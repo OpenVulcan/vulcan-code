@@ -43,9 +43,9 @@ SourceSystemPromptSkillsDir="$ProjectDir/crates/vulcan-prompt-skills/src/assets/
 # SourceLuaRuntimeDir 指向 make deps-lua 安装的官方 LuaSkills 运行时载荷。
 SourceLuaRuntimeDir="$ProjectDir/third_party/luaskills_runtime"
 
-# SourceSystemPluginsDir contains every manifest-driven System Plugin bundled with Vulcan Code.
-# SourceSystemPluginsDir 包含随 Vulcan Code 打包的所有清单驱动系统插件。
-SourceSystemPluginsDir="$ProjectDir/plugins"
+# SourceVulcanPluginsDir contains every manifest-driven Vulcan Plugin bundled with Vulcan Code.
+# SourceVulcanPluginsDir 包含随 Vulcan Code 打包的所有清单驱动 Vulcan 插件。
+SourceVulcanPluginsDir="$ProjectDir/plugins"
 
 # SourcePluginBridgeDir contains the only LuaSkills System package used by Vulcan plugins.
 # SourcePluginBridgeDir 包含 Vulcan 插件使用的唯一 LuaSkills System package。
@@ -178,10 +178,6 @@ OutputSystemPromptSkillsDir="$OutputResourcesDir/prompt-skills/system"
 # OutputToolsDir 保存打包后的辅助宿主工具可执行文件。
 OutputToolsDir="$ProjectDir/output/tools"
 
-# LegacyOutputRtkToolDir stores the previous nested RTK output directory for cleanup.
-# LegacyOutputRtkToolDir 保存旧版嵌套 RTK 输出目录，用于清理。
-LegacyOutputRtkToolDir="$OutputToolsDir/rtk"
-
 # OutputLuaRuntimeDir stores the application-owned LuaSkills runtime root.
 # OutputLuaRuntimeDir 保存应用持有的 LuaSkills 运行时根目录。
 OutputLuaRuntimeDir="$ProjectDir/output/lua_runtime"
@@ -194,17 +190,17 @@ LegacyManagedRuntimeDistributionDir="$OutputLuaRuntimeDir/dependencies/runtimes"
 # LegacyManagedRuntimeScriptsDir 保存由 Rust 原生初始化取代的废弃下载脚本。
 LegacyManagedRuntimeScriptsDir="$OutputLuaRuntimeDir/scripts/deps"
 
-# OutputSystemPluginsDir is the Vulcan-owned runtime directory scanned by the plugin host.
-# OutputSystemPluginsDir 是插件宿主扫描的 Vulcan 自有运行时目录。
-OutputSystemPluginsDir="$ProjectDir/output/plugins"
+# OutputVulcanPluginsDir is the Vulcan-owned runtime directory scanned by the plugin host.
+# OutputVulcanPluginsDir 是插件宿主扫描的 Vulcan 自有运行时目录。
+OutputVulcanPluginsDir="$ProjectDir/output/plugins"
 
 # OutputPluginBridgeDir is the only plugin-related package deployed below system_lua_lib.
 # OutputPluginBridgeDir 是部署到 system_lua_lib 下的唯一插件相关 package。
 OutputPluginBridgeDir="$OutputLuaRuntimeDir/system_lua_lib/vulcan-plugin-bridge"
 
-# ManagedSystemPluginIndexPath records only packages owned by this build script for safe stale cleanup.
-# ManagedSystemPluginIndexPath 仅记录当前构建脚本拥有的插件包，用于安全清理陈旧项。
-ManagedSystemPluginIndexPath="$OutputSystemPluginsDir/.vulcan-code-managed-plugins"
+# ManagedVulcanPluginIndexPath records only packages owned by this build script for safe stale cleanup.
+# ManagedVulcanPluginIndexPath 仅记录当前构建脚本拥有的插件包，用于安全清理陈旧项。
+ManagedVulcanPluginIndexPath="$OutputVulcanPluginsDir/.vulcan-code-managed-plugins"
 
 if [ ! -f "$BuiltBinaryPath" ]; then
     echo "Built Tauri binary was not found: $BuiltBinaryPath" >&2
@@ -237,101 +233,87 @@ if [ -d "$LegacyManagedRuntimeScriptsDir" ]; then
     rm -rf -- "$LegacyManagedRuntimeScriptsDir"
 fi
 
-echo "==> Syncing host System Plugin packages..."
-if [ ! -d "$SourceSystemPluginsDir" ]; then
-    echo "Missing System Plugin source directory: $SourceSystemPluginsDir" >&2
+echo "==> Syncing host Vulcan Plugin packages..."
+if [ ! -d "$SourceVulcanPluginsDir" ]; then
+    echo "Missing Vulcan Plugin source directory: $SourceVulcanPluginsDir" >&2
     exit 1
 fi
-# FoundSystemPlugin records whether the repository contains at least one deployable manifest package.
-# FoundSystemPlugin 记录仓库是否至少包含一个可部署的清单插件包。
-FoundSystemPlugin=0
-for SourceSystemPluginDir in "$SourceSystemPluginsDir"/*; do
-    [ -d "$SourceSystemPluginDir" ] || continue
-    [ -f "$SourceSystemPluginDir/plugin.yaml" ] || continue
-    FoundSystemPlugin=1
+# FoundVulcanPlugin records whether the repository contains at least one deployable manifest package.
+# FoundVulcanPlugin 记录仓库是否至少包含一个可部署的清单插件包。
+FoundVulcanPlugin=0
+for SourceVulcanPluginDir in "$SourceVulcanPluginsDir"/*; do
+    [ -d "$SourceVulcanPluginDir" ] || continue
+    [ -f "$SourceVulcanPluginDir/plugin.yaml" ] || continue
+    FoundVulcanPlugin=1
     break
 done
-if [ "$FoundSystemPlugin" -ne 1 ]; then
-    echo "No manifest-driven System Plugin packages were found in: $SourceSystemPluginsDir" >&2
+if [ "$FoundVulcanPlugin" -ne 1 ]; then
+    echo "No manifest-driven Vulcan Plugin packages were found in: $SourceVulcanPluginsDir" >&2
     exit 1
 fi
-mkdir -p "$OutputSystemPluginsDir"
-if [ -f "$ManagedSystemPluginIndexPath" ]; then
+mkdir -p "$OutputVulcanPluginsDir"
+if [ -f "$ManagedVulcanPluginIndexPath" ]; then
     while IFS= read -r PluginName || [ -n "$PluginName" ]; do
         [ -n "$PluginName" ] || continue
         case "$PluginName" in
             [a-z]* ) ;;
             * )
-                echo "Invalid managed System Plugin index entry: $PluginName" >&2
+                echo "Invalid managed Vulcan Plugin index entry: $PluginName" >&2
                 exit 1
                 ;;
         esac
         case "$PluginName" in
             *[!a-z0-9_-]* )
-                echo "Invalid managed System Plugin index entry: $PluginName" >&2
+                echo "Invalid managed Vulcan Plugin index entry: $PluginName" >&2
                 exit 1
                 ;;
         esac
-        DeployedPluginDir="$OutputSystemPluginsDir/$PluginName"
-        if [ -f "$SourceSystemPluginsDir/$PluginName/plugin.yaml" ]; then
+        DeployedPluginDir="$OutputVulcanPluginsDir/$PluginName"
+        if [ -f "$SourceVulcanPluginsDir/$PluginName/plugin.yaml" ]; then
             continue
         fi
         case "$DeployedPluginDir" in
-            "$OutputSystemPluginsDir"/*)
+            "$OutputVulcanPluginsDir"/*)
                 rm -rf "$DeployedPluginDir"
                 ;;
             *)
-                echo "Refusing to clean System Plugin path outside runtime root: $DeployedPluginDir" >&2
+                echo "Refusing to clean Vulcan Plugin path outside runtime root: $DeployedPluginDir" >&2
                 exit 1
                 ;;
         esac
-    done < "$ManagedSystemPluginIndexPath"
+    done < "$ManagedVulcanPluginIndexPath"
 fi
-: > "$ManagedSystemPluginIndexPath"
-for SourceSystemPluginDir in "$SourceSystemPluginsDir"/*; do
-    [ -d "$SourceSystemPluginDir" ] || continue
-    [ -f "$SourceSystemPluginDir/plugin.yaml" ] || continue
-    PluginName="$(basename "$SourceSystemPluginDir")"
+: > "$ManagedVulcanPluginIndexPath"
+for SourceVulcanPluginDir in "$SourceVulcanPluginsDir"/*; do
+    [ -d "$SourceVulcanPluginDir" ] || continue
+    [ -f "$SourceVulcanPluginDir/plugin.yaml" ] || continue
+    PluginName="$(basename "$SourceVulcanPluginDir")"
     case "$PluginName" in
         [a-z]* ) ;;
         * )
-            echo "Invalid System Plugin source directory name: $PluginName" >&2
+            echo "Invalid Vulcan Plugin source directory name: $PluginName" >&2
             exit 1
             ;;
     esac
     case "$PluginName" in
         *[!a-z0-9_-]* )
-            echo "Invalid System Plugin source directory name: $PluginName" >&2
+            echo "Invalid Vulcan Plugin source directory name: $PluginName" >&2
             exit 1
             ;;
     esac
-    # DestinationSystemPluginDir receives an incremental overlay so debug builds preserve existing plugin files.
-    # DestinationSystemPluginDir 接收增量覆盖，确保调试构建保留已有插件文件。
-    DestinationSystemPluginDir="$OutputSystemPluginsDir/$PluginName"
-    if ! copy_directory_contents "$SourceSystemPluginDir" "$DestinationSystemPluginDir" 0; then
-        echo "Failed to deploy System Plugin package: $PluginName" >&2
+    # DestinationVulcanPluginDir receives an incremental overlay so debug builds preserve existing plugin files.
+    # DestinationVulcanPluginDir 接收增量覆盖，确保调试构建保留已有插件文件。
+    DestinationVulcanPluginDir="$OutputVulcanPluginsDir/$PluginName"
+    if ! copy_directory_contents "$SourceVulcanPluginDir" "$DestinationVulcanPluginDir" 0; then
+        echo "Failed to deploy Vulcan Plugin package: $PluginName" >&2
         exit 1
     fi
-    printf '%s\n' "$PluginName" >> "$ManagedSystemPluginIndexPath"
+    printf '%s\n' "$PluginName" >> "$ManagedVulcanPluginIndexPath"
 done
 
 echo "==> Syncing fixed LuaSkills plugin bridge package..."
 copy_directory_contents "$SourcePluginBridgeDir" "$OutputPluginBridgeDir" 0
 
-# LegacyOutputRtkToolDir is removed because RTK is now distributed only inside its plugin package.
-# LegacyOutputRtkToolDir 会被移除，因为 RTK 现在只通过其插件包分发。
-if [ -e "$LegacyOutputRtkToolDir" ]; then
-    case "$LegacyOutputRtkToolDir" in
-        "$ProjectDir"/output/*)
-            rm -rf "$LegacyOutputRtkToolDir"
-            ;;
-        *)
-            echo "Refusing to clean path outside output: $LegacyOutputRtkToolDir" >&2
-            exit 1
-            ;;
-    esac
-fi
-find "$OutputToolsDir" -maxdepth 1 -type f \( -name rtk -o -name rtk.exe \) -delete 2>/dev/null || true
 # RtkHostIdentity selects the exact target artifact already copied with the plugin package.
 # RtkHostIdentity 选择随插件包一并复制的当前宿主精确目标制品。
 RtkHostIdentity="$(uname -s 2>/dev/null || printf unknown):$(uname -m 2>/dev/null || printf unknown)"
@@ -348,7 +330,7 @@ case "$RtkHostIdentity" in
 esac
 # OutputRtkPluginBinary is the exact manifest-owned executable required for this package.
 # OutputRtkPluginBinary 是当前插件包要求的精确清单自有可执行文件。
-OutputRtkPluginBinary="$OutputSystemPluginsDir/vulcan-rtk/bin/$RtkTargetTriple/$RtkBinaryName"
+OutputRtkPluginBinary="$OutputVulcanPluginsDir/vulcan-rtk/bin/$RtkTargetTriple/$RtkBinaryName"
 if [ ! -f "$OutputRtkPluginBinary" ]; then
     echo "RTK plugin binary is missing; run make deps-rtk before packaging." >&2
     exit 1

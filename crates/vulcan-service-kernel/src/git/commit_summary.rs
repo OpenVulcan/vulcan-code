@@ -10,7 +10,7 @@ use vulcan_agent_runtime::{
     ExecutionPreparationRequest, ExecutionPromptPurpose, ExecutionRunReport, ExecutionStreamEvent,
     agent_runtime::{
         conversation_hooks::HOOK_GIT_COMMIT_SUMMARY_CONTEXT,
-        system_plugin_hooks::dispatch_system_plugin_hook,
+        vulcan_plugin_hooks::dispatch_vulcan_plugin_hook,
     },
     conversation_protocol::SessionConversationState,
     provider_config::ReasoningEffortLevel,
@@ -82,7 +82,7 @@ pub(crate) async fn service_generate_git_commit_message(
             .summary_extra_prompt
             .trim()
             .to_string();
-        let plugin_runtime = Some(agent_runtime.system_plugin_runtime.clone());
+        let plugin_runtime = Some(agent_runtime.vulcan_plugin_runtime.clone());
         agent_runtime.provider_configuration = summary_provider_configuration;
         (
             agent_runtime,
@@ -204,7 +204,7 @@ async fn build_git_commit_summary_input(
     include_unstaged: bool,
     model_id: &str,
     estimator: Option<&dyn vulcan_context::ContextTokenEstimator>,
-    plugin_runtime: Option<&vulcan_plugin_runtime::SystemPluginRuntimeManager>,
+    plugin_runtime: Option<&vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
     session_id: SessionId,
 ) -> Result<GitCommitSummaryInput, String> {
     let mut notices = Vec::new();
@@ -309,7 +309,7 @@ fn append_git_commit_context_section(
 /// 返回经过严格校验且保留宿主不可变字段的载荷。
 async fn apply_git_commit_context_hooks(
     payload: GitCommitContextHookPayload,
-    plugin_runtime: Option<&vulcan_plugin_runtime::SystemPluginRuntimeManager>,
+    plugin_runtime: Option<&vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
     repository_root: &Path,
     session_id: SessionId,
 ) -> Result<GitCommitContextHookPayload, String> {
@@ -336,7 +336,7 @@ async fn apply_git_commit_context_hooks(
     context.session_id = Some(session_id.to_string());
     context.conversation_id = context.session_id.clone();
     context.capabilities = HookCapabilitySet::default();
-    let report = dispatch_system_plugin_hook(
+    let report = dispatch_vulcan_plugin_hook(
         plugin_runtime.clone(),
         context,
         serde_json::to_value(payload)
@@ -572,8 +572,8 @@ async fn run_git_commit_summary_model(
         agent_runtime.provider_configuration.clone(),
         agent_runtime.agent_profile_catalog.clone(),
         agent_runtime.luaskills_runtime.clone(),
-        Some(agent_runtime.system_plugin_runtime.clone()),
-        agent_runtime.mcp_runtime.clone(),
+        Some(agent_runtime.vulcan_plugin_runtime.clone()),
+        Some(Arc::clone(&agent_runtime.extension_generation)),
         Arc::clone(&agent_runtime.task_runtime),
         Arc::clone(&agent_runtime.question_runtime),
         Arc::clone(&agent_runtime.command_session_runtime),

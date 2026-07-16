@@ -148,9 +148,12 @@ struct WorkspaceMutationWorkbenchRebuildInputs {
     /// Cached LuaSkills catalog snapshot used by the workbench projector.
     /// 工作台投影器使用的 LuaSkills 缓存目录快照。
     luaskills_catalog: TauriLuaSkillsCatalog,
-    /// Live System Plugin catalog snapshot used by lifecycle-aware UI projection.
-    /// 生命周期感知界面投影使用的实时系统插件目录快照。
-    system_plugin_catalog: Option<Arc<vulcan_plugin_runtime::SystemPluginCatalogSnapshot>>,
+    /// Live Vulcan Plugin catalog snapshot used by lifecycle-aware UI projection.
+    /// 生命周期感知界面投影使用的实时 Vulcan 插件目录快照。
+    vulcan_plugin_catalog: Option<Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>>,
+    /// Structured MCP states captured from the same extension generation.
+    /// 从同一扩展代次捕获的结构化 MCP 状态。
+    mcp_server_states: Vec<vulcan_agent_runtime::mcp::McpRuntimeServerState>,
     /// Shared token budget runtime used by workbench context usage summaries.
     /// 工作台上下文用量摘要使用的共享 Token 预算运行时。
     token_budget_runtime: Arc<TauriTokenBudgetRuntime>,
@@ -259,10 +262,15 @@ where
             String::from("service is still starting; controller runtime is not ready")
         })?;
         let luaskills_catalog = cached_luaskills_catalog_from_state(&guard);
-        let system_plugin_catalog = guard
+        let vulcan_plugin_catalog = guard
             .agent_runtime
             .as_ref()
-            .map(|runtime| runtime.system_plugin_runtime.snapshot());
+            .and_then(|runtime| runtime.extension_generation.plugin_catalog());
+        let mcp_server_states = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.extension_generation.mcp_runtime().server_states())
+            .unwrap_or_default();
         let token_budget_runtime = guard.token_budget_runtime.clone().ok_or_else(|| {
             String::from("service is still starting; token budget runtime is not ready")
         })?;
@@ -352,7 +360,8 @@ where
             rebuild_generation,
             controller_runtime,
             luaskills_catalog,
-            system_plugin_catalog,
+            vulcan_plugin_catalog,
+            mcp_server_states,
             token_budget_runtime,
             mcp_catalog,
             provider_configuration,
@@ -375,7 +384,8 @@ where
         rebuild_generation,
         controller_runtime,
         luaskills_catalog,
-        system_plugin_catalog,
+        vulcan_plugin_catalog,
+        mcp_server_states,
         token_budget_runtime,
         mcp_catalog,
         provider_configuration,
@@ -395,7 +405,8 @@ where
         controller: &controller_runtime,
         command_session_runtime: command_session_runtime.as_deref(),
         luaskills_catalog: &luaskills_catalog,
-        system_plugin_catalog: system_plugin_catalog.as_deref(),
+        vulcan_plugin_catalog: vulcan_plugin_catalog.as_deref(),
+        mcp_server_states: &mcp_server_states,
         token_budget_runtime: &token_budget_runtime,
         mcp_catalog: &mcp_catalog,
         provider_configuration: &provider_configuration,

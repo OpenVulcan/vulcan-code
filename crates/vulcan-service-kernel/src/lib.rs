@@ -39,6 +39,7 @@ use vulcan_agent_runtime::{
         },
         conversation_hooks::{ConversationHookRuntime, ConversationTurnCompletionStatus},
         events::{RuntimeEvent, RuntimeEventKind},
+        extension_generation::ExtensionGeneration,
         prompt_composer_runtime::{
             invalidate_runtime_prompt_luaskill_catalog_cache,
             invalidate_runtime_prompt_tool_visibility_cache,
@@ -53,7 +54,12 @@ use vulcan_agent_runtime::{
         merge_session_messages_with_conversation_state_records,
     },
     luaskills_runtime::LuaSkillsRuntimeHandle,
-    mcp::{McpRuntimeAccess, bootstrap_mcp_runtime_access},
+    mcp::{
+        McpRuntimeAccess, plugin_mcp_server_configs_for_descriptors,
+        remove_plugin_mcp_runtime_partition, replace_plugin_mcp_runtime_partition,
+        replace_user_mcp_runtime_partition, runtime_mcp_server_configs,
+        validate_plugin_mcp_runtime_partition,
+    },
     provider_capabilities::{
         ResolvedModelCapabilities, resolve_effective_model_capabilities, resolve_model_capabilities,
     },
@@ -194,6 +200,7 @@ mod host_tools_settings;
 mod mcp_settings;
 mod pending_prompt_services;
 mod pending_prompts;
+mod plugin_mcp_secret_store;
 mod plugin_services;
 mod plugin_storage;
 mod plugin_ui_events;
@@ -499,7 +506,7 @@ pub fn service_prepare_for_app_shutdown(
         match guard.agent_runtime.as_ref() {
             Some(agent_runtime) => (
                 Some(Arc::clone(&agent_runtime.task_runtime)),
-                agent_runtime.mcp_runtime.clone(),
+                Some(agent_runtime.extension_generation.mcp_runtime()),
             ),
             None => (None, None),
         }

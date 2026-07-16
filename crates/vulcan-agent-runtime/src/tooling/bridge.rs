@@ -48,7 +48,7 @@ use vulcan_luaskills_prompt::{
     LUASKILL_HELP_TOOL_NAME, LuaSkillPromptEntry, render_luaskill_help_output,
 };
 use vulcan_plugin_runtime::{
-    SystemPluginInvocationRequest, SystemPluginRuntimeManager, SystemPluginToolDescriptor,
+    VulcanPluginInvocationRequest, VulcanPluginRuntimeManager, VulcanPluginToolDescriptor,
 };
 use vulcan_tools_luaskills_call::{
     CALL_LUASKILL_TOOL_NAME, LuaSkillCallEntryView, call_luaskill_args_schema,
@@ -125,8 +125,8 @@ pub fn build_vulcan_tools_manager(
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
     native_catalog: NativeToolCatalog,
-    system_plugin_runtime: Option<SystemPluginRuntimeManager>,
-    candidate_system_plugin_tools: Vec<SystemPluginToolDescriptor>,
+    vulcan_plugin_runtime: Option<VulcanPluginRuntimeManager>,
+    candidate_vulcan_plugin_tools: Vec<VulcanPluginToolDescriptor>,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     workspace_root: Option<PathBuf>,
     controller_runtime: Option<ControllerRuntimeHandle>,
@@ -235,8 +235,8 @@ pub fn build_vulcan_tools_manager(
         }
     }
 
-    let mut plugin_groups = BTreeMap::<(String, String), Vec<SystemPluginToolDescriptor>>::new();
-    for tool in candidate_system_plugin_tools {
+    let mut plugin_groups = BTreeMap::<(String, String), Vec<VulcanPluginToolDescriptor>>::new();
+    for tool in candidate_vulcan_plugin_tools {
         plugin_groups
             .entry((tool.plugin_id.clone(), tool.group.clone()))
             .or_default()
@@ -256,10 +256,10 @@ pub fn build_vulcan_tools_manager(
                 name: tool.id.clone(),
                 description: tool.description.clone(),
                 help_text: None,
-                source: VulcanToolSourceKind::SystemPlugin,
+                source: VulcanToolSourceKind::VulcanPlugin,
             };
             occupied_public_tool_ids.insert(tool.id.clone());
-            let runtime = system_plugin_runtime.clone();
+            let runtime = vulcan_plugin_runtime.clone();
             let tool_id = tool.id.clone();
             let workspace_root = workspace_root.clone();
             candidates.push(VulcanToolCandidate {
@@ -277,16 +277,16 @@ pub fn build_vulcan_tools_manager(
                     let workspace_root = workspace_root.clone();
                     Box::pin(async move {
                         let runtime = runtime.ok_or_else(|| {
-                            format!("System Plugin runtime is unavailable for tool `{tool_id}`.")
+                            format!("Vulcan Plugin runtime is unavailable for tool `{tool_id}`.")
                         })?;
                         let owner_session_id = owner_session_id.ok_or_else(|| {
-                            format!("System Plugin tool `{tool_id}` requires a conversation owner.")
+                            format!("Vulcan Plugin tool `{tool_id}` requires a conversation owner.")
                         })?;
                         let workspace_root = workspace_root.ok_or_else(|| {
-                            format!("System Plugin tool `{tool_id}` requires a workspace root.")
+                            format!("Vulcan Plugin tool `{tool_id}` requires a workspace root.")
                         })?;
                         let output = runtime
-                            .invoke(SystemPluginInvocationRequest {
+                            .invoke(VulcanPluginInvocationRequest {
                                 tool_id,
                                 arguments,
                                 owner_session_id,

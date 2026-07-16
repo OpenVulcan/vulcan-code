@@ -2,6 +2,7 @@
 //! 面向基础运行时构建、准备阶段校验与失败报告转换的运行时流准备辅助模块。
 
 use crate::agent_profile::AgentProfileCatalog;
+use crate::agent_runtime::ExtensionGeneration;
 use crate::agent_runtime::execution_models::{
     ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport,
 };
@@ -17,7 +18,6 @@ use crate::agent_runtime::runtime_stream_preparation_resources::{
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
-use crate::mcp::McpRuntimeAccess;
 use crate::provider_config::ProviderConfigurationFile;
 use crate::tooling::CommandSessionRuntime;
 use std::sync::Arc;
@@ -66,8 +66,8 @@ pub(crate) fn prepare_runtime_launch_input(
     config: &ProviderConfigurationFile,
     agent_profile_catalog: &AgentProfileCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-    system_plugin_runtime: Option<vulcan_plugin_runtime::SystemPluginRuntimeManager>,
-    mcp_runtime_access: McpRuntimeAccess,
+    vulcan_plugin_runtime: Option<vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
+    extension_generation: Arc<ExtensionGeneration>,
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
@@ -78,8 +78,8 @@ pub(crate) fn prepare_runtime_launch_input(
         config,
         agent_profile_catalog,
         luaskills_runtime,
-        system_plugin_runtime,
-        mcp_runtime_access,
+        vulcan_plugin_runtime,
+        extension_generation,
         task_runtime,
         question_runtime,
         command_session_runtime,

@@ -3,28 +3,30 @@
 
 use super::*;
 use vulcan_plugin_runtime::{
-    SystemPluginAvailability, SystemPluginCatalogSnapshot, SystemPluginPackageOrigin,
-    SystemPluginRuntimeState, SystemPluginUiMountIcon, SystemPluginUiMountPoint,
-    plugin_capability_key,
+    VulcanPluginAvailability, VulcanPluginCatalogSnapshot, VulcanPluginMcpStdioLauncherManifest,
+    VulcanPluginMcpTransportManifest, VulcanPluginPackageOrigin, VulcanPluginRuntimeState,
+    VulcanPluginUiMountIcon, VulcanPluginUiMountPoint, VulcanPluginValueSourceManifest,
+    plugin_permission_key,
 };
 use vulcan_service_api::{
     AgentSkillCategoryLocaleSummary, AgentSkillCategorySummary, AgentSkillLocaleSummary,
     AgentSkillOriginSummary, AgentSkillRecordSummary, AgentSkillResourceSummary,
     AgentSkillStandardMetadataSummary, LuaSkillsManagedRuntimeProgressSummary,
-    PluginExtensionSummary, PluginHookSummary, PluginToolSummary, PluginUiMountSummary,
-    SubagentCategoryLocaleSummary, SubagentDefinitionLocaleSummary, SubagentOriginSummary,
-    SubagentProviderModelSummary,
+    PluginExtensionSummary, PluginHookSummary, PluginMcpServerSummary, PluginToolSummary,
+    PluginUiMountSummary, SubagentCategoryLocaleSummary, SubagentDefinitionLocaleSummary,
+    SubagentOriginSummary, SubagentProviderModelSummary,
 };
 
-/// Combines LuaSkills packages and System Plugins into plugin summaries.
-/// 将 LuaSkills 包与系统插件合并为插件摘要。
+/// Combines LuaSkills packages and Vulcan Plugins into plugin summaries.
+/// 将 LuaSkills 包与 Vulcan 插件合并为插件摘要。
 pub(crate) fn plugins_from_catalogs(
     catalog: &TauriLuaSkillsCatalog,
     provider_configuration: &ProviderConfigurationFile,
-    system_plugin_catalog: Option<&SystemPluginCatalogSnapshot>,
+    vulcan_plugin_catalog: Option<&VulcanPluginCatalogSnapshot>,
+    mcp_server_states: &[vulcan_agent_runtime::mcp::McpRuntimeServerState],
 ) -> Vec<PluginSummary> {
-    // plugins starts with ordinary Lua Skill rows before discovered System Plugins are appended.
-    // plugins 先保存普通 Lua Skill 行，随后追加已发现的 System Plugin。
+    // plugins starts with ordinary Lua Skill rows before discovered Vulcan Plugins are appended.
+    // plugins 先保存普通 Lua Skill 行，随后追加已发现的 Vulcan Plugin。
     let mut plugins = catalog
         .skills
         .iter()
@@ -69,27 +71,27 @@ pub(crate) fn plugins_from_catalogs(
             extension: None,
         })
         .collect::<Vec<_>>();
-    let Some(plugin_catalog) = system_plugin_catalog else {
+    let Some(plugin_catalog) = vulcan_plugin_catalog else {
         return plugins;
     };
     for plugin in plugin_catalog.plugins.values() {
-        let enabled = plugin.runtime_state == SystemPluginRuntimeState::Enabled;
+        let enabled = plugin.runtime_state == VulcanPluginRuntimeState::Enabled;
         let available = matches!(
             plugin.availability,
-            SystemPluginAvailability::Enabled | SystemPluginAvailability::Disabled
+            VulcanPluginAvailability::Enabled | VulcanPluginAvailability::Disabled
         );
         let (runtime_state, status) = match plugin.runtime_state {
-            SystemPluginRuntimeState::Enabled => ("enabled", "已启用"),
-            SystemPluginRuntimeState::Disabled => ("disabled", "已停用"),
-            SystemPluginRuntimeState::Enabling => ("enabling", "正在启用"),
-            SystemPluginRuntimeState::Draining => ("draining", "正在排空会话"),
-            SystemPluginRuntimeState::DisabledWithCleanupWarning => {
+            VulcanPluginRuntimeState::Enabled => ("enabled", "已启用"),
+            VulcanPluginRuntimeState::Disabled => ("disabled", "已停用"),
+            VulcanPluginRuntimeState::Enabling => ("enabling", "正在启用"),
+            VulcanPluginRuntimeState::Draining => ("draining", "正在排空会话"),
+            VulcanPluginRuntimeState::DisabledWithCleanupWarning => {
                 ("disabledWithCleanupWarning", "已停用（清理警告）")
             }
-            SystemPluginRuntimeState::UnsupportedPlatform => {
+            VulcanPluginRuntimeState::UnsupportedPlatform => {
                 ("unsupportedPlatform", "当前平台不支持")
             }
-            SystemPluginRuntimeState::Unavailable => ("unavailable", "不可用"),
+            VulcanPluginRuntimeState::Unavailable => ("unavailable", "不可用"),
         };
         let (name, capability) = plugin.localized_display(
             provider_configuration
@@ -114,7 +116,7 @@ pub(crate) fn plugins_from_catalogs(
             kind: if plugin
                 .manifest
                 .as_ref()
-                .is_some_and(|manifest| manifest.has_runtime())
+                .is_some_and(|manifest| manifest.has_lua_runtime())
             {
                 String::from("Runtime Plugin")
             } else {
@@ -143,33 +145,43 @@ pub(crate) fn plugins_from_catalogs(
             agent_count: plugin.agents.len(),
             active_session_count: plugin.active_session_count,
             diagnostics: plugin.diagnostics.clone(),
-            management_kind: String::from("systemPlugin"),
+            management_kind: String::from("vulcanPlugin"),
             extension: plugin
                 .manifest
                 .as_ref()
                 .map(|manifest| PluginExtensionSummary {
                     origin: match plugin.origin {
-                        SystemPluginPackageOrigin::BundledSystem => String::from("bundledSystem"),
-                        SystemPluginPackageOrigin::UserInstalled => String::from("userInstalled"),
+                        VulcanPluginPackageOrigin::Bundled => String::from("bundled"),
+                        VulcanPluginPackageOrigin::UserInstalled => String::from("userInstalled"),
                     },
-                    capabilities: manifest
-                        .capabilities
+                    permissions: manifest
+                        .permissions
                         .iter()
-                        .map(|capability| plugin_capability_key(*capability).to_string())
+                        .map(|capability| plugin_permission_key(*capability).to_string())
                         .collect(),
                     hooks: manifest
-                        .hooks
-                        .iter()
-                        .map(|hook| PluginHookSummary {
-                            id: hook.id.clone(),
-                            point: hook.point.clone(),
-                        })
-                        .collect(),
+                        .lua_runtime
+                        .as_ref()
+                        .map_or_else(Vec::new, |runtime| {
+                            runtime
+                                .hooks
+                                .iter()
+                                .map(|hook| PluginHookSummary {
+                                    id: hook.id.clone(),
+                                    point: hook.point.clone(),
+                                })
+                                .collect()
+                        }),
                     actions: manifest
-                        .actions
-                        .iter()
-                        .map(|action| action.id.clone())
-                        .collect(),
+                        .lua_runtime
+                        .as_ref()
+                        .map_or_else(Vec::new, |runtime| {
+                            runtime
+                                .actions
+                                .iter()
+                                .map(|action| action.id.clone())
+                                .collect()
+                        }),
                     ui_mounts: manifest
                         .ui
                         .mounts
@@ -177,13 +189,13 @@ pub(crate) fn plugins_from_catalogs(
                         .map(|mount| PluginUiMountSummary {
                             id: mount.id.clone(),
                             point: match mount.point {
-                                SystemPluginUiMountPoint::SkillsPluginDetail => {
+                                VulcanPluginUiMountPoint::SkillsPluginDetail => {
                                     String::from("skillsPluginDetail")
                                 }
-                                SystemPluginUiMountPoint::WorkspaceMain => {
+                                VulcanPluginUiMountPoint::WorkspaceMain => {
                                     String::from("workspaceMain")
                                 }
-                                SystemPluginUiMountPoint::ConversationRightPanel => {
+                                VulcanPluginUiMountPoint::ConversationRightPanel => {
                                     String::from("conversationRightPanel")
                                 }
                             },
@@ -205,9 +217,9 @@ pub(crate) fn plugins_from_catalogs(
                                 })
                                 .collect(),
                             icon: match mount.icon {
-                                SystemPluginUiMountIcon::Plugin => String::from("plugin"),
-                                SystemPluginUiMountIcon::Route => String::from("route"),
-                                SystemPluginUiMountIcon::Chart => String::from("chart"),
+                                VulcanPluginUiMountIcon::Plugin => String::from("plugin"),
+                                VulcanPluginUiMountIcon::Route => String::from("route"),
+                                VulcanPluginUiMountIcon::Chart => String::from("chart"),
                             },
                             export_name: mount.export.clone(),
                         })
@@ -218,11 +230,119 @@ pub(crate) fn plugins_from_catalogs(
                         .map(|skill| skill.name.clone())
                         .collect(),
                     agents: plugin.agents.iter().map(|agent| agent.id.clone()).collect(),
-                    has_runtime: manifest.has_runtime(),
+                    has_lua_runtime: manifest.has_lua_runtime(),
+                    mcp_servers: plugin
+                        .mcp_servers
+                        .iter()
+                        .map(|server| {
+                            let runtime_state = mcp_server_states.iter().find(|state| {
+                                state.id == format!("{}:{}", plugin.id, server.id)
+                                    && state.generation == Some(plugin.generation)
+                            });
+                            plugin_mcp_server_summary(plugin, server, runtime_state)
+                        })
+                        .collect(),
                 }),
         });
     }
     plugins
+}
+
+/// Builds one credential-free service summary by joining a validated plugin descriptor with its exact live generation state.
+/// 通过连接已校验插件描述符与其精确实时代次状态，构建不含凭据的服务摘要。
+fn plugin_mcp_server_summary(
+    plugin: &vulcan_plugin_runtime::VulcanPluginDescriptor,
+    server: &vulcan_plugin_runtime::VulcanPluginMcpServerDescriptor,
+    runtime_state: Option<&vulcan_agent_runtime::mcp::McpRuntimeServerState>,
+) -> PluginMcpServerSummary {
+    let transport = match &server.manifest.transport {
+        VulcanPluginMcpTransportManifest::Stdio { .. } => "stdio",
+        VulcanPluginMcpTransportManifest::Http { .. } => "http",
+        VulcanPluginMcpTransportManifest::Sse { .. } => "sse",
+    };
+    let endpoint = runtime_state.map_or_else(
+        || plugin_mcp_manifest_endpoint_summary(&server.manifest.transport),
+        |state| state.endpoint.clone(),
+    );
+    let status = runtime_state.map_or_else(
+        || match plugin.runtime_state {
+            VulcanPluginRuntimeState::Disabled
+            | VulcanPluginRuntimeState::DisabledWithCleanupWarning => String::from("disabled"),
+            VulcanPluginRuntimeState::Enabling => String::from("preparing"),
+            VulcanPluginRuntimeState::Draining => String::from("draining"),
+            VulcanPluginRuntimeState::Enabled => String::from("stopped"),
+            VulcanPluginRuntimeState::UnsupportedPlatform
+            | VulcanPluginRuntimeState::Unavailable => String::from("failed"),
+        },
+        |state| match state.status {
+            vulcan_agent_runtime::mcp::runtime::McpRuntimeServerStatus::Disabled => {
+                String::from("disabled")
+            }
+            vulcan_agent_runtime::mcp::runtime::McpRuntimeServerStatus::Connecting => {
+                String::from("connecting")
+            }
+            vulcan_agent_runtime::mcp::runtime::McpRuntimeServerStatus::Connected
+                if state.last_error.is_some() =>
+            {
+                String::from("degraded")
+            }
+            vulcan_agent_runtime::mcp::runtime::McpRuntimeServerStatus::Connected => {
+                String::from("ready")
+            }
+            vulcan_agent_runtime::mcp::runtime::McpRuntimeServerStatus::Disconnected => {
+                String::from("degraded")
+            }
+            vulcan_agent_runtime::mcp::runtime::McpRuntimeServerStatus::Failed => {
+                String::from("failed")
+            }
+            vulcan_agent_runtime::mcp::runtime::McpRuntimeServerStatus::Stopped => {
+                String::from("stopped")
+            }
+        },
+    );
+    let secret_keys = server.manifest.declared_secret_keys();
+    PluginMcpServerSummary {
+        id: server.id.clone(),
+        name: server.name.clone(),
+        transport: transport.to_string(),
+        endpoint,
+        status,
+        generation: plugin.generation,
+        retry_count: runtime_state.map_or(0, |state| state.retry_count),
+        tool_count: runtime_state.map_or(0, |state| state.tool_count),
+        prompt_count: runtime_state.map_or(0, |state| state.prompt_count),
+        resource_count: runtime_state.map_or(0, |state| state.resource_count),
+        last_error: runtime_state.and_then(|state| state.last_error.clone()),
+        recent_logs: runtime_state
+            .map(|state| state.recent_logs.clone())
+            .unwrap_or_default(),
+        secret_keys: secret_keys.into_iter().collect(),
+    }
+}
+
+/// Returns a credential-free endpoint label for a disabled or not-yet-started plugin MCP declaration.
+/// 为已停用或尚未启动的插件 MCP 声明返回不含凭据的端点标签。
+fn plugin_mcp_manifest_endpoint_summary(transport: &VulcanPluginMcpTransportManifest) -> String {
+    match transport {
+        VulcanPluginMcpTransportManifest::Stdio { launcher, .. } => match launcher {
+            VulcanPluginMcpStdioLauncherManifest::NodeEntry { .. } => {
+                String::from("managed Node entry")
+            }
+            VulcanPluginMcpStdioLauncherManifest::NodePackageBin { .. } => {
+                String::from("managed private npm package bin")
+            }
+            VulcanPluginMcpStdioLauncherManifest::NativeBinary { .. } => {
+                String::from("managed native binary")
+            }
+        },
+        VulcanPluginMcpTransportManifest::Http { url, .. }
+        | VulcanPluginMcpTransportManifest::Sse { url, .. } => match url {
+            VulcanPluginValueSourceManifest::Literal { value } => value.clone(),
+            VulcanPluginValueSourceManifest::Config { key } => format!("config:{key}"),
+            VulcanPluginValueSourceManifest::Secret { .. } => String::from("secret-managed URL"),
+            VulcanPluginValueSourceManifest::Environment { name } => format!("env:{name}"),
+        },
+    }
 }
 
 /// Projects the retained LuaSkills catalog into the WebUI service API shape.
@@ -335,7 +455,7 @@ pub(crate) fn lua_skills_catalog_summary(
 /// 将基于提示词的 Agent Skills 投影为 WebUI service API 结构。
 pub(crate) fn agent_skills_catalog_summary(
     provider_configuration: &ProviderConfigurationFile,
-    system_plugin_catalog: Option<&SystemPluginCatalogSnapshot>,
+    vulcan_plugin_catalog: Option<&VulcanPluginCatalogSnapshot>,
 ) -> AgentSkillsCatalogSummary {
     // Resolve runtime roots and per-skill states from persisted configuration.
     // 从持久化配置解析运行时根目录与单技能状态。
@@ -345,7 +465,7 @@ pub(crate) fn agent_skills_catalog_summary(
     // Load one complete source-aware Agent Skills catalog transaction.
     // 加载一次完整的来源感知 Agent Skills 目录事务。
     let mut catalog = vulcan_prompt_skills::load_prompt_skills(&runtime_config);
-    if let Some(plugin_catalog) = system_plugin_catalog
+    if let Some(plugin_catalog) = vulcan_plugin_catalog
         && let Err(error) =
             catalog.merge_plugin_skills(plugin_catalog.enabled_skills.values().cloned())
     {
@@ -480,13 +600,13 @@ pub(crate) fn agent_skills_catalog_summary(
 /// 将智能体与专家定义投影为 WebUI service API 结构。
 pub(crate) fn subagent_catalog_summary(
     provider_configuration: &ProviderConfigurationFile,
-    system_plugin_catalog: Option<&SystemPluginCatalogSnapshot>,
+    vulcan_plugin_catalog: Option<&VulcanPluginCatalogSnapshot>,
 ) -> SubagentCatalogSummary {
     let system_root = vulcan_runtime_assets::resolve_system_subagents_resource_directory();
     let user_root = vulcan_workspace_store::data_plane::application_data_root().join("agents");
     let mut catalog =
         vulcan_task_session::load_subagent_catalog_from_roots(system_root.clone(), user_root);
-    if let Some(plugin_catalog) = system_plugin_catalog
+    if let Some(plugin_catalog) = vulcan_plugin_catalog
         && let Err(error) =
             catalog.merge_plugin_definitions(plugin_catalog.enabled_agents.values().cloned())
     {
@@ -1078,6 +1198,7 @@ mod tests {
             &empty_luaskills_catalog(),
             &ProviderConfigurationFile::default(),
             None,
+            &[],
         );
 
         assert!(plugins.is_empty());

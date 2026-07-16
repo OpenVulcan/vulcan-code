@@ -16,10 +16,13 @@ pub(crate) struct WorkbenchRuntimeProjection<'a> {
     /// LuaSkills catalog snapshot already cached by the service state.
     /// 服务状态中已缓存的 LuaSkills 目录快照。
     pub(crate) luaskills_catalog: &'a TauriLuaSkillsCatalog,
-    /// Optional live System Plugin catalog from the shared Agent runtime.
-    /// 来自共享 Agent 运行时的可选实时系统插件目录。
-    pub(crate) system_plugin_catalog:
-        Option<&'a vulcan_plugin_runtime::SystemPluginCatalogSnapshot>,
+    /// Optional live Vulcan Plugin catalog from the shared Agent runtime.
+    /// 来自共享 Agent 运行时的可选实时 Vulcan 插件目录。
+    pub(crate) vulcan_plugin_catalog:
+        Option<&'a vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
+    /// Structured MCP states captured from the same extension generation as the plugin catalog.
+    /// 从与插件目录相同扩展代次捕获的结构化 MCP 状态。
+    pub(crate) mcp_server_states: &'a [vulcan_agent_runtime::mcp::McpRuntimeServerState],
     /// Token budget runtime used by module and context usage summaries.
     /// 模块与上下文用量摘要使用的 Token 预算运行时。
     pub(crate) token_budget_runtime: &'a TauriTokenBudgetRuntime,
@@ -223,16 +226,26 @@ async fn refresh_workbench_snapshot_with_selected_session(
             ),
         )
     };
-    let system_plugin_catalog = agent_runtime_for_status
+    let vulcan_plugin_catalog = agent_runtime_for_status
         .as_ref()
-        .map(|agent_runtime| agent_runtime.system_plugin_runtime.snapshot());
+        .and_then(|agent_runtime| agent_runtime.extension_generation.plugin_catalog());
+    let mcp_server_states = agent_runtime_for_status
+        .as_ref()
+        .map(|agent_runtime| {
+            agent_runtime
+                .extension_generation
+                .mcp_runtime()
+                .server_states()
+        })
+        .unwrap_or_default();
     let mut workbench = workbench_from_runtime(WorkbenchRuntimeProjection {
         controller: &controller_runtime,
         command_session_runtime: agent_runtime_for_status
             .as_ref()
             .map(|agent_runtime| agent_runtime.command_session_runtime.as_ref()),
         luaskills_catalog: &luaskills_catalog,
-        system_plugin_catalog: system_plugin_catalog.as_deref(),
+        vulcan_plugin_catalog: vulcan_plugin_catalog.as_deref(),
+        mcp_server_states: &mcp_server_states,
         token_budget_runtime: &token_budget_runtime,
         mcp_catalog: &mcp_catalog,
         provider_configuration: &provider_configuration,
@@ -538,7 +551,7 @@ pub(crate) fn native_tool_summaries_from_agent_runtime(
             .as_deref(),
         std::sync::Arc::clone(&agent_runtime.command_session_runtime),
         agent_runtime.provider_configuration.vmm.clone(),
-        Some(agent_runtime.system_plugin_runtime.clone()),
+        Some(agent_runtime.vulcan_plugin_runtime.clone()),
     );
     native_catalog
         .descriptors
@@ -738,7 +751,8 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         controller,
         command_session_runtime,
         luaskills_catalog,
-        system_plugin_catalog,
+        vulcan_plugin_catalog,
+        mcp_server_states,
         token_budget_runtime,
         mcp_catalog,
         provider_configuration,
@@ -961,16 +975,17 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         plugins: plugins_from_catalogs(
             luaskills_catalog,
             provider_configuration,
-            system_plugin_catalog,
+            vulcan_plugin_catalog,
+            mcp_server_states,
         ),
         lua_skills: lua_skills_catalog_summary(luaskills_catalog, provider_configuration),
         agent_skills: agent_skills_catalog_summary(
             provider_configuration,
-            input.system_plugin_catalog,
+            input.vulcan_plugin_catalog,
         ),
         subagent_catalog: subagent_catalog_summary(
             provider_configuration,
-            input.system_plugin_catalog,
+            input.vulcan_plugin_catalog,
         ),
         settings: settings(),
         providers: providers(provider_configuration),

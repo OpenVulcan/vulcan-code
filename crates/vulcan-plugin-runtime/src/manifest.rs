@@ -1,41 +1,28 @@
-//! Declarative manifest models for bundled System Plugin packages.
-//! 内建系统插件包使用的声明式清单模型。
+//! Declarative manifest models for bundled Vulcan Plugin packages.
+//! Vulcan 插件包使用的声明式清单模型。
 
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use vulcan_hooks::{HookCapability, HookFailurePolicy, HookMode, HookScope};
 
 /// Current manifest schema version accepted by the host.
 /// 当前宿主接受的清单结构版本。
-pub const SYSTEM_PLUGIN_MANIFEST_SCHEMA_VERSION: u32 = 1;
+pub const VULCAN_PLUGIN_MANIFEST_SCHEMA_VERSION: u32 = 1;
 
 /// Stable host-owned argument used to address one managed plugin session.
 /// 用于寻址单个受管插件会话的稳定宿主参数。
-pub const SYSTEM_PLUGIN_SESSION_ID_ARGUMENT: &str = "session_id";
+pub const VULCAN_PLUGIN_SESSION_ID_ARGUMENT: &str = "session_id";
 
 /// Host-owned payload fields that plugin tool schemas and model arguments must never declare.
 /// 插件工具 Schema 与模型参数绝不能声明的宿主自有载荷字段。
-pub const SYSTEM_PLUGIN_RESERVED_PAYLOAD_ARGUMENTS: [&str; 3] =
+pub const VULCAN_PLUGIN_RESERVED_PAYLOAD_ARGUMENTS: [&str; 3] =
     ["op", "request_id", "host_timeout_ms"];
 
-/// Exact trusted plugin kind supported by the first host implementation.
-/// 第一版宿主实现支持的精确信任插件类型。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SystemPluginKind {
-    /// Plugin bundled and installed by the Vulcan Code distribution.
-    /// 由 Vulcan Code 发行包内建并安装的插件。
-    BundledSystem,
-    /// Plugin installed into the current user's Vulcan plugin root.
-    /// 安装到当前用户 Vulcan 插件根目录的插件。
-    UserInstalled,
-}
-
-/// One complete System Plugin package manifest.
-/// 一份完整的系统插件包清单。
+/// One complete Vulcan Plugin package manifest.
+/// 一份完整的 Vulcan 插件包清单。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SystemPluginManifest {
+pub struct VulcanPluginManifest {
     /// Manifest schema version.
     /// 清单结构版本。
     pub schema_version: u32,
@@ -45,87 +32,64 @@ pub struct SystemPluginManifest {
     /// Package semantic version.
     /// 插件包语义版本。
     pub version: String,
-    /// Trusted plugin distribution kind.
-    /// 可信插件分发类型。
-    pub kind: SystemPluginKind,
     /// Whether the plugin is enabled before user overrides are applied.
     /// 应用用户覆盖前插件是否默认启用。
     pub default_enabled: bool,
     /// Default user-facing metadata.
     /// 默认的用户可见元数据。
-    pub display: SystemPluginDisplayManifest,
+    pub display: VulcanPluginDisplayManifest,
     /// Platform availability declaration.
     /// 平台可用性声明。
     #[serde(default)]
-    pub platforms: SystemPluginPlatformManifest,
-    /// Managed Lua runtime declaration.
-    /// 受管 Lua 运行时声明。
+    pub platforms: VulcanPluginPlatformManifest,
+    /// Explicit host permissions requested by this plugin.
+    /// 当前插件请求的显式宿主权限集合。
     #[serde(default)]
-    pub runtime: SystemPluginRuntimeManifest,
-    /// Dependency installation policy owned by the Vulcan host.
-    /// 由 Vulcan 宿主持有的依赖安装策略。
+    pub permissions: Vec<VulcanPluginPermission>,
+    /// Package-relative regular files required for every enabled plugin component.
+    /// 每个已启用插件组件都要求存在的插件包相对普通文件集合。
     #[serde(default)]
-    pub dependency_policy: SystemPluginDependencyPolicyManifest,
-    /// Optional lifecycle callbacks exported by the Lua bundle.
-    /// Lua bundle 导出的可选生命周期回调。
+    pub required_files: Vec<String>,
+    /// Host-managed execution resources shared by executable plugin protocols.
+    /// 由可执行插件协议共享的宿主管理执行资源。
     #[serde(default)]
-    pub lifecycle: SystemPluginLifecycleManifest,
-    /// Explicit host capabilities requested by this plugin.
-    /// 当前插件请求的显式宿主能力集合。
+    pub execution: VulcanPluginExecutionManifest,
+    /// Optional managed Lua protocol declaration.
+    /// 可选的受管 Lua 协议声明。
     #[serde(default)]
-    pub capabilities: Vec<SystemPluginCapability>,
-    /// Host-callable plugin business actions.
-    /// 可由宿主调用的插件业务 action 集合。
+    pub lua_runtime: Option<VulcanPluginLuaRuntimeManifest>,
+    /// Optional Model Context Protocol server declarations.
+    /// 可选的模型上下文协议服务器声明。
     #[serde(default)]
-    pub actions: Vec<SystemPluginActionManifest>,
+    pub mcp: VulcanPluginMcpManifest,
     /// Dynamic WebUI mount declarations.
     /// 动态 WebUI 挂载声明。
     #[serde(default)]
-    pub ui: SystemPluginUiManifest,
+    pub ui: VulcanPluginUiManifest,
     /// Optional plugin configuration contract.
     /// 可选插件配置契约。
     #[serde(default)]
-    pub config: Option<SystemPluginConfigManifest>,
-    /// Logical executable resources resolved by the Vulcan host.
-    /// 由 Vulcan 宿主解析的逻辑可执行资源。
-    #[serde(default)]
-    pub binaries: Vec<SystemPluginBinaryManifest>,
-    /// Logical Node.js entries resolved through the shared managed runtime distribution.
-    /// 通过共享受管运行时发行版解析的逻辑 Node.js 入口。
-    #[serde(default)]
-    pub node_entries: Vec<SystemPluginNodeEntryManifest>,
-    /// Logical Python entries resolved through the shared managed runtime distribution.
-    /// 通过共享受管运行时发行版解析的逻辑 Python 入口。
-    #[serde(default)]
-    pub python_entries: Vec<SystemPluginPythonEntryManifest>,
-    /// Atomic provider-visible tool group.
-    /// 原子化的 Provider 可见工具组。
-    #[serde(default)]
-    pub tools: Vec<SystemPluginToolManifest>,
-    /// Lua hook handlers registered into host-owned hook points.
-    /// 注册到宿主自有 hook 点位的 Lua hook 处理器。
-    #[serde(default)]
-    pub hooks: Vec<SystemPluginHookManifest>,
+    pub config: Option<VulcanPluginConfigManifest>,
     /// Prompt contributions activated with their required tools.
     /// 随所需工具共同激活的提示词贡献。
     #[serde(default)]
-    pub prompt_contributions: Vec<SystemPluginPromptManifest>,
+    pub prompt_contributions: Vec<VulcanPluginPromptManifest>,
     /// Locale file paths keyed by locale identifier.
     /// 以语言标识为键的本地化文件路径。
     #[serde(default)]
     pub locales: BTreeMap<String, String>,
 }
 
-impl SystemPluginManifest {
-    /// Returns whether this package declares an executable Lua runtime.
-    /// 返回当前插件包是否声明了可执行 Lua 运行时。
+impl VulcanPluginManifest {
+    /// Returns whether this package declares the managed Lua protocol.
+    /// 返回当前插件包是否声明受管 Lua 协议。
     ///
     /// # Returns
     /// 返回值
-    /// `true` when the runtime section is present and complete after deserialization.
-    /// 当反序列化后存在完整运行时段时返回 `true`。
-    pub fn has_runtime(&self) -> bool {
-        !self.runtime.bundle.is_empty()
+    /// `true` when the optional Lua protocol is present.
+    /// 当可选 Lua 协议存在时返回 `true`。
+    pub fn has_lua_runtime(&self) -> bool {
+        self.lua_runtime.is_some()
     }
 
     /// Returns whether a content-only package declares an execution-owned feature.
@@ -136,42 +100,62 @@ impl SystemPluginManifest {
     /// `true` when any declaration requires an executable runtime or host capability.
     /// 任一声明需要可执行运行时或宿主能力时返回 `true`。
     pub fn has_execution_declarations(&self) -> bool {
-        !self.capabilities.is_empty()
-            || !self.actions.is_empty()
+        !self.permissions.is_empty()
             || !self.ui.mounts.is_empty()
             || self.config.is_some()
-            || !self.binaries.is_empty()
-            || !self.node_entries.is_empty()
-            || !self.python_entries.is_empty()
-            || !self.tools.is_empty()
-            || !self.hooks.is_empty()
+            || !self.execution.native_binaries.is_empty()
+            || !self.execution.node_entries.is_empty()
+            || !self.execution.python_entries.is_empty()
+            || self.lua_runtime.is_some()
+            || !self.mcp.servers.is_empty()
             || !self.prompt_contributions.is_empty()
-            || self.lifecycle.install.is_some()
-            || self.lifecycle.enable.is_some()
-            || self.lifecycle.disable.is_some()
-            || self.lifecycle.uninstall.is_some()
-            || !self.runtime.required_files.is_empty()
-            || !self.runtime.lua_modules.is_empty()
-            || self.runtime.hook_shutdown_function.is_some()
+            || !self.required_files.is_empty()
     }
 }
 
-/// Dependency installation source policy for one plugin package.
-/// 单个插件包的依赖安装来源策略。
+/// Host-managed execution resources shared by Lua and MCP protocols.
+/// 由 Lua 与 MCP 协议共享的宿主管理执行资源。
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SystemPluginDependencyPolicyManifest {
-    /// Whether dependencies must be installed from bundled assets or an approved registry.
-    /// 依赖必须从随包资产还是经授权的注册表安装。
+pub struct VulcanPluginExecutionManifest {
+    /// Dependency graph and acquisition policy for the private plugin environment.
+    /// 插件私有环境的依赖图与获取策略。
     #[serde(default)]
-    pub install_mode: SystemPluginDependencyInstallMode,
+    pub dependencies: VulcanPluginDependenciesManifest,
+    /// Logical native executable resources resolved by the Vulcan host.
+    /// 由 Vulcan 宿主解析的逻辑原生可执行资源。
+    #[serde(default)]
+    pub native_binaries: Vec<VulcanPluginBinaryManifest>,
+    /// Logical Node.js entries resolved through the managed runtime distribution.
+    /// 通过受管运行时发行版解析的逻辑 Node.js 入口。
+    #[serde(default)]
+    pub node_entries: Vec<VulcanPluginNodeEntryManifest>,
+    /// Logical Python entries resolved through the managed runtime distribution.
+    /// 通过受管运行时发行版解析的逻辑 Python 入口。
+    #[serde(default)]
+    pub python_entries: Vec<VulcanPluginPythonEntryManifest>,
+}
+
+/// Dependency declaration for one plugin-private execution environment.
+/// 单个插件私有执行环境的依赖声明。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VulcanPluginDependenciesManifest {
+    /// Package-relative dependency manifest consumed by the managed runtime installer.
+    /// 由受管运行时安装器消费的插件包相对依赖清单。
+    #[serde(default)]
+    pub manifest: Option<String>,
+    /// Whether dependencies come from bundled assets or an approved registry.
+    /// 依赖来自随包资产还是经授权的注册表。
+    #[serde(default)]
+    pub install_mode: VulcanPluginDependencyInstallMode,
 }
 
 /// Supported dependency acquisition modes.
 /// 支持的依赖获取模式。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SystemPluginDependencyInstallMode {
+pub enum VulcanPluginDependencyInstallMode {
     /// Install exclusively from artifacts shipped inside the plugin package.
     /// 仅从插件包内随附的制品安装。
     #[default]
@@ -185,7 +169,7 @@ pub enum SystemPluginDependencyInstallMode {
 /// 可选 Lua 生命周期函数声明。
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SystemPluginLifecycleManifest {
+pub struct VulcanPluginLifecycleManifest {
     /// Function invoked after a user plugin package is installed.
     /// 用户插件包安装完成后调用的函数。
     #[serde(default)]
@@ -204,11 +188,11 @@ pub struct SystemPluginLifecycleManifest {
     pub uninstall: Option<String>,
 }
 
-/// Host capability that must be declared and authorized before use.
-/// 使用前必须声明并授权的宿主能力。
+/// Host permission that must be declared and authorized before use.
+/// 使用前必须声明并授权的宿主权限。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SystemPluginCapability {
+pub enum VulcanPluginPermission {
     /// Access host-allowlisted Lua runtime modules declared by this bundled plugin.
     /// 访问当前内建插件声明且经宿主白名单允许的 Lua 运行时模块。
     RuntimeLuaModules,
@@ -230,6 +214,9 @@ pub enum SystemPluginCapability {
     /// Read and update the current plugin configuration.
     /// 读取并更新当前插件配置。
     Config,
+    /// Read explicitly referenced secrets scoped to the current plugin.
+    /// 读取限定到当前插件且被显式引用的 Secret。
+    SecretsRead,
     /// Render dynamic UI with the stable host UI context.
     /// 使用稳定宿主 UI 上下文渲染动态界面。
     UiHostContext,
@@ -254,7 +241,7 @@ pub enum SystemPluginCapability {
 /// 一个可通过通用服务边界调用的插件业务 action。
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SystemPluginActionManifest {
+pub struct VulcanPluginActionManifest {
     /// Stable plugin-local action identifier.
     /// 稳定的插件内 action 标识。
     pub id: String,
@@ -274,14 +261,14 @@ pub struct SystemPluginActionManifest {
     pub timeout_ms: u64,
     /// Explicit caller classes allowed to invoke this action.
     /// 允许调用当前 action 的显式调用方类别。
-    pub callers: Vec<SystemPluginActionCaller>,
+    pub callers: Vec<VulcanPluginActionCaller>,
 }
 
 /// Authorized caller class for one plugin action.
 /// 单个插件 action 的授权调用方类别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SystemPluginActionCaller {
+pub enum VulcanPluginActionCaller {
     /// The plugin's own Lua bundle may invoke the action.
     /// 插件自身 Lua bundle 可以调用 action。
     PluginRuntime,
@@ -297,24 +284,24 @@ pub enum SystemPluginActionCaller {
 /// 单个插件的动态 UI 声明。
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SystemPluginUiManifest {
+pub struct VulcanPluginUiManifest {
     /// Ordered UI mounts contributed by the plugin.
     /// 插件贡献的有序 UI 挂载集合。
     #[serde(default)]
-    pub mounts: Vec<SystemPluginUiMountManifest>,
+    pub mounts: Vec<VulcanPluginUiMountManifest>,
 }
 
 /// One uncompressed ESM module mounted into a host-owned UI location.
 /// 一个挂载到宿主持有界面位置的未压缩 ESM 模块。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SystemPluginUiMountManifest {
+pub struct VulcanPluginUiMountManifest {
     /// Stable plugin-local mount identifier.
     /// 稳定的插件内挂载标识。
     pub id: String,
     /// Host-owned mount point.
     /// 宿主持有的挂载点。
-    pub point: SystemPluginUiMountPoint,
+    pub point: VulcanPluginUiMountPoint,
     /// Default host navigation label for this mount.
     /// 此挂载点使用的默认宿主导航名称。
     #[serde(default)]
@@ -326,7 +313,7 @@ pub struct SystemPluginUiMountManifest {
     /// Host-owned icon rendered beside the navigation label.
     /// 在导航名称旁渲染的宿主持有图标。
     #[serde(default)]
-    pub icon: SystemPluginUiMountIcon,
+    pub icon: VulcanPluginUiMountIcon,
     /// Package-relative uncompressed ESM file.
     /// 插件包相对未压缩 ESM 文件。
     pub entry: String,
@@ -339,7 +326,7 @@ pub struct SystemPluginUiMountManifest {
 /// 动态插件导航条目可使用的稳定宿主图标。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SystemPluginUiMountIcon {
+pub enum VulcanPluginUiMountIcon {
     /// Generic plugin puzzle icon.
     /// 通用插件拼图图标。
     #[default]
@@ -356,7 +343,7 @@ pub enum SystemPluginUiMountIcon {
 /// 稳定的宿主持有动态 UI 挂载点。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SystemPluginUiMountPoint {
+pub enum VulcanPluginUiMountPoint {
     /// Plugin detail page below the LuaSkills/Plugins area.
     /// LuaSkills/插件区域下的插件详情页。
     SkillsPluginDetail,
@@ -372,7 +359,7 @@ pub enum SystemPluginUiMountPoint {
 /// 插件持有的配置 Schema 与默认值。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SystemPluginConfigManifest {
+pub struct VulcanPluginConfigManifest {
     /// Package-relative JSON Schema for the complete configuration object.
     /// 完整配置对象使用的插件包相对 JSON Schema。
     pub schema_file: String,
@@ -385,7 +372,7 @@ pub struct SystemPluginConfigManifest {
 /// 一个带有插件包相对目标映射的逻辑原生可执行文件。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SystemPluginBinaryManifest {
+pub struct VulcanPluginBinaryManifest {
     /// Stable plugin-local executable identifier.
     /// 稳定的插件内可执行文件标识。
     pub id: String,
@@ -406,7 +393,7 @@ pub struct SystemPluginBinaryManifest {
 /// 单个由插件包持有的逻辑 Node.js 脚本入口。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SystemPluginNodeEntryManifest {
+pub struct VulcanPluginNodeEntryManifest {
     /// Stable plugin-local Node entry identifier.
     /// 稳定的插件内 Node 入口标识。
     pub id: String,
@@ -422,7 +409,7 @@ pub struct SystemPluginNodeEntryManifest {
 /// 单个由插件包持有的逻辑 Python 脚本入口。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SystemPluginPythonEntryManifest {
+pub struct VulcanPluginPythonEntryManifest {
     /// Stable plugin-local Python entry identifier.
     /// 稳定的插件内 Python 入口标识。
     pub id: String,
@@ -438,7 +425,7 @@ pub struct SystemPluginPythonEntryManifest {
 /// 默认的用户可见插件元数据。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SystemPluginDisplayManifest {
+pub struct VulcanPluginDisplayManifest {
     /// Default plugin name.
     /// 默认插件名称。
     pub name: String,
@@ -451,28 +438,21 @@ pub struct SystemPluginDisplayManifest {
 /// 目标平台可用性声明。
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SystemPluginPlatformManifest {
+pub struct VulcanPluginPlatformManifest {
     /// Exact Rust target triples excluded by the package.
     /// 插件包明确排除的 Rust 目标三元组。
     #[serde(default)]
     pub excluded_targets: Vec<String>,
 }
 
-/// Managed Lua runtime entry declaration.
-/// 受管 Lua 运行时入口声明。
-#[derive(Debug, Clone, Default, Deserialize)]
+/// Optional managed Lua protocol implemented by one plugin bundle.
+/// 由单个插件 bundle 实现的可选受管 Lua 协议。
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SystemPluginRuntimeManifest {
-    /// Dependency manifest relative to the package root.
-    /// 相对于插件包根目录的依赖清单。
-    pub dependencies_file: String,
+pub struct VulcanPluginLuaRuntimeManifest {
     /// Package-relative bundled Lua source loaded through the fixed Vulcan bridge package.
     /// 通过固定 Vulcan 桥接包加载的插件包相对 Lua bundle 源文件。
     pub bundle: String,
-    /// Additional package-relative regular files required before the plugin can be enabled.
-    /// 插件可启用前必须存在的其他包相对普通文件集合。
-    #[serde(default)]
-    pub required_files: Vec<String>,
     /// Host-allowlisted Lua modules exposed through the restricted plugin runtime API.
     /// 通过受限插件运行时 API 暴露的宿主白名单 Lua 模块。
     #[serde(default)]
@@ -494,13 +474,260 @@ pub struct SystemPluginRuntimeManifest {
     /// 触发宿主自有会话清理的可选空闲超时秒数。
     #[serde(default)]
     pub session_idle_timeout_sec: Option<u64>,
+    /// Lifecycle callbacks exported by the Lua bundle.
+    /// Lua bundle 导出的生命周期回调。
+    #[serde(default)]
+    pub lifecycle: VulcanPluginLifecycleManifest,
+    /// Host-callable plugin business actions implemented by Lua functions.
+    /// 由 Lua 函数实现且可由宿主调用的插件业务 action 集合。
+    #[serde(default)]
+    pub actions: Vec<VulcanPluginActionManifest>,
+    /// Atomic provider-visible Lua tool group.
+    /// 原子化的 Provider 可见 Lua 工具组。
+    #[serde(default)]
+    pub tools: Vec<VulcanPluginToolManifest>,
+    /// Lua hook handlers registered into host-owned hook points.
+    /// 注册到宿主自有 hook 点位的 Lua hook 处理器。
+    #[serde(default)]
+    pub hooks: Vec<VulcanPluginHookManifest>,
+}
+
+/// Model Context Protocol servers contributed by one plugin.
+/// 单个插件贡献的模型上下文协议服务器集合。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VulcanPluginMcpManifest {
+    /// Independently managed servers keyed by their plugin-local identifiers.
+    /// 以插件内标识独立管理的服务器集合。
+    #[serde(default)]
+    pub servers: Vec<VulcanPluginMcpServerManifest>,
+}
+
+/// One plugin-owned Model Context Protocol server.
+/// 单个插件自有的模型上下文协议服务器。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VulcanPluginMcpServerManifest {
+    /// Stable server identifier within the owning plugin.
+    /// 所属插件内部稳定的服务器标识。
+    pub id: String,
+    /// Default user-facing server name.
+    /// 默认的用户可见服务器名称。
+    pub name: String,
+    /// Strictly selected transport and its transport-specific settings.
+    /// 严格选择的传输方式及其专属设置。
+    pub transport: VulcanPluginMcpTransportManifest,
+}
+
+impl VulcanPluginMcpServerManifest {
+    /// Returns the exact deduplicated Secret Store key allowlist declared by this server.
+    /// 返回当前服务器声明的精确去重 Secret Store 键白名单。
+    pub fn declared_secret_keys(&self) -> BTreeSet<String> {
+        let mut keys = BTreeSet::new();
+        collect_mcp_transport_secret_keys(&self.transport, &mut keys);
+        keys
+    }
+}
+
+/// Collects secret keys from every typed value source in one MCP transport.
+/// 从单个 MCP 传输的每个带类型值来源收集 Secret 键。
+fn collect_mcp_transport_secret_keys(
+    transport: &VulcanPluginMcpTransportManifest,
+    keys: &mut BTreeSet<String>,
+) {
+    match transport {
+        VulcanPluginMcpTransportManifest::Stdio { args, env, .. } => {
+            for source in args.iter().chain(env.values()) {
+                collect_mcp_value_source_secret_key(source, keys);
+            }
+        }
+        VulcanPluginMcpTransportManifest::Http {
+            url,
+            headers,
+            oauth,
+        }
+        | VulcanPluginMcpTransportManifest::Sse {
+            url,
+            headers,
+            oauth,
+        } => {
+            collect_mcp_value_source_secret_key(url, keys);
+            for source in headers.values() {
+                collect_mcp_value_source_secret_key(source, keys);
+            }
+            if let Some(oauth) = oauth {
+                for source in [
+                    oauth.client_id.as_ref(),
+                    oauth.client_secret.as_ref(),
+                    oauth.redirect_uri.as_ref(),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    collect_mcp_value_source_secret_key(source, keys);
+                }
+            }
+        }
+    }
+}
+
+/// Adds one Secret source key and ignores non-secret sources by construction.
+/// 添加单个 Secret 来源键，并按结构忽略非 Secret 来源。
+fn collect_mcp_value_source_secret_key(
+    source: &VulcanPluginValueSourceManifest,
+    keys: &mut BTreeSet<String>,
+) {
+    if let VulcanPluginValueSourceManifest::Secret { key } = source {
+        keys.insert(key.clone());
+    }
+}
+
+/// Transport-specific settings for one plugin MCP server.
+/// 单个插件 MCP 服务器的传输专属设置。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum VulcanPluginMcpTransportManifest {
+    /// Local stdio transport launched through a manifest-owned managed entry.
+    /// 通过清单自有受管入口启动的本地 stdio 传输。
+    Stdio {
+        /// Managed launcher resolved without Shell or PATH lookup.
+        /// 不经 Shell 或 PATH 查找解析的受管启动器。
+        launcher: VulcanPluginMcpStdioLauncherManifest,
+        /// Ordered launcher arguments resolved from explicit value sources.
+        /// 从显式值来源解析的有序启动参数。
+        #[serde(default)]
+        args: Vec<VulcanPluginValueSourceManifest>,
+        /// Child environment values keyed by exact variable name.
+        /// 以精确变量名为键的子进程环境变量值。
+        #[serde(default)]
+        env: BTreeMap<String, VulcanPluginValueSourceManifest>,
+    },
+    /// Streamable HTTP transport connected to an explicit remote endpoint.
+    /// 连接到显式远程端点的 Streamable HTTP 传输。
+    Http {
+        /// Remote endpoint resolved from one typed value source.
+        /// 从唯一带类型值来源解析的远程端点。
+        url: VulcanPluginValueSourceManifest,
+        /// Request headers keyed by exact header name.
+        /// 以精确 Header 名称为键的请求 Header。
+        #[serde(default)]
+        headers: BTreeMap<String, VulcanPluginValueSourceManifest>,
+        /// Optional host-driven OAuth client settings.
+        /// 可选的宿主驱动 OAuth 客户端设置。
+        #[serde(default)]
+        oauth: Option<VulcanPluginMcpOAuthManifest>,
+    },
+    /// Legacy Server-Sent Events transport connected to an explicit endpoint.
+    /// 连接到显式端点的旧式服务器发送事件传输。
+    Sse {
+        /// Remote endpoint resolved from one typed value source.
+        /// 从唯一带类型值来源解析的远程端点。
+        url: VulcanPluginValueSourceManifest,
+        /// Request headers keyed by exact header name.
+        /// 以精确 Header 名称为键的请求 Header。
+        #[serde(default)]
+        headers: BTreeMap<String, VulcanPluginValueSourceManifest>,
+        /// Optional host-driven OAuth client settings.
+        /// 可选的宿主驱动 OAuth 客户端设置。
+        #[serde(default)]
+        oauth: Option<VulcanPluginMcpOAuthManifest>,
+    },
+}
+
+/// Host-driven OAuth settings for one plugin-owned remote MCP server.
+/// 单个插件自有远端 MCP 服务器的宿主驱动 OAuth 设置。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VulcanPluginMcpOAuthManifest {
+    /// Optional pre-registered client identifier.
+    /// 可选的预注册客户端标识。
+    #[serde(default)]
+    pub client_id: Option<VulcanPluginValueSourceManifest>,
+    /// Optional pre-registered client secret from the host Secret Store.
+    /// 可选的宿主 Secret Store 预注册客户端密钥。
+    #[serde(default)]
+    pub client_secret: Option<VulcanPluginValueSourceManifest>,
+    /// Ordered OAuth scopes requested during authorization.
+    /// 授权期间请求的有序 OAuth scope 集合。
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    /// Optional exact redirect URI.
+    /// 可选的精确回调 URI。
+    #[serde(default)]
+    pub redirect_uri: Option<VulcanPluginValueSourceManifest>,
+}
+
+/// Managed local launcher variants accepted by plugin MCP stdio servers.
+/// 插件 MCP stdio 服务器允许使用的受管本地启动器变体。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum VulcanPluginMcpStdioLauncherManifest {
+    /// Execute a declared Node.js module through the managed Node runtime.
+    /// 通过受管 Node 运行时执行已声明的 Node.js 模块。
+    NodeEntry {
+        /// Identifier from `execution.node_entries`.
+        /// 来自 `execution.node_entries` 的标识。
+        entry_id: String,
+    },
+    /// Execute one exact package bin from the plugin-private dependency environment.
+    /// 从插件私有依赖环境执行一个精确的 package bin。
+    NodePackageBin {
+        /// Exact dependency package name.
+        /// 精确依赖包名称。
+        package: String,
+        /// Exact bin key declared by the installed package.
+        /// 已安装依赖包声明的精确 bin 键。
+        bin: String,
+    },
+    /// Execute a declared native binary directly without a Shell.
+    /// 不经 Shell 直接执行已声明的原生二进制文件。
+    NativeBinary {
+        /// Identifier from `execution.native_binaries`.
+        /// 来自 `execution.native_binaries` 的标识。
+        binary_id: String,
+    },
+}
+
+/// One unambiguous source for a plugin configuration value.
+/// 单个插件配置值的无歧义来源。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
+pub enum VulcanPluginValueSourceManifest {
+    /// Inline non-secret value stored in the plugin manifest.
+    /// 存储在插件清单中的内联非敏感值。
+    Literal {
+        /// Exact literal value.
+        /// 精确字面值。
+        value: String,
+    },
+    /// Reference to one key from the plugin configuration contract.
+    /// 对插件配置契约中单个键的引用。
+    Config {
+        /// Exact plugin configuration key.
+        /// 精确插件配置键。
+        key: String,
+    },
+    /// Reference to one host-managed secret scoped to the plugin.
+    /// 对限定到当前插件的单个宿主管理 Secret 的引用。
+    Secret {
+        /// Exact plugin-scoped secret key.
+        /// 精确插件作用域 Secret 键。
+        key: String,
+    },
+    /// Reference to one explicitly named host environment variable.
+    /// 对单个显式命名宿主环境变量的引用。
+    Environment {
+        /// Exact environment variable name.
+        /// 精确环境变量名称。
+        name: String,
+    },
 }
 
 /// One Lua handler bound to an existing host-owned hook point.
 /// 绑定到现有宿主自有 hook 点位的单个 Lua 处理器。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SystemPluginHookManifest {
+pub struct VulcanPluginHookManifest {
     /// Stable hook identifier within the owning plugin.
     /// 所属插件内部稳定的 hook 标识。
     pub id: String,
@@ -547,7 +774,7 @@ pub struct SystemPluginHookManifest {
 /// 支持的通用工具执行生命周期。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SystemPluginToolExecutionKind {
+pub enum VulcanPluginToolExecutionKind {
     /// Create, invoke, and close one temporary managed lease for a single call.
     /// 为单次调用创建、执行并关闭一个临时受管租约。
     Stateless,
@@ -566,10 +793,10 @@ pub enum SystemPluginToolExecutionKind {
 /// 附着在单个插件工具上的运行时调度声明。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SystemPluginToolExecutionManifest {
+pub struct VulcanPluginToolExecutionManifest {
     /// Generic session lifecycle kind.
     /// 通用会话生命周期类型。
-    pub kind: SystemPluginToolExecutionKind,
+    pub kind: VulcanPluginToolExecutionKind,
     /// Plugin-owned operation name inserted into the exact JSON payload.
     /// 插入精确 JSON 载荷的插件自有操作名。
     pub operation: String,
@@ -594,7 +821,7 @@ pub struct SystemPluginToolExecutionManifest {
 /// 插件包声明的单个 Provider 可见工具。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SystemPluginToolManifest {
+pub struct VulcanPluginToolManifest {
     /// Stable globally unique tool identifier.
     /// 全局唯一的稳定工具标识。
     pub id: String,
@@ -613,14 +840,14 @@ pub struct SystemPluginToolManifest {
     pub available_in_plan: bool,
     /// Generic runtime dispatch declaration.
     /// 通用运行时调度声明。
-    pub execution: SystemPluginToolExecutionManifest,
+    pub execution: VulcanPluginToolExecutionManifest,
 }
 
 /// One plugin-level model instruction contribution.
 /// 单个插件级模型说明贡献。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SystemPluginPromptManifest {
+pub struct VulcanPluginPromptManifest {
     /// Stable contribution identifier within the plugin.
     /// 插件内部稳定的贡献标识。
     pub id: String,
@@ -636,7 +863,7 @@ pub struct SystemPluginPromptManifest {
 /// 从单个语言文件加载的可选用户可见元数据。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SystemPluginLocaleManifest {
+pub struct VulcanPluginLocaleManifest {
     /// Localized plugin name.
     /// 本地化插件名称。
     pub name: String,

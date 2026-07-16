@@ -377,21 +377,24 @@ export interface LuaSkillsCatalogSummary {
   skills: LuaSkillSummary[];
 }
 
-// SystemPluginPermissionPreview is the host-validated authorization surface for one local package.
-// SystemPluginPermissionPreview 是宿主校验后的单个本地插件包授权界面数据。
-export interface SystemPluginPermissionPreview {
+// VulcanPluginPermissionPreview is the host-validated authorization surface for one local package.
+// VulcanPluginPermissionPreview 是宿主校验后的单个本地插件包授权界面数据。
+export interface VulcanPluginPermissionPreview {
   // Stable plugin identity.
   // 稳定插件身份。
   pluginId: string;
   // Exact package version.
   // 精确插件包版本。
   version: string;
+  // Exact package content fingerprint bound to this authorization preview.
+  // 与当前授权预览绑定的精确插件包内容指纹。
+  contentFingerprint: string;
   // Host-assigned package origin.
   // 宿主分配的插件包来源。
   origin: "user_installed";
-  // Complete capability set that must be approved exactly.
-  // 必须完整批准的能力集合。
-  capabilities: string[];
+  // Complete permission set that must be approved exactly.
+  // 必须完整批准的权限集合。
+  permissions: string[];
   // Exact host Hook points affected by the plugin.
   // 插件影响的精确宿主 Hook 点。
   hookPoints: string[];
@@ -407,6 +410,9 @@ export interface SystemPluginPermissionPreview {
   // Declared Python process identifiers.
   // 声明的 Python 进程标识。
   pythonEntryIds: string[];
+  // Secret keys required to start local MCP servers before installation commits.
+  // 安装提交前启动本地 MCP 服务器所需的 Secret 键。
+  installSecretRequirements: VulcanPluginInstallSecretRequirement[];
   // Read-only Agent Skill identifiers contained in the package.
   // 插件包内包含的只读 Agent Skill 标识。
   skillIds: string[];
@@ -415,7 +421,46 @@ export interface SystemPluginPermissionPreview {
   agentIds: string[];
   // Whether the package declares an executable Lua runtime.
   // 插件包是否声明了可执行 Lua 运行时。
-  hasRuntime: boolean;
+  hasLuaRuntime: boolean;
+  // Sanitized MCP server declarations included in the authorization surface.
+  // 纳入授权界面的脱敏 MCP 服务器声明。
+  mcpServers: VulcanPluginMcpPermissionPreview[];
+}
+
+// VulcanPluginMcpPermissionPreview describes one MCP server without endpoint or credential values.
+// VulcanPluginMcpPermissionPreview 描述单个不含端点或凭据值的 MCP 服务器。
+export interface VulcanPluginMcpPermissionPreview {
+  // Stable plugin-local server identifier.
+  // 稳定的插件内服务器标识。
+  serverId: string;
+  // User-facing server name.
+  // 用户可见服务器名称。
+  name: string;
+  // Exact transport family.
+  // 精确传输类型。
+  transport: "stdio" | "http" | "sse";
+  // Declared Secret Store keys without values.
+  // 不含值的已声明 Secret Store 键集合。
+  secretKeys: string[];
+}
+
+// VulcanPluginInstallSecretRequirement identifies one exact local-MCP credential input.
+// VulcanPluginInstallSecretRequirement 标识单个精确的本地 MCP 凭据输入。
+export interface VulcanPluginInstallSecretRequirement {
+  // Plugin-local server identifier owning the credential namespace.
+  // 持有凭据命名空间的插件内服务器标识。
+  serverId: string;
+  // Exact manifest-declared Secret key.
+  // 清单声明的精确 Secret 键。
+  secretKey: string;
+}
+
+// VulcanPluginInitialSecret carries one installation-only credential mutation to the service.
+// VulcanPluginInitialSecret 将单个仅用于安装的凭据变更传递给服务。
+export interface VulcanPluginInitialSecret extends VulcanPluginInstallSecretRequirement {
+  // Non-empty value written directly to the operating-system credential store.
+  // 直接写入操作系统凭据库的非空值。
+  value: string;
 }
 
 // PluginUiInvalidatedEvent describes one revision-only plugin UI data invalidation.
@@ -432,8 +477,8 @@ export interface PluginUiInvalidatedEvent {
   revision: number;
 }
 
-// PluginSummary describes one System Plugin or LuaSkills package projected by the service.
-// PluginSummary 描述服务端投影的单个系统插件或 LuaSkills 包。
+// PluginSummary describes one Vulcan Plugin or LuaSkills package projected by the service.
+// PluginSummary 描述服务端投影的单个 Vulcan 插件或 LuaSkills 包。
 export interface PluginSummary {
   // Stable plugin identifier.
   // 稳定插件标识。
@@ -504,16 +549,16 @@ export interface PluginSummary {
   diagnostics: string[];
   // Stable lifecycle manager kind used by the action router.
   // 动作路由使用的稳定生命周期管理类型。
-  managementKind: "luaSkill" | "systemPlugin";
+  managementKind: "luaSkill" | "vulcanPlugin";
   // Optional manifest-owned extension surfaces for real Vulcan plugins.
   // 真实 Vulcan 插件可用的可选清单自有扩展面。
   extension?: {
     // Stable package origin.
     // 稳定的包来源。
-    origin: "bundledSystem" | "userInstalled";
-    // Exact host capabilities declared by the manifest.
-    // 清单声明的精确宿主能力。
-    capabilities: string[];
+    origin: "bundled" | "userInstalled";
+    // Exact host permissions declared by the manifest.
+    // 清单声明的精确宿主权限。
+    permissions: string[];
     // Declared host hooks shown during authorization and management.
     // 在授权与管理期间展示的已声明宿主 Hook。
     hooks: Array<{ id: string; point: string }>;
@@ -550,7 +595,50 @@ export interface PluginSummary {
     agents: string[];
     // Whether this plugin owns an executable Lua runtime.
     // 当前插件是否拥有可执行 Lua 运行时。
-    hasRuntime: boolean;
+    hasLuaRuntime: boolean;
+    // Read-only plugin-owned MCP server diagnostics.
+    // 只读插件自有 MCP 服务器诊断。
+    mcpServers: Array<{
+      // Stable plugin-local server identifier.
+      // 稳定的插件内服务器标识。
+      id: string;
+      // User-facing server name.
+      // 面向用户的服务器名称。
+      name: string;
+      // Stable transport-family label.
+      // 稳定传输类型标签。
+      transport: "stdio" | "http" | "sse" | string;
+      // Credential-free endpoint or managed-launcher summary.
+      // 不含凭据的端点或受管启动器摘要。
+      endpoint: string;
+      // Stable runtime state key.
+      // 稳定运行时状态键。
+      status: "disabled" | "preparing" | "connecting" | "ready" | "degraded" | "failed" | "draining" | "stopped" | string;
+      // Owning plugin content generation.
+      // 所属插件内容代次。
+      generation: number;
+      // Consecutive automatic retry count.
+      // 连续自动重试次数。
+      retryCount: number;
+      // Current complete tool count.
+      // 当前完整工具数量。
+      toolCount: number;
+      // Current prompt count.
+      // 当前 Prompt 数量。
+      promptCount: number;
+      // Current resource count.
+      // 当前 Resource 数量。
+      resourceCount: number;
+      // Latest sanitized error.
+      // 最近一次已脱敏错误。
+      lastError?: string | null;
+      // Bounded sanitized transport diagnostics, newest entries last.
+      // 有界脱敏传输诊断，较新的条目位于末尾。
+      recentLogs?: string[];
+      // Exact host-owned secret key allowlist.
+      // 精确宿主持有 Secret 键白名单。
+      secretKeys: string[];
+    }>;
   } | null;
 }
 
@@ -597,8 +685,8 @@ export interface LuaSkillsCatalogUpdate {
   // Complete LuaSkills catalog after the committed mutation.
   // 已提交变更后的完整 LuaSkills 目录。
   luaSkills: LuaSkillsCatalogSummary;
-  // Plugin rows derived from the same committed LuaSkills and System Plugin catalogs.
-  // 从同一份已提交 LuaSkills 与系统插件目录派生的插件行。
+  // Plugin rows derived from the same committed LuaSkills and Vulcan Plugin catalogs.
+  // 从同一份已提交 LuaSkills 与 Vulcan 插件目录派生的插件行。
   plugins: PluginSummary[];
 }
 

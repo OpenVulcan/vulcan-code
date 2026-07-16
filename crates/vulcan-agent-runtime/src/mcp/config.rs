@@ -6,6 +6,7 @@ use crate::provider_config::{
     ProviderConfigurationFile,
 };
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::PathBuf;
 use vulcan_mcp_runtime::{McpTransportLaunchSpec, McpTransportOAuthSpec};
 
@@ -50,7 +51,7 @@ impl From<PersistedMcpTransportKind> for McpTransportKind {
 
 /// Runtime-facing MCP server configuration entry.
 /// 面向运行时的 MCP 服务器配置条目。
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct McpServerOAuthConfig {
     /// Optional pre-registered OAuth client identifier.
     /// 可选的预注册 OAuth 客户端标识。
@@ -92,10 +93,202 @@ impl From<McpServerOAuthConfig> for McpTransportOAuthSpec {
     }
 }
 
+/// Origin of one runtime-facing MCP server definition.
+/// 单个面向运行时的 MCP 服务器定义来源。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum McpServerSource {
+    /// Server declared by the user's persisted MCP configuration.
+    /// 由用户持久化 MCP 配置声明的服务器。
+    UserConfigured,
+    /// Server contributed by one immutable plugin generation.
+    /// 由某个不可变插件代次贡献的服务器。
+    Plugin {
+        /// Stable owning plugin identifier.
+        /// 稳定的所属插件标识。
+        plugin_id: String,
+        /// Owning plugin generation.
+        /// 所属插件代次。
+        generation: u64,
+    },
+}
+
+impl fmt::Debug for McpServerOAuthConfig {
+    /// Formats only OAuth structure metadata and never credential-bearing values.
+    /// 仅格式化 OAuth 结构元数据，绝不输出可能承载凭据的值。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `formatter` receives the redacted structural representation.
+    /// `formatter` 接收脱敏后的结构表示。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the formatter result after all sensitive fields have been reduced to presence flags.
+    /// 在所有敏感字段均被收敛为存在性标记后返回格式化结果。
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("McpServerOAuthConfig")
+            .field("has_client_id", &self.client_id.is_some())
+            .field("has_client_secret", &self.client_secret.is_some())
+            .field("scope_count", &self.scopes.len())
+            .field("has_redirect_uri", &self.redirect_uri.is_some())
+            .finish()
+    }
+}
+
+impl McpServerSource {
+    /// Returns the stable runtime partition key for this source.
+    /// 返回当前来源的稳定运行时分区键。
+    pub fn partition_key(&self) -> String {
+        match self {
+            Self::UserConfigured => String::from("user"),
+            Self::Plugin {
+                plugin_id,
+                generation,
+            } => format!("plugin:{plugin_id}:{generation}"),
+        }
+    }
+}
+
+/// Runtime-facing MCP server transport configuration.
+/// 面向运行时的 MCP 服务器传输配置。
+#[derive(Clone)]
+pub enum McpServerTransportConfig {
+    /// Local child process connected through standard input and output.
+    /// 通过标准输入输出连接的本地子进程。
+    Stdio {
+        /// Exact executable path or persisted user command.
+        /// 精确可执行文件路径或用户持久化命令。
+        command: String,
+        /// Ordered process arguments.
+        /// 有序进程参数。
+        args: Vec<String>,
+        /// Optional working directory.
+        /// 可选工作目录。
+        cwd: Option<String>,
+        /// Explicit child environment values.
+        /// 显式子进程环境变量值。
+        env: BTreeMap<String, String>,
+        /// Host environment names passed through when present.
+        /// 存在时从宿主透传的环境变量名称。
+        env_passthrough: Vec<String>,
+        /// Whether undeclared host environment variables remain visible to the child process.
+        /// 未声明的宿主环境变量是否继续对该子进程可见。
+        inherit_environment: bool,
+    },
+    /// Streamable HTTP connection.
+    /// Streamable HTTP 连接。
+    Http {
+        /// Exact remote endpoint URL.
+        /// 精确远端端点 URL。
+        url: String,
+        /// Optional bearer token.
+        /// 可选 Bearer Token。
+        bearer_token: Option<String>,
+        /// Explicit request headers.
+        /// 显式请求 Header。
+        headers: BTreeMap<String, String>,
+        /// Header values sourced from named host environment variables.
+        /// 从具名宿主环境变量获取值的 Header。
+        headers_from_env: BTreeMap<String, String>,
+        /// Optional host-driven OAuth settings.
+        /// 可选宿主驱动 OAuth 设置。
+        oauth: Option<McpServerOAuthConfig>,
+    },
+    /// Legacy Server-Sent Events connection.
+    /// 旧式 Server-Sent Events 连接。
+    Sse {
+        /// Exact remote endpoint URL.
+        /// 精确远端端点 URL。
+        url: String,
+        /// Optional bearer token.
+        /// 可选 Bearer Token。
+        bearer_token: Option<String>,
+        /// Explicit request headers.
+        /// 显式请求 Header。
+        headers: BTreeMap<String, String>,
+        /// Header values sourced from named host environment variables.
+        /// 从具名宿主环境变量获取值的 Header。
+        headers_from_env: BTreeMap<String, String>,
+        /// Optional host-driven OAuth settings.
+        /// 可选宿主驱动 OAuth 设置。
+        oauth: Option<McpServerOAuthConfig>,
+    },
+}
+
+impl fmt::Debug for McpServerTransportConfig {
+    /// Formats transport topology while redacting arguments, environment values, headers, and OAuth values.
+    /// 格式化传输拓扑，同时脱敏参数、环境变量值、Header 与 OAuth 值。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `formatter` receives only safe transport metadata and key names.
+    /// `formatter` 仅接收安全的传输元数据与键名。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the formatter result without serializing any dynamic value source result.
+    /// 返回不序列化任何动态值来源结果的格式化结果。
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Stdio {
+                command,
+                args,
+                cwd,
+                env,
+                ..
+            } => formatter
+                .debug_struct("Stdio")
+                .field("command", &redacted_stdio_program(command))
+                .field("argument_count", &args.len())
+                .field("has_cwd", &cwd.is_some())
+                .field("environment_keys", &env.keys().collect::<Vec<_>>())
+                .finish(),
+            Self::Http {
+                url,
+                bearer_token,
+                headers,
+                headers_from_env,
+                oauth,
+            } => formatter
+                .debug_struct("Http")
+                .field("endpoint", &redacted_remote_endpoint(url))
+                .field("has_bearer_token", &bearer_token.is_some())
+                .field("header_names", &headers.keys().collect::<Vec<_>>())
+                .field(
+                    "environment_header_names",
+                    &headers_from_env.keys().collect::<Vec<_>>(),
+                )
+                .field("oauth", oauth)
+                .finish(),
+            Self::Sse {
+                url,
+                bearer_token,
+                headers,
+                headers_from_env,
+                oauth,
+            } => formatter
+                .debug_struct("Sse")
+                .field("endpoint", &redacted_remote_endpoint(url))
+                .field("has_bearer_token", &bearer_token.is_some())
+                .field("header_names", &headers.keys().collect::<Vec<_>>())
+                .field(
+                    "environment_header_names",
+                    &headers_from_env.keys().collect::<Vec<_>>(),
+                )
+                .field("oauth", oauth)
+                .finish(),
+        }
+    }
+}
+
 /// Runtime-facing MCP server configuration entry.
 /// 面向运行时的 MCP 服务器配置条目。
 #[derive(Debug, Clone)]
 pub struct McpServerConfig {
+    /// Host-owned origin used for partitioning and lifecycle isolation.
+    /// 宿主持有且用于分区和生命周期隔离的来源。
+    pub source: McpServerSource,
     /// Stable server identifier.
     /// 稳定服务器标识。
     pub id: String,
@@ -105,74 +298,170 @@ pub struct McpServerConfig {
     /// Whether the server is enabled.
     /// 当前服务器是否启用。
     pub enabled: bool,
-    /// Transport family.
-    /// 传输类型。
-    pub transport: McpTransportKind,
-    /// Process command.
-    /// 进程命令。
-    pub command: String,
-    /// Process argument list.
-    /// 进程参数列表。
-    pub args: Vec<String>,
-    /// Remote endpoint URL used by HTTP transports.
-    /// HTTP 传输使用的远端端点 URL。
-    pub url: Option<String>,
-    /// Optional bearer token used by HTTP transports.
-    /// HTTP 传输使用的可选 Bearer Token。
-    pub bearer_token: Option<String>,
-    /// Additional HTTP headers used by HTTP transports.
-    /// HTTP 传输使用的附加 HTTP 请求头。
-    pub headers: BTreeMap<String, String>,
-    /// Optional HTTP-header values sourced from host environment variables when present.
-    /// 当宿主环境变量存在时从中取值的可选 HTTP 请求头映射。
-    pub headers_from_env: BTreeMap<String, String>,
-    /// Optional OAuth configuration used by host-driven remote authorization flows.
-    /// 宿主驱动远端授权流程使用的可选 OAuth 配置。
-    pub oauth: Option<McpServerOAuthConfig>,
-    /// Optional working directory.
-    /// 可选工作目录。
-    pub cwd: Option<String>,
-    /// Additional environment variables.
-    /// 附加环境变量集合。
-    pub env: BTreeMap<String, String>,
-    /// Optional environment-variable names that should be passed through from the host process when present.
-    /// 当前宿主进程存在时应被透传的可选环境变量名称集合。
-    pub env_passthrough: Vec<String>,
+    /// Strict transport-specific runtime settings.
+    /// 严格区分的传输专属运行时设置。
+    pub transport: McpServerTransportConfig,
 }
 
 impl McpServerConfig {
-    /// Returns a compact command-line summary.
-    /// 返回紧凑的命令行摘要。
+    /// Returns the transport family represented by the strict transport settings.
+    /// 返回严格传输设置所表示的传输类型。
+    pub const fn transport_kind(&self) -> McpTransportKind {
+        match &self.transport {
+            McpServerTransportConfig::Stdio { .. } => McpTransportKind::Stdio,
+            McpServerTransportConfig::Http { .. } => McpTransportKind::Http,
+            McpServerTransportConfig::Sse { .. } => McpTransportKind::Sse,
+        }
+    }
+
+    /// Returns the remote OAuth settings when the selected transport supports OAuth.
+    /// 当所选传输支持 OAuth 时返回远端 OAuth 设置。
+    pub fn oauth(&self) -> Option<&McpServerOAuthConfig> {
+        match &self.transport {
+            McpServerTransportConfig::Http { oauth, .. }
+            | McpServerTransportConfig::Sse { oauth, .. } => oauth.as_ref(),
+            McpServerTransportConfig::Stdio { .. } => None,
+        }
+    }
+
+    /// Returns the remote endpoint URL when the selected transport is remote.
+    /// 当所选传输为远端传输时返回端点 URL。
+    pub fn remote_url(&self) -> Option<&str> {
+        match &self.transport {
+            McpServerTransportConfig::Http { url, .. }
+            | McpServerTransportConfig::Sse { url, .. } => Some(url),
+            McpServerTransportConfig::Stdio { .. } => None,
+        }
+    }
+
+    /// Returns a compact redacted endpoint summary that never includes arguments, query strings, or credentials.
+    /// 返回不包含参数、查询字符串或凭据的紧凑脱敏端点摘要。
     pub fn command_summary(&self) -> String {
-        match self.transport {
-            McpTransportKind::Stdio => {
-                if self.args.is_empty() {
-                    self.command.clone()
+        match &self.transport {
+            McpServerTransportConfig::Stdio { command, args, .. } => {
+                let program = redacted_stdio_program(command);
+                if args.is_empty() {
+                    program
                 } else {
-                    format!("{} {}", self.command, self.args.join(" "))
+                    format!("{program} <{} arguments>", args.len())
                 }
             }
-            McpTransportKind::Http | McpTransportKind::Sse => self
-                .url
-                .clone()
-                .unwrap_or_else(|| String::from("(missing url)")),
+            McpServerTransportConfig::Http { url, .. }
+            | McpServerTransportConfig::Sse { url, .. } => redacted_remote_endpoint(url),
         }
+    }
+
+    /// Redacts every exact dynamic transport value from one diagnostic before it enters runtime state or service payloads.
+    /// 在单条诊断进入运行时状态或服务载荷前，脱敏其中每个精确动态传输值。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `diagnostic` is transport or protocol text that may contain resolved configuration values.
+    /// `diagnostic` 是可能包含已解析配置值的传输或协议文本。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns owned text with credential-bearing values replaced and remote URLs reduced to their public origin.
+    /// 返回将含凭据值替换、并把远程 URL 收敛到公开源站后的自有文本。
+    pub(crate) fn sanitize_diagnostic(&self, diagnostic: &str) -> String {
+        let (mut sanitized, sensitive_values) = match &self.transport {
+            McpServerTransportConfig::Stdio {
+                args,
+                env,
+                env_passthrough,
+                ..
+            } => {
+                let values = args
+                    .iter()
+                    .chain(env.values())
+                    .cloned()
+                    .chain(
+                        env_passthrough
+                            .iter()
+                            .filter_map(|name| std::env::var(name).ok()),
+                    )
+                    .collect::<Vec<_>>();
+                (diagnostic.to_string(), values)
+            }
+            McpServerTransportConfig::Http {
+                url,
+                bearer_token,
+                headers,
+                headers_from_env,
+                oauth,
+            }
+            | McpServerTransportConfig::Sse {
+                url,
+                bearer_token,
+                headers,
+                headers_from_env,
+                oauth,
+            } => {
+                let mut text = diagnostic.replace(url, &redacted_remote_endpoint(url));
+                let mut values = bearer_token.iter().cloned().collect::<Vec<_>>();
+                values.extend(headers.values().cloned());
+                values.extend(
+                    headers_from_env
+                        .values()
+                        .filter_map(|name| std::env::var(name).ok()),
+                );
+                if let Some(oauth) = oauth {
+                    values.extend(oauth.client_id.iter().cloned());
+                    values.extend(oauth.client_secret.iter().cloned());
+                    values.extend(oauth.redirect_uri.iter().cloned());
+                }
+                (std::mem::take(&mut text), values)
+            }
+        };
+        // sensitive_values is longest-first so overlapping credentials cannot expose an unmatched suffix.
+        // sensitive_values 按长度降序排列，防止重叠凭据暴露未匹配后缀。
+        let mut sensitive_values = sensitive_values
+            .into_iter()
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>();
+        sensitive_values.sort_by_key(|value| std::cmp::Reverse(value.len()));
+        sensitive_values.dedup();
+        for value in sensitive_values {
+            sanitized = sanitized.replace(&value, "[REDACTED]");
+        }
+        sanitized
     }
 
     /// Resolves the effective child-process environment by merging explicit variables with optional host passthrough entries.
     /// 通过合并显式变量与可选宿主透传项解析最终子进程环境变量集合。
     fn resolved_env(&self) -> BTreeMap<String, String> {
-        Self::resolved_env_with_lookup(&self.env, &self.env_passthrough, |env_name| {
-            std::env::var(env_name).ok()
-        })
+        match &self.transport {
+            McpServerTransportConfig::Stdio {
+                env,
+                env_passthrough,
+                ..
+            } => Self::resolved_env_with_lookup(env, env_passthrough, |env_name| {
+                std::env::var(env_name).ok()
+            }),
+            McpServerTransportConfig::Http { .. } | McpServerTransportConfig::Sse { .. } => {
+                BTreeMap::new()
+            }
+        }
     }
 
     /// Resolves the effective request headers by merging explicit values with optional host environment lookups.
     /// 通过合并显式值与可选宿主环境变量查找解析最终请求头集合。
     fn resolved_headers(&self) -> BTreeMap<String, String> {
-        Self::resolved_headers_with_lookup(&self.headers, &self.headers_from_env, |env_name| {
-            std::env::var(env_name).ok()
-        })
+        match &self.transport {
+            McpServerTransportConfig::Http {
+                headers,
+                headers_from_env,
+                ..
+            }
+            | McpServerTransportConfig::Sse {
+                headers,
+                headers_from_env,
+                ..
+            } => Self::resolved_headers_with_lookup(headers, headers_from_env, |env_name| {
+                std::env::var(env_name).ok()
+            }),
+            McpServerTransportConfig::Stdio { .. } => BTreeMap::new(),
+        }
     }
 
     /// Resolves the effective child-process environment using one injectable host-environment lookup.
@@ -232,33 +521,44 @@ impl McpServerConfig {
     /// 将面向运行时的服务器配置转换为宿主自有传输启动规格。
     pub fn launch_spec(&self) -> Result<McpTransportLaunchSpec, String> {
         let endpoint = self.command_summary();
-        match self.transport {
-            McpTransportKind::Stdio => Ok(McpTransportLaunchSpec::Stdio {
+        match &self.transport {
+            McpServerTransportConfig::Stdio {
+                command,
+                args,
+                cwd,
+                inherit_environment,
+                ..
+            } => Ok(McpTransportLaunchSpec::Stdio {
                 endpoint,
-                program: self.command.clone(),
-                args: self.args.clone(),
-                cwd: self.cwd.clone().map(PathBuf::from),
+                program: command.clone(),
+                args: args.clone(),
+                cwd: cwd.clone().map(PathBuf::from),
                 env: self.resolved_env(),
+                inherit_environment: *inherit_environment,
             }),
-            McpTransportKind::Http => Ok(McpTransportLaunchSpec::Http {
+            McpServerTransportConfig::Http {
+                url,
+                bearer_token,
+                oauth,
+                ..
+            } => Ok(McpTransportLaunchSpec::Http {
                 endpoint,
-                uri: self
-                    .url
-                    .clone()
-                    .ok_or_else(|| format!("MCP 服务器 `{}` 缺少 HTTP URL。", self.name))?,
-                bearer_token: self.bearer_token.clone(),
+                uri: url.clone(),
+                bearer_token: bearer_token.clone(),
                 headers: self.resolved_headers(),
-                oauth: self.oauth.clone().map(Into::into),
+                oauth: oauth.clone().map(Into::into),
             }),
-            McpTransportKind::Sse => Ok(McpTransportLaunchSpec::Sse {
+            McpServerTransportConfig::Sse {
+                url,
+                bearer_token,
+                oauth,
+                ..
+            } => Ok(McpTransportLaunchSpec::Sse {
                 endpoint,
-                uri: self
-                    .url
-                    .clone()
-                    .ok_or_else(|| format!("MCP 服务器 `{}` 缺少 SSE URL。", self.name))?,
-                bearer_token: self.bearer_token.clone(),
+                uri: url.clone(),
+                bearer_token: bearer_token.clone(),
                 headers: self.resolved_headers(),
-                oauth: self.oauth.clone().map(Into::into),
+                oauth: oauth.clone().map(Into::into),
             }),
         }
     }
@@ -266,7 +566,7 @@ impl McpServerConfig {
     /// Converts one low-level launch error into user-facing transport diagnostics.
     /// 将底层启动错误转换为面向用户的传输诊断文本。
     pub fn launch_error_text(&self, error: impl std::fmt::Display) -> String {
-        match self.transport {
+        match self.transport_kind() {
             McpTransportKind::Stdio => {
                 format!("启动 MCP 服务器 `{}` 失败：{}。", self.name, error)
             }
@@ -282,7 +582,9 @@ impl McpServerConfig {
 
 /// Converts the persisted MCP server map into runtime-facing server entries.
 /// 将持久化 MCP 服务器映射转换为面向运行时的服务器条目集合。
-pub fn runtime_mcp_server_configs(config: &ProviderConfigurationFile) -> Vec<McpServerConfig> {
+pub fn runtime_mcp_server_configs(
+    config: &ProviderConfigurationFile,
+) -> Result<Vec<McpServerConfig>, String> {
     config
         .mcp
         .servers
@@ -291,55 +593,163 @@ pub fn runtime_mcp_server_configs(config: &ProviderConfigurationFile) -> Vec<Mcp
         .collect()
 }
 
+/// Reduces one stdio executable path to its non-sensitive final program name.
+/// 将单个 stdio 可执行路径收敛为不敏感的最终程序名。
+///
+/// # Parameters
+/// 参数
+/// `command` is the exact executable path used by the runtime.
+/// `command` 是运行时使用的精确可执行路径。
+///
+/// # Returns
+/// 返回值
+/// Returns the final path component or a fixed redacted label when it cannot be represented safely.
+/// 返回最终路径段；无法安全表示时返回固定脱敏标签。
+fn redacted_stdio_program(command: &str) -> String {
+    PathBuf::from(command)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| String::from("<stdio program>"))
+}
+
+/// Reduces one remote URL to its public origin without user info, path, query, or fragment.
+/// 将单个远程 URL 收敛为不含用户信息、路径、查询或片段的公开源站。
+///
+/// # Parameters
+/// 参数
+/// `url` is the exact resolved endpoint used by the transport.
+/// `url` 是传输使用的精确已解析端点。
+///
+/// # Returns
+/// 返回值
+/// Returns a safe origin summary or a fixed invalid-endpoint label.
+/// 返回安全源站摘要；解析失败时返回固定无效端点标签。
+fn redacted_remote_endpoint(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .ok()
+        .map(|parsed| parsed.origin().ascii_serialization())
+        .filter(|origin| origin != "null")
+        .unwrap_or_else(|| String::from("<invalid remote endpoint>"))
+}
+
 /// Converts one persisted MCP server entry into its runtime counterpart.
 /// 将单条持久化 MCP 服务器条目转换为对应的运行时表示。
-fn runtime_mcp_server_from_persisted(id: &str, entry: &PersistedMcpServerEntry) -> McpServerConfig {
-    McpServerConfig {
+fn runtime_mcp_server_from_persisted(
+    id: &str,
+    entry: &PersistedMcpServerEntry,
+) -> Result<McpServerConfig, String> {
+    if id.contains(':') {
+        return Err(format!(
+            "User-configured MCP server id `{id}` uses the reserved plugin namespace separator `:`."
+        ));
+    }
+    let transport = match entry.transport {
+        PersistedMcpTransportKind::Stdio => McpServerTransportConfig::Stdio {
+            command: entry.command.clone(),
+            args: entry.args.clone(),
+            cwd: entry.cwd.clone(),
+            env: entry.env.clone(),
+            env_passthrough: entry.env_passthrough.clone(),
+            inherit_environment: true,
+        },
+        PersistedMcpTransportKind::Http => McpServerTransportConfig::Http {
+            url: entry
+                .url
+                .clone()
+                .ok_or_else(|| format!("MCP HTTP server `{id}` requires an explicit URL."))?,
+            bearer_token: entry.bearer_token.clone(),
+            headers: entry.headers.clone(),
+            headers_from_env: entry.headers_from_env.clone(),
+            oauth: entry.oauth.clone().map(Into::into),
+        },
+        PersistedMcpTransportKind::Sse => McpServerTransportConfig::Sse {
+            url: entry
+                .url
+                .clone()
+                .ok_or_else(|| format!("MCP SSE server `{id}` requires an explicit URL."))?,
+            bearer_token: entry.bearer_token.clone(),
+            headers: entry.headers.clone(),
+            headers_from_env: entry.headers_from_env.clone(),
+            oauth: entry.oauth.clone().map(Into::into),
+        },
+    };
+    Ok(McpServerConfig {
+        source: McpServerSource::UserConfigured,
         id: id.to_string(),
         name: entry.name.clone(),
         enabled: entry.enabled,
-        transport: entry.transport.into(),
-        command: entry.command.clone(),
-        args: entry.args.clone(),
-        url: entry.url.clone(),
-        bearer_token: entry.bearer_token.clone(),
-        headers: entry.headers.clone(),
-        headers_from_env: entry.headers_from_env.clone(),
-        oauth: entry.oauth.clone().map(Into::into),
-        cwd: entry.cwd.clone(),
-        env: entry.env.clone(),
-        env_passthrough: entry.env_passthrough.clone(),
-    }
+        transport,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{McpServerConfig, McpServerOAuthConfig, McpTransportKind};
+    use super::{
+        McpServerConfig, McpServerOAuthConfig, McpServerSource, McpServerTransportConfig,
+        McpTransportKind, runtime_mcp_server_configs,
+    };
+    use crate::provider_config::{
+        PersistedMcpConfiguration, PersistedMcpServerEntry, PersistedMcpTransportKind,
+        ProviderConfigurationFile,
+    };
     use std::collections::BTreeMap;
     use std::path::PathBuf;
     use vulcan_mcp_runtime::{McpTransportLaunchSpec, McpTransportOAuthSpec};
 
     fn sample_server(transport: McpTransportKind) -> McpServerConfig {
+        let oauth = Some(McpServerOAuthConfig {
+            client_id: Some(String::from("demo-client")),
+            client_secret: Some(String::from("demo-secret")),
+            scopes: vec![String::from("read"), String::from("offline_access")],
+            redirect_uri: Some(String::from("http://localhost:8787/callback")),
+        });
+        let remote = || {
+            (
+                String::from("https://example.test/mcp"),
+                Some(String::from("token-123")),
+                BTreeMap::from([(String::from("X-Test"), String::from("1"))]),
+                BTreeMap::new(),
+                oauth.clone(),
+            )
+        };
+        let transport = match transport {
+            McpTransportKind::Stdio => McpServerTransportConfig::Stdio {
+                command: String::from("sample-mcp"),
+                args: vec![String::from("--stdio"), String::from("--verbose")],
+                cwd: Some(String::from(r"D:\mock\mcp")),
+                env: BTreeMap::from([(String::from("VULCAN_MODE"), String::from("stdio"))]),
+                env_passthrough: Vec::new(),
+                inherit_environment: true,
+            },
+            McpTransportKind::Http => {
+                let (url, bearer_token, headers, headers_from_env, oauth) = remote();
+                McpServerTransportConfig::Http {
+                    url,
+                    bearer_token,
+                    headers,
+                    headers_from_env,
+                    oauth,
+                }
+            }
+            McpTransportKind::Sse => {
+                let (url, bearer_token, headers, headers_from_env, oauth) = remote();
+                McpServerTransportConfig::Sse {
+                    url,
+                    bearer_token,
+                    headers,
+                    headers_from_env,
+                    oauth,
+                }
+            }
+        };
         McpServerConfig {
+            source: McpServerSource::UserConfigured,
             id: String::from("server-1"),
             name: String::from("Sample Server"),
             enabled: true,
             transport,
-            command: String::from("sample-mcp"),
-            args: vec![String::from("--stdio"), String::from("--verbose")],
-            url: Some(String::from("https://example.test/mcp")),
-            bearer_token: Some(String::from("token-123")),
-            headers: BTreeMap::from([(String::from("X-Test"), String::from("1"))]),
-            headers_from_env: BTreeMap::new(),
-            oauth: Some(McpServerOAuthConfig {
-                client_id: Some(String::from("demo-client")),
-                client_secret: Some(String::from("demo-secret")),
-                scopes: vec![String::from("read"), String::from("offline_access")],
-                redirect_uri: Some(String::from("http://localhost:8787/callback")),
-            }),
-            cwd: Some(String::from(r"D:\mock\mcp")),
-            env: BTreeMap::from([(String::from("VULCAN_MODE"), String::from("stdio"))]),
-            env_passthrough: Vec::new(),
         }
     }
 
@@ -350,27 +760,48 @@ mod tests {
         assert_eq!(
             server.launch_spec().expect("stdio server should build"),
             McpTransportLaunchSpec::Stdio {
-                endpoint: String::from("sample-mcp --stdio --verbose"),
+                endpoint: String::from("sample-mcp <2 arguments>"),
                 program: String::from("sample-mcp"),
                 args: vec![String::from("--stdio"), String::from("--verbose")],
                 cwd: Some(PathBuf::from(r"D:\mock\mcp")),
                 env: BTreeMap::from([(String::from("VULCAN_MODE"), String::from("stdio"))]),
+                inherit_environment: true,
             }
         );
     }
 
     #[test]
-    fn http_launch_spec_requires_remote_url() {
-        let mut server = sample_server(McpTransportKind::Http);
-        server.url = None;
+    fn persisted_http_mapping_requires_remote_url() {
+        let config = ProviderConfigurationFile {
+            mcp: PersistedMcpConfiguration {
+                servers: BTreeMap::from([(
+                    String::from("missing-url"),
+                    PersistedMcpServerEntry {
+                        name: String::from("Missing URL"),
+                        enabled: true,
+                        transport: PersistedMcpTransportKind::Http,
+                        command: String::new(),
+                        args: Vec::new(),
+                        url: None,
+                        bearer_token: None,
+                        headers: BTreeMap::new(),
+                        headers_from_env: BTreeMap::new(),
+                        oauth: None,
+                        cwd: None,
+                        env: BTreeMap::new(),
+                        env_passthrough: Vec::new(),
+                    },
+                )]),
+            },
+            ..ProviderConfigurationFile::default()
+        };
 
-        let error = server
-            .launch_spec()
-            .expect_err("http server must require URL");
+        let error = runtime_mcp_server_configs(&config)
+            .expect_err("HTTP mapping must reject a missing URL");
 
         assert_eq!(
             error,
-            String::from("MCP 服务器 `Sample Server` 缺少 HTTP URL。")
+            String::from("MCP HTTP server `missing-url` requires an explicit URL.")
         );
     }
 
@@ -381,7 +812,7 @@ mod tests {
         assert_eq!(
             server.launch_spec().expect("http server should build"),
             McpTransportLaunchSpec::Http {
-                endpoint: String::from("https://example.test/mcp"),
+                endpoint: String::from("https://example.test"),
                 uri: String::from("https://example.test/mcp"),
                 bearer_token: Some(String::from("token-123")),
                 headers: BTreeMap::from([(String::from("X-Test"), String::from("1"))]),
@@ -442,5 +873,92 @@ mod tests {
                 (String::from("X-Static"), String::from("1")),
             ])
         );
+    }
+
+    /// Verifies every debug and endpoint-summary surface excludes resolved credential values and sensitive URL components.
+    /// 验证每个调试与端点摘要能力面均排除已解析凭据值及敏感 URL 组成部分。
+    #[test]
+    fn mcp_configuration_diagnostics_are_structurally_redacted() {
+        // remote contains credentials in every field class that must stay outside diagnostics.
+        // remote 在每类必须与诊断隔离的字段中都包含凭据。
+        let remote = McpServerConfig {
+            source: McpServerSource::UserConfigured,
+            id: String::from("redacted"),
+            name: String::from("Redacted Server"),
+            enabled: true,
+            transport: McpServerTransportConfig::Http {
+                url: String::from("https://user:password@example.test/private?token=query#secret"),
+                bearer_token: Some(String::from("bearer-secret")),
+                headers: BTreeMap::from([(
+                    String::from("Authorization"),
+                    String::from("header-secret"),
+                )]),
+                headers_from_env: BTreeMap::new(),
+                oauth: Some(McpServerOAuthConfig {
+                    client_id: Some(String::from("client-secret-id")),
+                    client_secret: Some(String::from("oauth-secret")),
+                    scopes: vec![String::from("private-scope")],
+                    redirect_uri: Some(String::from("https://callback.test/private")),
+                }),
+            },
+        };
+        let debug_text = format!("{remote:?}");
+        for sensitive in [
+            "password",
+            "private",
+            "query",
+            "secret#",
+            "bearer-secret",
+            "header-secret",
+            "client-secret-id",
+            "oauth-secret",
+            "private-scope",
+            "callback.test",
+        ] {
+            assert!(!debug_text.contains(sensitive));
+        }
+        assert_eq!(remote.command_summary(), "https://example.test");
+        let sanitized_error = remote.sanitize_diagnostic(
+            "failed https://user:password@example.test/private?token=query#secret bearer-secret header-secret client-secret-id oauth-secret",
+        );
+        assert!(sanitized_error.contains("https://example.test"));
+        for sensitive in [
+            "password",
+            "private",
+            "query",
+            "bearer-secret",
+            "header-secret",
+            "client-secret-id",
+            "oauth-secret",
+        ] {
+            assert!(!sanitized_error.contains(sensitive));
+        }
+
+        // stdio proves arguments, working-directory parents, and environment values are also absent.
+        // stdio 证明参数、工作目录父路径与环境变量值同样不会出现。
+        let stdio = McpServerConfig {
+            source: McpServerSource::UserConfigured,
+            id: String::from("stdio-redacted"),
+            name: String::from("Stdio Redacted"),
+            enabled: true,
+            transport: McpServerTransportConfig::Stdio {
+                command: String::from(r"C:\private\bin\server.exe"),
+                args: vec![String::from("secret")],
+                cwd: Some(String::from(r"C:\private\workspace")),
+                env: BTreeMap::from([(
+                    String::from("ACCESS_TOKEN"),
+                    String::from("environment-secret"),
+                )]),
+                env_passthrough: Vec::new(),
+                inherit_environment: true,
+            },
+        };
+        let stdio_debug = format!("{stdio:?}");
+        assert!(!stdio_debug.contains("secret"));
+        assert!(!stdio_debug.contains("environment-secret"));
+        assert!(!stdio_debug.contains("workspace"));
+        assert_eq!(stdio.command_summary(), "server.exe <1 arguments>");
+        let sanitized_stdio = stdio.sanitize_diagnostic("failed environment-secret secret");
+        assert_eq!(sanitized_stdio, "failed [REDACTED] [REDACTED]");
     }
 }

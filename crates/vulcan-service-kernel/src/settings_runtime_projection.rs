@@ -8,8 +8,8 @@ use vulcan_service_api::{
     ProjectSettingsDomain, SubagentCatalogChangedDelta,
 };
 
-/// Carries one atomically committed plugin-owned catalog projection and its legacy RPC response.
-/// 携带一份原子提交的插件所有目录投影及其兼容 RPC 响应。
+/// Carries one atomically committed plugin-owned catalog projection and its public RPC response.
+/// 携带一份原子提交的插件所有目录投影及其公开 RPC 响应。
 pub(crate) struct PluginCatalogProjectionUpdate {
     /// Monotonic workbench revision shared by every projected domain.
     /// 所有投影领域共享的工作台单调版本号。
@@ -714,11 +714,22 @@ pub(crate) fn store_provider_and_mcp_configuration_after_change(
         .map(|runtime| runtime.ai_tool_configuration.clone())
         .unwrap_or_default();
     if let Some(agent_runtime) = guard.agent_runtime.as_mut() {
-        if let Some(previous_mcp_runtime) = agent_runtime.mcp_runtime.take() {
-            previous_mcp_runtime.shutdown();
-        }
+        // retiredMcpRuntime keeps the replaced user partition addressable only for existing generation owners during drain.
+        // retiredMcpRuntime 仅在排空期间为既有代次持有者保留被替换用户分区的可寻址性。
+        let retired_mcp_runtime = agent_runtime.extension_generation.mcp_runtime();
+        // nextGeneration preserves the exact plugin catalog while atomically publishing the new user MCP partition.
+        // nextGeneration 保留精确插件目录，同时原子发布新的用户 MCP 分区。
+        let next_generation = Arc::new(ExtensionGeneration::new(
+            agent_runtime
+                .extension_generation
+                .revision()
+                .saturating_add(1),
+            agent_runtime.extension_generation.plugin_catalog(),
+            next_mcp_runtime,
+        ));
         agent_runtime.provider_configuration = provider_configuration.clone();
-        agent_runtime.mcp_runtime = Some(next_mcp_runtime);
+        agent_runtime.extension_generation = next_generation;
+        retired_mcp_runtime.retire_user_partition_after(std::time::Duration::from_secs(30));
     }
     refresh_settings_projection_locked(
         &mut guard,
@@ -763,7 +774,7 @@ pub(crate) async fn refresh_agent_skills_local_state(
     // 使配置捕获与领域投影和每次技能配置变更保持有序。
     let _configuration_transaction = begin_provider_configuration_transaction().await;
     let provider_configuration = provider_configuration_from_state(state)?;
-    let plugin_catalog = service_system_plugin_runtime(state)?.snapshot();
+    let plugin_catalog = service_vulcan_plugin_runtime(state)?.snapshot();
     let summary = agent_skills_catalog_summary(&provider_configuration, Some(&plugin_catalog));
     let mut guard = state
         .lock()
@@ -796,7 +807,7 @@ pub(crate) async fn refresh_agent_skills_local_state_if_changed(
     // 使配置捕获和投影与并发设置变更保持有序。
     let _configuration_transaction = begin_provider_configuration_transaction().await;
     let provider_configuration = provider_configuration_from_state(state)?;
-    let plugin_catalog = service_system_plugin_runtime(state)?.snapshot();
+    let plugin_catalog = service_vulcan_plugin_runtime(state)?.snapshot();
     let summary = agent_skills_catalog_summary(&provider_configuration, Some(&plugin_catalog));
     let mut guard = state
         .lock()
@@ -845,7 +856,7 @@ pub(crate) async fn refresh_plugin_catalog_local_state(
     let provider_configuration = provider_configuration_from_state(state)?;
     // plugin_catalog is immutable and supplies every plugin component in this transaction.
     // plugin_catalog 不可变，并为本次事务提供全部插件组件。
-    let plugin_catalog = service_system_plugin_runtime(state)?.snapshot();
+    let plugin_catalog = service_vulcan_plugin_runtime(state)?.snapshot();
     // agent_skills projects ordinary and plugin skills against the exact same plugin revision.
     // agent_skills 使用完全相同的插件版本投影普通 Skill 与插件 Skill。
     let agent_skills =
@@ -874,12 +885,18 @@ pub(crate) async fn refresh_plugin_catalog_local_state(
     // lua_skills is rebuilt in the transaction so the compatibility RPC response is revision-consistent.
     // lua_skills 在事务内重建，使兼容 RPC 响应保持版本一致。
     let lua_skills = lua_skills_catalog_summary(&lua_catalog, &provider_configuration);
+    let mcp_server_states = guard
+        .agent_runtime
+        .as_ref()
+        .map(|runtime| runtime.extension_generation.mcp_runtime().server_states())
+        .unwrap_or_default();
     // plugins combines ordinary LuaSkills rows and the exact immutable plugin snapshot.
     // plugins 合并普通 LuaSkills 行与完全一致的不可变插件快照。
     let plugins = plugins_from_catalogs(
         &lua_catalog,
         &provider_configuration,
         Some(plugin_catalog.as_ref()),
+        &mcp_server_states,
     );
     if let Some(runtime) = guard.agent_runtime.as_ref() {
         runtime
@@ -919,17 +936,23 @@ pub(crate) async fn refresh_luaskills_local_state(
         .map(|runtime| runtime.provider_configuration.clone())
         .unwrap_or_default();
     let catalog = cached_luaskills_catalog_from_state(&guard);
-    let system_plugin_catalog = guard
+    let vulcan_plugin_catalog = guard
         .agent_runtime
         .as_ref()
-        .map(|runtime| runtime.system_plugin_runtime.snapshot());
+        .and_then(|runtime| runtime.extension_generation.plugin_catalog());
+    let mcp_server_states = guard
+        .agent_runtime
+        .as_ref()
+        .map(|runtime| runtime.extension_generation.mcp_runtime().server_states())
+        .unwrap_or_default();
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
     guard.workbench.lua_skills = lua_skills_catalog_summary(&catalog, &provider_configuration);
     guard.workbench.plugins = plugins_from_catalogs(
         &catalog,
         &provider_configuration,
-        system_plugin_catalog.as_deref(),
+        vulcan_plugin_catalog.as_deref(),
+        &mcp_server_states,
     );
     Ok(LuaSkillsCatalogUpdate {
         revision: guard.workbench_generation,

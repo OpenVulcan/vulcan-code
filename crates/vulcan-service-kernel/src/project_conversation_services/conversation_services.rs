@@ -106,10 +106,10 @@ pub(crate) async fn service_archive_conversation(
     // workbench 是持久化闸门内刷新所提交的权威保留投影。
     let workbench = refresh_result?;
     let plugin_cleanup_failures =
-        drain_system_plugin_sessions_for_owners(&state, &[session_id]).await;
+        drain_vulcan_plugin_sessions_for_owners(&state, &[session_id]).await;
     if !plugin_cleanup_failures.is_empty() {
         eprintln!(
-            "[system-plugin] archived conversation cleanup warnings: {}",
+            "[vulcan-plugin] archived conversation cleanup warnings: {}",
             plugin_cleanup_failures.join("; ")
         );
     }

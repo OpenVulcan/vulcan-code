@@ -1,5 +1,5 @@
 import type { FeatureHeaderSummary } from "@/components/features/feature-area-types"
-import type { LuaSkillsManagedRuntimeTarget, LuaSkillsRuntimeSettings, PluginSummary, SystemPluginPermissionPreview } from "@/types"
+import type { LuaSkillsManagedRuntimeTarget, LuaSkillsRuntimeSettings, PluginSummary, VulcanPluginInitialSecret, VulcanPluginPermissionPreview } from "@/types"
 
 // SkillActionProps groups service-backed actions used by the skill page.
 // SkillActionProps 分组技能页面使用的服务端动作。
@@ -22,18 +22,27 @@ export interface SkillActionProps {
   // Toggles one Lua Skill package lifecycle state.
   // 切换单个 Lua Skill 包生命周期状态。
   onSetLuaSkillEnabled: (skillId: string, enabled: boolean) => Promise<void>
-  // Persists one host-owned System Plugin enabled state through the compatibility action.
-  // 通过兼容操作持久化单个宿主自有系统插件的启用状态。
-  onSetSystemPluginEnabled: (pluginId: string, enabled: boolean) => Promise<void>
+  // Persists one host-owned Vulcan Plugin enabled state through the unified plugin action.
+  // 通过统一插件操作持久化单个宿主持有 Vulcan 插件的启用状态。
+  onSetVulcanPluginEnabled: (pluginId: string, enabled: boolean) => Promise<void>
   // Inspects one local user plugin before authorization.
   // 在授权前检查单个本地用户插件。
-  onInspectLocalPlugin: (sourcePath: string) => Promise<SystemPluginPermissionPreview>
+  onInspectLocalPlugin: (sourcePath: string) => Promise<VulcanPluginPermissionPreview>
   // Installs one local user plugin with exact capability and dependency consent.
   // 使用精确能力与依赖许可安装单个本地用户插件。
-  onInstallLocalPlugin: (sourcePath: string, approvedCapabilities: string[], allowRegistryDependencies: boolean) => Promise<void>
+  onInstallLocalPlugin: (sourcePath: string, contentFingerprint: string, approvedPermissions: string[], allowRegistryDependencies: boolean, initialSecrets: VulcanPluginInitialSecret[]) => Promise<void>
+  // Updates one disabled local user plugin through the same exact authorization surface.
+  // 通过同一精确授权界面更新单个已停用本地用户插件。
+  onUpdateLocalPlugin: (sourcePath: string, contentFingerprint: string, approvedPermissions: string[], allowRegistryDependencies: boolean, initialSecrets: VulcanPluginInitialSecret[]) => Promise<void>
   // Uninstalls one disabled user plugin.
   // 卸载单个已停用用户插件。
   onUninstallUserPlugin: (pluginId: string) => Promise<void>
+  // Stores one exact plugin MCP secret without returning its value.
+  // 存储单个精确插件 MCP Secret，且不返回其值。
+  onSetPluginMcpSecret: (pluginId: string, serverId: string, secretKey: string, value: string) => Promise<void>
+  // Deletes one exact plugin MCP secret.
+  // 删除单个精确插件 MCP Secret。
+  onDeletePluginMcpSecret: (pluginId: string, serverId: string, secretKey: string) => Promise<void>
   // Uninstalls one ordinary Lua Skill package.
   // 卸载单个普通 Lua Skill 包。
   onUninstallLuaSkill: (skillId: string) => Promise<void>

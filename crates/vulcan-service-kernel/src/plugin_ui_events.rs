@@ -1,7 +1,7 @@
 //! Service-event publisher for plugin-scoped UI invalidation signals.
 //! 插件作用域界面失效信号的服务事件发布器。
 
-use vulcan_plugin_runtime::{SystemPluginUiEventPublisher, SystemPluginUiInvalidation};
+use vulcan_plugin_runtime::{VulcanPluginUiEventPublisher, VulcanPluginUiInvalidation};
 use vulcan_service_api::{PluginUiInvalidatedEvent, ServiceEvent, ServiceEventEmitter};
 
 /// Publishes plugin UI invalidations through the existing desktop and browser event sinks.
@@ -30,7 +30,7 @@ impl ServicePluginUiEventPublisher {
     }
 }
 
-impl SystemPluginUiEventPublisher for ServicePluginUiEventPublisher {
+impl VulcanPluginUiEventPublisher for ServicePluginUiEventPublisher {
     /// Publishes one validated plugin-scoped invalidation event.
     /// 发布一条已校验的插件作用域失效事件。
     ///
@@ -43,7 +43,7 @@ impl SystemPluginUiEventPublisher for ServicePluginUiEventPublisher {
     /// 返回值
     /// Returns unit after synchronous fan-out.
     /// 同步扇出后返回空值。
-    fn publish(&self, event: SystemPluginUiInvalidation) -> Result<(), String> {
+    fn publish(&self, event: VulcanPluginUiInvalidation) -> Result<(), String> {
         self.event_emitter
             .emit(ServiceEvent::PluginUiInvalidated(Box::new(
                 PluginUiInvalidatedEvent {

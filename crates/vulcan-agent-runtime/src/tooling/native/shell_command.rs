@@ -1,6 +1,6 @@
 use super::*;
 use crate::agent_runtime::conversation_hooks::HOOK_TOOL_SHELL_COMMAND_BEFORE_EXECUTE;
-use crate::agent_runtime::system_plugin_hooks::dispatch_system_plugin_hook;
+use crate::agent_runtime::vulcan_plugin_hooks::dispatch_vulcan_plugin_hook;
 use std::collections::BTreeMap;
 use vulcan_hooks::{HookActor, HookCapabilitySet, HookContext, HookScope};
 use vulcan_host_tools::process_creation::apply_windows_release_no_window;
@@ -9,7 +9,7 @@ use vulcan_host_tools::process_creation::apply_windows_release_no_window;
 /// 构建一次性 shell 命令宿主自有原生工具。
 pub(crate) fn build_shell_command_tool(
     shell_support: HostCommandShellSupport,
-    plugin_runtime: Option<vulcan_plugin_runtime::SystemPluginRuntimeManager>,
+    plugin_runtime: Option<vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
 ) -> Arc<NativeToolDefinition> {
     let descriptor = NativeToolDescriptor {
         id: String::from("shell_command"),
@@ -381,7 +381,7 @@ async fn apply_shell_command_plugin_hooks(
     effective_cwd: &Path,
     workspace_root: Option<&Path>,
     session_id: Option<SessionId>,
-    plugin_runtime: Option<&vulcan_plugin_runtime::SystemPluginRuntimeManager>,
+    plugin_runtime: Option<&vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
 ) -> Result<
     (
         ShellCommandToolArgs,
@@ -429,7 +429,7 @@ async fn apply_shell_command_plugin_hooks(
     context.session_id = session_id.map(|value| value.to_string());
     context.conversation_id = context.session_id.clone();
     context.capabilities = HookCapabilitySet::default();
-    let report = dispatch_system_plugin_hook(
+    let report = dispatch_vulcan_plugin_hook(
         plugin_runtime.clone(),
         context,
         serde_json::to_value(&initial_payload).map_err(|error| {
@@ -873,7 +873,7 @@ pub(crate) fn build_shell_command_host_payload(
 pub(crate) async fn execute_shell_command_tool(
     request: NativeToolExecutionRequest,
     shell_support: &HostCommandShellSupport,
-    plugin_runtime: Option<&vulcan_plugin_runtime::SystemPluginRuntimeManager>,
+    plugin_runtime: Option<&vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
 ) -> Result<VulcanToolInvocationResult, NativeToolError> {
     let parsed_args = parse_shell_command_tool_arguments(request.arguments)?;
     let effective_cwd = resolve_shell_command_working_directory(

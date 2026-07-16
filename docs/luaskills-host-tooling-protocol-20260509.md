@@ -614,7 +614,7 @@ enum RuntimeEntryExposure {
 - 宿主缓存刷新工具
 - 宿主内部工作区结构快照工具
 
-#### Bundled System Plugins（官方可管理插件）
+#### Bundled Vulcan Plugins（官方可管理插件）
 
 适合做成插件包、默认启用、允许动态启停的能力包：
 
@@ -790,7 +790,7 @@ JSON FFI 推荐直接增加 `host_result` 字段。
 - `SystemSkill + HostOnly`
 - 返回 `structured_tree`
 
-### 第四阶段：系统插件化
+### 第四阶段：Vulcan 插件化
 
 将官方系统 skills 逐步按插件单元组织和启停。
 
@@ -886,6 +886,6 @@ JSON FFI 推荐直接增加 `host_result` 字段。
 - AI 可调用工具层
 - 宿主内部工具层
 - MCP 对外暴露能力源
-- 官方系统插件能力源
+- 官方 Vulcan 插件能力源
 
 这也是后续统一 `VulcanCode` 工具体系的最优方向。

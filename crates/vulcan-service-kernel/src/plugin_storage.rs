@@ -1,5 +1,5 @@
-//! Controller-backed isolated storage service for authorized System Plugins.
-//! 面向已授权系统插件的 Controller 后端隔离存储服务。
+//! Controller-backed isolated storage service for authorized Vulcan Plugins.
+//! 面向已授权 Vulcan 插件的 Controller 后端隔离存储服务。
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use serde::Deserialize;
@@ -18,7 +18,7 @@ use vldb_controller_client::{
     ControllerSqliteEnableRequest, ControllerSqliteValue, SpaceKind, SpaceRegistration,
 };
 use vulcan_plugin_runtime::{
-    SystemPluginStorageOperation, SystemPluginStorageRequest, SystemPluginStorageService,
+    VulcanPluginStorageOperation, VulcanPluginStorageRequest, VulcanPluginStorageService,
 };
 
 /// Maximum SQLite rows returned by one plugin query.
@@ -165,7 +165,7 @@ impl ControllerPluginStorageService {
     /// 返回值
     /// Returns the JSON-safe storage result.
     /// 返回 JSON 安全的存储结果。
-    async fn execute_async(&self, request: SystemPluginStorageRequest) -> Result<Value, String> {
+    async fn execute_async(&self, request: VulcanPluginStorageRequest) -> Result<Value, String> {
         validate_plugin_storage_identity(&request.plugin_id)?;
         // operationLane provides both bounded backpressure and exact per-plugin ordering.
         // operationLane 同时提供有界背压与精确的插件级操作顺序。
@@ -189,41 +189,41 @@ impl ControllerPluginStorageService {
             self.ensure_lancedb(&request.plugin_id).await?;
         }
         match request.operation {
-            SystemPluginStorageOperation::SqliteMigrate => {
+            VulcanPluginStorageOperation::SqliteMigrate => {
                 self.sqlite_migrate(&request.plugin_id, request.payload)
                     .await
             }
-            SystemPluginStorageOperation::SqliteExecute => {
+            VulcanPluginStorageOperation::SqliteExecute => {
                 self.sqlite_execute(&request.plugin_id, request.payload)
                     .await
             }
-            SystemPluginStorageOperation::SqliteExecuteBatch => {
+            VulcanPluginStorageOperation::SqliteExecuteBatch => {
                 self.sqlite_execute_batch(&request.plugin_id, request.payload)
                     .await
             }
-            SystemPluginStorageOperation::SqliteQuery => {
+            VulcanPluginStorageOperation::SqliteQuery => {
                 self.sqlite_query(&request.plugin_id, request.payload).await
             }
-            SystemPluginStorageOperation::SqliteFlush => {
+            VulcanPluginStorageOperation::SqliteFlush => {
                 self.sqlite_flush(&request.plugin_id).await
             }
-            SystemPluginStorageOperation::LanceDbCreateTable => {
+            VulcanPluginStorageOperation::LanceDbCreateTable => {
                 self.lancedb_create_table(&request.plugin_id, request.payload)
                     .await
             }
-            SystemPluginStorageOperation::LanceDbUpsert => {
+            VulcanPluginStorageOperation::LanceDbUpsert => {
                 self.lancedb_upsert(&request.plugin_id, request.payload)
                     .await
             }
-            SystemPluginStorageOperation::LanceDbSearch => {
+            VulcanPluginStorageOperation::LanceDbSearch => {
                 self.lancedb_search(&request.plugin_id, request.payload)
                     .await
             }
-            SystemPluginStorageOperation::LanceDbDelete => {
+            VulcanPluginStorageOperation::LanceDbDelete => {
                 self.lancedb_delete(&request.plugin_id, request.payload)
                     .await
             }
-            SystemPluginStorageOperation::LanceDbDropTable => {
+            VulcanPluginStorageOperation::LanceDbDropTable => {
                 self.lancedb_drop_table(&request.plugin_id, request.payload)
                     .await
             }
@@ -730,7 +730,7 @@ impl ControllerPluginStorageService {
     }
 }
 
-impl SystemPluginStorageService for ControllerPluginStorageService {
+impl VulcanPluginStorageService for ControllerPluginStorageService {
     /// Executes one authenticated request on the retained service runtime.
     /// 在保留的服务运行时上执行一条已认证请求。
     ///
@@ -743,7 +743,7 @@ impl SystemPluginStorageService for ControllerPluginStorageService {
     /// 返回值
     /// Returns the JSON-safe result or an explicit storage diagnostic.
     /// 返回 JSON 安全结果或明确的存储诊断。
-    fn execute(&self, request: SystemPluginStorageRequest) -> Result<Value, String> {
+    fn execute(&self, request: VulcanPluginStorageRequest) -> Result<Value, String> {
         self.runtime.block_on(self.execute_async(request))
     }
 }

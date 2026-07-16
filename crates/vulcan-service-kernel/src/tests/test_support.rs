@@ -356,20 +356,35 @@ pub(super) fn test_agent_runtime_bridge() -> AgentRuntimeBridge {
     // plugin_root provides isolated path identities without requiring a Lua engine.
     // plugin_root 提供隔离路径身份，且不要求存在 Lua 引擎。
     let plugin_root = std::env::temp_dir().join(format!("vulcan-plugin-test-{}", Uuid::new_v4()));
+    // provider_configuration is shared by the bridge and its empty MCP access projection.
+    // provider_configuration 由桥接与其空 MCP 访问投影共同使用。
+    let provider_configuration = ProviderConfigurationFile::default();
+    // vulcan_plugin_runtime owns the isolated catalog later frozen into the extension generation.
+    // vulcan_plugin_runtime 持有随后冻结到扩展代次中的隔离目录。
+    let vulcan_plugin_runtime = vulcan_plugin_runtime::VulcanPluginRuntimeManager::without_runtime(
+        plugin_root.join("system"),
+        plugin_root.join("user"),
+        plugin_root.join("bridge"),
+        plugin_root.join("distributions"),
+        plugin_root.join("state"),
+        plugin_root.join("runtime"),
+    );
+    // extension_generation pins the exact test catalog and MCP access surface as one immutable snapshot.
+    // extension_generation 把精确测试目录与 MCP 访问面固定为单个不可变快照。
+    let extension_generation = Arc::new(
+        vulcan_agent_runtime::agent_runtime::ExtensionGeneration::new(
+            0,
+            Some(vulcan_plugin_runtime.snapshot()),
+            vulcan_agent_runtime::mcp::configured_mcp_runtime_access(&provider_configuration),
+        ),
+    );
     AgentRuntimeBridge {
-        provider_configuration: ProviderConfigurationFile::default(),
+        provider_configuration,
         ai_tool_configuration: PersistedAiToolConfiguration::default(),
         agent_profile_catalog: AgentProfileCatalog::default(),
         luaskills_runtime: None,
-        system_plugin_runtime: vulcan_plugin_runtime::SystemPluginRuntimeManager::without_runtime(
-            plugin_root.join("system"),
-            plugin_root.join("user"),
-            plugin_root.join("bridge"),
-            plugin_root.join("distributions"),
-            plugin_root.join("state"),
-            plugin_root.join("runtime"),
-        ),
-        mcp_runtime: None,
+        vulcan_plugin_runtime,
+        extension_generation,
         task_runtime: Arc::new(TaskRuntime::new()),
         question_runtime: Arc::new(QuestionRuntime::new()),
         command_session_runtime: Arc::new(CommandSessionRuntime::new()),

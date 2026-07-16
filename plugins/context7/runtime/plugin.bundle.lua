@@ -1,5 +1,5 @@
--- Context7 System Plugin implemented through the restricted Vulcan Lua bridge.
--- 通过受限 Vulcan Lua 桥实现的 Context7 系统插件。
+-- Context7 Vulcan Plugin implemented through the restricted Vulcan Lua bridge.
+-- 通过受限 Vulcan Lua 桥实现的 Context7 Vulcan 插件。
 
 -- M is the exact bundle export table validated by the fixed plugin bridge.
 -- M 是由固定插件桥校验的精确 Bundle 导出表。
@@ -1776,8 +1776,8 @@ function M.dispatch(args)
     if type(args) ~= "table" or type(args.payload_json) ~= "string" or args.payload_json == "" then
         error("Context7 tool payload_json is required")
     end
-    -- decode_ok and input enforce the exact System Plugin bridge serialization boundary.
-    -- decode_ok 与 input 强制执行精确的 System Plugin 固定桥序列化边界。
+    -- decode_ok and input enforce the exact Vulcan Plugin bridge serialization boundary.
+    -- decode_ok 与 input 强制执行精确的 Vulcan Plugin 固定桥序列化边界。
     local decode_ok, input = pcall(vulcan.json.decode, args.payload_json)
     if not decode_ok or type(input) ~= "table" then
         error("Context7 tool payload_json must decode to an object")

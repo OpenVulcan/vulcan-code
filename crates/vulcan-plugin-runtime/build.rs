@@ -1,5 +1,5 @@
-//! Propagates Cargo's exact compilation target into the System Plugin runtime.
-//! 将 Cargo 的精确编译目标传播到系统插件运行时。
+//! Propagates Cargo's exact compilation target into the Vulcan Plugin runtime.
+//! 将 Cargo 的精确编译目标传播到 Vulcan 插件运行时。
 
 use std::env;
 

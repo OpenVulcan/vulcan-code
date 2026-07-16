@@ -20,6 +20,7 @@ import {
 import { loadWorkbenchSnapshot } from "@/service/workbench-snapshot-service";
 import {
   deleteSubagentDefinition,
+  deletePluginMcpSecret,
   installLuaSkill,
   installLocalPlugin,
   inspectLocalPlugin,
@@ -42,10 +43,12 @@ import {
   setAgentSkillProjectState,
   setSubagentDefinitionEnabled,
   setLuaSkillEnabled,
-  setLuaSkillsSystemPluginEnabled,
+  setVulcanPluginEnabled,
   setLuaSkillToolRegistrationState,
+  setPluginMcpSecret,
   uninstallLuaSkill,
   uninstallUserPlugin,
+  updateLocalPlugin,
   updateLuaSkill,
 } from "@/service/skills-actions-service";
 import { saveVmmMemoryConfig } from "@/service/memory-actions-service";
@@ -298,12 +301,21 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     onInstallLuaSkill: (skillId, source, sourceType) => runLuaSkillsCatalogAction(() => installLuaSkill(skillId, source, sourceType)),
     onUpdateLuaSkill: (skillId) => runLuaSkillsCatalogAction(() => updateLuaSkill(skillId)),
     onSetLuaSkillEnabled: (skillId, enabled) => runLuaSkillsCatalogAction(() => setLuaSkillEnabled(skillId, enabled)),
-    onSetSystemPluginEnabled: (pluginId, enabled) => runLuaSkillsCatalogAction(() => setLuaSkillsSystemPluginEnabled(pluginId, enabled)),
+    onSetVulcanPluginEnabled: (pluginId, enabled) => runLuaSkillsCatalogAction(() => setVulcanPluginEnabled(pluginId, enabled)),
     onInspectLocalPlugin: inspectLocalPlugin,
-    onInstallLocalPlugin: (sourcePath, approvedCapabilities, allowRegistryDependencies) => runLuaSkillsCatalogAction(
-      () => installLocalPlugin(sourcePath, approvedCapabilities, allowRegistryDependencies),
+    onInstallLocalPlugin: (sourcePath, contentFingerprint, approvedPermissions, allowRegistryDependencies, initialSecrets) => runLuaSkillsCatalogAction(
+      () => installLocalPlugin(sourcePath, contentFingerprint, approvedPermissions, allowRegistryDependencies, initialSecrets),
+    ),
+    onUpdateLocalPlugin: (sourcePath, contentFingerprint, approvedPermissions, allowRegistryDependencies, initialSecrets) => runLuaSkillsCatalogAction(
+      () => updateLocalPlugin(sourcePath, contentFingerprint, approvedPermissions, allowRegistryDependencies, initialSecrets),
     ),
     onUninstallUserPlugin: (pluginId) => runLuaSkillsCatalogAction(() => uninstallUserPlugin(pluginId)),
+    onSetPluginMcpSecret: (pluginId, serverId, secretKey, value) => runLuaSkillsCatalogAction(
+      () => setPluginMcpSecret(pluginId, serverId, secretKey, value),
+    ),
+    onDeletePluginMcpSecret: (pluginId, serverId, secretKey) => runLuaSkillsCatalogAction(
+      () => deletePluginMcpSecret(pluginId, serverId, secretKey),
+    ),
     onUninstallLuaSkill: (skillId) => runLuaSkillsCatalogAction(() => uninstallLuaSkill(skillId)),
     onSetLuaSkillToolRegistrationState: (skillId, localName, registrationState) => (
       runLuaSkillsCatalogAction(() => setLuaSkillToolRegistrationState(skillId, localName, registrationState))

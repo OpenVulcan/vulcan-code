@@ -29,6 +29,9 @@ pub enum McpTransportLaunchSpec {
         /// Additional child process environment overrides.
         /// 附加子进程环境变量覆盖。
         env: BTreeMap<String, String>,
+        /// Whether the child inherits host variables not present in the explicit environment map.
+        /// 子进程是否继承显式环境映射之外的宿主变量。
+        inherit_environment: bool,
     },
     /// Streamable HTTP launch specification.
     /// Streamable HTTP 启动规格。
@@ -84,11 +87,18 @@ impl McpTransportLaunchSpec {
                 args,
                 cwd,
                 env,
+                inherit_environment,
             } => {
                 let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-                let transport =
-                    StdioTransport::spawn(endpoint, &program, &arg_refs, cwd.as_deref(), &env)
-                        .await?;
+                let transport = StdioTransport::spawn(
+                    endpoint,
+                    &program,
+                    &arg_refs,
+                    cwd.as_deref(),
+                    &env,
+                    inherit_environment,
+                )
+                .await?;
                 Ok(Arc::new(transport))
             }
             Self::Http {

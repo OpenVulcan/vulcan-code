@@ -38,7 +38,7 @@ fn normalize_candidate_public_tool_name(
 fn preferred_public_tool_name_for_descriptor(descriptor: &VulcanToolDescriptor) -> String {
     match descriptor.source {
         VulcanToolSourceKind::Native
-        | VulcanToolSourceKind::SystemPlugin
+        | VulcanToolSourceKind::VulcanPlugin
         | VulcanToolSourceKind::LuaSkills
         | VulcanToolSourceKind::AiFallback => build_direct_public_tool_name(&descriptor.id),
         VulcanToolSourceKind::Mcp => {

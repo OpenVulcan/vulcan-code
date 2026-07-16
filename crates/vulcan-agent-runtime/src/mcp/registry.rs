@@ -1,9 +1,8 @@
 //! MCP registry glue used by the desktop runtime foundation.
 //! 桌面运行时基础架构使用的 MCP 注册表胶水层。
 
-use crate::mcp::config::{McpServerConfig, runtime_mcp_server_configs};
+use crate::mcp::config::McpServerConfig;
 use crate::mcp::runtime::{McpRuntimeDiscoveryReport, McpRuntimeOverview};
-use crate::provider_config::ProviderConfigurationFile;
 use std::sync::Arc;
 use vulcan_mcp_runtime::{McpOAuthSession, McpTransport};
 
@@ -17,12 +16,10 @@ pub(crate) struct McpServerRegistry {
 }
 
 impl McpServerRegistry {
-    /// Builds the runtime registry from the shared provider configuration file.
-    /// 根据共享供应商配置文件构建运行时注册表。
-    pub(crate) fn from_provider_configuration(config: &ProviderConfigurationFile) -> Self {
-        Self {
-            servers: runtime_mcp_server_configs(config),
-        }
+    /// Builds a source-neutral registry from already validated server definitions.
+    /// 根据已经校验的中立服务器定义构建注册表。
+    pub(crate) fn new(servers: Vec<McpServerConfig>) -> Self {
+        Self { servers }
     }
 
     /// Returns every configured MCP server entry.
@@ -56,7 +53,7 @@ impl McpServerRegistry {
                     "{} · {} · {} · {}",
                     if server.enabled { "启用" } else { "禁用" },
                     server.name,
-                    server.transport.label(),
+                    server.transport_kind().label(),
                     server.command_summary()
                 )
             })
@@ -74,7 +71,7 @@ impl McpServerRegistry {
                     "{} · {} · {} · {}",
                     "启用",
                     server.name,
-                    server.transport.label(),
+                    server.transport_kind().label(),
                     server.command_summary()
                 )
             })
@@ -114,67 +111,66 @@ impl McpServerRegistry {
     }
 }
 
-/// Builds one lightweight configured MCP overview directly from the shared provider configuration file.
-/// 直接根据共享供应商配置文件构建一个轻量已配置 MCP 概览。
+/// Builds one lightweight MCP overview from source-neutral server definitions.
+/// 根据中立服务器定义构建一个轻量 MCP 概览。
 pub(crate) fn configured_mcp_registry_overview(
-    config: &ProviderConfigurationFile,
+    servers: Vec<McpServerConfig>,
 ) -> McpRuntimeOverview {
-    McpServerRegistry::from_provider_configuration(config).overview()
+    McpServerRegistry::new(servers).overview()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{McpServerRegistry, configured_mcp_registry_overview};
-    use crate::mcp::config::{McpServerConfig, McpTransportKind};
+    use crate::mcp::config::{McpServerConfig, McpServerSource, McpServerTransportConfig};
     use crate::provider_config::{
         PersistedMcpConfiguration, PersistedMcpServerEntry, PersistedMcpTransportKind,
         ProviderConfigurationFile,
     };
     use std::collections::BTreeMap;
 
+    /// Builds one deterministic source-neutral test server.
+    /// 构建一个确定性的中立测试服务器。
+    fn test_server(id: &str, name: &str, enabled: bool, remote: bool) -> McpServerConfig {
+        McpServerConfig {
+            source: McpServerSource::UserConfigured,
+            id: id.to_owned(),
+            name: name.to_owned(),
+            enabled,
+            transport: if remote {
+                McpServerTransportConfig::Http {
+                    url: String::from("https://disabled.test/mcp"),
+                    bearer_token: None,
+                    headers: BTreeMap::new(),
+                    headers_from_env: BTreeMap::new(),
+                    oauth: None,
+                }
+            } else {
+                McpServerTransportConfig::Stdio {
+                    command: String::from("enabled-mcp"),
+                    args: vec![String::from("--stdio")],
+                    cwd: None,
+                    env: BTreeMap::new(),
+                    env_passthrough: Vec::new(),
+                    inherit_environment: true,
+                }
+            },
+        }
+    }
+
     #[test]
     fn enabled_summary_rows_skip_disabled_servers() {
         let registry = McpServerRegistry {
             servers: vec![
-                McpServerConfig {
-                    id: String::from("enabled"),
-                    name: String::from("Enabled Server"),
-                    enabled: true,
-                    transport: McpTransportKind::Stdio,
-                    command: String::from("enabled-mcp"),
-                    args: vec![String::from("--stdio")],
-                    url: None,
-                    bearer_token: None,
-                    headers: BTreeMap::new(),
-                    headers_from_env: BTreeMap::new(),
-                    oauth: None,
-                    cwd: None,
-                    env: BTreeMap::new(),
-                    env_passthrough: Vec::new(),
-                },
-                McpServerConfig {
-                    id: String::from("disabled"),
-                    name: String::from("Disabled Server"),
-                    enabled: false,
-                    transport: McpTransportKind::Http,
-                    command: String::new(),
-                    args: Vec::new(),
-                    url: Some(String::from("https://disabled.test/mcp")),
-                    bearer_token: None,
-                    headers: BTreeMap::new(),
-                    headers_from_env: BTreeMap::new(),
-                    oauth: None,
-                    cwd: None,
-                    env: BTreeMap::new(),
-                    env_passthrough: Vec::new(),
-                },
+                test_server("enabled", "Enabled Server", true, false),
+                test_server("disabled", "Disabled Server", false, true),
             ],
         };
 
         assert_eq!(
             registry.enabled_summary_rows(),
             vec![String::from(
-                "启用 · Enabled Server · stdio · enabled-mcp --stdio"
+                "启用 · Enabled Server · stdio · enabled-mcp <1 arguments>"
             )]
         );
     }
@@ -183,38 +179,8 @@ mod tests {
     fn registry_overview_preserves_rows_and_discovery_defaults() {
         let registry = McpServerRegistry {
             servers: vec![
-                McpServerConfig {
-                    id: String::from("enabled"),
-                    name: String::from("Enabled Server"),
-                    enabled: true,
-                    transport: McpTransportKind::Stdio,
-                    command: String::from("enabled-mcp"),
-                    args: vec![String::from("--stdio")],
-                    url: None,
-                    bearer_token: None,
-                    headers: BTreeMap::new(),
-                    headers_from_env: BTreeMap::new(),
-                    oauth: None,
-                    cwd: None,
-                    env: BTreeMap::new(),
-                    env_passthrough: Vec::new(),
-                },
-                McpServerConfig {
-                    id: String::from("disabled"),
-                    name: String::from("Disabled Server"),
-                    enabled: false,
-                    transport: McpTransportKind::Http,
-                    command: String::new(),
-                    args: Vec::new(),
-                    url: Some(String::from("https://disabled.test/mcp")),
-                    bearer_token: None,
-                    headers: BTreeMap::new(),
-                    headers_from_env: BTreeMap::new(),
-                    oauth: None,
-                    cwd: None,
-                    env: BTreeMap::new(),
-                    env_passthrough: Vec::new(),
-                },
+                test_server("enabled", "Enabled Server", true, false),
+                test_server("disabled", "Disabled Server", false, true),
             ],
         };
 
@@ -224,7 +190,7 @@ mod tests {
         assert_eq!(
             overview.active_summary_rows(),
             &[String::from(
-                "启用 · Enabled Server · stdio · enabled-mcp --stdio"
+                "启用 · Enabled Server · stdio · enabled-mcp <1 arguments>"
             )]
         );
         assert!(overview.discovery_report().is_empty());
@@ -256,12 +222,15 @@ mod tests {
             ..ProviderConfigurationFile::default()
         };
 
-        let overview = configured_mcp_registry_overview(&config);
+        let overview = configured_mcp_registry_overview(
+            crate::mcp::config::runtime_mcp_server_configs(&config)
+                .expect("persisted fixture should map"),
+        );
 
         assert_eq!(
             overview.summary_rows(),
             &[String::from(
-                "启用 · Configured Server · stdio · configured-mcp --stdio"
+                "启用 · Configured Server · stdio · configured-mcp <1 arguments>"
             )]
         );
         assert!(overview.discovery_report().is_empty());

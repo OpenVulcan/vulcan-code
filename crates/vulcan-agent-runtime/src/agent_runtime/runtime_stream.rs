@@ -2,6 +2,7 @@
 //! Provider 执行与最终报告组装的运行时流式入口模块。
 
 use crate::agent_profile::AgentProfileCatalog;
+use crate::agent_runtime::ExtensionGeneration;
 use crate::agent_runtime::events::ExecutionStreamEvent;
 use crate::agent_runtime::execution_models::ExecutionPreparationRequest;
 use crate::agent_runtime::question_runtime::QuestionRuntime;
@@ -58,12 +59,14 @@ pub fn stream_runtime_run_with_intervention(
     request: ExecutionPreparationRequest,
     prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
+    let mcp_runtime = mcp_runtime.unwrap_or_else(|| configured_mcp_runtime_access(&config));
+    let extension_generation = Arc::new(ExtensionGeneration::new(0, None, mcp_runtime));
     stream_runtime_run_with_intervention_and_plugins(
         config,
         agent_profile_catalog,
         luaskills_runtime,
         None,
-        mcp_runtime,
+        Some(extension_generation),
         task_runtime,
         question_runtime,
         command_session_runtime,
@@ -73,14 +76,14 @@ pub fn stream_runtime_run_with_intervention(
     )
 }
 
-/// Streams one provider run with independently owned LuaSkills and System Plugin runtimes.
-/// 使用相互独立持有的 LuaSkills 与系统插件运行时流式执行一次 Provider 调用。
+/// Streams one provider run with independently owned LuaSkills and Vulcan Plugin runtimes.
+/// 使用相互独立持有的 LuaSkills 与 Vulcan 插件运行时流式执行一次 Provider 调用。
 pub fn stream_runtime_run_with_intervention_and_plugins(
     config: ProviderConfigurationFile,
     agent_profile_catalog: AgentProfileCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-    system_plugin_runtime: Option<vulcan_plugin_runtime::SystemPluginRuntimeManager>,
-    mcp_runtime: Option<McpRuntimeAccess>,
+    vulcan_plugin_runtime: Option<vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
+    extension_generation: Option<Arc<ExtensionGeneration>>,
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
@@ -88,13 +91,21 @@ pub fn stream_runtime_run_with_intervention_and_plugins(
     request: ExecutionPreparationRequest,
     prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
-    let mcp_runtime_access = mcp_runtime.unwrap_or_else(|| configured_mcp_runtime_access(&config));
+    let extension_generation = extension_generation.unwrap_or_else(|| {
+        Arc::new(ExtensionGeneration::new(
+            0,
+            vulcan_plugin_runtime
+                .as_ref()
+                .map(vulcan_plugin_runtime::VulcanPluginRuntimeManager::snapshot),
+            configured_mcp_runtime_access(&config),
+        ))
+    });
     stream_runtime_run_with_access(
         config,
         agent_profile_catalog,
         luaskills_runtime,
-        system_plugin_runtime,
-        mcp_runtime_access,
+        vulcan_plugin_runtime,
+        extension_generation,
         task_runtime,
         question_runtime,
         command_session_runtime,
@@ -126,8 +137,8 @@ fn stream_runtime_run_with_access(
     config: ProviderConfigurationFile,
     agent_profile_catalog: AgentProfileCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-    system_plugin_runtime: Option<vulcan_plugin_runtime::SystemPluginRuntimeManager>,
-    mcp_runtime_access: McpRuntimeAccess,
+    vulcan_plugin_runtime: Option<vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
+    extension_generation: Arc<ExtensionGeneration>,
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
@@ -140,8 +151,8 @@ fn stream_runtime_run_with_access(
             &config,
             &agent_profile_catalog,
             luaskills_runtime.clone(),
-            system_plugin_runtime.clone(),
-            mcp_runtime_access,
+            vulcan_plugin_runtime.clone(),
+            extension_generation,
             task_runtime,
             question_runtime,
             command_session_runtime,

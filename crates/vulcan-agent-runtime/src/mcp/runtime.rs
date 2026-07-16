@@ -11,11 +11,10 @@ mod tests;
 
 use crate::mcp::config::McpServerConfig;
 use crate::mcp::registry::{McpServerRegistry, configured_mcp_registry_overview};
-use crate::provider_config::ProviderConfigurationFile;
 use crate::tooling::{allocate_unique_public_tool_name, build_prefixed_public_tool_name};
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::Duration;
 use tokio::sync::{RwLock as AsyncRwLock, watch};
 use vulcan_mcp_runtime::{
@@ -29,7 +28,12 @@ use tools::*;
 
 pub use diagnostics::{
     McpRuntimeDiscoveryReport, McpRuntimeEventProjection, McpRuntimeOverview,
-    McpRuntimeServerDiagnostic, McpRuntimeServerStatus, McpRuntimeToolAllowlist,
+    McpRuntimeServerDiagnostic, McpRuntimeServerState, McpRuntimeServerStatus,
+    McpRuntimeToolAllowlist,
 };
-pub use handle::bootstrap_mcp_runtime_access;
+pub use handle::{
+    bootstrap_mcp_runtime_access, remove_plugin_mcp_runtime_partition,
+    replace_plugin_mcp_runtime_partition, replace_user_mcp_runtime_partition,
+    validate_plugin_mcp_runtime_partition,
+};
 pub use tools::{McpRuntimeAccess, McpRuntimeToolBinding, configured_mcp_runtime_access};

@@ -27,7 +27,7 @@ use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 mod tool_exposure;
 
 use tool_exposure::{
-    filter_resolved_tool_set_by_tool_exposure, filter_system_plugin_tool_groups,
+    filter_resolved_tool_set_by_tool_exposure, filter_vulcan_plugin_tool_groups,
     resolve_execution_tool_exposure,
 };
 
@@ -93,7 +93,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     ));
     let mut prompt_skill_catalog =
         vulcan_prompt_skills::load_prompt_skills(&prompt_skills_global_config);
-    if let Some(plugin_catalog) = foundation.system_plugin_catalog() {
+    if let Some(plugin_catalog) = foundation.vulcan_plugin_catalog() {
         // A published plugin snapshot is part of the execution contract; invariant failures must not degrade silently.
         // 已发布插件快照属于执行契约的一部分；不变量失败不得静默降级。
         prompt_skill_catalog
@@ -156,9 +156,9 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         foundation.task_runtime(),
         foundation.question_runtime(),
         foundation.native_tool_catalog().clone(),
-        foundation.system_plugin_runtime(),
-        filter_system_plugin_tool_groups(
-            foundation.resolved_system_plugin_tools_for_agent(&active_agent.id),
+        foundation.vulcan_plugin_runtime(),
+        filter_vulcan_plugin_tool_groups(
+            foundation.resolved_vulcan_plugin_tools_for_agent(&active_agent.id),
             &tool_exposure,
         ),
         luaskills_runtime,
@@ -200,9 +200,9 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         resolved_tools.descriptors.clear();
         resolved_tools.definitions.clear();
     }
-    append_system_plugin_prompt_contributions(
+    append_vulcan_plugin_prompt_contributions(
         &mut prompt_skill_developer_segment,
-        foundation.system_plugin_catalog().as_deref(),
+        foundation.vulcan_plugin_catalog().as_deref(),
         &resolved_tools.descriptors,
     );
 
@@ -348,9 +348,9 @@ fn prompt_skill_is_visible_for_policy(skill_name: &str, policy: &CapabilityPolic
 
 /// Appends plugin-level instructions only when every declared tool dependency remains visible.
 /// 仅在所有声明的工具依赖仍然可见时追加插件级说明。
-fn append_system_plugin_prompt_contributions(
+fn append_vulcan_plugin_prompt_contributions(
     developer_segment: &mut Option<String>,
-    catalog: Option<&vulcan_plugin_runtime::SystemPluginCatalogSnapshot>,
+    catalog: Option<&vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
     visible_tools: &[vulcan_tools_manager::VulcanToolDescriptor],
 ) {
     let Some(catalog) = catalog else {

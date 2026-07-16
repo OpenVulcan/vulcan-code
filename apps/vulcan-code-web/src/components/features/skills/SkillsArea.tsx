@@ -5,7 +5,7 @@ import { DynamicPluginMountPanel } from "@/components/plugins/dynamic-plugin-mou
 
 import { LuaSkillsPanel, LuaSkillInstallDialog } from "./lua-skills-panel"
 import { LuaSkillsSettingsPanel } from "./lua-skills-settings-panel"
-import { SystemPluginsPanel } from "./system-plugins-panel"
+import { VulcanPluginsPanel } from "./vulcan-plugins-panel"
 import {
   findEnabledPluginDetailMount,
   localizedPluginCapability,
@@ -33,14 +33,14 @@ export function activeSkillHeaderSummary(
     }
   }
   if (activeTab === "plugins") {
-    // systemPlugins excludes ordinary Lua Skill projection rows from the plugin menu page.
-    // systemPlugins 从插件菜单页面排除普通 Lua Skill 投影行。
-    const systemPlugins = workbench.plugins.filter((plugin) => plugin.managementKind === "systemPlugin")
+    // vulcanPlugins excludes ordinary Lua Skill projection rows from the plugin menu page.
+    // vulcanPlugins 从插件菜单页面排除普通 Lua Skill 投影行。
+    const vulcanPlugins = workbench.plugins.filter((plugin) => plugin.managementKind === "vulcanPlugin")
     return {
       title: t("skills.navigation.plugins"),
       detail: formatSkillText(t("skills.header.pluginDetail"), {
-        total: systemPlugins.length,
-        enabled: systemPlugins.filter((plugin) => plugin.enabled && plugin.available).length,
+        total: vulcanPlugins.length,
+        enabled: vulcanPlugins.filter((plugin) => plugin.enabled && plugin.available).length,
       }),
     }
   }
@@ -91,7 +91,7 @@ export function SkillsArea(props: {
           skills={props.workbench.luaSkills.skills}
         />
       ) : props.activeTab === "plugins" ? (
-        <SystemPluginsPanel
+        <VulcanPluginsPanel
           actions={props.skillActions}
           plugins={props.workbench.plugins}
         />

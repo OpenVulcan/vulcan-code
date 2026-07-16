@@ -10,7 +10,10 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_refresh_luaskills_catalog",
     "service_inspect_local_plugin",
     "service_install_local_plugin",
+    "service_update_local_plugin",
     "service_uninstall_user_plugin",
+    "service_set_plugin_mcp_secret",
+    "service_delete_plugin_mcp_secret",
     "service_load_plugin_ui_module",
     "service_read_plugin_text_asset",
     "service_invoke_plugin_action",
@@ -19,7 +22,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_install_luaskill",
     "service_update_luaskill",
     "service_set_luaskill_enabled",
-    "service_set_luaskills_system_plugin_enabled",
+    "service_set_vulcan_plugin_enabled",
     "service_uninstall_luaskill",
     "service_set_luaskill_tool_registration_state",
     "service_refresh_agent_skills_catalog",
@@ -78,8 +81,22 @@ pub(super) async fn dispatch(
                 app.clone(),
                 state,
                 rpc_required_param(params, "sourcePath")?,
-                rpc_required_param(params, "approvedCapabilities")?,
+                rpc_required_param(params, "contentFingerprint")?,
+                rpc_required_param(params, "approvedPermissions")?,
                 rpc_required_param(params, "allowRegistryDependencies")?,
+                rpc_required_param(params, "initialSecrets")?,
+            )
+            .await,
+        ),
+        "service_update_local_plugin" => rpc_json_result(
+            service_update_local_plugin(
+                app.clone(),
+                state,
+                rpc_required_param(params, "sourcePath")?,
+                rpc_required_param(params, "contentFingerprint")?,
+                rpc_required_param(params, "approvedPermissions")?,
+                rpc_required_param(params, "allowRegistryDependencies")?,
+                rpc_required_param(params, "initialSecrets")?,
             )
             .await,
         ),
@@ -88,6 +105,27 @@ pub(super) async fn dispatch(
                 app.clone(),
                 state,
                 rpc_required_param(params, "pluginId")?,
+            )
+            .await,
+        ),
+        "service_set_plugin_mcp_secret" => rpc_json_result(
+            service_set_plugin_mcp_secret(
+                app.clone(),
+                state,
+                rpc_required_param(params, "pluginId")?,
+                rpc_required_param(params, "serverId")?,
+                rpc_required_param(params, "secretKey")?,
+                rpc_required_param(params, "value")?,
+            )
+            .await,
+        ),
+        "service_delete_plugin_mcp_secret" => rpc_json_result(
+            service_delete_plugin_mcp_secret(
+                app.clone(),
+                state,
+                rpc_required_param(params, "pluginId")?,
+                rpc_required_param(params, "serverId")?,
+                rpc_required_param(params, "secretKey")?,
             )
             .await,
         ),
@@ -150,8 +188,8 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
-        "service_set_luaskills_system_plugin_enabled" => rpc_json_result(
-            service_set_luaskills_system_plugin_enabled(
+        "service_set_vulcan_plugin_enabled" => rpc_json_result(
+            service_set_vulcan_plugin_enabled(
                 app.clone(),
                 state,
                 rpc_required_param(params, "pluginId")?,

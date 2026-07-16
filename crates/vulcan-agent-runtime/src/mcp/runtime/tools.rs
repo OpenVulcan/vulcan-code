@@ -1,4 +1,6 @@
 use super::*;
+use crate::mcp::config::runtime_mcp_server_configs;
+use crate::provider_config::ProviderConfigurationFile;
 
 /// 暴露给宿主运行时与执行规划器的稳定 MCP 工具 Schema。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,7 +173,46 @@ pub struct McpRuntimeToolBinding {
     view: McpRuntimeToolView,
     /// Live runtime handle used to resolve the owning transport at invocation time.
     /// 在调用时用于解析所属传输的实时运行时句柄。
+    runtime: Arc<McpRuntimePartitionLease>,
+}
+
+/// Reference-counted ownership boundary for one independently replaceable MCP runtime partition.
+/// 单个可独立替换 MCP 运行时分区的引用计数所有权边界。
+struct McpRuntimePartitionLease {
+    /// Live runtime retained until the last generation or in-flight tool binding releases the partition.
+    /// 保留到最后一个代次或执行中工具绑定释放分区为止的实时运行时。
     runtime: McpRuntimeHandle,
+}
+
+/// Shared weak registry used to reject package removal while retired plugin leases can still execute.
+/// 用于在已退休插件租约仍可执行时拒绝删除包的共享弱引用注册表。
+type RetiredPluginPartitionRegistry =
+    Arc<Mutex<BTreeMap<String, Vec<Weak<McpRuntimePartitionLease>>>>>;
+
+impl std::fmt::Debug for McpRuntimePartitionLease {
+    /// Formats only the lease type so transport configuration and credential-bearing state never enter logs.
+    /// 仅格式化租约类型，避免传输配置与含凭据状态进入日志。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("McpRuntimePartitionLease")
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for McpRuntimePartitionLease {
+    /// Stops the partition when no published generation or in-flight binding still owns its lease.
+    /// 当已发布代次与执行中绑定均不再持有租约时停止该分区。
+    fn drop(&mut self) {
+        self.runtime.shutdown();
+    }
+}
+
+impl McpRuntimePartitionLease {
+    /// Wraps one newly booted runtime in a shared lifecycle lease.
+    /// 将一个新引导的运行时包装为共享生命周期租约。
+    fn new(runtime: McpRuntimeHandle) -> Self {
+        Self { runtime }
+    }
 }
 
 /// Stable MCP runtime access surface that resolves live-versus-configured reads inside the MCP domain.
@@ -181,9 +222,12 @@ pub struct McpRuntimeAccess {
     /// Lightweight configured MCP overview retained for fallback reads.
     /// 为回退读取保留的轻量 MCP 配置概览。
     configured_overview: McpRuntimeOverview,
-    /// Optional live MCP runtime handle used when real runtime state is available.
-    /// 在真实运行时状态可用时使用的可选实时 MCP 运行时句柄。
-    live_runtime: Option<McpRuntimeHandle>,
+    /// Independently replaceable live runtime partitions keyed by stable source identity.
+    /// 以稳定来源身份为键、可独立替换的实时运行时分区。
+    live_partitions: BTreeMap<String, Arc<McpRuntimePartitionLease>>,
+    /// Weak retired-lease registry shared by every generation derived from the same bootstrap access.
+    /// 由同一引导访问面派生的每个代次共享的弱退休租约注册表。
+    retired_plugin_partitions: RetiredPluginPartitionRegistry,
 }
 
 impl McpRuntimeAccess {
@@ -191,21 +235,128 @@ impl McpRuntimeAccess {
     /// 根据配置摘要数据与一个可选实时运行时句柄构建单个稳定 MCP 运行时访问面。
     pub(super) fn new(
         configured_overview: McpRuntimeOverview,
-        live_runtime: Option<McpRuntimeHandle>,
+        live_partitions: BTreeMap<String, McpRuntimeHandle>,
     ) -> Self {
         Self {
             configured_overview,
-            live_runtime,
+            live_partitions: live_partitions
+                .into_iter()
+                .map(|(key, runtime)| (key, Arc::new(McpRuntimePartitionLease::new(runtime))))
+                .collect(),
+            retired_plugin_partitions: Arc::new(Mutex::new(BTreeMap::new())),
         }
+    }
+
+    /// Builds one access generation from already shared partition leases.
+    /// 根据已经共享的分区租约构建一个访问代次。
+    fn from_shared_partitions(
+        configured_overview: McpRuntimeOverview,
+        live_partitions: BTreeMap<String, Arc<McpRuntimePartitionLease>>,
+        retired_plugin_partitions: RetiredPluginPartitionRegistry,
+    ) -> Self {
+        Self {
+            configured_overview,
+            live_partitions,
+            retired_plugin_partitions,
+        }
+    }
+
+    /// Builds a new access generation by replacing only the user-configured partition.
+    /// 仅替换用户配置分区并构建新的访问代次。
+    pub(super) fn with_replaced_user_partition(
+        &self,
+        user_overview: McpRuntimeOverview,
+        user_runtime: McpRuntimeHandle,
+    ) -> Self {
+        let mut live_partitions = self.live_partitions.clone();
+        live_partitions.insert(
+            String::from("user"),
+            Arc::new(McpRuntimePartitionLease::new(user_runtime)),
+        );
+        let configured_overview = merge_mcp_runtime_overviews(
+            std::iter::once(user_overview).chain(
+                live_partitions
+                    .iter()
+                    .filter(|(key, _)| key.as_str() != "user")
+                    .map(|(_, lease)| lease.runtime.overview()),
+            ),
+        );
+        Self::from_shared_partitions(
+            configured_overview,
+            live_partitions,
+            Arc::clone(&self.retired_plugin_partitions),
+        )
+    }
+
+    /// Builds a new access generation by replacing every prior generation of one plugin partition.
+    /// 通过替换单个插件分区的全部旧代次来构建新的访问代次。
+    pub(super) fn with_replaced_plugin_partition(
+        &self,
+        plugin_id: &str,
+        generation: u64,
+        plugin_overview: McpRuntimeOverview,
+        plugin_runtime: McpRuntimeHandle,
+    ) -> Self {
+        let partition_prefix = format!("plugin:{plugin_id}:");
+        let mut live_partitions = self.live_partitions.clone();
+        live_partitions.retain(|key, _| !key.starts_with(&partition_prefix));
+        live_partitions.insert(
+            format!("{partition_prefix}{generation}"),
+            Arc::new(McpRuntimePartitionLease::new(plugin_runtime)),
+        );
+        let configured_overview = merge_mcp_runtime_overviews(
+            std::iter::once(plugin_overview).chain(
+                live_partitions
+                    .iter()
+                    .filter(|(key, _)| !key.starts_with(&partition_prefix))
+                    .map(|(_, lease)| lease.runtime.overview()),
+            ),
+        );
+        Self::from_shared_partitions(
+            configured_overview,
+            live_partitions,
+            Arc::clone(&self.retired_plugin_partitions),
+        )
+    }
+
+    /// Builds a new access generation without any live partition owned by one plugin.
+    /// 构建一个不包含指定插件任何实时分区的新访问代次。
+    pub(super) fn without_plugin_partition(&self, plugin_id: &str) -> Self {
+        let partition_prefix = format!("plugin:{plugin_id}:");
+        let mut live_partitions = self.live_partitions.clone();
+        live_partitions.retain(|key, _| !key.starts_with(&partition_prefix));
+        let configured_overview = merge_mcp_runtime_overviews(
+            live_partitions
+                .values()
+                .map(|lease| lease.runtime.overview()),
+        );
+        Self::from_shared_partitions(
+            configured_overview,
+            live_partitions,
+            Arc::clone(&self.retired_plugin_partitions),
+        )
     }
 
     /// Returns one stable MCP runtime overview backed by live runtime state when available, or configured fallback data otherwise.
     /// 返回一份在实时运行时可用时优先使用实时状态、否则回退到配置摘要数据的稳定 MCP 运行时概览。
     pub fn overview(&self) -> McpRuntimeOverview {
-        self.live_runtime
-            .as_ref()
-            .map(McpRuntimeHandle::overview)
-            .unwrap_or_else(|| self.configured_overview.clone())
+        if self.live_partitions.is_empty() {
+            return self.configured_overview.clone();
+        }
+        merge_mcp_runtime_overviews(
+            self.live_partitions
+                .values()
+                .map(|lease| lease.runtime.overview()),
+        )
+    }
+
+    /// Returns structured server states merged from every current live partition.
+    /// 返回从当前每个实时分区合并得到的结构化服务器状态。
+    pub fn server_states(&self) -> Vec<McpRuntimeServerState> {
+        self.live_partitions
+            .values()
+            .flat_map(|lease| lease.runtime.server_states())
+            .collect()
     }
 
     /// Returns currently available MCP tool bindings filtered by one allowlist when live runtime state is available.
@@ -214,24 +365,131 @@ impl McpRuntimeAccess {
         &self,
         allowlist: &McpRuntimeToolAllowlist,
     ) -> Vec<McpRuntimeToolBinding> {
-        self.live_runtime
-            .as_ref()
-            .map(|runtime| runtime.available_tool_bindings_filtered(allowlist))
-            .unwrap_or_default()
+        let mut occupied_public_names = BTreeSet::new();
+        let mut bindings = Vec::new();
+        for lease in self.live_partitions.values() {
+            for mut view in lease.runtime.available_tool_views_filtered(allowlist) {
+                let public_name =
+                    allocate_unique_public_tool_name(view.id(), &mut occupied_public_names);
+                view.id = public_name.clone();
+                view.name = public_name;
+                bindings.push(McpRuntimeToolBinding::new(view, Arc::clone(lease)));
+            }
+        }
+        bindings
     }
 
     /// Requests the live MCP runtime to stop when one real runtime handle is currently available.
     /// 当当前存在真实运行时句柄时，请求实时 MCP 运行时停止。
     pub fn shutdown(&self) {
-        if let Some(runtime) = self.live_runtime.as_ref() {
-            runtime.shutdown();
+        for lease in self.live_partitions.values() {
+            lease.runtime.shutdown();
         }
+    }
+
+    /// Requests only the stable user-configured runtime partition to stop.
+    /// 仅请求稳定的用户配置运行时分区停止。
+    pub fn shutdown_user_partition(&self) {
+        if let Some(lease) = self.live_partitions.get("user") {
+            lease.runtime.shutdown();
+        }
+    }
+
+    /// Schedules a forced stop for the retired user partition without extending its natural lease lifetime.
+    /// 为已退休用户分区安排强制停止，同时不延长其自然租约生命周期。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `maximum_drain` is the longest time an in-flight execution may retain the retired partition.
+    /// `maximum_drain` 是执行中任务可继续保留已退休分区的最长时间。
+    pub fn retire_user_partition_after(&self, maximum_drain: std::time::Duration) {
+        let Some(lease) = self.live_partitions.get("user") else {
+            return;
+        };
+        // weakLease lets normal generation release stop the runtime immediately instead of keeping it alive for the timeout.
+        // weakLease 允许代次正常释放时立即停止运行时，而不会为了超时窗口延长其生命期。
+        let weak_lease = Arc::downgrade(lease);
+        tokio::spawn(async move {
+            tokio::time::sleep(maximum_drain).await;
+            if let Some(lease) = weak_lease.upgrade() {
+                lease.runtime.shutdown();
+            }
+        });
+    }
+
+    /// Schedules forced retirement for every prior runtime generation owned by one plugin.
+    /// 为指定插件持有的全部旧运行时代次安排强制退休。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `plugin_id` selects the exact plugin namespace and `maximum_drain` limits in-flight access to old generations.
+    /// `plugin_id` 选择精确插件命名空间，`maximum_drain` 限制执行中任务访问旧代次的时长。
+    pub fn retire_plugin_partitions_after(
+        &self,
+        plugin_id: &str,
+        maximum_drain: std::time::Duration,
+    ) {
+        let partition_prefix = format!("plugin:{plugin_id}:");
+        let retired_leases = self
+            .live_partitions
+            .iter()
+            .filter(|(key, _)| key.starts_with(&partition_prefix))
+            .map(|(_, lease)| Arc::downgrade(lease))
+            .collect::<Vec<_>>();
+        if retired_leases.is_empty() {
+            return;
+        }
+        self.retired_plugin_partitions
+            .lock()
+            .expect("retired MCP plugin partition registry poisoned")
+            .entry(plugin_id.to_string())
+            .or_default()
+            .extend(retired_leases.iter().cloned());
+        tokio::spawn(async move {
+            tokio::time::sleep(maximum_drain).await;
+            for weak_lease in retired_leases {
+                if let Some(lease) = weak_lease.upgrade() {
+                    lease.runtime.shutdown();
+                }
+            }
+        });
+    }
+
+    /// Returns whether a retired partition for one plugin still owns a usable runtime lease.
+    /// 返回指定插件的已退休分区是否仍持有可用运行时租约。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `plugin_id` selects the exact package whose removal safety is being checked.
+    /// `plugin_id` 选择正在检查删除安全性的精确包。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns true until all leases are released or their thirty-second forced shutdown has fired.
+    /// 在全部租约释放或其三十秒强制关闭触发前返回 true。
+    pub fn has_usable_retired_plugin_partitions(&self, plugin_id: &str) -> bool {
+        let mut registry = self
+            .retired_plugin_partitions
+            .lock()
+            .expect("retired MCP plugin partition registry poisoned");
+        let has_usable_leases = registry.get_mut(plugin_id).is_some_and(|leases| {
+            leases.retain(|weak_lease| {
+                weak_lease
+                    .upgrade()
+                    .is_some_and(|lease| !lease.runtime.is_fully_stopped())
+            });
+            !leases.is_empty()
+        });
+        if !has_usable_leases {
+            registry.remove(plugin_id);
+        }
+        has_usable_leases
     }
 
     /// Returns the current OAuth status label for one configured MCP server when live runtime state is available.
     /// 当实时运行时状态可用时，返回单个已配置 MCP 服务器的当前 OAuth 状态标签。
     pub async fn server_oauth_status_label(&self, server_id: &str) -> Result<String, String> {
-        let Some(runtime) = self.live_runtime.as_ref() else {
+        let Some(runtime) = self.partition_for_server(server_id) else {
             return Ok(String::from("运行时未就绪"));
         };
         runtime.server_auth_status_label(server_id).await
@@ -244,7 +502,7 @@ impl McpRuntimeAccess {
         server_id: &str,
         client_name: &str,
     ) -> Result<McpAuthChallenge, String> {
-        let Some(runtime) = self.live_runtime.as_ref() else {
+        let Some(runtime) = self.partition_for_server(server_id) else {
             return Err(String::from(
                 "MCP 运行时尚未就绪，暂时无法启动 OAuth 授权。",
             ));
@@ -260,7 +518,7 @@ impl McpRuntimeAccess {
         authorization_code: &str,
         oauth_state: &str,
     ) -> Result<McpAuthStatus, String> {
-        let Some(runtime) = self.live_runtime.as_ref() else {
+        let Some(runtime) = self.partition_for_server(server_id) else {
             return Err(String::from(
                 "MCP 运行时尚未就绪，暂时无法完成 OAuth 授权。",
             ));
@@ -273,25 +531,76 @@ impl McpRuntimeAccess {
     /// Removes stored OAuth credentials for the target MCP server when live runtime state is available.
     /// 当实时运行时状态可用时，为目标 MCP 服务器移除已存储的 OAuth 凭据。
     pub async fn remove_server_oauth(&self, server_id: &str) -> Result<(), String> {
-        let Some(runtime) = self.live_runtime.as_ref() else {
+        let Some(runtime) = self.partition_for_server(server_id) else {
             return Err(String::from(
                 "MCP 运行时尚未就绪，暂时无法清理 OAuth 凭据。",
             ));
         };
         runtime.remove_server_auth(server_id).await
     }
+
+    /// Resolves the unique live partition that owns one exact server identifier.
+    /// 解析持有某个精确服务器标识的唯一实时分区。
+    fn partition_for_server(&self, server_id: &str) -> Option<&McpRuntimeHandle> {
+        self.live_partitions
+            .values()
+            .find(|lease| lease.runtime.contains_server(server_id))
+            .map(|lease| &lease.runtime)
+    }
 }
 
 /// Builds one stable MCP runtime access surface from provider configuration without a live runtime handle.
 /// 根据供应商配置构建一个不包含实时运行时句柄的稳定 MCP 运行时访问面。
 pub fn configured_mcp_runtime_access(config: &ProviderConfigurationFile) -> McpRuntimeAccess {
-    McpRuntimeAccess::new(configured_mcp_registry_overview(config), None)
+    match runtime_mcp_server_configs(config) {
+        Ok(servers) => {
+            McpRuntimeAccess::new(configured_mcp_registry_overview(servers), BTreeMap::new())
+        }
+        Err(error) => McpRuntimeAccess::new(
+            McpRuntimeOverview::new(
+                vec![format!("MCP configuration is invalid: {error}")],
+                Vec::new(),
+                McpRuntimeDiscoveryReport {
+                    discovery_errors: vec![error],
+                    ..McpRuntimeDiscoveryReport::default()
+                },
+            ),
+            BTreeMap::new(),
+        ),
+    }
+}
+
+/// Merges independently owned MCP partition overviews into one deterministic access surface.
+/// 将独立持有的 MCP 分区概览合并为一个确定性的访问表面。
+fn merge_mcp_runtime_overviews(
+    overviews: impl IntoIterator<Item = McpRuntimeOverview>,
+) -> McpRuntimeOverview {
+    let mut summary_rows = Vec::new();
+    let mut active_summary_rows = Vec::new();
+    let mut report = McpRuntimeDiscoveryReport::default();
+    for overview in overviews {
+        summary_rows.extend(overview.summary_rows);
+        active_summary_rows.extend(overview.active_summary_rows);
+        report
+            .event_projections
+            .extend(overview.discovery_report.event_projections);
+        report
+            .discovery_rows
+            .extend(overview.discovery_report.discovery_rows);
+        report
+            .discovery_errors
+            .extend(overview.discovery_report.discovery_errors);
+        report
+            .discovery_warnings
+            .extend(overview.discovery_report.discovery_warnings);
+    }
+    McpRuntimeOverview::new(summary_rows, active_summary_rows, report)
 }
 
 impl McpRuntimeToolBinding {
     /// Builds one MCP runtime tool binding from one host-facing tool view and one live runtime handle.
     /// 根据一份宿主侧工具视图与一份实时运行时句柄构建单个 MCP 运行时工具绑定。
-    pub(super) fn new(view: McpRuntimeToolView, runtime: McpRuntimeHandle) -> Self {
+    fn new(view: McpRuntimeToolView, runtime: Arc<McpRuntimePartitionLease>) -> Self {
         Self { view, runtime }
     }
 
@@ -349,6 +658,7 @@ impl McpRuntimeToolBinding {
     /// 通过稳定宿主侧工具标识调用当前绑定的 MCP 工具。
     pub async fn invoke(&self, args: serde_json::Value) -> Result<serde_json::Value, String> {
         self.runtime
+            .runtime
             .call_tool_by_id(self.view.origin_tool_id(), args)
             .await
     }

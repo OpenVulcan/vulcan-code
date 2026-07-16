@@ -11,7 +11,7 @@ use rmcp::transport::{
     streamable_http_client::{StreamableHttpClient, StreamableHttpClientTransportConfig},
 };
 use serde_json::Value;
-use tokio::sync::broadcast;
+use tokio::sync::{Mutex as AsyncMutex, broadcast};
 
 use crate::auth::{McpAuthChallenge, McpAuthStatus, McpOAuthSession};
 use crate::error::McpRuntimeError;
@@ -160,7 +160,7 @@ pub struct HttpTransport {
     peer: Peer<RoleClient>,
     /// Keeps the rmcp service alive for the lifetime of the transport.
     /// 在传输生命周期内保持 rmcp 服务存活。
-    _service: Arc<RunningService<RoleClient, Arc<EventingClientHandler>>>,
+    service: AsyncMutex<Option<RunningService<RoleClient, Arc<EventingClientHandler>>>>,
     /// Broadcast channel used to surface tool refresh and disconnect events.
     /// 用于对外广播工具刷新与断连事件的广播通道。
     event_sender: broadcast::Sender<McpTransportEvent>,
@@ -212,7 +212,7 @@ impl HttpTransport {
         Ok(Self {
             endpoint,
             peer,
-            _service: Arc::new(service),
+            service: AsyncMutex::new(Some(service)),
             event_sender,
             auth_session,
         })
@@ -227,6 +227,24 @@ impl McpTransport for HttpTransport {
 
     fn event_receiver(&self) -> broadcast::Receiver<McpTransportEvent> {
         self.event_sender.subscribe()
+    }
+
+    /// Gracefully closes the streamable-HTTP rmcp service and waits for cleanup.
+    /// 优雅关闭 Streamable HTTP rmcp 服务并等待清理完成。
+    async fn shutdown(&self) -> Result<(), McpRuntimeError> {
+        let service = self.service.lock().await.take();
+        let Some(mut service) = service else {
+            return Ok(());
+        };
+        match tokio::time::timeout(std::time::Duration::from_secs(5), service.close()).await {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(error)) => Err(McpRuntimeError::transport(format!(
+                "mcp.shutdown(http).join: {error}"
+            ))),
+            Err(_) => Err(McpRuntimeError::transport(
+                "mcp.shutdown(http) timed out after 5 seconds",
+            )),
+        }
     }
 
     async fn list_tools(&self) -> Result<Vec<McpToolSchema>, McpRuntimeError> {

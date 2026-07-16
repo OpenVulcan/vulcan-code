@@ -460,10 +460,10 @@ pub(crate) async fn service_archive_project_conversations(
     // workbench 是批量刷新提交的权威保留投影。
     let workbench = refresh_result?;
     let plugin_cleanup_failures =
-        drain_system_plugin_sessions_for_owners(&state, &archived_session_ids).await;
+        drain_vulcan_plugin_sessions_for_owners(&state, &archived_session_ids).await;
     if !plugin_cleanup_failures.is_empty() {
         eprintln!(
-            "[system-plugin] archived project cleanup warnings: {}",
+            "[vulcan-plugin] archived project cleanup warnings: {}",
             plugin_cleanup_failures.join("; ")
         );
     }
@@ -547,10 +547,10 @@ pub(crate) async fn service_remove_project(
     // workbench 是子会话归档与项目移除后的权威保留投影。
     let workbench = refresh_result?;
     let plugin_cleanup_failures =
-        drain_system_plugin_sessions_for_owners(&state, &archived_session_ids).await;
+        drain_vulcan_plugin_sessions_for_owners(&state, &archived_session_ids).await;
     if !plugin_cleanup_failures.is_empty() {
         eprintln!(
-            "[system-plugin] removed project cleanup warnings: {}",
+            "[vulcan-plugin] removed project cleanup warnings: {}",
             plugin_cleanup_failures.join("; ")
         );
     }

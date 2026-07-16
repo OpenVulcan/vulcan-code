@@ -15,6 +15,7 @@ fn empty_server_snapshot() -> McpRuntimeServerSnapshot {
         endpoint_summary: String::new(),
         status: McpRuntimeServerStatus::Disabled,
         last_error: None,
+        recent_logs: Vec::new(),
         tools: Vec::new(),
         cached_tools: Vec::new(),
         prompt_count: 0,

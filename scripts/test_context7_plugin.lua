@@ -432,8 +432,8 @@ local function decode_result(raw)
     return decoded.result
 end
 
--- tool_frame serializes one Provider payload exactly as the fixed System Plugin bridge does.
--- tool_frame 按固定 System Plugin 桥的真实方式序列化一个 Provider 载荷。
+-- tool_frame serializes one Provider payload exactly as the fixed Vulcan Plugin bridge does.
+-- tool_frame 按固定 Vulcan Plugin 桥的真实方式序列化一个 Provider 载荷。
 --
 -- arguments is the schema-valid business object before host metadata is injected.
 -- arguments 是宿主元数据注入前经过 Schema 校验的业务对象。

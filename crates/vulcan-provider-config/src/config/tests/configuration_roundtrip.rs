@@ -227,8 +227,8 @@ fn provider_configuration_round_trips_luaskills_registration_configuration() {
                 ]),
             )]),
             disabled_tools_by_skill: BTreeMap::new(),
-            disabled_system_plugins: BTreeSet::from([String::from("test-system-plugin")]),
-            enabled_system_plugins: BTreeSet::from([String::from("opt-in-system-plugin")]),
+            disabled_vulcan_plugins: BTreeSet::from([String::from("test-vulcan-plugin")]),
+            enabled_vulcan_plugins: BTreeSet::from([String::from("opt-in-vulcan-plugin")]),
         },
         ..ProviderConfigurationFile::default()
     };
@@ -243,12 +243,12 @@ fn provider_configuration_round_trips_luaskills_registration_configuration() {
         json!("disabled")
     );
     assert_eq!(
-        value["luaskills"]["disabledSystemPlugins"],
-        json!(["test-system-plugin"])
+        value["luaskills"]["disabledVulcanPlugins"],
+        json!(["test-vulcan-plugin"])
     );
     assert_eq!(
-        value["luaskills"]["enabledSystemPlugins"],
-        json!(["opt-in-system-plugin"])
+        value["luaskills"]["enabledVulcanPlugins"],
+        json!(["opt-in-vulcan-plugin"])
     );
 
     let restored: ProviderConfigurationFile =
@@ -265,12 +265,12 @@ fn provider_configuration_round_trips_luaskills_registration_configuration() {
     assert!(
         !restored
             .luaskills
-            .system_plugin_enabled_or_default("test-system-plugin", true)
+            .vulcan_plugin_enabled_or_default("test-vulcan-plugin", true)
     );
     assert!(
         restored
             .luaskills
-            .system_plugin_enabled_or_default("opt-in-system-plugin", false)
+            .vulcan_plugin_enabled_or_default("opt-in-vulcan-plugin", false)
     );
 }
 
@@ -330,11 +330,11 @@ fn luaskills_registration_configuration_only_persists_non_default_tools() {
             ),
             (String::new(), vec![String::from("tool-x")]),
         ]),
-        disabled_system_plugins: BTreeSet::from([
+        disabled_vulcan_plugins: BTreeSet::from([
             String::new(),
-            String::from(" test-system-plugin "),
+            String::from(" test-vulcan-plugin "),
         ]),
-        enabled_system_plugins: BTreeSet::new(),
+        enabled_vulcan_plugins: BTreeSet::new(),
     };
 
     assert!(configuration.normalize());
@@ -375,16 +375,16 @@ fn luaskills_registration_configuration_only_persists_non_default_tools() {
     );
     assert!(configuration.disabled_tools_by_skill.is_empty());
     assert_eq!(
-        configuration.disabled_system_plugins,
-        BTreeSet::from([String::from("test-system-plugin")])
+        configuration.disabled_vulcan_plugins,
+        BTreeSet::from([String::from("test-vulcan-plugin")])
     );
-    assert!(!configuration.system_plugin_enabled_or_default("test-system-plugin", true));
-    assert!(configuration.set_system_plugin_enabled_with_default("test-system-plugin", true, true));
-    assert!(configuration.system_plugin_enabled_or_default("test-system-plugin", true));
-    assert!(configuration.set_system_plugin_enabled_with_default(
-        "opt-in-system-plugin",
+    assert!(!configuration.vulcan_plugin_enabled_or_default("test-vulcan-plugin", true));
+    assert!(configuration.set_vulcan_plugin_enabled_with_default("test-vulcan-plugin", true, true));
+    assert!(configuration.vulcan_plugin_enabled_or_default("test-vulcan-plugin", true));
+    assert!(configuration.set_vulcan_plugin_enabled_with_default(
+        "opt-in-vulcan-plugin",
         true,
         false
     ));
-    assert!(configuration.system_plugin_enabled_or_default("opt-in-system-plugin", false));
+    assert!(configuration.vulcan_plugin_enabled_or_default("opt-in-vulcan-plugin", false));
 }

@@ -13,14 +13,15 @@ use vulcan_agent_runtime::{
     agent_profile::load_agent_profile_catalog,
     agent_runtime::{
         conversation_hooks::ConversationHookRuntime,
+        extension_generation::ExtensionGeneration,
         question_runtime::QuestionRuntime,
-        system_plugin_hooks::synchronize_system_plugin_hooks,
         task_runtime::TaskRuntime,
         token_budget_runtime::TokenBudgetRuntime,
         vmm_hooks::{VmmHookConfigSnapshot, VmmHookRuntimeHandle, register_builtin_vmm_hooks},
+        vulcan_plugin_hooks::synchronize_vulcan_plugin_hooks,
     },
     luaskills_runtime::LuaSkillsRuntimeHandle,
-    mcp::bootstrap_mcp_runtime_access,
+    mcp::{bootstrap_mcp_runtime_access, plugin_mcp_server_configs, runtime_mcp_server_configs},
     project_temp_maintenance, runtime_assets,
     tooling::CommandSessionRuntime,
 };
@@ -269,17 +270,16 @@ fn run_service_bootstrap(
                 )
             }
         };
-    let (system_plugin_runtime, system_plugin_catalog) = prepare_system_plugin_runtime(
+    let (vulcan_plugin_runtime, vulcan_plugin_catalog) = prepare_vulcan_plugin_runtime(
         luaskills_runtime.as_ref(),
         &provider_configuration,
         &controller_runtime,
         runtime.handle().clone(),
         event_emitter.clone(),
-        &mut logs,
     )?;
     // pluginPrewarmTask overlaps the cold System VM creation cost with independent token-budget and MCP initialization.
     // pluginPrewarmTask 将冷启动 System VM 的创建成本与独立的 Token 预算及 MCP 初始化并行重叠。
-    let plugin_prewarm_runtime = system_plugin_runtime.clone();
+    let plugin_prewarm_runtime = vulcan_plugin_runtime.clone();
     let plugin_prewarm_task = runtime.spawn(async move {
         // prewarmStarted measures only plugin work and excludes later MCP join delay.
         // prewarmStarted 仅测量插件工作，不包含后续等待 MCP 完成的时间。
@@ -466,11 +466,11 @@ fn run_service_bootstrap(
         )
     })?;
     logs.push(format!(
-        "[webui-service] system plugins ready: plugins={} tools={} prewarmed_runtimes={} revision={} elapsed_ms={}",
-        system_plugin_catalog.plugins.len(),
-        system_plugin_catalog.enabled_tools.len(),
+        "[webui-service] Vulcan plugins ready: plugins={} tools={} prewarmed_runtimes={} revision={} elapsed_ms={}",
+        vulcan_plugin_catalog.plugins.len(),
+        vulcan_plugin_catalog.enabled_tools.len(),
         prewarmed_plugin_ids.len(),
-        system_plugin_catalog.revision,
+        vulcan_plugin_catalog.revision,
         plugin_prewarm_elapsed.as_millis()
     ));
     let agent_profile_catalog = load_agent_profile_catalog()
@@ -562,8 +562,28 @@ fn run_service_bootstrap(
             )
         },
     );
+    let mut mcp_server_configs =
+        runtime_mcp_server_configs(&provider_configuration).map_err(|error| {
+            ServiceBootstrapError::new(
+                "mcp",
+                "MCP Runtime",
+                format!("Agent MCP Runtime 配置无效：{error}"),
+            )
+        })?;
+    let plugin_secret_store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
+    mcp_server_configs.extend(
+        plugin_mcp_server_configs(&vulcan_plugin_runtime, &plugin_secret_store).map_err(
+            |error| {
+                ServiceBootstrapError::new(
+                    "mcp",
+                    "Plugin MCP Runtime",
+                    format!("插件 MCP Runtime 配置无效：{error}"),
+                )
+            },
+        )?,
+    );
     let agent_mcp_runtime = runtime
-        .block_on(bootstrap_mcp_runtime_access(provider_configuration.clone()))
+        .block_on(bootstrap_mcp_runtime_access(mcp_server_configs))
         .map_err(|error| {
             ServiceBootstrapError::new(
                 "mcp",
@@ -590,16 +610,16 @@ fn run_service_bootstrap(
             format!("VMM hook 注册失败：{error}"),
         )
     })?;
-    synchronize_system_plugin_hooks(
+    synchronize_vulcan_plugin_hooks(
         conversation_hook_runtime.dispatcher_mut(),
-        system_plugin_runtime.clone(),
-        &system_plugin_catalog,
+        vulcan_plugin_runtime.clone(),
+        &vulcan_plugin_catalog,
     )
     .map_err(|error| {
         ServiceBootstrapError::new(
             "workspace",
             "Workspace",
-            format!("System Plugin hook 注册失败：{error}"),
+            format!("Vulcan Plugin hook 注册失败：{error}"),
         )
     })?;
     let agent_runtime = AgentRuntimeBridge {
@@ -607,8 +627,12 @@ fn run_service_bootstrap(
         ai_tool_configuration: ai_tool_configuration.clone(),
         agent_profile_catalog,
         luaskills_runtime: agent_luaskills_runtime,
-        system_plugin_runtime: system_plugin_runtime.clone(),
-        mcp_runtime: Some(agent_mcp_runtime),
+        vulcan_plugin_runtime: vulcan_plugin_runtime.clone(),
+        extension_generation: Arc::new(ExtensionGeneration::new(
+            vulcan_plugin_catalog.revision,
+            Some(Arc::clone(&vulcan_plugin_catalog)),
+            agent_mcp_runtime,
+        )),
         task_runtime: Arc::new(TaskRuntime::new()),
         question_runtime: Arc::new(QuestionRuntime::new()),
         command_session_runtime: Arc::new(CommandSessionRuntime::new()),
@@ -782,11 +806,16 @@ fn run_service_bootstrap(
             &guard.hydrated_conversation_windows,
             &guard.webui_preloaded_unclosed_subagent_roots,
         );
+        let mcp_server_states = agent_runtime
+            .extension_generation
+            .mcp_runtime()
+            .server_states();
         let mut workbench = workbench_from_runtime(WorkbenchRuntimeProjection {
             controller: &controller_runtime,
             command_session_runtime: Some(agent_runtime.command_session_runtime.as_ref()),
             luaskills_catalog: &luaskills_catalog,
-            system_plugin_catalog: Some(system_plugin_catalog.as_ref()),
+            vulcan_plugin_catalog: Some(vulcan_plugin_catalog.as_ref()),
+            mcp_server_states: &mcp_server_states,
             token_budget_runtime: &token_budget_runtime,
             mcp_catalog: &mcp_catalog,
             provider_configuration: &provider_configuration,
@@ -842,24 +871,23 @@ fn run_service_bootstrap(
 ///
 /// # Parameters
 /// 参数
-/// `luaskills_runtime` optionally supplies the execution engine, while the remaining arguments own catalog policy, storage, async bridging, events, and diagnostics.
-/// `luaskills_runtime` 可选提供执行引擎，其余参数分别持有目录策略、存储、异步桥接、事件与诊断。
+/// `luaskills_runtime` optionally supplies the execution engine, while the remaining arguments own catalog policy, storage, async bridging, and events.
+/// `luaskills_runtime` 可选提供执行引擎，其余参数分别持有目录策略、存储、异步桥接与事件。
 ///
 /// # Returns
 /// 返回值
 /// Returns the long-lived manager and immutable catalog used by background Hook prewarming and later runtime projection.
 /// 返回供后台 Hook 预热及后续运行时投影使用的长生命周期管理器与不可变目录。
-fn prepare_system_plugin_runtime(
+fn prepare_vulcan_plugin_runtime(
     luaskills_runtime: Option<&vulcan_service_runtime::luaskills_bridge::TauriLuaSkillsHandle>,
     provider_configuration: &ProviderConfigurationFile,
     controller_runtime: &ControllerRuntimeHandle,
     service_runtime: tokio::runtime::Handle,
     event_emitter: ServiceEventEmitter,
-    logs: &mut Vec<String>,
 ) -> Result<
     (
-        vulcan_plugin_runtime::SystemPluginRuntimeManager,
-        Arc<vulcan_plugin_runtime::SystemPluginCatalogSnapshot>,
+        vulcan_plugin_runtime::VulcanPluginRuntimeManager,
+        Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
     ),
     ServiceBootstrapError,
 > {
@@ -910,7 +938,7 @@ fn prepare_system_plugin_runtime(
                 .map(|root| root.join("system_lua_lib").join("vulcan-plugin-bridge"))
         })
         .unwrap_or_else(|| plugin_state_root.join("unavailable-plugin-bridge"));
-    let system_plugin_runtime = vulcan_plugin_runtime::SystemPluginRuntimeManager::without_runtime(
+    let vulcan_plugin_runtime = vulcan_plugin_runtime::VulcanPluginRuntimeManager::without_runtime(
         bundled_plugin_root,
         user_plugin_root,
         bridge_package_root,
@@ -931,13 +959,13 @@ fn prepare_system_plugin_runtime(
         })?,
     );
     if let Some(luaskills_runtime) = luaskills_runtime {
-        system_plugin_runtime
+        vulcan_plugin_runtime
             .attach_runtime_engine(Arc::clone(&luaskills_runtime.engine))
             .map_err(|error| {
                 ServiceBootstrapError::new(
                     "plugins",
-                    "System Plugins",
-                    format!("附加系统插件执行运行时失败：{error}"),
+                    "Vulcan Plugins",
+                    format!("附加 Vulcan 插件执行运行时失败：{error}"),
                 )
             })?;
     }
@@ -953,50 +981,29 @@ fn prepare_system_plugin_runtime(
     let ui_event_publisher = Arc::new(crate::plugin_ui_events::ServicePluginUiEventPublisher::new(
         event_emitter,
     ));
-    system_plugin_runtime
-        .install_host_services(vulcan_plugin_runtime::SystemPluginHostServices {
+    vulcan_plugin_runtime
+        .install_host_services(vulcan_plugin_runtime::VulcanPluginHostServices {
             storage: Some(storage_service),
             ui_events: Some(ui_event_publisher),
         })
         .map_err(|error| {
             ServiceBootstrapError::new(
                 "plugins",
-                "System Plugins",
-                format!("安装系统插件宿主服务失败：{error}"),
+                "Vulcan Plugins",
+                format!("安装 Vulcan 插件宿主服务失败：{error}"),
             )
         })?;
-    let system_plugin_catalog = system_plugin_runtime
+    let vulcan_plugin_catalog = vulcan_plugin_runtime
         .refresh_catalog(
-            &provider_configuration.luaskills.disabled_system_plugins,
-            &provider_configuration.luaskills.enabled_system_plugins,
+            &provider_configuration.luaskills.disabled_vulcan_plugins,
+            &provider_configuration.luaskills.enabled_vulcan_plugins,
         )
         .map_err(|error| {
             ServiceBootstrapError::new(
                 "plugins",
-                "System Plugins",
-                format!("加载系统插件目录失败：{error}"),
+                "Vulcan Plugins",
+                format!("加载 Vulcan 插件目录失败：{error}"),
             )
         })?;
-    // The legacy document is removed only after the plugin-owned replacement is durable, so an interrupted startup can safely resume.
-    // 仅在插件持有的替代配置持久化后移除旧文档，因此启动中断后可以安全续做。
-    if let Some(legacy_rtk) = vulcan_provider_config::config::load_legacy_rtk_plugin_configuration()
-        .map_err(|error| ServiceBootstrapError::new("plugins", "RTK Plugin Migration", error))?
-    {
-        let initialized = system_plugin_runtime
-            .initialize_plugin_config_if_absent("vulcan-rtk", legacy_rtk.plugin_config)
-            .map_err(|error| {
-                ServiceBootstrapError::new(
-                    "plugins",
-                    "RTK Plugin Migration",
-                    format!("迁移 RTK 插件配置失败：{error}"),
-                )
-            })?;
-        vulcan_provider_config::config::remove_legacy_rtk_configuration_fields().map_err(
-            |error| ServiceBootstrapError::new("plugins", "RTK Plugin Migration", error),
-        )?;
-        logs.push(format!(
-            "[webui-service] migrated retired RTK settings: initialized_plugin_state={initialized}"
-        ));
-    }
-    Ok((system_plugin_runtime, system_plugin_catalog))
+    Ok((vulcan_plugin_runtime, vulcan_plugin_catalog))
 }

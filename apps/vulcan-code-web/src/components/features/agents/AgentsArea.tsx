@@ -1606,7 +1606,7 @@ function buildAgentToolPolicyOptions(workbench: WorkbenchSnapshot, draft: AgentE
     })
   })
   workbench.plugins
-    .filter((plugin) => plugin.managementKind === "systemPlugin" && plugin.enabled)
+    .filter((plugin) => plugin.managementKind === "vulcanPlugin" && plugin.enabled)
     .forEach((plugin) => {
       plugin.tools.forEach((tool) => {
         const toolId = tool.id.trim()
@@ -1616,7 +1616,7 @@ function buildAgentToolPolicyOptions(workbench: WorkbenchSnapshot, draft: AgentE
         appendAgentCapabilityPolicyOption(optionMap, {
           id: toolId,
           label: toolId,
-          family: localizedAgentLiteral(locale, "系统插件", "System Plugin"),
+          family: localizedAgentLiteral(locale, "Vulcan 插件", "Vulcan Plugin"),
           description: tool.description,
           detail: [plugin.name || plugin.id, tool.group].filter(Boolean).join(" · "),
         })

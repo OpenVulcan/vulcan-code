@@ -1,12 +1,12 @@
-//! Transactional System Plugin enable and disable orchestration.
-//! 系统插件启用与停用事务编排。
+//! Transactional Vulcan Plugin enable and disable orchestration.
+//! Vulcan 插件启用与停用事务编排。
 
 use super::*;
 
 /// One exact desired lifecycle state selected by the service request.
 /// 服务请求选择的唯一目标生命周期状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SystemPluginTargetState {
+enum VulcanPluginTargetState {
     /// The plugin must become enabled and ready for hook traffic.
     /// 插件必须进入已启用状态并准备接收 Hook 流量。
     Enabled,
@@ -15,7 +15,7 @@ enum SystemPluginTargetState {
     Disabled,
 }
 
-impl SystemPluginTargetState {
+impl VulcanPluginTargetState {
     /// Converts the request boolean at the transport boundary into a domain state.
     /// 在传输边界把请求布尔值转换为领域状态。
     ///
@@ -51,7 +51,7 @@ impl SystemPluginTargetState {
 /// Immutable policy sets used to rebuild one exact catalog projection.
 /// 用于重建唯一目录投影的不可变策略集合。
 #[derive(Debug, Clone)]
-struct SystemPluginPolicySnapshot {
+struct VulcanPluginPolicySnapshot {
     /// Explicit plugin identifiers disabled by configuration.
     /// 配置中显式停用的插件标识集合。
     disabled_plugin_ids: BTreeSet<String>,
@@ -63,29 +63,35 @@ struct SystemPluginPolicySnapshot {
 /// Complete immutable facts required by one lifecycle transaction and every rollback path.
 /// 单次生命周期事务及其所有回滚路径所需的完整不可变事实。
 #[derive(Debug, Clone)]
-struct SystemPluginTransition {
+struct VulcanPluginTransition {
     /// Exact manifest-owned plugin identifier.
     /// 清单持有的精确插件标识。
     plugin_id: String,
     /// Requested domain target state.
     /// 请求的领域目标状态。
-    target: SystemPluginTargetState,
+    target: VulcanPluginTargetState,
     /// Manifest default used to persist only meaningful overrides.
     /// 用于仅持久化有效覆盖的清单默认值。
     default_enabled: bool,
     /// Effective state that must be restored after failure.
     /// 失败后必须恢复的原始生效状态。
     previous_enabled: bool,
+    /// Installed package generation that every candidate MCP descriptor must match.
+    /// 每个候选 MCP 描述符都必须匹配的已安装包代次。
+    plugin_generation: u64,
+    /// Complete MCP descriptor set validated for the requested target catalog.
+    /// 针对请求目标目录完成校验的完整 MCP 描述符集合。
+    target_mcp_servers: Vec<vulcan_plugin_runtime::VulcanPluginMcpServerDescriptor>,
     /// Policy projection captured before any mutation.
     /// 任意变更前捕获的策略投影。
-    previous_policy: SystemPluginPolicySnapshot,
+    previous_policy: VulcanPluginPolicySnapshot,
     /// Prevalidated policy projection for the requested state.
     /// 针对请求状态预校验的策略投影。
-    target_policy: SystemPluginPolicySnapshot,
+    target_policy: VulcanPluginPolicySnapshot,
 }
 
-/// Enables or disables one host-owned System Plugin as a compensating transaction.
-/// 以补偿事务方式启用或停用单个宿主自有系统插件。
+/// Enables or disables one host-owned Vulcan Plugin as a compensating transaction.
+/// 以补偿事务方式启用或停用单个宿主持有的 Vulcan 插件。
 ///
 /// # Parameters
 /// 参数
@@ -96,7 +102,7 @@ struct SystemPluginTransition {
 /// 返回值
 /// Returns the refreshed LuaSkills projection after every lifecycle phase commits.
 /// 在全部生命周期阶段提交后返回刷新的 LuaSkills 投影。
-pub(super) async fn set_system_plugin_enabled(
+pub(super) async fn set_vulcan_plugin_enabled(
     state: SharedServiceBridgeState,
     plugin_id: String,
     enabled: bool,
@@ -105,7 +111,7 @@ pub(super) async fn set_system_plugin_enabled(
     // stable_plugin_id 采用所有权字符串，因为所有异步补偿路径都使用同一标识。
     let stable_plugin_id = plugin_id.trim().to_owned();
     if stable_plugin_id.is_empty() {
-        return Err(String::from("系统插件标识不能为空。"));
+        return Err(String::from("Vulcan 插件标识不能为空。"));
     }
     // management_guard serializes catalog, lifecycle, persistence, and hook ownership transfer.
     // management_guard 串行化目录、生命周期、持久化与 Hook 所有权交接。
@@ -115,13 +121,13 @@ pub(super) async fn set_system_plugin_enabled(
     let provider_configuration = provider_configuration_from_state(&state)?;
     // runtime owns every transient state and managed plugin lease.
     // runtime 持有全部临时状态与受管插件租约。
-    let runtime = service_system_plugin_runtime(&state)?;
+    let runtime = service_vulcan_plugin_runtime(&state)?;
     // current_catalog projects the exact persisted policy before request evaluation.
     // current_catalog 在请求评估前投影精确的持久化策略。
     let current_catalog = runtime
         .refresh_catalog(
-            &provider_configuration.luaskills.disabled_system_plugins,
-            &provider_configuration.luaskills.enabled_system_plugins,
+            &provider_configuration.luaskills.disabled_vulcan_plugins,
+            &provider_configuration.luaskills.enabled_vulcan_plugins,
         )
         .map_err(|error| error.to_string())?;
     // current_plugin is the unique discovered package selected by the stable identifier.
@@ -129,43 +135,46 @@ pub(super) async fn set_system_plugin_enabled(
     let current_plugin = current_catalog
         .plugins
         .get(&stable_plugin_id)
-        .ok_or_else(|| format!("未发现系统插件：{stable_plugin_id}"))?;
+        .ok_or_else(|| format!("未发现 Vulcan 插件：{stable_plugin_id}"))?;
     // default_enabled is the manifest baseline required by configuration normalization.
     // default_enabled 是配置归一化所需的清单基线。
     let default_enabled = current_plugin
         .manifest
         .as_ref()
         .map(|manifest| manifest.default_enabled)
-        .ok_or_else(|| format!("系统插件 `{stable_plugin_id}` 缺少有效清单，无法变更状态"))?;
+        .ok_or_else(|| format!("Vulcan 插件 `{stable_plugin_id}` 缺少有效清单，无法变更状态"))?;
     // previous_enabled is the exact effective state restored by every failed transaction.
     // previous_enabled 是每个失败事务都要恢复的精确生效状态。
     let previous_enabled = current_plugin.desired_enabled;
+    // plugin_generation is the installed content generation retained across this enable/disable policy transition.
+    // plugin_generation 是在本次启停策略转换期间保持不变的已安装内容代次。
+    let plugin_generation = current_plugin.generation;
     // target converts the transport boolean once so later branches carry domain meaning.
     // target 仅转换一次传输布尔值，使后续分支携带领域语义。
-    let target = SystemPluginTargetState::from_enabled(enabled);
+    let target = VulcanPluginTargetState::from_enabled(enabled);
     // already_settled excludes cleanup-warning states that require an explicit retry.
     // already_settled 排除需要显式重试的清理告警状态。
     let already_settled = matches!(
         (target, current_plugin.runtime_state),
         (
-            SystemPluginTargetState::Enabled,
-            vulcan_plugin_runtime::SystemPluginRuntimeState::Enabled
+            VulcanPluginTargetState::Enabled,
+            vulcan_plugin_runtime::VulcanPluginRuntimeState::Enabled
         ) | (
-            SystemPluginTargetState::Disabled,
-            vulcan_plugin_runtime::SystemPluginRuntimeState::Disabled
+            VulcanPluginTargetState::Disabled,
+            vulcan_plugin_runtime::VulcanPluginRuntimeState::Disabled
         )
     );
     // requires_cleanup_retry identifies retained resources from an earlier disable attempt.
     // requires_cleanup_retry 标识早期停用尝试遗留的资源。
     let requires_cleanup_retry = current_plugin.runtime_state
-        == vulcan_plugin_runtime::SystemPluginRuntimeState::DisabledWithCleanupWarning;
+        == vulcan_plugin_runtime::VulcanPluginRuntimeState::DisabledWithCleanupWarning;
     if !matches!(
         current_plugin.availability,
-        vulcan_plugin_runtime::SystemPluginAvailability::Enabled
-            | vulcan_plugin_runtime::SystemPluginAvailability::Disabled
+        vulcan_plugin_runtime::VulcanPluginAvailability::Enabled
+            | vulcan_plugin_runtime::VulcanPluginAvailability::Disabled
     ) {
         return Err(format!(
-            "系统插件 `{stable_plugin_id}` 当前不可管理：{}",
+            "Vulcan 插件 `{stable_plugin_id}` 当前不可管理：{}",
             current_plugin.diagnostics.join("；")
         ));
     }
@@ -176,7 +185,7 @@ pub(super) async fn set_system_plugin_enabled(
     // target_luaskills applies the requested override without mutating retained state.
     // target_luaskills 在不修改保留状态的前提下应用请求覆盖。
     let mut target_luaskills = provider_configuration.luaskills.clone();
-    target_luaskills.set_system_plugin_enabled_with_default(
+    target_luaskills.set_vulcan_plugin_enabled_with_default(
         &stable_plugin_id,
         target.is_enabled(),
         default_enabled,
@@ -184,10 +193,10 @@ pub(super) async fn set_system_plugin_enabled(
     // target_catalog validates the entire requested package and hook surface before side effects.
     // target_catalog 在产生副作用前校验完整的目标插件与 Hook 能力面。
     let target_catalog = vulcan_plugin_runtime::load_vulcan_plugin_catalog(
-        runtime.system_plugin_root(),
+        runtime.vulcan_plugin_root(),
         Some(runtime.user_plugin_root()),
-        &target_luaskills.disabled_system_plugins,
-        &target_luaskills.enabled_system_plugins,
+        &target_luaskills.disabled_vulcan_plugins,
+        &target_luaskills.enabled_vulcan_plugins,
         0,
     );
     // target_plugin proves the selected package survives target catalog validation.
@@ -195,48 +204,63 @@ pub(super) async fn set_system_plugin_enabled(
     let target_plugin = target_catalog
         .plugins
         .get(&stable_plugin_id)
-        .ok_or_else(|| format!("目标目录未发现系统插件：{stable_plugin_id}"))?;
+        .ok_or_else(|| format!("目标目录未发现 Vulcan 插件：{stable_plugin_id}"))?;
     // expected_availability is the only availability accepted for the requested target.
     // expected_availability 是请求目标唯一允许的可用性。
     let expected_availability = if target.is_enabled() {
-        vulcan_plugin_runtime::SystemPluginAvailability::Enabled
+        vulcan_plugin_runtime::VulcanPluginAvailability::Enabled
     } else {
-        vulcan_plugin_runtime::SystemPluginAvailability::Disabled
+        vulcan_plugin_runtime::VulcanPluginAvailability::Disabled
     };
     if target_plugin.availability != expected_availability {
         return Err(format!(
-            "系统插件 `{stable_plugin_id}` 无法进入请求状态：{}",
+            "Vulcan 插件 `{stable_plugin_id}` 无法进入请求状态：{}",
             target_plugin.diagnostics.join("；")
         ));
     }
     // target_hooks are cloned from the prevalidated catalog before it leaves this planning phase.
     // target_hooks 在离开规划阶段前从预校验目录中克隆。
     let target_hooks = target_plugin.hooks.clone();
+    // target_mcp_servers receives the installed generation because the standalone validation catalog intentionally starts descriptors at zero.
+    // target_mcp_servers 使用已安装代次，因为独立校验目录会有意把描述符初始代次设为零。
+    let target_mcp_servers = target_plugin
+        .mcp_servers
+        .iter()
+        .cloned()
+        .map(|mut server| {
+            server.plugin_generation = plugin_generation;
+            server
+        })
+        .collect();
     // transition freezes both policy projections so rollback never rereads mutable service state.
     // transition 固定两个策略投影，使回滚绝不重新读取可变服务状态。
-    let transition = SystemPluginTransition {
+    let transition = VulcanPluginTransition {
         plugin_id: stable_plugin_id,
         target,
         default_enabled,
         previous_enabled,
-        previous_policy: SystemPluginPolicySnapshot {
+        plugin_generation,
+        target_mcp_servers,
+        previous_policy: VulcanPluginPolicySnapshot {
             disabled_plugin_ids: provider_configuration
                 .luaskills
-                .disabled_system_plugins
+                .disabled_vulcan_plugins
                 .clone(),
             enabled_plugin_ids: provider_configuration
                 .luaskills
-                .enabled_system_plugins
+                .enabled_vulcan_plugins
                 .clone(),
         },
-        target_policy: SystemPluginPolicySnapshot {
-            disabled_plugin_ids: target_luaskills.disabled_system_plugins,
-            enabled_plugin_ids: target_luaskills.enabled_system_plugins,
+        target_policy: VulcanPluginPolicySnapshot {
+            disabled_plugin_ids: target_luaskills.disabled_vulcan_plugins,
+            enabled_plugin_ids: target_luaskills.enabled_vulcan_plugins,
         },
     };
 
-    match transition.target {
-        SystemPluginTargetState::Enabled => {
+    // prepared_mcp_runtime is a fully Ready candidate access generation and remains unpublished until every durable phase succeeds.
+    // prepared_mcp_runtime 是完全 Ready 的候选访问代次，在全部持久化阶段成功前保持未发布。
+    let prepared_mcp_runtime = match transition.target {
+        VulcanPluginTargetState::Enabled => {
             prepare_enable_transition(
                 &state,
                 &runtime,
@@ -244,12 +268,13 @@ pub(super) async fn set_system_plugin_enabled(
                 &target_hooks,
                 requires_cleanup_retry,
             )
-            .await?;
+            .await?
         }
-        SystemPluginTargetState::Disabled => {
+        VulcanPluginTargetState::Disabled => {
             prepare_disable_transition(&state, &runtime, &transition)?;
+            None
         }
-    }
+    };
     if let Err(error) = persist_transition_target(&state, &transition).await {
         // rollback_result preserves runtime, lifecycle, and Hook compensation diagnostics.
         // rollback_result 保留运行时、生命周期与 Hook 补偿诊断。
@@ -257,10 +282,21 @@ pub(super) async fn set_system_plugin_enabled(
         return Err(append_rollback_error(error, rollback_result));
     }
     match transition.target {
-        SystemPluginTargetState::Enabled => {
-            commit_enable_transition(&state, &runtime, &transition).await?;
+        VulcanPluginTargetState::Enabled => {
+            commit_enable_transition(
+                &state,
+                &runtime,
+                &transition,
+                prepared_mcp_runtime.ok_or_else(|| {
+                    format!(
+                        "Vulcan 插件 `{}` 缺少已准备的 MCP 访问代次。",
+                        transition.plugin_id
+                    )
+                })?,
+            )
+            .await?;
         }
-        SystemPluginTargetState::Disabled => {
+        VulcanPluginTargetState::Disabled => {
             commit_disable_transition(&state, &runtime, &transition).await?;
         }
     }
@@ -281,11 +317,11 @@ pub(super) async fn set_system_plugin_enabled(
 /// 仅当插件安全保持在 `Enabling` 状态时返回成功。
 async fn prepare_enable_transition(
     state: &SharedServiceBridgeState,
-    runtime: &vulcan_plugin_runtime::SystemPluginRuntimeManager,
-    transition: &SystemPluginTransition,
-    target_hooks: &[vulcan_plugin_runtime::SystemPluginHookDescriptor],
+    runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
+    transition: &VulcanPluginTransition,
+    target_hooks: &[vulcan_plugin_runtime::VulcanPluginHookDescriptor],
     requires_cleanup_retry: bool,
-) -> Result<(), String> {
+) -> Result<Option<McpRuntimeAccess>, String> {
     if requires_cleanup_retry {
         // cleanup_report proves retained sessions are gone before capacity is reused.
         // cleanup_report 证明在复用容量前遗留会话已经消失。
@@ -294,7 +330,7 @@ async fn prepare_enable_transition(
             .await
             .map_err(|error| {
                 format!(
-                    "系统插件 `{}` 重新启用前清理失败：{error}",
+                    "Vulcan 插件 `{}` 重新启用前清理失败：{error}",
                     transition.plugin_id
                 )
             })?;
@@ -307,20 +343,24 @@ async fn prepare_enable_transition(
                 cleanup_report.failures.clone(),
             )?;
             return Err(format!(
-                "系统插件 `{}` 仍有未清理资源：{}",
+                "Vulcan 插件 `{}` 仍有未清理资源：{}",
                 transition.plugin_id,
                 cleanup_report.failures.join("；")
             ));
         }
     }
-    validate_service_system_plugin_hooks(state, target_hooks)
-        .map_err(|error| format!("系统插件 `{}` Hook 声明无效：{error}", transition.plugin_id))?;
+    validate_service_vulcan_plugin_hooks(state, target_hooks).map_err(|error| {
+        format!(
+            "Vulcan 插件 `{}` Hook 声明无效：{error}",
+            transition.plugin_id
+        )
+    })?;
     runtime
         .begin_enabling(&transition.plugin_id)
         .map_err(|error| error.to_string())?;
     synchronize_transient_hooks(state, runtime).map_err(|error| {
         append_rollback_error(
-            format!("System Plugin hook 同步失败：{error}"),
+            format!("Vulcan Plugin hook 同步失败：{error}"),
             restore_previous_projection(state, runtime, transition, Vec::new()),
         )
     })?;
@@ -339,14 +379,17 @@ async fn prepare_enable_transition(
     .await
     {
         return Err(append_rollback_error(
-            format!("系统插件 `{}` 环境准备失败：{error}", transition.plugin_id),
+            format!(
+                "Vulcan 插件 `{}` 环境准备失败：{error}",
+                transition.plugin_id
+            ),
             restore_previous_projection(state, runtime, transition, Vec::new()),
         ));
     }
     if let Err(error) = runtime
         .invoke_lifecycle(
             &transition.plugin_id,
-            vulcan_plugin_runtime::SystemPluginLifecycleEvent::Enable,
+            vulcan_plugin_runtime::VulcanPluginLifecycleEvent::Enable,
         )
         .await
     {
@@ -354,7 +397,10 @@ async fn prepare_enable_transition(
         // cleanup_failures 通过声明的停用回调捕获部分回调副作用。
         let cleanup_failures = compensate_failed_enable(runtime, &transition.plugin_id).await;
         return Err(append_rollback_error(
-            format!("系统插件 `{}` 启用回调失败：{error}", transition.plugin_id),
+            format!(
+                "Vulcan 插件 `{}` 启用回调失败：{error}",
+                transition.plugin_id
+            ),
             restore_previous_projection(state, runtime, transition, cleanup_failures),
         ));
     }
@@ -363,11 +409,59 @@ async fn prepare_enable_transition(
         // cleanup_failures 补偿回调成功但运行时探测失败的情况。
         let cleanup_failures = compensate_failed_enable(runtime, &transition.plugin_id).await;
         return Err(append_rollback_error(
-            format!("系统插件 `{}` 启用探测失败：{error}", transition.plugin_id),
+            format!(
+                "Vulcan 插件 `{}` 启用探测失败：{error}",
+                transition.plugin_id
+            ),
             restore_previous_projection(state, runtime, transition, cleanup_failures),
         ));
     }
-    Ok(())
+    let candidate_result = async {
+        // currentMcpRuntime is captured once before asynchronous candidate startup so the replacement cannot mix service generations.
+        // currentMcpRuntime 在异步候选启动前仅捕获一次，避免替换过程混用服务代次。
+        let current_mcp_runtime = state
+            .lock()
+            .map_err(|error| format!("锁定服务状态失败：{error}"))?
+            .agent_runtime
+            .as_ref()
+            .map(|agent_runtime| agent_runtime.extension_generation.mcp_runtime())
+            .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+        let secret_store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
+        let server_configs = plugin_mcp_server_configs_for_descriptors(
+            runtime,
+            &transition.target_mcp_servers,
+            &secret_store,
+        )?;
+        if server_configs.is_empty() {
+            Ok(remove_plugin_mcp_runtime_partition(
+                &current_mcp_runtime,
+                &transition.plugin_id,
+            ))
+        } else {
+            replace_plugin_mcp_runtime_partition(
+                &current_mcp_runtime,
+                &transition.plugin_id,
+                transition.plugin_generation,
+                server_configs,
+            )
+            .await
+        }
+    }
+    .await;
+    let candidate_mcp_runtime = match candidate_result {
+        Ok(candidate) => candidate,
+        Err(error) => {
+            let cleanup_failures = compensate_failed_enable(runtime, &transition.plugin_id).await;
+            return Err(append_rollback_error(
+                format!(
+                    "Vulcan 插件 `{}` MCP 就绪检查失败：{error}",
+                    transition.plugin_id
+                ),
+                restore_previous_projection(state, runtime, transition, cleanup_failures),
+            ));
+        }
+    };
+    Ok(Some(candidate_mcp_runtime))
 }
 
 /// Prepares a disable transition by rejecting new work and removing hooks atomically.
@@ -384,15 +478,15 @@ async fn prepare_enable_transition(
 /// 仅当插件安全保持在 `Draining` 状态时返回成功。
 fn prepare_disable_transition(
     state: &SharedServiceBridgeState,
-    runtime: &vulcan_plugin_runtime::SystemPluginRuntimeManager,
-    transition: &SystemPluginTransition,
+    runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
+    transition: &VulcanPluginTransition,
 ) -> Result<(), String> {
     runtime
         .begin_draining(&transition.plugin_id)
         .map_err(|error| error.to_string())?;
     synchronize_transient_hooks(state, runtime).map_err(|error| {
         append_rollback_error(
-            format!("System Plugin hook 同步失败：{error}"),
+            format!("Vulcan Plugin hook 同步失败：{error}"),
             restore_previous_projection(state, runtime, transition, Vec::new()),
         )
     })
@@ -412,13 +506,13 @@ fn prepare_disable_transition(
 /// 在持久化配置与保留配置都完成变更后返回成功。
 async fn persist_transition_target(
     state: &SharedServiceBridgeState,
-    transition: &SystemPluginTransition,
+    transition: &VulcanPluginTransition,
 ) -> Result<(), String> {
     persist_transition_enabled_state(
         state,
         transition,
         transition.target.is_enabled(),
-        "保存系统插件状态失败",
+        "保存 Vulcan 插件状态失败",
     )
     .await
 }
@@ -437,7 +531,7 @@ async fn persist_transition_target(
 /// 在 Provider 配置事务提交后返回成功。
 async fn persist_transition_enabled_state(
     state: &SharedServiceBridgeState,
-    transition: &SystemPluginTransition,
+    transition: &VulcanPluginTransition,
     enabled: bool,
     error_context: &str,
 ) -> Result<(), String> {
@@ -453,7 +547,7 @@ async fn persist_transition_enabled_state(
         move |configuration| {
             configuration
                 .luaskills
-                .set_system_plugin_enabled_with_default(
+                .set_vulcan_plugin_enabled_with_default(
                     &persisted_plugin_id,
                     enabled,
                     default_enabled,
@@ -479,8 +573,9 @@ async fn persist_transition_enabled_state(
 /// 仅在最终 Hook 同步与预热全部完成后返回成功。
 async fn commit_enable_transition(
     state: &SharedServiceBridgeState,
-    runtime: &vulcan_plugin_runtime::SystemPluginRuntimeManager,
-    transition: &SystemPluginTransition,
+    runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
+    transition: &VulcanPluginTransition,
+    candidate_mcp_runtime: McpRuntimeAccess,
 ) -> Result<(), String> {
     // final_catalog publishes the prevalidated target policy without rereading mutable configuration.
     // final_catalog 使用预校验目标策略发布，而不重新读取可变配置。
@@ -498,16 +593,16 @@ async fn commit_enable_transition(
                     state,
                     transition,
                     transition.previous_enabled,
-                    "回滚系统插件状态失败",
+                    "回滚 Vulcan 插件状态失败",
                 )
                 .await;
                 if let Err(rollback_error) = persistence_rollback {
                     return Err(format!(
-                        "System Plugin 启用最终发布失败：{error}；配置回滚失败：{rollback_error}"
+                        "Vulcan Plugin 启用最终发布失败：{error}；配置回滚失败：{rollback_error}"
                     ));
                 }
                 return Err(append_rollback_error(
-                    format!("System Plugin 启用最终发布失败：{error}"),
+                    format!("Vulcan Plugin 启用最终发布失败：{error}"),
                     restore_previous_projection(state, runtime, transition, cleanup_failures),
                 ));
             }
@@ -515,7 +610,7 @@ async fn commit_enable_transition(
     // activation_error joins atomic hook replacement and persistent runtime cold initialization.
     // activation_error 合并原子 Hook 替换与持久运行时冷初始化错误。
     let activation_error =
-        synchronize_service_system_plugin_hooks(state, runtime.clone(), &final_catalog).err();
+        synchronize_service_vulcan_plugin_hooks(state, runtime.clone(), &final_catalog).err();
     // activation_error is extended asynchronously only when hook replacement succeeded.
     // activation_error 仅在 Hook 替换成功时异步扩展预热错误。
     let activation_error = if activation_error.is_none() {
@@ -525,6 +620,19 @@ async fn commit_enable_transition(
             .map(|_| ())
             .map_err(|error| format!("插件 Hook 运行时预热失败：{error}"))
             .err()
+    } else {
+        activation_error
+    };
+    // activation_error includes the final atomic extension publication only after hooks and runtime prewarm succeed.
+    // activation_error 仅在 Hook 与运行时预热成功后才包含最终原子扩展发布错误。
+    let activation_error = if activation_error.is_none() {
+        publish_extension_generation(
+            state,
+            &transition.plugin_id,
+            Arc::clone(&final_catalog),
+            candidate_mcp_runtime,
+        )
+        .err()
     } else {
         activation_error
     };
@@ -540,7 +648,7 @@ async fn commit_enable_transition(
         )
         .await;
         return Err(append_rollback_error(
-            format!("System Plugin hook 最终激活失败：{error}"),
+            format!("Vulcan Plugin hook 最终激活失败：{error}"),
             rollback_result,
         ));
     }
@@ -561,8 +669,8 @@ async fn commit_enable_transition(
 /// 在停用目录发布后返回成功。
 async fn commit_disable_transition(
     state: &SharedServiceBridgeState,
-    runtime: &vulcan_plugin_runtime::SystemPluginRuntimeManager,
-    transition: &SystemPluginTransition,
+    runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
+    transition: &VulcanPluginTransition,
 ) -> Result<(), String> {
     // cleanup_failures retains non-fatal drain and lifecycle diagnostics in the final runtime state.
     // cleanup_failures 在最终运行时状态中保留非致命排空与生命周期诊断。
@@ -573,7 +681,7 @@ async fn commit_disable_transition(
     if let Err(error) = runtime
         .invoke_lifecycle(
             &transition.plugin_id,
-            vulcan_plugin_runtime::SystemPluginLifecycleEvent::Disable,
+            vulcan_plugin_runtime::VulcanPluginLifecycleEvent::Disable,
         )
         .await
     {
@@ -584,17 +692,42 @@ async fn commit_disable_transition(
     // rollback_cleanup_failures preserves diagnostics if final catalog publication itself fails.
     // rollback_cleanup_failures 在最终目录发布自身失败时保留诊断。
     let rollback_cleanup_failures = cleanup_failures.clone();
-    if let Err(error) = finish_transition(
+    let final_catalog = match finish_transition(
         runtime,
         transition,
         &transition.target_policy,
         cleanup_failures,
     ) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            let rollback_result =
+                rollback_disable(state, runtime, transition, rollback_cleanup_failures, false)
+                    .await;
+            return Err(append_rollback_error(
+                format!("Vulcan Plugin 停用最终发布失败：{error}"),
+                rollback_result,
+            ));
+        }
+    };
+    let current_mcp_runtime = state
+        .lock()
+        .map_err(|error| format!("锁定服务状态失败：{error}"))?
+        .agent_runtime
+        .as_ref()
+        .map(|agent_runtime| agent_runtime.extension_generation.mcp_runtime())
+        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+    let next_mcp_runtime =
+        remove_plugin_mcp_runtime_partition(&current_mcp_runtime, &transition.plugin_id);
+    if let Err(error) = publish_extension_generation(
+        state,
+        &transition.plugin_id,
+        final_catalog,
+        next_mcp_runtime,
+    ) {
         let rollback_result =
-            rollback_uncommitted_disable(state, runtime, transition, rollback_cleanup_failures)
-                .await;
+            rollback_disable(state, runtime, transition, rollback_cleanup_failures, true).await;
         return Err(append_rollback_error(
-            format!("System Plugin 停用最终发布失败：{error}"),
+            format!("Vulcan Plugin 停用扩展代次发布失败：{error}"),
             rollback_result,
         ));
     }
@@ -617,17 +750,17 @@ async fn commit_disable_transition(
 /// 在生命周期与 Hook 状态返回原始投影后返回成功。
 async fn rollback_prepared_transition(
     state: &SharedServiceBridgeState,
-    runtime: &vulcan_plugin_runtime::SystemPluginRuntimeManager,
-    transition: &SystemPluginTransition,
+    runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
+    transition: &VulcanPluginTransition,
 ) -> Result<(), String> {
     match transition.target {
-        SystemPluginTargetState::Enabled => {
+        VulcanPluginTargetState::Enabled => {
             // cleanup_failures compensates the completed enable callback before projection rollback.
             // cleanup_failures 在投影回滚前补偿已完成的启用回调。
             let cleanup_failures = compensate_failed_enable(runtime, &transition.plugin_id).await;
             restore_previous_projection(state, runtime, transition, cleanup_failures)
         }
-        SystemPluginTargetState::Disabled => {
+        VulcanPluginTargetState::Disabled => {
             // No disable callback ran before persistence, so only catalog and hooks need restoration.
             // 持久化前尚未执行停用回调，因此只需恢复目录与 Hook。
             restore_previous_projection(state, runtime, transition, Vec::new())
@@ -649,13 +782,18 @@ async fn rollback_prepared_transition(
 /// 仅在完整停用生命周期恢复原始策略后返回成功。
 async fn rollback_finalized_enable_to_policy(
     state: &SharedServiceBridgeState,
-    runtime: &vulcan_plugin_runtime::SystemPluginRuntimeManager,
-    transition: &SystemPluginTransition,
+    runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
+    transition: &VulcanPluginTransition,
     restored_enabled: bool,
-    restored_policy: &SystemPluginPolicySnapshot,
+    restored_policy: &VulcanPluginPolicySnapshot,
 ) -> Result<(), String> {
-    persist_transition_enabled_state(state, transition, restored_enabled, "回滚系统插件状态失败")
-        .await?;
+    persist_transition_enabled_state(
+        state,
+        transition,
+        restored_enabled,
+        "回滚 Vulcan 插件状态失败",
+    )
+    .await?;
     runtime
         .begin_draining(&transition.plugin_id)
         .map_err(|error| error.to_string())?;
@@ -669,7 +807,7 @@ async fn rollback_finalized_enable_to_policy(
     if let Err(error) = runtime
         .invoke_lifecycle(
             &transition.plugin_id,
-            vulcan_plugin_runtime::SystemPluginLifecycleEvent::Disable,
+            vulcan_plugin_runtime::VulcanPluginLifecycleEvent::Disable,
         )
         .await
     {
@@ -695,37 +833,48 @@ async fn rollback_finalized_enable_to_policy(
     }
 }
 
-/// Compensates a disable whose final catalog publication failed while still draining.
-/// 补偿最终目录发布失败且仍处于排空状态的停用操作。
+/// Compensates a disable from either its draining state or its finalized disabled state.
+/// 从排空状态或已经完成的停用状态补偿一次停用操作。
 ///
 /// # Parameters
 /// 参数
-/// Service state, runtime, and transition define the exact reverse enable transaction.
-/// 服务状态、运行时与转换定义精确的反向启用事务。
+/// Service state, runtime, transition, cleanup diagnostics, and finalization flag define the exact reverse enable transaction.
+/// 服务状态、运行时、转换、清理诊断与完成标记定义精确的反向启用事务。
 ///
 /// # Returns
 /// 返回值
 /// Returns success after enable callback, probe, persistence, hooks, and prewarm recover.
 /// 在启用回调、探测、持久化、Hook 与预热全部恢复后返回成功。
-async fn rollback_uncommitted_disable(
+async fn rollback_disable(
     state: &SharedServiceBridgeState,
-    runtime: &vulcan_plugin_runtime::SystemPluginRuntimeManager,
-    transition: &SystemPluginTransition,
+    runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
+    transition: &VulcanPluginTransition,
     cleanup_failures: Vec<String>,
+    finalized: bool,
 ) -> Result<(), String> {
     if !transition.previous_enabled {
         // A cleanup retry started disabled, so rollback must never run an enable lifecycle.
         // 清理重试开始时就是停用状态，因此回滚绝不能执行启用生命周期。
         return restore_previous_projection(state, runtime, transition, cleanup_failures);
     }
-    runtime
-        .rollback_draining_to_enabling(&transition.plugin_id)
-        .map_err(|error| error.to_string())?;
+    if finalized {
+        // A finalized disable no longer owns a Draining override, so recovery must use the regular Disabled -> Enabling transition.
+        // 已完成停用不再持有 Draining 覆盖，因此恢复必须使用常规的 Disabled -> Enabling 转换。
+        runtime
+            .begin_enabling(&transition.plugin_id)
+            .map_err(|error| error.to_string())?;
+    } else {
+        // An uncommitted disable still owns the exact Draining override and must reverse that state directly.
+        // 尚未提交的停用仍持有精确的 Draining 覆盖，必须直接反转该状态。
+        runtime
+            .rollback_draining_to_enabling(&transition.plugin_id)
+            .map_err(|error| error.to_string())?;
+    }
     synchronize_transient_hooks(state, runtime)?;
     if let Err(error) = runtime
         .invoke_lifecycle(
             &transition.plugin_id,
-            vulcan_plugin_runtime::SystemPluginLifecycleEvent::Enable,
+            vulcan_plugin_runtime::VulcanPluginLifecycleEvent::Enable,
         )
         .await
     {
@@ -758,7 +907,7 @@ async fn rollback_uncommitted_disable(
         state,
         transition,
         transition.previous_enabled,
-        "回滚系统插件状态失败",
+        "回滚 Vulcan 插件状态失败",
     )
     .await
     {
@@ -788,7 +937,7 @@ async fn rollback_uncommitted_disable(
                     state,
                     transition,
                     transition.target.is_enabled(),
-                    "恢复系统插件停用状态失败",
+                    "恢复 Vulcan 插件停用状态失败",
                 )
                 .await?;
                 return Err(append_rollback_error(
@@ -806,7 +955,7 @@ async fn rollback_uncommitted_disable(
     // activation_error joins recovered Hook replacement and persistent runtime initialization.
     // activation_error 合并恢复后的 Hook 替换与持久运行时初始化错误。
     let activation_error =
-        synchronize_service_system_plugin_hooks(state, runtime.clone(), &recovered_catalog).err();
+        synchronize_service_vulcan_plugin_hooks(state, runtime.clone(), &recovered_catalog).err();
     // activation_error is extended with prewarm failure only after Hook replacement succeeds.
     // activation_error 仅在 Hook 替换成功后扩展预热失败。
     let activation_error = if activation_error.is_none() {
@@ -848,7 +997,7 @@ async fn rollback_uncommitted_disable(
 /// Returns every cleanup failure that prevents complete compensation.
 /// 返回所有阻止完整补偿的清理失败。
 async fn compensate_failed_enable(
-    runtime: &vulcan_plugin_runtime::SystemPluginRuntimeManager,
+    runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
     plugin_id: &str,
 ) -> Vec<String> {
     // failures combines lease drain and lifecycle compensation diagnostics.
@@ -860,7 +1009,7 @@ async fn compensate_failed_enable(
     if let Err(error) = runtime
         .invoke_lifecycle(
             plugin_id,
-            vulcan_plugin_runtime::SystemPluginLifecycleEvent::EnableRollback,
+            vulcan_plugin_runtime::VulcanPluginLifecycleEvent::EnableRollback,
         )
         .await
     {
@@ -883,9 +1032,9 @@ async fn compensate_failed_enable(
 /// 在原子 Hook 替换后返回成功。
 fn synchronize_transient_hooks(
     state: &SharedServiceBridgeState,
-    runtime: &vulcan_plugin_runtime::SystemPluginRuntimeManager,
+    runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
 ) -> Result<(), String> {
-    synchronize_service_system_plugin_hooks(state, runtime.clone(), &runtime.snapshot())
+    synchronize_service_vulcan_plugin_hooks(state, runtime.clone(), &runtime.snapshot())
 }
 
 /// Restores the previous catalog and Hook projection from immutable transaction facts.
@@ -902,8 +1051,8 @@ fn synchronize_transient_hooks(
 /// 在运行时发布与 Hook 同步全部完成后返回成功。
 fn restore_previous_projection(
     state: &SharedServiceBridgeState,
-    runtime: &vulcan_plugin_runtime::SystemPluginRuntimeManager,
-    transition: &SystemPluginTransition,
+    runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
+    transition: &VulcanPluginTransition,
     cleanup_failures: Vec<String>,
 ) -> Result<(), String> {
     finish_transition_and_sync(
@@ -929,15 +1078,57 @@ fn restore_previous_projection(
 /// 在目录与 Hook 发布全部完成后返回成功。
 fn finish_transition_and_sync(
     state: &SharedServiceBridgeState,
-    runtime: &vulcan_plugin_runtime::SystemPluginRuntimeManager,
-    transition: &SystemPluginTransition,
-    policy: &SystemPluginPolicySnapshot,
+    runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
+    transition: &VulcanPluginTransition,
+    policy: &VulcanPluginPolicySnapshot,
     cleanup_failures: Vec<String>,
 ) -> Result<(), String> {
     // catalog is the immutable post-transition surface supplied to Hook replacement.
     // catalog 是提供给 Hook 替换的不可变转换后能力面。
     let catalog = finish_transition(runtime, transition, policy, cleanup_failures)?;
-    synchronize_service_system_plugin_hooks(state, runtime.clone(), &catalog)
+    synchronize_service_vulcan_plugin_hooks(state, runtime.clone(), &catalog)
+}
+
+/// Atomically publishes one plugin catalog and its matching MCP access generation, then retires only the replaced plugin leases.
+/// 原子发布单个插件目录及其匹配的 MCP 访问代次，随后仅退休被替换插件的租约。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the publication slot, `plugin_id` selects leases to retire, `catalog` is the exact finalized snapshot, and `mcp_runtime` is its prepared matching access surface.
+/// `state` 持有发布槽，`plugin_id` 选择需要退休的租约，`catalog` 是精确最终快照，`mcp_runtime` 是与其匹配且已准备的访问面。
+///
+/// # Returns
+/// 返回值
+/// Returns success after one lock-protected pointer replacement; old leases drain for at most thirty seconds.
+/// 在单次锁保护指针替换后返回成功；旧租约最多排空三十秒。
+pub(super) fn publish_extension_generation(
+    state: &SharedServiceBridgeState,
+    plugin_id: &str,
+    catalog: Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
+    mcp_runtime: McpRuntimeAccess,
+) -> Result<(), String> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("锁定服务状态失败：{error}"))?;
+    let agent_runtime = guard
+        .agent_runtime
+        .as_mut()
+        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+    // retiredMcpRuntime remains owned by old in-flight ExtensionGeneration arcs until natural release or forced drain expiry.
+    // retiredMcpRuntime 由旧执行中的 ExtensionGeneration Arc 保留，直到自然释放或强制排空到期。
+    let retired_mcp_runtime = agent_runtime.extension_generation.mcp_runtime();
+    let revision = agent_runtime
+        .extension_generation
+        .revision()
+        .saturating_add(1);
+    agent_runtime.extension_generation = Arc::new(ExtensionGeneration::new(
+        revision,
+        Some(catalog),
+        mcp_runtime,
+    ));
+    retired_mcp_runtime
+        .retire_plugin_partitions_after(plugin_id, std::time::Duration::from_secs(30));
+    Ok(())
 }
 
 /// Finishes one runtime transition from an immutable policy snapshot.
@@ -953,11 +1144,11 @@ fn finish_transition_and_sync(
 /// Returns the newly published immutable catalog snapshot.
 /// 返回新发布的不可变目录快照。
 fn finish_transition(
-    runtime: &vulcan_plugin_runtime::SystemPluginRuntimeManager,
-    transition: &SystemPluginTransition,
-    policy: &SystemPluginPolicySnapshot,
+    runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
+    transition: &VulcanPluginTransition,
+    policy: &VulcanPluginPolicySnapshot,
     cleanup_failures: Vec<String>,
-) -> Result<Arc<vulcan_plugin_runtime::SystemPluginCatalogSnapshot>, String> {
+) -> Result<Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>, String> {
     runtime
         .finish_lifecycle_transition(
             &transition.plugin_id,
@@ -996,15 +1187,15 @@ mod tests {
     #[test]
     fn target_state_conversion_is_exact() {
         assert_eq!(
-            SystemPluginTargetState::from_enabled(true),
-            SystemPluginTargetState::Enabled
+            VulcanPluginTargetState::from_enabled(true),
+            VulcanPluginTargetState::Enabled
         );
         assert_eq!(
-            SystemPluginTargetState::from_enabled(false),
-            SystemPluginTargetState::Disabled
+            VulcanPluginTargetState::from_enabled(false),
+            VulcanPluginTargetState::Disabled
         );
-        assert!(SystemPluginTargetState::Enabled.is_enabled());
-        assert!(!SystemPluginTargetState::Disabled.is_enabled());
+        assert!(VulcanPluginTargetState::Enabled.is_enabled());
+        assert!(!VulcanPluginTargetState::Disabled.is_enabled());
     }
 
     /// Verifies rollback formatting preserves the primary failure and adds only real rollback errors.

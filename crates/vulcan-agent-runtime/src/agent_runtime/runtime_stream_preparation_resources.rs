@@ -2,13 +2,13 @@
 //! 面向基础运行时构建与启动输入所有权封装的运行时流准备资源辅助模块。
 
 use crate::agent_profile::AgentProfileCatalog;
+use crate::agent_runtime::ExtensionGeneration;
 use crate::agent_runtime::execution_models::ExecutionPreparationRequest;
 use crate::agent_runtime::question_runtime::QuestionRuntime;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
-use crate::mcp::McpRuntimeAccess;
 use crate::provider_config::ProviderConfigurationFile;
 use crate::tooling::CommandSessionRuntime;
 use std::sync::Arc;
@@ -33,20 +33,20 @@ pub(crate) fn build_runtime_preparation_resources(
     config: &ProviderConfigurationFile,
     agent_profile_catalog: &AgentProfileCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-    system_plugin_runtime: Option<vulcan_plugin_runtime::SystemPluginRuntimeManager>,
-    mcp_runtime_access: McpRuntimeAccess,
+    vulcan_plugin_runtime: Option<vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
+    extension_generation: Arc<ExtensionGeneration>,
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
     token_budget_runtime: Arc<TokenBudgetRuntime>,
     request: ExecutionPreparationRequest,
 ) -> RuntimePreparationResources {
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access_with_runtimes_and_plugins(
+    let foundation = RuntimeFoundation::build_from_extension_generation_with_runtimes_and_plugins(
         config,
         agent_profile_catalog,
         luaskills_runtime.clone(),
-        system_plugin_runtime,
-        Some(mcp_runtime_access),
+        vulcan_plugin_runtime,
+        extension_generation,
         task_runtime,
         question_runtime,
         command_session_runtime,

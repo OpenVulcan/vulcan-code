@@ -731,13 +731,13 @@ impl ExecutionPreparation {
             rows.push(format!("原生工具：{} 个", native_tool_count));
         }
 
-        let system_plugin_tool_count = self
+        let vulcan_plugin_tool_count = self
             .tool_descriptors
             .iter()
-            .filter(|descriptor| descriptor.source == VulcanToolSourceKind::SystemPlugin)
+            .filter(|descriptor| descriptor.source == VulcanToolSourceKind::VulcanPlugin)
             .count();
-        if system_plugin_tool_count > 0 {
-            rows.push(format!("系统插件工具：{} 个", system_plugin_tool_count));
+        if vulcan_plugin_tool_count > 0 {
+            rows.push(format!("Vulcan 插件工具：{} 个", vulcan_plugin_tool_count));
         }
 
         let luaskills_tool_count = self

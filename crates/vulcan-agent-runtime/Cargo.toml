@@ -18,6 +18,7 @@ encoding_rs = "0.8.35"
 filetime = "0.2.26"
 futures-channel = "0.3.31"
 futures-util = "0.3.31"
+jsonschema.workspace = true
 luaskills.workspace = true
 png = "0.17.16"
 reqwest.workspace = true

@@ -98,6 +98,18 @@ pub trait McpTransport: Send + Sync {
     /// 订阅初始连接成功之后发出的传输生命周期事件。
     fn event_receiver(&self) -> broadcast::Receiver<McpTransportEvent>;
 
+    /// Returns a bounded sanitized diagnostic log snapshot owned by this transport.
+    /// 返回当前传输持有的有界脱敏诊断日志快照。
+    fn recent_logs(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Gracefully closes this exact transport and waits for owned resources to be released.
+    /// 优雅关闭当前精确传输，并等待其持有资源完成释放。
+    async fn shutdown(&self) -> Result<(), McpRuntimeError> {
+        Ok(())
+    }
+
     /// Returns whether the transport supports a host-driven OAuth lifecycle.
     /// 返回当前传输是否支持宿主驱动的 OAuth 生命周期。
     async fn supports_oauth(&self) -> bool {

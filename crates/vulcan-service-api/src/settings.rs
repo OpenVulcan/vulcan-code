@@ -56,6 +56,55 @@ pub struct PluginUiMountSummary {
     pub export_name: String,
 }
 
+/// Summarizes one plugin-owned MCP server without exposing credentials or editable user-MCP fields.
+/// 汇总单个插件自有 MCP 服务器，且不暴露凭据或可编辑用户 MCP 字段。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginMcpServerSummary {
+    /// Stable plugin-local server identifier.
+    /// 稳定的插件内服务器标识。
+    pub id: String,
+    /// User-facing server name.
+    /// 面向用户的服务器名称。
+    pub name: String,
+    /// Stable transport-family label.
+    /// 稳定传输类型标签。
+    pub transport: String,
+    /// Credential-free endpoint or managed-launcher summary.
+    /// 不含凭据的端点或受管启动器摘要。
+    pub endpoint: String,
+    /// Stable runtime state key.
+    /// 稳定运行时状态键。
+    pub status: String,
+    /// Owning plugin content generation.
+    /// 所属插件内容代次。
+    pub generation: u64,
+    /// Consecutive automatic retry count.
+    /// 连续自动重试次数。
+    pub retry_count: u8,
+    /// Number of tools in the complete last valid snapshot.
+    /// 最近完整有效快照中的工具数量。
+    pub tool_count: usize,
+    /// Number of discovered prompts.
+    /// 已发现 Prompt 数量。
+    pub prompt_count: usize,
+    /// Number of discovered resources.
+    /// 已发现 Resource 数量。
+    pub resource_count: usize,
+    /// Latest sanitized error text.
+    /// 最近一次已脱敏错误文本。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// Bounded sanitized transport diagnostics, newest entries last.
+    /// 有界脱敏传输诊断，较新的条目位于末尾。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_logs: Vec<String>,
+    /// Exact host-owned secret keys accepted for this server.
+    /// 当前服务器接受的精确宿主持有 Secret 键。
+    #[serde(default)]
+    pub secret_keys: Vec<String>,
+}
+
 /// Describes manifest-owned extension surfaces unavailable to ordinary LuaSkill rows.
 /// 描述普通 LuaSkill 行不具备的清单自有扩展面。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -64,9 +113,9 @@ pub struct PluginExtensionSummary {
     /// Stable package origin such as bundled system or user installed.
     /// 稳定的包来源，例如系统内建或用户安装。
     pub origin: String,
-    /// Exact host capabilities declared by the plugin manifest.
-    /// 插件清单声明的精确宿主能力。
-    pub capabilities: Vec<String>,
+    /// Exact host permissions declared by the plugin manifest.
+    /// 插件清单声明的精确宿主权限。
+    pub permissions: Vec<String>,
     /// Declared host hooks shown before installation authorization.
     /// 在安装授权前展示的已声明宿主 Hook。
     pub hooks: Vec<PluginHookSummary>,
@@ -87,7 +136,11 @@ pub struct PluginExtensionSummary {
     /// Whether this plugin owns an executable Lua runtime.
     /// 当前插件是否拥有可执行 Lua 运行时。
     #[serde(default)]
-    pub has_runtime: bool,
+    pub has_lua_runtime: bool,
+    /// Read-only plugin-owned MCP server diagnostics.
+    /// 只读插件自有 MCP 服务器诊断。
+    #[serde(default)]
+    pub mcp_servers: Vec<PluginMcpServerSummary>,
 }
 
 /// Summarizes one plugin or LuaSkill package.
@@ -581,7 +634,7 @@ mod plugin_summary_tests {
             id: String::from("hook-only-plugin"),
             version: Some(String::from("1.0.0")),
             name: String::from("Hook-only Plugin"),
-            kind: String::from("System Plugin"),
+            kind: String::from("Vulcan Plugin"),
             status: String::from("已启用"),
             runtime_state: String::from("enabled"),
             capability: String::from("Host hook integration"),
@@ -597,7 +650,7 @@ mod plugin_summary_tests {
             hook_count: 1,
             active_session_count: 0,
             diagnostics: Vec::new(),
-            management_kind: String::from("systemPlugin"),
+            management_kind: String::from("vulcanPlugin"),
             extension: None,
         };
         let value = serde_json::to_value(summary).expect("serialize plugin summary");

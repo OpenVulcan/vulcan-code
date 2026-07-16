@@ -1,4 +1,4 @@
-﻿# build_tauri.ps1 builds the new Tauri/WebUI main application.
+# build_tauri.ps1 builds the new Tauri/WebUI main application.
 # build_tauri.ps1 用于构建新的 Tauri/WebUI 主应用。
 # Usage:
 # 用法：
@@ -61,9 +61,9 @@ $SourceSystemPromptSkillsDir = Join-Path $ProjectDir "crates\vulcan-prompt-skill
 # SourceLuaRuntimeDir 指向 make deps-lua 安装的官方 LuaSkills 运行时载荷。
 $SourceLuaRuntimeDir = Join-Path $ProjectDir "third_party\luaskills_runtime"
 
-# SourceSystemPluginsDir contains every manifest-driven plugin bundled with Vulcan Code.
-# SourceSystemPluginsDir 包含随 Vulcan Code 打包的所有清单驱动插件。
-$SourceSystemPluginsDir = Join-Path $ProjectDir "plugins"
+# SourceVulcanPluginsDir contains every manifest-driven plugin bundled with Vulcan Code.
+# SourceVulcanPluginsDir 包含随 Vulcan Code 打包的所有清单驱动插件。
+$SourceVulcanPluginsDir = Join-Path $ProjectDir "plugins"
 
 # SourcePluginBridgeDir contains the only LuaSkills System package used by Vulcan plugins.
 # SourcePluginBridgeDir 包含 Vulcan 插件使用的唯一 LuaSkills System package。
@@ -282,10 +282,6 @@ $OutputSystemPromptSkillsDir = Join-Path $OutputResourcesDir "prompt-skills\syst
 # OutputToolsDir 保存打包后的辅助宿主工具可执行文件。
 $OutputToolsDir = Join-Path $ProjectDir "output\tools"
 
-# LegacyOutputRtkToolDir stores the previous nested RTK output directory for cleanup.
-# LegacyOutputRtkToolDir 保存旧版嵌套 RTK 输出目录，用于清理。
-$LegacyOutputRtkToolDir = Join-Path $OutputToolsDir "rtk"
-
 # OutputLuaRuntimeDir stores the application-owned LuaSkills runtime root.
 # OutputLuaRuntimeDir 保存应用持有的 LuaSkills 运行时根目录。
 $OutputLuaRuntimeDir = Join-Path $ProjectDir "output\lua_runtime"
@@ -298,17 +294,17 @@ $LegacyManagedRuntimeScriptsDir = Join-Path $OutputLuaRuntimeDir "scripts\deps"
 # LegacyManagedRuntimeDistributionDir 是已经废弃的 LuaSkills 私有 Python/Node 位置。
 $LegacyManagedRuntimeDistributionDir = Join-Path $OutputLuaRuntimeDir "dependencies\runtimes"
 
-# OutputSystemPluginsDir is the Vulcan-owned runtime directory scanned by the plugin host.
-# OutputSystemPluginsDir 是插件宿主扫描的 Vulcan 自有运行时目录。
-$OutputSystemPluginsDir = Join-Path $ProjectDir "output\plugins"
+# OutputVulcanPluginsDir is the Vulcan-owned runtime directory scanned by the plugin host.
+# OutputVulcanPluginsDir 是插件宿主扫描的 Vulcan 自有运行时目录。
+$OutputVulcanPluginsDir = Join-Path $ProjectDir "output\plugins"
 
 # OutputPluginBridgeDir is the only plugin-related package deployed below system_lua_lib.
 # OutputPluginBridgeDir 是部署到 system_lua_lib 下的唯一插件相关 package。
 $OutputPluginBridgeDir = Join-Path $OutputLuaRuntimeDir "system_lua_lib\vulcan-plugin-bridge"
 
-# ManagedSystemPluginIndexPath records only packages owned by this build script for safe stale cleanup.
-# ManagedSystemPluginIndexPath 仅记录当前构建脚本拥有的插件包，用于安全清理陈旧项。
-$ManagedSystemPluginIndexPath = Join-Path $OutputSystemPluginsDir ".vulcan-code-managed-plugins"
+# ManagedVulcanPluginIndexPath records only packages owned by this build script for safe stale cleanup.
+# ManagedVulcanPluginIndexPath 仅记录当前构建脚本拥有的插件包，用于安全清理陈旧项。
+$ManagedVulcanPluginIndexPath = Join-Path $OutputVulcanPluginsDir ".vulcan-code-managed-plugins"
 
 if (-not (Test-Path -LiteralPath $BuiltBinaryPath)) {
     throw "Built Tauri binary was not found: $BuiltBinaryPath"
@@ -339,78 +335,70 @@ if (Test-Path -LiteralPath $LegacyManagedRuntimeScriptsDir) {
     $null = Remove-ItemAllowLocked -LiteralPath $LegacyManagedRuntimeScriptsDir -Recurse
 }
 
-Write-Host "==> Syncing host System Plugin packages..."
-New-Item -ItemType Directory -Path $OutputSystemPluginsDir -Force | Out-Null
-$ResolvedOutputSystemPluginsDir = [System.IO.Path]::GetFullPath($OutputSystemPluginsDir).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
-$SourceSystemPluginNames = @(
-    Get-ChildItem -LiteralPath $SourceSystemPluginsDir -Directory -Force |
+Write-Host "==> Syncing host Vulcan Plugin packages..."
+New-Item -ItemType Directory -Path $OutputVulcanPluginsDir -Force | Out-Null
+$ResolvedOutputVulcanPluginsDir = [System.IO.Path]::GetFullPath($OutputVulcanPluginsDir).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+$SourceVulcanPluginNames = @(
+    Get-ChildItem -LiteralPath $SourceVulcanPluginsDir -Directory -Force |
         Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "plugin.yaml") -PathType Leaf } |
         Select-Object -ExpandProperty Name
 )
-if ($SourceSystemPluginNames.Count -eq 0) {
-    throw "No manifest-driven System Plugin packages were found in: $SourceSystemPluginsDir"
+if ($SourceVulcanPluginNames.Count -eq 0) {
+    throw "No manifest-driven Vulcan Plugin packages were found in: $SourceVulcanPluginsDir"
 }
-foreach ($SystemPluginName in $SourceSystemPluginNames) {
-    if ($SystemPluginName -notmatch '^[a-z][a-z0-9_-]*$') {
-        throw "Invalid System Plugin source directory name: $SystemPluginName"
+foreach ($VulcanPluginName in $SourceVulcanPluginNames) {
+    if ($VulcanPluginName -notmatch '^[a-z][a-z0-9_-]*$') {
+        throw "Invalid Vulcan Plugin source directory name: $VulcanPluginName"
     }
 }
-$PreviouslyManagedSystemPluginNames = @()
-if (Test-Path -LiteralPath $ManagedSystemPluginIndexPath -PathType Leaf) {
-    $PreviouslyManagedSystemPluginNames = @(
-        Get-Content -LiteralPath $ManagedSystemPluginIndexPath |
+$PreviouslyManagedVulcanPluginNames = @()
+if (Test-Path -LiteralPath $ManagedVulcanPluginIndexPath -PathType Leaf) {
+    $PreviouslyManagedVulcanPluginNames = @(
+        Get-Content -LiteralPath $ManagedVulcanPluginIndexPath |
             ForEach-Object { $_.Trim() } |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     )
 }
-foreach ($SystemPluginName in $PreviouslyManagedSystemPluginNames) {
-    if ($SystemPluginName -notmatch '^[a-z][a-z0-9_-]*$') {
-        throw "Invalid managed System Plugin index entry: $SystemPluginName"
+foreach ($VulcanPluginName in $PreviouslyManagedVulcanPluginNames) {
+    if ($VulcanPluginName -notmatch '^[a-z][a-z0-9_-]*$') {
+        throw "Invalid managed Vulcan Plugin index entry: $VulcanPluginName"
     }
-    if ($SourceSystemPluginNames -notcontains $SystemPluginName) {
-        $DeployedPluginDir = Join-Path $OutputSystemPluginsDir $SystemPluginName
+    if ($SourceVulcanPluginNames -notcontains $VulcanPluginName) {
+        $DeployedPluginDir = Join-Path $OutputVulcanPluginsDir $VulcanPluginName
         $ResolvedDeployedPluginDir = [System.IO.Path]::GetFullPath($DeployedPluginDir)
-        if (-not $ResolvedDeployedPluginDir.StartsWith($ResolvedOutputSystemPluginsDir + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "Refusing to clean System Plugin path outside runtime root: $ResolvedDeployedPluginDir"
+        if (-not $ResolvedDeployedPluginDir.StartsWith($ResolvedOutputVulcanPluginsDir + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to clean Vulcan Plugin path outside runtime root: $ResolvedDeployedPluginDir"
         }
         if (Test-Path -LiteralPath $ResolvedDeployedPluginDir) {
             $null = Remove-ItemAllowLocked -LiteralPath $ResolvedDeployedPluginDir -Recurse
         }
     }
 }
-foreach ($SystemPluginName in $SourceSystemPluginNames) {
-    # DestinationSystemPluginDir receives an incremental overlay so debug builds preserve existing plugin files.
-    # DestinationSystemPluginDir 接收增量覆盖，确保调试构建保留已有插件文件。
-    $DestinationSystemPluginDir = Join-Path $OutputSystemPluginsDir $SystemPluginName
-    # ResolvedDestinationSystemPluginDir proves the cleanup target remains below the runtime plugin root.
-    # ResolvedDestinationSystemPluginDir 用于证明清理目标仍位于运行时插件根目录下。
-    $ResolvedDestinationSystemPluginDir = [System.IO.Path]::GetFullPath($DestinationSystemPluginDir)
-    if (-not $ResolvedDestinationSystemPluginDir.StartsWith($ResolvedOutputSystemPluginsDir + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "Refusing to deploy System Plugin outside runtime root: $ResolvedDestinationSystemPluginDir"
+foreach ($VulcanPluginName in $SourceVulcanPluginNames) {
+    # DestinationVulcanPluginDir receives an incremental overlay so debug builds preserve existing plugin files.
+    # DestinationVulcanPluginDir 接收增量覆盖，确保调试构建保留已有插件文件。
+    $DestinationVulcanPluginDir = Join-Path $OutputVulcanPluginsDir $VulcanPluginName
+    # ResolvedDestinationVulcanPluginDir proves the cleanup target remains below the runtime plugin root.
+    # ResolvedDestinationVulcanPluginDir 用于证明清理目标仍位于运行时插件根目录下。
+    $ResolvedDestinationVulcanPluginDir = [System.IO.Path]::GetFullPath($DestinationVulcanPluginDir)
+    if (-not $ResolvedDestinationVulcanPluginDir.StartsWith($ResolvedOutputVulcanPluginsDir + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to deploy Vulcan Plugin outside runtime root: $ResolvedDestinationVulcanPluginDir"
     }
     Copy-DirectoryContents `
-        -SourceDirectory (Join-Path $SourceSystemPluginsDir $SystemPluginName) `
-        -DestinationDirectory $DestinationSystemPluginDir
+        -SourceDirectory (Join-Path $SourceVulcanPluginsDir $VulcanPluginName) `
+        -DestinationDirectory $DestinationVulcanPluginDir
 }
 # ASCII keeps the cross-shell ownership index free of a Windows PowerShell UTF-8 BOM.
 # ASCII 确保跨 Shell 使用的所有权索引不会带有 Windows PowerShell UTF-8 BOM。
-Set-Content -LiteralPath $ManagedSystemPluginIndexPath -Value ($SourceSystemPluginNames | Sort-Object) -Encoding ascii
+Set-Content -LiteralPath $ManagedVulcanPluginIndexPath -Value ($SourceVulcanPluginNames | Sort-Object) -Encoding ascii
 
 Write-Host "==> Syncing fixed LuaSkills plugin bridge package..."
 Copy-DirectoryContents -SourceDirectory $SourcePluginBridgeDir -DestinationDirectory $OutputPluginBridgeDir
 
-# LegacyOutputRtkToolDir is removed because RTK is now distributed only inside its plugin package.
-# LegacyOutputRtkToolDir 会被移除，因为 RTK 现在只通过其插件包分发。
-if (Test-Path -LiteralPath $LegacyOutputRtkToolDir) {
-    $null = Remove-ItemAllowLocked -LiteralPath $LegacyOutputRtkToolDir -Recurse
-}
-Get-ChildItem -LiteralPath $OutputToolsDir -File -Force -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -ieq "rtk" -or $_.Name -ieq "rtk.exe" } |
-    ForEach-Object { $null = Remove-ItemAllowLocked -LiteralPath $_.FullName }
 if ($IsWindowsPlatform) {
     # OutputRtkPluginBinary is the exact current-target artifact already copied with the plugin package.
     # OutputRtkPluginBinary 是随插件包一并复制的当前目标精确制品。
-    $OutputRtkPluginBinary = Join-Path $OutputSystemPluginsDir "vulcan-rtk\bin\x86_64-pc-windows-msvc\rtk.exe"
+    $OutputRtkPluginBinary = Join-Path $OutputVulcanPluginsDir "vulcan-rtk\bin\x86_64-pc-windows-msvc\rtk.exe"
     if (-not (Test-Path -LiteralPath $OutputRtkPluginBinary -PathType Leaf)) {
         throw "RTK plugin binary is missing; run make deps-rtk before packaging."
     }

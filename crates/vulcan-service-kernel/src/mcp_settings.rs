@@ -100,13 +100,17 @@ pub(super) async fn service_save_mcp_server_configuration(
         )?;
         configuration
     };
-    let next_mcp_runtime = bootstrap_mcp_runtime_access(next_configuration.clone())
-        .await
-        .map_err(|error| format!("MCP Runtime 重建失败，配置未保存：{error}"))?;
+    let current_mcp_runtime = agent_mcp_runtime_from_state(&state)?;
+    let next_mcp_runtime = replace_user_mcp_runtime_partition(
+        &current_mcp_runtime,
+        runtime_mcp_server_configs(&next_configuration)?,
+    )
+    .await
+    .map_err(|error| format!("MCP Runtime 重建失败，配置未保存：{error}"))?;
     if let Err(error) =
         configuration_transaction.persist(&next_configuration, "保存 MCP 服务器失败")
     {
-        next_mcp_runtime.shutdown();
+        next_mcp_runtime.shutdown_user_partition();
         return Err(error);
     }
     let workbench = store_provider_and_mcp_configuration_after_change(
@@ -137,13 +141,17 @@ pub(super) async fn service_remove_mcp_server_configuration(
         .servers
         .remove(server_id.trim())
         .ok_or_else(|| format!("未找到 MCP 服务器 `{}`。", server_id.trim()))?;
-    let next_mcp_runtime = bootstrap_mcp_runtime_access(next_configuration.clone())
-        .await
-        .map_err(|error| format!("MCP Runtime 重建失败，配置未保存：{error}"))?;
+    let current_mcp_runtime = agent_mcp_runtime_from_state(&state)?;
+    let next_mcp_runtime = replace_user_mcp_runtime_partition(
+        &current_mcp_runtime,
+        runtime_mcp_server_configs(&next_configuration)?,
+    )
+    .await
+    .map_err(|error| format!("MCP Runtime 重建失败，配置未保存：{error}"))?;
     if let Err(error) =
         configuration_transaction.persist(&next_configuration, "移除 MCP 服务器失败")
     {
-        next_mcp_runtime.shutdown();
+        next_mcp_runtime.shutdown_user_partition();
         return Err(error);
     }
     let workbench = store_provider_and_mcp_configuration_after_change(
@@ -156,6 +164,20 @@ pub(super) async fn service_remove_mcp_server_configuration(
     drop(configuration_transaction);
     emit_workbench_event(&app, &workbench);
     Ok(workbench)
+}
+
+/// Clones the currently published Agent MCP access generation before asynchronous replacement.
+/// 在异步替换前克隆当前已发布的 Agent MCP 访问代次。
+fn agent_mcp_runtime_from_state(
+    state: &SharedServiceBridgeState,
+) -> Result<McpRuntimeAccess, String> {
+    state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .agent_runtime
+        .as_ref()
+        .map(|runtime| runtime.extension_generation.mcp_runtime())
+        .ok_or_else(|| String::from("Agent MCP Runtime 尚未初始化。"))
 }
 
 /// Applies one parsed MCP server entry to the provider configuration without silent overwrites.

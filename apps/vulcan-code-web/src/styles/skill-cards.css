@@ -1119,28 +1119,28 @@
   color: var(--foreground);
 }
 
-.system-plugin-definition-row .agent-definition-row-path.warning {
+.vulcan-plugin-definition-row .agent-definition-row-path.warning {
   color: var(--destructive);
 }
 
-.system-plugin-component-details {
+.vulcan-plugin-component-details {
   margin-top: 6px;
   color: var(--muted-foreground);
   font-size: 12px;
 }
 
-.system-plugin-component-details > summary {
+.vulcan-plugin-component-details > summary {
   cursor: pointer;
   user-select: none;
 }
 
-.system-plugin-component-group {
+.vulcan-plugin-component-group {
   display: grid;
   gap: 5px;
   margin-top: 8px;
 }
 
-.system-plugin-component-group > div {
+.vulcan-plugin-component-group > div {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
@@ -1148,8 +1148,8 @@
 
 /* Local plugin installation remains visually integrated with the current skill management surface. */
 /* 本地插件安装区域在视觉上保持与当前技能管理界面一致。 */
-.system-plugin-install-panel,
-.system-plugin-detail-mount {
+.vulcan-plugin-install-panel,
+.vulcan-plugin-detail-mount {
   display: grid;
   gap: 12px;
   padding: 14px;
@@ -1158,30 +1158,30 @@
   background: var(--card);
 }
 
-.system-plugin-install-heading,
-.system-plugin-install-input-row,
-.system-plugin-permission-title {
+.vulcan-plugin-install-heading,
+.vulcan-plugin-install-input-row,
+.vulcan-plugin-permission-title {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-.system-plugin-install-heading > div {
+.vulcan-plugin-install-heading > div {
   min-width: 0;
 }
 
-.system-plugin-install-heading p {
+.vulcan-plugin-install-heading p {
   margin: 3px 0 0;
   color: var(--muted-foreground);
   font-size: 12px;
 }
 
-.system-plugin-install-input-row input {
+.vulcan-plugin-install-input-row input {
   min-width: 0;
   flex: 1;
 }
 
-.system-plugin-permission-preview {
+.vulcan-plugin-permission-preview {
   display: grid;
   gap: 12px;
   padding: 12px;
@@ -1190,28 +1190,28 @@
   background: var(--background);
 }
 
-.system-plugin-permission-preview dl {
+.vulcan-plugin-permission-preview dl {
   display: grid;
   gap: 7px;
   margin: 0;
 }
 
-.system-plugin-permission-preview dl > div {
+.vulcan-plugin-permission-preview dl > div {
   display: grid;
   grid-template-columns: minmax(92px, 130px) minmax(0, 1fr);
   gap: 10px;
 }
 
-.system-plugin-permission-preview dt {
+.vulcan-plugin-permission-preview dt {
   color: var(--muted-foreground);
 }
 
-.system-plugin-permission-preview dd {
+.vulcan-plugin-permission-preview dd {
   margin: 0;
   overflow-wrap: anywhere;
 }
 
-.system-plugin-permission-consent {
+.vulcan-plugin-permission-consent {
   display: flex;
   align-items: flex-start;
   gap: 8px;
@@ -1219,11 +1219,11 @@
   line-height: 1.5;
 }
 
-.system-plugin-permission-consent input {
+.vulcan-plugin-permission-consent input {
   margin-top: 2px;
 }
 
-.system-plugin-permission-consent.warning {
+.vulcan-plugin-permission-consent.warning {
   color: var(--destructive);
 }
 

@@ -54,6 +54,12 @@ pub enum McpRuntimeServerStatus {
     /// Server is enabled but currently disconnected or unavailable.
     /// 服务器已启用，但当前处于断开或不可用状态。
     Disconnected,
+    /// Server exhausted its bounded automatic retries and requires an explicit lifecycle action.
+    /// 服务器已耗尽有限自动重试，需要显式生命周期操作才能恢复。
+    Failed,
+    /// Server task completed host-requested transport teardown and will not reconnect.
+    /// 服务器任务已完成宿主请求的传输拆除，且不会重新连接。
+    Stopped,
 }
 
 impl McpRuntimeServerStatus {
@@ -65,8 +71,58 @@ impl McpRuntimeServerStatus {
             Self::Connecting => "连接中",
             Self::Connected => "在线",
             Self::Disconnected => "离线",
+            Self::Failed => "失败",
+            Self::Stopped => "已停止",
         }
     }
+}
+
+/// Structured source-aware runtime state for one MCP server exposed to service diagnostics.
+/// 暴露给服务诊断的单个 MCP 服务器结构化来源感知运行时状态。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpRuntimeServerState {
+    /// Exact globally unique runtime server identifier.
+    /// 精确且全局唯一的运行时服务器标识。
+    pub id: String,
+    /// User-facing server name.
+    /// 面向用户的服务器名称。
+    pub name: String,
+    /// Stable source label: `user` or `plugin`.
+    /// 稳定来源标签：`user` 或 `plugin`。
+    pub source: String,
+    /// Owning plugin identifier for plugin partitions.
+    /// 插件分区的所属插件标识。
+    pub plugin_id: Option<String>,
+    /// Owning plugin content generation for plugin partitions.
+    /// 插件分区的所属插件内容代次。
+    pub generation: Option<u64>,
+    /// Stable transport-family label.
+    /// 稳定传输类型标签。
+    pub transport: String,
+    /// Credential-free endpoint or command summary.
+    /// 不含凭据的端点或命令摘要。
+    pub endpoint: String,
+    /// Current connectivity state.
+    /// 当前连通状态。
+    pub status: McpRuntimeServerStatus,
+    /// Consecutive automatic retry count for the current unstable period.
+    /// 当前不稳定周期内的连续自动重试次数。
+    pub retry_count: u8,
+    /// Number of currently visible tools from the complete last valid snapshot.
+    /// 当前完整且最近有效快照中可见工具的数量。
+    pub tool_count: usize,
+    /// Number of currently discovered prompts.
+    /// 当前已发现 Prompt 数量。
+    pub prompt_count: usize,
+    /// Number of currently discovered resources.
+    /// 当前已发现 Resource 数量。
+    pub resource_count: usize,
+    /// Latest sanitized connection or discovery error.
+    /// 最近一次已脱敏的连接或发现错误。
+    pub last_error: Option<String>,
+    /// Bounded sanitized transport diagnostics, newest entries last.
+    /// 有界脱敏传输诊断，较新的条目位于末尾。
+    pub recent_logs: Vec<String>,
 }
 
 /// Runtime snapshot of one configured MCP server.
@@ -91,6 +147,9 @@ pub(super) struct McpRuntimeServerSnapshot {
     /// Latest connection or refresh warning, if any.
     /// 最近一次连接或刷新警告（如果存在）。
     pub(super) last_error: Option<String>,
+    /// Last bounded sanitized transport logs retained across disconnect.
+    /// 跨断连保留的最近有界脱敏传输日志。
+    pub(super) recent_logs: Vec<String>,
     /// Currently live tool descriptors registered from the active transport.
     /// 当前从活动传输注册得到的实时工具描述集合。
     pub(super) tools: Vec<McpRuntimeToolDescriptor>,
@@ -118,7 +177,9 @@ impl McpRuntimeServerSnapshot {
                     &self.cached_tools
                 }
             }
-            McpRuntimeServerStatus::Disabled => &self.tools,
+            McpRuntimeServerStatus::Disabled
+            | McpRuntimeServerStatus::Failed
+            | McpRuntimeServerStatus::Stopped => &self.tools,
         }
     }
 }
@@ -207,6 +268,12 @@ impl McpRuntimeServerDiagnostic {
             }
             McpRuntimeServerStatus::Disconnected => {
                 format!("MCP 服务器离线 · {}", self.server_name())
+            }
+            McpRuntimeServerStatus::Failed => {
+                format!("MCP 服务器失败 · {}", self.server_name())
+            }
+            McpRuntimeServerStatus::Stopped => {
+                format!("MCP 服务器已停止 · {}", self.server_name())
             }
         }
     }

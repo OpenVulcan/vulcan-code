@@ -45,9 +45,6 @@ mod helpers;
 mod model_catalog;
 pub use model_catalog::*;
 
-mod rtk_plugin_migration;
-pub use rtk_plugin_migration::*;
-
 mod persisted_provider;
 pub use persisted_provider::*;
 

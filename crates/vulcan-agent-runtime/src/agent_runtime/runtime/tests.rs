@@ -1,7 +1,7 @@
 use super::{
     RuntimeFoundation, filter_luaskills_entries_by_explicit_registration,
-    filter_luaskills_entries_by_host_dispatch, move_matching_tool_ids, resolve_agent_native_tools,
-    resolve_agent_system_plugin_tool_ids,
+    filter_luaskills_entries_by_host_dispatch, resolve_agent_native_tools,
+    resolve_agent_vulcan_plugin_tool_ids,
 };
 use crate::agent_runtime::config::{
     RuntimeAgentDefinition, RuntimeAgentKind, RuntimeToolPolicyDefinition,
@@ -110,7 +110,7 @@ fn direct_plugin_tool_selection_overrides_policy_and_filters_unknown_tools() {
     )]);
     let available = BTreeSet::from([String::from("plugin-a"), String::from("plugin-b")]);
     assert_eq!(
-        resolve_agent_system_plugin_tool_ids(&definition, &policies, &available),
+        resolve_agent_vulcan_plugin_tool_ids(&definition, &policies, &available),
         vec![String::from("plugin-b")]
     );
 }
@@ -150,7 +150,7 @@ fn allow_all_plugin_policy_resolves_every_available_tool() {
     };
     let available = BTreeSet::from([String::from("plugin-a"), String::from("plugin-b")]);
     assert_eq!(
-        resolve_agent_system_plugin_tool_ids(
+        resolve_agent_vulcan_plugin_tool_ids(
             &definition,
             &BTreeMap::from([(String::from("policy-a"), policy.clone())]),
             &available,
@@ -159,27 +159,8 @@ fn allow_all_plugin_policy_resolves_every_available_tool() {
     );
     definition.tool_policy = Some(String::from("missing"));
     assert!(
-        resolve_agent_system_plugin_tool_ids(&definition, &BTreeMap::new(), &available).is_empty()
+        resolve_agent_vulcan_plugin_tool_ids(&definition, &BTreeMap::new(), &available).is_empty()
     );
-}
-
-/// Verifies in-memory legacy migration moves exact plugin ids without duplicating existing targets.
-/// 验证内存旧版迁移会移动精确插件标识，且不会重复已有目标。
-#[test]
-fn legacy_plugin_tool_migration_moves_only_exact_discovered_ids() {
-    let mut native = vec![
-        String::from("shell_command"),
-        String::from("plugin-a"),
-        String::from("plugin-a"),
-    ];
-    let mut plugins = vec![String::from("plugin-a")];
-    move_matching_tool_ids(
-        &mut native,
-        &mut plugins,
-        &BTreeSet::from([String::from("plugin-a")]),
-    );
-    assert_eq!(native, vec![String::from("shell_command")]);
-    assert_eq!(plugins, vec![String::from("plugin-a")]);
 }
 
 /// Verifies universal native tools are appended even when an agent uses an explicit restricted tool list.
@@ -318,12 +299,12 @@ fn runtime_foundation_does_not_implicitly_refresh_plugin_catalog() {
     // temp owns every plugin and runtime path used by this isolated snapshot test.
     // temp 持有该隔离快照测试使用的全部插件与运行时路径。
     let temp = tempfile::tempdir().expect("create plugin snapshot test root");
-    // system_root contains one content-only plugin initially published by the manager.
-    // system_root 包含一个最初由管理器发布的纯内容插件。
-    let system_root = temp.path().join("system-plugins");
+    // bundled_root contains one content-only plugin initially published by the manager.
+    // bundled_root 包含一个最初由管理器发布的纯内容插件。
+    let bundled_root = temp.path().join("vulcan-plugins");
     // package_root is the exact package mutated after the first published generation.
     // package_root 是首个已发布代次之后被修改的精确插件包。
-    let package_root = system_root.join("content-plugin");
+    let package_root = bundled_root.join("content-plugin");
     std::fs::create_dir_all(package_root.join("skills/first-skill"))
         .expect("create initial plugin skill directory");
     std::fs::write(
@@ -333,13 +314,13 @@ fn runtime_foundation_does_not_implicitly_refresh_plugin_catalog() {
     .expect("write initial plugin skill");
     std::fs::write(
         package_root.join("plugin.yaml"),
-        "schema_version: 1\nid: content-plugin\nversion: 1.0.0\nkind: bundled_system\ndefault_enabled: true\ndisplay:\n  name: Content Plugin\n  capability: Snapshot fixture\n",
+        "schema_version: 1\nid: content-plugin\nversion: 1.0.0\ndefault_enabled: true\ndisplay:\n  name: Content Plugin\n  capability: Snapshot fixture\n",
     )
     .expect("write content plugin manifest");
     // manager owns the sole mutable catalog generation boundary for this test.
     // manager 持有该测试唯一可变的目录代次边界。
-    let manager = vulcan_plugin_runtime::SystemPluginRuntimeManager::without_runtime(
-        system_root,
+    let manager = vulcan_plugin_runtime::VulcanPluginRuntimeManager::without_runtime(
+        bundled_root,
         temp.path().join("user-plugins"),
         temp.path().join("bridge"),
         temp.path().join("distribution"),
@@ -375,7 +356,7 @@ fn runtime_foundation_does_not_implicitly_refresh_plugin_catalog() {
     // captured is the exact generation frozen into this execution foundation.
     // captured 是冻结到该执行基础中的精确代次。
     let captured = foundation
-        .system_plugin_catalog()
+        .vulcan_plugin_catalog()
         .expect("foundation should capture plugin catalog");
 
     assert_eq!(manager.snapshot().revision, published.revision);

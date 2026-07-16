@@ -910,10 +910,20 @@ pub(super) async fn load_hydrated_session_workbench(
     };
     let hydrated_window_summaries =
         hydrated_conversation_window_summaries(&hydrated_windows, &preloaded_subagent_roots);
-    let system_plugin_catalog = projection_context
+    let vulcan_plugin_catalog = projection_context
         .agent_runtime_for_status
         .as_ref()
-        .map(|agent_runtime| agent_runtime.system_plugin_runtime.snapshot());
+        .and_then(|agent_runtime| agent_runtime.extension_generation.plugin_catalog());
+    let mcp_server_states = projection_context
+        .agent_runtime_for_status
+        .as_ref()
+        .map(|agent_runtime| {
+            agent_runtime
+                .extension_generation
+                .mcp_runtime()
+                .server_states()
+        })
+        .unwrap_or_default();
     let mut workbench = workbench_from_runtime(WorkbenchRuntimeProjection {
         controller: &read_context.controller_runtime,
         command_session_runtime: projection_context
@@ -921,7 +931,8 @@ pub(super) async fn load_hydrated_session_workbench(
             .as_ref()
             .map(|agent_runtime| agent_runtime.command_session_runtime.as_ref()),
         luaskills_catalog: &projection_context.luaskills_catalog,
-        system_plugin_catalog: system_plugin_catalog.as_deref(),
+        vulcan_plugin_catalog: vulcan_plugin_catalog.as_deref(),
+        mcp_server_states: &mcp_server_states,
         token_budget_runtime: &projection_context.token_budget_runtime,
         mcp_catalog: &projection_context.mcp_catalog,
         provider_configuration: &projection_context.provider_configuration,

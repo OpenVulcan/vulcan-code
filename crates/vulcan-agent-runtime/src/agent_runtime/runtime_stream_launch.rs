@@ -2,6 +2,7 @@
 //! 面向外层执行壳的运行时流启动载荷与启动构建辅助模块。
 
 use crate::agent_profile::AgentProfileCatalog;
+use crate::agent_runtime::ExtensionGeneration;
 use crate::agent_runtime::execution_models::{ExecutionPreparationRequest, ExecutionRunReport};
 use crate::agent_runtime::question_runtime::QuestionRuntime;
 use crate::agent_runtime::runtime_stream_bootstrap::bootstrap_runtime_stream;
@@ -37,7 +38,7 @@ pub async fn prepare_runtime_stream_launch(
         agent_profile_catalog,
         luaskills_runtime,
         None,
-        mcp_runtime_access,
+        Arc::new(ExtensionGeneration::new(0, None, mcp_runtime_access)),
         task_runtime,
         question_runtime,
         command_session_runtime,
@@ -47,14 +48,14 @@ pub async fn prepare_runtime_stream_launch(
     .await
 }
 
-/// Builds one runtime-stream launch with an independently owned System Plugin runtime.
-/// 使用独立持有的系统插件运行时构建一次运行时流启动载荷。
+/// Builds one runtime-stream launch with an independently owned Vulcan Plugin runtime.
+/// 使用独立持有的 Vulcan 插件运行时构建一次运行时流启动载荷。
 pub async fn prepare_runtime_stream_launch_with_plugins(
     config: &ProviderConfigurationFile,
     agent_profile_catalog: &AgentProfileCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-    system_plugin_runtime: Option<vulcan_plugin_runtime::SystemPluginRuntimeManager>,
-    mcp_runtime_access: McpRuntimeAccess,
+    vulcan_plugin_runtime: Option<vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
+    extension_generation: Arc<ExtensionGeneration>,
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
@@ -65,8 +66,8 @@ pub async fn prepare_runtime_stream_launch_with_plugins(
         config,
         agent_profile_catalog,
         luaskills_runtime,
-        system_plugin_runtime,
-        mcp_runtime_access,
+        vulcan_plugin_runtime,
+        extension_generation,
         task_runtime,
         question_runtime,
         command_session_runtime,

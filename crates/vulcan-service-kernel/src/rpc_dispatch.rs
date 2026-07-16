@@ -169,7 +169,7 @@ mod tests {
         // methods combines all domain contracts without deriving ownership from implementation fallbacks.
         // methods 合并全部领域契约，不从实现兜底中推导所有权。
         let methods = service_rpc_method_names();
-        assert_eq!(methods.len(), 122);
+        assert_eq!(methods.len(), 125);
         // unique_methods proves no earlier router can shadow a later domain branch.
         // unique_methods 证明前置路由不会遮蔽后续领域分支。
         let declared_method_count = workspace_io::RPC_METHODS.len()
@@ -179,7 +179,10 @@ mod tests {
             + project_conversation::RPC_METHODS.len();
         assert_eq!(methods.len(), declared_method_count);
         assert!(methods.contains("service_submit_conversation_prompt"));
-        assert!(methods.contains("service_set_luaskills_system_plugin_enabled"));
+        assert!(methods.contains("service_set_vulcan_plugin_enabled"));
+        assert!(methods.contains("service_update_local_plugin"));
+        assert!(methods.contains("service_set_plugin_mcp_secret"));
+        assert!(methods.contains("service_delete_plugin_mcp_secret"));
         assert!(methods.contains("workspace.diff.snapshot"));
         assert!(methods.contains("service_remove_project"));
     }

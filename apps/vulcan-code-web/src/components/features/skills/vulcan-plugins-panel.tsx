@@ -1,14 +1,14 @@
 import * as React from "react";
-import { ChartNoAxesCombined, Puzzle, Route, Search, ShieldCheck, Trash2 } from "lucide-react";
+import { ChartNoAxesCombined, KeyRound, Puzzle, Route, Search, ShieldCheck, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { StatusPill } from "@/components/shared/status";
 import { useI18n } from "@/i18n";
-import type { PluginSummary, SystemPluginPermissionPreview } from "@/types";
+import type { PluginSummary, VulcanPluginPermissionPreview } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 
-// SystemPluginStatusFilter identifies the lifecycle subset shown in the System Plugin list.
-// SystemPluginStatusFilter 标识系统插件列表中显示的生命周期子集。
-type SystemPluginStatusFilter = "all" | "enabled" | "disabled" | "issues";
+// VulcanPluginStatusFilter identifies the lifecycle subset shown in the Vulcan Plugin list.
+// VulcanPluginStatusFilter 标识 Vulcan 插件列表中显示的生命周期子集。
+type VulcanPluginStatusFilter = "all" | "enabled" | "disabled" | "issues";
 
 // pluginRuntimeStatusLabel resolves one stable runtime state through the active UI locale.
 // pluginRuntimeStatusLabel 通过当前界面语言解析单个稳定运行时状态。
@@ -68,14 +68,14 @@ function localizedPluginText(
   return languageValue || fallback;
 }
 
-// systemPluginMatchesSearch checks one plugin against localized user-visible fields.
-// systemPluginMatchesSearch 使用本地化后的用户可见字段检查单个插件是否匹配搜索词。
+// vulcanPluginMatchesSearch checks one plugin against localized user-visible fields.
+// vulcanPluginMatchesSearch 使用本地化后的用户可见字段检查单个插件是否匹配搜索词。
 //
 // Parameters: plugin is the projected plugin row, name and capability are localized display values, and query is the current filter.
 // 参数：plugin 是投影插件行，name 与 capability 是本地化显示值，query 是当前筛选词。
 // Returns: true when the normalized query is empty or matches a visible plugin field.
 // 返回值：规范化查询为空或匹配可见插件字段时返回 true。
-function systemPluginMatchesSearch(
+function vulcanPluginMatchesSearch(
   plugin: PluginSummary,
   name: string,
   capability: string,
@@ -99,14 +99,14 @@ function systemPluginMatchesSearch(
     .some((value) => value.toLocaleLowerCase().includes(normalizedQuery));
 }
 
-// systemPluginHasIssue reports whether one plugin is unavailable or outside a normal lifecycle transition.
-// systemPluginHasIssue 判断单个插件是否不可用或处于正常生命周期过渡之外。
+// vulcanPluginHasIssue reports whether one plugin is unavailable or outside a normal lifecycle transition.
+// vulcanPluginHasIssue 判断单个插件是否不可用或处于正常生命周期过渡之外。
 //
-// Parameters: plugin is the exact projected System Plugin row.
-// 参数：plugin 是精确投影的系统插件行。
+// Parameters: plugin is the exact projected Vulcan Plugin row.
+// 参数：plugin 是精确投影的 Vulcan 插件行。
 // Returns: true for diagnostics, unavailable assets, cleanup warnings, unsupported platforms, and unknown runtime states.
 // 返回值：存在诊断、资产不可用、清理警告、平台不支持或未知运行时状态时返回 true。
-function systemPluginHasIssue(plugin: PluginSummary): boolean {
+function vulcanPluginHasIssue(plugin: PluginSummary): boolean {
   if (!plugin.available || plugin.diagnostics.length > 0) {
     return true;
   }
@@ -121,9 +121,9 @@ function systemPluginHasIssue(plugin: PluginSummary): boolean {
   }
 }
 
-// SystemPluginsPanel renders host-owned plugins and their unified content/runtime lifecycle controls.
-// SystemPluginsPanel 渲染宿主自有插件及其统一的内容与运行时生命周期控件。
-export function SystemPluginsPanel(props: {
+// VulcanPluginsPanel renders host-owned plugins and their unified content/runtime lifecycle controls.
+// VulcanPluginsPanel 渲染宿主自有插件及其统一的内容与运行时生命周期控件。
+export function VulcanPluginsPanel(props: {
   // Service-backed plugin lifecycle actions.
   // 服务端支持的插件生命周期动作。
   actions: SkillActionProps;
@@ -134,21 +134,21 @@ export function SystemPluginsPanel(props: {
   // locale and t resolve plugin manifest text and stable plugin-page labels.
   // locale 与 t 分别解析插件清单文案和稳定的插件页面文案。
   const { locale, t } = useI18n();
-  // searchQuery stores the free-text System Plugin filter.
-  // searchQuery 保存系统插件自由文本筛选词。
+  // searchQuery stores the free-text Vulcan Plugin filter.
+  // searchQuery 保存 Vulcan 插件自由文本筛选词。
   const [searchQuery, setSearchQuery] = React.useState("");
-  // statusFilter stores the selected System Plugin lifecycle filter.
-  // statusFilter 保存选中的系统插件生命周期筛选。
-  const [statusFilter, setStatusFilter] = React.useState<SystemPluginStatusFilter>("all");
-  // busyPluginId identifies the single System Plugin mutation currently in flight.
-  // busyPluginId 标识当前正在执行变更的唯一 System Plugin。
+  // statusFilter stores the selected Vulcan Plugin lifecycle filter.
+  // statusFilter 保存选中的 Vulcan 插件生命周期筛选。
+  const [statusFilter, setStatusFilter] = React.useState<VulcanPluginStatusFilter>("all");
+  // busyPluginId identifies the single Vulcan Plugin mutation currently in flight.
+  // busyPluginId 标识当前正在执行变更的唯一 Vulcan Plugin。
   const [busyPluginId, setBusyPluginId] = React.useState<string | null>(null);
   // installSourcePath stores the exact local plugin directory selected for inspection.
   // installSourcePath 保存等待检查的精确本地插件目录。
   const [installSourcePath, setInstallSourcePath] = React.useState("");
   // permissionPreview stores only the latest host-validated package authorization surface.
   // permissionPreview 仅保存最近一次经宿主校验的插件包授权界面数据。
-  const [permissionPreview, setPermissionPreview] = React.useState<SystemPluginPermissionPreview | null>(null);
+  const [permissionPreview, setPermissionPreview] = React.useState<VulcanPluginPermissionPreview | null>(null);
   // installError stores inspection or installation diagnostics without hiding the preview.
   // installError 保存检查或安装诊断，同时不隐藏授权预览。
   const [installError, setInstallError] = React.useState("");
@@ -161,25 +161,37 @@ export function SystemPluginsPanel(props: {
   // registryDependenciesConfirmed records separate network consent when requested by the package.
   // registryDependenciesConfirmed 记录插件请求注册表依赖时的独立联网许可。
   const [registryDependenciesConfirmed, setRegistryDependenciesConfirmed] = React.useState(false);
+  // installSecretDrafts holds required local-MCP credentials only until the installation request settles.
+  // installSecretDrafts 仅在安装请求结束前保存所需的本地 MCP 凭据。
+  const [installSecretDrafts, setInstallSecretDrafts] = React.useState<Record<string, string>>({});
+  // secretDrafts stores only user-entered replacement values and is cleared immediately after each mutation.
+  // secretDrafts 仅保存用户输入的替换值，并在每次变更后立即清空。
+  const [secretDrafts, setSecretDrafts] = React.useState<Record<string, string>>({});
+  // secretBusyKey identifies the exact plugin/server/key mutation currently in flight.
+  // secretBusyKey 标识当前正在执行的精确插件/服务器/键变更。
+  const [secretBusyKey, setSecretBusyKey] = React.useState<string | null>(null);
+  // secretError stores sanitized service diagnostics without ever retaining a credential value.
+  // secretError 保存已脱敏服务诊断，绝不保留凭据值。
+  const [secretError, setSecretError] = React.useState("");
   // actionRunningRef closes the repeat-click window before React commits the busy state.
   // actionRunningRef 在 React 提交忙碌状态前关闭重复点击窗口。
   const actionRunningRef = React.useRef(false);
-  // systemPlugins keeps ordinary Lua Skill rows on their existing catalog page.
-  // systemPlugins 使普通 Lua Skill 行继续留在原有技能目录页面。
-  const systemPlugins = React.useMemo(
-    () => props.plugins.filter((plugin) => plugin.managementKind === "systemPlugin"),
+  // vulcanPlugins keeps ordinary Lua Skill rows on their existing catalog page.
+  // vulcanPlugins 使普通 Lua Skill 行继续留在原有技能目录页面。
+  const vulcanPlugins = React.useMemo(
+    () => props.plugins.filter((plugin) => plugin.managementKind === "vulcanPlugin"),
     [props.plugins],
   );
-  // visiblePlugins applies localized text and lifecycle filters to the System Plugin projection.
-  // visiblePlugins 对系统插件投影应用本地化文本与生命周期筛选。
-  const visiblePlugins = React.useMemo(() => systemPlugins.filter((plugin) => {
+  // visiblePlugins applies localized text and lifecycle filters to the Vulcan Plugin projection.
+  // visiblePlugins 对 Vulcan 插件投影应用本地化文本与生命周期筛选。
+  const visiblePlugins = React.useMemo(() => vulcanPlugins.filter((plugin) => {
     if (statusFilter === "enabled" && !plugin.desiredEnabled) {
       return false;
     }
     if (statusFilter === "disabled" && plugin.desiredEnabled) {
       return false;
     }
-    if (statusFilter === "issues" && !systemPluginHasIssue(plugin)) {
+    if (statusFilter === "issues" && !vulcanPluginHasIssue(plugin)) {
       return false;
     }
     // localizedName is the active-locale plugin name used by both filtering and rendering.
@@ -188,8 +200,13 @@ export function SystemPluginsPanel(props: {
     // localizedCapability is the active-locale plugin introduction used by both filtering and rendering.
     // localizedCapability 是同时用于筛选和渲染的当前语言插件介绍。
     const localizedCapability = localizedPluginText(plugin.capabilityByLocale, locale, plugin.capability);
-    return systemPluginMatchesSearch(plugin, localizedName, localizedCapability, searchQuery);
-  }), [locale, searchQuery, statusFilter, systemPlugins]);
+    return vulcanPluginMatchesSearch(plugin, localizedName, localizedCapability, searchQuery);
+  }), [locale, searchQuery, statusFilter, vulcanPlugins]);
+  // inspectedInstalledPlugin resolves whether the inspected identity is a new install, update, or bundled conflict.
+  // inspectedInstalledPlugin 解析已检查身份属于新安装、更新还是内建冲突。
+  const inspectedInstalledPlugin = permissionPreview === null
+    ? undefined
+    : props.plugins.find((plugin) => plugin.id === permissionPreview.pluginId);
   // togglePlugin persists one plugin state through the unified plugin catalog transaction.
   // togglePlugin 通过统一插件目录事务持久化单个插件状态。
   //
@@ -209,7 +226,7 @@ export function SystemPluginsPanel(props: {
       const requestedEnabled = plugin.runtimeState === "disabledWithCleanupWarning"
         ? false
         : !plugin.desiredEnabled;
-      await props.actions.onSetSystemPluginEnabled(plugin.id, requestedEnabled);
+      await props.actions.onSetVulcanPluginEnabled(plugin.id, requestedEnabled);
     } finally {
       actionRunningRef.current = false;
       setBusyPluginId(null);
@@ -228,11 +245,13 @@ export function SystemPluginsPanel(props: {
     setPermissionPreview(null);
     setAuthorizationConfirmed(false);
     setRegistryDependenciesConfirmed(false);
+    setInstallSecretDrafts({});
     try {
       setPermissionPreview(await props.actions.onInspectLocalPlugin(sourcePath));
     } catch (reason: unknown) {
       setInstallError(reason instanceof Error ? reason.message : String(reason));
     } finally {
+      setInstallSecretDrafts({});
       setInstallBusy(false);
     }
   }, [installBusy, installSourcePath, props.actions]);
@@ -243,31 +262,48 @@ export function SystemPluginsPanel(props: {
     if (permissionPreview === null || !authorizationConfirmed || installBusy) {
       return;
     }
-    const requiresRegistryConsent = permissionPreview.capabilities.includes("dependency_registry_network");
+    const requiresRegistryConsent = permissionPreview.permissions.includes("dependency_registry_network");
     if (requiresRegistryConsent && !registryDependenciesConfirmed) {
+      return;
+    }
+    const initialSecrets = permissionPreview.installSecretRequirements.map((requirement) => ({
+      serverId: requirement.serverId,
+      secretKey: requirement.secretKey,
+      value: installSecretDrafts[`${requirement.serverId}:${requirement.secretKey}`] ?? "",
+    }));
+    if (initialSecrets.some((secret) => secret.value.length === 0)) {
       return;
     }
     setInstallBusy(true);
     setInstallError("");
     try {
-      await props.actions.onInstallLocalPlugin(
+      const mutation = inspectedInstalledPlugin?.extension?.origin === "userInstalled"
+        ? props.actions.onUpdateLocalPlugin
+        : props.actions.onInstallLocalPlugin;
+      await mutation(
         installSourcePath.trim(),
-        permissionPreview.capabilities,
+        permissionPreview.contentFingerprint,
+        permissionPreview.permissions,
         registryDependenciesConfirmed,
+        initialSecrets,
       );
       setInstallSourcePath("");
       setPermissionPreview(null);
       setAuthorizationConfirmed(false);
       setRegistryDependenciesConfirmed(false);
+      setInstallSecretDrafts({});
     } catch (reason: unknown) {
       setInstallError(reason instanceof Error ? reason.message : String(reason));
     } finally {
+      setInstallSecretDrafts({});
       setInstallBusy(false);
     }
   }, [
     authorizationConfirmed,
     installBusy,
     installSourcePath,
+    installSecretDrafts,
+    inspectedInstalledPlugin,
     permissionPreview,
     props.actions,
     registryDependenciesConfirmed,
@@ -298,10 +334,61 @@ export function SystemPluginsPanel(props: {
     }
   }, [installBusy, locale, props.actions]);
 
+  // storePluginMcpSecret writes one blank-by-default replacement value and clears the draft on every outcome.
+  // storePluginMcpSecret 写入一个默认空白的替换值，并在所有结果下清空草稿。
+  const storePluginMcpSecret = React.useCallback(async (
+    pluginId: string,
+    serverId: string,
+    secretKey: string,
+  ) => {
+    const draftKey = `${pluginId}:${serverId}:${secretKey}`;
+    const value = secretDrafts[draftKey] ?? "";
+    if (!value || secretBusyKey !== null) {
+      return;
+    }
+    setSecretBusyKey(draftKey);
+    setSecretError("");
+    try {
+      await props.actions.onSetPluginMcpSecret(pluginId, serverId, secretKey, value);
+    } catch (reason: unknown) {
+      setSecretError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setSecretDrafts((current) => ({ ...current, [draftKey]: "" }));
+      setSecretBusyKey(null);
+    }
+  }, [props.actions, secretBusyKey, secretDrafts]);
+
+  // deletePluginMcpSecret removes one exact credential after explicit confirmation.
+  // deletePluginMcpSecret 在明确确认后移除单个精确凭据。
+  const deletePluginMcpSecret = React.useCallback(async (
+    pluginId: string,
+    serverId: string,
+    secretKey: string,
+  ) => {
+    const draftKey = `${pluginId}:${serverId}:${secretKey}`;
+    if (secretBusyKey !== null || !window.confirm(
+      locale.startsWith("zh")
+        ? `确定删除 Secret“${secretKey}”吗？已启用服务器会先通过就绪检查。`
+        : `Delete secret “${secretKey}”? An enabled server must pass readiness before the change commits.`,
+    )) {
+      return;
+    }
+    setSecretBusyKey(draftKey);
+    setSecretError("");
+    try {
+      await props.actions.onDeletePluginMcpSecret(pluginId, serverId, secretKey);
+    } catch (reason: unknown) {
+      setSecretError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setSecretDrafts((current) => ({ ...current, [draftKey]: "" }));
+      setSecretBusyKey(null);
+    }
+  }, [locale, props.actions, secretBusyKey]);
+
   return (
     <div className="skill-page-body lua-skill-page-body">
-      <section className="system-plugin-install-panel" aria-label={locale.startsWith("zh") ? "安装本地插件" : "Install local plugin"}>
-        <div className="system-plugin-install-heading">
+      <section className="vulcan-plugin-install-panel" aria-label={locale.startsWith("zh") ? "安装本地插件" : "Install local plugin"}>
+        <div className="vulcan-plugin-install-heading">
           <ShieldCheck size={17} />
           <div>
             <strong>{locale.startsWith("zh") ? "安装本地插件" : "Install local plugin"}</strong>
@@ -310,7 +397,7 @@ export function SystemPluginsPanel(props: {
               : "Inspect the package before explicitly authorizing its capabilities, hooks, UI mounts, and process entries."}</p>
           </div>
         </div>
-        <div className="system-plugin-install-input-row">
+        <div className="vulcan-plugin-install-input-row">
           <input
             aria-label={locale.startsWith("zh") ? "本地插件目录" : "Local plugin directory"}
             disabled={installBusy}
@@ -319,6 +406,7 @@ export function SystemPluginsPanel(props: {
               setPermissionPreview(null);
               setAuthorizationConfirmed(false);
               setRegistryDependenciesConfirmed(false);
+              setInstallSecretDrafts({});
             }}
             placeholder={locale.startsWith("zh") ? "输入包含 plugin.yaml 的本地目录" : "Directory containing plugin.yaml"}
             value={installSourcePath}
@@ -334,25 +422,34 @@ export function SystemPluginsPanel(props: {
         </div>
         {installError ? <div className="skill-empty-state warning">{installError}</div> : null}
         {permissionPreview ? (
-          <div className="system-plugin-permission-preview">
-            <div className="system-plugin-permission-title">
+          <div className="vulcan-plugin-permission-preview">
+            <div className="vulcan-plugin-permission-title">
               <strong>{permissionPreview.pluginId}</strong>
               <Badge variant="secondary">v{permissionPreview.version}</Badge>
             </div>
             <dl>
-              <div><dt>{locale.startsWith("zh") ? "能力" : "Capabilities"}</dt><dd>{permissionPreview.capabilities.join("、") || "—"}</dd></div>
+              <div><dt>{locale.startsWith("zh") ? "权限" : "Permissions"}</dt><dd>{permissionPreview.permissions.join("、") || "—"}</dd></div>
               <div><dt>Hooks</dt><dd>{permissionPreview.hookPoints.join("、") || "—"}</dd></div>
               <div><dt>{locale.startsWith("zh") ? "界面挂载点" : "UI mounts"}</dt><dd>{permissionPreview.uiMountPoints.join("、") || "—"}</dd></div>
               <div><dt>{locale.startsWith("zh") ? "原生进程" : "Native processes"}</dt><dd>{permissionPreview.binaryIds.join("、") || "—"}</dd></div>
               <div><dt>Node.js</dt><dd>{permissionPreview.nodeEntryIds.join("、") || "—"}</dd></div>
               <div><dt>Python</dt><dd>{permissionPreview.pythonEntryIds.join("、") || "—"}</dd></div>
-              <div><dt>{locale.startsWith("zh") ? "插件类型" : "Plugin type"}</dt><dd>{permissionPreview.hasRuntime
+              <div><dt>{locale.startsWith("zh") ? "插件类型" : "Plugin type"}</dt><dd>{permissionPreview.hasLuaRuntime
                 ? (locale.startsWith("zh") ? "运行时插件" : "Runtime plugin")
                 : (locale.startsWith("zh") ? "内容插件" : "Content plugin")}</dd></div>
               <div><dt>{locale.startsWith("zh") ? "技能" : "Skills"}</dt><dd>{permissionPreview.skillIds.join("、") || "—"}</dd></div>
               <div><dt>{locale.startsWith("zh") ? "智能体" : "Agents"}</dt><dd>{permissionPreview.agentIds.join("、") || "—"}</dd></div>
+              <div>
+                <dt>MCP</dt>
+                <dd>{permissionPreview.mcpServers.map((server) => {
+                  const secretUsage = server.secretKeys.length > 0
+                    ? ` · ${locale.startsWith("zh") ? "Secret 键" : "Secret keys"}: ${server.secretKeys.join(", ")}`
+                    : "";
+                  return `${server.name} (${server.serverId}, ${server.transport}${secretUsage})`;
+                }).join("；") || "—"}</dd>
+              </div>
             </dl>
-            <label className="system-plugin-permission-consent">
+            <label className="vulcan-plugin-permission-consent">
               <input
                 checked={authorizationConfirmed}
                 onChange={(event) => setAuthorizationConfirmed(event.target.checked)}
@@ -362,8 +459,8 @@ export function SystemPluginsPanel(props: {
                 ? "我已核对并授权以上全部能力、Hook、挂载点和进程入口。"
                 : "I reviewed and authorize every capability, hook, mount, and process entry above."}</span>
             </label>
-            {permissionPreview.capabilities.includes("dependency_registry_network") ? (
-              <label className="system-plugin-permission-consent warning">
+            {permissionPreview.permissions.includes("dependency_registry_network") ? (
+              <label className="vulcan-plugin-permission-consent warning">
                 <input
                   checked={registryDependenciesConfirmed}
                   onChange={(event) => setRegistryDependenciesConfirmed(event.target.checked)}
@@ -374,15 +471,57 @@ export function SystemPluginsPanel(props: {
                   : "Allow Vulcan to access registries for this plugin's locked dependencies during installation."}</span>
               </label>
             ) : null}
+            {permissionPreview.installSecretRequirements.length > 0 ? (
+              <div className="vulcan-plugin-component-list">
+                <strong>{locale.startsWith("zh") ? "本地 MCP 安装凭据" : "Local MCP installation credentials"}</strong>
+                <p>{locale.startsWith("zh")
+                  ? "这些值仅写入操作系统凭据库，并用于安装提交前的本地 MCP 启动验证。"
+                  : "These values are written only to the operating-system credential store and used to validate local MCP startup before installation commits."}</p>
+                {permissionPreview.installSecretRequirements.map((requirement) => {
+                  const draftKey = `${requirement.serverId}:${requirement.secretKey}`;
+                  return (
+                    <div className="vulcan-plugin-install-input-row" key={draftKey}>
+                      <KeyRound aria-hidden="true" size={15} />
+                      <input
+                        aria-label={`${requirement.serverId} ${requirement.secretKey}`}
+                        autoComplete="new-password"
+                        disabled={installBusy}
+                        onChange={(event) => setInstallSecretDrafts((current) => ({
+                          ...current,
+                          [draftKey]: event.target.value,
+                        }))}
+                        placeholder={`${requirement.serverId} / ${requirement.secretKey}`}
+                        type="password"
+                        value={installSecretDrafts[draftKey] ?? ""}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+            {inspectedInstalledPlugin ? (
+              <div className={`skill-empty-state ${inspectedInstalledPlugin.extension?.origin === "userInstalled" && inspectedInstalledPlugin.runtimeState === "disabled" ? "" : "warning"}`}>
+                {inspectedInstalledPlugin.extension?.origin !== "userInstalled"
+                  ? (locale.startsWith("zh") ? "该 ID 已由内建插件占用，不能从本地包替换。" : "This ID is owned by a bundled plugin and cannot be replaced by a local package.")
+                  : inspectedInstalledPlugin.runtimeState === "disabled"
+                    ? (locale.startsWith("zh") ? "将更新现有用户插件；旧插件包会保留到候选验证与代次发布成功。" : "This will update the existing user plugin; its previous package is retained until candidate validation and generation publication succeed.")
+                    : (locale.startsWith("zh") ? "更新前必须先停用并完全排空现有插件。" : "Disable and fully drain the existing plugin before updating it.")}
+              </div>
+            ) : null}
             <button
               className="primary-button"
               disabled={installBusy
-                || !authorizationConfirmed
-                || (permissionPreview.capabilities.includes("dependency_registry_network") && !registryDependenciesConfirmed)}
+                 || !authorizationConfirmed
+                 || (inspectedInstalledPlugin !== undefined
+                   && (inspectedInstalledPlugin.extension?.origin !== "userInstalled" || inspectedInstalledPlugin.runtimeState !== "disabled"))
+                 || permissionPreview.installSecretRequirements.some((requirement) => !(installSecretDrafts[`${requirement.serverId}:${requirement.secretKey}`] ?? ""))
+                 || (permissionPreview.permissions.includes("dependency_registry_network") && !registryDependenciesConfirmed)}
               onClick={() => void installInspectedPlugin()}
               type="button"
             >
-              {locale.startsWith("zh") ? "授权并安装" : "Authorize and install"}
+              {inspectedInstalledPlugin?.extension?.origin === "userInstalled"
+                ? (locale.startsWith("zh") ? "授权并更新" : "Authorize and update")
+                : (locale.startsWith("zh") ? "授权并安装" : "Authorize and install")}
             </button>
           </div>
         ) : null}
@@ -400,7 +539,7 @@ export function SystemPluginsPanel(props: {
         <select
           aria-label={t("skills.filter.statusLabel")}
           className="agent-catalog-status-select"
-          onChange={(event) => setStatusFilter(event.target.value as SystemPluginStatusFilter)}
+          onChange={(event) => setStatusFilter(event.target.value as VulcanPluginStatusFilter)}
           value={statusFilter}
         >
           <option value="all">{t("skills.filter.allStatuses")}</option>
@@ -409,10 +548,11 @@ export function SystemPluginsPanel(props: {
           <option value="issues">{t("skills.filter.issues")}</option>
         </select>
       </div>
+      {secretError ? <div className="vulcan-plugin-install-error">{secretError}</div> : null}
       <div className="skill-card-list agent-skill-card-list">
         {visiblePlugins.length === 0 ? (
           <div className="skill-empty-state">
-            {systemPlugins.length === 0 ? t("skills.plugins.emptyDetail") : t("skills.filter.empty")}
+            {vulcanPlugins.length === 0 ? t("skills.plugins.emptyDetail") : t("skills.filter.empty")}
           </div>
         ) : visiblePlugins.map((plugin) => {
           // localizedName follows the active UI locale instead of the service snapshot locale.
@@ -436,7 +576,7 @@ export function SystemPluginsPanel(props: {
           // PluginIcon 映射稳定的清单图标键，不对插件身份进行特判。
           const PluginIcon = primaryMountIcon === "route" ? Route : primaryMountIcon === "chart" ? ChartNoAxesCombined : Puzzle;
           return (
-            <article className="agent-definition-row system-plugin-definition-row" key={plugin.id}>
+            <article className="agent-definition-row vulcan-plugin-definition-row" key={plugin.id}>
               <div className="agent-definition-row-icon" aria-hidden="true">
                 <span className="agent-definition-row-glyph"><PluginIcon size={17} /></span>
               </div>
@@ -452,7 +592,7 @@ export function SystemPluginsPanel(props: {
                       ? (locale.startsWith("zh") ? "用户插件" : "User plugin")
                       : t("skills.plugins.systemKind")}</Badge>
                     {plugin.version ? <Badge variant="secondary">v{plugin.version}</Badge> : null}
-                    <Badge variant="outline">{plugin.extension?.hasRuntime
+                    <Badge variant="outline">{plugin.extension?.hasLuaRuntime
                       ? (locale.startsWith("zh") ? "运行时插件" : "Runtime plugin")
                       : (locale.startsWith("zh") ? "内容插件" : "Content plugin")}</Badge>
                     <Badge variant="outline">{locale.startsWith("zh") ? "技能" : "Skills"} {plugin.skillCount}</Badge>
@@ -467,10 +607,10 @@ export function SystemPluginsPanel(props: {
                   {plugin.diagnostics.length > 0 ? plugin.diagnostics.join("；") : plugin.id}
                 </span>
                 {plugin.skillCount > 0 || plugin.agentCount > 0 ? (
-                  <details className="system-plugin-component-details">
+                  <details className="vulcan-plugin-component-details">
                     <summary>{locale.startsWith("zh") ? "查看只读组件" : "View read-only components"}</summary>
                     {plugin.skillCount > 0 ? (
-                      <div className="system-plugin-component-group">
+                      <div className="vulcan-plugin-component-group">
                         <strong>{locale.startsWith("zh") ? "技能" : "Skills"}</strong>
                         <div>{plugin.extension?.skills.map((skillId) => (
                           <Badge key={skillId} variant="secondary">{skillId}</Badge>
@@ -478,13 +618,83 @@ export function SystemPluginsPanel(props: {
                       </div>
                     ) : null}
                     {plugin.agentCount > 0 ? (
-                      <div className="system-plugin-component-group">
+                      <div className="vulcan-plugin-component-group">
                         <strong>{locale.startsWith("zh") ? "智能体" : "Agents"}</strong>
                         <div>{plugin.extension?.agents.map((agentId) => (
                           <Badge key={agentId} variant="secondary">{agentId}</Badge>
                         ))}</div>
                       </div>
                     ) : null}
+                  </details>
+                ) : null}
+                {(plugin.extension?.mcpServers.length ?? 0) > 0 ? (
+                  <details className="vulcan-plugin-component-details">
+                    <summary>{locale.startsWith("zh") ? "MCP 服务器与凭据" : "MCP servers and credentials"}</summary>
+                    {plugin.extension?.mcpServers.map((server) => (
+                      <div className="vulcan-plugin-component-group" key={server.id}>
+                        <div className="agent-definition-row-title-line">
+                          <strong>{server.name}</strong>
+                          <div className="agent-definition-row-badges">
+                            <StatusPill
+                              label={server.status}
+                              status={server.status === "ready" ? "ready" : server.status === "failed" || server.status === "degraded" ? "warning" : "pending"}
+                            />
+                            <Badge variant="outline">{server.transport}</Badge>
+                            <Badge variant="outline">gen {server.generation}</Badge>
+                            <Badge variant="outline">retry {server.retryCount}</Badge>
+                            <Badge variant="outline">tools {server.toolCount}</Badge>
+                            <Badge variant="outline">prompts {server.promptCount}</Badge>
+                            <Badge variant="outline">resources {server.resourceCount}</Badge>
+                          </div>
+                        </div>
+                        <span className={`agent-definition-row-path ${server.lastError ? "warning" : ""}`}>
+                          {server.lastError ?? server.endpoint}
+                        </span>
+                        {(server.recentLogs?.length ?? 0) > 0 ? (
+                          <details className="vulcan-plugin-component-details">
+                            <summary>{locale.startsWith("zh") ? "最近脱敏日志" : "Recent sanitized logs"}</summary>
+                            <pre className="agent-definition-row-path">{server.recentLogs?.join("\n")}</pre>
+                          </details>
+                        ) : null}
+                        {server.secretKeys.map((secretKey) => {
+                          const draftKey = `${plugin.id}:${server.id}:${secretKey}`;
+                          return (
+                            <div className="vulcan-plugin-install-input-row" key={secretKey}>
+                              <KeyRound aria-hidden="true" size={15} />
+                              <input
+                                aria-label={`${server.name} ${secretKey}`}
+                                autoComplete="new-password"
+                                disabled={secretBusyKey !== null}
+                                onChange={(event) => setSecretDrafts((current) => ({
+                                  ...current,
+                                  [draftKey]: event.target.value,
+                                }))}
+                                placeholder={secretKey}
+                                type="password"
+                                value={secretDrafts[draftKey] ?? ""}
+                              />
+                              <button
+                                className="secondary-button"
+                                disabled={secretBusyKey !== null || !(secretDrafts[draftKey] ?? "")}
+                                onClick={() => void storePluginMcpSecret(plugin.id, server.id, secretKey)}
+                                type="button"
+                              >
+                                {locale.startsWith("zh") ? "安全保存" : "Store securely"}
+                              </button>
+                              <button
+                                className="icon-button danger"
+                                disabled={secretBusyKey !== null}
+                                onClick={() => void deletePluginMcpSecret(plugin.id, server.id, secretKey)}
+                                title={locale.startsWith("zh") ? "删除 Secret" : "Delete secret"}
+                                type="button"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ))}
                   </details>
                 ) : null}
               </div>

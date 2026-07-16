@@ -4,11 +4,11 @@
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use vulcan_plugin_runtime::{
-    SystemPluginActionCaller, SystemPluginActionRequest, SystemPluginRuntimeState,
+    VulcanPluginActionCaller, VulcanPluginActionRequest, VulcanPluginRuntimeState,
 };
 use vulcan_service_api::{PluginTextAssetSource, PluginUiModuleSource};
 
-use crate::{SharedServiceBridgeState, service_system_plugin_runtime};
+use crate::{SharedServiceBridgeState, service_vulcan_plugin_runtime};
 
 /// Maximum uncompressed UTF-8 source size accepted for one dynamic plugin UI module.
 /// 单个动态插件界面模块允许的最大未压缩 UTF-8 源码大小。
@@ -39,17 +39,17 @@ pub(crate) async fn service_invoke_plugin_action(
     arguments: Value,
     workspace_path: Option<String>,
 ) -> Result<Value, String> {
-    let runtime = service_system_plugin_runtime(&state)?;
+    let runtime = service_vulcan_plugin_runtime(&state)?;
     // reuseEnabledRuntime is authorized only for global plugin pages without a workspace-bound action context.
     // reuseEnabledRuntime 仅对没有工作区绑定 Action 上下文的全局插件页面授权。
     let reuse_enabled_runtime = workspace_path.is_none();
     let workspace_root = resolve_plugin_action_workspace_root(workspace_path.as_deref())?;
     runtime
-        .invoke_action(SystemPluginActionRequest {
+        .invoke_action(VulcanPluginActionRequest {
             plugin_id,
             action_id,
             arguments,
-            caller: SystemPluginActionCaller::PluginUi,
+            caller: VulcanPluginActionCaller::PluginUi,
             workspace_root,
             reuse_enabled_runtime,
         })
@@ -74,13 +74,13 @@ pub(crate) fn service_load_plugin_ui_module(
     plugin_id: String,
     mount_id: String,
 ) -> Result<PluginUiModuleSource, String> {
-    let runtime = service_system_plugin_runtime(&state)?;
+    let runtime = service_vulcan_plugin_runtime(&state)?;
     let snapshot = runtime.snapshot();
     let plugin = snapshot
         .plugins
         .get(&plugin_id)
         .ok_or_else(|| format!("Vulcan plugin `{plugin_id}` is not installed."))?;
-    if plugin.runtime_state != SystemPluginRuntimeState::Enabled {
+    if plugin.runtime_state != VulcanPluginRuntimeState::Enabled {
         return Err(format!("Vulcan plugin `{plugin_id}` is not enabled."));
     }
     let manifest = plugin
@@ -125,7 +125,7 @@ pub(crate) fn service_load_plugin_ui_module(
         .plugins
         .get(&plugin_id)
         .ok_or_else(|| format!("Vulcan plugin `{plugin_id}` is no longer installed."))?;
-    if current_plugin.runtime_state != SystemPluginRuntimeState::Enabled
+    if current_plugin.runtime_state != VulcanPluginRuntimeState::Enabled
         || current_plugin.content_fingerprint != content_fingerprint
     {
         return Err(format!(
@@ -183,7 +183,7 @@ pub(crate) fn service_read_plugin_text_asset(
 ) -> Result<PluginTextAssetSource, String> {
     // runtime resolves the current installed package through the host-owned plugin catalog.
     // runtime 通过宿主自有插件目录解析当前已安装包。
-    let runtime = service_system_plugin_runtime(&state)?;
+    let runtime = service_vulcan_plugin_runtime(&state)?;
     // snapshot provides one stable manifest identity before package-root preparation.
     // snapshot 在准备包根目录前提供一个稳定清单身份。
     let snapshot = runtime.snapshot();
@@ -193,7 +193,7 @@ pub(crate) fn service_read_plugin_text_asset(
         .plugins
         .get(&plugin_id)
         .ok_or_else(|| format!("Vulcan plugin `{plugin_id}` is not installed."))?;
-    if plugin.runtime_state != SystemPluginRuntimeState::Enabled {
+    if plugin.runtime_state != VulcanPluginRuntimeState::Enabled {
         return Err(format!("Vulcan plugin `{plugin_id}` is not enabled."));
     }
     // manifest owns the only allowlist accepted by this generic text-resource boundary.
@@ -203,7 +203,6 @@ pub(crate) fn service_read_plugin_text_asset(
         .as_ref()
         .ok_or_else(|| format!("Vulcan plugin `{plugin_id}` has no valid manifest."))?;
     if !manifest
-        .runtime
         .required_files
         .iter()
         .any(|declared_path| declared_path == &relative_path)
@@ -229,7 +228,7 @@ pub(crate) fn service_read_plugin_text_asset(
         .plugins
         .get(&plugin_id)
         .ok_or_else(|| format!("Vulcan plugin `{plugin_id}` is no longer installed."))?;
-    if current_plugin.runtime_state != SystemPluginRuntimeState::Enabled
+    if current_plugin.runtime_state != VulcanPluginRuntimeState::Enabled
         || current_plugin.content_fingerprint != content_fingerprint
     {
         return Err(format!(

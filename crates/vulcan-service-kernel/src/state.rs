@@ -19,12 +19,12 @@ pub(crate) struct AgentRuntimeBridge {
     /// LuaSkills runtime handle reused by provider-visible tool execution.
     /// Provider 可见工具执行复用的 LuaSkills 运行时句柄。
     pub(crate) luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-    /// Host-owned System Plugin catalog and optional execution runtime.
-    /// 宿主持有的系统插件目录与可选执行运行时。
-    pub(crate) system_plugin_runtime: vulcan_plugin_runtime::SystemPluginRuntimeManager,
-    /// MCP runtime access reused by provider-visible MCP tools.
-    /// Provider 可见 MCP 工具复用的 MCP 运行时访问面。
-    pub(crate) mcp_runtime: Option<McpRuntimeAccess>,
+    /// Host-owned Vulcan Plugin catalog and optional execution runtime.
+    /// 宿主持有的 Vulcan 插件目录与可选执行运行时。
+    pub(crate) vulcan_plugin_runtime: vulcan_plugin_runtime::VulcanPluginRuntimeManager,
+    /// Atomically published plugin catalog and MCP runtime generation reused by one execution.
+    /// 单次执行复用的原子发布插件目录与 MCP 运行时代次。
+    pub(crate) extension_generation: Arc<ExtensionGeneration>,
     /// Shared task runtime used by nested subagent tools.
     /// 嵌套子代理工具使用的共享任务运行时。
     pub(crate) task_runtime: Arc<TaskRuntime>,

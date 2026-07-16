@@ -87,8 +87,8 @@ const LINK_STYLE = {
 //
 // sdk supplies the host React runtime, components, localization, actions, events, and notifications.
 // sdk 提供宿主 React 运行时、组件、本地化、Action、事件与通知。
-// Returns one React component integrated into the System Plugin detail page.
-// 返回一个集成到 System Plugin 详情页的 React 组件。
+// Returns one React component integrated into the Vulcan Plugin detail page.
+// 返回一个集成到 Vulcan Plugin 详情页的 React 组件。
 export function createPluginPanel(sdk) {
   // React is the exact host renderer and must never be bundled by this plugin.
   // React 是精确宿主渲染器，当前插件绝不能自行打包。

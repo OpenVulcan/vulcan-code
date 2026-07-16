@@ -185,11 +185,11 @@ pub struct RuntimeToolPolicyDefinition {
     /// Explicit native tool whitelist.
     /// 显式原生工具白名单。
     pub native_tools: Vec<String>,
-    /// Whether every enabled System Plugin tool group should be visible.
-    /// 是否让全部已启用系统插件工具组都可见。
+    /// Whether every enabled Vulcan Plugin tool group should be visible.
+    /// 是否让全部已启用 Vulcan 插件工具组都可见。
     pub allow_all_plugin_tools: bool,
-    /// Explicit System Plugin tool whitelist.
-    /// 显式系统插件工具白名单。
+    /// Explicit Vulcan Plugin tool whitelist.
+    /// 显式 Vulcan 插件工具白名单。
     pub plugin_tools: Vec<String>,
     /// Explicit MCP server whitelist.
     /// 显式 MCP 服务器白名单。
@@ -254,8 +254,8 @@ pub struct RuntimeAgentDefinition {
     /// Direct native tool attachments.
     /// 直接附着的原生工具集合。
     pub native_tools: Vec<String>,
-    /// Direct System Plugin tool attachments.
-    /// 直接附着的系统插件工具集合。
+    /// Direct Vulcan Plugin tool attachments.
+    /// 直接附着的 Vulcan 插件工具集合。
     pub plugin_tools: Vec<String>,
     /// Direct MCP tool attachments.
     /// 直接附着的 MCP 工具集合。

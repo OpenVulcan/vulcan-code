@@ -46,8 +46,8 @@ pub struct UserAgentProfile {
     /// Native tool identifiers directly exposed by this profile.
     /// 该配置直接暴露的原生工具标识集合。
     pub native_tools: Vec<String>,
-    /// System Plugin tool identifiers directly exposed by this profile.
-    /// 该配置直接暴露的系统插件工具标识集合。
+    /// Vulcan Plugin tool identifiers directly exposed by this profile.
+    /// 该配置直接暴露的 Vulcan 插件工具标识集合。
     pub plugin_tools: Vec<String>,
     /// MCP tool identifiers directly exposed by this profile.
     /// 该配置直接暴露的 MCP 工具标识集合。
@@ -100,8 +100,8 @@ struct UserAgentFrontmatter {
     /// 该配置直接暴露的原生工具标识集合。
     #[serde(default, alias = "tools")]
     pub native_tools: Vec<String>,
-    /// System Plugin tool identifiers directly exposed by this profile.
-    /// 该配置直接暴露的系统插件工具标识集合。
+    /// Vulcan Plugin tool identifiers directly exposed by this profile.
+    /// 该配置直接暴露的 Vulcan 插件工具标识集合。
     #[serde(default)]
     pub plugin_tools: Vec<String>,
     /// MCP tool identifiers directly exposed by this profile.

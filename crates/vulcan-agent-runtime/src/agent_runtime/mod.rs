@@ -10,6 +10,7 @@ pub mod events;
 pub mod execution_models;
 pub mod execution_preparation;
 pub mod executor;
+pub mod extension_generation;
 pub mod prompt_compaction;
 pub mod prompt_composer_runtime;
 pub mod provider;
@@ -98,11 +99,11 @@ pub mod runtime_stream_preparation;
 pub mod runtime_stream_preparation_failure;
 pub mod runtime_stream_preparation_resources;
 pub mod runtime_stream_setup;
-pub mod system_plugin_hooks;
 pub mod task_runtime;
 pub mod token_budget_runtime;
 pub mod tool_runtime_bridge;
 pub mod vmm_hooks;
+pub mod vulcan_plugin_hooks;
 
 pub use config::{RuntimeSkillKind, ensure_runtime_defaults};
 pub use events::ExecutionStreamEvent;
@@ -110,6 +111,7 @@ pub use execution_models::{
     ExecutionPreparation, ExecutionPreparationRequest, ExecutionPromptPurpose,
     ExecutionProviderVisibleAgentMessage, ExecutionRunReport, ExecutionSessionGoalContext,
 };
+pub use extension_generation::ExtensionGeneration;
 pub use runtime::RuntimeFoundation;
 pub use runtime_stream::{
     stream_runtime_run, stream_runtime_run_with_intervention,

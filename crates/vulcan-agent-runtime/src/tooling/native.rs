@@ -303,7 +303,7 @@ pub fn build_native_tool_catalog(
     configured_default_command_shell_id: Option<&str>,
     command_session_runtime: Arc<CommandSessionRuntime>,
     vmm_global: VmmConfigLayer,
-    plugin_runtime: Option<vulcan_plugin_runtime::SystemPluginRuntimeManager>,
+    plugin_runtime: Option<vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
 ) -> NativeToolCatalog {
     let snapshot = NativeToolRuntimeSnapshot {
         workspace_directory: std::env::current_dir()

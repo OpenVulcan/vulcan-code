@@ -7,7 +7,8 @@ import type {
   LuaSkillsRuntimeSettings,
   PluginUiModuleSource,
   PluginTextAssetSource,
-  SystemPluginPermissionPreview,
+  VulcanPluginInitialSecret,
+  VulcanPluginPermissionPreview,
   SubagentCatalogUpdate,
   SubagentDefinitionSummary,
   SubagentDefinitionSaveRequest,
@@ -193,21 +194,21 @@ export async function setLuaSkillEnabled(skillId: string, enabled: boolean): Pro
   return serviceClient.request<LuaSkillsCatalogUpdate>("service_set_luaskill_enabled", { skillId, enabled });
 }
 
-// setLuaSkillsSystemPluginEnabled toggles one host-owned System Plugin through the legacy RPC name.
-// setLuaSkillsSystemPluginEnabled 通过兼容 RPC 名切换单个宿主自有系统插件。
-export async function setLuaSkillsSystemPluginEnabled(pluginId: string, enabled: boolean): Promise<LuaSkillsCatalogUpdate> {
+// setVulcanPluginEnabled toggles one host-owned Vulcan Plugin through its initial public RPC.
+// setVulcanPluginEnabled 通过首发公开 RPC 切换单个宿主自有 Vulcan 插件。
+export async function setVulcanPluginEnabled(pluginId: string, enabled: boolean): Promise<LuaSkillsCatalogUpdate> {
   if (!hasServiceRuntime()) {
     return luaSkillsCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench((snapshot) => {
-      // plugin resolves only a host-owned System Plugin row in browser preview mode.
-      // plugin 在浏览器预览模式中仅解析宿主自有 System Plugin 行。
-      const plugin = snapshot.plugins.find((item) => item.id === pluginId && item.managementKind === "systemPlugin");
+      // plugin resolves only a host-owned Vulcan Plugin row in browser preview mode.
+      // plugin 在浏览器预览模式中仅解析宿主自有 Vulcan Plugin 行。
+      const plugin = snapshot.plugins.find((item) => item.id === pluginId && item.managementKind === "vulcanPlugin");
       if (plugin) {
         plugin.enabled = enabled;
         plugin.status = enabled ? "已启用" : "已停用";
       }
     }));
   }
-  const update = await serviceClient.request<LuaSkillsCatalogUpdate>("service_set_luaskills_system_plugin_enabled", { pluginId, enabled });
+  const update = await serviceClient.request<LuaSkillsCatalogUpdate>("service_set_vulcan_plugin_enabled", { pluginId, enabled });
   if (!enabled) {
     invalidatePersistentPluginUiModules(pluginId);
   }
@@ -221,27 +222,60 @@ export async function setLuaSkillsSystemPluginEnabled(pluginId: string, enabled:
 // 参数：sourcePath 是用户选择的精确目录。
 // Returns: the complete host-derived capability, Hook, UI, and process authorization preview.
 // 返回值：宿主派生的完整能力、Hook、界面与进程授权预览。
-export async function inspectLocalPlugin(sourcePath: string): Promise<SystemPluginPermissionPreview> {
+export async function inspectLocalPlugin(sourcePath: string): Promise<VulcanPluginPermissionPreview> {
   if (!hasServiceRuntime()) {
     throw new Error("Local plugin inspection requires the Vulcan service runtime.");
   }
-  return serviceClient.request<SystemPluginPermissionPreview>("service_inspect_local_plugin", { sourcePath });
+  return serviceClient.request<VulcanPluginPermissionPreview>("service_inspect_local_plugin", { sourcePath });
 }
 
 // installLocalPlugin atomically installs one package with the exact approved capability set.
 // installLocalPlugin 使用精确批准的能力集合原子安装一个插件包。
+// Parameters: sourcePath selects the package, contentFingerprint binds its inspection, and the remaining values carry exact user consent.
+// 参数：sourcePath 选择插件包，contentFingerprint 绑定其检查结果，其余值承载用户的精确授权。
+// Returns: the catalog update published after the complete installation transaction succeeds.
+// 返回值：完整安装事务成功后发布的目录更新。
 export async function installLocalPlugin(
   sourcePath: string,
-  approvedCapabilities: string[],
+  contentFingerprint: string,
+  approvedPermissions: string[],
   allowRegistryDependencies: boolean,
+  initialSecrets: VulcanPluginInitialSecret[],
 ): Promise<LuaSkillsCatalogUpdate> {
   if (!hasServiceRuntime()) {
     throw new Error("Local plugin installation requires the Vulcan service runtime.");
   }
   return serviceClient.request<LuaSkillsCatalogUpdate>("service_install_local_plugin", {
     sourcePath,
-    approvedCapabilities,
+    contentFingerprint,
+    approvedPermissions,
     allowRegistryDependencies,
+    initialSecrets,
+  });
+}
+
+// updateLocalPlugin replaces one disabled user plugin only after full candidate validation succeeds.
+// updateLocalPlugin 仅在完整候选校验成功后替换单个已停用用户插件。
+// Parameters: sourcePath selects the candidate, contentFingerprint binds its inspection, and the remaining values carry exact user consent.
+// 参数：sourcePath 选择候选包，contentFingerprint 绑定其检查结果，其余值承载用户的精确授权。
+// Returns: the catalog update published after the complete update transaction succeeds.
+// 返回值：完整更新事务成功后发布的目录更新。
+export async function updateLocalPlugin(
+  sourcePath: string,
+  contentFingerprint: string,
+  approvedPermissions: string[],
+  allowRegistryDependencies: boolean,
+  initialSecrets: VulcanPluginInitialSecret[],
+): Promise<LuaSkillsCatalogUpdate> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Local plugin update requires the Vulcan service runtime.");
+  }
+  return serviceClient.request<LuaSkillsCatalogUpdate>("service_update_local_plugin", {
+    sourcePath,
+    contentFingerprint,
+    approvedPermissions,
+    allowRegistryDependencies,
+    initialSecrets,
   });
 }
 
@@ -254,6 +288,42 @@ export async function uninstallUserPlugin(pluginId: string): Promise<LuaSkillsCa
   const update = await serviceClient.request<LuaSkillsCatalogUpdate>("service_uninstall_user_plugin", { pluginId });
   invalidatePersistentPluginUiModules(pluginId);
   return update;
+}
+
+// setPluginMcpSecret stores one exact plugin-owned MCP secret through the OS credential store.
+// setPluginMcpSecret 通过操作系统凭据库存储单个精确插件自有 MCP Secret。
+export async function setPluginMcpSecret(
+  pluginId: string,
+  serverId: string,
+  secretKey: string,
+  value: string,
+): Promise<LuaSkillsCatalogUpdate> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Plugin MCP secret storage requires the Vulcan service runtime.");
+  }
+  return serviceClient.request<LuaSkillsCatalogUpdate>("service_set_plugin_mcp_secret", {
+    pluginId,
+    serverId,
+    secretKey,
+    value,
+  });
+}
+
+// deletePluginMcpSecret removes one exact plugin-owned MCP secret without reading it into the WebUI.
+// deletePluginMcpSecret 删除单个精确插件自有 MCP Secret，且不会把其值读入 WebUI。
+export async function deletePluginMcpSecret(
+  pluginId: string,
+  serverId: string,
+  secretKey: string,
+): Promise<LuaSkillsCatalogUpdate> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Plugin MCP secret deletion requires the Vulcan service runtime.");
+  }
+  return serviceClient.request<LuaSkillsCatalogUpdate>("service_delete_plugin_mcp_secret", {
+    pluginId,
+    serverId,
+    secretKey,
+  });
 }
 
 // loadPluginUiModule loads one exact manifest-declared uncompressed ESM module.

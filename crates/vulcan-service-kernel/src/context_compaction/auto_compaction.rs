@@ -386,10 +386,7 @@ pub(crate) fn build_webui_context_compaction_job_request(
     plan: CompactionPlan,
     full_context_state: SessionConversationState,
 ) -> Result<PromptCompactionJobRequest, String> {
-    let mcp_runtime_access = agent_runtime
-        .mcp_runtime
-        .clone()
-        .ok_or_else(|| String::from("上下文压缩运行时未就绪，无法发起模型总结请求。"))?;
+    let mcp_runtime_access = agent_runtime.extension_generation.mcp_runtime();
     let workspace_snapshot = current_workspace_snapshot_from_shared_state(state)
         .ok()
         .flatten();

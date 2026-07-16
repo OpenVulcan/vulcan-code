@@ -23,6 +23,8 @@ tokio = { workspace = true, features = ["process", "rt-multi-thread"] }
 uuid.workspace = true
 vldb-controller-client.workspace = true
 vulcan-agent-runtime.workspace = true
+keyring.workspace = true
+sha2.workspace = true
 vulcan-context.workspace = true
 vulcan-context-compaction.workspace = true
 vulcan-context-injection.workspace = true

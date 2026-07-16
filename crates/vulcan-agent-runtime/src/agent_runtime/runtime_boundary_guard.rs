@@ -262,8 +262,8 @@ fn runtime_tool_preparation_surfaces_stay_on_mcp_tool_bindings() {
     );
 }
 
-/// Verifies runtime-stream execution stays on the stable MCP access surface instead of reintroducing raw runtime handles.
-/// 验证 runtime-stream 执行链继续停留在稳定 MCP 访问面之上，而不会重新引回原始运行时句柄。
+/// Verifies runtime-stream execution freezes MCP and plugin surfaces through one Extension Generation.
+/// 验证 runtime-stream 执行链通过单个扩展代次冻结 MCP 与插件能力面。
 #[test]
 fn runtime_stream_inner_layers_do_not_reintroduce_raw_mcp_runtime_handles() {
     let runtime_root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -284,8 +284,8 @@ fn runtime_stream_inner_layers_do_not_reintroduce_raw_mcp_runtime_handles() {
         .expect("runtime_stream_preparation_resources.rs should remain readable");
 
     assert!(
-        outer_entry_source.contains("mcp_runtime: Option<McpRuntimeAccess>"),
-        "runtime_stream.rs should accept the stable McpRuntimeAccess surface at the outer entrypoint: {}",
+        outer_entry_source.contains("extension_generation: Arc<ExtensionGeneration>"),
+        "runtime_stream.rs should freeze one ExtensionGeneration at the execution entrypoint: {}",
         outer_entry_path.display()
     );
     assert!(
@@ -299,8 +299,8 @@ fn runtime_stream_inner_layers_do_not_reintroduce_raw_mcp_runtime_handles() {
         outer_entry_path.display()
     );
     assert!(
-        launch_source.contains("McpRuntimeAccess"),
-        "runtime_stream_launch.rs should consume McpRuntimeAccess instead of raw handles: {}",
+        launch_source.contains("Arc<ExtensionGeneration>"),
+        "runtime_stream_launch.rs should pass one frozen ExtensionGeneration into preparation: {}",
         launch_path.display()
     );
     assert!(
@@ -309,8 +309,8 @@ fn runtime_stream_inner_layers_do_not_reintroduce_raw_mcp_runtime_handles() {
         launch_path.display()
     );
     assert!(
-        preparation_source.contains("McpRuntimeAccess"),
-        "runtime_stream_preparation.rs should consume McpRuntimeAccess instead of raw handles: {}",
+        preparation_source.contains("Arc<ExtensionGeneration>"),
+        "runtime_stream_preparation.rs should consume one frozen ExtensionGeneration: {}",
         preparation_path.display()
     );
     assert!(
@@ -319,8 +319,8 @@ fn runtime_stream_inner_layers_do_not_reintroduce_raw_mcp_runtime_handles() {
         preparation_path.display()
     );
     assert!(
-        preparation_resources_source.contains("McpRuntimeAccess"),
-        "runtime_stream_preparation_resources.rs should consume McpRuntimeAccess instead of raw handles: {}",
+        preparation_resources_source.contains("Arc<ExtensionGeneration>"),
+        "runtime_stream_preparation_resources.rs should build from one frozen ExtensionGeneration: {}",
         preparation_resources_path.display()
     );
     assert!(
@@ -330,8 +330,8 @@ fn runtime_stream_inner_layers_do_not_reintroduce_raw_mcp_runtime_handles() {
     );
 }
 
-/// Verifies top-level service workbench construction paths stay on stable MCP runtime access objects.
-/// 验证顶层服务工作台构建路径继续使用稳定 MCP 运行时访问对象。
+/// Verifies top-level service workbench construction retains one atomic Extension Generation.
+/// 验证顶层服务工作台构建过程持有单个原子扩展代次。
 #[test]
 fn service_workbench_paths_stay_on_mcp_runtime_access() {
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -350,8 +350,8 @@ fn service_workbench_paths_stay_on_mcp_runtime_access() {
         .join("\n");
 
     assert!(
-        service_kernel_source.contains("mcp_runtime: Option<McpRuntimeAccess>"),
-        "service kernel should retain MCP runtime state through the stable McpRuntimeAccess field under: {}",
+        service_kernel_source.contains("extension_generation: Arc<ExtensionGeneration>"),
+        "service kernel should retain plugin and MCP runtime state through one ExtensionGeneration under: {}",
         service_kernel_root.display()
     );
     assert!(
@@ -361,7 +361,7 @@ fn service_workbench_paths_stay_on_mcp_runtime_access() {
     );
     assert!(
         service_kernel_source.contains("bootstrap_mcp_runtime_access"),
-        "service kernel should bootstrap the stable McpRuntimeAccess surface under: {}",
+        "service kernel should bootstrap the MCP access surface before constructing ExtensionGeneration under: {}",
         service_kernel_root.display()
     );
     assert!(

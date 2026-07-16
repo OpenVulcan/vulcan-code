@@ -610,9 +610,9 @@ export function updateBrowserFallbackWorkbench(mutator: (snapshot: WorkbenchSnap
     .reduce((total, skill) => total + (skill.enabled ? skill.entryCount : 0), 0);
   // Plugin rows are a projection of the same LuaSkills catalog and must advance atomically with it.
   // 插件行是同一份 LuaSkills 目录的投影，必须与其原子推进。
-  // systemPlugins retains host-owned plugin state while ordinary Lua Skill rows are regenerated.
-  // systemPlugins 在重新生成普通 Lua Skill 行时保留宿主自有插件状态。
-  const systemPlugins = browserFallbackWorkbenchState.plugins.filter((plugin) => plugin.managementKind === "systemPlugin");
+  // vulcanPlugins retains host-owned plugin state while ordinary Lua Skill rows are regenerated.
+  // vulcanPlugins 在重新生成普通 Lua Skill 行时保留宿主自有插件状态。
+  const vulcanPlugins = browserFallbackWorkbenchState.plugins.filter((plugin) => plugin.managementKind === "vulcanPlugin");
   // luaSkillPlugins mirrors ordinary Lua Skill lifecycle rows for browser preview mode.
   // luaSkillPlugins 在浏览器预览模式中镜像普通 Lua Skill 生命周期行。
   const luaSkillPlugins = browserFallbackWorkbenchState.luaSkills.skills.map((skill) => ({
@@ -641,6 +641,6 @@ export function updateBrowserFallbackWorkbench(mutator: (snapshot: WorkbenchSnap
     diagnostics: skill.disabledReason ? [skill.disabledReason] : [],
     managementKind: "luaSkill" as const,
   }));
-  browserFallbackWorkbenchState.plugins = [...luaSkillPlugins, ...systemPlugins];
+  browserFallbackWorkbenchState.plugins = [...luaSkillPlugins, ...vulcanPlugins];
   return browserFallbackSnapshot();
 }

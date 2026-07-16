@@ -339,6 +339,7 @@ impl TauriMcpServerConfig {
                 args: self.args.clone(),
                 cwd: self.cwd.clone().map(PathBuf::from),
                 env: self.resolved_env(),
+                inherit_environment: true,
             }),
             PersistedMcpTransportKind::Http => Ok(McpTransportLaunchSpec::Http {
                 endpoint: self.endpoint_summary(),

@@ -1,5 +1,5 @@
--- Integration harness for the fixed System Plugin allowlisted Lua module bridge.
--- 固定 System Plugin 白名单 Lua 模块桥接集成测试夹具。
+-- Integration harness for the fixed Vulcan Plugin allowlisted Lua module bridge.
+-- 固定 Vulcan Plugin 白名单 Lua 模块桥接集成测试夹具。
 
 -- runtime_vulcan retains the controlled runtime JSON implementation outside the bridge sandbox.
 -- runtime_vulcan 在桥接沙箱外保留受控运行时 JSON 实现。
@@ -9,8 +9,8 @@ local runtime_vulcan = vulcan
 -- windows_runtime 记录当前夹具是否必须验证 verbatim 包搜索路径规范化。
 local windows_runtime = package.config:sub(1, 1) == "\\"
 if windows_runtime then
-    -- verbatim_lua_template reproduces the exact System Plugin path that previously became a false UNC probe.
-    -- verbatim_lua_template 复现此前会变成错误 UNC 探测的精确 System Plugin 路径。
+    -- verbatim_lua_template reproduces the exact Vulcan Plugin path that previously became a false UNC probe.
+    -- verbatim_lua_template 复现此前会变成错误 UNC 探测的精确 Vulcan Plugin 路径。
     local verbatim_lua_template = [[\\?\D:\vulcan-plugin-bridge-path-probe\?.lua;]]
     -- verbatim_c_template covers the equivalent native-module search template.
     -- verbatim_c_template 覆盖对应的原生模块搜索模板。

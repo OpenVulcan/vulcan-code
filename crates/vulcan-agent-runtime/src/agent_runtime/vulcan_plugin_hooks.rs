@@ -1,5 +1,5 @@
-//! System Plugin Lua hook registration bridge for the shared host dispatcher.
-//! 面向共享宿主调度器的系统插件 Lua hook 注册桥。
+//! Vulcan Plugin Lua hook registration bridge for the shared host dispatcher.
+//! 面向共享宿主调度器的 Vulcan 插件 Lua hook 注册桥。
 
 use std::sync::Arc;
 
@@ -9,12 +9,12 @@ use vulcan_hooks::{
     HookPayload, HookRegistration,
 };
 use vulcan_plugin_runtime::{
-    SystemPluginCatalogSnapshot, SystemPluginHookDescriptor, SystemPluginRuntimeManager,
+    VulcanPluginCatalogSnapshot, VulcanPluginHookDescriptor, VulcanPluginRuntimeManager,
 };
 
-/// Stable registration prefix reserved for manifest-driven System Plugin hooks.
-/// 为清单驱动系统插件 hook 保留的稳定注册前缀。
-const SYSTEM_PLUGIN_HOOK_REGISTRATION_PREFIX: &str = "system-plugin/";
+/// Stable registration prefix reserved for manifest-driven Vulcan Plugin hooks.
+/// 为清单驱动 Vulcan 插件 hook 保留的稳定注册前缀。
+const VULCAN_PLUGIN_HOOK_REGISTRATION_PREFIX: &str = "vulcan-plugin/";
 
 /// Dispatches one host-owned hook point through the current enabled plugin snapshot.
 /// 通过当前已启用插件快照分发一个宿主持有 Hook 点。
@@ -28,8 +28,8 @@ const SYSTEM_PLUGIN_HOOK_REGISTRATION_PREFIX: &str = "system-plugin/";
 /// 返回值
 /// Returns the shared dispatcher report with transformed payload and generic contributions.
 /// 返回包含转换后载荷与通用贡献的共享调度报告。
-pub async fn dispatch_system_plugin_hook(
-    runtime: SystemPluginRuntimeManager,
+pub async fn dispatch_vulcan_plugin_hook(
+    runtime: VulcanPluginRuntimeManager,
     context: HookContext,
     payload: Value,
 ) -> Result<HookDispatchReport, HookError> {
@@ -38,7 +38,7 @@ pub async fn dispatch_system_plugin_hook(
         dispatcher.register_point(descriptor)?;
     }
     let snapshot = runtime.snapshot();
-    synchronize_system_plugin_hooks(&mut dispatcher, runtime, &snapshot)?;
+    synchronize_vulcan_plugin_hooks(&mut dispatcher, runtime, &snapshot)?;
     dispatcher
         .dispatch(HookDispatchRequest::new(
             context,
@@ -57,15 +57,15 @@ pub async fn dispatch_system_plugin_hook(
 ///
 /// # Returns
 /// 返回值
-/// Returns success after atomically replacing only System Plugin registrations.
-/// 在仅原子替换系统插件注册项后返回成功。
-pub fn synchronize_system_plugin_hooks(
+/// Returns success after atomically replacing only Vulcan Plugin registrations.
+/// 在仅原子替换 Vulcan 插件注册项后返回成功。
+pub fn synchronize_vulcan_plugin_hooks(
     dispatcher: &mut HookDispatcher,
-    runtime: SystemPluginRuntimeManager,
-    catalog: &SystemPluginCatalogSnapshot,
+    runtime: VulcanPluginRuntimeManager,
+    catalog: &VulcanPluginCatalogSnapshot,
 ) -> Result<(), HookError> {
     let enabled_hooks = catalog.enabled_hooks.values().cloned().collect::<Vec<_>>();
-    validate_system_plugin_hooks(dispatcher, &enabled_hooks)?;
+    validate_vulcan_plugin_hooks(dispatcher, &enabled_hooks)?;
 
     let mut staged = dispatcher.clone();
     let existing_ids = staged
@@ -73,7 +73,7 @@ pub fn synchronize_system_plugin_hooks(
         .registration_snapshots(None)
         .into_iter()
         .map(|snapshot| snapshot.registration.id)
-        .filter(|id| id.starts_with(SYSTEM_PLUGIN_HOOK_REGISTRATION_PREFIX))
+        .filter(|id| id.starts_with(VULCAN_PLUGIN_HOOK_REGISTRATION_PREFIX))
         .collect::<Vec<_>>();
     for registration_id in existing_ids {
         staged.unregister(&registration_id, None);
@@ -128,9 +128,9 @@ pub fn synchronize_system_plugin_hooks(
 /// 返回值
 /// Returns success only when every point exists and accepts the declared mode.
 /// 仅当每个点位存在且接受声明模式时返回成功。
-pub fn validate_system_plugin_hooks(
+pub fn validate_vulcan_plugin_hooks(
     dispatcher: &HookDispatcher,
-    hooks: &[SystemPluginHookDescriptor],
+    hooks: &[VulcanPluginHookDescriptor],
 ) -> Result<(), HookError> {
     for hook in hooks {
         let point = dispatcher
@@ -138,13 +138,13 @@ pub fn validate_system_plugin_hooks(
             .point_descriptor(&hook.manifest.point)
             .ok_or_else(|| {
                 HookError::invalid_registration(format!(
-                    "System Plugin hook `{}` references unknown host point `{}`.",
+                    "Vulcan Plugin hook `{}` references unknown host point `{}`.",
                     hook.registration_id, hook.manifest.point
                 ))
             })?;
         if !point.modes.contains(&hook.manifest.mode) {
             return Err(HookError::invalid_registration(format!(
-                "System Plugin hook `{}` mode {:?} is not accepted by host point `{}`.",
+                "Vulcan Plugin hook `{}` mode {:?} is not accepted by host point `{}`.",
                 hook.registration_id, hook.manifest.mode, hook.manifest.point
             )));
         }
@@ -162,8 +162,8 @@ mod tests {
     use std::sync::Mutex;
     use vulcan_hooks::{HookMode, HookPointDescriptor};
 
-    /// Writes one minimal hook-only System Plugin package.
-    /// 写入一个最小化的仅含 hook 的系统插件包。
+    /// Writes one minimal hook-only Vulcan Plugin package.
+    /// 写入一个最小化的仅含 hook 的 Vulcan 插件包。
     fn write_hook_package(root: &Path) {
         let package = root.join("hook-plugin");
         fs::create_dir_all(package.join("runtime")).expect("create hook runtime directory");
@@ -187,24 +187,26 @@ return M
             r#"schema_version: 1
 id: hook-plugin
 version: 1.0.0
-kind: bundled_system
 default_enabled: true
 display:
   name: Hook Plugin
   capability: Host hook bridge fixture
-runtime:
-  dependencies_file: dependencies.yaml
+execution:
+  dependencies:
+    manifest: dependencies.yaml
+    install_mode: bundled
+lua_runtime:
   bundle: runtime/plugin.bundle.lua
   invoke_function: dispatch
   shutdown_function: shutdown
   max_active_sessions: 1
-hooks:
-  - id: precheck
-    point: conversation.turn.precheck
-    mode: transform
-    function: on_precheck
-    timeout_ms: 20000
-    failure_policy: stop
+  hooks:
+    - id: precheck
+      point: conversation.turn.precheck
+      mode: transform
+      function: on_precheck
+      timeout_ms: 20000
+      failure_policy: stop
 "#,
         )
         .expect("write hook manifest");
@@ -234,11 +236,11 @@ hooks:
     /// Verifies atomic registration, idempotent synchronization, and draining removal.
     /// 验证原子注册、幂等同步与 draining 移除。
     #[test]
-    fn system_plugin_hooks_share_existing_dispatcher_and_lifecycle() {
+    fn vulcan_plugin_hooks_share_existing_dispatcher_and_lifecycle() {
         let temp = tempfile::tempdir().expect("create temp directory");
         let runtime_root = temp.path().join("runtime");
         let plugin_root = runtime_root.join("plugins");
-        fs::create_dir_all(&plugin_root).expect("create System Plugin root");
+        fs::create_dir_all(&plugin_root).expect("create Vulcan Plugin root");
         write_hook_package(&plugin_root);
         let bridge_root = runtime_root
             .join("system_lua_lib")
@@ -259,7 +261,7 @@ hooks:
         fs::create_dir_all(&managed_runtime_root).expect("create managed runtime root");
         fs::create_dir_all(&plugin_state_root).expect("create plugin state root");
         fs::create_dir_all(&plugin_runtime_root).expect("create plugin runtime root");
-        let manager = SystemPluginRuntimeManager::new(
+        let manager = VulcanPluginRuntimeManager::new(
             Arc::new(Mutex::new(test_engine(&runtime_root))),
             plugin_root,
             user_plugin_root,
@@ -271,6 +273,11 @@ hooks:
         let catalog = manager
             .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
             .expect("load hook catalog");
+        assert_eq!(
+            catalog.enabled_hooks.len(),
+            1,
+            "hook fixture must expose exactly one enabled registration"
+        );
         let mut dispatcher = HookDispatcher::default();
         dispatcher
             .register_point(HookPointDescriptor::new(
@@ -290,7 +297,7 @@ hooks:
             }
         }
         let invalid =
-            synchronize_system_plugin_hooks(&mut dispatcher, manager.clone(), &invalid_catalog);
+            synchronize_vulcan_plugin_hooks(&mut dispatcher, manager.clone(), &invalid_catalog);
         assert!(invalid.is_err());
         assert!(
             dispatcher
@@ -299,15 +306,15 @@ hooks:
                 .is_empty()
         );
 
-        synchronize_system_plugin_hooks(&mut dispatcher, manager.clone(), &catalog)
+        synchronize_vulcan_plugin_hooks(&mut dispatcher, manager.clone(), &catalog)
             .expect("register plugin hook");
-        synchronize_system_plugin_hooks(&mut dispatcher, manager.clone(), &catalog)
+        synchronize_vulcan_plugin_hooks(&mut dispatcher, manager.clone(), &catalog)
             .expect("resynchronize plugin hook");
         assert_eq!(dispatcher.registry().registration_snapshots(None).len(), 1);
         manager
             .begin_draining("hook-plugin")
             .expect("begin plugin draining");
-        synchronize_system_plugin_hooks(&mut dispatcher, manager.clone(), &manager.snapshot())
+        synchronize_vulcan_plugin_hooks(&mut dispatcher, manager.clone(), &manager.snapshot())
             .expect("remove draining plugin hook");
         assert!(
             dispatcher

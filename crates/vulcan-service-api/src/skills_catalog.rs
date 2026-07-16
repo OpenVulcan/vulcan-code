@@ -124,8 +124,8 @@ pub struct LuaSkillsCatalogUpdate {
     /// Complete LuaSkills catalog after the committed mutation.
     /// 已提交变更后的完整 LuaSkills 目录。
     pub lua_skills: LuaSkillsCatalogSummary,
-    /// Plugin rows derived from the same committed LuaSkills and System Plugin catalogs.
-    /// 从同一份已提交 LuaSkills 与系统插件目录派生的插件行。
+    /// Plugin rows derived from the same committed LuaSkills and Vulcan Plugin catalogs.
+    /// 从同一份已提交 LuaSkills 与 Vulcan 插件目录派生的插件行。
     pub plugins: Vec<PluginSummary>,
 }
 

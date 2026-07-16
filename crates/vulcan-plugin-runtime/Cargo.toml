@@ -1,6 +1,6 @@
 [package]
 name = "vulcan-plugin-runtime"
-description = "Manifest-driven bundled System Plugin host runtime for Vulcan Code."
+description = "Manifest-driven bundled Vulcan Plugin host runtime for Vulcan Code."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 luaskills.workspace = true
 jsonschema.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml = "0.9"

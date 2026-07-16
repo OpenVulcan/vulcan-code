@@ -1,5 +1,5 @@
-//! System Plugin Hook forwarding for structured Provider request telemetry.
-//! 结构化 Provider 请求遥测的系统插件 Hook 转发。
+//! Vulcan Plugin Hook forwarding for structured Provider request telemetry.
+//! 结构化 Provider 请求遥测的 Vulcan 插件 Hook 转发。
 
 use super::*;
 use vulcan_agent_runtime::agent_runtime::provider_request_telemetry::{
@@ -24,8 +24,8 @@ impl ProviderTelemetryHookGuard {
     ///
     /// # Parameters
     /// 参数
-    /// `state` resolves the current System Plugin runtime and canonical project ownership.
-    /// `state` 解析当前系统插件运行时与规范项目归属。
+    /// `state` resolves the current Vulcan Plugin runtime and canonical project ownership.
+    /// `state` 解析当前 Vulcan 插件运行时与规范项目归属。
     ///
     /// # Returns
     /// 返回值
@@ -81,8 +81,8 @@ impl Drop for ProviderTelemetryHookGuard {
     }
 }
 
-/// Dispatches one System Plugin Hook event inside a stream-local ordered worker.
-/// 在流局部有序 Worker 内调度一条系统插件 Hook 事件。
+/// Dispatches one Vulcan Plugin Hook event inside a stream-local ordered worker.
+/// 在流局部有序 Worker 内调度一条 Vulcan 插件 Hook 事件。
 ///
 /// # Parameters
 /// 参数
@@ -99,7 +99,7 @@ async fn dispatch_provider_request_telemetry_hook(
 ) {
     // pluginRuntime is cloned before spawning so the service state lock is not retained.
     // pluginRuntime 在派生任务前克隆，避免保留服务状态锁。
-    let Ok(plugin_runtime) = service_system_plugin_runtime(state) else {
+    let Ok(plugin_runtime) = service_vulcan_plugin_runtime(state) else {
         return;
     };
     // hookPoint is fixed by the strongly typed telemetry event kind.
@@ -144,7 +144,7 @@ async fn dispatch_provider_request_telemetry_hook(
     // payload 在不含转录或凭据数据的前提下移入有序 Effect 调度。
     let payload = event.payload;
     if let Err(error) =
-        vulcan_agent_runtime::agent_runtime::system_plugin_hooks::dispatch_system_plugin_hook(
+        vulcan_agent_runtime::agent_runtime::vulcan_plugin_hooks::dispatch_vulcan_plugin_hook(
             plugin_runtime,
             context,
             payload,

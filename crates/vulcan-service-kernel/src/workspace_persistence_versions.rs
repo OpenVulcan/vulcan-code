@@ -633,7 +633,8 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         command_session_runtime,
         native_tools,
         hydrated_window_summaries,
-        system_plugin_catalog,
+        vulcan_plugin_catalog,
+        mcp_server_states,
     ) = {
         retain_hydrated_conversation_windows_for_workspace(
             &mut guard.hydrated_conversation_windows,
@@ -705,10 +706,15 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
             .as_ref()
             .map(|agent_runtime| Arc::clone(&agent_runtime.command_session_runtime));
         let native_tools = native_tool_summaries_from_agent_runtime(guard.agent_runtime.as_ref());
-        let system_plugin_catalog = guard
+        let vulcan_plugin_catalog = guard
             .agent_runtime
             .as_ref()
-            .map(|runtime| runtime.system_plugin_runtime.snapshot());
+            .and_then(|runtime| runtime.extension_generation.plugin_catalog());
+        let mcp_server_states = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.extension_generation.mcp_runtime().server_states())
+            .unwrap_or_default();
         (
             live_context_budgets,
             surface_messages,
@@ -721,7 +727,8 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
                 &guard.hydrated_conversation_windows,
                 &guard.webui_preloaded_unclosed_subagent_roots,
             ),
-            system_plugin_catalog,
+            vulcan_plugin_catalog,
+            mcp_server_states,
         )
     };
     let trace_workbench_started_at = current_unix_millis_value();
@@ -729,7 +736,8 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         controller: controller_runtime,
         command_session_runtime: command_session_runtime.as_deref(),
         luaskills_catalog,
-        system_plugin_catalog: system_plugin_catalog.as_deref(),
+        vulcan_plugin_catalog: vulcan_plugin_catalog.as_deref(),
+        mcp_server_states: &mcp_server_states,
         token_budget_runtime,
         mcp_catalog,
         provider_configuration,
