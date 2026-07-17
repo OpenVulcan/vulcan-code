@@ -81,7 +81,12 @@ function buildNativeVulcanFilePresentation(
   options: ToolPresentationResolveOptions,
 ): FileChangePresentation | null {
   const paths = nativeVulcanFilePaths(blocks);
-  const displayPaths = paths.length ? paths : ["File"];
+  // A file card requires one real path; request formation must not fabricate a generic `File` identity.
+  // 文件卡片必须具备真实路径；请求构造阶段不得伪造通用 `File` 身份。
+  if (!paths.length) {
+    return null;
+  }
+  const displayPaths = paths;
   const files = displayPaths.map((path, index) => {
     const rows = displayState === "failed" ? errorRowsFromBlocks(blocks) : [];
     return buildFilePresentation({

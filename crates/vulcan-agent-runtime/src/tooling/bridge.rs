@@ -185,6 +185,7 @@ pub fn build_vulcan_tools_manager(
             parameters_schema: definition.args_schema.clone(),
             ai_visible: definition.descriptor.ai_visible,
             plan_policy: native_plan_policy(&definition.descriptor),
+            request_streaming: definition.request_streaming.clone(),
             invoke: std::sync::Arc::new(move |args, session_id| {
                 let catalog = catalog.clone();
                 let tool_id = tool_id.clone();
@@ -271,6 +272,7 @@ pub fn build_vulcan_tools_manager(
                 } else {
                     VulcanPlanToolPolicy::Hidden
                 },
+                request_streaming: None,
                 invoke: Arc::new(move |arguments, owner_session_id| {
                     let runtime = runtime.clone();
                     let tool_id = tool_id.clone();
@@ -336,6 +338,7 @@ pub fn build_vulcan_tools_manager(
             parameters_schema,
             ai_visible: true,
             plan_policy: VulcanPlanToolPolicy::HeuristicText(canonical_name.clone()),
+            request_streaming: None,
             invoke: std::sync::Arc::new(move |args, session_id| {
                 let runtime = runtime.clone();
                 let canonical_name = canonical_name.clone();
@@ -414,6 +417,7 @@ pub fn build_vulcan_tools_manager(
             parameters_schema,
             ai_visible: true,
             plan_policy: VulcanPlanToolPolicy::HeuristicText(tool_name.clone()),
+            request_streaming: None,
             invoke: std::sync::Arc::new(move |args, _session_id| {
                 let tool = tool.clone();
                 Box::pin(async move {

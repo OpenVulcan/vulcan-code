@@ -620,6 +620,7 @@ fn test_resolved_tool(id: &str, source: VulcanToolSourceKind) -> ResolvedToolDef
         },
         parameters_schema: json!({ "type": "object" }),
         plan_policy: VulcanPlanToolPolicy::Visible,
+        request_streaming: None,
         invoke: Arc::new(|_, _| {
             Box::pin(async { Ok(VulcanToolInvocationResult::from_model_output(json!({}))) })
         }),

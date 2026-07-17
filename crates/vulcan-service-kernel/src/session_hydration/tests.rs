@@ -3,7 +3,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use vulcan_context::{SessionConversationMessage, SessionConversationPayload};
+use serde_json::json;
+use vulcan_context::{
+    SessionConversationMessage, SessionConversationPayload, SessionConversationRecord,
+};
 use vulcan_workbench_model::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
 
 use super::*;
@@ -20,6 +23,19 @@ fn selected_session_runtime_hydration_preserves_existing_display_window() {
     let display_entry =
         SessionMessageEntry::new(SessionMessageKind::Assistant, "助手", "已有显示层正文")
             .with_runtime_metadata("display-entry", "1000");
+    // orphanedDisplayEntry proves the retained WebUI row is normalized together with runtime JSONL.
+    // orphanedDisplayEntry 证明保留的 WebUI 行会与运行态 JSONL 一同被归一化。
+    let mut orphaned_display_entry =
+        SessionMessageEntry::new(SessionMessageKind::Assistant, "", "")
+            .with_runtime_metadata("orphaned-request-card", "1003");
+    orphaned_display_entry.record_kind = SessionMessageRecordKind::ToolCallOutput;
+    orphaned_display_entry.metadata = Some(json!({
+        "request_stream_id": "orphaned-stream",
+        "tool_call_id": "orphaned-call",
+        "tool_name": "submit_plan",
+        "tool_display_state": "receiving",
+        "request_revision": 1,
+    }));
     // hydrated_display_entry represents the lazy hydration window that must not overwrite display_entry.
     // hydrated_display_entry 表示不应覆盖 display_entry 的懒加载显示窗口。
     let hydrated_display_entry =
@@ -42,6 +58,35 @@ fn selected_session_runtime_hydration_preserves_existing_display_window() {
             attachments: Vec::new(),
         },
     }];
+    // orphanedRequest models a persisted request-stage card without any retained live owner.
+    // orphanedRequest 模拟一张已持久化但不再拥有保留实时所有者的请求阶段卡片。
+    runtime_state
+        .conversation_state
+        .records
+        .push(SessionConversationRecord {
+            id: String::from("orphaned-request-card"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolCallOutput,
+            visible: true,
+            title: String::new(),
+            body: String::new(),
+            metadata: Some(json!({
+                "request_stream_id": "orphaned-stream",
+                "tool_call_id": "orphaned-call",
+                "tool_name": "submit_plan",
+                "tool_display_state": "receiving",
+                "request_revision": 1,
+            })),
+            created_at: String::from("1003"),
+        });
+    runtime_state.tool_request_record_ids.insert(
+        String::from("orphaned-stream"),
+        String::from("orphaned-request-card"),
+    );
+    runtime_state.tool_call_record_ids.insert(
+        String::from("orphaned-call"),
+        String::from("orphaned-request-card"),
+    );
     let hydration = SessionHydrationSnapshot {
         session_id,
         messages: vec![hydrated_display_entry],
@@ -58,7 +103,10 @@ fn selected_session_runtime_hydration_preserves_existing_display_window() {
         archived_task_projects: Vec::new(),
         sessions: Vec::new(),
         archived_sessions: Vec::new(),
-        session_messages: BTreeMap::from([(session_id, vec![display_entry])]),
+        session_messages: BTreeMap::from([(
+            session_id,
+            vec![display_entry, orphaned_display_entry],
+        )]),
         archived_session_messages: BTreeMap::new(),
         session_compactions: BTreeMap::new(),
         archived_session_compactions: BTreeMap::new(),
@@ -90,6 +138,18 @@ fn selected_session_runtime_hydration_preserves_existing_display_window() {
             && message.record_kind == SessionMessageRecordKind::ToolDetailOutput
             && !message.visible
     }));
+    let retained_orphaned_request = retained_messages
+        .iter()
+        .find(|message| message.id == "orphaned-request-card")
+        .expect("retained orphaned request card should remain visible");
+    assert_eq!(
+        retained_orphaned_request
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("tool_display_state"))
+            .and_then(serde_json::Value::as_str),
+        Some("stopped")
+    );
     let runtime_state = workspace_snapshot
         .session_runtime_state
         .get(&session_id)
@@ -105,6 +165,22 @@ fn selected_session_runtime_hydration_preserves_existing_display_window() {
             }),
         Some("运行态正文")
     );
+    let orphaned_request = runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .find(|record| record.id == "orphaned-request-card")
+        .expect("orphaned request card should remain visible");
+    assert_eq!(
+        orphaned_request
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("tool_display_state"))
+            .and_then(serde_json::Value::as_str),
+        Some("stopped")
+    );
+    assert!(runtime_state.tool_request_record_ids.is_empty());
+    assert!(runtime_state.tool_call_record_ids.is_empty());
     assert!(
         workspace_snapshot
             .hydrated_session_ids

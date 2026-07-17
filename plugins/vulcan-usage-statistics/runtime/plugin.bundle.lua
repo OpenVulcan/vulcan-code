@@ -488,7 +488,7 @@ function M.provider_request_completed(args)
             sql_optional(payload.first_token_at_ms, "integer"), sql_integer(payload.completed_at_ms),
             sql_optional(payload.time_to_first_event_ms, "integer"),
             sql_optional(payload.time_to_first_token_ms, "integer"),
-            sql_integer(payload.duration_ms), sql_integer(payload.input_tokens),
+            sql_integer(payload.duration_ms), sql_integer(payload.uncached_input_tokens),
             sql_integer(payload.output_tokens), sql_integer(payload.reasoning_tokens),
             sql_integer(payload.total_tokens), sql_optional(payload.cached_input_tokens, "integer"),
             sql_optional(payload.cache_creation_input_tokens, "integer"),

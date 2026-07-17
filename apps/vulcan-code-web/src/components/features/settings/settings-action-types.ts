@@ -69,6 +69,51 @@ export interface GitCommitSettingsSaveRequest {
   summaryExtraPrompt: string
 }
 
+// ProviderRetrySettingsSaveRequest describes one complete Provider retry settings submission.
+// ProviderRetrySettingsSaveRequest 描述一次完整 Provider 重试设置提交。
+export interface ProviderRetrySettingsSaveRequest {
+  // Whether automatic retry is enabled.
+  // 是否启用自动重试。
+  enabled: boolean
+  // Maximum ordinary transient retry count.
+  // 普通瞬态错误的最大重试次数。
+  maxRetries: number
+  // Initial ordinary retry delay in milliseconds.
+  // 普通重试的初始等待毫秒数。
+  initialDelayMs: number
+  // Maximum ordinary retry delay in milliseconds.
+  // 普通重试的最大等待毫秒数。
+  maxDelayMs: number
+  // Ordinary backoff multiplier represented in thousandths.
+  // 以千分数表示的普通退避倍数。
+  backoffFactorMilli: number
+  // Deterministic jitter percentage.
+  // 确定性抖动百分比。
+  jitterPercent: number
+  // Whether Retry-After hints may increase waits.
+  // 是否允许 Retry-After 提示增加等待时间。
+  respectRetryAfter: boolean
+  // Whether HTTP 429 and structured rate-limit errors may be retried.
+  // 是否允许重试 HTTP 429 与结构化限流错误。
+  retry429: boolean
+  // Dedicated rate-limit scheduling values.
+  // 专用限流调度值。
+  rateLimit: {
+    // Maximum retries, where zero means retry until cancellation.
+    // 最大重试次数；零表示持续重试直至取消。
+    maxRetries: number
+    // Delay before the first rate-limit retry in milliseconds.
+    // 第一次限流重试前的等待毫秒数。
+    initialDelayMs: number
+    // Maximum rate-limit delay in milliseconds.
+    // 最大限流等待毫秒数。
+    maxDelayMs: number
+    // Rate-limit backoff multiplier represented in thousandths.
+    // 以千分数表示的限流退避倍数。
+    backoffFactorMilli: number
+  }
+}
+
 // GitCommitSummaryModelSelectionSaveRequest describes the saved commit-summary model mode.
 // GitCommitSummaryModelSelectionSaveRequest 描述已保存的提交总结模型模式。
 export type GitCommitSummaryModelSelectionSaveRequest =
@@ -231,6 +276,9 @@ export interface SettingsActionProps {
   // Saves Git commit dialog settings.
   // 保存 Git 提交弹窗设置。
   onSaveGitCommitSettings: (request: GitCommitSettingsSaveRequest) => Promise<void>
+  // Saves Provider retry settings.
+  // 保存 Provider 重试设置。
+  onSaveProviderRetrySettings: (request: ProviderRetrySettingsSaveRequest) => Promise<void>
   // Saves one shared AI capability vendor.
   // 保存单个共享 AI 能力供应商。
   onSaveAiCapabilityVendor: (request: AiCapabilityVendorSaveRequest) => Promise<void>

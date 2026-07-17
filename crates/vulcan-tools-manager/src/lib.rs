@@ -13,6 +13,7 @@ const MAX_PUBLIC_TOOL_NAME_LEN: usize = 64;
 
 mod manager;
 mod public_names;
+mod request_streaming;
 mod schema_projection;
 #[cfg(test)]
 mod tests;
@@ -20,6 +21,12 @@ mod types;
 
 pub use manager::VulcanToolsManager;
 pub use public_names::public_tool_name_is_valid;
+pub use request_streaming::{
+    IncrementalJsonEvent, IncrementalJsonPathSegment, IncrementalJsonScalar,
+    ToolRequestParserContext, ToolRequestParserFactory, ToolRequestParserSession,
+    ToolRequestPreview, ToolRequestProgressPolicy, ToolRequestSensitivityPolicy,
+    ToolRequestStagingPolicy, ToolRequestStagingStatus, ToolRequestStreamingCapability,
+};
 pub use schema_projection::{
     normalize_provider_tool_parameters_schema, project_tool_parameters_schema,
     resolve_tool_schema_projection_profile,

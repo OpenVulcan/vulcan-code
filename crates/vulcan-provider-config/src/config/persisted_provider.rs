@@ -308,6 +308,14 @@ pub struct PersistedProviderRetryConfiguration {
     /// 当 HTTP 429 不是配额耗尽错误时是否允许重试。
     #[serde(rename = "retry429", default = "default_provider_retry_429")]
     pub retry_429: bool,
+    /// Rate-limit-specific retry scheduling configured by the backend.
+    /// 由后台配置的限流专用重试调度规则。
+    #[serde(
+        rename = "rateLimit",
+        default,
+        skip_serializing_if = "PersistedProviderRateLimitRetryConfiguration::is_default"
+    )]
+    pub rate_limit: PersistedProviderRateLimitRetryConfiguration,
 }
 
 impl Default for PersistedProviderRetryConfiguration {
@@ -323,6 +331,7 @@ impl Default for PersistedProviderRetryConfiguration {
             jitter_percent: default_provider_retry_jitter_percent(),
             respect_retry_after: default_provider_retry_respect_retry_after(),
             retry_429: default_provider_retry_429(),
+            rate_limit: PersistedProviderRateLimitRetryConfiguration::default(),
         }
     }
 }
@@ -330,6 +339,58 @@ impl Default for PersistedProviderRetryConfiguration {
 impl PersistedProviderRetryConfiguration {
     /// Returns whether the persisted retry block is equal to the built-in default.
     /// 返回当前持久化重试配置块是否等于内置默认值。
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+/// Backend-configurable scheduling rules for Provider rate-limit retries.
+/// Provider 限流重试使用的后台可配置调度规则。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PersistedProviderRateLimitRetryConfiguration {
+    /// Maximum retry count, where zero means retry until user cancellation.
+    /// 最大重试次数；零表示持续重试直至用户取消。
+    #[serde(rename = "maxRetries", default)]
+    pub max_retries: u32,
+    /// Delay before the first rate-limit retry in milliseconds.
+    /// 第一次限流重试前的等待毫秒数。
+    #[serde(
+        rename = "initialDelayMs",
+        default = "default_provider_rate_limit_retry_initial_delay_ms"
+    )]
+    pub initial_delay_ms: u64,
+    /// Configured delay ceiling in milliseconds before the hard 1800-second safety cap.
+    /// 应用 1800 秒硬安全上限前的配置等待毫秒上限。
+    #[serde(
+        rename = "maxDelayMs",
+        default = "default_provider_rate_limit_retry_max_delay_ms"
+    )]
+    pub max_delay_ms: u64,
+    /// Backoff multiplier, where one selects a fixed retry interval.
+    /// 退避倍数；一表示使用固定重试间隔。
+    #[serde(
+        rename = "backoffFactor",
+        default = "default_provider_rate_limit_retry_backoff_factor"
+    )]
+    pub backoff_factor: f64,
+}
+
+impl Default for PersistedProviderRateLimitRetryConfiguration {
+    /// Builds the default cancellation-bound rate-limit retry schedule.
+    /// 构建默认的仅由取消终止的限流重试调度规则。
+    fn default() -> Self {
+        Self {
+            max_retries: 0,
+            initial_delay_ms: default_provider_rate_limit_retry_initial_delay_ms(),
+            max_delay_ms: default_provider_rate_limit_retry_max_delay_ms(),
+            backoff_factor: default_provider_rate_limit_retry_backoff_factor(),
+        }
+    }
+}
+
+impl PersistedProviderRateLimitRetryConfiguration {
+    /// Returns whether this rate-limit schedule equals the built-in backend default.
+    /// 返回当前限流调度规则是否等于内置后台默认值。
     pub fn is_default(&self) -> bool {
         self == &Self::default()
     }
@@ -381,4 +442,22 @@ pub(super) fn default_provider_retry_respect_retry_after() -> bool {
 /// 返回默认的 Provider HTTP 429 重试开关。
 pub(super) fn default_provider_retry_429() -> bool {
     true
+}
+
+/// Returns the default initial rate-limit retry delay in milliseconds.
+/// 返回默认的限流重试初始等待毫秒数。
+pub(super) fn default_provider_rate_limit_retry_initial_delay_ms() -> u64 {
+    5_000
+}
+
+/// Returns the default maximum rate-limit retry delay in milliseconds.
+/// 返回默认的限流重试最大等待毫秒数。
+pub(super) fn default_provider_rate_limit_retry_max_delay_ms() -> u64 {
+    1_800_000
+}
+
+/// Returns the default rate-limit retry backoff multiplier.
+/// 返回默认的限流重试退避倍数。
+pub(super) fn default_provider_rate_limit_retry_backoff_factor() -> f64 {
+    2.0
 }

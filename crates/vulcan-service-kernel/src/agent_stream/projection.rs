@@ -1437,10 +1437,7 @@ fn append_runtime_event_projection_with_authority(
     authority: RuntimeEventProjectionAuthority,
     event: &RuntimeEvent,
 ) -> Result<(), String> {
-    if !matches!(
-        event.kind,
-        RuntimeEventKind::ToolStarted | RuntimeEventKind::ToolFinished
-    ) {
+    if !runtime_event_projects_conversation_transcript(event.kind) {
         return Ok(());
     }
     // Preflight every fallible event decoder and persistence dependency before any service state mutation.
@@ -1768,6 +1765,33 @@ fn append_runtime_event_projection_with_authority(
     Ok(())
 }
 
+/// Reports whether one runtime event can create or update a retained conversation record.
+/// 判断一条运行时事件是否可以创建或更新保留的会话记录。
+///
+/// # Parameters
+/// 参数
+/// `event_kind` is the runtime event discriminator emitted by the Agent runtime.
+/// `event_kind` 是 Agent 运行时发送的运行事件判别值。
+///
+/// # Returns
+/// 返回值
+/// Returns `true` for runtime events that own a visible transcript record or update.
+/// 对拥有可见转录记录或更新的运行时事件返回 `true`。
+fn runtime_event_projects_conversation_transcript(event_kind: RuntimeEventKind) -> bool {
+    matches!(
+        event_kind,
+        RuntimeEventKind::ToolRequestStarted
+            | RuntimeEventKind::ToolRequestProgress
+            | RuntimeEventKind::ToolRequestPreviewUpdated
+            | RuntimeEventKind::ToolRequestReady
+            | RuntimeEventKind::ToolRequestInvalid
+            | RuntimeEventKind::ToolRequestAborted
+            | RuntimeEventKind::ToolStarted
+            | RuntimeEventKind::ToolFinished
+            | RuntimeEventKind::Retrying
+    )
+}
+
 /// Reports whether one runtime event completed a tool that owns command-session lifecycle state.
 /// 判断单个运行时事件是否完成了持有命令会话生命周期状态的工具。
 ///
@@ -1912,6 +1936,13 @@ fn close_agent_closed_subagent_task_ids_from_event(
 /// 返回必须与单条运行时事件消息补丁一起推进的界面运行阶段。
 fn runtime_event_projection_run_phase(event: &RuntimeEvent) -> Option<SessionRunPhase> {
     match event.kind {
+        RuntimeEventKind::ToolRequestStarted
+        | RuntimeEventKind::ToolRequestProgress
+        | RuntimeEventKind::ToolRequestPreviewUpdated
+        | RuntimeEventKind::ToolRequestReady => Some(SessionRunPhase::ToolCalling),
+        RuntimeEventKind::ToolRequestInvalid | RuntimeEventKind::ToolRequestAborted => {
+            Some(SessionRunPhase::Requesting)
+        }
         RuntimeEventKind::ToolStarted => Some(SessionRunPhase::ToolRunning),
         RuntimeEventKind::ToolFinished => Some(SessionRunPhase::Requesting),
         _ => None,
@@ -2201,6 +2232,42 @@ mod tests {
                 .iter()
                 .any(|message| message.record_kind == SessionMessageRecordKind::ThinkingOutput)
         );
+    }
+
+    /// Verifies every visible tool-request revision reaches the retained transcript projection.
+    /// 验证每个可见工具请求修订都能进入保留转录投影。
+    ///
+    /// # Returns
+    /// 返回值
+    /// This test returns no value and reports failures through assertions.
+    /// 此测试无返回值，并通过断言报告失败。
+    #[test]
+    fn visible_runtime_events_project_conversation_transcript() {
+        // visibleRuntimeEvents enumerates tool-card lifecycle events and independent retry notes.
+        // visibleRuntimeEvents 枚举工具卡片生命周期事件与独立重试备注。
+        let visible_runtime_events = [
+            RuntimeEventKind::ToolRequestStarted,
+            RuntimeEventKind::ToolRequestProgress,
+            RuntimeEventKind::ToolRequestPreviewUpdated,
+            RuntimeEventKind::ToolRequestReady,
+            RuntimeEventKind::ToolRequestInvalid,
+            RuntimeEventKind::ToolRequestAborted,
+            RuntimeEventKind::ToolStarted,
+            RuntimeEventKind::ToolFinished,
+            RuntimeEventKind::Retrying,
+        ];
+
+        // eventKind must pass the projection gate so its exact visible record can be persisted.
+        // eventKind 必须通过投影门禁，确保其精确可见记录能够持久化。
+        for event_kind in visible_runtime_events {
+            assert!(
+                runtime_event_projects_conversation_transcript(event_kind),
+                "visible runtime event {event_kind:?} must reach transcript projection"
+            );
+        }
+        assert!(!runtime_event_projects_conversation_transcript(
+            RuntimeEventKind::TokenDelta
+        ));
     }
 
     /// Verifies a session-scoped runtime-event patch leaves unrelated workspace collections untouched.

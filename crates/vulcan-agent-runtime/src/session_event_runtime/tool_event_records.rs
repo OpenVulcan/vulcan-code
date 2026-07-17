@@ -1,5 +1,248 @@
 use super::*;
 
+/// Stable identity and revision extracted from one safe tool-request runtime event.
+/// 从一条安全工具请求运行时事件中提取的稳定身份与修订信息。
+#[derive(Debug)]
+struct ToolRequestEventIdentity {
+    /// Stable provider-request stream identifier used before execution.
+    /// 执行前使用的稳定 Provider 请求流标识。
+    request_stream_id: String,
+    /// Current canonical or temporary tool-call identifier.
+    /// 当前规范或临时工具调用标识。
+    tool_call_id: String,
+    /// Exact public tool name resolved against the frozen tool snapshot.
+    /// 针对冻结工具快照解析出的精确公开工具名称。
+    tool_name: String,
+    /// Monotonic request projection revision.
+    /// 单调递增的请求投影修订号。
+    revision: u64,
+}
+
+/// Creates one visible tool card as soon as a uniquely resolved request is detected.
+/// 一旦检测到唯一解析的工具请求就创建一张可见工具卡片。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` owns durable transcript records and request correlations.
+/// `runtime_state` 持有持久转录记录与请求关联。
+/// `session_id` identifies the owning conversation session.
+/// `session_id` 标识所属会话。
+/// `now` is the persistence timestamp used for a newly created record.
+/// `now` 是新建记录使用的持久化时间戳。
+/// `event` is the safe request-start event emitted by the stream coordinator.
+/// `event` 是流协调器发出的安全请求开始事件。
+///
+/// # Returns
+/// 返回值
+/// `true` when the event created or advanced one correlated card.
+/// 当事件创建或推进了一张关联卡片时返回 `true`。
+pub(super) fn append_tool_request_started_projection_to_state(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    session_id: SessionId,
+    now: &str,
+    event: &RuntimeEvent,
+) -> Result<bool, String> {
+    // identity is accepted only when every required coordinator-owned field is present.
+    // identity 仅在协调器负责的所有必需字段都存在时才会被接受。
+    let Some(identity) = parse_tool_request_event_identity(event) else {
+        return Ok(false);
+    };
+    // existingRecordId preserves one-card semantics for an exact logical call correlation.
+    // existingRecordId 为精确逻辑调用关联保持单卡片语义。
+    let existing_record_id = runtime_state
+        .tool_request_record_ids
+        .get(&identity.request_stream_id)
+        .or_else(|| {
+            runtime_state
+                .tool_call_record_ids
+                .get(&identity.tool_call_id)
+        })
+        .cloned();
+    if let Some(record_id) = existing_record_id {
+        // Older physical-request aliases are removed before the new stream correlation is installed.
+        // 安装新请求流关联前会移除较旧的物理请求别名。
+        runtime_state
+            .tool_request_record_ids
+            .retain(|_, mapped_record_id| mapped_record_id != &record_id);
+        runtime_state
+            .tool_request_record_ids
+            .insert(identity.request_stream_id, record_id.clone());
+        let advanced = merge_tool_request_event_into_record(
+            &mut runtime_state.conversation_state,
+            &record_id,
+            event,
+            identity.revision,
+        );
+        if advanced {
+            runtime_state.updated_at = now.to_string();
+        }
+        return Ok(advanced);
+    }
+
+    // recordId is stable for the lifetime of request generation and real execution.
+    // recordId 在请求生成及真实执行的整个生命周期内保持稳定。
+    let record_id = build_session_record_message_id(
+        session_id,
+        now,
+        runtime_state.conversation_state.records.len(),
+    );
+    // metadata is already content-safe and is normalized to the authoritative identity.
+    // metadata 已具备内容安全性，并会规范到权威身份。
+    let metadata = normalize_tool_call_metadata(
+        event.metadata.clone(),
+        &identity.tool_call_id,
+        &identity.tool_name,
+    );
+    append_record(
+        &mut runtime_state.conversation_state,
+        SessionConversationRecord {
+            id: record_id.clone(),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolCallOutput,
+            visible: true,
+            title: String::new(),
+            body: String::new(),
+            metadata: Some(metadata),
+            created_at: now.to_string(),
+        },
+    )
+    .map_err(|error| format!("Invalid tool-request record identity: {error}"))?;
+    runtime_state
+        .tool_request_record_ids
+        .insert(identity.request_stream_id, record_id.clone());
+    runtime_state
+        .tool_call_record_ids
+        .insert(identity.tool_call_id, record_id);
+    runtime_state.updated_at = now.to_string();
+    Ok(true)
+}
+
+/// Applies a progress or ready snapshot to the exact request-stream card.
+/// 将进度或就绪快照应用到精确请求流卡片。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` owns the request and canonical call correlations.
+/// `runtime_state` 持有请求关联与规范调用关联。
+/// `now` is the persistence timestamp for an accepted revision.
+/// `now` 是已接受修订的持久化时间戳。
+/// `event` is one coordinator-normalized progress or ready event.
+/// `event` 是一条由协调器规范化的进度或就绪事件。
+///
+/// # Returns
+/// 返回值
+/// `true` when a newer revision was applied to an existing card.
+/// 当较新修订被应用到已有卡片时返回 `true`。
+pub(super) fn update_tool_request_projection_to_state(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    now: &str,
+    event: &RuntimeEvent,
+) -> Result<bool, String> {
+    // identity supplies both the temporary stream key and the final call key.
+    // identity 同时提供临时请求流键与最终调用键。
+    let Some(identity) = parse_tool_request_event_identity(event) else {
+        return Ok(false);
+    };
+    // recordId must come from the exact request stream; no same-name fallback is allowed.
+    // recordId 必须来自精确请求流，不允许同名回退。
+    let Some(record_id) = runtime_state
+        .tool_request_record_ids
+        .get(&identity.request_stream_id)
+        .cloned()
+    else {
+        return Ok(false);
+    };
+    // previousCallId is captured before metadata merge so canonical promotion can be atomic.
+    // previousCallId 在元数据合并前捕获，以便原子提升规范关联。
+    let previous_call_id = runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .find(|record| record.id == record_id)
+        .and_then(|record| record.metadata.as_ref())
+        .and_then(|metadata| metadata.get("tool_call_id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let advanced = merge_tool_request_event_into_record(
+        &mut runtime_state.conversation_state,
+        &record_id,
+        event,
+        identity.revision,
+    );
+    if !advanced {
+        return Ok(false);
+    }
+    if event.kind == RuntimeEventKind::ToolRequestReady {
+        if let Some(previous_call_id) = previous_call_id
+            && runtime_state.tool_call_record_ids.get(&previous_call_id) == Some(&record_id)
+        {
+            runtime_state.tool_call_record_ids.remove(&previous_call_id);
+        }
+        runtime_state
+            .tool_call_record_ids
+            .insert(identity.tool_call_id, record_id);
+        // request correlation remains until ToolStarted so a late final background token estimate can update the ready card.
+        // 请求关联会保留到 ToolStarted，使稍晚到达的最终后台 Token 估算仍可更新就绪卡片。
+    }
+    runtime_state.updated_at = now.to_string();
+    Ok(true)
+}
+
+/// Marks one exact pre-execution request card as stopped and releases its correlations.
+/// 将一张精确的执行前请求卡片标记为已停止并释放其关联。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` owns the card and its open correlation maps.
+/// `runtime_state` 持有卡片及其开放关联映射。
+/// `now` is the persistence timestamp for the terminal request state.
+/// `now` 是请求终态的持久化时间戳。
+/// `event` is the coordinator-normalized abort event.
+/// `event` 是协调器规范化后的中止事件。
+///
+/// # Returns
+/// 返回值
+/// `true` when the exact active request was closed.
+/// 当精确活动请求被关闭时返回 `true`。
+pub(super) fn abort_tool_request_projection_to_state(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    now: &str,
+    event: &RuntimeEvent,
+) -> Result<bool, String> {
+    // identity carries the only permitted lookup key for a request-stage abort.
+    // identity 携带请求阶段中止允许使用的唯一查找键。
+    let Some(identity) = parse_tool_request_event_identity(event) else {
+        return Ok(false);
+    };
+    // recordId is removed from the request map first so the stopped request cannot revive.
+    // recordId 会先从请求映射移除，确保已停止请求不能复活。
+    let Some(record_id) = runtime_state
+        .tool_request_record_ids
+        .remove(&identity.request_stream_id)
+    else {
+        return Ok(false);
+    };
+    let advanced = merge_tool_request_event_into_record(
+        &mut runtime_state.conversation_state,
+        &record_id,
+        event,
+        identity.revision,
+    );
+    if runtime_state
+        .tool_call_record_ids
+        .get(&identity.tool_call_id)
+        == Some(&record_id)
+    {
+        runtime_state
+            .tool_call_record_ids
+            .remove(&identity.tool_call_id);
+    }
+    if advanced {
+        runtime_state.updated_at = now.to_string();
+    }
+    Ok(advanced)
+}
+
 pub(super) fn append_tool_started_projection_to_state(
     runtime_state: &mut SessionRuntimeStateEntry,
     session_id: SessionId,
@@ -10,6 +253,34 @@ pub(super) fn append_tool_started_projection_to_state(
     else {
         return Ok(false);
     };
+    // existingRecordId upgrades the request-stage card instead of appending a duplicate card.
+    // existingRecordId 会升级请求阶段卡片，而不是追加重复卡片。
+    if let Some(existing_record_id) = runtime_state
+        .tool_call_record_ids
+        .get(&tool_call_id)
+        .cloned()
+    {
+        let mut metadata =
+            normalize_tool_call_metadata(event.metadata.clone(), &tool_call_id, &tool_name);
+        if let serde_json::Value::Object(object) = &mut metadata {
+            object.insert(
+                String::from("tool_display_state"),
+                serde_json::Value::String(String::from("running")),
+            );
+        }
+        let attached = attach_tool_result_to_record(
+            &mut runtime_state.conversation_state,
+            &existing_record_id,
+            metadata,
+        );
+        if attached {
+            runtime_state
+                .tool_request_record_ids
+                .retain(|_, record_id| record_id != &existing_record_id);
+            runtime_state.updated_at = now.to_string();
+        }
+        return Ok(attached);
+    }
     let record_id = build_session_record_message_id(
         session_id,
         now,
@@ -35,6 +306,115 @@ pub(super) fn append_tool_started_projection_to_state(
         .insert(tool_call_id, record_id);
     runtime_state.updated_at = now.to_string();
     Ok(true)
+}
+
+/// Parses the exact safe metadata contract emitted by the tool-request stream coordinator.
+/// 解析工具请求流协调器发出的精确安全元数据契约。
+///
+/// # Parameters
+/// 参数
+/// `event` is one tool-request lifecycle event.
+/// `event` 是一条工具请求生命周期事件。
+///
+/// # Returns
+/// 返回值
+/// A complete identity when every required field has the expected type and non-empty value.
+/// 当所有必需字段类型正确且非空时返回完整身份。
+fn parse_tool_request_event_identity(event: &RuntimeEvent) -> Option<ToolRequestEventIdentity> {
+    // metadata is the sole authoritative identity source for request-stage events.
+    // metadata 是请求阶段事件唯一的权威身份来源。
+    let metadata = event.metadata.as_ref()?;
+    // requestStreamId uniquely selects one physical request stream.
+    // requestStreamId 唯一选择一条物理请求流。
+    let request_stream_id = metadata
+        .get("request_stream_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())?
+        .to_string();
+    // toolCallId correlates the card with eventual host execution.
+    // toolCallId 将卡片与最终宿主执行关联。
+    let tool_call_id = metadata
+        .get("tool_call_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())?
+        .to_string();
+    // toolName is already resolved against the frozen provider tool definitions.
+    // toolName 已针对冻结的 Provider 工具定义完成解析。
+    let tool_name = metadata
+        .get("tool_name")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())?
+        .to_string();
+    // revision provides monotonic stale-update rejection.
+    // revision 提供单调的过期更新拒绝能力。
+    let revision = metadata
+        .get("request_revision")
+        .and_then(serde_json::Value::as_u64)?;
+    Some(ToolRequestEventIdentity {
+        request_stream_id,
+        tool_call_id,
+        tool_name,
+        revision,
+    })
+}
+
+/// Merges one newer safe request snapshot into an existing visible tool card.
+/// 将一份较新的安全请求快照合并到已有可见工具卡片。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the durable conversation records.
+/// `state` 持有持久会话记录。
+/// `record_id` selects the exact card established by correlation maps.
+/// `record_id` 选择由关联映射建立的精确卡片。
+/// `event` carries only coordinator-approved safe metadata.
+/// `event` 仅携带协调器批准的安全元数据。
+/// `incoming_revision` is the monotonic revision to compare before mutation.
+/// `incoming_revision` 是变更前用于比较的单调修订号。
+///
+/// # Returns
+/// 返回值
+/// `true` when the record existed and the incoming revision was newer.
+/// 当记录存在且传入修订较新时返回 `true`。
+fn merge_tool_request_event_into_record(
+    state: &mut SessionConversationState,
+    record_id: &str,
+    event: &RuntimeEvent,
+    incoming_revision: u64,
+) -> bool {
+    // record is selected only by its stable correlation-derived identifier.
+    // record 仅通过关联派生的稳定标识选择。
+    let Some(record) = state
+        .records
+        .iter_mut()
+        .find(|record| record.id == record_id)
+    else {
+        return false;
+    };
+    // currentRevision prevents delayed persistence work from overwriting newer progress.
+    // currentRevision 防止延迟的持久化工作覆盖较新进度。
+    let current_revision = record
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("request_revision"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default();
+    if incoming_revision <= current_revision {
+        return false;
+    }
+    // merged retains execution metadata while replacing request snapshot fields atomically.
+    // merged 保留执行元数据，同时原子替换请求快照字段。
+    let mut merged = match record.metadata.take() {
+        Some(serde_json::Value::Object(object)) => object,
+        _ => serde_json::Map::new(),
+    };
+    if let Some(serde_json::Value::Object(update)) = event.metadata.clone() {
+        for (key, value) in update {
+            merged.insert(key, value);
+        }
+    }
+    record.metadata = Some(serde_json::Value::Object(merged));
+    true
 }
 
 /// Appends one visible tool-result card for a tool-finish runtime event.

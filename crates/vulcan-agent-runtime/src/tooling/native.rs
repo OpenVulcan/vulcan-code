@@ -236,6 +236,9 @@ pub struct NativeToolDefinition {
     /// JSON Schema describing tool arguments.
     /// 描述工具参数的 JSON Schema。
     pub args_schema: Value,
+    /// Optional execution-only parser and preview capability for streamed requests.
+    /// 可选的流式请求仅执行期解析器与预览能力。
+    pub request_streaming: Option<vulcan_tools_manager::ToolRequestStreamingCapability>,
     /// Shared async handler that executes the tool.
     /// 执行该工具的共享异步处理器。
     handler: Arc<NativeToolHandler>,
@@ -358,9 +361,37 @@ fn build_native_tool_definition(
     args_schema: Value,
     handler: impl Fn(NativeToolExecutionRequest) -> NativeToolFuture + Send + Sync + 'static,
 ) -> Arc<NativeToolDefinition> {
+    build_native_tool_definition_with_request_streaming(descriptor, args_schema, None, handler)
+}
+
+/// Builds one native tool definition with an explicit host-owned request-streaming capability.
+/// 使用显式宿主自有请求流能力构建单个原生工具定义。
+///
+/// # Parameters
+/// 参数
+/// `descriptor` is the stable tool identity and AI-visible description.
+/// `descriptor` 是稳定工具身份与 AI 可见描述。
+/// `args_schema` is the exact JSON Schema exposed to providers.
+/// `args_schema` 是暴露给 Provider 的精确 JSON Schema。
+/// `request_streaming` is the optional execution-only parser and preview capability.
+/// `request_streaming` 是可选的仅执行期解析器与预览能力。
+/// `handler` is the authoritative complete-request execution function.
+/// `handler` 是权威完整请求执行函数。
+///
+/// # Returns
+/// 返回值
+/// A shared immutable native tool definition.
+/// 返回共享不可变原生工具定义。
+fn build_native_tool_definition_with_request_streaming(
+    descriptor: NativeToolDescriptor,
+    args_schema: Value,
+    request_streaming: Option<vulcan_tools_manager::ToolRequestStreamingCapability>,
+    handler: impl Fn(NativeToolExecutionRequest) -> NativeToolFuture + Send + Sync + 'static,
+) -> Arc<NativeToolDefinition> {
     Arc::new(NativeToolDefinition {
         descriptor,
         args_schema,
+        request_streaming,
         handler: Arc::new(handler),
     })
 }

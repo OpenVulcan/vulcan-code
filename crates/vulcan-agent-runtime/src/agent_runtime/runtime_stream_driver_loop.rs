@@ -22,6 +22,10 @@ use std::time::Duration;
 /// 面向工作台的流式增量刷新节奏，用于避免每个 Provider token 都触发整窗重绘。
 const RUNTIME_STREAM_WORKBENCH_DELTA_FLUSH_INTERVAL: Duration = Duration::from_millis(50);
 
+/// Maximum post-provider window reserved for projecting final ready-request token estimates.
+/// Provider 结束后为投影已就绪请求最终 Token 估算保留的最长窗口。
+const RUNTIME_STREAM_FINAL_TOOL_REQUEST_TOKEN_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Accumulates adjacent visible stream deltas while preserving non-delta event ordering.
 /// 在保留非增量事件顺序的同时，合并相邻的可见流式增量。
 #[derive(Default)]
@@ -172,19 +176,31 @@ pub(crate) fn drive_runtime_stream_provider_loop(
             tokio::time::Instant::now() + RUNTIME_STREAM_WORKBENCH_DELTA_FLUSH_INTERVAL;
 
         loop {
-            let item = if delta_coalescer.is_empty() {
-                provider_stream.next().await
+            let token_poll_at = tokio::time::Instant::now()
+                + RUNTIME_STREAM_WORKBENCH_DELTA_FLUSH_INTERVAL;
+            let wait_deadline = if delta_coalescer.is_empty() {
+                token_poll_at
             } else {
-                match tokio::time::timeout_at(next_delta_flush_at, provider_stream.next()).await {
-                    Ok(item) => item,
-                    Err(_) => {
+                std::cmp::min(token_poll_at, next_delta_flush_at)
+            };
+            let item = match tokio::time::timeout_at(wait_deadline, provider_stream.next()).await {
+                Ok(item) => item,
+                Err(_) => {
+                    for event in stream_state.drain_tool_request_token_progress(session_id) {
+                        for flushed_event in delta_coalescer.push_event(event) {
+                            yield flushed_event;
+                        }
+                    }
+                    if !delta_coalescer.is_empty()
+                        && tokio::time::Instant::now() >= next_delta_flush_at
+                    {
                         for event in delta_coalescer.flush() {
                             yield event;
                         }
                         next_delta_flush_at = tokio::time::Instant::now()
                             + RUNTIME_STREAM_WORKBENCH_DELTA_FLUSH_INTERVAL;
-                        continue;
                     }
+                    continue;
                 }
             };
 
@@ -221,6 +237,29 @@ pub(crate) fn drive_runtime_stream_provider_loop(
             }
         }
 
+        // finalTokenDrainDeadline prevents a failed background worker from blocking terminal delivery forever.
+        // finalTokenDrainDeadline 防止后台 worker 失效时永久阻塞终态投递。
+        let final_token_drain_deadline = tokio::time::Instant::now()
+            + RUNTIME_STREAM_FINAL_TOOL_REQUEST_TOKEN_DRAIN_TIMEOUT;
+        while stream_state.has_pending_ready_tool_request_token_progress()
+            && tokio::time::Instant::now() < final_token_drain_deadline
+        {
+            for event in stream_state.drain_tool_request_token_progress(session_id) {
+                for flushed_event in delta_coalescer.push_event(event) {
+                    yield flushed_event;
+                }
+            }
+            if stream_state.has_pending_ready_tool_request_token_progress() {
+                tokio::time::sleep(RUNTIME_STREAM_WORKBENCH_DELTA_FLUSH_INTERVAL).await;
+            }
+        }
+        // One last non-blocking drain catches a result that arrived at the deadline boundary.
+        // 最后一次非阻塞排空用于接收恰好在截止边界到达的结果。
+        for event in stream_state.drain_tool_request_token_progress(session_id) {
+            for flushed_event in delta_coalescer.push_event(event) {
+                yield flushed_event;
+            }
+        }
         for event in delta_coalescer.flush() {
             yield event;
         }

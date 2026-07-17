@@ -516,6 +516,7 @@ pub(crate) fn refresh_settings_projection_locked(
     guard.workbench.reasoning_selection = reasoning_selection(provider_configuration);
     guard.workbench.thinking_display_mode = workbench_thinking_display_mode(provider_configuration);
     guard.workbench.git_commit = git_commit_settings(provider_configuration);
+    guard.workbench.provider_retry = provider_retry_settings(provider_configuration);
     guard.workbench.host_tools = host_tools_settings(provider_configuration);
     let ai_capability_model_capabilities =
         active_provider_configuration_model_capabilities(provider_configuration);

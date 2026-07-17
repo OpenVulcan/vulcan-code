@@ -3,6 +3,7 @@
 
 use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPromptPurpose};
 use crate::model::SessionId;
+use crate::provider_config::ProviderApiFamily;
 use serde::Serialize;
 use serde_json::{Value, to_value};
 use time::{OffsetDateTime, UtcOffset};
@@ -44,6 +45,9 @@ pub(crate) struct ProviderRequestTelemetryContext {
     /// Current model display name from the runtime blueprint.
     /// 来自运行时蓝图的当前模型显示名称。
     model_name: String,
+    /// Canonical API family that defines whether Provider input already excludes cached tokens.
+    /// 定义 Provider 输入是否已经排除缓存 Token 的规范接口族。
+    api_family: ProviderApiFamily,
     /// Stable owner category derived from explicit preparation fields.
     /// 从显式执行准备字段派生的稳定归属类别。
     owner_kind: &'static str,
@@ -86,6 +90,7 @@ impl ProviderRequestTelemetryContext {
             workspace_id: preparation.workspace_path.clone(),
             provider_name: preparation.model_blueprint.provider_name.clone(),
             model_name: preparation.model_blueprint.model_name.clone(),
+            api_family: preparation.model_blueprint.api_family(),
             owner_kind,
             owner_id: preparation.agent_id.clone(),
             owner_name: preparation.agent_name.clone(),
@@ -275,6 +280,7 @@ impl ProviderRequestTelemetryCancellationTracker {
         );
         for token_field in [
             "input_tokens",
+            "uncached_input_tokens",
             "output_tokens",
             "reasoning_tokens",
             "total_tokens",
@@ -703,6 +709,9 @@ fn build_completed_event(
     // normalizedUsage uses provider facts when available and zeros only for absent numeric facts.
     // normalizedUsage 在可用时使用 Provider 事实，仅对缺失数字事实使用零值。
     let normalized_usage = usage.cloned().unwrap_or_default();
+    // uncachedInputTokens converts protocol-specific input semantics into the statistics contract once at the telemetry boundary.
+    // uncachedInputTokens 在遥测边界一次性把协议专属输入语义转换为统计契约。
+    let uncached_input_tokens = uncached_input_tokens(context.api_family, &normalized_usage);
     ProviderRequestTelemetryEvent {
         kind: ProviderRequestTelemetryEventKind::Completed,
         session_id: context.session_id,
@@ -721,6 +730,7 @@ fn build_completed_event(
                 .map(|value| elapsed_millis(request.started_at_ms, value)),
             duration_ms: elapsed_millis(request.started_at_ms, completed_at_ms),
             input_tokens: normalized_usage.input_tokens.unwrap_or(0),
+            uncached_input_tokens,
             output_tokens: normalized_usage.output_tokens.unwrap_or(0),
             reasoning_tokens: normalized_usage.reasoning_tokens.unwrap_or(0),
             total_tokens: normalized_usage.total_tokens.unwrap_or(0),
@@ -732,6 +742,31 @@ fn build_completed_event(
             calendar_date: &request.calendar_date,
             timezone_offset_minutes: request.timezone_offset_minutes,
         }),
+    }
+}
+
+/// Converts Provider-specific input-token semantics into a non-cached input count for statistics consumers.
+/// 将 Provider 专属输入 Token 语义转换为供统计消费方使用的非缓存输入量。
+///
+/// `api_family` identifies the exact wire-protocol usage contract.
+/// `api_family` 标识精确的线协议用量契约。
+/// `usage` contains the final normalized Provider usage snapshot.
+/// `usage` 包含最终规范化 Provider 用量快照。
+/// Returns the non-cached input-token count without changing the Provider-reported fields.
+/// 返回非缓存输入 Token 数量，且不修改 Provider 原始报告字段。
+fn uncached_input_tokens(api_family: ProviderApiFamily, usage: &ProviderUsageSnapshot) -> usize {
+    // inputTokens preserves the Provider-reported input value before statistics normalization.
+    // inputTokens 在统计归一化前保留 Provider 报告的输入值。
+    let input_tokens = usage.input_tokens.unwrap_or_default();
+    match api_family {
+        ProviderApiFamily::OpenAiResponses
+        | ProviderApiFamily::OpenAiChatCompatible
+        | ProviderApiFamily::GoogleGeminiGenerateContent => {
+            input_tokens.saturating_sub(usage.cached_input_tokens.unwrap_or_default())
+        }
+        ProviderApiFamily::AnthropicMessages
+        | ProviderApiFamily::CohereChat
+        | ProviderApiFamily::BedrockConverse => input_tokens,
     }
 }
 
@@ -835,6 +870,9 @@ struct CompletedPayload<'a> {
     /// Provider-reported input tokens or zero when absent.
     /// Provider 报告的输入 Token，缺失时为零。
     input_tokens: usize,
+    /// Protocol-normalized non-cached input tokens.
+    /// 按协议规范化后的非缓存输入 Token。
+    uncached_input_tokens: usize,
     /// Provider-reported output tokens or zero when absent.
     /// Provider 报告的输出 Token，缺失时为零。
     output_tokens: usize,
@@ -886,8 +924,8 @@ struct RetryingPayload<'a> {
     /// One-based retry number.
     /// 从一开始的重试序号。
     retry_number: u32,
-    /// Configured retry ceiling.
-    /// 配置的重试上限。
+    /// Configured retry ceiling, or zero for cancellation-bound rate-limit retries.
+    /// 已配置的重试上限；仅由取消终止的限流重试为零。
     max_retries: u32,
     /// Retry wait duration.
     /// 重试等待时长。
@@ -969,6 +1007,7 @@ mod tests {
             workspace_id: String::from("workspace-1"),
             provider_name: String::from("Provider Name"),
             model_name: String::from("Model Name"),
+            api_family: ProviderApiFamily::AnthropicMessages,
             owner_kind: "main_agent",
             owner_id: String::from("agent-1"),
             owner_name: String::from("Agent One"),
@@ -1022,7 +1061,39 @@ mod tests {
         assert_eq!(completed.kind, ProviderRequestTelemetryEventKind::Completed);
         assert_eq!(completed.payload["status"], "succeeded");
         assert_eq!(completed.payload["total_tokens"], 17);
+        assert_eq!(completed.payload["uncached_input_tokens"], 10);
         assert!(tracker.complete_success(None).is_none());
+    }
+
+    /// Verifies Anthropic already-separated input remains non-cached while OpenAI total prompt input subtracts cache hits.
+    /// 验证 Anthropic 已分离输入保持为非缓存输入，而 OpenAI 提示词总输入会扣除缓存命中。
+    #[test]
+    fn normalizes_uncached_input_by_provider_api_family() {
+        // anthropicUsage models Kimi's Anthropic-compatible separated cache accounting.
+        // anthropicUsage 模拟 Kimi Anthropic 兼容接口的缓存分离计量。
+        let anthropic_usage = ProviderUsageSnapshot {
+            input_tokens: Some(2_509),
+            output_tokens: Some(330),
+            reasoning_tokens: None,
+            total_tokens: Some(66_839),
+            cached_input_tokens: Some(64_000),
+            cache_creation_input_tokens: Some(0),
+        };
+        // openaiUsage models an OpenAI-compatible prompt total that includes cached tokens.
+        // openaiUsage 模拟包含缓存 Token 的 OpenAI 兼容提示词总量。
+        let openai_usage = ProviderUsageSnapshot {
+            input_tokens: Some(66_509),
+            ..anthropic_usage.clone()
+        };
+
+        assert_eq!(
+            uncached_input_tokens(ProviderApiFamily::AnthropicMessages, &anthropic_usage),
+            2_509
+        );
+        assert_eq!(
+            uncached_input_tokens(ProviderApiFamily::OpenAiChatCompatible, &openai_usage),
+            2_509
+        );
     }
 
     /// Verifies retry transitions close the failed request before publishing retry metadata.

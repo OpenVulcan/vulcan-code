@@ -149,6 +149,9 @@ where
     let mut assistant_text = String::new();
     let mut assistant_reasoning = String::new();
     let mut pending_tool_calls: HashMap<usize, CompatibleAccumulatedToolCall> = HashMap::new();
+    // activeToolRequestStreams maps provider tool slots to visible request stream identities.
+    // activeToolRequestStreams 将 Provider 工具槽位映射到可见请求流身份。
+    let mut active_tool_request_streams = HashMap::<usize, String>::new();
     let mut finalized_tool_calls = Vec::new();
     let mut final_usage = None::<CoreProviderUsageSnapshot>;
     let mut provider_visible_assistant_fields = JsonMap::new();
@@ -191,11 +194,16 @@ where
             );
         }
 
-        process_compatible_tool_call_chunks(
+        // toolRequestFragments expose recognized requests before their arguments finish.
+        // toolRequestFragments 在参数完成前暴露已识别的请求。
+        let tool_request_fragments = process_compatible_tool_call_chunks(
             &mut pending_tool_calls,
             &mut finalized_tool_calls,
+            &mut active_tool_request_streams,
+            provider_tool_definitions,
             choice.tool_calls,
         );
+        forward_openai_compatible_tool_request_fragments(live_sender, tool_request_fragments);
 
         if let Some(reasoning) = choice.reasoning {
             saw_reasoning_field = true;
@@ -222,11 +230,25 @@ where
         }
 
         if choice.finish_reason == CompatibleFinishReason::ToolCalls {
-            flush_pending_compatible_tool_calls(&mut pending_tool_calls, &mut finalized_tool_calls);
+            // completedFragments close every visible request before canonical tool dispatch.
+            // completedFragments 在规范工具调度前关闭每条可见请求。
+            let completed_fragments = flush_pending_compatible_tool_calls(
+                &mut pending_tool_calls,
+                &mut finalized_tool_calls,
+                &mut active_tool_request_streams,
+            );
+            forward_openai_compatible_tool_request_fragments(live_sender, completed_fragments);
         }
     }
 
-    flush_pending_compatible_tool_calls(&mut pending_tool_calls, &mut finalized_tool_calls);
+    // completedFragments close streams when a provider omits an explicit tool finish reason.
+    // completedFragments 在 Provider 省略显式工具结束原因时关闭请求流。
+    let completed_fragments = flush_pending_compatible_tool_calls(
+        &mut pending_tool_calls,
+        &mut finalized_tool_calls,
+        &mut active_tool_request_streams,
+    );
+    forward_openai_compatible_tool_request_fragments(live_sender, completed_fragments);
 
     let provider_message_state = build_openai_compatible_provider_message_state(
         &assistant_text,
@@ -260,6 +282,17 @@ where
     );
     response.provider_message_state = provider_message_state;
     Ok(response)
+}
+
+/// Forwards normalized OpenAI-compatible tool request fragments into the shared runtime stream.
+/// 将规范化 OpenAI 兼容工具请求碎片转发到共享运行时流。
+fn forward_openai_compatible_tool_request_fragments(
+    live_sender: &ProviderLiveDeltaSender,
+    fragments: Vec<ToolRequestFragment>,
+) {
+    for fragment in fragments {
+        let _ = live_sender.send(Ok(ProviderStreamDelta::ToolRequestFragment(fragment)));
+    }
 }
 
 /// Builds one direct OpenAI-compatible HTTP client with merged authorization and caller-supplied request headers.

@@ -283,6 +283,19 @@ fn runtime_event_phase_transition(
     event_kind: RuntimeEventKind,
 ) -> Option<RuntimeEventPhaseTransition> {
     match event_kind {
+        RuntimeEventKind::ToolRequestStarted
+        | RuntimeEventKind::ToolRequestProgress
+        | RuntimeEventKind::ToolRequestPreviewUpdated
+        | RuntimeEventKind::ToolRequestReady => Some(RuntimeEventPhaseTransition {
+            phase: SessionRunPhase::ToolCalling,
+            failure_context: "apply tool-request generation phase failed",
+        }),
+        RuntimeEventKind::ToolRequestInvalid | RuntimeEventKind::ToolRequestAborted => {
+            Some(RuntimeEventPhaseTransition {
+                phase: SessionRunPhase::Requesting,
+                failure_context: "restore request phase after tool-request terminal event failed",
+            })
+        }
         RuntimeEventKind::ToolStarted => Some(RuntimeEventPhaseTransition {
             phase: SessionRunPhase::ToolRunning,
             failure_context: "apply tool phase failed",
@@ -314,6 +327,14 @@ mod tests {
     /// 此测试无返回值，并通过断言报告失败。
     #[test]
     fn tool_boundaries_define_session_phase_transitions() {
+        // Request generation must become visible before the executor receives complete arguments.
+        // 请求生成必须在执行器收到完整参数之前变为可见。
+        let request_started = runtime_event_phase_transition(RuntimeEventKind::ToolRequestStarted)
+            .expect("tool-request-started transition should exist");
+        // An aborted request must return the session to provider requesting.
+        // 已中止的请求必须让会话恢复到 Provider 请求阶段。
+        let request_aborted = runtime_event_phase_transition(RuntimeEventKind::ToolRequestAborted)
+            .expect("tool-request-aborted transition should exist");
         // The started transition must expose the tool-running phase.
         // 启动转换必须暴露工具运行阶段。
         let started = runtime_event_phase_transition(RuntimeEventKind::ToolStarted)
@@ -323,6 +344,8 @@ mod tests {
         let finished = runtime_event_phase_transition(RuntimeEventKind::ToolFinished)
             .expect("tool-finished transition should exist");
 
+        assert_eq!(request_started.phase, SessionRunPhase::ToolCalling);
+        assert_eq!(request_aborted.phase, SessionRunPhase::Requesting);
         assert_eq!(started.phase, SessionRunPhase::ToolRunning);
         assert_eq!(finished.phase, SessionRunPhase::Requesting);
     }

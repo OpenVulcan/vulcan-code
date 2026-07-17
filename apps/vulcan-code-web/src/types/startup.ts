@@ -11,6 +11,7 @@ export type MainAreaId = "chat" | "agent-skills" | "skills" | "agents" | "memory
 export type SettingsSubAreaId =
   | "model-providers"
   | "model-list"
+  | "provider-retry"
   | "ai-vendors"
   | "ai-web-search"
   | "ai-understand-image"

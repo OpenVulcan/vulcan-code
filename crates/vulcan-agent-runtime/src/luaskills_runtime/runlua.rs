@@ -298,6 +298,7 @@ pub fn build_runlua_tool_candidates(
             parameters_schema: runlua_args_schema(),
             ai_visible: true,
             plan_policy: VulcanPlanToolPolicy::Hidden,
+            request_streaming: None,
             invoke: Arc::new(move |arguments, _owner_session_id| {
                 // invocation_handle isolates one cloned long-lived runtime handle for this future.
                 // invocation_handle 为当前 Future 隔离一份克隆的长生命周期运行时句柄。
@@ -330,6 +331,7 @@ pub fn build_runlua_tool_candidates(
             parameters_schema: runlua_session_args_schema(),
             ai_visible: true,
             plan_policy: VulcanPlanToolPolicy::Hidden,
+            request_streaming: None,
             invoke: Arc::new(move |arguments, owner_session_id| {
                 // invocation_handle keeps the registry shared across every action call.
                 // invocation_handle 使归属注册表在所有动作调用之间保持共享。

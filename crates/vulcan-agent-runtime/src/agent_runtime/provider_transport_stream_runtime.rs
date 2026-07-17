@@ -20,11 +20,13 @@ use crate::agent_runtime::provider_transport_tool_context::PreparedHostToolRunti
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
 use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
 use crate::agent_runtime::task_runtime::{TaskRuntime, build_task_execution_handler};
+use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
 use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
 use crate::model::SessionId;
 use async_stream::stream;
 use reqwest::header::HeaderMap;
 use serde_json::json;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::AbortHandle;
@@ -132,6 +134,12 @@ where
         let controller_prompt = prompt.clone();
         let controller_task = tokio::spawn(async move {
             let mut completed_retries = 0u32;
+            // retrySnapshot advances to the controller's last committed state so later physical Provider requests can retry without replaying completed tools.
+            // retrySnapshot 推进到控制器最后提交的状态，使后续真实 Provider 请求可在不重放已完成工具的前提下重试。
+            let mut retry_snapshot = core_snapshot;
+            // retryResumesSeededInput prevents the original user prompt from being appended twice after resuming a committed snapshot.
+            // retryResumesSeededInput 防止从已提交快照恢复后再次追加原始用户提示词。
+            let mut retry_resumes_seeded_input = false;
             loop {
                 let (attempt_sender, mut attempt_receiver) =
                     unbounded_channel::<Result<ProviderStreamDelta, String>>();
@@ -139,7 +147,7 @@ where
                 // controller 通过流拒绝无效的重试快照，而不是在任务内部触发 panic。
                 let mut controller = match VulcanCoreController::new(
                     controller_config.clone(),
-                    core_snapshot.clone(),
+                    retry_snapshot.clone(),
                 ) {
                     Ok(controller) => controller,
                     Err(error) => {
@@ -176,6 +184,9 @@ where
                 };
                 let tool_policy = AllowAllToolPolicy;
                 let mut unsafe_delta_seen = false;
+                // activeToolRequestStreams tracks visible request drafts for attempt-scoped terminal cleanup.
+                // activeToolRequestStreams 跟踪可见请求草稿，用于按尝试执行终态清理。
+                let mut active_tool_request_streams = BTreeSet::<String>::new();
                 let attempt_result = {
                     let checkpoint_sender = attempt_sender.clone();
                     let prompt_intervention = prompt_intervention.clone();
@@ -205,7 +216,12 @@ where
                             })
                     };
                     let run_future = async {
-                        match turn_start_mode {
+                        let effective_turn_start_mode = if retry_resumes_seeded_input {
+                            ProviderTransportTurnStartMode::SeededProviderInput
+                        } else {
+                            turn_start_mode
+                        };
+                        match effective_turn_start_mode {
                             ProviderTransportTurnStartMode::UserPrompt => {
                                 controller.run_user_turn_streaming_with_checkpoints_and_interventions(
                                     &provider_adapter,
@@ -235,7 +251,14 @@ where
                             maybe_item = attempt_receiver.recv() => {
                                 if let Some(item) = maybe_item {
                                     if let Ok(delta) = &item {
-                                        unsafe_delta_seen |= provider_delta_makes_retry_unsafe(delta);
+                                        observe_provider_request_retry_safety(
+                                            &mut unsafe_delta_seen,
+                                            delta,
+                                        );
+                                        observe_active_tool_request_streams(
+                                            &mut active_tool_request_streams,
+                                            delta,
+                                        );
                                     }
                                     let _ = task_sender.send(item);
                                 }
@@ -252,7 +275,11 @@ where
 
                 while let Ok(item) = attempt_receiver.try_recv() {
                     if let Ok(delta) = &item {
-                        unsafe_delta_seen |= provider_delta_makes_retry_unsafe(delta);
+                        observe_provider_request_retry_safety(&mut unsafe_delta_seen, delta);
+                        observe_active_tool_request_streams(
+                            &mut active_tool_request_streams,
+                            delta,
+                        );
                     }
                     let _ = task_sender.send(item);
                 }
@@ -266,6 +293,11 @@ where
 
                 match attempt_result {
                     Ok(_) => {
+                        abort_active_tool_request_streams(
+                            &task_sender,
+                            &mut active_tool_request_streams,
+                            "provider_stream_completed_without_request_terminal",
+                        );
                         let last_successful_provider_usage =
                             controller.last_successful_provider_usage().cloned();
                         // final_delta rejects an invalid successful snapshot instead of publishing corrupt terminal state.
@@ -283,11 +315,29 @@ where
                         break;
                     }
                     Err(error) => {
-                        if let Some(decision) =
-                            retry_policy.next_retry(&error, completed_retries, unsafe_delta_seen)
-                        {
-                            completed_retries += 1;
+                        // retryDecision is computed before request cleanup so superseded cards receive the exact retry terminal state.
+                        // retryDecision 会在请求清理前计算，使被替换卡片获得精确的重试终态。
+                        let retry_decision =
+                            retry_policy.next_retry(&error, completed_retries, unsafe_delta_seen);
+                        abort_active_tool_request_streams(
+                            &task_sender,
+                            &mut active_tool_request_streams,
+                            if retry_decision.is_some() {
+                                "provider_retry_superseded"
+                            } else {
+                                "provider_attempt_failed"
+                            },
+                        );
+                        if let Some(decision) = retry_decision {
+                            // retrySnapshot contains the user prompt, completed assistant/tool messages, and no failed Provider response.
+                            // retrySnapshot 包含用户提示词及已完成的助手/工具消息，但不包含失败的 Provider 响应。
+                            retry_snapshot = controller.snapshot().clone();
+                            retry_resumes_seeded_input = true;
+                            completed_retries = completed_retries.saturating_add(1);
                             let delay_ms = decision.delay.as_millis() as u64;
+                            // delaySeconds rounds sub-second waits upward for an honest user-facing countdown value.
+                            // delaySeconds 向上取整不足一秒的等待，以提供真实的用户可见倒计时数值。
+                            let delay_seconds = delay_ms.div_ceil(1_000);
                             // failedRequestDelta closes the exact physical request before the retry wait begins.
                             // failedRequestDelta 在重试等待开始前关闭精确的真实请求。
                             let failed_request_delta = ProviderStreamDelta::RequestFailed {
@@ -300,22 +350,36 @@ where
                             if task_sender.send(Ok(failed_request_delta)).is_err() {
                                 break;
                             }
-                            let retry_event = crate::agent_runtime::events::RuntimeEvent::new(
-                                crate::agent_runtime::events::RuntimeEventKind::Retrying,
-                                "Provider 自动重试",
+                            // retryDetail distinguishes count-limited transient retries from cancellation-bound rate-limit retries.
+                            // retryDetail 区分受次数限制的瞬态重试与仅由取消终止的限流重试。
+                            let retry_detail = if decision.unbounded {
                                 format!(
-                                    "{} 第 {}/{} 次重试将在 {} ms 后开始：{}",
+                                    "{} 遇到限流，已安排第 {} 次重试；{} 秒后重试（将持续重试，直到用户终止）。",
+                                    provider_label,
+                                    decision.retry_number,
+                                    delay_seconds,
+                                )
+                            } else {
+                                format!(
+                                    "{} 第 {}/{} 次重试将在 {} 秒后开始：{}",
                                     provider_label,
                                     decision.retry_number,
                                     decision.max_retries,
-                                    delay_ms,
-                                    decision.reason
-                                ),
+                                    delay_seconds,
+                                    decision.reason,
+                                )
+                            };
+                            let retry_event = crate::agent_runtime::events::RuntimeEvent::new(
+                                crate::agent_runtime::events::RuntimeEventKind::Retrying,
+                                "Provider 自动重试",
+                                retry_detail,
                             )
                             .with_metadata(Some(json!({
                                 "attempt": decision.retry_number,
                                 "max_retries": decision.max_retries,
+                                "unbounded": decision.unbounded,
                                 "delay_ms": delay_ms,
+                                "delay_seconds": delay_seconds,
                                 "reason": decision.reason,
                             })));
                             // Stop retrying when the host runtime consumer has already dropped this stream.
@@ -384,6 +448,98 @@ where
             ));
         }
     })
+}
+
+/// Updates retry safety at the boundary of each physical Provider request.
+/// 在每次真实 Provider 请求边界更新重试安全状态。
+///
+/// `unsafe_delta_seen` records whether the current physical request exposed non-replayable output.
+/// `unsafe_delta_seen` 记录当前真实请求是否已经暴露不可重放输出。
+/// `delta` is the next normalized Provider stream delta.
+/// `delta` 是下一条规范化 Provider 流增量。
+/// This function mutates the supplied flag and returns no value.
+/// 本函数修改传入标记且不返回值。
+fn observe_provider_request_retry_safety(
+    unsafe_delta_seen: &mut bool,
+    delta: &ProviderStreamDelta,
+) {
+    if matches!(delta, ProviderStreamDelta::RequestSnapshot(_)) {
+        *unsafe_delta_seen = false;
+        return;
+    }
+    if provider_delta_makes_retry_unsafe(delta) {
+        *unsafe_delta_seen = true;
+    }
+}
+
+/// Updates the attempt-scoped set of visible tool requests from one normalized provider delta.
+/// 根据一条规范化 Provider 增量更新尝试级可见工具请求集合。
+///
+/// # Parameters
+/// 参数
+/// `active_request_streams` owns request identifiers that have started but not reached a terminal fragment.
+/// `active_request_streams` 持有已开始但尚未到达终态碎片的请求标识。
+/// `delta` is the next normalized Provider stream change.
+/// `delta` 是下一条规范化 Provider 流变化。
+///
+/// # Returns
+/// 返回值
+/// This function mutates the supplied set and returns no value.
+/// 此函数修改传入集合，不返回值。
+fn observe_active_tool_request_streams(
+    active_request_streams: &mut BTreeSet<String>,
+    delta: &ProviderStreamDelta,
+) {
+    let ProviderStreamDelta::ToolRequestFragment(fragment) = delta else {
+        return;
+    };
+    match fragment {
+        ToolRequestFragment::Detected {
+            request_stream_id, ..
+        } => {
+            active_request_streams.insert(request_stream_id.clone());
+        }
+        ToolRequestFragment::Completed {
+            request_stream_id, ..
+        }
+        | ToolRequestFragment::Aborted {
+            request_stream_id, ..
+        } => {
+            active_request_streams.remove(request_stream_id);
+        }
+        ToolRequestFragment::ArgumentsDelta { .. } => {}
+    }
+}
+
+/// Emits deterministic abort fragments for every request left active by a completed or failed provider attempt.
+/// 为 Provider 尝试完成或失败后仍处于活动状态的每条请求发出确定性中止碎片。
+///
+/// # Parameters
+/// 参数
+/// `sender` is the outer stream channel observed by the runtime projection.
+/// `sender` 是运行时投影所观察的外层流通道。
+/// `active_request_streams` owns the sorted request identifiers requiring cleanup.
+/// `active_request_streams` 持有需要清理的已排序请求标识。
+/// `reason` is a stable non-content diagnostic reason.
+/// `reason` 是不含正文的稳定诊断原因。
+///
+/// # Returns
+/// 返回值
+/// This function drains the supplied set and returns no value.
+/// 此函数清空传入集合，不返回值。
+fn abort_active_tool_request_streams(
+    sender: &ProviderLiveDeltaSender,
+    active_request_streams: &mut BTreeSet<String>,
+    reason: &str,
+) {
+    for request_stream_id in std::mem::take(active_request_streams) {
+        let _ = sender.send(Ok(ProviderStreamDelta::ToolRequestFragment(
+            ToolRequestFragment::Aborted {
+                request_stream_id,
+                reason: reason.to_string(),
+            },
+        )));
+    }
 }
 
 /// Executes one host-controlled provider stream from fully prepared runtime inputs, letting concrete entrypoints focus only on adapter-specific launch fields.
@@ -467,6 +623,48 @@ mod tests {
 
     use super::*;
     use tokio::sync::Notify;
+
+    /// Builds one minimal request snapshot used to verify physical-request retry boundaries.
+    /// 构建一份用于验证真实请求重试边界的最小请求快照。
+    ///
+    /// This function accepts no parameters and returns a valid empty request snapshot.
+    /// 本函数不接收参数，并返回一份有效的空请求快照。
+    fn test_request_snapshot() -> vulcan_core::types::ProviderRequestSnapshot {
+        vulcan_core::types::ProviderRequestSnapshot {
+            provider_id: String::from("test-provider"),
+            model_id: String::from("test-model"),
+            system_prompt: String::new(),
+            prompt_layers: vulcan_core::types::ProviderPromptLayers::default(),
+            prompt: String::from("test prompt"),
+            history: Vec::new(),
+            temperature: None,
+            max_turns: 1,
+            tool_schemas: Vec::new(),
+            additional_params: None,
+            request_headers: None,
+            continuation: vulcan_core::types::ProviderContinuation::default(),
+        }
+    }
+
+    /// Verifies a new physical Provider request clears output emitted by earlier successful requests from the retry-safety decision.
+    /// 验证新的真实 Provider 请求会从重试安全判定中清除更早成功请求已经发出的输出。
+    #[test]
+    fn physical_request_snapshot_resets_retry_safety() {
+        // unsafeDeltaSeen models visible output emitted by one earlier successful physical request.
+        // unsafeDeltaSeen 模拟更早一次成功真实请求已经发出的可见输出。
+        let mut unsafe_delta_seen = false;
+        observe_provider_request_retry_safety(
+            &mut unsafe_delta_seen,
+            &ProviderStreamDelta::Output(String::from("earlier response")),
+        );
+        assert!(unsafe_delta_seen);
+
+        observe_provider_request_retry_safety(
+            &mut unsafe_delta_seen,
+            &ProviderStreamDelta::RequestSnapshot(test_request_snapshot()),
+        );
+        assert!(!unsafe_delta_seen);
+    }
 
     /// Verifies dropping the stream-scoped guard cancels its still-running controller task.
     /// 验证丢弃流作用域守卫会取消其仍在运行的控制器任务。

@@ -25,6 +25,9 @@ import {
   toolExecutionIdentifier,
   toolExecutionMediaAttachments,
   toolExecutionName,
+  toolRequestProgress,
+  toolRequestProgressStateLabel,
+  toolRequestStreamMetricsLabel,
   toolExecutionSubagentLabel,
   toolExecutionSummary,
 } from "./conversation-tool-execution-model";
@@ -105,6 +108,14 @@ export function ToolExecutionBlock(props: {
   const subagentTaskId = props.blocks.find((block) => block.subagentTaskId)?.subagentTaskId ?? null;
   const identifier = toolExecutionIdentifier(props.blocks);
   const errorPreview = toolExecutionErrorPreview(props.blocks);
+  const requestProgress = toolRequestProgress(props.blocks);
+  // requestCardProgress keeps request formation distinct from actual tool execution while reusing the resolved card.
+  // requestCardProgress 在复用既有卡片的同时，保持请求构造与真实工具执行语义分离。
+  const requestCardProgress = requestProgress ? {
+    metricsLabel: toolRequestStreamMetricsLabel(requestProgress, t),
+    revision: requestProgress.revision,
+    statusLabel: toolRequestProgressStateLabel(requestProgress, t),
+  } : null;
   const detailRefFields = toolExecutionDetailRef(props.blocks);
   const detailRef = props.conversationId && (detailRefFields || primaryBlock.toolCallId)
     ? { sessionId: props.conversationId, ...(detailRefFields ?? {}), ...(primaryBlock.toolCallId ? { toolCallId: primaryBlock.toolCallId } : {}) }
@@ -155,6 +166,7 @@ export function ToolExecutionBlock(props: {
         expanded={props.expandedToolPresentationIds.has(presentation.id)}
         expandedToolPresentationIds={props.expandedToolPresentationIds}
         presentation={presentation}
+        requestProgress={requestCardProgress}
         onExpandedChange={props.onToolPresentationExpandedChange}
         onLoadToolDetail={props.onLoadToolDetail}
       />
@@ -196,7 +208,7 @@ export function ToolExecutionBlock(props: {
   return (
     <div className="tool-execution-stack">
       <button
-        className={cn("tool-execution-row", displayState === "running" && "running")}
+        className={cn("tool-execution-row", (displayState === "running" || requestProgress) && "running")}
         onClick={openDetail}
         type="button"
       >

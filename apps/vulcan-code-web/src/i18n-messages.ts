@@ -180,6 +180,9 @@ export type TranslationKey =
   | "conversation.metadata.error"
   | "conversation.metadata.result"
   | "conversation.metadata.returned"
+  | "conversation.toolRequest.receiving"
+  | "conversation.toolRequest.ready"
+  | "conversation.toolRequest.characters"
   | "conversation.stats.providerCalls"
   | "conversation.stats.toolCalls"
   | "conversation.stats.totalTokens"
@@ -1039,6 +1042,7 @@ export type TranslationKey =
   | "planArtifact.suggest"
   | "runtime.memoryRecall"
   | "runtime.requesting"
+  | "runtime.toolCalling"
   | "runtime.thinking"
   | "runtime.thinkingOverlayHint"
   | "settings.general"
@@ -1056,6 +1060,7 @@ export type TranslationKey =
   | "settings.group.aiCapabilities"
   | "settings.modelProviders"
   | "settings.modelList"
+  | "settings.providerRetry"
   | "settings.aiVendors"
   | "settings.aiWebSearch"
   | "settings.aiUnderstandImage"
@@ -1074,6 +1079,7 @@ export type TranslationKey =
   | "settings.archivedRestore"
   | "settings.modelProviders.description"
   | "settings.modelList.description"
+  | "settings.providerRetry.description"
   | "settings.aiVendors.description"
   | "settings.aiWebSearch.description"
   | "settings.aiUnderstandImage.description"
@@ -1450,7 +1456,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.action.forkInProgressMessage": "正在复制会话并打开新分叉，请稍候。",
     "conversation.forkSource.label": "从对话中派生",
     "conversation.forkSource.missing": "原会话已经不存在",
-    "conversation.block.toolCall": "工具调用",
+    "conversation.block.toolCall": "调用工具",
     "conversation.block.toolResult": "工具返回",
     "conversation.block.command": "命令会话",
     "conversation.block.thinking": "思考过程",
@@ -1464,6 +1470,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.metadata.error": "错误",
     "conversation.metadata.result": "结果",
     "conversation.metadata.returned": "已返回",
+    "conversation.toolRequest.receiving": "正在接收数据",
+    "conversation.toolRequest.ready": "数据接收完成",
+    "conversation.toolRequest.characters": "个字符",
     "conversation.stats.providerCalls": "{count} 次调用",
     "conversation.stats.toolCalls": "{count} 个工具",
     "conversation.stats.totalTokens": "{count} tokens",
@@ -2323,6 +2332,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "planArtifact.suggest": "补充计划内容",
     "runtime.memoryRecall": "✨ 正在记忆召回",
     "runtime.requesting": "✨ 正在请求",
+    "runtime.toolCalling": "🔧 正在构造工具请求",
     "runtime.thinking": "✨ 正在思考",
     "runtime.thinkingOverlayHint": "模型正在流式输出思考过程",
     "settings.general": "通用设置",
@@ -2340,6 +2350,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.group.aiCapabilities": "AI 能力",
     "settings.modelProviders": "模型供应商",
     "settings.modelList": "模型列表",
+    "settings.providerRetry": "请求重试",
     "settings.aiVendors": "能力供应商",
     "settings.aiWebSearch": "网页搜索",
     "settings.aiUnderstandImage": "图片理解",
@@ -2358,6 +2369,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.archivedRestore": "归档恢复",
     "settings.modelProviders.description": "对话模型供应商、当前模型和已启用模型状态。",
     "settings.modelList.description": "按供应商查看已启用模型，并核对当前工作台模型。",
+    "settings.providerRetry.description": "配置普通错误与 429 限流的重试次数、等待间隔和递增规则。",
     "settings.aiVendors.description": "多个语义 AI 工具共用的能力供应商与路由目标。",
     "settings.aiWebSearch.description": "网页搜索能力的启用状态与可用目标。",
     "settings.aiUnderstandImage.description": "图片理解能力的启用状态与可用目标。",
@@ -2731,7 +2743,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.action.forkInProgressMessage": "Copying the conversation and opening the new fork. Please wait.",
     "conversation.forkSource.label": "Derived from conversation",
     "conversation.forkSource.missing": "The original conversation no longer exists",
-    "conversation.block.toolCall": "Tool call",
+    "conversation.block.toolCall": "Call tool",
     "conversation.block.toolResult": "Tool result",
     "conversation.block.command": "Command session",
     "conversation.block.thinking": "Thinking process",
@@ -2745,6 +2757,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.metadata.error": "Error",
     "conversation.metadata.result": "Result",
     "conversation.metadata.returned": "Returned",
+    "conversation.toolRequest.receiving": "Receiving data",
+    "conversation.toolRequest.ready": "Data received",
+    "conversation.toolRequest.characters": "characters",
     "conversation.stats.providerCalls": "{count} calls",
     "conversation.stats.toolCalls": "{count} tools",
     "conversation.stats.totalTokens": "{count} tokens",
@@ -3604,6 +3619,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "planArtifact.suggest": "Send plan note",
     "runtime.memoryRecall": "✨ Recalling memory",
     "runtime.requesting": "✨ Requesting",
+    "runtime.toolCalling": "🔧 Building tool request",
     "runtime.thinking": "✨ Thinking",
     "runtime.thinkingOverlayHint": "The model is streaming its thinking process",
     "settings.general": "General",
@@ -3621,6 +3637,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.group.aiCapabilities": "AI capabilities",
     "settings.modelProviders": "Model providers",
     "settings.modelList": "Model list",
+    "settings.providerRetry": "Request retry",
     "settings.aiVendors": "Capability vendors",
     "settings.aiWebSearch": "Web search",
     "settings.aiUnderstandImage": "Image understanding",
@@ -3639,6 +3656,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.archivedRestore": "Archived restore",
     "settings.modelProviders.description": "Chat model providers, current model, and enabled model status.",
     "settings.modelList.description": "Review enabled models by provider and the active workbench model.",
+    "settings.providerRetry.description": "Configure retry counts, wait intervals, and backoff rules for ordinary failures and 429 rate limits.",
     "settings.aiVendors.description": "Capability vendors and route targets shared by semantic AI tools.",
     "settings.aiWebSearch.description": "Web-search capability state and available targets.",
     "settings.aiUnderstandImage.description": "Image-understanding capability state and available targets.",

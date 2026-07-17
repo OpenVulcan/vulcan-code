@@ -268,6 +268,9 @@ impl VulcanCoreController {
         ) || matches!(
             self.snapshot.messages.last().map(|message| &message.payload),
             Some(ConversationPayload::AgentMessage { payload, .. }) if !payload.trim().is_empty()
+        ) || matches!(
+            self.snapshot.messages.last().map(|message| &message.payload),
+            Some(ConversationPayload::ToolResult { text, .. }) if !text.trim().is_empty()
         );
         if has_seeded_provider_input {
             return Ok(());

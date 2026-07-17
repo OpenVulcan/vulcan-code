@@ -30,16 +30,12 @@ use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 /// 未配置显式最大轮次覆盖时使用的安全运行时默认轮次预算。
 pub(crate) const DEFAULT_RUNTIME_MAX_TURNS_LIMIT: usize = usize::MAX - 1;
 
-/// Resolves one effective max-turn budget for the host-controlled provider dispatch path.
-/// 为宿主控制的 Provider 分发路径解析一份生效中的最大轮次预算。
+/// Keeps the host-controlled provider dispatch loop unlimited for every agent configuration.
+/// 为所有智能体配置保持宿主控制 Provider 分发循环无限。
 pub(crate) fn resolve_runtime_default_max_turns_limit(
-    active_agent: Option<&RuntimeAgentDefinition>,
+    _active_agent: Option<&RuntimeAgentDefinition>,
 ) -> usize {
-    active_agent
-        .and_then(|agent| agent.max_turns)
-        .filter(|value| *value > 0)
-        .map(|value| value as usize)
-        .unwrap_or(DEFAULT_RUNTIME_MAX_TURNS_LIMIT)
+    DEFAULT_RUNTIME_MAX_TURNS_LIMIT
 }
 
 /// Executes one provider prompt against the currently selected runtime family and returns a delta stream.
@@ -150,10 +146,9 @@ fn execute_provider_prompt_stream_with_capture_mode(
         .or(preparation.temperature)
         .map(|value| value.clamp(0.0, 2.0) as f64)
         .filter(|_| preparation.model_blueprint.supports_temperature());
-    let max_turns = preparation
-        .prompt_purpose
-        .max_turns_override()
-        .unwrap_or_else(|| resolve_runtime_default_max_turns_limit(active_agent));
+    // maxTurns remains unlimited so only the model's no-tool response ends the provider loop.
+    // maxTurns 保持无限，因此只有模型返回无工具调用的响应才会结束 Provider 循环。
+    let max_turns = resolve_runtime_default_max_turns_limit(active_agent);
     let model_id = preparation.model_blueprint.model_id.as_str();
     let base_url = preparation.model_blueprint.base_url.as_deref();
     let request_headers = match build_provider_request_headers(&preparation.model_blueprint) {

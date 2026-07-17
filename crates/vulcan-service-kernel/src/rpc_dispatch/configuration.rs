@@ -17,6 +17,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_remove_provider_configuration",
     "service_save_provider_enabled_models",
     "service_save_provider_model_override",
+    "service_save_provider_retry_settings",
     "service_save_git_commit_settings",
     "service_generate_git_commit_message",
     "service_run_git_commit_action",
@@ -116,6 +117,14 @@ pub(super) async fn dispatch(
         ),
         "service_save_provider_model_override" => rpc_json_result(
             service_save_provider_model_override(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_save_provider_retry_settings" => rpc_json_result(
+            service_save_provider_retry_settings(
                 app,
                 state,
                 rpc_required_param(params, "request")?,

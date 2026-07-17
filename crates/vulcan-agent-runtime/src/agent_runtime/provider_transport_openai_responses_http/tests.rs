@@ -1,11 +1,19 @@
 use super::{
-    build_openai_responses_request_payload, build_openai_responses_turn_response,
+    append_openai_responses_tool_request_delta, build_openai_responses_request_payload,
+    build_openai_responses_turn_response, complete_openai_responses_tool_request_from_done_event,
+    complete_openai_responses_tool_request_from_output_item,
+    start_openai_responses_tool_request_from_output_item,
     synthesize_openai_responses_fallback_response,
 };
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
+use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
+use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
 use serde_json::json;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    collections::HashMap,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use vulcan_core::types::{
     ConversationAttachment, ConversationAttachmentKind,
     ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
@@ -493,6 +501,182 @@ fn fallback_response_rebuilds_delta_only_output() {
             .and_then(|continuation| continuation.last_provider_message_id.as_deref()),
         Some("resp_delta_only")
     );
+}
+
+/// Verifies Responses added, argument delta, and done events emit one request lifecycle without duplicate completion.
+/// 验证 Responses 的 added、参数增量与 done 事件只发出一次请求生命周期且不会重复完成。
+#[test]
+fn responses_function_argument_events_emit_one_correlated_request_lifecycle() {
+    // live channel captures exact provider-neutral request fragments in send order.
+    // live 通道按发送顺序捕获精确的 Provider 中立请求碎片。
+    let (live_sender, mut live_receiver) = tokio::sync::mpsc::unbounded_channel();
+    let provider_tools = vec![ProviderToolDefinition {
+        name: String::from("submit_plan"),
+        description: String::from("Submit a plan"),
+        parameters: json!({ "type": "object" }),
+    }];
+    let mut pending = HashMap::new();
+    start_openai_responses_tool_request_from_output_item(
+        &live_sender,
+        &provider_tools,
+        &json!({
+            "output_index": 2,
+            "item": {
+                "type": "function_call",
+                "id": "fc_2",
+                "call_id": "call_2",
+                "name": "submit_plan",
+                "arguments": ""
+            }
+        }),
+        &mut pending,
+    );
+    append_openai_responses_tool_request_delta(
+        &live_sender,
+        &json!({
+            "output_index": 2,
+            "item_id": "fc_2",
+            "delta": "{\"name\":\"demo\"}"
+        }),
+        &mut pending,
+    );
+    complete_openai_responses_tool_request_from_done_event(
+        &live_sender,
+        &provider_tools,
+        &json!({
+            "output_index": 2,
+            "item_id": "fc_2",
+            "name": "submit_plan",
+            "arguments": "{\"name\":\"demo\"}"
+        }),
+        &mut pending,
+    );
+    // A later output-item completion must be a no-op after the dedicated done event closed the request.
+    // 专用 done 事件闭合请求后，稍后的 output-item 完成必须保持无操作。
+    complete_openai_responses_tool_request_from_output_item(
+        &live_sender,
+        &json!({
+            "output_index": 2,
+            "item": {
+                "type": "function_call",
+                "id": "fc_2",
+                "call_id": "call_2",
+                "name": "submit_plan",
+                "arguments": "{\"name\":\"demo\"}"
+            }
+        }),
+        &mut pending,
+    );
+
+    let fragments = std::iter::from_fn(|| live_receiver.try_recv().ok())
+        .map(|delta| delta.expect("provider fragment should be successful"))
+        .collect::<Vec<_>>();
+    assert_eq!(fragments.len(), 3);
+    assert!(matches!(
+        &fragments[0],
+        ProviderStreamDelta::ToolRequestFragment(ToolRequestFragment::Detected {
+            request_stream_id,
+            tool_call_id,
+            tool_name,
+            initial_arguments,
+            argument_assembler: Some(argument_assembler),
+        }) if request_stream_id == "fc_2"
+            && tool_call_id == "fc_2"
+            && tool_name == "submit_plan"
+            && initial_arguments.is_empty()
+            && argument_assembler.read(|arguments| arguments == "{\"name\":\"demo\"}")
+    ));
+    assert!(matches!(
+        &fragments[1],
+        ProviderStreamDelta::ToolRequestFragment(ToolRequestFragment::ArgumentsDelta {
+            request_stream_id,
+            delta,
+        }) if request_stream_id == "fc_2" && delta == "{\"name\":\"demo\"}"
+    ));
+    assert!(matches!(
+        &fragments[2],
+        ProviderStreamDelta::ToolRequestFragment(ToolRequestFragment::Completed {
+            request_stream_id,
+            canonical_tool_call_id: Some(canonical_tool_call_id),
+            final_arguments: None,
+        }) if request_stream_id == "fc_2"
+            && canonical_tool_call_id == "call_2"
+    ));
+    assert!(pending.is_empty());
+}
+
+/// Verifies done-only Responses events wait for a real call id before canonical request completion.
+/// 验证仅有 done 的 Responses 事件会等待真实调用 ID，再完成规范请求关联。
+#[test]
+fn responses_done_without_added_waits_for_real_call_id() {
+    // doneEvent omits call_id by protocol and therefore may start visibility but cannot promote identity.
+    // doneEvent 按协议不含 call_id，因此可以启动可见性但不能提升身份。
+    let (live_sender, mut live_receiver) = tokio::sync::mpsc::unbounded_channel();
+    let provider_tools = vec![ProviderToolDefinition {
+        name: String::from("submit_plan"),
+        description: String::from("Submit a plan"),
+        parameters: json!({ "type": "object" }),
+    }];
+    let done_event = json!({
+        "output_index": 1,
+        "item_id": "fc_done_only",
+        "name": "submit_plan",
+        "arguments": "{\"name\":\"demo\"}"
+    });
+    let mut pending = HashMap::new();
+    complete_openai_responses_tool_request_from_done_event(
+        &live_sender,
+        &provider_tools,
+        &done_event,
+        &mut pending,
+    );
+    complete_openai_responses_tool_request_from_done_event(
+        &live_sender,
+        &provider_tools,
+        &done_event,
+        &mut pending,
+    );
+    let first = live_receiver
+        .try_recv()
+        .expect("done-only event should create one detected fragment")
+        .expect("detected fragment should be successful");
+    assert!(matches!(
+        first,
+        ProviderStreamDelta::ToolRequestFragment(ToolRequestFragment::Detected { .. })
+    ));
+    assert!(live_receiver.try_recv().is_err());
+    assert!(
+        pending
+            .get(&1)
+            .is_some_and(|request| request.call_id.is_none())
+    );
+
+    complete_openai_responses_tool_request_from_output_item(
+        &live_sender,
+        &json!({
+            "output_index": 1,
+            "item": {
+                "type": "function_call",
+                "id": "fc_done_only",
+                "call_id": "call_done_only",
+                "name": "submit_plan",
+                "arguments": "{\"name\":\"demo\"}"
+            }
+        }),
+        &mut pending,
+    );
+    let completed = live_receiver
+        .try_recv()
+        .expect("real call id should complete the request")
+        .expect("completed fragment should be successful");
+    assert!(matches!(
+        completed,
+        ProviderStreamDelta::ToolRequestFragment(ToolRequestFragment::Completed {
+            canonical_tool_call_id: Some(canonical_tool_call_id),
+            ..
+        }) if canonical_tool_call_id == "call_done_only"
+    ));
+    assert!(pending.is_empty());
 }
 
 /// Verifies schema sanitization adds OpenAI strict-tool requirements recursively while preserving `$ref` exclusivity.

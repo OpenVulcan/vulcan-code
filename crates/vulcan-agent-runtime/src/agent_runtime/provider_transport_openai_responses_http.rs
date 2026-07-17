@@ -13,6 +13,7 @@ use crate::agent_runtime::provider_protocol_content::{
     ProviderAssistantContent, ProviderReasoningPart,
 };
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
+use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_transport_http_support::{
     build_json_http_client, build_rest_endpoint, ensure_bearer_authorization_header,
     ensure_json_content_type, format_standard_error_response_with_headers,
@@ -22,12 +23,15 @@ use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreT
 use crate::agent_runtime::provider_transport_wire_capture::{
     emit_provider_wire_request, provider_request_dry_run_active, provider_request_dry_run_response,
 };
+use crate::agent_runtime::tool_request_argument_assembler::ToolCallDraftAssembler;
+use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
 use crate::provider_config::ProviderApiFamily;
 use crate::provider_input_normalizer::normalize_provider_user_input;
 use futures_util::StreamExt;
 use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use serde_json::{Map as JsonMap, Value, json};
+use std::collections::HashMap;
 use vulcan_core::provider::VulcanProviderDeltaSink;
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
@@ -41,6 +45,24 @@ use vulcan_tools_manager::{VulcanToolSchemaProjectionProfile, project_tool_param
 /// 用于抑制 OpenAI Responses continuation 持久化的内部附加参数键。
 pub(crate) const SUPPRESS_OPENAI_RESPONSES_CONTINUATION_PARAM: &str =
     "__vulcan_suppress_openai_responses_continuation";
+
+/// One active Responses function-call request keyed by its exact output index.
+/// 按精确输出索引保存的一条活动 Responses 函数调用请求。
+#[derive(Debug)]
+struct PendingOpenAiResponsesToolRequest {
+    /// Stable provider output-item identifier.
+    /// 稳定的 Provider 输出项标识。
+    item_id: String,
+    /// Stable call identifier once an output item or terminal response has supplied it.
+    /// 输出项或终态响应提供后的稳定调用标识。
+    call_id: Option<String>,
+    /// Exact public function name resolved from the frozen request tool set.
+    /// 从冻结请求工具集合解析出的精确公开函数名称。
+    name: String,
+    /// Accumulated raw JSON argument fragments.
+    /// 累计的原始 JSON 参数碎片。
+    arguments_json: ToolCallDraftAssembler,
+}
 
 /// Minimal OpenAI Responses top-level error payload decoded from one failed HTTP response or SSE error event.
 /// 从单个失败 HTTP 响应或 SSE 错误事件解码出的最小 OpenAI Responses 顶层错误载荷。
@@ -311,6 +333,9 @@ where
     // Collected reasoning-summary deltas used only when no structured reasoning item arrives.
     // 仅在没有结构化思考项到达时使用的思考摘要增量累计值。
     let mut fallback_reasoning_text = String::new();
+    // pendingToolRequests preserves exact parallel function-call state by output index.
+    // pendingToolRequests 按输出索引保留精确的并行函数调用状态。
+    let mut pending_tool_requests = HashMap::<usize, PendingOpenAiResponsesToolRequest>::new();
 
     while let Some(event_result) = events.next().await {
         let event = event_result.map_err(|error| VulcanCoreError::ProviderFailure {
@@ -334,6 +359,29 @@ where
                 if fallback_response_id.is_none() {
                     fallback_response_id = extract_openai_responses_stream_response_id(&value);
                 }
+            }
+            Some("response.output_item.added") => {
+                start_openai_responses_tool_request_from_output_item(
+                    live_sender,
+                    provider_tool_definitions,
+                    &value,
+                    &mut pending_tool_requests,
+                );
+            }
+            Some("response.function_call_arguments.delta") => {
+                append_openai_responses_tool_request_delta(
+                    live_sender,
+                    &value,
+                    &mut pending_tool_requests,
+                );
+            }
+            Some("response.function_call_arguments.done") => {
+                complete_openai_responses_tool_request_from_done_event(
+                    live_sender,
+                    provider_tool_definitions,
+                    &value,
+                    &mut pending_tool_requests,
+                );
             }
             Some("response.output_text.delta") | Some("response.refusal.delta") => {
                 if let Some(delta) = value.get("delta").and_then(Value::as_str)
@@ -364,6 +412,11 @@ where
                 }
             }
             Some("response.output_item.done") => {
+                complete_openai_responses_tool_request_from_output_item(
+                    live_sender,
+                    &value,
+                    &mut pending_tool_requests,
+                );
                 if let Some(output_item) = value
                     .get("item")
                     .cloned()
@@ -381,16 +434,26 @@ where
                         ),
                     });
                 };
-                completed_response = Some(
+                let response =
                     serde_json::from_value::<OpenAiResponsesCompletedResponse>(response_value)
                         .map_err(|error| VulcanCoreError::ProviderFailure {
                             provider_id: provider_id.to_string(),
                             message: format!("OpenAI Responses completed 响应解析失败：{error}"),
-                        })?,
+                        })?;
+                complete_openai_responses_tool_requests_from_terminal_response(
+                    live_sender,
+                    &response,
+                    &mut pending_tool_requests,
                 );
+                completed_response = Some(response);
                 break;
             }
             Some("response.failed") | Some("response.incomplete") => {
+                abort_openai_responses_tool_requests(
+                    live_sender,
+                    &mut pending_tool_requests,
+                    "provider_terminal_failure",
+                );
                 let Some(response_value) = value.get("response").cloned() else {
                     return Err(VulcanCoreError::ProviderFailure {
                         provider_id: provider_id.to_string(),
@@ -412,6 +475,11 @@ where
                 });
             }
             Some("error") => {
+                abort_openai_responses_tool_requests(
+                    live_sender,
+                    &mut pending_tool_requests,
+                    "provider_stream_error",
+                );
                 let message = value
                     .get("error")
                     .cloned()
@@ -445,6 +513,11 @@ where
     });
 
     let Some(completed_response) = completed_response else {
+        abort_openai_responses_tool_requests(
+            live_sender,
+            &mut pending_tool_requests,
+            "provider_stream_ended",
+        );
         return Err(VulcanCoreError::ProviderFailure {
             provider_id: provider_id.to_string(),
             message: String::from(
@@ -459,6 +532,297 @@ where
         completed_response,
         suppress_continuation,
     )
+}
+
+/// Starts one Responses request from an exact `response.output_item.added` function item.
+/// 从精确的 `response.output_item.added` 函数项启动一条 Responses 请求。
+fn start_openai_responses_tool_request_from_output_item(
+    live_sender: &ProviderLiveDeltaSender,
+    provider_tool_definitions: &[ProviderToolDefinition],
+    event: &Value,
+    pending_tool_requests: &mut HashMap<usize, PendingOpenAiResponsesToolRequest>,
+) {
+    let Some(output_index) = openai_responses_output_index(event) else {
+        return;
+    };
+    let Some(item) = event.get("item") else {
+        return;
+    };
+    if item.get("type").and_then(Value::as_str) != Some("function_call") {
+        return;
+    }
+    let Some(item_id) = non_empty_json_string(item, "id") else {
+        return;
+    };
+    let Some(call_id) = non_empty_json_string(item, "call_id") else {
+        return;
+    };
+    let Some(name) = non_empty_json_string(item, "name") else {
+        return;
+    };
+    if !provider_tool_definitions
+        .iter()
+        .any(|definition| definition.name == name)
+    {
+        return;
+    }
+    let Some(arguments_json) = item.get("arguments").and_then(Value::as_str) else {
+        return;
+    };
+    if let Some(previous) = pending_tool_requests.remove(&output_index) {
+        forward_openai_responses_tool_request_fragment(
+            live_sender,
+            ToolRequestFragment::Aborted {
+                request_stream_id: previous.item_id,
+                reason: String::from("superseded"),
+            },
+        );
+    }
+    let pending = PendingOpenAiResponsesToolRequest {
+        item_id: item_id.to_string(),
+        call_id: Some(call_id.to_string()),
+        name: name.to_string(),
+        arguments_json: arguments_json.to_string().into(),
+    };
+    forward_openai_responses_tool_request_fragment(
+        live_sender,
+        ToolRequestFragment::Detected {
+            request_stream_id: pending.item_id.clone(),
+            tool_call_id: pending.item_id.clone(),
+            tool_name: pending.name.clone(),
+            initial_arguments: pending.arguments_json.snapshot(),
+            argument_assembler: Some(pending.arguments_json.clone()),
+        },
+    );
+    pending_tool_requests.insert(output_index, pending);
+}
+
+/// Appends one official Responses function-call argument delta to its exact item.
+/// 将一条官方 Responses 函数调用参数增量追加到其精确输出项。
+fn append_openai_responses_tool_request_delta(
+    live_sender: &ProviderLiveDeltaSender,
+    event: &Value,
+    pending_tool_requests: &mut HashMap<usize, PendingOpenAiResponsesToolRequest>,
+) {
+    let Some(output_index) = openai_responses_output_index(event) else {
+        return;
+    };
+    let Some(item_id) = non_empty_json_string(event, "item_id") else {
+        return;
+    };
+    let Some(delta) = event.get("delta").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(pending) = pending_tool_requests.get_mut(&output_index) else {
+        return;
+    };
+    if pending.item_id != item_id {
+        return;
+    }
+    pending.arguments_json.append(delta);
+    forward_openai_responses_tool_request_fragment(
+        live_sender,
+        ToolRequestFragment::ArgumentsDelta {
+            request_stream_id: pending.item_id.clone(),
+            delta: delta.to_string(),
+        },
+    );
+}
+
+/// Completes one Responses request using the official authoritative arguments-done snapshot.
+/// 使用官方权威参数完成快照完成一条 Responses 请求。
+fn complete_openai_responses_tool_request_from_done_event(
+    live_sender: &ProviderLiveDeltaSender,
+    provider_tool_definitions: &[ProviderToolDefinition],
+    event: &Value,
+    pending_tool_requests: &mut HashMap<usize, PendingOpenAiResponsesToolRequest>,
+) {
+    let Some(output_index) = openai_responses_output_index(event) else {
+        return;
+    };
+    let Some(item_id) = non_empty_json_string(event, "item_id") else {
+        return;
+    };
+    let Some(name) = non_empty_json_string(event, "name") else {
+        return;
+    };
+    let Some(arguments) = event.get("arguments").and_then(Value::as_str) else {
+        return;
+    };
+    if let Some(pending) = pending_tool_requests.get(&output_index) {
+        if pending.item_id != item_id || pending.name != name {
+            return;
+        }
+        if pending.call_id.is_some() {
+            let pending = pending_tool_requests
+                .remove(&output_index)
+                .expect("checked Responses request must remain present");
+            pending.arguments_json.replace(arguments.to_string());
+            complete_openai_responses_tool_request(live_sender, pending);
+        } else if let Some(pending) = pending_tool_requests.get_mut(&output_index) {
+            // argumentsJson retains the authoritative done snapshot until a real call_id arrives.
+            // argumentsJson 会保留权威 done 快照，直到真实 call_id 到达。
+            pending.arguments_json.replace(arguments.to_string());
+        }
+        return;
+    }
+    if !provider_tool_definitions
+        .iter()
+        .any(|definition| definition.name == name)
+    {
+        return;
+    }
+    let pending = PendingOpenAiResponsesToolRequest {
+        item_id: item_id.to_string(),
+        call_id: None,
+        name: name.to_string(),
+        arguments_json: arguments.to_string().into(),
+    };
+    forward_openai_responses_tool_request_fragment(
+        live_sender,
+        ToolRequestFragment::Detected {
+            request_stream_id: pending.item_id.clone(),
+            tool_call_id: pending.item_id.clone(),
+            tool_name: pending.name.clone(),
+            initial_arguments: pending.arguments_json.snapshot(),
+            argument_assembler: Some(pending.arguments_json.clone()),
+        },
+    );
+    pending_tool_requests.insert(output_index, pending);
+}
+
+/// Completes one request from a full function-call item when the dedicated done event was absent.
+/// 在专用完成事件缺失时，根据完整函数调用项完成一条请求。
+fn complete_openai_responses_tool_request_from_output_item(
+    live_sender: &ProviderLiveDeltaSender,
+    event: &Value,
+    pending_tool_requests: &mut HashMap<usize, PendingOpenAiResponsesToolRequest>,
+) {
+    let Some(output_index) = openai_responses_output_index(event) else {
+        return;
+    };
+    let Some(item) = event.get("item") else {
+        return;
+    };
+    if item.get("type").and_then(Value::as_str) != Some("function_call") {
+        return;
+    }
+    let Some(item_id) = non_empty_json_string(item, "id") else {
+        return;
+    };
+    let Some(call_id) = non_empty_json_string(item, "call_id") else {
+        return;
+    };
+    let Some(name) = non_empty_json_string(item, "name") else {
+        return;
+    };
+    let Some(arguments) = item.get("arguments").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(mut pending) = pending_tool_requests.remove(&output_index) else {
+        return;
+    };
+    if pending.item_id != item_id || pending.name != name {
+        pending_tool_requests.insert(output_index, pending);
+        return;
+    }
+    pending.call_id = Some(call_id.to_string());
+    pending.arguments_json.replace(arguments.to_string());
+    complete_openai_responses_tool_request(live_sender, pending);
+}
+
+/// Completes any request whose dedicated events were omitted from a terminal response stream.
+/// 完成终态响应流中省略专用事件的任意请求。
+fn complete_openai_responses_tool_requests_from_terminal_response(
+    live_sender: &ProviderLiveDeltaSender,
+    response: &OpenAiResponsesCompletedResponse,
+    pending_tool_requests: &mut HashMap<usize, PendingOpenAiResponsesToolRequest>,
+) {
+    for (output_index, output_item) in response.output.iter().enumerate() {
+        let OpenAiResponsesOutputItem::FunctionCall(function_call) = output_item else {
+            continue;
+        };
+        let Some(mut pending) = pending_tool_requests.remove(&output_index) else {
+            continue;
+        };
+        if pending.item_id != function_call.id || pending.name != function_call.name {
+            pending_tool_requests.insert(output_index, pending);
+            continue;
+        }
+        pending.call_id = Some(function_call.call_id.clone());
+        let arguments = stringify_openai_responses_tool_arguments(&function_call.arguments);
+        pending.arguments_json.replace(arguments);
+        complete_openai_responses_tool_request(live_sender, pending);
+    }
+}
+
+/// Emits the final canonical correlation and authoritative complete arguments for one request.
+/// 为一条请求发出最终规范关联与权威完整参数。
+fn complete_openai_responses_tool_request(
+    live_sender: &ProviderLiveDeltaSender,
+    pending: PendingOpenAiResponsesToolRequest,
+) {
+    let Some(canonical_tool_call_id) = pending.call_id else {
+        return;
+    };
+    forward_openai_responses_tool_request_fragment(
+        live_sender,
+        ToolRequestFragment::Completed {
+            request_stream_id: pending.item_id,
+            canonical_tool_call_id: Some(canonical_tool_call_id),
+            final_arguments: None,
+        },
+    );
+}
+
+/// Aborts every still-active Responses request with one stable non-content reason.
+/// 使用一个稳定且不含内容的原因中止所有仍活动的 Responses 请求。
+fn abort_openai_responses_tool_requests(
+    live_sender: &ProviderLiveDeltaSender,
+    pending_tool_requests: &mut HashMap<usize, PendingOpenAiResponsesToolRequest>,
+    reason: &str,
+) {
+    let mut indices = pending_tool_requests.keys().copied().collect::<Vec<_>>();
+    indices.sort_unstable();
+    for index in indices {
+        let Some(pending) = pending_tool_requests.remove(&index) else {
+            continue;
+        };
+        forward_openai_responses_tool_request_fragment(
+            live_sender,
+            ToolRequestFragment::Aborted {
+                request_stream_id: pending.item_id,
+                reason: reason.to_string(),
+            },
+        );
+    }
+}
+
+/// Reads one exact non-empty string field without trying alternate protocol paths.
+/// 读取一个精确非空字符串字段，不尝试其他协议路径。
+fn non_empty_json_string<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+}
+
+/// Reads the official zero-based Responses output index with checked usize conversion.
+/// 读取官方从零开始的 Responses 输出索引，并执行受检 usize 转换。
+fn openai_responses_output_index(event: &Value) -> Option<usize> {
+    event
+        .get("output_index")
+        .and_then(Value::as_u64)
+        .and_then(|index| usize::try_from(index).ok())
+}
+
+/// Forwards one normalized Responses request fragment into the runtime coordinator.
+/// 将一条规范化 Responses 请求碎片转发进运行时协调器。
+fn forward_openai_responses_tool_request_fragment(
+    live_sender: &ProviderLiveDeltaSender,
+    fragment: ToolRequestFragment,
+) {
+    let _ = live_sender.send(Ok(ProviderStreamDelta::ToolRequestFragment(fragment)));
 }
 
 /// Builds one direct OpenAI Responses HTTP client with merged authorization and caller-supplied request headers.

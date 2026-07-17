@@ -249,6 +249,9 @@ pub enum SessionRunPhase {
     /// Provider reasoning output is streaming.
     /// Provider 思考输出正在流式返回。
     Thinking,
+    /// Provider tool request arguments are still being streamed by the model.
+    /// Provider 工具请求参数仍由模型流式生成。
+    ToolCalling,
     /// A provider-visible tool is currently running.
     /// Provider 可见工具当前正在运行。
     ToolRunning,
@@ -273,6 +276,7 @@ impl fmt::Display for SessionRunPhase {
             Self::MemoryRecall => "MemoryRecall",
             Self::Requesting => "Requesting",
             Self::Thinking => "Thinking",
+            Self::ToolCalling => "ToolCalling",
             Self::ToolRunning => "ToolRunning",
             Self::Ready => "Ready",
             Self::Failed => "Failed",

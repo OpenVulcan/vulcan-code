@@ -67,7 +67,9 @@ fn build_test_request_snapshot(prompt: &str) -> CoreProviderRequestSnapshot {
 }
 
 mod cache_control;
+mod max_tokens;
 mod multimodal_payload;
 mod provider_state;
 mod tool_mapping;
 mod tool_result_topology;
+mod usage;

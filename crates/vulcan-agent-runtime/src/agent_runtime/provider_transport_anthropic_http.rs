@@ -29,6 +29,8 @@ use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreT
 use crate::agent_runtime::provider_transport_wire_capture::{
     emit_provider_wire_request, provider_request_dry_run_active, provider_request_dry_run_response,
 };
+use crate::agent_runtime::tool_request_argument_assembler::ToolCallDraftAssembler;
+use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
 use crate::provider_config::ProviderApiFamily;
 use crate::provider_input_normalizer::normalize_provider_user_input;
 use crate::tooling::build_direct_public_tool_name;
@@ -39,6 +41,7 @@ use serde_json::{Map as JsonMap, Value, json};
 use std::collections::BTreeSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use uuid::Uuid;
 use vulcan_context::{RuntimeProviderLoweringRepairEvent, RuntimeProviderNativeStateEnvelope};
 use vulcan_core::provider::VulcanProviderDeltaSink;
 use vulcan_core::types::{
@@ -72,27 +75,29 @@ enum AnthropicStreamingEvent {
     /// Content-block-start event carrying one initial content block.
     /// 携带初始内容块的内容块开始事件。
     ContentBlockStart {
-        #[serde(rename = "index")]
-        _index: usize,
+        /// Stable content-block index used to correlate streamed deltas.
+        /// 用于关联流式增量的稳定内容块索引。
+        index: usize,
         content_block: AnthropicContentBlock,
     },
     /// Content-block-delta event carrying one streamed content fragment.
     /// 携带单条流式内容碎片的内容块增量事件。
     ContentBlockDelta {
-        #[serde(rename = "index")]
-        _index: usize,
+        /// Stable content-block index used to correlate streamed deltas.
+        /// 用于关联流式增量的稳定内容块索引。
+        index: usize,
         delta: AnthropicContentDelta,
     },
     /// Content-block-stop event closing the current content block.
     /// 用于关闭当前内容块的内容块结束事件。
     ContentBlockStop {
-        #[serde(rename = "index")]
-        _index: usize,
+        /// Stable content-block index that has reached its provider boundary.
+        /// 已到达 Provider 边界的稳定内容块索引。
+        index: usize,
     },
     /// Message-delta event carrying incremental usage and stop reason.
     /// 携带增量用量与停止原因的消息增量事件。
     MessageDelta {
-        delta: AnthropicMessageDelta,
         #[serde(rename = "usage")]
         _usage: AnthropicPartialUsage,
     },
@@ -187,15 +192,6 @@ enum AnthropicContentDelta {
     SignatureDelta { signature: String },
 }
 
-/// Minimal Anthropic message-delta payload.
-/// 最小 Anthropic 消息增量载荷。
-#[derive(Debug, Deserialize)]
-struct AnthropicMessageDelta {
-    /// Optional provider stop reason.
-    /// 可选的 Provider 停止原因。
-    stop_reason: Option<String>,
-}
-
 /// Minimal Anthropic full usage payload.
 /// 最小 Anthropic 完整用量载荷。
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -222,25 +218,60 @@ struct AnthropicUsage {
 /// 最小 Anthropic 增量用量载荷。
 #[derive(Debug, Clone, Default, Deserialize)]
 struct AnthropicPartialUsage {
-    /// Output token count accumulated so far.
-    /// 当前累计的输出 token 数量。
-    #[serde(rename = "output_tokens")]
-    _output_tokens: usize,
+    /// Optional uncached input token count reported by the terminal usage event.
+    /// 终态用量事件报告的可选未缓存输入 token 数量。
+    #[serde(rename = "input_tokens", default)]
+    _input_tokens: Option<usize>,
+    /// Optional output token count accumulated so far.
+    /// 当前累计的可选输出 token 数量。
+    #[serde(rename = "output_tokens", default)]
+    _output_tokens: Option<usize>,
+    /// Optional cache-creation input token count reported by the terminal usage event.
+    /// 终态用量事件报告的可选缓存写入输入 token 数量。
+    #[serde(rename = "cache_creation_input_tokens", default)]
+    _cache_creation_input_tokens: Option<usize>,
+    /// Optional cache-read input token count reported by the terminal usage event.
+    /// 终态用量事件报告的可选缓存命中输入 token 数量。
+    #[serde(rename = "cache_read_input_tokens", default)]
+    _cache_read_input_tokens: Option<usize>,
+}
+
+/// Recomputes Anthropic total tokens from uncached input, cache reads, cache writes, and output.
+/// 根据未缓存输入、缓存读取、缓存写入与输出重新计算 Anthropic 总 token。
+///
+/// `snapshot` is the normalized usage snapshot to update in place. The function has no return value.
+/// `snapshot` 是需要原地更新的规范化用量快照；本函数无返回值。
+fn recompute_anthropic_total_tokens(snapshot: &mut CoreProviderUsageSnapshot) {
+    let Some(input_tokens) = snapshot.input_tokens else {
+        return;
+    };
+    let Some(output_tokens) = snapshot.output_tokens else {
+        return;
+    };
+    let cached_input_tokens = snapshot.cached_input_tokens.unwrap_or_default();
+    let cache_creation_input_tokens = snapshot.cache_creation_input_tokens.unwrap_or_default();
+    snapshot.total_tokens = Some(
+        input_tokens
+            .saturating_add(cached_input_tokens)
+            .saturating_add(cache_creation_input_tokens)
+            .saturating_add(output_tokens),
+    );
 }
 
 /// Converts one full Anthropic usage payload into the shared normalized usage snapshot.
 /// 将一份完整 Anthropic 用量载荷转换为共享规范化用量快照。
 fn anthropic_usage_to_snapshot(usage: &AnthropicUsage) -> Option<CoreProviderUsageSnapshot> {
-    let snapshot = CoreProviderUsageSnapshot {
+    let mut snapshot = CoreProviderUsageSnapshot {
         input_tokens: Some(usage._input_tokens as usize),
         output_tokens: Some(usage._output_tokens as usize),
         reasoning_tokens: None,
-        total_tokens: Some((usage._input_tokens.saturating_add(usage._output_tokens)) as usize),
+        total_tokens: None,
         cached_input_tokens: usage._cache_read_input_tokens.map(|value| value as usize),
         cache_creation_input_tokens: usage
             ._cache_creation_input_tokens
             .map(|value| value as usize),
     };
+    recompute_anthropic_total_tokens(&mut snapshot);
     snapshot.has_any_tokens().then_some(snapshot)
 }
 
@@ -251,14 +282,19 @@ fn merge_anthropic_partial_usage(
     partial: &AnthropicPartialUsage,
 ) -> Option<CoreProviderUsageSnapshot> {
     let mut snapshot = current.unwrap_or_default();
-    if partial._output_tokens > 0 {
-        snapshot.output_tokens = Some(partial._output_tokens);
+    if let Some(input_tokens) = partial._input_tokens {
+        snapshot.input_tokens = Some(input_tokens);
     }
-    if let (Some(input_tokens), Some(output_tokens)) =
-        (snapshot.input_tokens, snapshot.output_tokens)
-    {
-        snapshot.total_tokens = Some(input_tokens.saturating_add(output_tokens));
+    if let Some(output_tokens) = partial._output_tokens {
+        snapshot.output_tokens = Some(output_tokens);
     }
+    if let Some(cached_input_tokens) = partial._cache_read_input_tokens {
+        snapshot.cached_input_tokens = Some(cached_input_tokens);
+    }
+    if let Some(cache_creation_input_tokens) = partial._cache_creation_input_tokens {
+        snapshot.cache_creation_input_tokens = Some(cache_creation_input_tokens);
+    }
+    recompute_anthropic_total_tokens(&mut snapshot);
     snapshot.has_any_tokens().then_some(snapshot)
 }
 
@@ -274,7 +310,7 @@ struct PendingAnthropicToolUse {
     name: String,
     /// Accumulated partial JSON payload for the tool input.
     /// 为工具输入累计的部分 JSON 载荷。
-    input_json: String,
+    input_json: ToolCallDraftAssembler,
 }
 
 /// Pending provider-native server-side tool-use block assembled across stream events.

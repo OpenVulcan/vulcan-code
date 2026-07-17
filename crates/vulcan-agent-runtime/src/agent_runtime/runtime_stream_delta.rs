@@ -11,16 +11,20 @@ use crate::agent_runtime::provider_stream_projection::{
     reset_current_thinking_phase_tracking, runtime_event_to_core_event,
     take_current_thinking_phase_completed_event,
 };
+use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
+use crate::agent_runtime::tool_request_stream::ToolRequestStreamCoordinator;
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
 use serde_json::Value;
 use std::mem;
+use std::sync::Arc;
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::types::{
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     ProviderUsageSnapshot as CoreProviderUsageSnapshot,
 };
 use vulcan_provider_config::provider_config::ProviderApiFamily;
+use vulcan_tools_manager::ResolvedToolDefinition;
 
 /// Owns the mutable runtime-stream loop state that changes while provider deltas are consumed.
 /// 持有在消费 Provider 增量期间持续变化的运行时流式循环状态。
@@ -70,6 +74,9 @@ pub(crate) struct RuntimeStreamDeltaState {
     /// Low-frequency physical Provider request telemetry state machine.
     /// 低频真实 Provider 请求遥测状态机。
     provider_request_telemetry: ProviderRequestTelemetryTracker,
+    /// Model-side tool request stream coordinator kept separate from real tool execution.
+    /// 与真实工具执行分离保存的模型侧工具请求流协调器。
+    tool_request_stream: ToolRequestStreamCoordinator,
 }
 
 impl RuntimeStreamDeltaState {
@@ -107,7 +114,35 @@ impl RuntimeStreamDeltaState {
             cumulative_usage_accounted_assistant_turns: 0,
             terminal_error: None,
             provider_request_telemetry: ProviderRequestTelemetryTracker::default(),
+            tool_request_stream: ToolRequestStreamCoordinator::default(),
         }
+    }
+
+    /// Installs model-aware services used by tool request argument progress.
+    /// 安装工具请求参数进度使用的模型感知服务。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `model_id` selects the tokenizer route for streamed arguments.
+    /// `model_id` 为流式参数选择 Tokenizer 路由。
+    /// `token_budget_runtime` is the shared warmed token runtime from bootstrap.
+    /// `token_budget_runtime` 是启动阶段提供的共享已预热 Token 运行时。
+    /// `resolved_tools` is the frozen tool snapshot used for exact request parser routing.
+    /// `resolved_tools` 是用于精确请求解析器路由的冻结工具快照。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The updated runtime stream state.
+    /// 返回更新后的运行时流状态。
+    pub(crate) fn with_tool_request_stream(
+        mut self,
+        model_id: impl Into<String>,
+        token_budget_runtime: Arc<TokenBudgetRuntime>,
+        resolved_tools: &[ResolvedToolDefinition],
+    ) -> Self {
+        self.tool_request_stream =
+            ToolRequestStreamCoordinator::new(model_id, token_budget_runtime, resolved_tools);
+        self
     }
 
     /// Installs immutable request telemetry context derived from execution preparation.
@@ -227,6 +262,40 @@ impl RuntimeStreamDeltaState {
             &mut self.thinking_visible_output,
             &mut self.thinking_completed_emitted,
         );
+    }
+
+    /// Drains completed background tool-request token estimates into visible execution events.
+    /// 将已完成的后台工具请求 Token 估算排空为可见执行事件。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_id` identifies the session that owns every projected request card.
+    /// `session_id` 标识拥有全部投影请求卡片的会话。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Ordered request-progress events with stale worker revisions already rejected.
+    /// 返回已拒绝过期后台修订的有序请求进度事件。
+    pub(crate) fn drain_tool_request_token_progress(
+        &mut self,
+        session_id: SessionId,
+    ) -> Vec<ExecutionStreamEvent> {
+        let runtime_events = self.tool_request_stream.drain_token_progress_events();
+        runtime_events
+            .into_iter()
+            .flat_map(|event| self.process_runtime_event(session_id, event))
+            .collect()
+    }
+
+    /// Returns whether any ready tool request still awaits its final token progress projection.
+    /// 返回是否仍有已就绪工具请求等待最终 Token 进度投影。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when the stream driver should briefly keep draining the background token worker.
+    /// 当流驱动应短暂继续排空后台 Token worker 时返回 `true`。
+    pub(crate) fn has_pending_ready_tool_request_token_progress(&self) -> bool {
+        self.tool_request_stream.has_pending_ready_token_progress()
     }
 
     /// Applies one provider thinking delta to controller state and returns one visible event when new normalized text appears.
@@ -416,6 +485,15 @@ pub(crate) fn process_provider_stream_delta(
         }
         Ok(ProviderStreamDelta::Thinking(delta)) => state.process_thinking_delta(session_id, delta),
         Ok(ProviderStreamDelta::Output(delta)) => state.process_output_delta(session_id, delta),
+        Ok(ProviderStreamDelta::ToolRequestFragment(fragment)) => {
+            // runtimeEvents are safe low-frequency projections produced without raw arguments.
+            // runtimeEvents 是在不包含原始参数的前提下生成的安全低频投影。
+            let runtime_events = state.tool_request_stream.apply(fragment);
+            runtime_events
+                .into_iter()
+                .flat_map(|event| state.process_runtime_event(session_id, event))
+                .collect()
+        }
         Ok(ProviderStreamDelta::RuntimeEvent(event)) => {
             state.process_runtime_event(session_id, event)
         }
@@ -683,6 +761,55 @@ mod tests {
         assert!(matches!(
             follow_up_events.as_slice(),
             [ExecutionStreamEvent::ThinkingDelta { delta, .. }] if delta == "继续分析"
+        ));
+    }
+
+    /// Verifies request start seals thinking once while later request progress does not create another boundary.
+    /// 验证请求开始只收口一次思考，而后续请求进度不会再次创建边界。
+    #[test]
+    fn tool_request_start_seals_thinking_only_once() {
+        // state first receives visible reasoning that must end when the tool identity becomes known.
+        // state 首先接收可见思考，并在工具身份明确时结束该思考。
+        let session_id = Uuid::nil();
+        let mut state = build_delta_state();
+        let _ = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::Thinking(String::from(
+                "正在组织长参数",
+            ))),
+        );
+        let started = RuntimeEvent::new(
+            RuntimeEventKind::ToolRequestStarted,
+            "工具请求 · pending-1 · submit_plan",
+            String::new(),
+        );
+        let started_events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::RuntimeEvent(started)),
+        );
+        assert!(matches!(
+            started_events.as_slice(),
+            [
+                ExecutionStreamEvent::ThinkingCompleted { .. },
+                ExecutionStreamEvent::RuntimeEvent { event, .. }
+            ] if event.kind == RuntimeEventKind::ToolRequestStarted
+        ));
+        let progress = RuntimeEvent::new(
+            RuntimeEventKind::ToolRequestProgress,
+            "工具请求 · pending-1 · submit_plan",
+            String::new(),
+        );
+        let progress_events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::RuntimeEvent(progress)),
+        );
+        assert!(matches!(
+            progress_events.as_slice(),
+            [ExecutionStreamEvent::RuntimeEvent { event, .. }]
+                if event.kind == RuntimeEventKind::ToolRequestProgress
         ));
     }
 

@@ -73,6 +73,7 @@ fn test_candidate(id: &str, source: VulcanToolSourceKind) -> VulcanToolCandidate
         }),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Visible,
+        request_streaming: None,
         invoke: Arc::new(|_args, _session_id| {
             Box::pin(async { Ok(VulcanToolInvocationResult::from_model_output(json!("ok"))) })
         }),

@@ -165,14 +165,30 @@ pub(crate) fn apply_hydration_to_selected_workspace_snapshot(
         runtime_state,
         ..
     } = hydration;
-    let messages = hydration_messages_with_tool_details(messages, tool_detail_messages);
+    let has_live_runtime_owner = webui_subagent_task_has_live_run_for_phase(
+        workspace_snapshot
+            .session_run_phases
+            .get(&session_id)
+            .copied(),
+        task_runtime,
+        live_listener_task_ids.contains(&session_id),
+        session_id,
+    );
+    let mut messages = hydration_messages_with_tool_details(messages, tool_detail_messages);
+    if !has_live_runtime_owner {
+        normalize_orphaned_tool_request_messages(&mut messages);
+    }
     workspace_snapshot
         .session_messages
         .insert(session_id, messages);
     workspace_snapshot
         .session_compactions
         .insert(session_id, compactions);
-    if let Some(runtime_state) = runtime_state {
+    if let Some(mut runtime_state) = runtime_state {
+        if !has_live_runtime_owner {
+            let now = current_unix_millis_value().to_string();
+            normalize_orphaned_tool_request_records(&mut runtime_state, &now);
+        }
         workspace_snapshot
             .session_runtime_state
             .insert(session_id, runtime_state);
@@ -342,20 +358,27 @@ pub(crate) fn apply_selected_session_runtime_hydration(
     hydration: SessionHydrationSnapshot,
 ) -> Result<(), String> {
     let SessionHydrationSnapshot {
-        messages,
-        tool_detail_messages,
+        mut messages,
+        mut tool_detail_messages,
         mut runtime_state,
         ..
     } = hydration;
     if let Some(runtime_state) = runtime_state.as_mut() {
         sanitize_runtime_state_legacy_goal_internal_messages(runtime_state)?;
+        // Runtime-only hydration is performed before a new live owner is installed for this session.
+        // 仅运行态水合发生在为该会话安装新的实时所有者之前。
+        let now = current_unix_millis_value().to_string();
+        normalize_orphaned_tool_request_records(runtime_state, &now);
     }
+    normalize_orphaned_tool_request_messages(&mut messages);
+    normalize_orphaned_tool_request_messages(&mut tool_detail_messages);
     match workspace_snapshot.session_messages.entry(session_id) {
         std::collections::btree_map::Entry::Vacant(entry) => {
             let messages = hydration_messages_with_tool_details(messages, tool_detail_messages);
             entry.insert(filter_legacy_goal_internal_user_messages(messages));
         }
         std::collections::btree_map::Entry::Occupied(mut entry) => {
+            normalize_orphaned_tool_request_messages(entry.get_mut());
             append_unique_session_messages(entry.get_mut(), tool_detail_messages);
         }
     }
@@ -399,12 +422,17 @@ pub(crate) fn apply_submission_session_hydration(
         ..
     } = hydration;
     let messages = hydration_messages_with_tool_details(messages, tool_detail_messages);
-    let messages = filter_legacy_goal_internal_user_messages(messages);
+    let mut messages = filter_legacy_goal_internal_user_messages(messages);
+    normalize_orphaned_tool_request_messages(&mut messages);
     workspace_snapshot
         .session_messages
         .insert(session_id, messages);
     if let Some(mut runtime_state) = runtime_state {
         sanitize_runtime_state_legacy_goal_internal_messages(&mut runtime_state)?;
+        // Disk hydration is reached only when no retained live dialogue context owns this session.
+        // 仅当没有保留的实时对话上下文拥有该会话时才会进入磁盘水合。
+        let now = current_unix_millis_value().to_string();
+        normalize_orphaned_tool_request_records(&mut runtime_state, &now);
         workspace_snapshot
             .session_runtime_state
             .insert(session_id, runtime_state);

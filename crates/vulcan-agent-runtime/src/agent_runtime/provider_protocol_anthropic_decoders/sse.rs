@@ -77,6 +77,16 @@ where
             }
         }
 
+        // rawBuffer may contain the final event when a compatible endpoint closes without a trailing blank separator.
+        // 当兼容端点未发送尾随空行便关闭连接时，原始缓冲区仍可能包含最后一条事件。
+        if !buffer.is_empty() {
+            for line in line_decoder.decode(&buffer) {
+                if let Some(event) = sse_decoder.decode(&line) {
+                    yield Ok(event);
+                }
+            }
+        }
+
         for line in line_decoder.flush() {
             if let Some(event) = sse_decoder.decode(&line) {
                 yield Ok(event);
@@ -200,5 +210,72 @@ mod tests {
         assert_eq!(event.event, None);
         assert_eq!(event.data, "hello");
         assert_eq!(event.raw, vec![String::from("data: hello")]);
+    }
+
+    /// Verifies that a final SSE event is retained when the transport closes without a blank separator.
+    /// 验证传输未发送空行分隔符便关闭时，最后一条 SSE 事件仍会被保留。
+    #[tokio::test]
+    async fn decodes_final_event_without_blank_separator() {
+        // stream closes immediately after the final data line without a separator.
+        // stream 在最后一条数据行后立即关闭，不携带分隔符。
+        let stream = futures_util::stream::iter(vec![Ok::<_, std::io::Error>(
+            b"event: message_stop\ndata: {\"type\":\"message_stop\"}".to_vec(),
+        )]);
+        // decoded applies the production incremental SSE path.
+        // decoded 使用生产环境的增量 SSE 路径。
+        let decoded = iter_sse_messages(stream);
+        futures_util::pin_mut!(decoded);
+
+        let event = decoded
+            .next()
+            .await
+            .expect("final event should exist")
+            .expect("final event should decode");
+
+        assert_eq!(event.event.as_deref(), Some("message_stop"));
+        assert_eq!(event.data, r#"{"type":"message_stop"}"#);
+    }
+
+    /// Verifies that long UTF-8 tool-input events survive arbitrary one-byte transport chunks.
+    /// 验证长 UTF-8 工具输入事件经过任意单字节传输分片后仍保持完整。
+    #[tokio::test]
+    async fn decodes_long_tool_input_from_single_byte_chunks() {
+        // argumentText exceeds the reported failure position and includes multi-byte UTF-8 text.
+        // argumentText 超过已报告的失败位置，并包含多字节 UTF-8 文本。
+        let argument_text = "火山".repeat(2_500);
+        // payload mirrors one real Anthropic input-json delta event.
+        // payload 模拟一条真实的 Anthropic 输入 JSON 增量事件。
+        let payload = serde_json::json!({
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {
+                "type": "input_json_delta",
+                "partial_json": serde_json::json!({ "content": argument_text }).to_string(),
+            },
+        })
+        .to_string();
+        // wire contains the complete SSE event framing.
+        // wire 包含完整的 SSE 事件帧。
+        let wire = format!("event: content_block_delta\ndata: {payload}\n\n");
+        // chunks force every UTF-8 byte and event delimiter across transport boundaries.
+        // chunks 强制每个 UTF-8 字节及事件分隔符跨越传输边界。
+        let chunks = wire
+            .into_bytes()
+            .into_iter()
+            .map(|byte| Ok::<_, std::io::Error>(vec![byte]))
+            .collect::<Vec<_>>();
+        // decoded applies the production incremental SSE path to all byte fragments.
+        // decoded 对全部字节碎片使用生产环境的增量 SSE 路径。
+        let decoded = iter_sse_messages(futures_util::stream::iter(chunks));
+        futures_util::pin_mut!(decoded);
+
+        let event = decoded
+            .next()
+            .await
+            .expect("tool-input event should exist")
+            .expect("tool-input event should decode");
+
+        assert_eq!(event.event.as_deref(), Some("content_block_delta"));
+        assert_eq!(event.data, payload);
     }
 }

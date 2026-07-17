@@ -3,14 +3,19 @@ use super::*;
 pub(super) fn parse_pending_anthropic_tool_use_input_json(
     tool_use: &PendingAnthropicToolUse,
 ) -> Result<Value, VulcanCoreError> {
-    if tool_use.input_json.trim().is_empty() {
+    if tool_use
+        .input_json
+        .read(|input_json| input_json.trim().is_empty())
+    {
         Ok(json!({}))
     } else {
-        serde_json::from_str::<Value>(&tool_use.input_json).map_err(|error| {
-            VulcanCoreError::ProviderFailure {
-                provider_id: String::from("anthropic"),
-                message: format!("Anthropic 工具输入 JSON 解析失败：{error}"),
-            }
+        tool_use.input_json.read(|input_json| {
+            serde_json::from_str::<Value>(input_json).map_err(|error| {
+                VulcanCoreError::ProviderFailure {
+                    provider_id: String::from("anthropic"),
+                    message: format!("Anthropic 工具输入 JSON 解析失败：{error}"),
+                }
+            })
         })
     }
 }
@@ -173,6 +178,30 @@ pub(super) fn resolve_host_owned_anthropic_tool_name(
         })
         .map(|definition| definition.name.clone())
         .unwrap_or_else(|| provider_tool_name.to_string())
+}
+
+/// Resolves a streamed provider tool name only when it exactly matches the frozen request tool set.
+/// 仅当流式 Provider 工具名称精确匹配冻结请求工具集合时进行解析。
+///
+/// # Parameters
+/// 参数
+/// `provider_tool_name` is the complete name received in a content-block start event.
+/// `provider_tool_name` 是内容块开始事件中接收的完整名称。
+/// `provider_tool_definitions` is the exact provider-facing tool snapshot for this request.
+/// `provider_tool_definitions` 是当前请求的精确 Provider 可见工具快照。
+///
+/// # Returns
+/// 返回值
+/// The canonical public tool name for an exact match, otherwise `None`.
+/// 精确匹配时返回规范公开工具名称，否则返回 `None`。
+pub(super) fn resolve_exact_streamed_anthropic_tool_name(
+    provider_tool_name: &str,
+    provider_tool_definitions: &[ProviderToolDefinition],
+) -> Option<String> {
+    provider_tool_definitions
+        .iter()
+        .find(|definition| definition.name == provider_tool_name)
+        .map(|definition| definition.name.clone())
 }
 
 /// Builds one Anthropic provider-visible tool name only for replay compatibility of historical invalid host identifiers.

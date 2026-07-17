@@ -24,6 +24,7 @@ pub(super) fn build_luaskills_help_candidate(
         plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(
             "luaskill implicit LuaSkills help and Markdown schema",
         )),
+        request_streaming: None,
         invoke: Arc::new(move |args, _session_id| {
             let entries = Arc::clone(&entries);
             Box::pin(async move { execute_luaskills_help_tool(entries, args).await })
@@ -60,6 +61,7 @@ pub(super) fn build_luaskills_dispatch_candidate(
         plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(
             "call_luaskill LuaSkills implicit entry dispatcher",
         )),
+        request_streaming: None,
         invoke: Arc::new(move |args, session_id| {
             let runtime = luaskills_runtime.clone();
             let workspace_root = workspace_root.clone();

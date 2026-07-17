@@ -18,6 +18,7 @@ import {
 import {
   ProvidersArea,
 } from "@/components/features/settings/provider-list-settings";
+import { ProviderRetrySettingsArea } from "@/components/features/settings/provider-retry-settings";
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types";
 import {
   activeSettingsHeaderSummary,
@@ -136,6 +137,9 @@ export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
   }
   if (props.activeSettingsSubArea === "git-commit") {
     return <GitCommitSettingsArea actions={props.actions} workbench={props.workbench} />;
+  }
+  if (props.activeSettingsSubArea === "provider-retry") {
+    return <ProviderRetrySettingsArea actions={props.actions} settings={props.workbench.providerRetry} />;
   }
   if (props.activeSettingsSubArea === "prompt-composer") {
     return (

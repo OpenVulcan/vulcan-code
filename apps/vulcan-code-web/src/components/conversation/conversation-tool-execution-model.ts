@@ -9,6 +9,29 @@ import {
   subagentToolDisplayName,
 } from "./conversation-tool-metadata";
 
+// ToolRequestProgress describes safe model-side argument construction metadata retained on one tool card.
+// ToolRequestProgress 描述保留在单张工具卡片上的安全模型侧参数构造元数据。
+export interface ToolRequestProgress {
+  // Stable request-stream identity used before host execution begins.
+  // 宿主执行开始前使用的稳定请求流标识。
+  requestStreamId: string;
+  // Current request formation state.
+  // 当前请求形成状态。
+  state: "receiving" | "ready";
+  // Exact Unicode character count received for the argument document.
+  // 参数文档已接收的精确 Unicode 字符数量。
+  receivedCharacters: number;
+  // Exact UTF-8 byte count received for the argument document.
+  // 参数文档已接收的精确 UTF-8 字节数量。
+  receivedBytes: number;
+  // Latest monotonic request revision.
+  // 最近一次单调请求修订号。
+  revision: number;
+  // Optional parser-sanitized preview metadata.
+  // 可选的解析器净化预览元数据。
+  preview: Record<string, unknown> | null;
+}
+
 // buildToolExecutionDetailBody builds the expensive modal body only when the user opens details.
 // buildToolExecutionDetailBody 仅在用户打开详情时构建成本较高的弹窗正文。
 export function buildToolExecutionDetailBody(blocks: ToolExecutionConversationBlock[], t?: (key: TranslationKey) => string): string {
@@ -52,6 +75,7 @@ export function toolExecutionSummary(blocks: ToolExecutionConversationBlock[], s
   const statusLabel = toolDisplayStateLabel(displayState, t);
   const identifier = toolExecutionIdentifier(blocks);
   const errorPreview = displayState === "failed" ? toolExecutionErrorPreview(blocks) : null;
+  const requestProgress = toolRequestProgress(blocks);
   if (commandBlock && !toolName) {
     return commandBlock.summary.toLowerCase().includes("command")
       ? commandBlock.summary
@@ -63,9 +87,119 @@ export function toolExecutionSummary(blocks: ToolExecutionConversationBlock[], s
   }
 
   if (toolName) {
+    if (requestProgress) {
+      return `${t ? t("conversation.block.toolCall") : "Tool call"} · ${toolName} · ${toolRequestProgressLabel(requestProgress, t)}`;
+    }
     return `${t ? t("conversation.block.toolCall") : "Tool call"} · ${toolName} · ${statusLabel}${errorPreview ? ` · ${errorPreview}` : ""}`;
   }
   return `${t ? t("conversation.block.toolCall") : "Tool execution"} · ${statusLabel}${identifier ? ` · ${identifier}` : ""}${errorPreview ? ` · ${errorPreview}` : ""}`;
+}
+
+// toolRequestProgress resolves the newest safe argument-construction snapshot from one merged tool row.
+// toolRequestProgress 从一条合并工具行中解析最新的安全参数构造快照。
+export function toolRequestProgress(blocks: ToolExecutionConversationBlock[]): ToolRequestProgress | null {
+  let latest: ToolRequestProgress | null = null;
+  for (const block of blocks) {
+    const requestStreamId = metadataString(block.rawMetadata, ["request_stream_id"]);
+    const state = metadataString(block.rawMetadata, ["tool_display_state"]);
+    if (!requestStreamId || (state !== "receiving" && state !== "ready")) {
+      continue;
+    }
+    const receivedCharacters = numericMetadata(metadataValue(block.rawMetadata, ["received_characters"]));
+    const receivedBytes = numericMetadata(metadataValue(block.rawMetadata, ["received_bytes"]));
+    const revision = numericMetadata(metadataValue(block.rawMetadata, ["request_revision"]));
+    if (receivedCharacters === null || receivedBytes === null || revision === null) {
+      continue;
+    }
+    const snapshot: ToolRequestProgress = {
+      requestStreamId,
+      state,
+      receivedCharacters: Math.max(0, receivedCharacters),
+      receivedBytes: Math.max(0, receivedBytes),
+      revision,
+      preview: objectMetadata(metadataValue(block.rawMetadata, ["preview"])),
+    };
+    if (!latest || snapshot.revision > latest.revision) {
+      latest = snapshot;
+    }
+  }
+  return latest;
+}
+
+// toolRequestProgressLabel formats one compact localized request-state and Token label.
+// toolRequestProgressLabel 格式化一条紧凑的本地化请求状态与 Token 标签。
+export function toolRequestProgressLabel(
+  progress: ToolRequestProgress,
+  t?: (key: TranslationKey) => string,
+): string {
+  return `${toolRequestProgressStateLabel(progress, t)} · ${toolRequestStreamMetricsLabel(progress, t)}`;
+}
+
+// toolRequestProgressStateLabel formats the request-receiving state used to override execution states.
+// toolRequestProgressStateLabel 格式化用于覆盖执行状态的请求接收状态。
+//
+// Parameters:
+// `progress` is the latest exact request snapshot.
+// `t` optionally resolves localized copy.
+// 参数：
+// `progress` 是最新的精确请求快照。
+// `t` 可选地解析本地化文案。
+//
+// Returns:
+// A localized request state label that remains distinct from actual tool execution.
+// 返回值：
+// 返回与真实工具执行明确区分的本地化请求状态文案。
+export function toolRequestProgressStateLabel(
+  progress: ToolRequestProgress,
+  t?: (key: TranslationKey) => string,
+): string {
+  return progress.state === "ready"
+    ? (t ? t("conversation.toolRequest.ready") : "Data received")
+    : (t ? t("conversation.toolRequest.receiving") : "Receiving data");
+}
+
+// toolRequestStreamMetricsLabel formats character and UTF-8 byte progress for any tool card.
+// toolRequestStreamMetricsLabel 为任意工具卡片格式化字符与 UTF-8 字节进度。
+//
+// Parameters:
+// `progress` is the latest exact request snapshot.
+// `t` optionally resolves localized copy.
+// 参数：
+// `progress` 是最新的精确请求快照。
+// `t` 可选地解析本地化文案。
+//
+// Returns:
+// A compact metrics label containing both character count and byte-stream size.
+// 返回值：
+// 返回同时包含字符数量与字节流大小的紧凑指标文案。
+export function toolRequestStreamMetricsLabel(
+  progress: ToolRequestProgress,
+  t?: (key: TranslationKey) => string,
+): string {
+  const characterLabel = `${progress.receivedCharacters.toLocaleString()} ${t ? t("conversation.toolRequest.characters") : "characters"}`;
+  return `${characterLabel} · ${formatToolRequestBytes(progress.receivedBytes)}`;
+}
+
+// formatToolRequestBytes formats an exact UTF-8 byte count for frequent inline updates.
+// formatToolRequestBytes 为高频内联更新格式化精确 UTF-8 字节数。
+//
+// Parameters:
+// `bytes` is the exact non-negative UTF-8 byte count.
+// 参数：
+// `bytes` 是精确的非负 UTF-8 字节数。
+//
+// Returns:
+// A compact binary-unit label.
+// 返回值：
+// 返回紧凑的二进制单位文案。
+function formatToolRequestBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes.toLocaleString()} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KiB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 // buildSubagentToolExecutionDetailBody builds a human-readable detail body for built-in subagent orchestration tools.
@@ -905,7 +1039,7 @@ function normalizeToolDisplayState(status?: string | null): string | undefined {
   if (normalized === "completed" || normalized === "complete" || normalized === "success" || normalized === "succeeded") {
     return "completed";
   }
-  if (normalized === "stopped" || normalized === "cancelled" || normalized === "canceled" || normalized === "aborted") {
+  if (normalized === "stopped" || normalized === "cancelled" || normalized === "canceled" || normalized === "aborted" || normalized === "superseded") {
     return "stopped";
   }
   if (normalized === "running" || normalized === "pending" || normalized === "in_progress") {

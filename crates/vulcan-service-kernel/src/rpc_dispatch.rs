@@ -169,7 +169,7 @@ mod tests {
         // methods combines all domain contracts without deriving ownership from implementation fallbacks.
         // methods 合并全部领域契约，不从实现兜底中推导所有权。
         let methods = service_rpc_method_names();
-        assert_eq!(methods.len(), 125);
+        assert_eq!(methods.len(), 126);
         // unique_methods proves no earlier router can shadow a later domain branch.
         // unique_methods 证明前置路由不会遮蔽后续领域分支。
         let declared_method_count = workspace_io::RPC_METHODS.len()

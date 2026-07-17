@@ -6,7 +6,7 @@ fn finalize_pending_anthropic_tool_use_synthesizes_local_identifier() {
         PendingAnthropicToolUse {
             id: String::new(),
             name: String::from("read_file"),
-            input_json: String::from("{\"path\":\"src/main.rs\"}"),
+            input_json: String::from("{\"path\":\"src/main.rs\"}").into(),
         },
         &[],
     )
@@ -164,7 +164,7 @@ fn finalize_pending_anthropic_tool_use_restores_host_tool_name() {
         PendingAnthropicToolUse {
             id: String::from("call-1"),
             name: build_anthropic_provider_tool_name(host_tool_name),
-            input_json: String::from("{\"command\":\"pwd\"}"),
+            input_json: String::from("{\"command\":\"pwd\"}").into(),
         },
         &[ProviderToolDefinition {
             name: String::from(host_tool_name),

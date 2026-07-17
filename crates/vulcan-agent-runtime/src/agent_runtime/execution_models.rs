@@ -343,17 +343,6 @@ impl ExecutionPromptPurpose {
         matches!(self, Self::UserTurn)
     }
 
-    /// Returns the maximum provider-turn override required by this purpose.
-    /// 返回该用途要求的最大 Provider 回合数覆盖值。
-    pub const fn max_turns_override(self) -> Option<usize> {
-        match self {
-            Self::UserTurn => None,
-            Self::ContextCompactionCachePreserving => Some(1),
-            Self::ContextCompaction => Some(1),
-            Self::GitCommitSummary => Some(1),
-        }
-    }
-
     /// Returns a compact diagnostics label for this prompt purpose.
     /// 返回该提示词用途的紧凑诊断标签。
     pub const fn diagnostics_label(self) -> &'static str {

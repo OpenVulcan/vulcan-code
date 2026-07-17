@@ -697,19 +697,13 @@ fn build_legacy_runtime_system_preamble(
     Ok(sections.join("\n"))
 }
 
-/// Resolves one optional max-turn override for multi-turn tool-calling providers.
-/// 为支持多轮工具调用的 Provider 解析一份可选的最大轮次覆盖值。
+/// Keeps the main provider tool loop unlimited regardless of legacy agent or prompt-purpose settings.
+/// 无论旧版智能体或提示用途设置如何，均保持主 Provider 工具循环无限。
 pub(crate) fn resolve_runtime_max_turns(
-    active_agent: Option<&RuntimeAgentDefinition>,
-    prompt_purpose: ExecutionPromptPurpose,
+    _active_agent: Option<&RuntimeAgentDefinition>,
+    _prompt_purpose: ExecutionPromptPurpose,
 ) -> Option<usize> {
-    if let Some(max_turns) = prompt_purpose.max_turns_override() {
-        return Some(max_turns);
-    }
-    active_agent
-        .and_then(|agent| agent.max_turns)
-        .filter(|value| *value > 0)
-        .map(|value| value as usize)
+    None
 }
 
 #[cfg(test)]

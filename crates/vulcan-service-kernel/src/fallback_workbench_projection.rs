@@ -81,6 +81,7 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
         reasoning_selection: reasoning_selection(&provider_configuration),
         thinking_display_mode: workbench_thinking_display_mode(&provider_configuration),
         git_commit: git_commit_settings(&provider_configuration),
+        provider_retry: provider_retry_settings(&provider_configuration),
         host_tools: host_tools_settings(&provider_configuration),
         ai_capabilities: ai_capabilities(&provider_configuration.ai_tools, None),
         default_ai_capabilities: ai_capabilities(&provider_configuration.ai_tools, None),

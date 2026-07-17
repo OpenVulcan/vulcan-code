@@ -110,6 +110,10 @@ pub struct SessionRuntimeStateEntry {
     /// 按 tool_call_id 索引的未闭合工具调用记录标识，用于直接挂接工具返回。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tool_call_record_ids: BTreeMap<String, String>,
+    /// Open tool-request record ids keyed by request_stream_id before canonical execution starts.
+    /// 在规范执行开始前按 request_stream_id 索引的未闭合工具请求记录标识。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tool_request_record_ids: BTreeMap<String, String>,
     /// Latest provider usage snapshot retained for budget calibration across turns.
     /// 为跨轮预算校准保留的最近一次 Provider 用量快照。
     pub last_provider_usage: Option<ProviderUsageSnapshot>,

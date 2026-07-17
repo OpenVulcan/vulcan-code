@@ -53,6 +53,7 @@ fn build_demo_manager() -> (
             }),
             ai_visible: true,
             plan_policy: VulcanPlanToolPolicy::Visible,
+            request_streaming: None,
             invoke: Arc::new(|args, session_id| {
                 Box::pin(async move {
                     Ok(VulcanToolInvocationResult::from_model_output(json!({
@@ -83,6 +84,7 @@ fn build_demo_manager() -> (
             }),
             ai_visible: true,
             plan_policy: VulcanPlanToolPolicy::Hidden,
+            request_streaming: None,
             invoke: Arc::new(|_args, _session_id| {
                 Box::pin(async move { Err(String::from("LuaSkills 工具解析失败：演示错误")) })
             }),
@@ -98,6 +100,7 @@ fn build_demo_manager() -> (
             parameters_schema: json!({ "type": "object" }),
             ai_visible: true,
             plan_policy: VulcanPlanToolPolicy::Visible,
+            request_streaming: None,
             invoke: Arc::new(|_args, _session_id| {
                 Box::pin(async move {
                     Ok(VulcanToolInvocationResult::from_tool_error_details(
@@ -118,6 +121,7 @@ fn build_demo_manager() -> (
             parameters_schema: json!({ "type": "object" }),
             ai_visible: true,
             plan_policy: VulcanPlanToolPolicy::Visible,
+            request_streaming: None,
             invoke: Arc::new(|_args, _session_id| {
                 Box::pin(async move {
                     Ok(VulcanToolInvocationResult::from_model_output(json!({
@@ -158,6 +162,7 @@ fn build_panic_demo_manager() -> (
         }),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Visible,
+        request_streaming: None,
         invoke: Arc::new(|_args, _session_id| {
             Box::pin(async move {
                 panic!("模拟搜索节点 panic");
@@ -194,6 +199,7 @@ fn build_gated_demo_manager(
         }),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Visible,
+        request_streaming: None,
         invoke: Arc::new(move |_args, _session_id| {
             let entered_tool_body = Arc::clone(&entered_tool_body);
             let release_tool_body = Arc::clone(&release_tool_body);

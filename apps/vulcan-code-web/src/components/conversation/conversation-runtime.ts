@@ -80,6 +80,9 @@ function sessionRunPhaseCue(
   if (normalized === "thinking") {
     return null;
   }
+  if (normalized === "toolcalling") {
+    return { kind: "default", text: t("runtime.toolCalling") };
+  }
   if (normalized === "toolrunning") {
     return null;
   }

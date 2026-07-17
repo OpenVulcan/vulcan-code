@@ -18,16 +18,37 @@
   },
   "models": [
     {
-      "id": "k2p5",
-      "name": "Kimi K2.5",
+      "id": "k3",
+      "name": "Kimi K3",
       "family": "kimi-thinking",
-      "releaseDate": "2026-01",
-      "contextLimit": 262144,
-      "outputLimit": 32768,
+      "contextLimit": 1048576,
+      "outputLimit": 262144,
       "reasoning": true,
       "toolCall": true,
       "temperature": true,
       "attachment": false,
+      "reasoningProfile": {
+        "kind": "tiered",
+        "low": {
+          "thinking": {
+            "type": "enabled",
+            "effort": "low"
+          }
+        },
+        "high": {
+          "thinking": {
+            "type": "enabled",
+            "effort": "high"
+          }
+        },
+        "xHigh": {
+          "thinking": {
+            "type": "enabled",
+            "effort": "max"
+          }
+        },
+        "xHighLabel": "Max"
+      },
       "inputModalities": [
         "text",
         "image",
@@ -35,19 +56,29 @@
       ],
       "outputModalities": [
         "text"
-      ]
+      ],
+      "defaultEnabled": true
     },
     {
-      "id": "k2p6",
-      "name": "Kimi K2.6",
+      "id": "kimi-for-coding",
+      "name": "Kimi K2.7 Code",
       "family": "kimi-thinking",
-      "releaseDate": "2026-04",
+      "releaseDate": "2026-06",
       "contextLimit": 262144,
       "outputLimit": 32768,
       "reasoning": true,
       "toolCall": true,
       "temperature": true,
       "attachment": false,
+      "reasoningProfile": {
+        "kind": "binary",
+        "low": {
+          "thinking": {
+            "type": "enabled"
+          }
+        },
+        "lowLabel": "ON"
+      },
       "inputModalities": [
         "text",
         "image",
@@ -55,25 +86,38 @@
       ],
       "outputModalities": [
         "text"
-      ]
+      ],
+      "defaultEnabled": true
     },
     {
-      "id": "kimi-k2-thinking",
-      "name": "Kimi K2 Thinking",
+      "id": "kimi-for-coding-highspeed",
+      "name": "Kimi K2.7 Code HighSpeed",
       "family": "kimi-thinking",
-      "releaseDate": "2025-11",
+      "releaseDate": "2026-07",
       "contextLimit": 262144,
       "outputLimit": 32768,
       "reasoning": true,
       "toolCall": true,
       "temperature": true,
       "attachment": false,
+      "reasoningProfile": {
+        "kind": "binary",
+        "low": {
+          "thinking": {
+            "type": "enabled"
+          }
+        },
+        "lowLabel": "ON"
+      },
       "inputModalities": [
-        "text"
+        "text",
+        "image",
+        "video"
       ],
       "outputModalities": [
         "text"
-      ]
+      ],
+      "defaultEnabled": true
     }
   ]
 }

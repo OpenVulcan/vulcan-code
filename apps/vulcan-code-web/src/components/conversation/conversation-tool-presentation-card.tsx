@@ -51,6 +51,20 @@ import {
 import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 
+// ToolRequestCardProgress carries request-state text without replacing the resolved presentation model.
+// ToolRequestCardProgress 在不替换已解析展示模型的前提下携带请求状态文案。
+interface ToolRequestCardProgress {
+  // Exact character and byte-stream metrics shown after the tool identity.
+  // 显示在工具身份后的精确字符与字节流指标。
+  metricsLabel: string;
+  // Monotonic request revision used by assistive live regions.
+  // 辅助技术实时区域使用的单调请求修订号。
+  revision: number;
+  // Request-receiving state that overrides premature execution wording.
+  // 覆盖过早执行文案的请求接收状态。
+  statusLabel: string;
+}
+
 // ToolPresentationCard renders one recognized tool presentation with shared expansion behavior.
 // ToolPresentationCard 使用共享展开行为渲染单个已识别工具展示。
 export function ToolPresentationCard(props: {
@@ -60,6 +74,9 @@ export function ToolPresentationCard(props: {
   // Whether the card is expanded in the current transcript surface.
   // 当前转录界面中该卡片是否已展开。
   expanded: boolean;
+  // Optional request stream state rendered by the resolved original card.
+  // 由已解析原始卡片渲染的可选请求流状态。
+  requestProgress: ToolRequestCardProgress | null;
   // Expansion id set shared with the virtualized transcript surface.
   // 与虚拟滚动转录界面共享的展开标识集合。
   expandedToolPresentationIds: Set<string>;
@@ -75,6 +92,7 @@ export function ToolPresentationCard(props: {
       <CommandExecutionPresentationCard
         expanded={props.expanded}
         presentation={props.presentation}
+        requestProgress={props.requestProgress}
         onExpandedChange={props.onExpandedChange}
         onLoadToolDetail={props.onLoadToolDetail}
       />
@@ -86,6 +104,7 @@ export function ToolPresentationCard(props: {
         expanded={props.expanded}
         expandedToolPresentationIds={props.expandedToolPresentationIds}
         presentation={props.presentation}
+        requestProgress={props.requestProgress}
         onExpandedChange={props.onExpandedChange}
       />
     );
@@ -95,6 +114,7 @@ export function ToolPresentationCard(props: {
       <MarkdownToolPresentationCard
         expanded={props.expanded}
         presentation={props.presentation}
+        requestProgress={props.requestProgress}
         onExpandedChange={props.onExpandedChange}
         onLoadToolDetail={props.onLoadToolDetail}
       />
@@ -105,6 +125,7 @@ export function ToolPresentationCard(props: {
       <LuaExecutionPresentationCard
         expanded={props.expanded}
         presentation={props.presentation}
+        requestProgress={props.requestProgress}
         onExpandedChange={props.onExpandedChange}
         onLoadToolDetail={props.onLoadToolDetail}
       />
@@ -115,6 +136,7 @@ export function ToolPresentationCard(props: {
       <AskQuestionPresentationCard
         expanded={props.expanded}
         presentation={props.presentation}
+        requestProgress={props.requestProgress}
         onExpandedChange={props.onExpandedChange}
         onLoadToolDetail={props.onLoadToolDetail}
       />
@@ -125,12 +147,44 @@ export function ToolPresentationCard(props: {
       <SubagentOrchestrationPresentationCard
         expanded={props.expanded}
         presentation={props.presentation}
+        requestProgress={props.requestProgress}
         onExpandedChange={props.onExpandedChange}
         onLoadToolDetail={props.onLoadToolDetail}
       />
     );
   }
   return null;
+}
+
+// ToolRequestInlineProgress appends byte-stream metrics inside an existing tool summary row.
+// ToolRequestInlineProgress 在既有工具摘要行内部追加字节流指标。
+//
+// Parameters:
+// `progress` is the optional request stream state for the current tool call.
+// 参数：
+// `progress` 是当前工具调用的可选请求流状态。
+//
+// Returns:
+// A live inline metrics suffix when request data is still being received; otherwise null.
+// 返回值：
+// 仍在接收请求数据时返回实时内联指标后缀，否则返回 null。
+function ToolRequestInlineProgress(props: {
+  // Optional request stream state owned by the current tool card.
+  // 当前工具卡片持有的可选请求流状态。
+  progress: ToolRequestCardProgress | null;
+}) {
+  if (!props.progress) {
+    return null;
+  }
+  return (
+    <span
+      aria-live="polite"
+      className="tool-request-inline-progress"
+      data-request-revision={props.progress.revision}
+    >
+      {props.progress.metricsLabel}
+    </span>
+  );
 }
 
 // commandPresentationDetailCache avoids refetching hidden details after virtualized remounts.
@@ -162,6 +216,9 @@ function MarkdownToolPresentationCard(props: {
   // Whether this Markdown-output card is expanded.
   // 当前 Markdown 输出卡片是否展开。
   expanded: boolean;
+  // Optional request stream state rendered inside this original card.
+  // 在当前原始卡片内部渲染的可选请求流状态。
+  requestProgress: ToolRequestCardProgress | null;
   // Updates the surface-level expansion state.
   // 更新界面级展开状态。
   onExpandedChange: (presentationId: string, expanded: boolean) => void;
@@ -233,8 +290,8 @@ function MarkdownToolPresentationCard(props: {
         type="button"
       >
         <MarkdownToolIcon className="markdown-tool-icon" icon={hydratedPresentation.icon} size={15} />
-        <span className={cn("tool-presentation-state", hydratedPresentation.state === "running" && "shimmer")}>{markdownToolStatusLabel(hydratedPresentation.state, t)}</span>
-        <span className="tool-presentation-command">{title}</span>
+        <span className={cn("tool-presentation-state", (props.requestProgress || hydratedPresentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? markdownToolStatusLabel(hydratedPresentation.state, t)}</span>
+        <span className="tool-presentation-command"><span className="tool-presentation-command-text">{title}</span><ToolRequestInlineProgress progress={props.requestProgress} /></span>
         {expanded ? (
           <ChevronDown className="tool-presentation-toggle" size={15} />
         ) : (
@@ -263,6 +320,9 @@ function LuaExecutionPresentationCard(props: {
   // Whether this Lua execution card is expanded.
   // 当前 Lua 执行卡片是否展开。
   expanded: boolean;
+  // Optional request stream state rendered inside this original card.
+  // 在当前原始卡片内部渲染的可选请求流状态。
+  requestProgress: ToolRequestCardProgress | null;
   // Updates the surface-level expansion state.
   // 更新界面级展开状态。
   onExpandedChange: (presentationId: string, expanded: boolean) => void;
@@ -340,7 +400,10 @@ function LuaExecutionPresentationCard(props: {
         type="button"
       >
         <LuaToolIcon className="lua-execution-icon" />
-        <span className={cn("tool-presentation-command", hydratedPresentation.state === "running" && "shimmer")}>{title}</span>
+        <span className={cn("tool-presentation-command", (props.requestProgress || hydratedPresentation.state === "running") && "shimmer")}>
+          <span className="tool-presentation-command-text">{props.requestProgress ? `${props.requestProgress.statusLabel} · ${title}` : title}</span>
+          <ToolRequestInlineProgress progress={props.requestProgress} />
+        </span>
         {expanded ? (
           <ChevronDown className="tool-presentation-toggle" size={15} />
         ) : (
@@ -742,6 +805,9 @@ function SubagentOrchestrationPresentationCard(props: {
   // Whether this row is expanded.
   // 当前行是否展开。
   expanded: boolean;
+  // Optional request stream state rendered inside this original card.
+  // 在当前原始卡片内部渲染的可选请求流状态。
+  requestProgress: ToolRequestCardProgress | null;
   // Updates the surface-level expansion state.
   // 更新界面级展开状态。
   onExpandedChange: (presentationId: string, expanded: boolean) => void;
@@ -815,8 +881,8 @@ function SubagentOrchestrationPresentationCard(props: {
         type="button"
       >
         <Bot className="subagent-orchestration-icon" size={15} />
-        <span className={cn("tool-presentation-state", hydratedPresentation.state === "running" && "shimmer")}>{subagentOperationLabel(hydratedPresentation, t)}</span>
-        <span className="tool-presentation-command">{subagentSummaryText(hydratedPresentation, t)}</span>
+        <span className={cn("tool-presentation-state", (props.requestProgress || hydratedPresentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? subagentOperationLabel(hydratedPresentation, t)}</span>
+        <span className="tool-presentation-command"><span className="tool-presentation-command-text">{subagentSummaryText(hydratedPresentation, t)}</span><ToolRequestInlineProgress progress={props.requestProgress} /></span>
         {canExpand ? (
           expanded ? (
             <ChevronDown className="tool-presentation-toggle" size={15} />
@@ -1327,6 +1393,9 @@ function CommandExecutionPresentationCard(props: {
   // Whether this command card is expanded.
   // 当前命令卡片是否展开。
   expanded: boolean;
+  // Optional request stream state rendered inside this original card.
+  // 在当前原始卡片内部渲染的可选请求流状态。
+  requestProgress: ToolRequestCardProgress | null;
   // Updates the surface-level expansion state.
   // 更新界面级展开状态。
   onExpandedChange: (presentationId: string, expanded: boolean) => void;
@@ -1417,7 +1486,7 @@ function CommandExecutionPresentationCard(props: {
         type="button"
       >
         <TerminalSquare className={cn("terminal-session-icon", terminalState && terminalStateClass(terminalState))} size={15} />
-        <span className={cn("tool-presentation-state", hydratedPresentation.state === "running" && "shimmer")}>{statusLabel}</span>
+        <span className={cn("tool-presentation-state", (props.requestProgress || hydratedPresentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? statusLabel}</span>
         {pluginContributions.map((contribution, index) => contribution.badge ? (
           <span
             className="tool-presentation-route-badge"
@@ -1427,7 +1496,7 @@ function CommandExecutionPresentationCard(props: {
             {contribution.badge}
           </span>
         ) : null)}
-        <span className="tool-presentation-command">{hydratedPresentation.command}</span>
+        <span className="tool-presentation-command"><span className="tool-presentation-command-text">{hydratedPresentation.command}</span><ToolRequestInlineProgress progress={props.requestProgress} /></span>
         {expanded ? (
           <ChevronDown className="tool-presentation-toggle" size={15} />
         ) : (
@@ -1578,6 +1647,9 @@ function AskQuestionPresentationCard(props: {
   // Whether this ask card is expanded.
   // 当前提问卡片是否展开。
   expanded: boolean;
+  // Optional request stream state rendered inside this original card.
+  // 在当前原始卡片内部渲染的可选请求流状态。
+  requestProgress: ToolRequestCardProgress | null;
   // Updates the surface-level expansion state.
   // 更新界面级展开状态。
   onExpandedChange: (presentationId: string, expanded: boolean) => void;
@@ -1642,8 +1714,8 @@ function AskQuestionPresentationCard(props: {
         type="button"
       >
         <MessageCircleQuestionMark className="ask-question-icon" size={15} />
-        <span className={cn("tool-presentation-state", hydratedPresentation.state === "running" && "shimmer")}>{askQuestionStatusLabel(hydratedPresentation.state, t)}</span>
-        <span className="tool-presentation-command">{hydratedPresentation.title}</span>
+        <span className={cn("tool-presentation-state", (props.requestProgress || hydratedPresentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? askQuestionStatusLabel(hydratedPresentation.state, t)}</span>
+        <span className="tool-presentation-command"><span className="tool-presentation-command-text">{hydratedPresentation.title}</span><ToolRequestInlineProgress progress={props.requestProgress} /></span>
         {expanded ? (
           <ChevronDown className="tool-presentation-toggle" size={15} />
         ) : (
@@ -1744,6 +1816,9 @@ function FileChangePresentationCard(props: {
   // Whether the top-level row is expanded.
   // 顶层行是否展开。
   expanded: boolean;
+  // Optional request stream state rendered inside this original card.
+  // 在当前原始卡片内部渲染的可选请求流状态。
+  requestProgress: ToolRequestCardProgress | null;
   // Expansion ids shared by the conversation surface.
   // 与会话界面共享的展开标识集合。
   expandedToolPresentationIds: Set<string>;
@@ -1786,6 +1861,7 @@ function FileChangePresentationCard(props: {
           file={singleFile}
           interactive={presentation.interactive}
           presentation={presentation}
+          requestProgress={props.requestProgress}
           t={t}
           onToggle={handleTopToggle}
         />
@@ -1811,9 +1887,10 @@ function FileChangePresentationCard(props: {
         type="button"
       >
         <FileChangeOperationIcon operation={presentation.operation} />
-        <span className={cn("tool-presentation-state", presentation.state === "running" && "shimmer")}>{fileChangeStatusLabel(presentation, presentation.operation, t)} {formatTranslation(t, "toolPresentation.file.count", { count: String(presentation.files.length) })}</span>
+        <span className={cn("tool-presentation-state", (props.requestProgress || presentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? fileChangeStatusLabel(presentation, presentation.operation, t)} {formatTranslation(t, "toolPresentation.file.count", { count: String(presentation.files.length) })}</span>
         <span className="file-change-path multi">
           <span className="file-change-path-text">{t("toolPresentation.file.multiChange")}</span>
+          <ToolRequestInlineProgress progress={props.requestProgress} />
           <FileChangeCounts added={presentation.totalAdded} failed={presentation.state === "failed"} removed={presentation.totalRemoved} />
         </span>
         {presentation.interactive ? (effectiveExpanded ? <ChevronDown className="tool-presentation-toggle file-change-toggle" size={15} /> : <ChevronRight className="tool-presentation-toggle file-change-toggle" size={15} />) : <span />}
@@ -1878,6 +1955,9 @@ function FileChangeSummaryButton(props: {
   // Whether to show the operation status label before the file name.
   // 是否在文件名前显示操作状态文案。
   showStatusLabel?: boolean;
+  // Optional request stream state for the top-level file row.
+  // 顶层文件行使用的可选请求流状态。
+  requestProgress?: ToolRequestCardProgress | null;
   // Toggle handler for interactive rows.
   // 可交互行的切换处理器。
   onToggle: () => void;
@@ -1898,10 +1978,11 @@ function FileChangeSummaryButton(props: {
       type="button"
     >
       {showOperationIcon ? <FileChangeOperationIcon operation={props.file.operation} /> : null}
-      {showStatusLabel ? <span className={cn("tool-presentation-state", props.presentation.state === "running" && "shimmer")}>{fileChangeStatusLabel(props.presentation, props.file.operation, props.t)}</span> : null}
+      {showStatusLabel ? <span className={cn("tool-presentation-state", (props.requestProgress || props.presentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? fileChangeStatusLabel(props.presentation, props.file.operation, props.t)}</span> : null}
       <span className="file-change-path">
         <span className="file-change-icon-stack"><FileTypeIcon icon={props.file.icon} /></span>
         <span className="file-change-path-text">{props.file.displayPath}</span>
+        <ToolRequestInlineProgress progress={props.requestProgress ?? null} />
         <FileChangeCounts added={props.file.added} failed={props.presentation.state === "failed"} removed={props.file.removed} />
       </span>
       {props.interactive ? (props.expanded ? <ChevronDown className="tool-presentation-toggle file-change-toggle" size={15} /> : <ChevronRight className="tool-presentation-toggle file-change-toggle" size={15} />) : <span />}

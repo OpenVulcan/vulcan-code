@@ -136,15 +136,15 @@ export function createPluginPanel(sdk) {
     return `${new Intl.NumberFormat(sdk.locale, { maximumFractionDigits: 1 }).format(tokensPerSecond)} t/s`;
   }
 
-  // uncachedInputTokens removes cached prompt tokens from the Provider-reported input total.
-  // uncachedInputTokens 从 Provider 报告的输入总量中扣除缓存提示词 Token。
+  // uncachedInputTokens reads the protocol-normalized non-cached input persisted by the statistics runtime.
+  // uncachedInputTokens 读取统计运行时按协议归一化后持久化的非缓存输入。
   //
-  // request is one validated recent-request record containing total and cached input counts.
-  // request 是一条包含输入总量与缓存输入量的已验证最近请求记录。
-  // Returns a non-negative uncached input-token count.
-  // 返回非负的未缓存输入 Token 数量。
+  // request is one validated recent-request record containing non-cached input and cache counts.
+  // request 是一条包含非缓存输入量与缓存量的已验证最近请求记录。
+  // Returns the non-negative non-cached input-token count.
+  // 返回非负的非缓存输入 Token 数量。
   function uncachedInputTokens(request) {
-    return Math.max(0, numeric(request.inputTokens) - numeric(request.cachedInputTokens));
+    return Math.max(0, numeric(request.inputTokens));
   }
 
   // colorForSeries maps one stable model identity to the inherited chart palette.

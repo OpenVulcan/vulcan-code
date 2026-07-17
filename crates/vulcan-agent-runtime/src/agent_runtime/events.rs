@@ -19,6 +19,24 @@ pub enum RuntimeEventKind {
     /// Token-level model streaming delta.
     /// 模型流式输出的 Token 增量事件。
     TokenDelta,
+    /// Model-side tool request was identified and is still receiving arguments.
+    /// 已识别模型侧工具请求，当前仍在接收参数。
+    ToolRequestStarted,
+    /// Model-side tool request argument progress changed.
+    /// 模型侧工具请求参数进度发生变化。
+    ToolRequestProgress,
+    /// Sanitized parser preview for the active tool request changed.
+    /// 活动工具请求的净化解析器预览发生变化。
+    ToolRequestPreviewUpdated,
+    /// Model-side tool request arguments completed and are ready for host dispatch.
+    /// 模型侧工具请求参数已完成，可进入宿主调度。
+    ToolRequestReady,
+    /// Model-side tool request became definitively invalid before host execution.
+    /// 模型侧工具请求在宿主执行前已确定无效。
+    ToolRequestInvalid,
+    /// Model-side tool request stopped before host execution began.
+    /// 模型侧工具请求在宿主执行开始前停止。
+    ToolRequestAborted,
     /// Native or MCP tool invocation started.
     /// 原生工具或 MCP 工具调用开始事件。
     ToolStarted,

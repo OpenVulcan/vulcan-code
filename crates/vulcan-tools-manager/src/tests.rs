@@ -26,6 +26,7 @@ fn test_candidate(
         parameters_schema: json!({"type": "object"}),
         ai_visible: true,
         plan_policy,
+        request_streaming: None,
         invoke: Arc::new(|_args: Value, _session_id| {
             Box::pin(async { Ok(VulcanToolInvocationResult::from_model_output(json!("ok"))) })
         }),

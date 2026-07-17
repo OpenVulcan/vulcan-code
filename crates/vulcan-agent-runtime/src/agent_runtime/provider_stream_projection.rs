@@ -11,6 +11,7 @@ use vulcan_core::types::{
 /// 返回某条 Provider 运行时事件是否代表真实工具边界，从而应封口当前浮动思考阶段。
 pub fn is_provider_tool_boundary_runtime_event(event: &RuntimeEvent) -> bool {
     match event.kind {
+        RuntimeEventKind::ToolRequestStarted => event.title.starts_with("工具请求 · "),
         RuntimeEventKind::ToolStarted => event.title.starts_with("工具调用 · "),
         RuntimeEventKind::ToolFinished => event.title.starts_with("工具返回 · "),
         _ => false,

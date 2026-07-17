@@ -23,6 +23,7 @@ use crate::agent_runtime::provider_protocol_openai_compatible::{
     should_evict_distinct_named_tool_call, tool_call_chunks,
 };
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
+use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_transport_http_support::{
     build_json_http_client, build_rest_endpoint, ensure_bearer_authorization_header,
     ensure_json_content_type, ensure_string_header, format_standard_error_response_with_headers,
@@ -32,6 +33,7 @@ use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreT
 use crate::agent_runtime::provider_transport_wire_capture::{
     emit_provider_wire_request, provider_request_dry_run_active, provider_request_dry_run_response,
 };
+use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
 use crate::provider_config::{
     ModelInterleavedCapability, OpenAiCompatibleStreamingUsageConfig,
     OpenAiCompatibleStreamingUsageSource, ProviderApiFamily, supported_provider_by_id,
@@ -42,6 +44,7 @@ use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use serde_json::{Map as JsonMap, Value, json};
 use std::collections::{BTreeSet, HashMap};
+use uuid::Uuid;
 use vulcan_context::RuntimeProviderNativeStateEnvelope;
 use vulcan_core::provider::VulcanProviderDeltaSink;
 use vulcan_core::types::{

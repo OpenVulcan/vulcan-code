@@ -248,7 +248,7 @@ fn anthropic_provider_state_stores_replayable_local_tool_id_when_upstream_id_is_
     let block = anthropic_content_block_from_pending_tool_use(&PendingAnthropicToolUse {
         id: String::new(),
         name: String::from("spawn_agent"),
-        input_json: String::from("{\"task\":\"delegate-1\"}"),
+        input_json: String::from("{\"task\":\"delegate-1\"}").into(),
     })
     .expect("tool-use block should build");
 

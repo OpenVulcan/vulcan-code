@@ -240,6 +240,93 @@ fn run_seeded_turn_streaming_uses_preseeded_agent_message() {
     });
 }
 
+/// Resumes a seeded streaming turn from a committed tool result without appending the original user prompt again.
+/// 从已提交工具结果恢复播种流式回合，且不再次追加原始用户提示词。
+#[test]
+fn run_seeded_turn_streaming_resumes_from_tool_result() {
+    let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        // firstAdapter creates one committed assistant tool call before the configured turn limit stops the original controller.
+        // firstAdapter 在配置的回合限制终止原控制器前创建一条已提交的助手工具调用。
+        let first_adapter = MockProviderAdapter::new(vec![ProviderTurnResponse {
+            assistant_text: String::new(),
+            assistant_reasoning: String::new(),
+            provider_message_id: Some(String::from("resp-tool-before-retry")),
+            provider_message_state: None,
+            tool_calls: vec![ConversationToolCall {
+                id: String::from("tool-item-before-retry"),
+                tool_call_id: Some(String::from("call-before-retry")),
+                tool_name: String::from("read_file"),
+                arguments: json!({"path":"src/lib.rs"}),
+            }],
+            continuation: None,
+            usage: None,
+        }]);
+        let executor =
+            MockToolExecutor::new().with_outcome("read_file", "已读取 src/lib.rs。", None, false);
+        let mut first_controller =
+            VulcanCoreController::new(build_test_config(1), ConversationSnapshot::default())
+                .expect("valid initial core conversation snapshot");
+        first_controller
+            .run_user_turn(
+                &first_adapter,
+                &executor,
+                &AllowAllToolPolicy,
+                "请读取文件后继续",
+            )
+            .await
+            .expect_err("turn limit should preserve the committed tool boundary");
+        let retry_snapshot = first_controller.snapshot().clone();
+        assert!(matches!(
+            retry_snapshot.messages.last().map(|message| &message.payload),
+            Some(ConversationPayload::ToolResult { tool_call_id, .. })
+                if tool_call_id.as_deref() == Some("call-before-retry")
+        ));
+
+        // retryAdapter returns the final response from the exact committed tool boundary.
+        // retryAdapter 从精确的已提交工具边界返回最终响应。
+        let retry_adapter = MockStreamingProviderAdapter::new(vec![(
+            vec![ProviderTurnDelta::Output {
+                delta: String::from("已继续处理。"),
+            }],
+            ProviderTurnResponse {
+                assistant_text: String::from("已继续处理。"),
+                assistant_reasoning: String::new(),
+                provider_message_id: Some(String::from("resp-after-retry")),
+                provider_message_state: None,
+                tool_calls: Vec::new(),
+                continuation: None,
+                usage: None,
+            },
+        )]);
+        let original_message_count = retry_snapshot.messages.len();
+        let mut retry_controller = VulcanCoreController::new(build_test_config(2), retry_snapshot)
+            .expect("valid retry core conversation snapshot");
+        retry_controller
+            .run_seeded_turn_streaming_with_checkpoints_and_interventions(
+                &retry_adapter,
+                &executor,
+                &AllowAllToolPolicy,
+                |_, _| {},
+                |_| Ok(false),
+            )
+            .await
+            .expect("resume seeded streaming turn from tool result");
+
+        assert_eq!(
+            retry_controller.snapshot().messages.len(),
+            original_message_count + 1
+        );
+        let built_requests = retry_adapter.built_requests();
+        assert_eq!(built_requests.len(), 1);
+        assert!(matches!(
+            built_requests[0].history.last().map(|message| &message.payload),
+            Some(ConversationPayload::ToolResult { tool_call_id, .. })
+                if tool_call_id.as_deref() == Some("call-before-retry")
+        ));
+    });
+}
+
 /// Stops the host-owned loop with a controller error once the configured provider-turn budget has been exhausted.
 /// 一旦达到已配置的 Provider 回合预算上限，就以控制器错误终止宿主自有循环。
 #[test]

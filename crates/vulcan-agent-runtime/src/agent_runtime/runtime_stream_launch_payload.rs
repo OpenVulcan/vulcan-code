@@ -106,6 +106,15 @@ pub(crate) fn build_runtime_stream_launch_payload(
     // provider_api_family preserves the canonical typed API family before preparation moves into the launch payload.
     // provider_api_family 在执行准备移入启动载荷前保留规范强类型 API 协议族。
     let provider_api_family = bootstrap.preparation.model_blueprint.api_family();
+    // modelId preserves the exact tokenizer route before preparation moves into the launch payload.
+    // modelId 在执行准备移入启动载荷前保留精确 Tokenizer 路由。
+    let model_id = bootstrap.preparation.model_blueprint.model_id.clone();
+    // streamTokenBudgetRuntime shares the warmed counter with tool request progress.
+    // streamTokenBudgetRuntime 与工具请求进度共享已预热统计器。
+    let stream_token_budget_runtime = bootstrap.token_budget_runtime.clone();
+    // streamResolvedTools freezes parser capabilities before definitions move into the launch payload.
+    // streamResolvedTools 在工具定义移入启动载荷前冻结解析器能力。
+    let stream_resolved_tools = bootstrap.resolved_tool_definitions.clone();
     RuntimeStreamLaunch {
         task_execution_context,
         session_id: request.session_id,
@@ -124,6 +133,11 @@ pub(crate) fn build_runtime_stream_launch_payload(
         system_preamble: bootstrap.system_preamble,
         core_snapshot: bootstrap.core_snapshot,
         stream_state: RuntimeStreamDeltaState::new(bootstrap.core_controller, provider_api_family)
+            .with_tool_request_stream(
+                model_id,
+                stream_token_budget_runtime,
+                &stream_resolved_tools,
+            )
             .with_provider_request_telemetry_context(provider_telemetry_context),
         lowering_repair_events: bootstrap.lowering_repair_events,
     }

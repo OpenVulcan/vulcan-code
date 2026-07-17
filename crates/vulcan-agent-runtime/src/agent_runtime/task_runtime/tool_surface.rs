@@ -42,6 +42,7 @@ pub(super) fn build_spawn_agent_tool_candidate(
         parameters_schema: spawn_agent_args_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
+        request_streaming: None,
         invoke: Arc::new(move |args, session_id| {
             let task_runtime = Arc::clone(&task_runtime);
             Box::pin(async move {
@@ -97,6 +98,7 @@ pub(super) fn build_agent_orchestration_info_tool_candidate(
         parameters_schema: agent_orchestration_info_args_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
+        request_streaming: None,
         invoke: Arc::new(move |args, session_id| {
             let task_runtime = Arc::clone(&task_runtime);
             Box::pin(async move {
@@ -130,6 +132,7 @@ pub(super) fn build_send_message_tool_candidate(
         parameters_schema: send_message_args_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
+        request_streaming: None,
         invoke: Arc::new(move |args, session_id| {
             let task_runtime = Arc::clone(&task_runtime);
             Box::pin(async move {
@@ -159,6 +162,7 @@ pub(super) fn build_wait_agent_tool_candidate(
         parameters_schema: wait_agent_args_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
+        request_streaming: None,
         invoke: Arc::new(move |args, session_id| {
             let task_runtime = Arc::clone(&task_runtime);
             Box::pin(async move {
@@ -188,6 +192,7 @@ pub(super) fn build_list_agents_tool_candidate(
         parameters_schema: list_agents_args_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
+        request_streaming: None,
         invoke: Arc::new(move |args, session_id| {
             let task_runtime = Arc::clone(&task_runtime);
             Box::pin(async move {
@@ -217,6 +222,7 @@ pub(super) fn build_interrupt_agent_tool_candidate(
         parameters_schema: interrupt_agent_args_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
+        request_streaming: None,
         invoke: Arc::new(move |args, session_id| {
             let task_runtime = Arc::clone(&task_runtime);
             Box::pin(async move {
@@ -244,6 +250,7 @@ pub(super) fn build_close_agent_tool_candidate(
         parameters_schema: close_agent_args_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
+        request_streaming: None,
         invoke: Arc::new(move |args, session_id| {
             let task_runtime = Arc::clone(&task_runtime);
             Box::pin(async move {

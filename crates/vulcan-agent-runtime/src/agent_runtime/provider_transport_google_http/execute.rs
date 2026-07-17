@@ -160,6 +160,7 @@ where
             &mut finalized_parts,
             &mut pending_reasoning_index,
             &mut function_part_indices,
+            provider_tool_definitions,
         )?;
     }
 

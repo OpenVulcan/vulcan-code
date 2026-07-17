@@ -34,6 +34,7 @@ impl VulcanToolsManager {
                 descriptor: candidate.descriptor.clone(),
                 parameters_schema: candidate.parameters_schema.clone(),
                 plan_policy: candidate.plan_policy.clone(),
+                request_streaming: candidate.request_streaming.clone(),
                 invoke: candidate.invoke.clone(),
             });
         }

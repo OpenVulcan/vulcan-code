@@ -164,6 +164,9 @@ export interface WorkbenchSnapshot {
   // Git commit dialog settings resolved from the shared service configuration.
   // 从共享服务配置解析出的 Git 提交弹窗设置。
   gitCommit?: GitCommitSettingsSummary;
+  // Provider retry settings resolved from the shared service configuration.
+  // 从共享服务配置解析出的 Provider 重试设置。
+  providerRetry?: ProviderRetrySettingsSummary;
   // Host-owned tool settings resolved from the shared service configuration.
   // 从共享服务配置解析出的宿主自有工具设置。
   hostTools?: HostToolsSettingsSummary;
@@ -236,6 +239,55 @@ export interface WorkbenchSnapshot {
   // Context token usage snapshot projected from the latest execution preparation.
   // 从最近一次执行准备投影出的上下文 Token 占用快照。
   contextUsage?: ContextUsageSnapshot | null;
+}
+
+// ProviderRetrySettingsSummary describes general and rate-limit retry rules projected by the service.
+// ProviderRetrySettingsSummary 描述服务端投影出的通用与限流重试规则。
+export interface ProviderRetrySettingsSummary {
+  // Whether retryable Provider failures may be retried automatically.
+  // 是否允许自动重试可重试的 Provider 失败。
+  enabled: boolean;
+  // Maximum ordinary transient retry count.
+  // 普通瞬态错误的最大重试次数。
+  maxRetries: number;
+  // Initial ordinary retry delay in milliseconds.
+  // 普通重试的初始等待毫秒数。
+  initialDelayMs: number;
+  // Maximum ordinary retry delay in milliseconds.
+  // 普通重试的最大等待毫秒数。
+  maxDelayMs: number;
+  // Ordinary backoff multiplier represented in thousandths.
+  // 以千分数表示的普通退避倍数。
+  backoffFactorMilli: number;
+  // Deterministic retry jitter percentage.
+  // 确定性重试抖动百分比。
+  jitterPercent: number;
+  // Whether Retry-After hints may increase waits.
+  // 是否允许 Retry-After 提示增加等待时间。
+  respectRetryAfter: boolean;
+  // Whether HTTP 429 and structured rate-limit errors may be retried.
+  // 是否允许重试 HTTP 429 与结构化限流错误。
+  retry429: boolean;
+  // Dedicated rate-limit retry schedule.
+  // 专用限流重试调度规则。
+  rateLimit: ProviderRateLimitRetrySettingsSummary;
+}
+
+// ProviderRateLimitRetrySettingsSummary describes the dedicated rate-limit schedule.
+// ProviderRateLimitRetrySettingsSummary 描述专用限流调度规则。
+export interface ProviderRateLimitRetrySettingsSummary {
+  // Maximum retry count, where zero means retry until user cancellation.
+  // 最大重试次数；零表示持续重试直至用户取消。
+  maxRetries: number;
+  // Delay before the first rate-limit retry in milliseconds.
+  // 第一次限流重试前的等待毫秒数。
+  initialDelayMs: number;
+  // Maximum rate-limit delay in milliseconds.
+  // 最大限流等待毫秒数。
+  maxDelayMs: number;
+  // Rate-limit backoff multiplier represented in thousandths.
+  // 以千分数表示的限流退避倍数。
+  backoffFactorMilli: number;
 }
 
 // GitCommitSettingsSummary describes Git commit dialog settings projected by the service.

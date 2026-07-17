@@ -365,6 +365,7 @@ pub(crate) fn is_active_session_run_phase(phase: SessionRunPhase) -> bool {
             | SessionRunPhase::MemoryRecall
             | SessionRunPhase::Requesting
             | SessionRunPhase::Thinking
+            | SessionRunPhase::ToolCalling
             | SessionRunPhase::ToolRunning
     )
 }
@@ -389,6 +390,7 @@ pub(crate) fn session_state_for_run_phase(phase: SessionRunPhase) -> SessionStat
         | SessionRunPhase::MemoryRecall
         | SessionRunPhase::Requesting
         | SessionRunPhase::Thinking
+        | SessionRunPhase::ToolCalling
         | SessionRunPhase::ToolRunning => SessionState::Running,
     }
 }
@@ -398,8 +400,12 @@ pub(crate) fn session_state_for_run_phase(phase: SessionRunPhase) -> SessionStat
 pub(crate) fn is_provider_tool_boundary_runtime_event(event: &RuntimeEvent) -> bool {
     matches!(
         event.kind,
-        RuntimeEventKind::ToolStarted | RuntimeEventKind::ToolFinished
-    ) && (event.title.starts_with("工具调用 · ") || event.title.starts_with("工具返回 · "))
+        RuntimeEventKind::ToolRequestStarted
+            | RuntimeEventKind::ToolStarted
+            | RuntimeEventKind::ToolFinished
+    ) && (event.title.starts_with("工具请求 · ")
+        || event.title.starts_with("工具调用 · ")
+        || event.title.starts_with("工具返回 · "))
 }
 
 /// Returns the current Unix timestamp as millisecond text for SQLite metadata rows.
@@ -994,6 +1000,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         reasoning_selection: reasoning_selection(provider_configuration),
         thinking_display_mode: workbench_thinking_display_mode(provider_configuration),
         git_commit: git_commit_settings(provider_configuration),
+        provider_retry: provider_retry_settings(provider_configuration),
         host_tools: host_tools_settings_with_native_tools(provider_configuration, native_tools),
         ai_capabilities: ai_capabilities(
             selected_ai_tool_configuration,

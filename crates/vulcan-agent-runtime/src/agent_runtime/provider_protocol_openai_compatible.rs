@@ -1,6 +1,7 @@
 //! Host-owned OpenAI-compatible streaming protocol primitives.
 //! 宿主自有的 OpenAI 兼容流式协议基础原语。
 
+use crate::agent_runtime::tool_request_argument_assembler::ToolCallDraftAssembler;
 use serde_json::{Map as JsonMap, Value};
 use vulcan_core::types::ProviderUsageSnapshot as CoreProviderUsageSnapshot;
 
@@ -120,9 +121,9 @@ pub(crate) struct CompatibleAccumulatedToolCall {
     /// Stable resolved tool name, if already known.
     /// 若已知则保存稳定的已解析工具名称。
     pub(crate) name: String,
-    /// Incrementally merged tool argument payload.
-    /// 增量合并后的工具参数载荷。
-    pub(crate) arguments: Value,
+    /// Shared single-copy assembler for the incrementally merged argument document.
+    /// 增量合并参数文档使用的共享单副本 assembler。
+    pub(crate) arguments: ToolCallDraftAssembler,
 }
 
 impl CompatibleAccumulatedToolCall {
@@ -132,7 +133,7 @@ impl CompatibleAccumulatedToolCall {
         Self {
             id: String::new(),
             name: String::new(),
-            arguments: Value::Null,
+            arguments: ToolCallDraftAssembler::default(),
         }
     }
 }
@@ -213,37 +214,23 @@ pub(crate) fn append_tool_call_arguments(
     tool_call: &mut CompatibleAccumulatedToolCall,
     chunk: &str,
 ) {
-    let current_args = match &tool_call.arguments {
-        Value::Null => String::new(),
-        Value::String(existing) => {
-            if existing.trim() == "null" && !chunk.trim().is_empty() {
-                String::new()
-            } else {
-                existing.clone()
-            }
-        }
-        value => value.to_string(),
-    };
-
-    let combined = format!("{current_args}{chunk}");
-
-    if combined.trim_start().starts_with('{') && combined.trim_end().ends_with('}') {
-        match serde_json::from_str(&combined) {
-            Ok(parsed) => tool_call.arguments = parsed,
-            Err(_) => tool_call.arguments = Value::String(combined),
-        }
-    } else {
-        tool_call.arguments = Value::String(combined);
+    if tool_call
+        .arguments
+        .read(|arguments| arguments.trim() == "null")
+        && !chunk.trim().is_empty()
+    {
+        tool_call.arguments.replace(String::new());
     }
+    tool_call.arguments.append(chunk);
 }
 
 /// Finalizes one already completed accumulated tool call by normalizing missing arguments into the canonical empty-object payload.
 /// 通过把缺失参数规范化为空对象载荷，完成一次已完成累计工具调用的收尾。
 pub(crate) fn finalize_completed_streaming_tool_call(
-    mut tool_call: CompatibleAccumulatedToolCall,
+    tool_call: CompatibleAccumulatedToolCall,
 ) -> CompatibleAccumulatedToolCall {
-    if tool_call.arguments.is_null() {
-        tool_call.arguments = Value::Object(JsonMap::new());
+    if tool_call.arguments.is_empty() {
+        tool_call.arguments.replace(String::from("{}"));
     }
 
     tool_call
@@ -252,26 +239,23 @@ pub(crate) fn finalize_completed_streaming_tool_call(
 /// Finalizes one pending accumulated tool call and drops nameless or syntactically incomplete entries.
 /// 完成一次待定累计工具调用的收尾，并丢弃无名称或语法不完整的条目。
 pub(crate) fn finalize_pending_tool_call(
-    mut tool_call: CompatibleAccumulatedToolCall,
+    tool_call: CompatibleAccumulatedToolCall,
 ) -> Option<CompatibleAccumulatedToolCall> {
     if tool_call.name.is_empty() {
         return None;
     }
 
-    match &tool_call.arguments {
-        Value::Null => Some(finalize_completed_streaming_tool_call(tool_call)),
-        Value::String(arguments) => {
-            if arguments.trim().is_empty() {
-                tool_call.arguments = Value::Object(JsonMap::new());
-                return Some(tool_call);
-            }
-
-            let parsed = serde_json::from_str(arguments).ok()?;
-            tool_call.arguments = parsed;
-            Some(tool_call)
-        }
-        _ => Some(tool_call),
+    if tool_call
+        .arguments
+        .read(|arguments| arguments.trim().is_empty())
+    {
+        tool_call.arguments.replace(String::from("{}"));
+        return Some(tool_call);
     }
+    tool_call
+        .arguments
+        .read(|arguments| serde_json::from_str::<Value>(arguments).ok())?;
+    Some(tool_call)
 }
 
 #[cfg(test)]
@@ -280,7 +264,17 @@ mod tests {
         CompatibleAccumulatedToolCall, CompatibleToolCallChunk, append_tool_call_arguments,
         finalize_pending_tool_call, should_evict_distinct_named_tool_call,
     };
+    use crate::agent_runtime::tool_request_argument_assembler::ToolCallDraftAssembler;
     use serde_json::json;
+
+    /// Parses one finalized assembler into its canonical JSON value for assertions.
+    /// 将一个已完成 assembler 解析为用于断言的规范 JSON 值。
+    fn arguments_value(tool_call: &CompatibleAccumulatedToolCall) -> serde_json::Value {
+        tool_call
+            .arguments
+            .read(|arguments| serde_json::from_str(arguments))
+            .expect("finalized test arguments should be valid JSON")
+    }
 
     /// Verifies that one parameterless pending tool call is normalized into an empty JSON object instead of being dropped.
     /// 验证无参数的待定工具调用会被规范化为空 JSON 对象，而不是被丢弃。
@@ -289,7 +283,7 @@ mod tests {
         let tool_call = CompatibleAccumulatedToolCall {
             id: String::from("call_123"),
             name: String::from("ping"),
-            arguments: serde_json::Value::Null,
+            arguments: ToolCallDraftAssembler::default(),
         };
 
         let finalized =
@@ -297,7 +291,7 @@ mod tests {
 
         assert_eq!(finalized.id, "call_123");
         assert_eq!(finalized.name, "ping");
-        assert_eq!(finalized.arguments, json!({}));
+        assert_eq!(arguments_value(&finalized), json!({}));
     }
 
     /// Verifies that incomplete JSON fragments are intentionally dropped so host-owned execution does not run syntactically broken tool calls.
@@ -307,7 +301,7 @@ mod tests {
         let tool_call = CompatibleAccumulatedToolCall {
             id: String::from("call_123"),
             name: String::from("ping"),
-            arguments: serde_json::Value::String(String::from("{\"x\":")),
+            arguments: ToolCallDraftAssembler::new(String::from("{\"x\":")),
         };
 
         assert!(finalize_pending_tool_call(tool_call).is_none());
@@ -320,7 +314,7 @@ mod tests {
         let mut tool_call = CompatibleAccumulatedToolCall {
             id: String::from("call_123"),
             name: String::from("web_search"),
-            arguments: serde_json::Value::String(String::from("null")),
+            arguments: ToolCallDraftAssembler::new(String::from("null")),
         };
 
         append_tool_call_arguments(&mut tool_call, "{\"query\": \"META");
@@ -329,7 +323,10 @@ mod tests {
         let finalized =
             finalize_pending_tool_call(tool_call).expect("tool call should be preserved");
 
-        assert_eq!(finalized.arguments, json!({"query": "META Platforms news"}));
+        assert_eq!(
+            arguments_value(&finalized),
+            json!({"query": "META Platforms news"})
+        );
     }
 
     /// Verifies that a new named tool-call fragment with a different upstream identifier evicts the existing accumulated entry.
@@ -339,7 +336,7 @@ mod tests {
         let existing = CompatibleAccumulatedToolCall {
             id: String::from("call_aaa"),
             name: String::from("search"),
-            arguments: json!({"query": "one"}),
+            arguments: ToolCallDraftAssembler::new(String::from("{\"query\":\"one\"}")),
         };
         let incoming = CompatibleToolCallChunk {
             index: 0,

@@ -319,8 +319,9 @@ use project_conversation_services::*;
 pub use project_directories::service_add_project_from_path;
 use project_directories::service_browse_project_directories;
 use provider_settings::{
-    service_remove_provider_configuration, service_save_provider_configuration,
-    service_save_provider_enabled_models, service_save_provider_model_override,
+    provider_retry_settings, service_remove_provider_configuration,
+    service_save_provider_configuration, service_save_provider_enabled_models,
+    service_save_provider_model_override, service_save_provider_retry_settings,
 };
 use rpc_dispatch::dispatch_service_rpc;
 use runtime_summary_projection::*;

@@ -56,9 +56,17 @@
 
 .tool-presentation-command {
   min-width: 0;
+  display: inline-flex;
+  align-items: center;
   overflow: hidden;
   color: color-mix(in oklch, var(--muted-foreground) 82%, transparent);
   font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.tool-presentation-command-text {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -583,6 +591,19 @@
   max-width: min(52vw, 560px);
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.tool-request-inline-progress {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tool-request-inline-progress::before {
+  content: "·";
+  margin-right: 6px;
 }
 
 .file-change-counts {

@@ -185,6 +185,9 @@ pub struct VulcanToolCandidate {
     /// Plan-mode execution policy used during invocation-time blocking.
     /// 调用期拦截过程中使用的 Plan 模式执行策略。
     pub plan_policy: VulcanPlanToolPolicy,
+    /// Optional execution-only request-streaming parser and preview capability.
+    /// 可选的仅执行期请求流解析器与预览能力。
+    pub request_streaming: Option<ToolRequestStreamingCapability>,
     /// Final host-owned invocation closure used for dispatch.
     /// 用于调度的最终宿主自有调用闭包。
     pub invoke: VulcanToolInvokeHandler,
@@ -203,6 +206,9 @@ pub struct ResolvedToolDefinition {
     /// Plan-mode execution policy preserved for invocation-time blocking.
     /// 为调用期拦截保留的 Plan 模式执行策略。
     pub plan_policy: VulcanPlanToolPolicy,
+    /// Optional execution-only request-streaming parser and preview capability.
+    /// 可选的仅执行期请求流解析器与预览能力。
+    pub request_streaming: Option<ToolRequestStreamingCapability>,
     /// Final host-owned invocation closure used for dispatch.
     /// 用于调度的最终宿主自有调用闭包。
     pub invoke: VulcanToolInvokeHandler,
@@ -216,6 +222,7 @@ impl std::fmt::Debug for ResolvedToolDefinition {
             .debug_struct("ResolvedToolDefinition")
             .field("descriptor", &self.descriptor)
             .field("parameters_schema", &self.parameters_schema)
+            .field("request_streaming", &self.request_streaming)
             .finish()
     }
 }

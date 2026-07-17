@@ -89,6 +89,7 @@ fn configured_web_search_candidate(
         plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(
             "web search browse internet search news docs",
         )),
+        request_streaming: None,
         invoke: std::sync::Arc::new(move |args, _session_id| {
             let configuration = configuration.clone();
             Box::pin(async move {
@@ -138,6 +139,7 @@ pub(super) fn configured_understand_image_candidate(
         plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(
             "understand image inspect screenshot analyze visual content OCR",
         )),
+        request_streaming: None,
         invoke: std::sync::Arc::new(move |args, _session_id| {
             let configuration = configuration.clone();
             let conversation_attachments = image_attachments.clone();
@@ -185,6 +187,7 @@ fn configured_image_generation_candidate(
         plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(
             "generate image create illustration render picture",
         )),
+        request_streaming: None,
         invoke: std::sync::Arc::new(move |args, _session_id| {
             let configuration = configuration.clone();
             let workspace_path = workspace_path.clone();
@@ -237,6 +240,7 @@ fn configured_video_generation_candidate(
         plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(
             "generate video animate clip movie image to video",
         )),
+        request_streaming: None,
         invoke: std::sync::Arc::new(move |args, _session_id| {
             let configuration = configuration.clone();
             let workspace_path = workspace_path.clone();
@@ -285,6 +289,7 @@ fn configured_speech_synthesis_candidate(
         plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(
             "speech synthesize text to speech voice audio narration",
         )),
+        request_streaming: None,
         invoke: std::sync::Arc::new(move |args, _session_id| {
             let configuration = configuration.clone();
             let workspace_path = workspace_path.clone();
@@ -326,6 +331,7 @@ fn configured_music_generation_candidate(
         plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(
             "generate music song bgm lyrics instrumental",
         )),
+        request_streaming: None,
         invoke: std::sync::Arc::new(move |args, _session_id| {
             let configuration = configuration.clone();
             let workspace_path = workspace_path.clone();
@@ -375,6 +381,7 @@ fn configured_music_cover_candidate(
         plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(
             "music cover remix rearrange reference audio song",
         )),
+        request_streaming: None,
         invoke: std::sync::Arc::new(move |args, _session_id| {
             let configuration = configuration.clone();
             let workspace_path = workspace_path.clone();
@@ -446,6 +453,7 @@ fn build_ai_tool_fallback_candidate(
             "{} {} {}",
             semantic_tool_name, backing_tool_name, semantic_description
         )),
+        request_streaming: target.request_streaming,
         invoke: target.invoke,
     }
 }

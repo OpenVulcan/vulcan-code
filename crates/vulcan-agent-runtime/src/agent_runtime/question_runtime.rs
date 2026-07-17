@@ -500,6 +500,7 @@ pub fn build_question_tool_candidate(
         parameters_schema: question_tool_args_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Visible,
+        request_streaming: None,
         invoke: Arc::new(move |args, session_id| {
             let question_runtime = Arc::clone(&question_runtime);
             let tool_name = tool_name.clone();

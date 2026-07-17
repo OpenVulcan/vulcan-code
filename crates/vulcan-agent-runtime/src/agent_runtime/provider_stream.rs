@@ -2,6 +2,7 @@
 //! 供执行器、传输适配器与协议桥接辅助逻辑复用的共享 Provider 流式通道类型。
 
 use crate::agent_runtime::events::RuntimeEvent;
+use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
 use crate::conversation_protocol::SessionConversationState;
 use futures_util::Stream;
 use serde_json::Value;
@@ -27,6 +28,9 @@ pub(crate) enum ProviderStreamDelta {
     /// Assistant final-output delta returned by the provider stream.
     /// Provider 流返回的助手正式输出增量。
     Output(String),
+    /// Normalized model-side tool request fragment emitted before host execution starts.
+    /// 宿主执行开始前发出的规范化模型侧工具请求碎片。
+    ToolRequestFragment(ToolRequestFragment),
     /// Runtime event emitted from one streamed provider-side tool interaction.
     /// 来自某次 Provider 侧流式工具交互的运行时事件。
     RuntimeEvent(RuntimeEvent),
@@ -39,8 +43,8 @@ pub(crate) enum ProviderStreamDelta {
         /// One-based retry number, or zero when no retry follows.
         /// 从一开始的重试序号；不继续重试时为零。
         retry_number: u32,
-        /// Configured retry ceiling.
-        /// 配置的重试上限。
+        /// Configured retry ceiling, or zero when a scheduled rate-limit retry is unbounded.
+        /// 配置的重试上限；已调度的限流重试无次数上限时为零。
         max_retries: u32,
         /// Retry delay in milliseconds, or zero when no retry follows.
         /// 重试延迟毫秒数；不继续重试时为零。

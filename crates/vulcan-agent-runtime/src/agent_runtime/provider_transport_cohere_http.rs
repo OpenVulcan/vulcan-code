@@ -17,6 +17,7 @@ use crate::agent_runtime::provider_protocol_content::{
     ProviderAssistantContent, ProviderReasoningPart,
 };
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
+use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_transport_http_support::{
     build_json_http_client, build_rest_endpoint, ensure_bearer_authorization_header,
     ensure_json_content_type, format_standard_error_response_with_headers,
@@ -26,11 +27,15 @@ use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreT
 use crate::agent_runtime::provider_transport_wire_capture::{
     emit_provider_wire_request, provider_request_dry_run_active, provider_request_dry_run_response,
 };
+use crate::agent_runtime::tool_request_argument_assembler::ToolCallDraftAssembler;
+use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
 use crate::provider_config::ProviderApiFamily;
 use crate::provider_input_normalizer::normalize_provider_user_input;
 use futures_util::StreamExt;
 use reqwest::header::HeaderMap;
 use serde_json::{Map as JsonMap, Value, json};
+use std::collections::HashMap;
+use uuid::Uuid;
 use vulcan_core::provider::VulcanProviderDeltaSink;
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
@@ -70,7 +75,7 @@ struct PendingCohereToolCall {
     name: String,
     /// Accumulated JSON-stringified arguments payload.
     /// 累积的 JSON 字符串化参数载荷。
-    arguments_json: String,
+    arguments_json: ToolCallDraftAssembler,
 }
 
 /// Executes one direct Cohere streaming turn without going through any compatibility transport layer.
@@ -153,7 +158,12 @@ where
     let mut active_content_kind = None::<ActiveCohereContentKind>;
     let mut active_thinking_text = String::new();
     let mut tool_plan_text = String::new();
-    let mut pending_tool_call = None::<PendingCohereToolCall>;
+    // pendingToolCalls preserves independent state for interleaved same-name calls.
+    // pendingToolCalls 为交错的同名调用保留独立状态。
+    let mut pending_tool_calls = HashMap::<usize, PendingCohereToolCall>::new();
+    // activeToolRequestStreams maps exact Cohere slots to visible request identities.
+    // activeToolRequestStreams 将精确 Cohere 槽位映射到可见请求身份。
+    let mut active_tool_request_streams = HashMap::<usize, String>::new();
     let mut tool_calls = Vec::<CoreConversationToolCall>::new();
     let mut final_usage = None::<CoreProviderUsageSnapshot>;
 
@@ -231,28 +241,70 @@ where
                     );
                 }
             }
-            CohereStreamingEvent::ToolCallStart { delta, .. } => {
+            CohereStreamingEvent::ToolCallStart { index, delta } => {
                 if let Some(tool_call_delta) = delta
                     .and_then(|payload| payload.message)
                     .and_then(|message| message.tool_calls)
                 {
-                    pending_tool_call = Some(start_pending_cohere_tool_call(tool_call_delta));
+                    let mut pending = start_pending_cohere_tool_call(tool_call_delta);
+                    if pending.id.trim().is_empty() {
+                        pending.id = format!("call_{}", Uuid::new_v4().simple());
+                    }
+                    maybe_start_cohere_tool_request_stream(
+                        live_sender,
+                        provider_tool_definitions,
+                        index,
+                        &pending,
+                        &mut active_tool_request_streams,
+                    );
+                    pending_tool_calls.insert(index, pending);
                 }
             }
-            CohereStreamingEvent::ToolCallDelta { delta, .. } => {
-                if let (Some(pending), Some(arguments_delta)) = (
-                    pending_tool_call.as_mut(),
-                    delta
-                        .and_then(|payload| payload.message)
-                        .and_then(|message| message.tool_calls)
-                        .and_then(extract_cohere_tool_call_arguments_delta),
-                ) {
-                    pending.arguments_json.push_str(&arguments_delta);
+            CohereStreamingEvent::ToolCallDelta { index, delta } => {
+                if let Some(tool_call_delta) = delta
+                    .and_then(|payload| payload.message)
+                    .and_then(|message| message.tool_calls)
+                    && let Some(pending) = pending_tool_calls.get_mut(&index)
+                {
+                    // requestWasActive prevents arguments included in the start snapshot from being counted twice.
+                    // requestWasActive 防止启动快照中包含的参数被重复统计。
+                    let request_was_active = active_tool_request_streams.contains_key(&index);
+                    let arguments_delta = merge_cohere_tool_call_delta(
+                        pending,
+                        tool_call_delta,
+                        provider_tool_definitions,
+                    );
+                    maybe_start_cohere_tool_request_stream(
+                        live_sender,
+                        provider_tool_definitions,
+                        index,
+                        pending,
+                        &mut active_tool_request_streams,
+                    );
+                    if request_was_active
+                        && let Some(arguments_delta) = arguments_delta
+                        && let Some(request_stream_id) = active_tool_request_streams.get(&index)
+                    {
+                        forward_cohere_tool_request_fragment(
+                            live_sender,
+                            ToolRequestFragment::ArgumentsDelta {
+                                request_stream_id: request_stream_id.clone(),
+                                delta: arguments_delta,
+                            },
+                        );
+                    }
                 }
             }
-            CohereStreamingEvent::ToolCallEnd { .. } => {
-                if let Some(pending) = pending_tool_call.take() {
-                    tool_calls.push(finalize_pending_cohere_tool_call(provider_id, pending)?);
+            CohereStreamingEvent::ToolCallEnd { index } => {
+                if let Some(pending) = pending_tool_calls.remove(&index) {
+                    let finalized = finalize_pending_cohere_tool_call(provider_id, pending);
+                    complete_cohere_tool_request_stream(
+                        live_sender,
+                        index,
+                        &mut active_tool_request_streams,
+                        finalized.as_ref().ok(),
+                    );
+                    tool_calls.push(finalized?);
                 }
             }
             CohereStreamingEvent::MessageEnd { id, delta } => {
@@ -271,8 +323,20 @@ where
         }
     }
 
-    if let Some(pending) = pending_tool_call.take() {
-        tool_calls.push(finalize_pending_cohere_tool_call(provider_id, pending)?);
+    let mut pending_indices = pending_tool_calls.keys().copied().collect::<Vec<_>>();
+    pending_indices.sort_unstable();
+    for index in pending_indices {
+        let Some(pending) = pending_tool_calls.remove(&index) else {
+            continue;
+        };
+        let finalized = finalize_pending_cohere_tool_call(provider_id, pending);
+        complete_cohere_tool_request_stream(
+            live_sender,
+            index,
+            &mut active_tool_request_streams,
+            finalized.as_ref().ok(),
+        );
+        tool_calls.push(finalized?);
     }
     if matches!(active_content_kind, Some(ActiveCohereContentKind::Thinking))
         && !active_thinking_text.is_empty()
@@ -632,18 +696,148 @@ fn start_pending_cohere_tool_call(
     PendingCohereToolCall {
         id: tool_call_delta.id.unwrap_or_default(),
         name: function.name.unwrap_or_default(),
-        arguments_json: function.arguments.unwrap_or_default(),
+        arguments_json: function.arguments.unwrap_or_default().into(),
     }
 }
 
-/// Extracts the JSON-arguments delta fragment from one Cohere tool-call delta payload.
-/// 从一条 Cohere 工具调用增量载荷中提取 JSON 参数碎片。
-fn extract_cohere_tool_call_arguments_delta(
+/// Merges one Cohere tool-call delta into its exact indexed pending request.
+/// 将一条 Cohere 工具调用增量合并进其精确索引的待处理请求。
+///
+/// # Parameters
+/// 参数
+/// `pending` is the only assembler for the indexed provider call.
+/// `pending` 是该索引 Provider 调用的唯一组装器。
+/// `tool_call_delta` carries optional identity, name, and raw argument changes.
+/// `tool_call_delta` 携带可选身份、名称与原始参数变化。
+/// `provider_tool_definitions` is the frozen exact-name snapshot.
+/// `provider_tool_definitions` 是冻结的精确名称快照。
+///
+/// # Returns
+/// 返回值
+/// The exact raw argument fragment appended by this delta, when present.
+/// 返回当前增量追加的精确原始参数碎片（如果存在）。
+fn merge_cohere_tool_call_delta(
+    pending: &mut PendingCohereToolCall,
     tool_call_delta: CohereStreamingToolCallDelta,
+    provider_tool_definitions: &[ProviderToolDefinition],
 ) -> Option<String> {
-    tool_call_delta
-        .function
-        .and_then(|function| function.arguments)
+    if let Some(id) = tool_call_delta.id.filter(|id| !id.trim().is_empty()) {
+        pending.id = id;
+    }
+    let function = tool_call_delta.function?;
+    if let Some(name_fragment) = function.name.filter(|name| !name.is_empty()) {
+        pending.name = merge_cohere_streamed_tool_name(
+            &pending.name,
+            &name_fragment,
+            provider_tool_definitions,
+        );
+    }
+    let arguments_delta = function.arguments.filter(|arguments| !arguments.is_empty());
+    if let Some(arguments_delta) = &arguments_delta {
+        pending.arguments_json.append(arguments_delta);
+    }
+    arguments_delta
+}
+
+/// Merges a possibly split Cohere tool name only along prefixes in the frozen tool set.
+/// 仅沿冻结工具集合中的前缀合并可能被拆分的 Cohere 工具名称。
+fn merge_cohere_streamed_tool_name(
+    current: &str,
+    fragment: &str,
+    provider_tool_definitions: &[ProviderToolDefinition],
+) -> String {
+    if provider_tool_definitions
+        .iter()
+        .any(|definition| definition.name == fragment)
+    {
+        return fragment.to_string();
+    }
+    if provider_tool_definitions
+        .iter()
+        .any(|definition| definition.name == current)
+    {
+        return current.to_string();
+    }
+    let combined = format!("{current}{fragment}");
+    if provider_tool_definitions
+        .iter()
+        .any(|definition| definition.name.starts_with(&combined))
+    {
+        return combined;
+    }
+    if provider_tool_definitions
+        .iter()
+        .any(|definition| definition.name.starts_with(fragment))
+    {
+        return fragment.to_string();
+    }
+    fragment.to_string()
+}
+
+/// Starts a visible Cohere request once its exact public tool name is complete.
+/// 当精确公开工具名称完整后启动一条可见 Cohere 请求。
+fn maybe_start_cohere_tool_request_stream(
+    live_sender: &ProviderLiveDeltaSender,
+    provider_tool_definitions: &[ProviderToolDefinition],
+    index: usize,
+    pending: &PendingCohereToolCall,
+    active_tool_request_streams: &mut HashMap<usize, String>,
+) {
+    if active_tool_request_streams.contains_key(&index)
+        || !provider_tool_definitions
+            .iter()
+            .any(|definition| definition.name == pending.name)
+    {
+        return;
+    }
+    let request_stream_id = pending.id.clone();
+    active_tool_request_streams.insert(index, request_stream_id.clone());
+    forward_cohere_tool_request_fragment(
+        live_sender,
+        ToolRequestFragment::Detected {
+            request_stream_id,
+            tool_call_id: pending.id.clone(),
+            tool_name: pending.name.clone(),
+            initial_arguments: pending.arguments_json.snapshot(),
+            argument_assembler: Some(pending.arguments_json.clone()),
+        },
+    );
+}
+
+/// Completes one indexed Cohere request stream after canonical argument parsing.
+/// 在规范参数解析后完成一条有索引的 Cohere 请求流。
+fn complete_cohere_tool_request_stream(
+    live_sender: &ProviderLiveDeltaSender,
+    index: usize,
+    active_tool_request_streams: &mut HashMap<usize, String>,
+    finalized: Option<&CoreConversationToolCall>,
+) {
+    let Some(request_stream_id) = active_tool_request_streams.remove(&index) else {
+        return;
+    };
+    let canonical_tool_call_id = finalized.map(|tool_call| {
+        tool_call
+            .tool_call_id
+            .clone()
+            .unwrap_or_else(|| tool_call.id.clone())
+    });
+    forward_cohere_tool_request_fragment(
+        live_sender,
+        ToolRequestFragment::Completed {
+            request_stream_id,
+            canonical_tool_call_id,
+            final_arguments: None,
+        },
+    );
+}
+
+/// Forwards one normalized Cohere request fragment into the runtime stream coordinator.
+/// 将一条规范化 Cohere 请求碎片转发进运行时流协调器。
+fn forward_cohere_tool_request_fragment(
+    live_sender: &ProviderLiveDeltaSender,
+    fragment: ToolRequestFragment,
+) {
+    let _ = live_sender.send(Ok(ProviderStreamDelta::ToolRequestFragment(fragment)));
 }
 
 /// Finalizes one pending Cohere tool call into the canonical core tool-call shape.
@@ -652,14 +846,19 @@ fn finalize_pending_cohere_tool_call(
     provider_id: &str,
     pending: PendingCohereToolCall,
 ) -> Result<CoreConversationToolCall, VulcanCoreError> {
-    let arguments = if pending.arguments_json.trim().is_empty() {
+    let arguments = if pending
+        .arguments_json
+        .read(|arguments| arguments.trim().is_empty())
+    {
         json!({})
     } else {
-        serde_json::from_str::<Value>(&pending.arguments_json).map_err(|error| {
-            VulcanCoreError::ProviderFailure {
-                provider_id: provider_id.to_string(),
-                message: format!("Cohere 工具参数 JSON 解析失败：{error}"),
-            }
+        pending.arguments_json.read(|arguments_json| {
+            serde_json::from_str::<Value>(arguments_json).map_err(|error| {
+                VulcanCoreError::ProviderFailure {
+                    provider_id: provider_id.to_string(),
+                    message: format!("Cohere 工具参数 JSON 解析失败：{error}"),
+                }
+            })
         })?
     };
 
@@ -699,11 +898,19 @@ fn forward_cohere_delta<S>(
 
 #[cfg(test)]
 mod tests {
-    use super::build_cohere_request_payload;
+    use super::{
+        PendingCohereToolCall, build_cohere_request_payload, complete_cohere_tool_request_stream,
+        maybe_start_cohere_tool_request_stream,
+    };
     use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
+    use crate::agent_runtime::provider_stream::ProviderStreamDelta;
     use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
+    use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
     use serde_json::json;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{
+        collections::HashMap,
+        time::{SystemTime, UNIX_EPOCH},
+    };
     use vulcan_core::types::{
         ConversationAttachment, ConversationAttachmentKind,
         ConversationMessage as CoreConversationMessage,
@@ -883,5 +1090,94 @@ mod tests {
         assert!(rendered.contains("sample.mp3"));
 
         let _ = std::fs::remove_file(&attachment.local_path);
+    }
+
+    /// Verifies parallel Cohere indices retain independent request and canonical call correlations.
+    /// 验证并行 Cohere 索引会保持相互独立的请求关联与规范调用关联。
+    #[test]
+    fn parallel_tool_request_indices_complete_their_exact_correlations() {
+        // live channel captures request fragments while completion intentionally arrives in reverse index order.
+        // live 通道捕获请求碎片，同时完成事件刻意按索引逆序到达。
+        let (live_sender, mut live_receiver) = tokio::sync::mpsc::unbounded_channel();
+        let provider_tools = vec![ProviderToolDefinition {
+            name: String::from("submit_plan"),
+            description: String::from("Submit a plan"),
+            parameters: json!({ "type": "object" }),
+        }];
+        let first = PendingCohereToolCall {
+            id: String::from("cohere-request-0"),
+            name: String::from("submit_plan"),
+            arguments_json: String::from("{\"name\":\"first\"}").into(),
+        };
+        let second = PendingCohereToolCall {
+            id: String::from("cohere-request-1"),
+            name: String::from("submit_plan"),
+            arguments_json: String::from("{\"name\":\"second\"}").into(),
+        };
+        let mut active = HashMap::new();
+        maybe_start_cohere_tool_request_stream(
+            &live_sender,
+            &provider_tools,
+            0,
+            &first,
+            &mut active,
+        );
+        maybe_start_cohere_tool_request_stream(
+            &live_sender,
+            &provider_tools,
+            1,
+            &second,
+            &mut active,
+        );
+        let first_final = CoreConversationToolCall {
+            id: String::from("cohere-request-0"),
+            tool_call_id: Some(String::from("canonical-0")),
+            tool_name: String::from("submit_plan"),
+            arguments: json!({ "name": "first" }),
+        };
+        let second_final = CoreConversationToolCall {
+            id: String::from("cohere-request-1"),
+            tool_call_id: Some(String::from("canonical-1")),
+            tool_name: String::from("submit_plan"),
+            arguments: json!({ "name": "second" }),
+        };
+        complete_cohere_tool_request_stream(&live_sender, 1, &mut active, Some(&second_final));
+        complete_cohere_tool_request_stream(&live_sender, 0, &mut active, Some(&first_final));
+
+        let fragments = std::iter::from_fn(|| live_receiver.try_recv().ok())
+            .map(|delta| delta.expect("provider fragment should be successful"))
+            .collect::<Vec<_>>();
+        assert_eq!(fragments.len(), 4);
+        assert!(matches!(
+            &fragments[0],
+            ProviderStreamDelta::ToolRequestFragment(ToolRequestFragment::Detected {
+                request_stream_id,
+                ..
+            }) if request_stream_id == "cohere-request-0"
+        ));
+        assert!(matches!(
+            &fragments[1],
+            ProviderStreamDelta::ToolRequestFragment(ToolRequestFragment::Detected {
+                request_stream_id,
+                ..
+            }) if request_stream_id == "cohere-request-1"
+        ));
+        assert!(matches!(
+            &fragments[2],
+            ProviderStreamDelta::ToolRequestFragment(ToolRequestFragment::Completed {
+                request_stream_id,
+                canonical_tool_call_id: Some(canonical_tool_call_id),
+                ..
+            }) if request_stream_id == "cohere-request-1" && canonical_tool_call_id == "canonical-1"
+        ));
+        assert!(matches!(
+            &fragments[3],
+            ProviderStreamDelta::ToolRequestFragment(ToolRequestFragment::Completed {
+                request_stream_id,
+                canonical_tool_call_id: Some(canonical_tool_call_id),
+                ..
+            }) if request_stream_id == "cohere-request-0" && canonical_tool_call_id == "canonical-0"
+        ));
+        assert!(active.is_empty());
     }
 }

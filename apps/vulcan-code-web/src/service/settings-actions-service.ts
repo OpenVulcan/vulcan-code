@@ -152,6 +152,30 @@ export async function saveGitCommitSettings(request: {
   return serviceClient.request<WorkbenchSnapshot>("service_save_git_commit_settings", { request });
 }
 
+// saveProviderRetrySettings persists Provider retry rules through the desktop service.
+// saveProviderRetrySettings 通过桌面服务持久化 Provider 重试规则。
+export async function saveProviderRetrySettings(request: {
+  enabled: boolean;
+  maxRetries: number;
+  initialDelayMs: number;
+  maxDelayMs: number;
+  backoffFactorMilli: number;
+  jitterPercent: number;
+  respectRetryAfter: boolean;
+  retry429: boolean;
+  rateLimit: {
+    maxRetries: number;
+    initialDelayMs: number;
+    maxDelayMs: number;
+    backoffFactorMilli: number;
+  };
+}): Promise<WorkbenchSnapshot | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_save_provider_retry_settings", { request });
+}
+
 // saveAiCapabilityVendor persists one shared AI capability vendor.
 // saveAiCapabilityVendor 持久化单个共享 AI 能力供应商。
 export async function saveAiCapabilityVendor(request: {

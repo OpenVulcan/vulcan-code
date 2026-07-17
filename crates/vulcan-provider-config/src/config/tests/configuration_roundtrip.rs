@@ -2,13 +2,43 @@ use super::super::{
     AiToolKind, PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
     PersistedAiToolConfiguration, PersistedLuaSkillToolRegistrationState,
     PersistedLuaSkillsConfiguration, PersistedPromptSkillState, PersistedPromptSkillsConfiguration,
-    PersistedWebSearchConfiguration, PersistedWebSearchProviderEntry, ProviderConfigurationFile,
-    ReasoningEffortLevel, WebSearchProviderDispatchMode, WebSearchProviderKind,
-    WebSearchRoutingMode, WorkbenchThinkingDisplayMode,
+    PersistedProviderRateLimitRetryConfiguration, PersistedWebSearchConfiguration,
+    PersistedWebSearchProviderEntry, ProviderConfigurationFile, ReasoningEffortLevel,
+    WebSearchProviderDispatchMode, WebSearchProviderKind, WebSearchRoutingMode,
+    WorkbenchThinkingDisplayMode,
 };
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_vmm::VmmConfigLayer;
+
+/// Verifies backend rate-limit retry rules preserve fixed intervals and finite retry ceilings through configuration persistence.
+/// 验证后台限流重试规则会在配置持久化中保留固定间隔与有限重试上限。
+#[test]
+fn provider_configuration_round_trips_rate_limit_retry_rules() {
+    // config carries one non-default backend rate-limit schedule.
+    // config 携带一份非默认的后台限流调度规则。
+    let mut config = ProviderConfigurationFile::default();
+    config.retry.rate_limit = PersistedProviderRateLimitRetryConfiguration {
+        max_retries: 12,
+        initial_delay_ms: 9_000,
+        max_delay_ms: 60_000,
+        backoff_factor: 1.0,
+    };
+
+    // value exposes the stable camelCase backend contract.
+    // value 暴露稳定的 camelCase 后台契约。
+    let value = serde_json::to_value(&config).expect("provider configuration must serialize");
+    assert_eq!(value["retry"]["rateLimit"]["maxRetries"], json!(12));
+    assert_eq!(value["retry"]["rateLimit"]["initialDelayMs"], json!(9_000));
+    assert_eq!(value["retry"]["rateLimit"]["maxDelayMs"], json!(60_000));
+    assert_eq!(value["retry"]["rateLimit"]["backoffFactor"], json!(1.0));
+
+    // restored proves the same rule reaches the runtime after backend reload.
+    // restored 证明后台重新加载后同一规则能够到达运行时。
+    let restored: ProviderConfigurationFile =
+        serde_json::from_value(value).expect("provider configuration must deserialize");
+    assert_eq!(restored.retry.rate_limit, config.retry.rate_limit);
+}
 
 /// Verifies the remembered workbench reasoning preference keeps the stable camelCase field name and round-trips through the shared provider configuration file.
 /// 验证已记忆的工作台思考偏好会保持稳定的 camelCase 字段名，并且能够经由共享 Provider 配置文件完成往返序列化。

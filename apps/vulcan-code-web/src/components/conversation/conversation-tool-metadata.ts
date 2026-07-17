@@ -317,7 +317,7 @@ export function normalizeToolDisplayState(status?: string | null): string | unde
   if (normalized === "completed" || normalized === "complete" || normalized === "success" || normalized === "succeeded") {
     return "completed";
   }
-  if (normalized === "stopped" || normalized === "cancelled" || normalized === "canceled" || normalized === "aborted") {
+  if (normalized === "stopped" || normalized === "cancelled" || normalized === "canceled" || normalized === "aborted" || normalized === "superseded") {
     return "stopped";
   }
   if (normalized === "running" || normalized === "pending" || normalized === "in_progress") {

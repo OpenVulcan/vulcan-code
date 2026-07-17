@@ -360,6 +360,7 @@ mod tests {
                 "required": ["path"]
             }),
             plan_policy: VulcanPlanToolPolicy::Visible,
+            request_streaming: None,
             invoke: std::sync::Arc::new(|_, _| unreachable!("test preview does not invoke tools")),
         }];
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -637,8 +638,8 @@ mod tests {
         assert!(text.contains("call-1"));
     }
 
-    /// Verifies the runtime leaves multi-turn providers unlimited when no explicit max-turn override exists.
-    /// 验证当未显式提供最大轮次覆盖值时，运行时会让多轮 Provider 保持不限制状态。
+    /// Verifies the runtime keeps multi-turn providers unlimited even when legacy overrides exist.
+    /// 验证即使存在旧版覆盖值，运行时仍会让多轮 Provider 保持不限制状态。
     #[test]
     fn runtime_max_turns_default_to_unlimited_without_override() {
         assert_eq!(
@@ -650,7 +651,7 @@ mod tests {
                 None,
                 crate::agent_runtime::ExecutionPromptPurpose::ContextCompaction
             ),
-            Some(1)
+            None
         );
         assert_eq!(
             resolve_runtime_default_max_turns_limit(None),
@@ -673,7 +674,7 @@ mod tests {
             fallback_delegate: None,
             model: None,
             temperature: None,
-            max_turns: None,
+            max_turns: Some(3),
             runtime_policy: vulcan_session_core::ExecutionRuntimePolicyRequest::default(),
         };
         assert_eq!(

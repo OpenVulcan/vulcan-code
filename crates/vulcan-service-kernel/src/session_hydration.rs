@@ -4,6 +4,9 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use vulcan_agent_runtime::agent_runtime::task_runtime::TaskRuntime;
+use vulcan_agent_runtime::session_event_runtime::{
+    normalize_orphaned_tool_request_messages, normalize_orphaned_tool_request_records,
+};
 use vulcan_workbench_model::{
     SessionId, SessionMessageEntry, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
     SessionSummary,

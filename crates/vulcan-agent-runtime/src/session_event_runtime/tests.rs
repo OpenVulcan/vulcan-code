@@ -11,6 +11,62 @@ fn test_session_id() -> SessionId {
         .expect("test session id should be a valid UUID")
 }
 
+/// Verifies every Provider retry becomes an independent visible note outside future model context.
+/// 验证每次 Provider 重试都会成为独立可见且不进入后续模型上下文的备注。
+#[test]
+fn provider_retry_projects_visible_display_note() {
+    // runtimeState owns the durable transcript projection under test.
+    // runtimeState 持有被测的持久转录投影。
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    // sessionId provides the stable namespace for the new retry record.
+    // sessionId 为新的重试记录提供稳定命名空间。
+    let session_id = test_session_id();
+    // retryEvent models one unbounded rate-limit wait emitted before sleeping.
+    // retryEvent 模拟一条在等待前发出的无次数上限限流重试事件。
+    let retry_event = RuntimeEvent::new(
+        RuntimeEventKind::Retrying,
+        "Provider 自动重试",
+        "Kimi 遇到限流，已安排第 6 次重试；32 秒后重试。",
+    )
+    .with_metadata(Some(json!({
+        "attempt": 6,
+        "max_retries": 0,
+        "unbounded": true,
+        "delay_ms": 32_000,
+        "delay_seconds": 32,
+    })));
+
+    assert!(
+        append_runtime_event_projection_to_state(
+            &mut runtime_state,
+            session_id,
+            "3500",
+            &retry_event,
+        )
+        .expect("retry projection should succeed")
+    );
+    // record is the exact display-only row created for this physical failure.
+    // record 是为本次真实请求失败创建的精确纯显示行。
+    let record = runtime_state
+        .conversation_state
+        .records
+        .last()
+        .expect("retry projection should append one record");
+    assert_eq!(record.kind, SessionMessageKind::Assistant);
+    assert_eq!(record.record_kind, SessionMessageRecordKind::DisplayNote);
+    assert!(record.visible);
+    assert_eq!(record.title, "Provider 自动重试");
+    assert!(record.body.contains("32 秒后重试"));
+    assert_eq!(
+        record
+            .metadata
+            .as_ref()
+            .and_then(|value| value["unbounded"].as_bool()),
+        Some(true)
+    );
+    assert!(!record.record_kind.contributes_to_context());
+}
+
 /// Builds one successful terminal report with deterministic provider usage.
 /// 构建一份带确定性 Provider 用量的成功终态报告。
 #[allow(clippy::too_many_arguments)]
@@ -728,6 +784,261 @@ fn tool_result_projection_preserves_runtime_event_order() {
             .and_then(serde_json::Value::as_str)
             .is_some()
     );
+}
+
+/// Verifies one request card survives request progress, canonical promotion, execution, and completion.
+/// 验证同一张请求卡片会贯穿请求进度、规范身份提升、执行与完成阶段。
+#[test]
+fn tool_request_projection_preserves_one_card_through_execution() {
+    // sessionId owns every lifecycle event in this deterministic projection.
+    // sessionId 持有该确定性投影中的全部生命周期事件。
+    let session_id = test_session_id();
+    // runtimeState starts without any pre-existing transcript or correlation aliases.
+    // runtimeState 初始不含任何既有转录或关联别名。
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    let request_started = RuntimeEvent::new(
+        RuntimeEventKind::ToolRequestStarted,
+        "工具请求 · pending-stream-1 · submit_plan",
+        String::new(),
+    )
+    .with_metadata(Some(json!({
+        "request_stream_id": "stream-1",
+        "tool_call_id": "pending-stream-1",
+        "tool_name": "submit_plan",
+        "tool_display_state": "receiving",
+        "received_bytes": 9,
+        "estimated_tokens": 3,
+        "token_precision": "heuristic",
+        "request_revision": 1,
+    })));
+    assert!(
+        append_runtime_event_projection_to_state(
+            &mut runtime_state,
+            session_id,
+            "3050",
+            &request_started,
+        )
+        .expect("request start projection should succeed")
+    );
+    let request_record_id = runtime_state
+        .tool_request_record_ids
+        .get("stream-1")
+        .cloned()
+        .expect("request stream should own one visible card");
+
+    let progress = RuntimeEvent::new(
+        RuntimeEventKind::ToolRequestProgress,
+        "工具请求 · pending-stream-1 · submit_plan",
+        String::new(),
+    )
+    .with_metadata(Some(json!({
+        "request_stream_id": "stream-1",
+        "tool_call_id": "pending-stream-1",
+        "tool_name": "submit_plan",
+        "tool_display_state": "receiving",
+        "received_bytes": 64,
+        "estimated_tokens": 18,
+        "token_precision": "model",
+        "request_revision": 2,
+    })));
+    assert!(append_runtime_event_projection_to_state(
+        &mut runtime_state,
+        session_id,
+        "3051",
+        &progress,
+    )
+    .expect("new progress revision should succeed"));
+    // staleProgress proves an older provider revision cannot roll the visible card backward.
+    // staleProgress 证明较旧 Provider 修订无法让可见卡片倒退。
+    let mut stale_progress = progress.clone();
+    stale_progress.metadata.as_mut().expect("metadata")["request_revision"] = json!(1);
+    assert!(
+        !append_runtime_event_projection_to_state(
+            &mut runtime_state,
+            session_id,
+            "3052",
+            &stale_progress,
+        )
+        .expect("stale progress should be ignored")
+    );
+
+    let ready = RuntimeEvent::new(
+        RuntimeEventKind::ToolRequestReady,
+        "工具请求 · call-canonical-1 · submit_plan",
+        String::new(),
+    )
+    .with_metadata(Some(json!({
+        "request_stream_id": "stream-1",
+        "tool_call_id": "call-canonical-1",
+        "tool_name": "submit_plan",
+        "tool_display_state": "ready",
+        "received_bytes": 96,
+        "estimated_tokens": 27,
+        "token_precision": "model",
+        "request_revision": 3,
+    })));
+    assert!(
+        append_runtime_event_projection_to_state(&mut runtime_state, session_id, "3053", &ready,)
+            .expect("ready projection should promote canonical identity")
+    );
+    assert_eq!(
+        runtime_state.tool_request_record_ids.get("stream-1"),
+        Some(&request_record_id)
+    );
+    assert_eq!(
+        runtime_state.tool_call_record_ids.get("call-canonical-1"),
+        Some(&request_record_id)
+    );
+    assert!(
+        !runtime_state
+            .tool_call_record_ids
+            .contains_key("pending-stream-1")
+    );
+    let final_token_progress = RuntimeEvent::new(
+        RuntimeEventKind::ToolRequestProgress,
+        "工具请求 · call-canonical-1 · submit_plan",
+        String::new(),
+    )
+    .with_metadata(Some(json!({
+        "request_stream_id": "stream-1",
+        "tool_call_id": "call-canonical-1",
+        "tool_name": "submit_plan",
+        "tool_display_state": "ready",
+        "received_bytes": 96,
+        "estimated_tokens": 31,
+        "token_precision": "model",
+        "request_revision": 4,
+    })));
+    assert!(
+        append_runtime_event_projection_to_state(
+            &mut runtime_state,
+            session_id,
+            "3054",
+            &final_token_progress,
+        )
+        .expect("final ready-state token progress should update the same card")
+    );
+
+    let started = RuntimeEvent::new(
+        RuntimeEventKind::ToolStarted,
+        "工具调用 · call-canonical-1 · submit_plan",
+        "## Tool Call",
+    )
+    .with_metadata(Some(json!({
+        "tool_call_id": "call-canonical-1",
+        "tool_name": "submit_plan",
+    })));
+    assert!(
+        append_runtime_event_projection_to_state(&mut runtime_state, session_id, "3055", &started,)
+            .expect("execution start should upgrade the request card")
+    );
+    assert!(
+        !runtime_state
+            .tool_request_record_ids
+            .contains_key("stream-1")
+    );
+    let finished = RuntimeEvent::new(
+        RuntimeEventKind::ToolFinished,
+        "工具返回 · call-canonical-1",
+        "## Tool Result\n\nplan saved",
+    )
+    .with_metadata(Some(json!({
+        "tool_call_id": "call-canonical-1",
+        "tool_name": "submit_plan",
+        "display_state": "completed",
+    })));
+    assert!(append_runtime_event_projection_to_state(
+        &mut runtime_state,
+        session_id,
+        "3056",
+        &finished,
+    )
+    .expect("tool completion should attach to the same card"));
+    let tool_cards = runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .filter(|record| record.record_kind == SessionMessageRecordKind::ToolCallOutput)
+        .collect::<Vec<_>>();
+    assert_eq!(tool_cards.len(), 1);
+    assert_eq!(tool_cards[0].id, request_record_id);
+    assert_eq!(
+        tool_cards[0]
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("result"))
+            .and_then(|result| result.get("status"))
+            .and_then(serde_json::Value::as_str),
+        Some("completed")
+    );
+}
+
+/// Verifies hydration closes both receiving and ready cards without touching an executing card.
+/// 验证水合会闭合接收中与就绪卡片，同时不会触碰已经执行的卡片。
+#[test]
+fn orphaned_tool_request_normalization_closes_only_pre_execution_cards() {
+    // runtimeState models a persisted crash snapshot with two orphaned requests and one real execution.
+    // runtimeState 模拟包含两个孤儿请求与一个真实执行的崩溃持久化快照。
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    for (record_id, call_id, display_state) in [
+        ("record-receiving", "pending-1", "receiving"),
+        ("record-ready", "call-ready", "ready"),
+        ("record-running", "call-running", "running"),
+    ] {
+        runtime_state
+            .conversation_state
+            .records
+            .push(SessionConversationRecord {
+                id: record_id.to_string(),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::ToolCallOutput,
+                visible: true,
+                title: String::new(),
+                body: String::new(),
+                metadata: Some(json!({
+                    "tool_call_id": call_id,
+                    "tool_name": "submit_plan",
+                    "tool_display_state": display_state,
+                })),
+                created_at: String::from("3056"),
+            });
+        runtime_state
+            .tool_call_record_ids
+            .insert(call_id.to_string(), record_id.to_string());
+    }
+    runtime_state
+        .tool_request_record_ids
+        .insert(String::from("stream-1"), String::from("record-receiving"));
+
+    assert_eq!(
+        normalize_orphaned_tool_request_records(&mut runtime_state, "3057"),
+        2
+    );
+    assert!(runtime_state.tool_request_record_ids.is_empty());
+    assert!(!runtime_state.tool_call_record_ids.contains_key("pending-1"));
+    assert!(
+        !runtime_state
+            .tool_call_record_ids
+            .contains_key("call-ready")
+    );
+    assert_eq!(
+        runtime_state.tool_call_record_ids.get("call-running"),
+        Some(&String::from("record-running"))
+    );
+    let display_state = |record_id: &str| {
+        runtime_state
+            .conversation_state
+            .records
+            .iter()
+            .find(|record| record.id == record_id)
+            .and_then(|record| record.metadata.as_ref())
+            .and_then(|metadata| metadata.get("tool_display_state"))
+            .and_then(serde_json::Value::as_str)
+    };
+    assert_eq!(display_state("record-receiving"), Some("stopped"));
+    assert_eq!(display_state("record-ready"), Some("stopped"));
+    assert_eq!(display_state("record-running"), Some("running"));
+    assert_eq!(runtime_state.updated_at, "3057");
 }
 
 /// Verifies display summaries collapse whitespace and truncate without changing visible semantics.

@@ -132,6 +132,10 @@ pub struct WorkbenchSnapshot {
     /// 从共享配置文件解析出的 Git 提交弹窗设置。
     #[serde(default)]
     pub git_commit: GitCommitSettingsSummary,
+    /// Provider retry settings resolved from the shared configuration file.
+    /// 从共享配置文件解析出的 Provider 重试设置。
+    #[serde(default)]
+    pub provider_retry: ProviderRetrySettingsSummary,
     /// Host-owned tool settings resolved from the shared configuration file.
     /// 从共享配置文件解析出的宿主自有工具设置。
     #[serde(default)]

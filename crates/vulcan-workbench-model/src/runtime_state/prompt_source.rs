@@ -262,6 +262,7 @@ fn provider_session_run_phase_is_active(phase: Option<crate::SessionRunPhase>) -
         Some(
             crate::SessionRunPhase::Requesting
                 | crate::SessionRunPhase::Thinking
+                | crate::SessionRunPhase::ToolCalling
                 | crate::SessionRunPhase::ToolRunning
         )
     )

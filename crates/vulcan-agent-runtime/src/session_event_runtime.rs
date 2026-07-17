@@ -5,9 +5,9 @@ use serde_json::json;
 use std::collections::BTreeSet;
 use vulcan_core::types::ConversationAttachment;
 use vulcan_workbench_model::{
-    PendingSessionPromptSource, SessionId, SessionMessageKind, SessionMessageRecordKind,
-    SessionRuntimeStateEntry, SessionTurnStats, SessionTurnStatsKind, SessionTurnStatsStatus,
-    SessionTurnUsageSegment, SessionTurnUsageSegmentKind,
+    PendingSessionPromptSource, SessionId, SessionMessageEntry, SessionMessageKind,
+    SessionMessageRecordKind, SessionRuntimeStateEntry, SessionTurnStats, SessionTurnStatsKind,
+    SessionTurnStatsStatus, SessionTurnUsageSegment, SessionTurnUsageSegmentKind,
 };
 
 use crate::{
@@ -58,6 +58,9 @@ mod user_prompt;
 
 pub use checkpoint::*;
 pub use event_projection::*;
+pub use open_tool_records::{
+    normalize_orphaned_tool_request_messages, normalize_orphaned_tool_request_records,
+};
 pub use streaming_records::*;
 pub use terminal_report::*;
 pub use user_prompt::*;

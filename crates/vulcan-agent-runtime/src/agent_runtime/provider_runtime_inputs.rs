@@ -7,7 +7,9 @@ use crate::agent_runtime::provider_native_tools::{
 };
 use crate::agent_runtime::provider_reasoning::merge_additional_params;
 use crate::agent_runtime::provider_stream::ProviderDeltaStream;
-use crate::provider_config::{PersistedProviderOptions, ProviderConfigurationFile};
+use crate::provider_config::{
+    PersistedProviderOptions, ProviderApiFamily, ProviderConfigurationFile,
+};
 use async_stream::stream;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use serde_json::Value;
@@ -22,6 +24,12 @@ pub(crate) fn resolve_provider_additional_params(
         .as_object()
         .filter(|object| !object.is_empty())
         .map(|object| Value::Object(object.clone()));
+    // capabilityDefaults projects the configured model output limit into Anthropic's required max_tokens field.
+    // capabilityDefaults 将已配置的模型输出限制投影到 Anthropic 必需的 max_tokens 字段。
+    let capability_defaults = anthropic_output_limit_additional_params(blueprint);
+    // providerDefaults overlays capability defaults so an explicit raw request parameter remains authoritative.
+    // providerDefaults 覆盖能力默认值，因此显式原始请求参数仍保持最高优先级。
+    let provider_defaults = merge_additional_params(capability_defaults, provider_defaults);
     let base = merge_additional_params(
         provider_defaults,
         blueprint.reasoning.additional_params.clone(),
@@ -31,6 +39,28 @@ pub(crate) fn resolve_provider_additional_params(
         build_provider_native_ai_tool_additional_params(blueprint),
     );
     merge_openrouter_endpoint_route_additional_params(merged, blueprint)
+}
+
+/// Projects one resolved Anthropic model output limit into the protocol's required request field.
+/// 将已解析的 Anthropic 模型输出限制投影到协议必需的请求字段。
+///
+/// # Parameters
+/// 参数
+/// `blueprint` contains the exact API family and resolved model capabilities for this request.
+/// `blueprint` 包含本次请求的准确接口族与已解析模型能力。
+///
+/// # Returns
+/// 返回值
+/// A `max_tokens` request patch for Anthropic, or `None` for other protocols and unknown limits.
+/// 返回 Anthropic 的 `max_tokens` 请求补丁；其他协议或未知限制返回 `None`。
+fn anthropic_output_limit_additional_params(blueprint: &ProviderRuntimeBlueprint) -> Option<Value> {
+    if blueprint.api_family() != ProviderApiFamily::AnthropicMessages {
+        return None;
+    }
+    blueprint
+        .capabilities
+        .output_limit
+        .map(|output_limit| serde_json::json!({ "max_tokens": output_limit }))
 }
 
 /// Merges one OpenRouter endpoint-routing override into the additional request parameters when the current run locks a specific upstream endpoint.
@@ -189,5 +219,49 @@ mod tests {
                 .and_then(serde_json::Value::as_bool),
             Some(true)
         );
+    }
+
+    /// Verifies an Anthropic-compatible request receives the configured model output limit.
+    /// 验证 Anthropic 兼容请求会收到已配置的模型输出限制。
+    #[test]
+    fn anthropic_output_limit_becomes_max_tokens() {
+        // blueprint models a non-Claude model routed through the Anthropic Messages protocol.
+        // blueprint 模拟通过 Anthropic Messages 协议路由的非 Claude 模型。
+        let mut blueprint = test_blueprint();
+        blueprint.provider_id = String::from("anthropic-compatible");
+        blueprint.provider_name = String::from("Anthropic Compatible");
+        blueprint.runtime_kind = ProviderRuntimeKind::Anthropic;
+        blueprint.model_id = String::from("deepseek-v4-pro");
+        blueprint.model_name = String::from("DeepSeek V4 Pro");
+        blueprint.openrouter_endpoint_route = None;
+        blueprint.extra_body = json!({});
+        blueprint.capabilities.output_limit = Some(32_000);
+
+        // additionalParams is the exact payload fragment consumed by the Anthropic transport.
+        // additionalParams 是 Anthropic 传输层消费的准确载荷片段。
+        let additional_params = resolve_provider_additional_params(&blueprint)
+            .expect("anthropic output limit should produce additional params");
+
+        assert_eq!(additional_params["max_tokens"], json!(32_000));
+    }
+
+    /// Verifies an explicit Anthropic max_tokens request parameter overrides the capability default.
+    /// 验证显式 Anthropic max_tokens 请求参数会覆盖能力默认值。
+    #[test]
+    fn explicit_anthropic_max_tokens_overrides_output_limit() {
+        // blueprint carries both the model capability and one explicit raw request override.
+        // blueprint 同时携带模型能力与显式原始请求覆盖值。
+        let mut blueprint = test_blueprint();
+        blueprint.runtime_kind = ProviderRuntimeKind::Anthropic;
+        blueprint.openrouter_endpoint_route = None;
+        blueprint.capabilities.output_limit = Some(32_000);
+        blueprint.extra_body = json!({ "max_tokens": 48_000 });
+
+        // additionalParams must retain the explicit operator-selected value.
+        // additionalParams 必须保留操作者显式选择的值。
+        let additional_params = resolve_provider_additional_params(&blueprint)
+            .expect("explicit anthropic max_tokens should remain available");
+
+        assert_eq!(additional_params["max_tokens"], json!(48_000));
     }
 }

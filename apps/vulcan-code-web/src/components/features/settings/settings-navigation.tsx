@@ -110,6 +110,7 @@ export function settingsSubAreaGroups(t: ReturnType<typeof useI18n>["t"]): Setti
       items: [
         { id: "model-providers", label: t("settings.modelProviders"), icon: <FileText size={16} />, description: t("settings.modelProviders.description") },
         { id: "model-list", label: t("settings.modelList"), icon: <FileText size={16} />, description: t("settings.modelList.description") },
+        { id: "provider-retry", label: t("settings.providerRetry"), icon: <RefreshCw size={16} />, description: t("settings.providerRetry.description") },
       ],
     },
     {
