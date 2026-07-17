@@ -184,6 +184,9 @@ where
                 };
                 let tool_policy = AllowAllToolPolicy;
                 let mut unsafe_delta_seen = false;
+                // physicalRequestSeen distinguishes the retry attempt's first request from a later request reached after success.
+                // physicalRequestSeen 区分本次重试尝试的首个请求与成功后继续到达的后续请求。
+                let mut physical_request_seen = false;
                 // activeToolRequestStreams tracks visible request drafts for attempt-scoped terminal cleanup.
                 // activeToolRequestStreams 跟踪可见请求草稿，用于按尝试执行终态清理。
                 let mut active_tool_request_streams = BTreeSet::<String>::new();
@@ -255,6 +258,11 @@ where
                                             &mut unsafe_delta_seen,
                                             delta,
                                         );
+                                        observe_provider_request_retry_reset(
+                                            &mut physical_request_seen,
+                                            &mut completed_retries,
+                                            delta,
+                                        );
                                         observe_active_tool_request_streams(
                                             &mut active_tool_request_streams,
                                             delta,
@@ -276,6 +284,11 @@ where
                 while let Ok(item) = attempt_receiver.try_recv() {
                     if let Ok(delta) = &item {
                         observe_provider_request_retry_safety(&mut unsafe_delta_seen, delta);
+                        observe_provider_request_retry_reset(
+                            &mut physical_request_seen,
+                            &mut completed_retries,
+                            delta,
+                        );
                         observe_active_tool_request_streams(
                             &mut active_tool_request_streams,
                             delta,
@@ -472,6 +485,37 @@ fn observe_provider_request_retry_safety(
     }
 }
 
+/// Resets consecutive retry accounting when the controller reaches another physical request after one successful request.
+/// 当控制器在一次请求成功后进入下一次真实请求时，重置连续重试计数。
+///
+/// # Parameters
+/// 参数
+/// `physical_request_seen` records whether the current retry attempt already dispatched one physical request.
+/// `physical_request_seen` 记录当前重试尝试是否已经发出过一次真实请求。
+/// `completed_retries` stores consecutive failed retries since the latest successful physical request.
+/// `completed_retries` 保存最近一次真实请求成功后的连续失败重试次数。
+/// `delta` is the current Provider stream delta.
+/// `delta` 是当前 Provider 流增量。
+///
+/// # Returns
+/// 返回值
+/// This function returns no value and mutates the retry state only at request boundaries.
+/// 本函数不返回值，仅在请求边界处修改重试状态。
+fn observe_provider_request_retry_reset(
+    physical_request_seen: &mut bool,
+    completed_retries: &mut u32,
+    delta: &ProviderStreamDelta,
+) {
+    if !matches!(delta, ProviderStreamDelta::RequestSnapshot(_)) {
+        return;
+    }
+    if *physical_request_seen {
+        *completed_retries = 0;
+        return;
+    }
+    *physical_request_seen = true;
+}
+
 /// Updates the attempt-scoped set of visible tool requests from one normalized provider delta.
 /// 根据一条规范化 Provider 增量更新尝试级可见工具请求集合。
 ///
@@ -664,6 +708,32 @@ mod tests {
             &ProviderStreamDelta::RequestSnapshot(test_request_snapshot()),
         );
         assert!(!unsafe_delta_seen);
+    }
+
+    /// Verifies a successful physical request resets retry numbering before the next request starts.
+    /// 验证一次真实请求成功后，下一次请求开始前会重置重试序号。
+    #[test]
+    fn next_physical_request_resets_consecutive_retry_count() {
+        // physicalRequestSeen starts false for each outer retry attempt.
+        // physicalRequestSeen 在每次外层重试尝试开始时为 false。
+        let mut physical_request_seen = false;
+        // completedRetries models three consecutive failures before the current attempt succeeds.
+        // completedRetries 模拟当前尝试成功前已经发生三次连续失败。
+        let mut completed_retries = 3;
+
+        observe_provider_request_retry_reset(
+            &mut physical_request_seen,
+            &mut completed_retries,
+            &ProviderStreamDelta::RequestSnapshot(test_request_snapshot()),
+        );
+        assert_eq!(completed_retries, 3);
+
+        observe_provider_request_retry_reset(
+            &mut physical_request_seen,
+            &mut completed_retries,
+            &ProviderStreamDelta::RequestSnapshot(test_request_snapshot()),
+        );
+        assert_eq!(completed_retries, 0);
     }
 
     /// Verifies dropping the stream-scoped guard cancels its still-running controller task.

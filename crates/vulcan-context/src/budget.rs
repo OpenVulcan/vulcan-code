@@ -149,6 +149,24 @@ impl ContextBudgetCapabilities {
 pub fn observed_input_tokens_from_usage(usage: Option<&ProviderUsageSnapshot>) -> Option<usize> {
     let snapshot = usage?;
     if let Some(input_tokens) = snapshot.input_tokens {
+        // cache_tokens captures Provider-reported cache reads and cache writes that may sit outside input_tokens.
+        // cache_tokens 汇总 Provider 报告且可能未包含在 input_tokens 内的缓存读取与缓存写入。
+        let cache_tokens = snapshot
+            .cached_input_tokens
+            .unwrap_or_default()
+            .saturating_add(snapshot.cache_creation_input_tokens.unwrap_or_default());
+        // expanded_input_tokens represents the Anthropic-style split-input interpretation.
+        // expanded_input_tokens 表示 Anthropic 风格的拆分输入口径。
+        let expanded_input_tokens = input_tokens.saturating_add(cache_tokens);
+        // provider_total_input derives the full input side without assuming whether cache tokens are a subset.
+        // provider_total_input 从总量推导完整输入侧，且不预设缓存 Token 是否属于 input_tokens 子集。
+        let provider_total_input = snapshot
+            .total_tokens
+            .zip(snapshot.output_tokens)
+            .map(|(total_tokens, output_tokens)| total_tokens.saturating_sub(output_tokens));
+        if cache_tokens > 0 && provider_total_input == Some(expanded_input_tokens) {
+            return Some(expanded_input_tokens);
+        }
         return Some(input_tokens);
     }
     snapshot.total_tokens.map(|total_tokens| {
@@ -629,6 +647,48 @@ mod tests {
         };
 
         assert_eq!(calibrated_input_token_estimate(10, Some(&usage)), 128);
+    }
+
+    /// Verifies Anthropic cache reads outside input_tokens contribute to the complete context window.
+    /// 验证 Anthropic 在 input_tokens 之外报告的缓存读取会计入完整上下文窗口。
+    #[test]
+    fn observed_input_tokens_include_anthropic_split_cache_usage() {
+        let usage = ProviderUsageSnapshot {
+            input_tokens: Some(399),
+            output_tokens: Some(380),
+            reasoning_tokens: None,
+            total_tokens: Some(112_395),
+            cached_input_tokens: Some(111_616),
+            cache_creation_input_tokens: Some(0),
+        };
+
+        assert_eq!(
+            observed_input_tokens_from_usage(Some(&usage)),
+            Some(112_015)
+        );
+        assert_eq!(
+            calibrated_input_token_estimate(88_824, Some(&usage)),
+            112_015
+        );
+    }
+
+    /// Verifies OpenAI-style cached input remains a subset and is not counted twice.
+    /// 验证 OpenAI 风格的缓存输入保持为输入子集且不会被重复计算。
+    #[test]
+    fn observed_input_tokens_do_not_duplicate_cached_input_subset() {
+        let usage = ProviderUsageSnapshot {
+            input_tokens: Some(112_015),
+            output_tokens: Some(380),
+            reasoning_tokens: None,
+            total_tokens: Some(112_395),
+            cached_input_tokens: Some(111_616),
+            cache_creation_input_tokens: None,
+        };
+
+        assert_eq!(
+            observed_input_tokens_from_usage(Some(&usage)),
+            Some(112_015)
+        );
     }
 
     /// Verifies ratio boundaries map to the shared context-budget severity buckets.

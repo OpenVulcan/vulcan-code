@@ -273,13 +273,13 @@ function appendMessageBodyDeltaToMessages(
 ): ConversationMessage[] {
   let found = false;
   const nextMessages = messages.map((message) => {
-    if (message.id !== delta.messageId) {
+    if (message.conversationId !== delta.conversationId || message.id !== delta.messageId) {
       return message;
     }
     found = true;
     return mergeAppendMessageBodyDelta(message, delta);
   });
-  if (found || !delta.initialMessage) {
+  if (found || !delta.initialMessage || delta.initialMessage.conversationId !== delta.conversationId) {
     return nextMessages;
   }
 
@@ -329,7 +329,7 @@ function findAppendMessageBodyReplacementIndex(
   delta: AppendMessageBodyDelta,
   candidate: ConversationMessage,
 ): number {
-  if (!isAssistantOutputMessage(candidate)) {
+  if (candidate.conversationId !== delta.conversationId || !isAssistantOutputMessage(candidate)) {
     return -1;
   }
   let lastUserIndex = -1;
@@ -475,6 +475,17 @@ export function groupMessagesByConversation(messages: ConversationMessage[]): Ma
   return grouped;
 }
 
+// CarriedStreamingOutput binds one live assistant row to its exact visible user-turn anchor.
+// CarriedStreamingOutput 将一条实时助手消息绑定到其精确的可见用户回合锚点。
+interface CarriedStreamingOutput {
+  // Live assistant output retained from the current browser state.
+  // 从当前浏览器状态保留的实时助手输出。
+  output: ConversationMessage;
+  // Stable user-message id that starts the output's visible turn, or null for an unanchored system turn.
+  // 开启该输出可见回合的稳定用户消息标识；系统发起且无法锚定时为 null。
+  turnAnchorId: string | null;
+}
+
 // mergeIncomingConversationMessages preserves a live streamed answer until the durable final answer appears.
 // mergeIncomingConversationMessages 在持久化最终回答出现前保留实时流式回答。
 export function mergeIncomingConversationMessages(
@@ -483,21 +494,22 @@ export function mergeIncomingConversationMessages(
   currentConversation: ConversationSummary | undefined,
   incomingConversation: ConversationSummary | undefined,
 ): ConversationMessage[] {
-  const latestCurrentOutput = latestAssistantOutputAfterLastUser(currentMessages);
-  if (!latestCurrentOutput) {
+  const carriedOutput = latestAssistantOutputAfterLastUser(currentMessages);
+  if (!carriedOutput) {
     return incomingMessages;
   }
-  const incomingOutput = latestAssistantOutputAfterLastUser(incomingMessages);
-  if (incomingOutput) {
-    if (incomingOutput.conversationId === latestCurrentOutput.conversationId
-      && incomingOutput.id === latestCurrentOutput.id
-      && incomingOutput.body.length >= latestCurrentOutput.body.length) {
+  const incomingCarriedOutput = latestAssistantOutputAfterLastUser(incomingMessages);
+  if (incomingCarriedOutput) {
+    const incomingOutput = incomingCarriedOutput.output;
+    if (incomingOutput.conversationId === carriedOutput.output.conversationId
+      && incomingOutput.id === carriedOutput.output.id
+      && incomingOutput.body.length >= carriedOutput.output.body.length) {
       return incomingMessages;
     }
-    if (incomingOutput.conversationId === latestCurrentOutput.conversationId
-      && incomingOutput.id === latestCurrentOutput.id
-      && latestCurrentOutput.body.length > incomingOutput.body.length) {
-      return replaceIncomingAssistantOutput(incomingMessages, incomingOutput.id, latestCurrentOutput);
+    if (incomingOutput.conversationId === carriedOutput.output.conversationId
+      && incomingOutput.id === carriedOutput.output.id
+      && carriedOutput.output.body.length > incomingOutput.body.length) {
+      return replaceIncomingAssistantOutput(incomingMessages, incomingOutput.id, carriedOutput.output);
     }
   }
   const incomingTerminal = incomingConversationHasTerminalStats(incomingMessages);
@@ -506,24 +518,30 @@ export function mergeIncomingConversationMessages(
   if (!currentRunning && !incomingRunning && !incomingTerminal) {
     return incomingMessages;
   }
-  return insertCarriedStreamingOutput(incomingMessages, latestCurrentOutput);
+  return insertCarriedStreamingOutput(incomingMessages, carriedOutput) ?? currentMessages;
 }
 
-// latestAssistantOutputAfterLastUser returns the newest visible assistant output in the active user turn.
-// latestAssistantOutputAfterLastUser 返回当前用户回合内最新的可见助手输出。
-function latestAssistantOutputAfterLastUser(messages: ConversationMessage[]): ConversationMessage | null {
-  const lastUserTime = Math.max(
-    -1,
-    ...messages
-      .filter((message) => message.role === "user")
-      .map((message) => conversationMessageCreatedAtValue(message)),
-  );
-  return [...messages]
-    .reverse()
-    .find((message) => (
-      isAssistantOutputMessage(message)
-      && conversationMessageCreatedAtValue(message) >= lastUserTime
-    )) ?? null;
+// latestAssistantOutputAfterLastUser returns the newest visible assistant output and its ordered user anchor.
+// latestAssistantOutputAfterLastUser 返回最新可见助手输出及其按顺序确定的用户锚点。
+function latestAssistantOutputAfterLastUser(messages: ConversationMessage[]): CarriedStreamingOutput | null {
+  // lastUserIndex is derived from authoritative visible order instead of potentially equal timestamps.
+  // lastUserIndex 根据权威可见顺序确定，避免依赖可能相同的时间戳。
+  let lastUserIndex = -1;
+  for (let index = 0; index < messages.length; index += 1) {
+    if (messages[index]?.role === "user") {
+      lastUserIndex = index;
+    }
+  }
+  for (let index = messages.length - 1; index > lastUserIndex; index -= 1) {
+    const output = messages[index];
+    if (output && isAssistantOutputMessage(output)) {
+      return {
+        output,
+        turnAnchorId: lastUserIndex >= 0 ? messages[lastUserIndex]?.id ?? null : null,
+      };
+    }
+  }
+  return null;
 }
 
 // incomingConversationHasTerminalStats detects whether the backend has already published turn completion records.
@@ -552,21 +570,49 @@ function replaceIncomingAssistantOutput(
     }
     nextMessages.push(message);
   }
-  return replaced ? nextMessages : insertCarriedStreamingOutput(messages, streamedOutput);
+  return replaced ? nextMessages : messages;
 }
 
-// insertCarriedStreamingOutput inserts a carried streamed output before terminal-looking records.
-// insertCarriedStreamingOutput 将保留的流式输出插入到终态记录之前。
-function insertCarriedStreamingOutput(messages: ConversationMessage[], output: ConversationMessage): ConversationMessage[] {
-  if (messages.some((message) => message.id === output.id)) {
+// insertCarriedStreamingOutput inserts one live output only inside its proven user-turn boundary.
+// insertCarriedStreamingOutput 仅在已证明的用户回合边界内插入实时输出。
+function insertCarriedStreamingOutput(
+  messages: ConversationMessage[],
+  carriedOutput: CarriedStreamingOutput,
+): ConversationMessage[] | null {
+  const { output, turnAnchorId } = carriedOutput;
+  if (messages.some((message) => (
+    message.conversationId === output.conversationId && message.id === output.id
+  ))) {
     return messages;
   }
-  const insertIndex = messages.findIndex((message) => {
+  if (!turnAnchorId) {
+    return null;
+  }
+  // turnAnchorIndex proves the stale hydration window still contains the exact user turn.
+  // turnAnchorIndex 证明旧水合窗口仍包含完全相同的用户回合。
+  const turnAnchorIndex = messages.findIndex((message) => (
+    message.conversationId === output.conversationId
+      && message.id === turnAnchorId
+      && message.role === "user"
+  ));
+  if (turnAnchorIndex < 0) {
+    return null;
+  }
+  // insertIndex searches only after the proven anchor and therefore cannot target an earlier turn.
+  // insertIndex 仅在已证明锚点之后搜索，因此不能落入更早回合。
+  let insertIndex = messages.length;
+  for (let index = turnAnchorIndex + 1; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (!message || message.conversationId !== output.conversationId) {
+      continue;
+    }
     const recordKind = normalizedRecordKind(message.recordKind);
-    return recordKind === "summaryoutput" || recordKind === "turnstats";
-  });
-  if (insertIndex < 0) {
-    return [...messages, output];
+    if (message.role === "user" || recordKind === "summaryoutput" || recordKind === "turnstats") {
+      insertIndex = index;
+      break;
+    }
+    // Earlier assistant rows may legitimately belong to the same tool-rich turn, so the carried tail follows them.
+    // 更早的助手记录可能合法地属于同一工具密集回合，因此保留的尾部输出应位于它们之后。
   }
   return [...messages.slice(0, insertIndex), output, ...messages.slice(insertIndex)];
 }
@@ -577,9 +623,3 @@ function normalizedRecordKind(recordKind?: string | null): string {
   return recordKind?.trim().toLowerCase().replace(/[-_]/g, "") ?? "";
 }
 
-// conversationMessageCreatedAtValue parses a message timestamp for turn-local ordering.
-// conversationMessageCreatedAtValue 解析消息时间戳用于回合内排序。
-function conversationMessageCreatedAtValue(message: ConversationMessage): number {
-  const value = Number.parseInt(message.createdAt ?? "", 10);
-  return Number.isFinite(value) ? value : -1;
-}

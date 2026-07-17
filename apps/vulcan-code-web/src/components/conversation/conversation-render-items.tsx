@@ -378,9 +378,9 @@ function ConversationToolSequenceGroup(props: {
     return () => window.clearTimeout(timer);
   }, [expanded, retirementById, retirementTimerRevision]);
 
-  // hasFoldableItems controls whether the summary can reveal successful completed tools.
-  // hasFoldableItems 控制摘要是否可以展开成功完成的工具。
-  const hasFoldableItems = props.completedItems.length > 0;
+  // hasFoldableItems keeps every grouped sequence expandable while it owns visible tool rows.
+  // hasFoldableItems 让包含可见工具记录的每个工具组都可以展开。
+  const hasFoldableItems = props.items.length > 0;
   // terminalCount reports every non-running tool, including persistent diagnostics.
   // terminalCount 报告所有非运行中工具，包括持续显示的诊断记录。
   const terminalCount = props.completedItems.length + props.persistentItems.length;
@@ -408,8 +408,11 @@ function ConversationToolSequenceGroup(props: {
   // persistentIds identifies diagnostic rows that must not auto-retire.
   // persistentIds 标识不得自动收纳的诊断工具行。
   const persistentIds = new Set(props.persistentItems.map((item) => item.renderKey ?? item.id));
-  // visibleItems preserves original order across retiring, running, and diagnostic rows.
-  // visibleItems 在退场、运行和诊断记录之间保留原始顺序。
+  // expandedItems preserves every completed, running, and diagnostic row in original sequence order.
+  // expandedItems 按原始序列顺序保留全部完成、运行和诊断工具行。
+  const expandedItems = expanded ? props.items : [];
+  // visibleItems preserves collapsed live rows without duplicating the expanded body.
+  // visibleItems 保留折叠状态的实时工具行，并避免与展开正文重复。
   const visibleItems = expanded
     ? []
     : props.items.filter((item) => {
@@ -446,7 +449,7 @@ function ConversationToolSequenceGroup(props: {
       {hasFoldableItems ? (
         <ConversationMeasuredCollapse collapseId={props.collapseId} expanded={expanded}>
           <div className="conversation-tool-sequence-body">
-            {props.completedItems.map(props.renderItem)}
+            {expandedItems.map(props.renderItem)}
           </div>
         </ConversationMeasuredCollapse>
       ) : null}
