@@ -30,8 +30,14 @@ export interface ChatAreaComposerDockLayerProps {
   // 转录是否已经离开最新尾部。
   showScrollToBottom: boolean;
   // Runtime cue shown near the composer.
-  // 输入区附近展示的运行时提示。
+  // 工作区底部状态栏展示的运行时提示。
   runtimeCue: ComposerDockProps["runtimeCue"];
+  // Runtime status portal host mounted in the workspace status bar.
+  // 挂载在工作区状态栏中的运行状态 Portal 宿主。
+  runtimeStatusHost: ComposerDockProps["runtimeStatusHost"];
+  // Todolist status portal host mounted beside the workspace version.
+  // 挂载在工作区版本号旁的 Todo 状态 Portal 宿主。
+  todolistStatusHost: ComposerDockProps["todolistStatusHost"];
   // Current thinking display mode.
   // 当前思考展示模式。
   thinkingDisplayMode: ThinkingDisplayMode;
@@ -94,6 +100,8 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
       sessionPlanMode={props.isEmptyConversation ? null : workbench.sessionPlanMode ?? null}
       sessionVmmPolicy={props.isEmptyConversation ? null : workbench.sessionVmmPolicy ?? null}
       runtimeCue={props.isEmptyConversation ? null : props.runtimeCue}
+      runtimeStatusHost={props.runtimeStatusHost}
+      todolistStatusHost={props.todolistStatusHost}
       showScrollToBottom={props.showScrollToBottom}
       onEditPendingPrompt={chatAreaProps.onEditPendingPrompt}
       onInsertPendingPrompt={chatAreaProps.onInsertPendingPrompt}

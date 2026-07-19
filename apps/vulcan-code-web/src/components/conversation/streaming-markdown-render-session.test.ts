@@ -121,17 +121,26 @@ describe("streaming Markdown render session", () => {
     expect(streamingMarkdownRenderStateBody(state)).toBe(unresolved);
   });
 
-  it("keeps reusable reference definitions out of the immutable cold baseline", () => {
+  it("renders cold safe history as one baseline even when it contains reusable references", () => {
     const body = `[target]: /url\n\n${"body ".repeat(450)}[link][target]\n\n`;
     const state = createStreamingMarkdownRenderState(bodySnapshot(body));
 
-    expect(state.baseline).toBe("");
-    expect(state.segmentationDisabled).toBe(true);
+    expect(state.baseline).toBe(body);
+    expect(state.segmentationDisabled).toBe(false);
     expect(streamingMarkdownRenderStateBody(state)).toBe(body);
   });
 
+  it("keeps Markdown enabled for a long cold body containing ordinary bracket text", () => {
+    const body = `${"paragraph [state] text ".repeat(900)}\n\n`;
+    const state = createStreamingMarkdownRenderState(bodySnapshot(body));
+
+    expect(state.baseline).toBe(body);
+    expect(state.markdownTail).toBe("");
+    expect(state.rawPreview).toBe(false);
+  });
+
   it("does not rescan an ever-growing tail after global reference semantics disable segmentation", () => {
-    const unresolved = `${"body ".repeat(450)}[later]\n\n`;
+    const unresolved = `${"body ".repeat(450)}[link][later]\n\n`;
     let state = applyStreamingMarkdownDeltas(
       createStreamingMarkdownRenderState(bodySnapshot("")),
       [{ generation: 2, text: unresolved }],

@@ -211,10 +211,11 @@ describe("streaming Markdown safe boundaries", () => {
     expect(completed.lastSafeOffset).toBe(8_002);
   });
 
-  it("keeps references and reusable definitions out of immutable independent segments", () => {
+  it("keeps explicit references and reusable definitions out of immutable independent segments", () => {
     expect(streamingMarkdownSegmentIsSelfContained("[link][target]\n\n")).toBe(false);
     expect(streamingMarkdownSegmentIsSelfContained("[link][target]\n\n[target]: /url\n\n")).toBe(false);
-    expect(streamingMarkdownSegmentIsSelfContained("[shortcut]\n\n")).toBe(false);
+    expect(streamingMarkdownSegmentIsSelfContained("[ordinary label]\n\n")).toBe(true);
+    expect(streamingMarkdownSegmentIsSelfContained("array[index]\n\n")).toBe(true);
     expect(streamingMarkdownSegmentIsSelfContained("[shortcut]\n\n[shortcut]: /url\n\n")).toBe(false);
     expect(streamingMarkdownSegmentIsSelfContained("![image][asset]\n\n")).toBe(false);
     expect(streamingMarkdownSegmentIsSelfContained("![image][asset]\n\n[asset]: /image.png\n\n")).toBe(false);

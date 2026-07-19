@@ -13,8 +13,8 @@ export interface ComposerAttachmentPreviewMedia {
   sourceUrl?: string;
 }
 
-// ComposerRuntimeCue describes the compact running-state badge shown above the composer.
-// ComposerRuntimeCue 描述输入区上方展示的紧凑运行状态徽标。
+// ComposerRuntimeCue describes the compact running-state badge shown in the workspace status bar.
+// ComposerRuntimeCue 描述工作区状态栏中展示的紧凑运行状态徽标。
 export interface ComposerRuntimeCue {
   // Stable cue family used to pick the icon and visual treatment.
   // 用于选择图标与视觉表现的稳定提示类型。

@@ -232,6 +232,12 @@ export function WorkbenchLayout(props: {
   // 后端返回的最近局部工作台更新信号。
   workbenchDelta: WorkbenchDeltaSignal | null;
 }) {
+  // todolistStatusHost stores the footer node immediately following the version label.
+  // todolistStatusHost 保存紧跟版本号的底栏 Todo 节点。
+  const [todolistStatusHost, setTodolistStatusHost] = React.useState<HTMLDivElement | null>(null);
+  // runtimeStatusHost stores the center footer node for the current API request state.
+  // runtimeStatusHost 保存当前 API 请求状态使用的底栏中央节点。
+  const [runtimeStatusHost, setRuntimeStatusHost] = React.useState<HTMLDivElement | null>(null);
   // liveStreamStore reconciles selection snapshots before the new conversation subtree mounts.
   // liveStreamStore 在新会话子树挂载前对账选择快照。
   const liveStreamStore = useConversationLiveStreamStore();
@@ -1708,10 +1714,16 @@ export function WorkbenchLayout(props: {
             resolveMediaSourceUrl={localMediaSourceUrl}
             footer={(
               <footer className="statusbar workspace-statusbar">
-                <span>{formatWorkbenchTranslation(i18n.t, "workspaceShell.version", { version: props.workbench.appVersion })}</span>
+                <div className="workspace-statusbar-leading">
+                  <span>{formatWorkbenchTranslation(i18n.t, "workspaceShell.version", { version: props.workbench.appVersion })}</span>
+                  <div className="workspace-statusbar-todolist-status" ref={setTodolistStatusHost} />
+                </div>
+                <div className="workspace-statusbar-runtime-status" ref={setRuntimeStatusHost} />
                 <RepositoryLink onOpenExternalUrl={openExternalUrl} />
               </footer>
             )}
+            runtimeStatusHost={runtimeStatusHost}
+            todolistStatusHost={todolistStatusHost}
             onTrace={webuiClickTrace}
           />
         ) : (

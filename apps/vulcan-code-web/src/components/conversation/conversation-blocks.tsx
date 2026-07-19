@@ -20,6 +20,7 @@ import {
 } from "@/components/conversation/conversation-measured-collapse";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { StreamingMarkdownDocument } from "@/components/conversation/streaming-markdown-document";
+import { nextStreamingThinkingTailFollow } from "@/components/conversation/streaming-thinking-scroll";
 import {
   metadataString,
   metadataValue,
@@ -488,6 +489,12 @@ export function StreamingThinkingOverlay(props: {
   // tailFrameRef coalesces all resize-driven scroll work into one animation frame.
   // tailFrameRef 将所有尺寸变化触发的滚动工作合并到一个动画帧。
   const tailFrameRef = React.useRef<number | null>(null);
+  // manualScrollPointerRef records an active pointer gesture that may intentionally move the popup viewport.
+  // manualScrollPointerRef 记录可能主动移动弹窗视口的活跃指针手势。
+  const manualScrollPointerRef = React.useRef(false);
+  // manualScrollUntilRef keeps wheel intent active until its asynchronous scroll events settle.
+  // manualScrollUntilRef 保持滚轮意图，直到对应异步滚动事件稳定。
+  const manualScrollUntilRef = React.useRef(0);
 
   // scheduleTailFollow scrolls once per frame only while the user remains pinned to the tail.
   // scheduleTailFollow 仅在用户仍钉住尾部时每帧最多滚动一次。
@@ -528,6 +535,20 @@ export function StreamingThinkingOverlay(props: {
     };
   }, [scheduleTailFollow]);
 
+  React.useEffect(() => {
+    // clearPointerInteraction ends scrollbar, mouse, pen, or touch scrolling even when release occurs outside the popup.
+    // clearPointerInteraction 即使在弹窗外释放，也会结束滚动条、鼠标、触控笔或触摸滚动交互。
+    const clearPointerInteraction = () => {
+      manualScrollPointerRef.current = false;
+    };
+    window.addEventListener("pointerup", clearPointerInteraction);
+    window.addEventListener("pointercancel", clearPointerInteraction);
+    return () => {
+      window.removeEventListener("pointerup", clearPointerInteraction);
+      window.removeEventListener("pointercancel", clearPointerInteraction);
+    };
+  }, []);
+
   // handleBodyScroll updates tail-follow intent from the user's real viewport position.
   // handleBodyScroll 根据用户真实视口位置更新尾部跟随意图。
   const handleBodyScroll = React.useCallback(() => {
@@ -537,7 +558,29 @@ export function StreamingThinkingOverlay(props: {
     if (!element) {
       return;
     }
-    followTailRef.current = element.scrollHeight - element.scrollTop - element.clientHeight <= 24;
+    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    const manualInteraction = manualScrollPointerRef.current
+      || Date.now() <= manualScrollUntilRef.current;
+    followTailRef.current = nextStreamingThinkingTailFollow(
+      followTailRef.current,
+      distanceFromBottom,
+      manualInteraction,
+    );
+  }, []);
+
+  // handleBodyWheel records explicit wheel intent before the browser dispatches its scroll event.
+  // handleBodyWheel 在浏览器发出 scroll 事件前记录明确滚轮意图。
+  const handleBodyWheel = React.useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+    manualScrollUntilRef.current = Date.now() + 250;
+    if (event.deltaY < 0) {
+      followTailRef.current = false;
+    }
+  }, []);
+
+  // handleBodyPointerDown marks pointer-driven scrollbar, touch, or drag scrolling as manual.
+  // handleBodyPointerDown 将指针驱动的滚动条、触摸或拖动滚动标记为手动操作。
+  const handleBodyPointerDown = React.useCallback(() => {
+    manualScrollPointerRef.current = true;
   }, []);
 
   return (
@@ -549,7 +592,13 @@ export function StreamingThinkingOverlay(props: {
         </span>
         <span className="streaming-thinking-caption">{t("runtime.thinkingOverlayHint")}</span>
       </header>
-      <div className="streaming-thinking-body" onScroll={handleBodyScroll} ref={bodyRef}>
+      <div
+        className="streaming-thinking-body"
+        onPointerDown={handleBodyPointerDown}
+        onScroll={handleBodyScroll}
+        onWheel={handleBodyWheel}
+        ref={bodyRef}
+      >
         <div className="streaming-thinking-content" ref={contentRef}>
           {props.block.sourceMessageId ? (
             <StreamingMarkdownDocument

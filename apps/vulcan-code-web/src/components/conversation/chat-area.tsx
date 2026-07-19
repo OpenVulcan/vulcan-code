@@ -820,6 +820,8 @@ export function ChatArea(props: ChatAreaProps) {
       isConversationRunning={isConversationRunning}
       showScrollToBottom={!isEmptyConversation && !isAtConversationBottom}
       runtimeCue={runtimeCue}
+      runtimeStatusHost={props.runtimeStatusHost ?? null}
+      todolistStatusHost={props.todolistStatusHost ?? null}
       thinkingDisplayMode={thinkingDisplayMode}
       sessionReviewSummary={props.sessionReviewSummary}
       onComposerDockHeightChange={handleComposerDockHeightChange}

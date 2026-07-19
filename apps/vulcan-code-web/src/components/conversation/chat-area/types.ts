@@ -58,6 +58,12 @@ export interface ChatAreaProps {
   // Current Git review summary shown beside compact session progress.
   // 当前用于紧凑会话进程旁展示的 Git 审查摘要。
   sessionReviewSummary: ConversationSessionReviewSummary | null;
+  // Optional DOM host that receives the session runtime status through a React portal.
+  // 通过 React Portal 接收会话运行状态的可选 DOM 宿主。
+  runtimeStatusHost?: HTMLElement | null;
+  // Optional DOM host that receives the session todolist status through a React portal.
+  // 通过 React Portal 接收会话 Todo 状态的可选 DOM 宿主。
+  todolistStatusHost?: HTMLElement | null;
   // Selects the active workbench model.
   // 选择当前工作台模型。
   onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;

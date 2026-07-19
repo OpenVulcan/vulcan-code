@@ -247,21 +247,6 @@ export function streamingMarkdownSegmentIsSelfContained(content: string): boolea
       return false;
     }
   }
-  // shortcutReferencePattern recognizes shortcut links and images that may depend on a later definition.
-  // shortcutReferencePattern 识别可能依赖后续定义的快捷链接与图片。
-  const shortcutReferencePattern = /!?\[([^\]\^]+)\](?![\[(:])/gu;
-  let shortcutReferenceMatch: RegExpExecArray | null;
-  while ((shortcutReferenceMatch = shortcutReferencePattern.exec(referenceText)) !== null) {
-    const identifier = normalizeReferenceIdentifier(shortcutReferenceMatch[1] ?? "");
-    // GFM task markers are syntax-owned checkboxes rather than reference links.
-    // GFM 任务标记属于复选框语法，而不是引用链接。
-    if (/^[ x]$/iu.test(identifier)) {
-      continue;
-    }
-    if (!definitions.has(identifier)) {
-      return false;
-    }
-  }
   // footnotePattern recognizes GFM footnote references but excludes their definition prefix.
   // footnotePattern 识别 GFM 脚注引用，同时排除定义前缀。
   const footnotePattern = /\[\^([^\]]+)\](?!:)/gu;

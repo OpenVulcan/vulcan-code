@@ -938,6 +938,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         conversationHasMoreHistory={props.conversationHasMoreHistory}
         conversationHistoryLoading={props.conversationHistoryLoading}
         sessionReviewSummary={sessionReviewSummary}
+        runtimeStatusHost={props.runtimeStatusHost}
+        todolistStatusHost={props.todolistStatusHost}
         onSelectWorkbenchModel={props.onSelectWorkbenchModel}
         onListWorkbenchModelSecondaryRoutes={props.onListWorkbenchModelSecondaryRoutes}
         onSelectWorkbenchModelSecondaryRoute={props.onSelectWorkbenchModelSecondaryRoute}

@@ -1,4 +1,5 @@
 import React from "react";
+import { createPortal } from "react-dom";
 import { ArrowDown } from "lucide-react";
 import { type ModelPickerChoice } from "@/components/composer/model-picker-control";
 import {
@@ -185,14 +186,20 @@ export function ComposerDock(props: {
   // 当前会话 VMM 记忆策略状态。
   sessionVmmPolicy: SessionVmmPolicySummary | null;
   // runtimeCue shows the current session in-progress activity near the composer.
-  // runtimeCue 在输入区附近显示当前会话的进行中活动。
+  // runtimeCue 在工作区底部状态栏显示当前会话的进行中活动。
   runtimeCue: ComposerRuntimeCue | null;
+  // Runtime status portal host mounted in the center of the workspace status bar.
+  // 挂载在工作区状态栏中央的运行状态 Portal 宿主。
+  runtimeStatusHost: HTMLElement | null;
+  // Todolist status portal host mounted immediately after the workspace version.
+  // 紧跟工作区版本号挂载的 Todo 状态 Portal 宿主。
+  todolistStatusHost: HTMLElement | null;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
-  // dockRef measures only in-flow composer content; floating status rows stay outside this height.
-  // dockRef 只测量布局流内的输入区内容；浮动状态行不参与该高度。
+  // dockRef measures only in-flow composer content; portaled and floating status controls stay outside this height.
+  // dockRef 只测量布局流内的输入区内容；Portal 状态与浮动控件不参与该高度。
   const dockRef = React.useRef<HTMLDivElement | null>(null);
   const onComposerDockHeightChange = props.onComposerDockHeightChange;
   // visibleSessionTodolist hides progress when no todolist exists or every step is complete.
@@ -200,10 +207,6 @@ export function ComposerDock(props: {
   const visibleSessionTodolist = props.sessionTodolist?.items.some((item) => item.status !== "completed")
     ? props.sessionTodolist
     : null;
-  // hasFloatingStatus keeps the floating stack absent unless at least one status row is visible.
-  // hasFloatingStatus 确保没有状态行可见时不创建浮动堆栈。
-  const hasFloatingStatus = Boolean(props.showScrollToBottom || props.runtimeCue || visibleSessionTodolist);
-
   React.useLayoutEffect(() => {
     const element = dockRef.current;
     if (!element) {
@@ -221,38 +224,25 @@ export function ComposerDock(props: {
 
   return (
     <div className={cn("composer-dock", props.emptyMode && "empty-mode")} ref={dockRef}>
-      {hasFloatingStatus ? (
+      {props.showScrollToBottom ? (
         <div className="composer-floating-status-stack">
-          {props.showScrollToBottom ? (
-            <div className="scroll-to-bottom-layer">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    aria-label={t("composer.scrollToBottom")}
-                    className="scroll-to-bottom-button"
-                    onClick={props.onScrollToBottom}
-                    size="icon"
-                    type="button"
-                    variant="outline"
-                  >
-                    <ArrowDown size={18} />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="top">{t("composer.scrollToBottom")}</TooltipContent>
-              </Tooltip>
-            </div>
-          ) : null}
-          {props.runtimeCue ? (
-            <div className="composer-runtime-cue" aria-live="polite" aria-busy="true">
-              <span className="shimmer">{props.runtimeCue.text}</span>
-            </div>
-          ) : null}
-          {visibleSessionTodolist ? (
-            <ComposerSessionProgressCapsule
-              reviewSummary={props.sessionReviewSummary}
-              todolist={visibleSessionTodolist}
-            />
-          ) : null}
+          <div className="scroll-to-bottom-layer">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  aria-label={t("composer.scrollToBottom")}
+                  className="scroll-to-bottom-button"
+                  onClick={props.onScrollToBottom}
+                  size="icon"
+                  type="button"
+                  variant="outline"
+                >
+                  <ArrowDown size={18} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">{t("composer.scrollToBottom")}</TooltipContent>
+            </Tooltip>
+          </div>
         </div>
       ) : null}
       <ComposerPanel
@@ -296,6 +286,23 @@ export function ComposerDock(props: {
         sessionPlanMode={props.sessionPlanMode}
         sessionVmmPolicy={props.sessionVmmPolicy}
       />
+      {props.todolistStatusHost && visibleSessionTodolist
+        ? createPortal(
+          <ComposerSessionProgressCapsule
+            reviewSummary={props.sessionReviewSummary}
+            todolist={visibleSessionTodolist}
+          />,
+          props.todolistStatusHost,
+        )
+        : null}
+      {props.runtimeStatusHost && props.runtimeCue
+        ? createPortal(
+          <div className="composer-runtime-cue" aria-live="polite" aria-busy="true">
+            <span className="shimmer">{props.runtimeCue.text}</span>
+          </div>,
+          props.runtimeStatusHost,
+        )
+        : null}
     </div>
   );
 }

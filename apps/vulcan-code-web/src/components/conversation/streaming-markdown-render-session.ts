@@ -118,14 +118,9 @@ export function createStreamingMarkdownRenderState(
   const scannerSafeOffset = snapshot.lifecycle === "sealed"
     ? snapshot.body.length
     : scanner.lastSafeOffset;
-  // safeOffset keeps globally reusable reference definitions and unresolved references in one Markdown root.
-  // safeOffset 将全局可复用引用定义与未解析引用保留在同一个 Markdown 根节点中。
-  const coldPrefixSelfContained = snapshot.lifecycle === "sealed"
-    || streamingMarkdownSegmentIsSelfContained(snapshot.body.slice(0, scannerSafeOffset));
-  const safeOffset = snapshot.lifecycle === "active"
-    && !coldPrefixSelfContained
-    ? 0
-    : scannerSafeOffset;
+  // safeOffset renders all cold history through the latest structural boundary as one Markdown root.
+  // safeOffset 将截至最近结构边界的全部冷历史作为单个 Markdown 根渲染。
+  const safeOffset = scannerSafeOffset;
   // baseline is rendered once and never changes during this mount.
   // baseline 在当前挂载期间只渲染一次且绝不变化。
   const baseline = snapshot.body.slice(0, safeOffset);
@@ -152,7 +147,7 @@ export function createStreamingMarkdownRenderState(
     markdownTail: rawPreview ? "" : tail,
     tailUtf8ByteLength,
     rawPreview,
-    segmentationDisabled: snapshot.lifecycle === "active" && !coldPrefixSelfContained,
+    segmentationDisabled: false,
     scanner: snapshot.lifecycle === "sealed" ? finishStreamingMarkdownBoundary(scanner) : scanner,
     nextPartSequence: 1,
   };
