@@ -26,6 +26,9 @@ import {
 import {
   loadWorkbenchSnapshot,
 } from "@/service/workbench-snapshot-service";
+import { ConversationLiveStreamProvider } from "@/state/conversation-live-stream-context";
+import { ConversationLiveStreamStore } from "@/state/conversation-live-stream-store";
+import { workbenchEnvelopeRequiresReactProjection } from "@/state/workbench-stream-projection";
 import { coalesceWorkbenchDeltaEnvelopes } from "@/state/workbench-state";
 import type {
   StartupSnapshot,
@@ -57,6 +60,9 @@ export function WorkbenchApp(props: {
   // workbench stores the latest workbench snapshot.
   // workbench 保存最近一次工作台快照。
   const [workbench, setWorkbench] = React.useState<WorkbenchSnapshot | null>(null);
+  // liveStreamStore owns ordered streamed bodies without routing every fragment through global React state.
+  // liveStreamStore 持有有序流式正文，避免每个片段经过全局 React 状态。
+  const [liveStreamStore] = React.useState(() => new ConversationLiveStreamStore());
   // workbenchRef exposes the latest authoritative conversation titles to service event callbacks.
   // workbenchRef 向服务事件回调暴露最近的权威会话标题。
   const workbenchRef = React.useRef<WorkbenchSnapshot | null>(null);
@@ -179,9 +185,17 @@ export function WorkbenchApp(props: {
     // flushReadyDeltas publishes the already-contiguous delta queue to React.
     // flushReadyDeltas 将已经连续的增量队列发布给 React。
     function flushReadyDeltas() {
-      const envelopes = coalesceWorkbenchDeltaEnvelopes(workbenchDeltaBufferRef.current);
+      // readyEnvelopes retains every raw generation already ingested by the live stream Store.
+      // readyEnvelopes 保留已经写入实时流 Store 的每条原始 generation。
+      const readyEnvelopes = workbenchDeltaBufferRef.current;
       workbenchDeltaBufferRef.current = [];
       workbenchDeltaTimerRef.current = null;
+      liveStreamStore.flushNotifications();
+      // envelopes excludes pure body continuations so WorkbenchLayout does not rerender for streamed text growth.
+      // envelopes 排除纯正文续传，使 WorkbenchLayout 不因流式文本增长而重渲染。
+      const envelopes = coalesceWorkbenchDeltaEnvelopes(
+        readyEnvelopes.filter(workbenchEnvelopeRequiresReactProjection),
+      );
       if (envelopes.length > 0) {
         setWorkbenchDelta((current) => ({
           seq: (current?.seq ?? 0) + 1,
@@ -239,6 +253,7 @@ export function WorkbenchApp(props: {
         const envelope = workbenchDeltaPendingRef.current.get(nextGeneration);
         workbenchDeltaPendingRef.current.delete(nextGeneration);
         if (envelope) {
+          liveStreamStore.applyEnvelope(envelope);
           workbenchDeltaBufferRef.current.push(envelope);
           workbenchRevisionRef.current = nextGeneration;
           drained = true;
@@ -273,6 +288,8 @@ export function WorkbenchApp(props: {
         }
         const revision = recoveredWorkbench.revision ?? 0;
         if (revision > workbenchRevisionRef.current || workbenchRevisionRef.current === 0) {
+          liveStreamStore.rebaseWorkbenchSnapshot(recoveredWorkbench);
+          liveStreamStore.flushNotifications();
           discardBufferedDeltasThroughRevision(revision);
           workbenchRevisionRef.current = Math.max(workbenchRevisionRef.current, revision);
           workbenchSnapshotSeqRef.current += 1;
@@ -332,6 +349,8 @@ export function WorkbenchApp(props: {
           setError(null);
           workbenchSnapshotSeqRef.current += 1;
           workbenchRevisionRef.current = Math.max(workbenchRevisionRef.current, nextWorkbench.revision ?? 0);
+          liveStreamStore.rebaseWorkbenchSnapshot(nextWorkbench);
+          liveStreamStore.flushNotifications();
           setWorkbench(nextWorkbench);
           workbenchRef.current = nextWorkbench;
         }
@@ -356,6 +375,8 @@ export function WorkbenchApp(props: {
                 clearDeltaGapTimer();
                 workbenchRevisionRef.current = revision;
                 workbenchSnapshotSeqRef.current += 1;
+                liveStreamStore.rebaseWorkbenchSnapshot(payload);
+                liveStreamStore.flushNotifications();
                 setWorkbench(payload);
                 workbenchRef.current = payload;
                 drainContiguousDeltas();
@@ -437,7 +458,9 @@ export function WorkbenchApp(props: {
   return (
     <I18nProvider initialLocale={workbench.uiLocale ?? startup.uiLocale}>
       <TooltipProvider>
-        <WorkbenchLayout startup={startup} workbench={workbench} workbenchDelta={workbenchDelta} />
+        <ConversationLiveStreamProvider store={liveStreamStore}>
+          <WorkbenchLayout startup={startup} workbench={workbench} workbenchDelta={workbenchDelta} />
+        </ConversationLiveStreamProvider>
         <Toaster />
       </TooltipProvider>
     </I18nProvider>

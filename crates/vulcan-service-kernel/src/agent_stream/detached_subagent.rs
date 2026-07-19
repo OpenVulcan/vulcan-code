@@ -137,6 +137,11 @@ pub(crate) fn maybe_start_webui_detached_subagent_task_listener(
                 eprintln!("[webui-service] detached subagent event failed: {error}");
             }
         }
+        // Stream exhaustion without a Finished event must not leave child transcript rows active forever.
+        // 缺少 Finished 事件的流耗尽不得让子任务转录行永久保持活跃。
+        if let Err(error) = seal_stream_content_records(&app, &state, task_id, &mut record_ids) {
+            eprintln!("[webui-service] seal exhausted detached subagent records failed: {error}");
+        }
     });
     Ok(())
 }
@@ -659,7 +664,7 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
                 eprintln!("[webui-service] detached runtime event Hook dispatch failed: {error}");
             }
             if is_provider_tool_boundary_runtime_event(&event) {
-                reset_stream_content_record_ids(record_ids);
+                seal_stream_content_records(app, state, session_id, record_ids)?;
             }
             append_runtime_event_projection_and_release_barrier(app, state, session_id, &event)?;
             Ok(())
@@ -679,8 +684,9 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
             provider_request_count,
         ),
         ExecutionStreamEvent::Finished(report) => {
-            let _ = (app, agent_runtime);
+            let _ = agent_runtime;
             let session_id = report.session_id;
+            seal_stream_content_records(app, state, session_id, record_ids)?;
             let before_visible_messages =
                 visible_workbench_messages_for_conversation(state, session_id)?;
             apply_task_session_execution_report_to_memory_in_place(state, &report)?;

@@ -354,6 +354,19 @@ pub struct ConversationHydrationChangedDelta {
     pub progress: ConversationHydrationProgress,
 }
 
+/// Describes whether one streamed conversation message can still receive body deltas.
+/// 描述单条流式会话消息是否仍可接收正文增量。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum ConversationMessageStreamState {
+    /// The message remains open for additional provider content.
+    /// 消息仍可接收后续 Provider 内容。
+    Active,
+    /// The message has been permanently closed with its authoritative final body.
+    /// 消息已使用权威最终正文永久封口。
+    Sealed,
+}
+
 /// Appends streamed text to one visible conversation message.
 /// 向单条可见会话消息追加流式文本。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -380,6 +393,10 @@ pub struct AppendMessageBodyDelta {
     /// 应用本次增量后的当前会话运行阶段。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_phase: Option<String>,
+    /// Explicit lifecycle for provider-streamed thinking and assistant output records.
+    /// Provider 流式思考与助手输出记录的显式生命周期。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_state: Option<ConversationMessageStreamState>,
 }
 
 /// Updates one conversation lifecycle phase without resending transcript rows.

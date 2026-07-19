@@ -32,6 +32,9 @@ export interface ConversationBlock {
   // Stable block identifier within the owning message.
   // 所属消息内的稳定块标识。
   id: string;
+  // Authoritative backend message identity that produced this parsed block.
+  // 生成当前解析块的权威后端消息身份。
+  sourceMessageId?: string;
   // Semantic block kind used for component selection.
   // 用于选择组件的语义块类型。
   kind: ConversationBlockKind;

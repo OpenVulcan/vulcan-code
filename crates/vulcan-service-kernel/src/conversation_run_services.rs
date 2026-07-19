@@ -283,6 +283,13 @@ pub(crate) async fn service_stop_conversation_run(
         &app,
         &state,
         |workspace| {
+            // now seals every active row before the stop snapshot becomes authoritative.
+            // now 在停止快照成为权威状态前封口全部活跃行。
+            let now = current_unix_millis_text();
+            if let Some(runtime_state) = workspace.session_runtime_state.get_mut(&target_session_id)
+            {
+                seal_active_streaming_records_in_state(runtime_state, &now);
+            }
             mark_webui_session_stop_requested_in_workspace(workspace, target_session_id);
         },
     )?;

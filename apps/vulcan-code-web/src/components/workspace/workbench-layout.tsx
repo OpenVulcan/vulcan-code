@@ -69,6 +69,7 @@ import {
   setNotificationPresentationContext,
 } from "@/notifications/presentation-context";
 import type { NotificationPresentationContext } from "@/notifications/types";
+import { useConversationLiveStreamStore } from "@/state/conversation-live-stream-context";
 import type {
   AgentSkillsCatalogUpdate,
   ComposerSlashCommandSummary,
@@ -231,6 +232,9 @@ export function WorkbenchLayout(props: {
   // 后端返回的最近局部工作台更新信号。
   workbenchDelta: WorkbenchDeltaSignal | null;
 }) {
+  // liveStreamStore reconciles selection snapshots before the new conversation subtree mounts.
+  // liveStreamStore 在新会话子树挂载前对账选择快照。
+  const liveStreamStore = useConversationLiveStreamStore();
   // i18n provides localized shell labels and the active language.
   // i18n 提供本地化外壳标签与当前语言。
   const i18n = useI18n();
@@ -386,6 +390,11 @@ export function WorkbenchLayout(props: {
   // workbenchStateRef 向路由点击回调暴露最新工作台状态，避免闭包过期。
   const workbenchStateRef = React.useRef<WorkbenchSnapshot>(workbenchState);
   workbenchStateRef.current = workbenchState;
+  React.useEffect(() => {
+    // Stable coverage reconciliation runs after React commits the message projection.
+    // 稳定覆盖对账在 React 提交消息投影后运行。
+    liveStreamStore.reconcileStableCoverage(workbenchState);
+  }, [liveStreamStore, workbenchState]);
   // conversationArchivePendingIdsRef blocks duplicate archive RPCs until failure or visible lifecycle convergence.
   // conversationArchivePendingIdsRef 在失败或可见生命周期收敛前阻止重复归档 RPC。
   const conversationArchivePendingIdsRef = React.useRef<Set<string>>(new Set());
@@ -1080,6 +1089,8 @@ export function WorkbenchLayout(props: {
     void selectConversation(conversationId)
       .then((snapshot) => {
         if (snapshot) {
+          liveStreamStore.rebaseWorkbenchSnapshot(snapshot);
+          liveStreamStore.flushNotifications();
           setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(
             current,
             snapshot,
@@ -1090,13 +1101,15 @@ export function WorkbenchLayout(props: {
       })
       .then((snapshot) => {
         if (snapshot) {
+          liveStreamStore.rebaseWorkbenchSnapshot(snapshot);
+          liveStreamStore.flushNotifications();
           setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
         }
       })
       .catch((error) => {
         toast.error(error instanceof Error ? error.message : String(error));
       });
-  }, [handleOpenWorkspaceChat]);
+  }, [handleOpenWorkspaceChat, liveStreamStore]);
 
   React.useEffect(() => {
     notificationCoordinator.setRouteHandler((route) => {

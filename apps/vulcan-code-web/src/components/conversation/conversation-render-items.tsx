@@ -44,6 +44,7 @@ import { metadataValue } from "@/components/conversation/conversation-metadata";
 import type { CommandSessionSummary, ComposerAttachmentSummary } from "@/types";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
+import { conversationMessageStreamState } from "@/state/conversation-live-stream-store";
 
 // USER_PROMPT_COLLAPSE_LINE_LIMIT limits long user bubbles before the user expands them.
 // USER_PROMPT_COLLAPSE_LINE_LIMIT 限制用户手动展开前长用户气泡的显示行数。
@@ -604,7 +605,13 @@ export function ConversationProcessGroup(props: {
     props.sessionRunning,
   );
   const visibleCollapsedProcessUserItems = collapsed ? visibleProcessItems.filter(isTurnProcessUserRenderItem) : [];
-  const streamingProcessItemId = props.process.running ? visibleProcessItems.at(-1)?.id ?? null : null;
+  // streamingProcessItemIds comes only from explicit backend lifecycle metadata, never row position or run phase.
+  // streamingProcessItemIds 仅来自后端显式生命周期元数据，不依赖行位置或运行阶段。
+  const streamingProcessItemIds = new Set(
+    visibleProcessItems
+      .filter((item) => conversationMessageStreamState(item.sourceMessage) === "active")
+      .map((item) => item.id),
+  );
   const liveDurationMs = props.process.running
     ? Math.max(0, props.nowMs - (props.process.startedAtMs ?? fallbackStartedAtMsRef.current))
     : null;
@@ -630,7 +637,7 @@ export function ConversationProcessGroup(props: {
       workspacePath={props.workspacePath}
       commandSessions={props.commandSessions}
       item={item}
-      itemStreaming={item.id === streamingProcessItemId}
+      itemStreaming={streamingProcessItemIds.has(item.id)}
       key={item.id}
       parentConversationId={props.parentConversationId}
       sessionRunning={props.sessionRunning}

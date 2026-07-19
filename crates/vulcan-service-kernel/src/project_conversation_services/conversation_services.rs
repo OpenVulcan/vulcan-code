@@ -291,11 +291,9 @@ pub(crate) async fn service_mark_conversation_read(
         }
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         guard.workbench.revision = guard.workbench_generation;
-        (
-            controller_runtime,
-            runtime_state_update,
-            guard.workbench.clone(),
-        )
+        let mut workbench = guard.workbench.clone();
+        refresh_selected_workbench_messages_from_runtime(&guard, &mut workbench);
+        (controller_runtime, runtime_state_update, workbench)
     };
 
     if let Some(runtime_state_update) = runtime_state_update {
@@ -409,13 +407,13 @@ fn select_conversation_in_retained_state(
     Ok(Some(guard.workbench.clone()))
 }
 
-/// Projects only the retained message window for the selected conversation.
-/// 仅投影当前选中会话已保留的消息窗口。
+/// Projects retained transcript rows together with authoritative live runtime records.
+/// 将已保留转录行与权威实时运行时记录共同投影。
 ///
 /// # Parameters
 /// 参数
-/// `workspace_snapshot` contains retained hydrated message windows.
-/// `workspace_snapshot` 包含已保留的水合消息窗口。
+/// `workspace_snapshot` contains retained hydrated rows and live runtime records.
+/// `workspace_snapshot` 包含已保留水合行与实时运行时记录。
 /// `session_id` identifies the selected root conversation.
 /// `session_id` 标识选中的根会话。
 /// `conversation_id` is the string identifier used by WebUI messages.
@@ -423,24 +421,122 @@ fn select_conversation_in_retained_state(
 ///
 /// # Returns
 /// 返回值
-/// A message list containing the selected hydrated body when present.
-/// 返回只包含已存在选中正文的消息列表。
+/// A stable-id merged message list whose live stream bodies come from runtime state.
+/// 返回按稳定标识合并的消息列表，其中实时流正文来自运行时状态。
 fn retained_selected_conversation_messages(
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
     conversation_id: &str,
 ) -> Vec<ConversationMessage> {
-    workspace_snapshot
+    // retained_messages is the durable or hydrated transcript window for this session.
+    // retained_messages 是当前会话的持久化或已水合转录窗口。
+    let retained_messages = workspace_snapshot
         .session_messages
         .get(&session_id)
-        .map(|session_messages| {
-            conversation_messages_from_session(
-                conversation_id,
-                session_messages,
-                workspace_surface_allows_user_prompt_editing(workspace_snapshot, session_id, None),
-            )
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    // runtime_entries projects the exact records that continue changing while the session is not selected.
+    // runtime_entries 投影会话未选中期间仍持续变化的精确记录。
+    let runtime_entries = workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .map(|runtime_state| {
+            runtime_state
+                .conversation_state
+                .records
+                .iter()
+                .map(session_message_entry_from_conversation_record)
+                .collect::<Vec<_>>()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // merged_messages preserves retained order and replaces matching ids with authoritative runtime bodies.
+    // merged_messages 保留既有顺序，并使用权威运行时正文替换相同标识的记录。
+    let merged_messages = merge_session_messages_with_runtime_event_entries(
+        retained_messages,
+        runtime_entries.as_slice(),
+    );
+    conversation_messages_from_session(
+        conversation_id,
+        merged_messages.as_slice(),
+        workspace_surface_allows_user_prompt_editing(workspace_snapshot, session_id, None),
+    )
+}
+
+/// Replaces one workbench snapshot's selected messages with same-lock authoritative runtime projection.
+/// 使用同一锁内的权威运行时投影替换工作台快照的当前会话消息。
+///
+/// # Parameters
+/// # 参数
+/// `guard` owns the retained workspace and runtime records at one consistent revision.
+/// `guard` 在同一一致 revision 下持有保留工作区与运行时记录。
+/// `workbench` is the snapshot being prepared for a full-response or recovery boundary.
+/// `workbench` 是正在为全量响应或恢复边界准备的快照。
+///
+/// # Returns
+/// # 返回值
+/// Nothing; invalid draft selections or unavailable workspaces leave the snapshot unchanged.
+/// 无返回值；草稿选择无效或工作区不可用时保持快照不变。
+pub(crate) fn refresh_selected_workbench_messages_from_runtime(
+    guard: &ServiceBridgeState,
+    workbench: &mut WorkbenchSnapshot,
+) {
+    let Some(workspace_snapshot) = guard.workspace_snapshot.as_ref() else {
+        return;
+    };
+    let Some(conversation_id) = workbench.selected_conversation_id.as_deref() else {
+        return;
+    };
+    let Ok(session_id) = conversation_id.parse::<SessionId>() else {
+        return;
+    };
+    if !workspace_snapshot
+        .sessions
+        .iter()
+        .any(|session| session.id == session_id)
+    {
+        return;
+    }
+    if workspace_snapshot
+        .session_messages
+        .contains_key(&session_id)
+    {
+        workbench.messages = retained_selected_conversation_messages(
+            workspace_snapshot,
+            session_id,
+            conversation_id,
+        );
+        return;
+    }
+    // runtimeMessages overlays exact live rows when the full workbench owns the only stable message window.
+    // runtimeMessages 在全量工作台持有唯一稳定消息窗口时叠加精确实时行。
+    let runtime_entries = workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .map(|runtime_state| {
+            runtime_state
+                .conversation_state
+                .records
+                .iter()
+                .map(session_message_entry_from_conversation_record)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let runtime_messages = conversation_messages_from_session(
+        conversation_id,
+        runtime_entries.as_slice(),
+        workspace_surface_allows_user_prompt_editing(workspace_snapshot, session_id, None),
+    );
+    for runtime_message in runtime_messages {
+        if let Some(existing_message) = workbench
+            .messages
+            .iter_mut()
+            .find(|message| message.id == runtime_message.id)
+        {
+            *existing_message = runtime_message;
+        } else {
+            workbench.messages.push(runtime_message);
+        }
+    }
 }
 
 /// Reprojects selected-only workbench fields from retained per-conversation caches.

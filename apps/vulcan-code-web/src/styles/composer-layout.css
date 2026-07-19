@@ -136,6 +136,27 @@
   font-size: 13px;
 }
 
+.streaming-thinking-content {
+  min-width: 0;
+}
+
+.streaming-markdown-document {
+  min-width: 0;
+}
+
+.streaming-markdown-document > .markdown-message + .markdown-message {
+  margin-top: 0;
+}
+
+.streaming-markdown-raw-preview {
+  margin: 0;
+  overflow-x: auto;
+  color: inherit;
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .conversation-loading-card > .shimmer {
   width: fit-content;
   font-size: 15px;

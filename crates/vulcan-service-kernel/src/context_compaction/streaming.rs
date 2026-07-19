@@ -2,7 +2,10 @@
 //! 上下文压缩 streaming 辅助逻辑。
 
 use super::*;
-use crate::{ProviderTelemetryHookGuard, Uuid, spawn_registered_active_stream_task};
+use crate::{
+    ProviderTelemetryHookGuard, Uuid, seal_stream_content_records,
+    spawn_registered_active_stream_task,
+};
 
 /// Streams one prompt-compaction request and mirrors provider deltas into WebUI state.
 /// 流式执行一次提示词压缩请求，并将 Provider 增量镜像到 WebUI 状态。
@@ -93,6 +96,9 @@ pub(crate) async fn stream_webui_context_compaction_execution(
             }
         }
     }
+    // Every terminal path, including provider failure and premature exhaustion, closes active compaction rows.
+    // 每条终止路径（包括 Provider 失败与提前耗尽）都关闭活跃压缩行。
+    seal_stream_content_records(app, state, session_id, &mut record_ids)?;
     terminal_result
         .unwrap_or_else(|| Err(String::from("模型总结流提前结束，已取消本次提示词压缩。")))
 }
@@ -361,7 +367,9 @@ pub(crate) fn apply_webui_context_compaction_stream_event(
             Ok(())
         }
         ExecutionStreamEvent::ConversationCheckpoint { .. } => Ok(()),
-        ExecutionStreamEvent::Finished(_) => Ok(()),
+        ExecutionStreamEvent::Finished(_) => {
+            seal_stream_content_records(app, state, session_id, record_ids)
+        }
     }
 }
 

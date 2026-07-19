@@ -626,6 +626,143 @@ async fn retained_conversation_messages_response_is_focused_on_requested_session
     );
 }
 
+/// Verifies retained selection overlays authoritative live runtime stream records.
+/// 验证保留会话选择会叠加权威实时运行时流记录。
+///
+/// # Parameters
+/// # 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// # 返回值
+/// This test returns no value and fails when a live thinking row is omitted or downgraded.
+/// 此测试无返回值；实时思考行被遗漏或降级时通过断言失败。
+#[tokio::test]
+async fn select_retained_conversation_includes_live_runtime_stream_record() {
+    // session_id identifies the selected regular conversation.
+    // session_id 标识当前选中的常规会话。
+    let session_id = SessionId::new_v4();
+    // service_state owns both the retained transcript and the authoritative live runtime row.
+    // service_state 同时持有保留转录与权威实时运行时行。
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    service_state.workbench.conversations = vec![test_conversation_summary(session_id, "live")];
+    service_state.workbench.selected_conversation_id = Some(session_id.to_string());
+    // record_ids captures the exact stable id allocated to the live thinking record.
+    // record_ids 捕获实时思考记录分配到的精确稳定标识。
+    let mut record_ids = SessionStreamingRecordIds::default();
+    {
+        // workspace is the retained owner of session runtime state during stream projection.
+        // workspace 是流投影期间会话运行时状态的保留所有者。
+        let workspace = service_state
+            .workspace_snapshot
+            .as_mut()
+            .expect("workspace snapshot");
+        workspace.session_messages.insert(
+            session_id,
+            vec![test_visible_message("stable-message", "stable body")],
+        );
+        // runtime_state is the exact live conversation state that continues changing off-screen.
+        // runtime_state 是离屏期间继续变化的精确实时会话状态。
+        let runtime_state = workspace
+            .session_runtime_state
+            .entry(session_id)
+            .or_default();
+        append_stream_delta_record_to_state(
+            runtime_state,
+            session_id,
+            "101",
+            &mut record_ids.thinking_record_id,
+            SessionMessageRecordKind::ThinkingOutput,
+            "思考",
+            "live thinking body",
+            true,
+        )
+        .expect("live thinking record should append");
+        append_stream_delta_record_to_state(
+            runtime_state,
+            session_id,
+            "102",
+            &mut record_ids.output_record_id,
+            SessionMessageRecordKind::AssistantOutput,
+            "输出",
+            "sealed assistant body",
+            false,
+        )
+        .expect("assistant stream record should append");
+        let output_record_id = record_ids
+            .output_record_id
+            .as_deref()
+            .expect("assistant output record id");
+        seal_streaming_record_in_state(runtime_state, "103", output_record_id)
+            .expect("valid output lifecycle metadata")
+            .expect("assistant output record should exist");
+    }
+    // live_message_id is the identity that later body-only deltas will target.
+    // live_message_id 是后续纯正文增量将要定位的身份。
+    let live_message_id = record_ids
+        .thinking_record_id
+        .clone()
+        .expect("thinking record id");
+    // state exposes the retained fast path used by the selection service.
+    // state 暴露会话选择服务使用的保留快速路径。
+    let state = Arc::new(Mutex::new(service_state));
+
+    // recovery_snapshot must overlay runtime records instead of returning the stale retained message body.
+    // recovery_snapshot 必须叠加运行时记录，不能返回过期的保留消息正文。
+    let recovery_snapshot = service_workbench_snapshot(state.clone())
+        .expect("full recovery snapshot should project live runtime rows");
+    assert!(
+        recovery_snapshot
+            .messages
+            .iter()
+            .any(|message| message.id == live_message_id && message.body == "live thinking body")
+    );
+
+    // response must be cut from the same retained revision as the runtime body.
+    // response 必须从与运行时正文相同的保留版本中截取。
+    let response = service_select_conversation(state, session_id.to_string())
+        .await
+        .expect("retained conversation selection should succeed");
+    // live_message is the selected runtime row required for uninterrupted later deltas.
+    // live_message 是后续增量不中断所必需的选中运行时行。
+    let live_message = response
+        .messages
+        .iter()
+        .find(|message| message.id == live_message_id)
+        .expect("selected workbench should include live thinking row");
+
+    assert_eq!(live_message.body, "live thinking body");
+    assert_eq!(
+        live_message
+            .metadata
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .and_then(|metadata| metadata.get(STREAMING_RECORD_STATE_METADATA_KEY))
+            .and_then(serde_json::Value::as_str),
+        Some(STREAMING_RECORD_STATE_ACTIVE)
+    );
+    let output_message_id = record_ids
+        .output_record_id
+        .as_deref()
+        .expect("assistant output record id");
+    let output_message = response
+        .messages
+        .iter()
+        .find(|message| message.id == output_message_id)
+        .expect("selected workbench should include sealed assistant row");
+    assert_eq!(output_message.body, "sealed assistant body");
+    assert_eq!(
+        output_message
+            .metadata
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .and_then(|metadata| metadata.get(STREAMING_RECORD_STATE_METADATA_KEY))
+            .and_then(serde_json::Value::as_str),
+        Some(STREAMING_RECORD_STATE_SEALED)
+    );
+}
+
 /// Verifies retained message fast path refuses sessions missing subagent preload completion.
 /// 验证已保留消息快速路径会拒绝缺失子智能体预载完成标记的会话。
 #[tokio::test]

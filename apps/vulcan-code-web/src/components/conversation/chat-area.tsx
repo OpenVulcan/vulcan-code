@@ -304,8 +304,8 @@ export function ChatArea(props: ChatAreaProps) {
   // composerBlockedByDecision hides the normal composer until the user resolves the blocking decision surface.
   // composerBlockedByDecision 在用户处理完阻塞式决策界面前隐藏普通输入区。
   const composerBlockedByDecision = Boolean(pendingPlanArtifact || pendingAskQuestion);
-  // conversationStreamSignature changes when streamed content grows inside existing transcript rows.
-  // conversationStreamSignature 在现有转录行内部的流式内容增长时变化。
+  // conversationStreamSignature tracks transcript structure without rescanning cumulative streamed bodies.
+  // conversationStreamSignature 跟踪转录结构，且不重复扫描累计流式正文。
   const conversationStreamSignature = React.useMemo(
     () => buildConversationStreamSignature(messages),
     [messages],
@@ -501,6 +501,15 @@ export function ChatArea(props: ChatAreaProps) {
     const initialRect = element.getBoundingClientRect();
     let previousWidth = initialRect.width;
     let previousHeight = initialRect.height;
+    // resizeFrame coalesces geometry-driven scroll writes into one animation frame.
+    // resizeFrame 将几何变化触发的滚动写入合并到一个动画帧。
+    let resizeFrame: number | null = null;
+    // pendingWidthChange retains width invalidation across coalesced observer callbacks.
+    // pendingWidthChange 在合并的观察器回调间保留宽度失效标记。
+    let pendingWidthChange = false;
+    // pendingHeightChange retains height invalidation across coalesced observer callbacks.
+    // pendingHeightChange 在合并的观察器回调间保留高度失效标记。
+    let pendingHeightChange = false;
     const observer = new ResizeObserver(([entry]) => {
       const nextWidth = entry.contentRect.width;
       const nextHeight = entry.contentRect.height;
@@ -511,30 +520,47 @@ export function ChatArea(props: ChatAreaProps) {
       }
       previousWidth = nextWidth;
       previousHeight = nextHeight;
-      const scrollElement = workspaceRef.current;
-      const surfaceId = scrollElement?.dataset.conversationSurfaceId ?? renderedSurfaceConversationIdRef.current ?? activeSurfaceConversationId ?? null;
-      const suppressNearBottomFollow = Date.now() <= upwardScrollTailSuppressUntilRef.current;
-      const userScrollSettling = Date.now() <= userScrollSettleUntilRef.current;
-      if (heightChanged && scrollElement && shouldFollowConversationTailRef.current && !suppressNearBottomFollow && !userScrollSettling) {
-        scrollElement.scrollTop = scrollElement.scrollHeight;
-        if (surfaceId) {
-          writeConversationScrollSnapshot(surfaceId, {
-            anchor: null,
-            distanceFromBottom: 0,
-            wasAtBottom: true,
-          });
-        }
-        setIsAtConversationBottom(true);
+      pendingWidthChange ||= widthChanged;
+      pendingHeightChange ||= heightChanged;
+      if (resizeFrame !== null) {
         return;
       }
-      updateConversationBottomState();
-      if (widthChanged) {
-        capturePendingConversationLayoutViewport();
-        schedulePendingConversationLayoutRestore();
-      }
+      resizeFrame = window.requestAnimationFrame(() => {
+        resizeFrame = null;
+        const widthInvalidated = pendingWidthChange;
+        const heightInvalidated = pendingHeightChange;
+        pendingWidthChange = false;
+        pendingHeightChange = false;
+        const scrollElement = workspaceRef.current;
+        const surfaceId = scrollElement?.dataset.conversationSurfaceId ?? renderedSurfaceConversationIdRef.current ?? activeSurfaceConversationId ?? null;
+        const suppressNearBottomFollow = Date.now() <= upwardScrollTailSuppressUntilRef.current;
+        const userScrollSettling = Date.now() <= userScrollSettleUntilRef.current;
+        if (heightInvalidated && scrollElement && shouldFollowConversationTailRef.current && !suppressNearBottomFollow && !userScrollSettling) {
+          scrollElement.scrollTop = scrollElement.scrollHeight;
+          if (surfaceId) {
+            writeConversationScrollSnapshot(surfaceId, {
+              anchor: null,
+              distanceFromBottom: 0,
+              wasAtBottom: true,
+            });
+          }
+          setIsAtConversationBottom(true);
+        } else {
+          updateConversationBottomState();
+        }
+        if (widthInvalidated) {
+          capturePendingConversationLayoutViewport();
+          schedulePendingConversationLayoutRestore();
+        }
+      });
     });
     observer.observe(element);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (resizeFrame !== null) {
+        window.cancelAnimationFrame(resizeFrame);
+      }
+    };
   }, [activeSurfaceConversationId, capturePendingConversationLayoutViewport, schedulePendingConversationLayoutRestore, updateConversationBottomState, writeConversationScrollSnapshot]);
 
   React.useLayoutEffect(() => {
@@ -856,9 +882,10 @@ export function ChatArea(props: ChatAreaProps) {
         resolveComposerAttachmentMedia={composerAttachmentMedia}
         onTrace={props.onTrace}
       />
-      {visibleStreamingThinkingOverlayBlock ? (
+      {visibleStreamingThinkingOverlayBlock && activeSurfaceConversationId ? (
         <StreamingThinkingOverlay
           block={visibleStreamingThinkingOverlayBlock}
+          conversationId={activeSurfaceConversationId}
           leaving={streamingThinkingOverlayLeaving}
         />
       ) : null}

@@ -19,6 +19,7 @@ import {
   useConversationMeasuredExpansion,
 } from "@/components/conversation/conversation-measured-collapse";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
+import { StreamingMarkdownDocument } from "@/components/conversation/streaming-markdown-document";
 import {
   metadataString,
   metadataValue,
@@ -32,6 +33,9 @@ export interface ConversationDisplayBlock {
   // Stable block id used by React keys and section memory.
   // React key 与分段记忆使用的稳定块标识。
   id: string;
+  // Optional authoritative backend message identity used by live stream binding.
+  // 实时流绑定使用的可选权威后端消息身份。
+  sourceMessageId?: string;
   // Block kind used by thinking and compaction filtering.
   // 思考与压缩过滤使用的块类型。
   kind: string;
@@ -73,6 +77,9 @@ export function ContextCompactionBlock(props: {
   // Section blocks contain start, optional body, and optional end rows.
   // 分段块包含开始、可选正文和可选结束行。
   blocks: ConversationDisplayBlock[];
+  // Conversation identity used to bind streamed thinking rows to the live Store.
+  // 用于把流式思考行绑定到实时 Store 的会话身份。
+  conversationId: string | null;
   // onOpenMedia opens generated media referenced from markdown content.
   // onOpenMedia 打开 Markdown 内容引用的生成媒体。
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
@@ -147,6 +154,7 @@ export function ContextCompactionBlock(props: {
                 autoExpanded={false}
                 autoExpandWhileStreaming={false}
                 block={block}
+                conversationId={props.conversationId}
                 key={block.id}
                 sessionRunning={running}
                 streaming={running}
@@ -259,6 +267,9 @@ export function ThinkingBlock(props: {
   // block contains the thinking transcript payload.
   // block 包含思考转录载荷。
   block: ConversationDisplayBlock;
+  // Conversation identity used by the live stream Store.
+  // 实时流 Store 使用的会话身份。
+  conversationId: string | null;
   // sessionRunning keeps call-site compatibility with completion collapse behavior.
   // sessionRunning 保持与完成后折叠行为调用点兼容。
   sessionRunning: boolean;
@@ -319,7 +330,17 @@ export function ThinkingBlock(props: {
       </button>
       <ConversationMeasuredCollapse collapseId={collapseId} expanded={expanded}>
         <div className="thinking-body">
-          <MarkdownMessage content={content} eager streaming={props.streaming} onOpenMedia={props.onOpenMedia} />
+          {props.streaming && props.conversationId && props.block.sourceMessageId ? (
+            <StreamingMarkdownDocument
+              conversationId={props.conversationId}
+              fallbackContent={content}
+              fallbackStreaming={props.streaming}
+              messageId={props.block.sourceMessageId}
+              onOpenMedia={props.onOpenMedia}
+            />
+          ) : (
+            <MarkdownMessage content={content} eager streaming={props.streaming} onOpenMedia={props.onOpenMedia} />
+          )}
         </div>
       </ConversationMeasuredCollapse>
     </section>
@@ -445,6 +466,9 @@ export function StreamingThinkingOverlay(props: {
   // block contains the currently streaming thinking transcript.
   // block 包含当前正在流式输出的思考转录。
   block: ConversationDisplayBlock;
+  // Conversation identity used by the live stream Store.
+  // 实时流 Store 使用的会话身份。
+  conversationId: string;
   // leaving marks the popup fade-out phase after the hold delay.
   // leaving 标记保留等待后的弹窗淡出阶段。
   leaving: boolean;
@@ -455,14 +479,66 @@ export function StreamingThinkingOverlay(props: {
   // bodyRef stores the scrollable thinking body for tail following.
   // bodyRef 保存可滚动思考正文，用于追随最新尾部。
   const bodyRef = React.useRef<HTMLDivElement | null>(null);
+  // contentRef stores the changing inner document observed without watching cumulative body props.
+  // contentRef 保存变化中的内部文档，避免监听累计正文 props。
+  const contentRef = React.useRef<HTMLDivElement | null>(null);
+  // followTailRef records whether the user remains pinned near the popup bottom.
+  // followTailRef 记录用户是否仍停留在弹窗底部附近。
+  const followTailRef = React.useRef(true);
+  // tailFrameRef coalesces all resize-driven scroll work into one animation frame.
+  // tailFrameRef 将所有尺寸变化触发的滚动工作合并到一个动画帧。
+  const tailFrameRef = React.useRef<number | null>(null);
 
-  React.useLayoutEffect(() => {
+  // scheduleTailFollow scrolls once per frame only while the user remains pinned to the tail.
+  // scheduleTailFollow 仅在用户仍钉住尾部时每帧最多滚动一次。
+  const scheduleTailFollow = React.useCallback(() => {
+    if (tailFrameRef.current !== null) {
+      return;
+    }
+    tailFrameRef.current = window.requestAnimationFrame(() => {
+      tailFrameRef.current = null;
+      // element is read at execution time because the popup may leave before the frame runs.
+      // element 在执行时读取，因为弹窗可能在动画帧运行前退场。
+      const element = bodyRef.current;
+      if (!element || !followTailRef.current) {
+        return;
+      }
+      element.scrollTop = element.scrollHeight;
+    });
+  }, []);
+
+  React.useEffect(() => {
+    // content is the exact inner document whose height changes as the live Store publishes updates.
+    // content 是实时 Store 发布更新时高度发生变化的精确内部文档。
+    const content = contentRef.current;
+    if (!content) {
+      return;
+    }
+    // observer schedules tail following from real geometry changes rather than cumulative Markdown props.
+    // observer 根据真实几何变化调度尾部跟随，而不是依赖累计 Markdown props。
+    const observer = new ResizeObserver(scheduleTailFollow);
+    observer.observe(content);
+    scheduleTailFollow();
+    return () => {
+      observer.disconnect();
+      if (tailFrameRef.current !== null) {
+        window.cancelAnimationFrame(tailFrameRef.current);
+        tailFrameRef.current = null;
+      }
+    };
+  }, [scheduleTailFollow]);
+
+  // handleBodyScroll updates tail-follow intent from the user's real viewport position.
+  // handleBodyScroll 根据用户真实视口位置更新尾部跟随意图。
+  const handleBodyScroll = React.useCallback(() => {
+    // element owns the popup-local scroll range.
+    // element 持有弹窗局部滚动范围。
     const element = bodyRef.current;
     if (!element) {
       return;
     }
-    element.scrollTop = element.scrollHeight;
-  }, [props.block.body]);
+    followTailRef.current = element.scrollHeight - element.scrollTop - element.clientHeight <= 24;
+  }, []);
 
   return (
     <section className={cn("streaming-thinking-overlay", props.leaving && "leaving")} aria-live="polite" aria-busy={!props.leaving}>
@@ -473,8 +549,23 @@ export function StreamingThinkingOverlay(props: {
         </span>
         <span className="streaming-thinking-caption">{t("runtime.thinkingOverlayHint")}</span>
       </header>
-      <div className="streaming-thinking-body" ref={bodyRef}>
-        <MarkdownMessage content={props.block.body || t("runtime.thinking")} eager streaming={!props.leaving} />
+      <div className="streaming-thinking-body" onScroll={handleBodyScroll} ref={bodyRef}>
+        <div className="streaming-thinking-content" ref={contentRef}>
+          {props.block.sourceMessageId ? (
+            <StreamingMarkdownDocument
+              conversationId={props.conversationId}
+              fallbackContent={props.block.body || t("runtime.thinking")}
+              fallbackStreaming={!props.leaving}
+              messageId={props.block.sourceMessageId}
+            />
+          ) : (
+            <MarkdownMessage
+              content={props.block.body || t("runtime.thinking")}
+              eager
+              streaming={!props.leaving}
+            />
+          )}
+        </div>
       </div>
     </section>
   );

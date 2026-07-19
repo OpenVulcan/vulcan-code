@@ -162,6 +162,139 @@ fn checkpoint_preserves_visible_records() {
     assert_eq!(runtime_state.updated_at, "1002");
 }
 
+/// Verifies an external stop seals only explicitly active stream records.
+/// 验证外部停止仅封口显式处于活跃状态的流记录。
+///
+/// # Parameters
+/// # 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// # 返回值
+/// This test returns no value and fails when active lifecycle sealing is incomplete or non-idempotent.
+/// 此测试无返回值；活跃生命周期封口不完整或不幂等时通过断言失败。
+#[test]
+fn external_stop_seals_all_active_stream_records() {
+    let session_id = test_session_id();
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    let mut thinking_record_id = None;
+    append_stream_delta_record_to_state(
+        &mut runtime_state,
+        session_id,
+        "1050",
+        &mut thinking_record_id,
+        SessionMessageRecordKind::ThinkingOutput,
+        "思考",
+        "分析中",
+        true,
+    )
+    .expect("valid thinking stream identity");
+    let mut output_record_id = None;
+    append_stream_delta_record_to_state(
+        &mut runtime_state,
+        session_id,
+        "1051",
+        &mut output_record_id,
+        SessionMessageRecordKind::AssistantOutput,
+        "输出",
+        "回答中",
+        false,
+    )
+    .expect("valid output stream identity");
+    append_user_prompt_record(&mut runtime_state, session_id, "1052", "保留稳定记录")
+        .expect("valid stable user record identity");
+
+    assert_eq!(
+        seal_active_streaming_records_in_state(&mut runtime_state, "1053"),
+        2
+    );
+    assert_eq!(runtime_state.updated_at, "1053");
+    let stream_states = runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .filter_map(|record| {
+            record
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get(STREAMING_RECORD_STATE_METADATA_KEY))
+                .and_then(serde_json::Value::as_str)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        stream_states,
+        vec![STREAMING_RECORD_STATE_SEALED, STREAMING_RECORD_STATE_SEALED]
+    );
+    assert_eq!(
+        seal_active_streaming_records_in_state(&mut runtime_state, "1054"),
+        0
+    );
+    assert_eq!(runtime_state.updated_at, "1053");
+}
+
+/// Verifies a stale request-local identity cannot append after authoritative sealing.
+/// 验证过期的请求局部身份无法在权威封口后继续追加。
+///
+/// # Parameters
+/// # 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// # 返回值
+/// This test returns no value and fails when terminal records accept late text.
+/// 此测试无返回值；终态记录接受迟到文本时通过断言失败。
+#[test]
+fn sealed_stream_record_rejects_late_append() {
+    let session_id = test_session_id();
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    let mut record_id = None;
+    append_stream_delta_record_to_state(
+        &mut runtime_state,
+        session_id,
+        "1060",
+        &mut record_id,
+        SessionMessageRecordKind::AssistantOutput,
+        "输出",
+        "完整正文",
+        false,
+    )
+    .expect("valid active stream identity");
+    let stale_record_id = record_id.clone().expect("stream record identity");
+    seal_streaming_record_in_state(&mut runtime_state, "1061", &stale_record_id)
+        .expect("valid stream lifecycle metadata")
+        .expect("stream record should exist");
+    assert!(
+        seal_streaming_record_in_state(&mut runtime_state, "1061", &stale_record_id)
+            .expect("repeat sealing should remain valid")
+            .is_none()
+    );
+
+    let error = append_stream_delta_record_to_state(
+        &mut runtime_state,
+        session_id,
+        "1062",
+        &mut record_id,
+        SessionMessageRecordKind::AssistantOutput,
+        "输出",
+        "不应追加",
+        false,
+    )
+    .expect_err("sealed stream identity must reject late append");
+
+    assert!(error.contains("non-active streaming record"));
+    assert_eq!(
+        runtime_state
+            .conversation_state
+            .records
+            .iter()
+            .find(|record| record.id == stale_record_id)
+            .map(|record| record.body.as_str()),
+        Some("完整正文")
+    );
+}
+
 /// Verifies checkpoint-created guided user records are merged into visible transcript projections.
 /// 验证检查点创建的引导用户记录会合并进可见转录投影。
 #[test]

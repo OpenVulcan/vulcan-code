@@ -130,8 +130,10 @@ pub(super) async fn handle_runtime_stream_event(
             ),
         );
     }
-    if is_provider_tool_boundary_runtime_event(&event) {
-        reset_stream_content_record_ids(record_ids);
+    if is_provider_tool_boundary_runtime_event(&event)
+        && let Err(error) = seal_stream_content_records(app, task_state, session_id, record_ids)
+    {
+        eprintln!("[webui-service] seal provider content records failed: {error}");
     }
 
     // Wait-agent state must observe the tool boundary before phase and projection updates run.

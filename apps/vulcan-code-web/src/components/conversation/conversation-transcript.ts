@@ -86,7 +86,12 @@ export function projectConversationRenderItems(
       return;
     }
 
-    const blocks = parseConversationBlocks(projectionMessage, t);
+    // blocks retain the backend message identity even when projectionId is rewritten for duplicate visual rows.
+    // 即使 projectionId 因重复视觉行被改写，blocks 仍保留后端消息身份。
+    const blocks = parseConversationBlocks(projectionMessage, t).map((block) => ({
+      ...block,
+      sourceMessageId: message.id,
+    }));
     for (const block of blocks) {
       if (isContextCompactionBlock(block)) {
         const sectionId = block.compactionSectionId ?? block.id;
@@ -218,13 +223,12 @@ function contextCompactionInstanceKey(
   return key;
 }
 
-// thinkingOverlayBlockSignature returns a stable content key for delayed popup retention.
-// thinkingOverlayBlockSignature 返回用于延迟保留思考弹窗的稳定内容键。
+// thinkingOverlayBlockSignature returns a stable structural key without rescanning cumulative stream text.
+// thinkingOverlayBlockSignature 返回不重复扫描累计流文本的稳定结构键。
 export function thinkingOverlayBlockSignature(block: ConversationBlock): string {
   return [
     block.id,
     block.title,
-    block.body,
     block.summary,
     block.status ?? "",
   ].join("\u0000");

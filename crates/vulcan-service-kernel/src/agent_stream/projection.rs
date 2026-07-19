@@ -158,21 +158,86 @@ pub(crate) fn append_stream_content_delta(
     )
 }
 
-/// Clears both streaming record identifiers at one provider tool boundary.
-/// 在单个 Provider 工具边界清除两个流式记录标识。
+/// Permanently closes every active content record at one provider boundary.
+/// 在单个 Provider 边界永久封口所有活跃内容记录。
 ///
 /// # Parameters
 /// # 参数
-/// `record_ids` owns the request-local thinking and output record identifiers.
-/// `record_ids` 持有请求局部的思考与输出记录标识。
+/// `app` emits one authoritative terminal body event for every closed record.
+/// `app` 为每条封口记录发送一条权威终态正文事件。
+/// `state` owns retained runtime and Workbench projections.
+/// `state` 持有保留运行时与 Workbench 投影。
+/// `session_id` identifies the session that owns the active records.
+/// `session_id` 标识拥有活跃记录的会话。
+/// `record_ids` owns the request-local thinking and output identities.
+/// `record_ids` 持有请求局部的思考与输出身份。
 ///
 /// # Returns
 /// # 返回值
-/// This function returns no value and leaves both identifier slots empty.
-/// 此函数无返回值，并将两个标识槽位都置为空。
-pub(crate) fn reset_stream_content_record_ids(record_ids: &mut SessionStreamingRecordIds) {
-    record_ids.thinking_record_id = None;
-    record_ids.output_record_id = None;
+/// Success after both identities are empty, or the first explicit sealing error.
+/// 两个身份均清空后返回成功，否则返回首个显式封口错误。
+pub(crate) fn seal_stream_content_records(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    record_ids: &mut SessionStreamingRecordIds,
+) -> Result<(), String> {
+    seal_stream_content_kind(
+        app,
+        state,
+        session_id,
+        record_ids,
+        StreamContentKind::Thinking,
+    )?;
+    seal_stream_content_kind(
+        app,
+        state,
+        session_id,
+        record_ids,
+        StreamContentKind::Output,
+    )
+}
+
+/// Permanently closes the active record for one exact provider content kind.
+/// 永久封口一个精确 Provider 内容类型对应的活跃记录。
+///
+/// # Parameters
+/// # 参数
+/// `app` emits the terminal body event.
+/// `app` 发送终态正文事件。
+/// `state` owns retained runtime and Workbench projections.
+/// `state` 持有保留运行时与 Workbench 投影。
+/// `session_id` identifies the owning session.
+/// `session_id` 标识所属会话。
+/// `record_ids` owns the request-local record identities.
+/// `record_ids` 持有请求局部记录身份。
+/// `kind` selects the exact record identity slot.
+/// `kind` 选择精确记录身份槽位。
+///
+/// # Returns
+/// # 返回值
+/// Success after the selected slot is empty and its record is sealed, or an explicit error.
+/// 所选槽位清空且记录完成封口后返回成功，否则返回显式错误。
+pub(crate) fn seal_stream_content_kind(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    record_ids: &mut SessionStreamingRecordIds,
+    kind: StreamContentKind,
+) -> Result<(), String> {
+    // record_id is taken before sealing so a successful close can never receive later deltas.
+    // record_id 在封口前从槽位取出，确保成功关闭后绝不再接收后续增量。
+    let record_id_slot = kind.record_id_slot(record_ids);
+    let Some(record_id) = record_id_slot.take() else {
+        return Ok(());
+    };
+    if let Err(error) = seal_stream_delta_record(app, state, session_id, &record_id) {
+        // A failed state mutation restores the exact identity so a later terminal path can retry sealing.
+        // 状态变更失败时恢复精确身份，使后续终止路径仍可重试封口。
+        *record_id_slot = Some(record_id);
+        return Err(error);
+    }
+    Ok(())
 }
 
 /// Appends or extends one streaming transcript record.
@@ -198,13 +263,17 @@ fn append_stream_delta_record(
         let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
+        if workspace.session_run_phases.get(&session_id) == Some(&SessionRunPhase::Stopped) {
+            return Err(format!(
+                "cannot append streaming content to stopped session {session_id}"
+            ));
+        }
         let now = current_unix_millis_text();
-        let is_new_message = record_id_slot.is_none();
         let run_phase = match record_kind {
             SessionMessageRecordKind::ThinkingOutput => SessionRunPhase::Thinking,
             _ => SessionRunPhase::Requesting,
         };
-        let projected_entry = {
+        let (projected_entry, is_new_message) = {
             let mut runtime_state = workspace
                 .session_runtime_state
                 .get(&session_id)
@@ -213,7 +282,10 @@ fn append_stream_delta_record(
                     updated_at: now.clone(),
                     ..SessionRuntimeStateEntry::default()
                 });
-            let mut record_id_draft = record_id_slot.clone();
+            // previous_record_id distinguishes an append from recovery that allocates a replacement row.
+            // previous_record_id 区分普通追加与分配替代行的恢复路径。
+            let previous_record_id = record_id_slot.clone();
+            let mut record_id_draft = previous_record_id.clone();
             append_stream_delta_record_to_state(
                 &mut runtime_state,
                 session_id,
@@ -237,8 +309,9 @@ fn append_stream_delta_record(
             workspace
                 .session_runtime_state
                 .insert(session_id, runtime_state);
+            let is_new_message = previous_record_id.as_deref() != record_id_draft.as_deref();
             *record_id_slot = record_id_draft;
-            projected_entry
+            (projected_entry, is_new_message)
         };
         workspace.session_run_phases.insert(session_id, run_phase);
         sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
@@ -251,15 +324,17 @@ fn append_stream_delta_record(
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         let generation = guard.workbench_generation;
         guard.workbench.revision = generation;
-        if let Some(existing) = guard
-            .workbench
-            .messages
-            .iter_mut()
-            .find(|message| message.id == projected_message.id)
-        {
-            *existing = projected_message.clone();
-        } else if workbench_surface_matches_conversation(&guard.workbench, &conversation_id) {
-            guard.workbench.messages.push(projected_message.clone());
+        if is_new_message {
+            if let Some(existing) = guard
+                .workbench
+                .messages
+                .iter_mut()
+                .find(|message| message.id == projected_message.id)
+            {
+                *existing = projected_message.clone();
+            } else if workbench_surface_matches_conversation(&guard.workbench, &conversation_id) {
+                guard.workbench.messages.push(projected_message.clone());
+            }
         }
         for conversation in &mut guard.workbench.conversations {
             if conversation.id == conversation_id {
@@ -276,15 +351,115 @@ fn append_stream_delta_record(
                 conversation_id,
                 message_id: projected_entry.id,
                 body_delta: delta.to_string(),
-                current_body: Some(projected_message.body.clone()),
+                current_body: None,
                 initial_message,
                 run_phase: Some(run_phase.to_string()),
+                stream_state: Some(ConversationMessageStreamState::Active),
             }),
         }
     };
     emit_service_event_with_trace(
         app,
         "workbench_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(event)),
+    );
+    Ok(())
+}
+
+/// Seals one exact streamed record and emits its authoritative final body once.
+/// 封口一条精确流式记录，并仅发送一次其权威最终正文。
+///
+/// # Parameters
+/// # 参数
+/// `app` emits the sealed message delta.
+/// `app` 发送已封口消息增量。
+/// `state` owns runtime records and retained Workbench state.
+/// `state` 持有运行时记录与保留 Workbench 状态。
+/// `session_id` identifies the owning conversation.
+/// `session_id` 标识所属会话。
+/// `record_id` identifies the exact runtime record being sealed.
+/// `record_id` 标识正在封口的精确运行时记录。
+///
+/// # Returns
+/// # 返回值
+/// Success after the final event is emitted, or an explicit state/projection error.
+/// 最终事件发送后返回成功，否则返回显式状态或投影错误。
+fn seal_stream_delta_record(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    record_id: &str,
+) -> Result<(), String> {
+    // conversation_id is the stable WebUI owner identity for the sealed message.
+    // conversation_id 是已封口消息稳定的 WebUI 所属身份。
+    let conversation_id = session_id.to_string();
+    // event is created under the same state lock as the authoritative lifecycle mutation.
+    // event 与权威生命周期变更在同一个状态锁内创建。
+    let event = {
+        // guard serializes runtime sealing, retained projection, and generation allocation.
+        // guard 串行化运行时封口、保留投影与 generation 分配。
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        // now timestamps the exact sealed runtime record revision.
+        // now 为精确的已封口运行时记录版本提供时间戳。
+        let now = current_unix_millis_text();
+        // sealed_record is cloned from the authoritative runtime record only after metadata is sealed.
+        // sealed_record 仅在权威运行时记录元数据完成封口后克隆。
+        let sealed_record = {
+            // workspace owns the exact session runtime record collection.
+            // workspace 持有精确的会话运行时记录集合。
+            let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
+                String::from("service is still starting; workspace snapshot is not ready")
+            })?;
+            // runtime_state is the exact session entry referenced by the request-local record id.
+            // runtime_state 是请求局部记录标识指向的精确会话条目。
+            let Some(runtime_state) = workspace.session_runtime_state.get_mut(&session_id) else {
+                return Ok(());
+            };
+            seal_streaming_record_in_state(runtime_state, &now, record_id)?
+        };
+        let Some(sealed_record) = sealed_record else {
+            return Ok(());
+        };
+        // projected_entry reuses the canonical runtime-to-session projection contract.
+        // projected_entry 复用规范的运行时到会话投影契约。
+        let projected_entry = session_message_entry_from_conversation_record(&sealed_record);
+        // projected_message is the authoritative final WebUI row carried by retained state.
+        // projected_message 是保留状态携带的权威最终 WebUI 行。
+        let projected_message =
+            conversation_message_from_session_entry(&conversation_id, &projected_entry);
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        // generation orders sealing after every body delta already emitted for this record.
+        // generation 将封口事件排序在该记录已发送的所有正文增量之后。
+        let generation = guard.workbench_generation;
+        guard.workbench.revision = generation;
+        if let Some(existing) = guard
+            .workbench
+            .messages
+            .iter_mut()
+            .find(|message| message.id == projected_message.id)
+        {
+            *existing = projected_message.clone();
+        } else if workbench_surface_matches_conversation(&guard.workbench, &conversation_id) {
+            guard.workbench.messages.push(projected_message.clone());
+        }
+        WorkbenchDeltaEnvelope {
+            generation,
+            delta: WorkbenchDelta::AppendMessageBody(AppendMessageBodyDelta {
+                conversation_id,
+                message_id: projected_message.id,
+                body_delta: String::new(),
+                current_body: Some(projected_message.body),
+                initial_message: None,
+                run_phase: None,
+                stream_state: Some(ConversationMessageStreamState::Sealed),
+            }),
+        }
+    };
+    emit_service_event_with_trace(
+        app,
+        "workbench_stream_message_sealed_emit",
         ServiceEvent::WorkbenchDelta(Box::new(event)),
     );
     Ok(())
@@ -326,8 +501,8 @@ mod stream_content_tests {
         ));
     }
 
-    /// Verifies that provider tool boundaries clear both streaming record slots.
-    /// 验证 Provider 工具边界会清除两个流式记录槽位。
+    /// Verifies that taking one selected content identity cannot clear the other slot.
+    /// 验证取出一个选定内容身份不会清除另一个槽位。
     ///
     /// # Parameters
     /// # 参数
@@ -339,18 +514,23 @@ mod stream_content_tests {
     /// This test returns no value and fails through assertions.
     /// 此测试无返回值，并通过断言报告失败。
     #[test]
-    fn provider_tool_boundary_clears_all_content_record_ids() {
-        // Populated identifiers model an active thinking and output phase before a tool boundary.
-        // 已填充标识模拟工具边界前活跃的思考与输出阶段。
+    fn content_kind_take_clears_only_selected_record_id() {
+        // Populated identifiers model independent thinking and output streams.
+        // 已填充标识模拟相互独立的思考流与输出流。
         let mut record_ids = SessionStreamingRecordIds {
             thinking_record_id: Some(String::from("think")),
             output_record_id: Some(String::from("output")),
         };
 
-        reset_stream_content_record_ids(&mut record_ids);
+        // selected_id is removed from the thinking slot before its authoritative record is sealed.
+        // selected_id 在对应权威记录封口前从思考槽位中移除。
+        let selected_id = StreamContentKind::Thinking
+            .record_id_slot(&mut record_ids)
+            .take();
 
+        assert_eq!(selected_id.as_deref(), Some("think"));
         assert!(record_ids.thinking_record_id.is_none());
-        assert!(record_ids.output_record_id.is_none());
+        assert_eq!(record_ids.output_record_id.as_deref(), Some("output"));
     }
 }
 
@@ -424,6 +604,7 @@ pub(crate) fn emit_materialized_session_message_delta(
                 current_body: Some(projected_message.body.clone()),
                 initial_message: Some(projected_message),
                 run_phase: Some(run_phase.to_string()),
+                stream_state: None,
             }),
         }
     };
@@ -900,7 +1081,7 @@ pub(crate) fn complete_streaming_thinking_phase(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     session_id: SessionId,
-    record_ids: &SessionStreamingRecordIds,
+    record_ids: &mut SessionStreamingRecordIds,
 ) -> Result<(), String> {
     // This scope releases the service-state mutex before apply_session_phase reacquires it, preventing same-thread self-deadlock.
     // 此作用域会在 apply_session_phase 再次获取服务状态互斥锁前释放锁，防止同线程自锁。
@@ -931,6 +1112,16 @@ pub(crate) fn complete_streaming_thinking_phase(
             });
         collapse_streaming_thinking_in_state(runtime_state, &now, record_ids);
     }
+
+    // Thinking is sealed before the requesting phase becomes visible, preserving lifecycle order for every client.
+    // 思考记录在请求阶段可见前完成封口，从而为所有客户端保持生命周期顺序。
+    seal_stream_content_kind(
+        app,
+        state,
+        session_id,
+        record_ids,
+        StreamContentKind::Thinking,
+    )?;
 
     // Requesting becomes visible only after the retained thinking row is sealed, preserving event order for every consumer.
     // 仅在保留思考行完成封口后才显示请求阶段，从而为所有消费者保持事件顺序。
@@ -1896,7 +2087,7 @@ fn session_conversation_records_equal(
 
 /// Merges changed runtime tool entries into retained display transcript rows.
 /// 将变化的运行时工具项合并到已保留的显示转录行中。
-fn merge_session_messages_with_runtime_event_entries(
+pub(crate) fn merge_session_messages_with_runtime_event_entries(
     existing_messages: &[SessionMessageEntry],
     projection_entries: &[SessionMessageEntry],
 ) -> Vec<SessionMessageEntry> {

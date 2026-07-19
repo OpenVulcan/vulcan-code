@@ -37,6 +37,18 @@ pub struct SessionStreamingRecordIds {
     pub output_record_id: Option<String>,
 }
 
+/// Metadata key that stores the lifecycle of a streamed transcript record.
+/// 保存流式转录记录生命周期的元数据键。
+pub const STREAMING_RECORD_STATE_METADATA_KEY: &str = "stream_state";
+
+/// Lifecycle value written while a streamed transcript record still accepts deltas.
+/// 流式转录记录仍可接收增量时写入的生命周期值。
+pub const STREAMING_RECORD_STATE_ACTIVE: &str = "active";
+
+/// Lifecycle value written after a streamed transcript record is permanently closed.
+/// 流式转录记录永久封口后写入的生命周期值。
+pub const STREAMING_RECORD_STATE_SEALED: &str = "sealed";
+
 /// Builds the stable transcript record id used by legacy session projections.
 /// 构建旧会话投影使用的稳定转录记录标识。
 pub fn build_session_record_message_id(

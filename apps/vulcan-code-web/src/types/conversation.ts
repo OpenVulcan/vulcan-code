@@ -153,6 +153,10 @@ export interface ConversationMessage {
   editableUserPrompt?: boolean;
 }
 
+// ConversationMessageStreamState describes whether a streamed message can still grow.
+// ConversationMessageStreamState 描述流式消息是否仍可继续增长。
+export type ConversationMessageStreamState = "active" | "sealed";
+
 // AppendMessageBodyDelta appends streamed text to one visible conversation message.
 // AppendMessageBodyDelta 向单条可见会话消息追加流式文本。
 export interface AppendMessageBodyDelta {
@@ -174,6 +178,9 @@ export interface AppendMessageBodyDelta {
   // Current backend run phase after this delta.
   // 本次增量后的后端运行阶段。
   runPhase?: string | null;
+  // Explicit lifecycle for a streamed thinking or assistant-output message.
+  // 流式思考或助手输出消息的显式生命周期。
+  streamState?: ConversationMessageStreamState | null;
 }
 
 // UpdateConversationRunPhaseDelta updates a conversation phase without transcript rows.

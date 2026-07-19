@@ -11,6 +11,7 @@ import {
 import { StatusPill } from "@/components/shared/status";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
+import { StreamingMarkdownDocument } from "@/components/conversation/streaming-markdown-document";
 import {
   type ConversationDetail,
   type ConversationDetailRef,
@@ -132,6 +133,7 @@ export function ConversationBlocksView(props: {
     return (
       <ContextCompactionBlock
         blocks={props.blocks}
+        conversationId={props.conversationId}
         onOpenMedia={props.onOpenMedia}
       />
     );
@@ -176,6 +178,17 @@ export function ConversationBlocksView(props: {
     return null;
   }
   if (block.kind === "markdown") {
+    if (props.itemStreaming && props.conversationId && block.sourceMessageId) {
+      return (
+        <StreamingMarkdownDocument
+          conversationId={props.conversationId}
+          fallbackContent={block.body}
+          fallbackStreaming
+          messageId={block.sourceMessageId}
+          onOpenMedia={props.onOpenMedia}
+        />
+      );
+    }
     return (
       <MarkdownMessage
         content={block.body}
@@ -299,6 +312,7 @@ function SpecialConversationBlock(props: {
         autoExpanded={props.block.id === props.autoExpandThinkingBlockId}
         autoExpandWhileStreaming={props.block.id === props.autoExpandThinkingBlockId}
         block={props.block}
+        conversationId={props.conversationId}
         sessionRunning={props.sessionRunning}
         streaming={props.itemStreaming}
         onOpenMedia={props.onOpenMedia}

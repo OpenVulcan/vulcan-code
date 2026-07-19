@@ -107,15 +107,12 @@ export function restoreConversationScrollSnapshot(
   conversationScrollToDistanceFromBottom(element, snapshot.distanceFromBottom);
 }
 
-// buildConversationStreamSignature returns a compact content signature for tail-follow decisions.
-// buildConversationStreamSignature 返回用于尾部追随判定的紧凑内容签名。
+// buildConversationStreamSignature returns a structural signature without reading cumulative stream bodies.
+// buildConversationStreamSignature 返回不读取累计流正文的结构签名。
 export function buildConversationStreamSignature(messages: ConversationMessage[]): string {
   return messages
     .slice(-STREAM_SIGNATURE_TAIL_MESSAGE_LIMIT)
-    .map((message) => {
-      const bodyTail = message.body.slice(-48);
-      return `${message.id}:${message.recordKind ?? ""}:${message.body.length}:${bodyTail}`;
-    })
+    .map((message) => `${message.id}:${message.recordKind ?? ""}:${message.role}`)
     .join("|");
 }
 

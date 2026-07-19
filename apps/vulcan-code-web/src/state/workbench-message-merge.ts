@@ -91,6 +91,7 @@ export function coalesceWorkbenchDeltaEnvelopes(envelopes: WorkbenchDeltaEnvelop
         };
       }
       previousPayload.runPhase = nextPayload.runPhase ?? previousPayload.runPhase;
+      previousPayload.streamState = nextPayload.streamState ?? previousPayload.streamState;
       continue;
     }
     coalesced.push(cloneWorkbenchDeltaEnvelope(envelope));
@@ -298,18 +299,49 @@ function mergeAppendMessageBodyDelta(
   delta: AppendMessageBodyDelta,
 ): ConversationMessage {
   if (typeof delta.currentBody === "string") {
+    // sourceMessage selects the freshest complete structural row before terminal metadata is applied.
+    // sourceMessage 在应用终态元数据前选择最近的完整结构行。
+    const sourceMessage = delta.initialMessage && delta.initialMessage.body.length >= message.body.length
+      ? delta.initialMessage
+      : message;
     return {
-      ...(delta.initialMessage && delta.initialMessage.body.length >= message.body.length ? delta.initialMessage : message),
+      ...sourceMessage,
       body: delta.currentBody,
+      metadata: mergeMessageStreamStateMetadata(sourceMessage.metadata, delta.streamState),
     };
   }
   if (delta.initialMessage && delta.initialMessage.body.length > message.body.length) {
-    return delta.initialMessage;
+    return {
+      ...delta.initialMessage,
+      metadata: mergeMessageStreamStateMetadata(
+        delta.initialMessage.metadata,
+        delta.streamState,
+      ),
+    };
   }
   return {
     ...message,
     body: appendStreamingTextDelta(message.body, delta.bodyDelta),
+    metadata: mergeMessageStreamStateMetadata(message.metadata, delta.streamState),
   };
+}
+
+// mergeMessageStreamStateMetadata applies the explicit protocol lifecycle to structured message metadata.
+// mergeMessageStreamStateMetadata 将显式协议生命周期应用到结构化消息元数据。
+function mergeMessageStreamStateMetadata(
+  metadata: unknown,
+  streamState: AppendMessageBodyDelta["streamState"],
+): unknown {
+  if (!streamState) {
+    return metadata;
+  }
+  if (typeof metadata === "object" && metadata !== null && !Array.isArray(metadata)) {
+    return {
+      ...(metadata as Record<string, unknown>),
+      stream_state: streamState,
+    };
+  }
+  return { stream_state: streamState };
 }
 
 // appendInitialMessageBodyDelta returns the host-projected full row for a newly materialized stream.

@@ -411,6 +411,7 @@ function detectToolAttributes(source: string): Record<string, string> {
 function conversationMarkdownBlock(messageId: string, index: number, body: string): ConversationBlock {
   return {
     id: `${messageId}-markdown-${index}`,
+    sourceMessageId: messageId,
     kind: "markdown",
     title: "Markdown",
     body,
@@ -448,6 +449,7 @@ function conversationSpecialBlock(
     : normalizeToolDisplayState(attributes.status);
   return {
     id: `${messageId}-${kind}-${index}`,
+    sourceMessageId: messageId,
     kind,
     title,
     body: body.trim(),

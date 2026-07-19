@@ -326,7 +326,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                         &app,
                         &task_state,
                         session_id,
-                        &record_ids,
+                        &mut record_ids,
                     ) {
                         eprintln!("[webui-service] complete thinking phase failed: {error}");
                     }
@@ -376,6 +376,17 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                         .map(|goal_context| goal_context.goal_id.as_str()),
                 ),
                 ExecutionStreamEvent::Finished(report) => {
+                    // finished_session_id keeps the exact owner available before the report moves into terminal handling.
+                    // finished_session_id 在报告移入终态处理前保留精确所属会话。
+                    let finished_session_id = report.session_id;
+                    if let Err(error) = seal_stream_content_records(
+                        &app,
+                        &task_state,
+                        finished_session_id,
+                        &mut record_ids,
+                    ) {
+                        eprintln!("[webui-service] seal finished content records failed: {error}");
+                    }
                     match handle_finished_stream_event(
                         &app,
                         &task_state,
@@ -396,6 +407,13 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                 }
             }
         };
+        // Remaining identities belong to non-Finished exits such as exhaustion or stale ownership and must not remain active.
+        // 剩余身份属于流耗尽或旧所有权等非 Finished 退出路径，不能继续保持活跃状态。
+        if let Err(error) =
+            seal_stream_content_records(&app, &task_state, session_id, &mut record_ids)
+        {
+            eprintln!("[webui-service] seal exiting content records failed: {error}");
+        }
         // stream_exit_outcome records the exact ownership decision made after polling stops.
         // stream_exit_outcome 记录轮询停止后作出的精确所有权决策。
         let stream_exit_outcome = handle_stream_task_exit(

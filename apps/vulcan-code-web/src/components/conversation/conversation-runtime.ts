@@ -5,6 +5,7 @@ import type {
   ConversationRenderItem,
   RuntimeCue,
 } from "@/components/conversation/conversation-model";
+import { conversationMessageStreamState } from "@/state/conversation-live-stream-store";
 
 // activeStreamingThinkingBlock returns the selected session thinking block that should float while streaming.
 // activeStreamingThinkingBlock 返回当前选中会话在流式思考时应浮动展示的思考块。
@@ -15,10 +16,11 @@ export function activeStreamingThinkingBlock(
   if (normalizedSessionRunPhase(conversation?.runPhase) !== "thinking") {
     return null;
   }
-  const blocks = renderItems
-    .filter((item) => item.role !== "user")
-    .flatMap((item) => item.blocks);
-  return [...blocks].reverse().find((block) => block.kind === "thinking") ?? null;
+  const activeThinkingItem = [...renderItems].reverse().find((item) => (
+    item.sourceMessage?.recordKind === "thinking-output"
+    && conversationMessageStreamState(item.sourceMessage) === "active"
+  ));
+  return activeThinkingItem?.blocks.find((block) => block.kind === "thinking") ?? null;
 }
 
 // conversationRuntimeCue resolves the compact active-state cue shown above the composer.
