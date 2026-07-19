@@ -4,6 +4,8 @@ import {
   BrainCircuit,
   ChevronDown,
   ChevronRight,
+  Columns2,
+  PanelRightOpen,
   ScrollText,
 } from "lucide-react";
 import {
@@ -21,6 +23,11 @@ import {
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { StreamingMarkdownDocument } from "@/components/conversation/streaming-markdown-document";
 import { nextStreamingThinkingTailFollow } from "@/components/conversation/streaming-thinking-scroll";
+import {
+  loadStreamingThinkingLayoutMode,
+  nextStreamingThinkingLayoutMode,
+  persistStreamingThinkingLayoutMode,
+} from "@/components/conversation/streaming-thinking-layout";
 import {
   metadataString,
   metadataValue,
@@ -495,6 +502,9 @@ export function StreamingThinkingOverlay(props: {
   // manualScrollUntilRef keeps wheel intent active until its asynchronous scroll events settle.
   // manualScrollUntilRef 保持滚轮意图，直到对应异步滚动事件稳定。
   const manualScrollUntilRef = React.useRef(0);
+  // layoutMode stores the globally remembered popup placement selected by the user.
+  // layoutMode 保存用户选择并全局记忆的弹窗位置。
+  const [layoutMode, setLayoutMode] = React.useState(loadStreamingThinkingLayoutMode);
 
   // scheduleTailFollow scrolls once per frame only while the user remains pinned to the tail.
   // scheduleTailFollow 仅在用户仍钉住尾部时每帧最多滚动一次。
@@ -583,14 +593,50 @@ export function StreamingThinkingOverlay(props: {
     manualScrollPointerRef.current = true;
   }, []);
 
+  // handleLayoutToggle switches the popup layout and immediately persists the global preference.
+  // handleLayoutToggle 切换弹窗布局并立即持久化全局偏好。
+  const handleLayoutToggle = React.useCallback(() => {
+    setLayoutMode((currentMode) => {
+      const nextMode = nextStreamingThinkingLayoutMode(currentMode);
+      persistStreamingThinkingLayoutMode(nextMode);
+      return nextMode;
+    });
+  }, []);
+
+  // layoutToggleLabel describes the action performed by the header button.
+  // layoutToggleLabel 描述标题栏按钮将执行的布局操作。
+  const layoutToggleLabel = layoutMode === "centered"
+    ? t("runtime.thinkingOverlayDockRight")
+    : t("runtime.thinkingOverlayRestoreCentered");
+
   return (
-    <section className={cn("streaming-thinking-overlay", props.leaving && "leaving")} aria-live="polite" aria-busy={!props.leaving}>
+    <section
+      className={cn(
+        "streaming-thinking-overlay",
+        layoutMode === "right_docked" && "right-docked",
+        props.leaving && "leaving",
+      )}
+      aria-live="polite"
+      aria-busy={!props.leaving}
+    >
       <header className="streaming-thinking-header">
         <span className="streaming-thinking-title">
           <BrainCircuit size={16} />
           <span className="shimmer">{t("runtime.thinking")}</span>
         </span>
-        <span className="streaming-thinking-caption">{t("runtime.thinkingOverlayHint")}</span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              aria-label={layoutToggleLabel}
+              className="streaming-thinking-layout-toggle"
+              onClick={handleLayoutToggle}
+              type="button"
+            >
+              {layoutMode === "centered" ? <PanelRightOpen size={16} /> : <Columns2 size={16} />}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="left">{layoutToggleLabel}</TooltipContent>
+        </Tooltip>
       </header>
       <div
         className="streaming-thinking-body"

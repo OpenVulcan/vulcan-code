@@ -1071,7 +1071,8 @@ export type TranslationKey =
   | "runtime.requesting"
   | "runtime.toolCalling"
   | "runtime.thinking"
-  | "runtime.thinkingOverlayHint"
+  | "runtime.thinkingOverlayDockRight"
+  | "runtime.thinkingOverlayRestoreCentered"
   | "settings.general"
   | "settings.systemSettings"
   | "settings.projects"
@@ -2388,7 +2389,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "runtime.requesting": "✨ 正在请求",
     "runtime.toolCalling": "🔧 正在构造工具请求",
     "runtime.thinking": "✨ 正在思考",
-    "runtime.thinkingOverlayHint": "模型正在流式输出思考过程",
+    "runtime.thinkingOverlayDockRight": "切换到右侧紧凑思考面板",
+    "runtime.thinkingOverlayRestoreCentered": "恢复底部居中思考面板",
     "settings.general": "通用设置",
     "settings.systemSettings": "系统设置",
     "settings.projects": "项目",
@@ -3702,7 +3704,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "runtime.requesting": "✨ Requesting",
     "runtime.toolCalling": "🔧 Building tool request",
     "runtime.thinking": "✨ Thinking",
-    "runtime.thinkingOverlayHint": "The model is streaming its thinking process",
+    "runtime.thinkingOverlayDockRight": "Switch to the compact right thinking panel",
+    "runtime.thinkingOverlayRestoreCentered": "Restore the bottom-centered thinking panel",
     "settings.general": "General",
     "settings.systemSettings": "System settings",
     "settings.projects": "Projects",

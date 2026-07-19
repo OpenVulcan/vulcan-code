@@ -113,13 +113,44 @@
   font-weight: 700;
 }
 
-.streaming-thinking-caption {
-  min-width: 0;
-  overflow: hidden;
+.streaming-thinking-overlay.right-docked {
+  right: 16px;
+  left: auto;
+  width: min(456px, calc(60% - 38px));
+  max-height: min(432px, calc(100% - var(--composer-dock-height, 132px) - 96px));
+  transform: none;
+}
+
+.streaming-thinking-overlay.right-docked.leaving {
+  transform: translateY(8px);
+}
+
+.streaming-thinking-layout-toggle {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
   color: var(--muted-foreground);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  cursor: pointer;
+  outline: none;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.streaming-thinking-layout-toggle:hover,
+.streaming-thinking-layout-toggle:focus-visible {
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.streaming-thinking-layout-toggle:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--ring) 55%, transparent);
 }
 
 .streaming-thinking-body {

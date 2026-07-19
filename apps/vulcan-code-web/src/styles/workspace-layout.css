@@ -36,6 +36,17 @@
   display: none;
 }
 
+.workspace-statusbar-todolist-status .composer-session-progress-popover {
+  right: auto;
+  left: 0;
+  transform: translateY(6px);
+}
+
+.workspace-statusbar-todolist-status .composer-session-progress-root:hover .composer-session-progress-popover,
+.workspace-statusbar-todolist-status .composer-session-progress-root:focus-within .composer-session-progress-popover {
+  transform: translateY(0);
+}
+
 .workspace-statusbar-runtime-status {
   min-width: 0;
   display: flex;
