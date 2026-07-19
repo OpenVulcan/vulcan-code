@@ -10,7 +10,8 @@
     "ownerKind": {
       "type": "string",
       "enum": ["main_agent", "subagent", "context_compaction", "git_commit_summary"]
-    }
+    },
+    "modelRef": { "type": "integer", "minimum": 1 }
   },
   "required": ["rangeDays", "metric"],
   "additionalProperties": false

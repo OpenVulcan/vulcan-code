@@ -28,6 +28,8 @@ messages:
   range.365: 最近 365 天
   range.0: 累计
   range.label: 时间范围
+  model.label: 模型
+  model.all: 全部模型
   owner.label: 请求归属
   owner.all: 全部归属
   owner.main_agent: 主代理

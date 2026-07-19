@@ -7594,6 +7594,15 @@ mod tests {
                     }], "row_count": 1}))
                 }
                 VulcanPluginStorageOperation::SqliteQuery
+                    if sql.contains("SELECT model_ref AS modelRef") =>
+                {
+                    Ok(json!({"rows": [{
+                        "modelRef": 1,
+                        "providerName": "Provider One",
+                        "modelName": "Model One"
+                    }], "row_count": 1}))
+                }
+                VulcanPluginStorageOperation::SqliteQuery
                     if sql.contains("SELECT e.request_id AS requestId") =>
                 {
                     Ok(json!({"rows": [{
@@ -8384,6 +8393,7 @@ return M
         assert!((cache_hit_rate - (14.0 * 100.0 / 26.0)).abs() < 0.000_001);
         assert_eq!(dashboard["heatmap"][0]["topModelName"], "Model One");
         assert_eq!(dashboard["series"][0]["value"], 10);
+        assert_eq!(dashboard["availableModels"][0]["modelRef"], 1);
         // groupedErrors validates the same omitted-owner contract after prior action reuse.
         // groupedErrors 验证此前 Action 复用后的同一省略归属契约。
         let grouped_errors = runtime
@@ -8405,6 +8415,59 @@ return M
             "provider_http"
         );
         assert_eq!(grouped_errors["errors"][0]["errorCode"], "429");
+        // filteredDashboard proves range, owner, and model filters share one ordered aggregate projection.
+        // filteredDashboard 证明范围、归属与模型筛选共享一个有序聚合投影。
+        let filtered_dashboard = runtime
+            .block_on(manager.invoke_action(VulcanPluginActionRequest {
+                plugin_id: String::from("vulcan-usage-statistics"),
+                action_id: String::from("dashboard-get"),
+                arguments: json!({
+                    "rangeDays": 30,
+                    "metric": "total_tokens",
+                    "ownerKind": "main_agent",
+                    "modelRef": 1
+                }),
+                caller: crate::VulcanPluginActionCaller::PluginUi,
+                workspace_root: repository_root.to_path_buf(),
+                reuse_enabled_runtime: true,
+            }))
+            .expect("query model-filtered usage statistics dashboard");
+        assert_eq!(filtered_dashboard["summary"]["totalTokens"], 35);
+        // filteredRecent proves raw request facts use the same exact owner and model identity.
+        // filteredRecent 证明原始请求事实使用相同的精确归属与模型身份。
+        let filtered_recent = runtime
+            .block_on(manager.invoke_action(VulcanPluginActionRequest {
+                plugin_id: String::from("vulcan-usage-statistics"),
+                action_id: String::from("recent-get"),
+                arguments: json!({
+                    "limit": 20,
+                    "ownerKind": "main_agent",
+                    "modelRef": 1
+                }),
+                caller: crate::VulcanPluginActionCaller::PluginUi,
+                workspace_root: repository_root.to_path_buf(),
+                reuse_enabled_runtime: true,
+            }))
+            .expect("query model-filtered recent usage statistics requests");
+        assert_eq!(filtered_recent["requests"][0]["requestId"], "request-1");
+        // filteredErrors proves grouped failure facts honor the identical model boundary.
+        // filteredErrors 证明分组失败事实遵守完全相同的模型边界。
+        let filtered_errors = runtime
+            .block_on(manager.invoke_action(VulcanPluginActionRequest {
+                plugin_id: String::from("vulcan-usage-statistics"),
+                action_id: String::from("errors-get"),
+                arguments: json!({
+                    "rangeDays": 30,
+                    "metric": "total_tokens",
+                    "ownerKind": "main_agent",
+                    "modelRef": 1
+                }),
+                caller: crate::VulcanPluginActionCaller::PluginUi,
+                workspace_root: repository_root.to_path_buf(),
+                reuse_enabled_runtime: true,
+            }))
+            .expect("query model-filtered grouped usage statistics errors");
+        assert_eq!(filtered_errors["errors"][0]["errorCode"], "429");
         // allTime validates the zero-day sentinel without synthetic date parameters.
         // allTime 验证零天累计哨兵，且不生成虚假的日期参数。
         let all_time = runtime
@@ -8535,6 +8598,73 @@ return M
                 .expect("grouped error query parameters")
                 .len(),
             1
+        );
+        // filteredSummaryQuery binds range, owner, and model in one exact numbered sequence.
+        // filteredSummaryQuery 以一个精确编号序列绑定范围、归属与模型。
+        let filtered_summary_query = calls
+            .iter()
+            .find(|request| {
+                request
+                    .payload
+                    .get("sql")
+                    .and_then(Value::as_str)
+                    .is_some_and(|sql| {
+                        sql.contains("COALESCE(SUM(request_count)")
+                            && sql.contains("model_ref = ?3")
+                    })
+            })
+            .expect("record model-filtered dashboard summary query");
+        assert_eq!(
+            filtered_summary_query.payload["params"]
+                .as_array()
+                .expect("model-filtered dashboard summary parameters")
+                .len(),
+            3
+        );
+        // filteredRecentQuery binds owner, model, and row limit without reusing mutable parameter arrays.
+        // filteredRecentQuery 绑定归属、模型与行数限制，且不复用可变参数数组。
+        let filtered_recent_query = calls
+            .iter()
+            .find(|request| {
+                request
+                    .payload
+                    .get("sql")
+                    .and_then(Value::as_str)
+                    .is_some_and(|sql| {
+                        sql.contains("SELECT e.request_id AS requestId")
+                            && sql.contains("e.model_ref = ?2")
+                            && sql.contains("LIMIT ?3")
+                    })
+            })
+            .expect("record model-filtered recent request query");
+        assert_eq!(
+            filtered_recent_query.payload["params"]
+                .as_array()
+                .expect("model-filtered recent request parameters")
+                .len(),
+            3
+        );
+        // filteredErrorsQuery binds range, owner, and model before grouping redacted failures.
+        // filteredErrorsQuery 在聚合脱敏失败信息前绑定范围、归属与模型。
+        let filtered_errors_query = calls
+            .iter()
+            .find(|request| {
+                request
+                    .payload
+                    .get("sql")
+                    .and_then(Value::as_str)
+                    .is_some_and(|sql| {
+                        sql.contains("WHERE e.status = 'failed'")
+                            && sql.contains("e.model_ref = ?3")
+                    })
+            })
+            .expect("record model-filtered grouped errors query");
+        assert_eq!(
+            filtered_errors_query.payload["params"]
+                .as_array()
+                .expect("model-filtered grouped error parameters")
+                .len(),
+            3
         );
         drop(calls);
         assert_eq!(

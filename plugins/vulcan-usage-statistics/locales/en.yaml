@@ -28,6 +28,8 @@ messages:
   range.365: Last 365 days
   range.0: All time
   range.label: Time range
+  model.label: Model
+  model.all: All models
   owner.label: Request owner
   owner.all: All owners
   owner.main_agent: Main agent

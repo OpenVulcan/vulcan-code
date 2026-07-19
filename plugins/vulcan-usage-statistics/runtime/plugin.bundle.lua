@@ -523,6 +523,24 @@ local function owner_filter(owner_kind, column_name, parameter_index)
     return " AND " .. column_name .. " = ?" .. tostring(parameter_index), { sql_string(owner_kind) }
 end
 
+-- Build one exact optional model predicate and numbered integer parameter list.
+-- 构建一个精确的可选模型谓词与编号整数参数列表。
+--
+-- model_ref is the unique persistent model dimension key, or nil for every model.
+-- model_ref 是唯一持久模型维度键；nil 表示全部模型。
+-- column_name is the trusted query-owned model reference column.
+-- column_name 是由查询持有的可信模型引用列。
+-- parameter_index is the next numbered SQLite placeholder index.
+-- parameter_index 是下一个 SQLite 编号占位符索引。
+-- Returns the SQL predicate suffix and its fresh ordered parameter array.
+-- 返回 SQL 谓词后缀及其全新有序参数数组。
+local function model_filter(model_ref, column_name, parameter_index)
+    if model_ref == nil then
+        return "", {}
+    end
+    return " AND " .. column_name .. " = ?" .. tostring(parameter_index), { sql_integer(model_ref) }
+end
+
 -- Build one optional local-calendar range predicate and its numbered parameter.
 -- 构建一个可选的本地自然日范围条件及其编号参数。
 --
@@ -578,17 +596,25 @@ function M.dashboard_get(args)
     -- range_sql and range_params represent the selected finite window or all retained aggregates.
     -- range_sql 与 range_params 表示选定有限窗口或全部保留聚合。
     local range_sql, range_params = range_filter(input.rangeDays, "calendar_date", 1)
-    -- owner_sql and owner_params represent the only optional query branch.
-    -- owner_sql 与 owner_params 表示唯一可选查询分支。
+    -- owner_after_range_sql and owner_params bind the optional owner after the range value.
+    -- owner_after_range_sql 与 owner_params 在范围值之后绑定可选归属。
     local owner_after_range_sql, owner_params = owner_filter(input.ownerKind, "owner_kind", #range_params + 1)
-    -- owner_only_sql binds the same optional owner as the first and only parameter.
-    -- owner_only_sql 把同一个可选归属绑定为第一且唯一的参数。
-    local owner_only_sql = owner_filter(input.ownerKind, "owner_kind", 1)
-    -- summary_params keeps the range modifier before the optional owner value.
-    -- summary_params 将范围修饰符放在可选归属值之前。
+    -- model_after_range_owner_sql binds the exact optional model after range and owner values.
+    -- model_after_range_owner_sql 在范围与归属值之后绑定精确的可选模型。
+    local model_after_range_owner_sql, model_filter_params = model_filter(
+        input.modelRef,
+        "model_ref",
+        #range_params + #owner_params + 1
+    )
+    -- aggregate_filter_sql is shared by every unaliased daily aggregate query.
+    -- aggregate_filter_sql 由每个无别名的每日聚合查询共享。
+    local aggregate_filter_sql = range_sql .. owner_after_range_sql .. model_after_range_owner_sql
+    -- summary_params keeps range, owner, and model values in exact placeholder order.
+    -- summary_params 按精确占位符顺序保存范围、归属与模型值。
     local summary_params = {}
     append_values(summary_params, range_params)
     append_values(summary_params, owner_params)
+    append_values(summary_params, model_filter_params)
     -- summary_rows contains one aggregate KPI record even when no usage exists.
     -- summary_rows 即使无用量也包含一条聚合 KPI 记录。
     local summary_rows = sqlite_query(
@@ -616,7 +642,7 @@ function M.dashboard_get(args)
                 ELSE SUM(first_token_ms_sum) / SUM(first_token_count) END AS averageFirstTokenMs,
             COUNT(DISTINCT calendar_date) AS activeDays
         FROM usage_daily_model
-        WHERE 1 = 1]] .. range_sql .. owner_after_range_sql,
+        WHERE 1 = 1]] .. aggregate_filter_sql,
         summary_params,
         "dashboard.summary"
     )
@@ -626,7 +652,7 @@ function M.dashboard_get(args)
         [[WITH active AS (
             SELECT DISTINCT calendar_date
             FROM usage_daily_model
-            WHERE 1 = 1]] .. range_sql .. owner_after_range_sql .. [[
+            WHERE 1 = 1]] .. aggregate_filter_sql .. [[
         ), numbered AS (
             SELECT calendar_date,
                    julianday(calendar_date) - ROW_NUMBER() OVER (ORDER BY calendar_date) AS island
@@ -641,13 +667,28 @@ function M.dashboard_get(args)
         summary_params,
         "dashboard.streak"
     )
+    -- heatmap_owner_sql binds the optional owner as the first fixed-window parameter.
+    -- heatmap_owner_sql 把可选归属绑定为固定窗口查询的第一个参数。
+    local heatmap_owner_sql, heatmap_owner_params = owner_filter(input.ownerKind, "owner_kind", 1)
+    -- heatmap_model_sql binds the optional model after the fixed-window owner parameter.
+    -- heatmap_model_sql 在固定窗口归属参数之后绑定可选模型。
+    local heatmap_model_sql, heatmap_model_params = model_filter(
+        input.modelRef,
+        "model_ref",
+        #heatmap_owner_params + 1
+    )
+    -- heatmap_params preserves the owner-then-model fixed-window parameter order.
+    -- heatmap_params 保持固定窗口查询先归属后模型的参数顺序。
+    local heatmap_params = {}
+    append_values(heatmap_params, heatmap_owner_params)
+    append_values(heatmap_params, heatmap_model_params)
     -- heatmap_rows contains one rich activity cell and top-model label per local calendar day.
     -- heatmap_rows 每个宿主本地自然日包含一个丰富活动单元与最常用模型名称。
     local heatmap_rows = sqlite_query(
         [[WITH filtered AS (
             SELECT calendar_date, model_ref, total_tokens, request_count, success_count
             FROM usage_daily_model
-            WHERE calendar_date >= date('now', 'localtime', '-364 days')]] .. owner_only_sql .. [[
+            WHERE calendar_date >= date('now', 'localtime', '-364 days')]] .. heatmap_owner_sql .. heatmap_model_sql .. [[
         ), daily AS (
             SELECT calendar_date, SUM(total_tokens) AS value,
                    SUM(request_count) AS requests, SUM(success_count) AS successes
@@ -668,22 +709,19 @@ function M.dashboard_get(args)
             ON r.calendar_date = d.calendar_date AND r.model_rank = 1
         LEFT JOIN models m ON m.model_ref = r.model_ref
         ORDER BY d.calendar_date]],
-        owner_params,
+        heatmap_params,
         "dashboard.heatmap"
     )
     -- peak_rows computes the maximum total Token volume across complete local calendar days.
     -- peak_rows 计算完整宿主本地自然日中的最大 Token 总量。
-    local peak_params = {}
-    append_values(peak_params, range_params)
-    append_values(peak_params, owner_params)
     local peak_rows = sqlite_query(
         [[SELECT COALESCE(MAX(daily_tokens), 0) AS peakDailyTokens FROM (
             SELECT calendar_date, SUM(total_tokens) AS daily_tokens
             FROM usage_daily_model
-            WHERE 1 = 1]] .. range_sql .. owner_after_range_sql .. [[
+            WHERE 1 = 1]] .. aggregate_filter_sql .. [[
             GROUP BY calendar_date
         )]],
-        peak_params,
+        summary_params,
         "dashboard.peak"
     )
     -- expression is selected exclusively from the schema-enumerated allowlist.
@@ -694,19 +732,27 @@ function M.dashboard_get(args)
     local series_params = {}
     append_values(series_params, range_params)
     append_values(series_params, owner_params)
+    append_values(series_params, model_filter_params)
     -- projected_range_sql applies the same numbered parameters to the aliased daily table.
     -- projected_range_sql 把同一组编号参数应用到带别名的日级表。
     local projected_range_sql = range_filter(input.rangeDays, "d.calendar_date", 1)
     -- projected_owner_sql applies the same optional owner parameter to the aliased daily table.
     -- projected_owner_sql 把同一个可选归属参数应用到带别名的日级表。
     local projected_owner_sql = owner_filter(input.ownerKind, "d.owner_kind", #range_params + 1)
+    -- projected_model_sql applies the same optional model parameter to the aliased daily table.
+    -- projected_model_sql 把同一个可选模型参数应用到带别名的日级表。
+    local projected_model_sql = model_filter(
+        input.modelRef,
+        "d.model_ref",
+        #range_params + #owner_params + 1
+    )
     -- series_rows groups the top five models and one stable Other series.
     -- series_rows 把前五个模型与一个稳定的其他序列分组。
     local series_rows = sqlite_query(
         [[WITH ranked AS (
             SELECT model_ref, ]] .. expression .. [[ AS metric_value
             FROM usage_daily_model
-            WHERE 1 = 1]] .. range_sql .. owner_after_range_sql .. [[
+            WHERE 1 = 1]] .. aggregate_filter_sql .. [[
             GROUP BY model_ref ORDER BY metric_value DESC, model_ref LIMIT 5
         ), projected AS (
             SELECT d.calendar_date,
@@ -714,7 +760,7 @@ function M.dashboard_get(args)
                    ]] .. expression .. [[ AS value
             FROM usage_daily_model d
             LEFT JOIN ranked r ON r.model_ref = d.model_ref
-            WHERE 1 = 1]] .. projected_range_sql .. projected_owner_sql .. [[
+            WHERE 1 = 1]] .. projected_range_sql .. projected_owner_sql .. projected_model_sql .. [[
             GROUP BY d.calendar_date, series_ref
         )
         SELECT p.calendar_date AS date, p.series_ref AS seriesRef,
@@ -730,8 +776,7 @@ function M.dashboard_get(args)
     -- model_rows provides the ten most-used persistent model dimension records.
     -- model_rows 提供用量最高的十条永久模型维度记录。
     local model_params = {}
-    append_values(model_params, range_params)
-    append_values(model_params, owner_params)
+    append_values(model_params, series_params)
     local model_rows = sqlite_query(
         [[SELECT m.model_ref AS modelRef, m.provider_key AS providerKey,
                m.provider_name AS providerName, m.model_key AS modelKey,
@@ -739,10 +784,19 @@ function M.dashboard_get(args)
                SUM(d.request_count) AS requests
         FROM usage_daily_model d
         JOIN models m ON m.model_ref = d.model_ref
-        WHERE 1 = 1]] .. projected_range_sql .. projected_owner_sql .. [[
+        WHERE 1 = 1]] .. projected_range_sql .. projected_owner_sql .. projected_model_sql .. [[
         GROUP BY m.model_ref ORDER BY totalTokens DESC, m.model_ref LIMIT 10]],
         model_params,
         "dashboard.models"
+    )
+    -- available_model_rows contains every permanent model dimension independently of active filters.
+    -- available_model_rows 包含独立于活动筛选条件的全部永久模型维度。
+    local available_model_rows = sqlite_query(
+        [[SELECT model_ref AS modelRef, provider_name AS providerName, model_name AS modelName
+        FROM models
+        ORDER BY provider_name COLLATE NOCASE, model_name COLLATE NOCASE, model_ref]],
+        {},
+        "dashboard.available_models"
     )
     -- summary is the normalized KPI record augmented with streak facts.
     -- summary 是补充连续活跃事实后的规范 KPI 记录。
@@ -768,6 +822,7 @@ function M.dashboard_get(args)
         heatmap = heatmap_rows,
         series = series_rows,
         models = model_rows,
+        availableModels = available_model_rows,
     })
 end
 
@@ -788,10 +843,18 @@ function M.recent_get(args)
     -- owner_sql and owner_params represent the documented optional owner filter.
     -- owner_sql 与 owner_params 表示文档化的可选归属筛选。
     local owner_sql, owner_params = owner_filter(input.ownerKind, "e.owner_kind", 1)
-    -- limit_parameter_index follows the optional owner parameter exactly.
-    -- limit_parameter_index 精确位于可选归属参数之后。
-    local limit_parameter_index = #owner_params + 1
-    table.insert(owner_params, sql_integer(input.limit))
+    -- model_sql and model_params bind the exact optional model after the owner value.
+    -- model_sql 与 model_params 在归属值之后绑定精确的可选模型。
+    local model_sql, model_params = model_filter(input.modelRef, "e.model_ref", #owner_params + 1)
+    -- query_params preserves owner, model, and limit values in exact placeholder order.
+    -- query_params 按精确占位符顺序保存归属、模型与限制值。
+    local query_params = {}
+    append_values(query_params, owner_params)
+    append_values(query_params, model_params)
+    -- limit_parameter_index follows the optional owner and model parameters exactly.
+    -- limit_parameter_index 精确位于可选归属与模型参数之后。
+    local limit_parameter_index = #query_params + 1
+    table.insert(query_params, sql_integer(input.limit))
     -- rows is bounded by the validated maximum of one hundred facts.
     -- rows 受已校验的一百条最大事实数限制。
     local rows = sqlite_query(
@@ -805,9 +868,9 @@ function M.recent_get(args)
                e.error_code AS errorCode
         FROM api_request_events e
         JOIN models m ON m.model_ref = e.model_ref
-        WHERE 1 = 1]] .. owner_sql .. [[
+        WHERE 1 = 1]] .. owner_sql .. model_sql .. [[
         ORDER BY e.completed_at_ms DESC LIMIT ?]] .. tostring(limit_parameter_index),
-        owner_params,
+        query_params,
         "recent.requests"
     )
     return success({ requests = rows })
@@ -826,18 +889,26 @@ function M.errors_get(args)
     -- owner_sql and owner_params represent the documented optional owner filter.
     -- owner_sql 与 owner_params 表示文档化的可选归属筛选。
     local owner_sql, owner_params = owner_filter(input.ownerKind, "e.owner_kind", #range_params + 1)
-    -- params preserves the exact range-then-owner parameter ordering.
-    -- params 保持精确的范围后归属参数顺序。
+    -- model_sql and model_params bind the exact optional model after range and owner values.
+    -- model_sql 与 model_params 在范围与归属值之后绑定精确的可选模型。
+    local model_sql, model_params = model_filter(
+        input.modelRef,
+        "e.model_ref",
+        #range_params + #owner_params + 1
+    )
+    -- params preserves the exact range-then-owner-then-model parameter ordering.
+    -- params 保持精确的范围后归属再模型参数顺序。
     local params = {}
     append_values(params, range_params)
     append_values(params, owner_params)
+    append_values(params, model_params)
     -- rows contains only stable redacted error categories and codes, never raw messages.
     -- rows 仅包含稳定脱敏错误类别与错误码，绝不包含原始消息。
     local rows = sqlite_query(
         [[SELECT COALESCE(e.error_category, 'unknown') AS errorCategory,
                COALESCE(e.error_code, '') AS errorCode, COUNT(*) AS count
         FROM api_request_events e
-        WHERE e.status = 'failed']] .. range_sql .. owner_sql .. [[
+        WHERE e.status = 'failed']] .. range_sql .. owner_sql .. model_sql .. [[
         GROUP BY e.error_category, e.error_code ORDER BY count DESC LIMIT 20]],
         params,
         "errors.grouped"

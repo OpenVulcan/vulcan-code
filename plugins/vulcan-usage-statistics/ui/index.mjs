@@ -324,8 +324,13 @@ export function createPluginPanel(sdk) {
 
   // dashboardCacheKey identifies one exact query projection.
   // dashboardCacheKey 标识一个精确查询投影。
-  function dashboardCacheKey(rangeDays, metric, ownerKind) {
-    return `${rangeDays}|${metric}|${ownerKind ?? "all"}`;
+  //
+  // rangeDays, metric, ownerKind, and modelRef are the complete active filter tuple.
+  // rangeDays、metric、ownerKind 与 modelRef 是完整的活动筛选元组。
+  // Returns one collision-free cache key for the selected projection.
+  // 返回选定投影使用的无冲突缓存键。
+  function dashboardCacheKey(rangeDays, metric, ownerKind, modelRef) {
+    return `${rangeDays}|${metric}|${ownerKind ?? "all"}|${modelRef ?? "all"}`;
   }
 
   // UsageStatisticsPanel renders settings, KPIs, heatmap, trend, models, and recent requests.
@@ -343,6 +348,9 @@ export function createPluginPanel(sdk) {
     // ownerKind selects one exact execution owner category or all categories.
     // ownerKind 选择一个精确执行归属类别或全部类别。
     const [ownerKind, setOwnerKind] = React.useState(null);
+    // modelRef selects one exact persistent Provider/model identity or every model.
+    // modelRef 选择一个精确的持久 Provider/模型身份或全部模型。
+    const [modelRef, setModelRef] = React.useState(null);
     // dashboard stores the latest aggregate action result.
     // dashboard 保存最近的聚合 Action 结果。
     const [dashboard, setDashboard] = React.useState(null);
@@ -379,7 +387,7 @@ export function createPluginPanel(sdk) {
     const loadDashboard = React.useCallback(async (force) => {
       // cacheKey identifies the exact active query projection.
       // cacheKey 标识精确的活动查询投影。
-      const cacheKey = dashboardCacheKey(rangeDays, metric, ownerKind);
+      const cacheKey = dashboardCacheKey(rangeDays, metric, ownerKind, modelRef);
       // cached is the optional fresh module-level action result.
       // cached 是可选的新鲜模块级 Action 结果。
       const cached = dashboardCache.get(cacheKey);
@@ -397,12 +405,15 @@ export function createPluginPanel(sdk) {
         // ownerArguments omits the optional field for the all-owner view instead of sending JSON null.
         // ownerArguments 在全部归属视图中省略可选字段，而不是发送 JSON null。
         const ownerArguments = ownerKind === null ? {} : { ownerKind };
+        // modelArguments omits the optional field for the all-model view instead of sending JSON null.
+        // modelArguments 在全部模型视图中省略可选字段，而不是发送 JSON null。
+        const modelArguments = modelRef === null ? {} : { modelRef };
         // results are loaded concurrently because both reads are independent and bounded.
         // results 并发加载，因为两次读取相互独立且有界。
         const [dashboardResult, recentResult, errorsResult] = await Promise.all([
-          sdk.invoke("dashboard-get", { rangeDays, metric, ...ownerArguments }),
-          sdk.invoke("recent-get", { limit: 20, ...ownerArguments }),
-          sdk.invoke("errors-get", { rangeDays, metric, ...ownerArguments }),
+          sdk.invoke("dashboard-get", { rangeDays, metric, ...ownerArguments, ...modelArguments }),
+          sdk.invoke("recent-get", { limit: 20, ...ownerArguments, ...modelArguments }),
+          sdk.invoke("errors-get", { rangeDays, metric, ...ownerArguments, ...modelArguments }),
         ]);
         // requests is the exact recent facts array from the validated action output.
         // requests 是经校验 Action 输出中的精确最近事实数组。
@@ -420,7 +431,7 @@ export function createPluginPanel(sdk) {
       } finally {
         setLoading(false);
       }
-    }, [metric, ownerKind, rangeDays]);
+    }, [metric, modelRef, ownerKind, rangeDays]);
 
     React.useEffect(() => {
       // cancelled prevents a stale settings read from mutating an unmounted panel.
@@ -646,6 +657,27 @@ export function createPluginPanel(sdk) {
             value: metric,
             options: ["total_tokens", "input_tokens", "output_tokens", "requests", "duration_ms", "time_to_first_token_ms"].map((value) => ({ value, label: text(`metric.${value}`, value) })),
             onValueChange: setMetric,
+          }),
+          h(SelectControl, {
+            ariaLabel: text("model.label", "Model"),
+            className: "plugin-statistics-toolbar-select",
+            value: modelRef === null ? "all" : String(modelRef),
+            options: [
+              { value: "all", label: text("model.all", "All models") },
+              ...(dashboard?.availableModels ?? []).map((model) => ({
+                value: String(model.modelRef),
+                label: `${model.modelName} · ${model.providerName}`,
+              })),
+            ],
+            onValueChange: (value) => {
+              // nextModelRef preserves the exact persistent model identity selected by the user.
+              // nextModelRef 保留用户选择的精确持久模型身份。
+              const nextModelRef = value === "all" ? null : Number(value);
+              setModelRef(nextModelRef);
+              // A newly focused model must not inherit a hidden line from a previous chart view.
+              // 新聚焦的模型不得继承上一图表视图中的隐藏折线状态。
+              setHiddenSeries(new Set());
+            },
           }),
           h(SelectControl, {
             ariaLabel: text("owner.label", "Request owner"),

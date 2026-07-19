@@ -88,8 +88,21 @@
         "required": ["modelRef", "providerKey", "providerName", "modelKey", "modelName", "totalTokens", "requests", "sharePercent"],
         "additionalProperties": false
       }
+    },
+    "availableModels": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "modelRef": { "type": "number", "minimum": 1 },
+          "providerName": { "type": "string", "minLength": 1 },
+          "modelName": { "type": "string", "minLength": 1 }
+        },
+        "required": ["modelRef", "providerName", "modelName"],
+        "additionalProperties": false
+      }
     }
   },
-  "required": ["revision", "rangeDays", "metric", "summary", "heatmap", "series", "models"],
+  "required": ["revision", "rangeDays", "metric", "summary", "heatmap", "series", "models", "availableModels"],
   "additionalProperties": false
 }
