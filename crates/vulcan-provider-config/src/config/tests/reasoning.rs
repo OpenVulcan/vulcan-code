@@ -1,6 +1,6 @@
 use super::super::{
-    ProviderRuntimeKind, ReasoningCapabilityKind, ReasoningEffortLevel, ReasoningProfileConfig,
-    apply_provider_reasoning_model_overrides, supported_provider_by_id,
+    AiToolKind, ProviderRuntimeKind, ReasoningCapabilityKind, ReasoningEffortLevel,
+    ReasoningProfileConfig, apply_provider_reasoning_model_overrides, supported_provider_by_id,
 };
 use super::helpers::{test_model_choice, test_provider_definition};
 use serde_json::json;
@@ -71,6 +71,63 @@ fn alibaba_coding_plan_cn_provider_uses_binary_reasoning_selector() {
     assert_eq!(view.options[0].label, "关闭");
     assert_eq!(view.options[1].label, "开启");
     assert_eq!(view.selected_effort, ReasoningEffortLevel::Low);
+}
+
+/// Verifies Alibaba Token Plan exposes only Qwen 3.8 with always-on low/high/xhigh reasoning, defaults unsupported preferences to xhigh, and declares implicit native web search without a tools-array patch.
+/// 验证阿里云 Token Plan 仅暴露千问 3.8，提供始终开启的 low/high/xhigh 推理档位，将不支持的偏好默认回退为 xhigh，并声明无需 tools 数组补丁的隐式原生联网搜索。
+#[test]
+fn alibaba_token_plan_cn_exposes_exact_qwen_3_8_contract() {
+    // provider is the embedded Token Plan definition resolved through the same catalog path used at runtime.
+    // provider 是通过运行时同一目录路径解析的内嵌 Token Plan 定义。
+    let provider = supported_provider_by_id("alibaba-token-plan-cn")
+        .expect("alibaba-token-plan-cn provider must exist");
+    assert_eq!(provider.runtime, ProviderRuntimeKind::OpenAiCompatible);
+    assert_eq!(
+        provider.credential_env_keys,
+        vec![String::from("ALIBABA_TOKEN_PLAN_API_KEY")]
+    );
+    assert_eq!(provider.extra_body.get("tool_stream"), Some(&json!(true)));
+    assert_eq!(provider.models.len(), 1);
+
+    // model is the sole catalog entry authorized by the Token Plan request.
+    // model 是 Token Plan 需求授权的唯一目录条目。
+    let model = &provider.models[0];
+    assert_eq!(model.id, "qwen3.8-max-preview");
+    assert_eq!(model.context_limit, Some(983_616));
+    assert_eq!(model.output_limit, Some(131_072));
+    assert_eq!(model.input_modalities, ["text", "image"]);
+    assert_eq!(model.output_modalities, ["text"]);
+
+    // view starts at xhigh when the remembered shared medium preference is unsupported.
+    // view 在共享记忆的 medium 偏好不受支持时从 xhigh 开始。
+    let view = provider.reasoning_selection_view(Some(model), ReasoningEffortLevel::Medium);
+    assert_eq!(
+        view.options
+            .iter()
+            .map(|option| option.effort)
+            .collect::<Vec<_>>(),
+        vec![
+            ReasoningEffortLevel::Low,
+            ReasoningEffortLevel::High,
+            ReasoningEffortLevel::XHigh,
+        ]
+    );
+    assert_eq!(view.selected_effort, ReasoningEffortLevel::XHigh);
+    assert_eq!(
+        provider
+            .reasoning_profile
+            .as_ref()
+            .and_then(|profile| profile.patch_for_effort(ReasoningEffortLevel::XHigh)),
+        Some(json!({ "reasoning_effort": "xhigh" }))
+    );
+
+    // web_search remains provider-native while its empty request patch prevents any web_search object from being appended to the OpenAI-compatible tools array.
+    // web_search 保持为 Provider 原生能力，同时空请求补丁会阻止向 OpenAI 兼容 tools 数组追加任何 web_search 对象。
+    assert_eq!(model.ai_tools.len(), 1);
+    assert_eq!(model.ai_tools[0].kind, AiToolKind::WebSearch);
+    assert_eq!(model.ai_tools[0].native_provider_tool, Some(true));
+    assert_eq!(model.ai_tools[0].native_request_patch, Some(json!({})));
+    assert!(model.ai_tools[0].native_tool_type.is_none());
 }
 
 /// Verifies DeepSeek official provider definitions expose the expected three-state selector and remap the shared medium default onto `高`.

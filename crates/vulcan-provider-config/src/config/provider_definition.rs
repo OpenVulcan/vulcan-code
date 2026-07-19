@@ -435,7 +435,16 @@ impl SupportedProviderDefinition {
             .and_then(|item| item.reasoning_profile.as_ref())
             .or(self.reasoning_profile.as_ref());
         let supported_efforts = self.supported_reasoning_efforts(model);
-        let selected_effort = reconcile_reasoning_effort(preferred_effort, &supported_efforts);
+        // selected_effort preserves an explicitly supported user choice and otherwise honors the provider-declared default before generic nearest-tier reconciliation.
+        // selected_effort 保留用户明确选择且受支持的档位，否则优先采用供应商声明的默认值，再执行通用最近档位回退。
+        let selected_effort = if supported_efforts.contains(&preferred_effort) {
+            preferred_effort
+        } else {
+            active_profile
+                .and_then(|profile| profile.default_effort)
+                .filter(|effort| supported_efforts.contains(effort))
+                .unwrap_or_else(|| reconcile_reasoning_effort(preferred_effort, &supported_efforts))
+        };
         let options = build_reasoning_selection_options(active_profile, &supported_efforts);
         let note =
             build_reasoning_selection_note(model, preferred_effort, selected_effort, &options);

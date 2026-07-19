@@ -1,0 +1,74 @@
+{
+  "id": "alibaba-token-plan-cn",
+  "name": "Alibaba Token Plan (China)",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "ALIBABA_TOKEN_PLAN_API_KEY"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "extraBody": {
+    "tool_stream": true
+  },
+  "usageCapture": {
+    "openaiCompatibleStreaming": {
+      "requestIncludeUsage": true,
+      "responseSources": [
+        "top-level-empty-choices-chunk",
+        "top-level-terminal-chunk"
+      ]
+    }
+  },
+  "reasoningProfile": {
+    "kind": "tiered",
+    "defaultEffort": "x-high",
+    "low": {
+      "reasoning_effort": "low"
+    },
+    "high": {
+      "reasoning_effort": "high"
+    },
+    "xHigh": {
+      "reasoning_effort": "xhigh"
+    }
+  },
+  "baseUrl": {
+    "kind": "fixed",
+    "value": "https:\/\/token-plan.cn-beijing.maas.aliyuncs.com\/compatible-mode\/v1",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "none"
+  },
+  "modelRuntimeOverrides": {},
+  "models": [
+    {
+      "id": "qwen3.8-max-preview",
+      "name": "Qwen3.8 Max Preview",
+      "family": "qwen",
+      "contextLimit": 983616,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ],
+      "defaultEnabled": true,
+      "aiTools": [
+        {
+          "kind": "web_search",
+          "nativeProviderTool": true,
+          "nativeRequestPatch": {},
+          "citationSupport": true
+        }
+      ]
+    }
+  ]
+}

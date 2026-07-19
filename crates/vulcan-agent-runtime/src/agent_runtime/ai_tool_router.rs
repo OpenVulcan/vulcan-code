@@ -203,7 +203,7 @@ mod tests {
             native_provider_tool: true,
             native_tool_type: Some(String::from("web_search_preview")),
             native_request_patch: None,
-            fallback_tool_id: None,
+            fallback_tool_id: Some(String::from("__test_web_search_fallback")),
             requires_approval: false,
             result_modalities: vec![String::from("text")],
             citation_support: true,

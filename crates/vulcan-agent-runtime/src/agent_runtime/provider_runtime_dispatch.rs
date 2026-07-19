@@ -30,12 +30,67 @@ use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 /// 未配置显式最大轮次覆盖时使用的安全运行时默认轮次预算。
 pub(crate) const DEFAULT_RUNTIME_MAX_TURNS_LIMIT: usize = usize::MAX - 1;
 
+/// Alibaba Token Plan provider identifier that owns the Qwen 3.8 temperature floor contract.
+/// 持有千问 3.8 温度下限契约的阿里云 Token Plan 供应商标识。
+const ALIBABA_TOKEN_PLAN_CN_PROVIDER_ID: &str = "alibaba-token-plan-cn";
+
+/// Qwen 3.8 model identifier whose always-on reasoning mode requires temperature 0.6 or higher.
+/// 始终开启思考模式且要求温度不低于 0.6 的千问 3.8 模型标识。
+const QWEN_3_8_MAX_PREVIEW_MODEL_ID: &str = "qwen3.8-max-preview";
+
+/// Minimum and default temperature required by Qwen 3.8 Max Preview reasoning mode.
+/// 千问 3.8 Max Preview 思考模式要求的最低及默认温度。
+const QWEN_3_8_REASONING_TEMPERATURE: f64 = 0.6;
+
 /// Keeps the host-controlled provider dispatch loop unlimited for every agent configuration.
 /// 为所有智能体配置保持宿主控制 Provider 分发循环无限。
 pub(crate) fn resolve_runtime_default_max_turns_limit(
     _active_agent: Option<&RuntimeAgentDefinition>,
 ) -> usize {
     DEFAULT_RUNTIME_MAX_TURNS_LIMIT
+}
+
+/// Normalizes one temperature request according to shared bounds and exact provider/model compatibility contracts.
+/// 根据共享边界与精确供应商/模型兼容契约归一化一次温度请求。
+///
+/// # Parameters
+/// # 参数
+/// `provider_id` identifies the selected provider definition.
+/// `provider_id` 标识当前选中的供应商定义。
+/// `model_id` identifies the selected model definition.
+/// `model_id` 标识当前选中的模型定义。
+/// `requested_temperature` is the agent or workbench override before provider normalization.
+/// `requested_temperature` 是供应商归一化前来自智能体或工作台的覆盖值。
+/// `supports_temperature` indicates whether the model accepts a temperature field.
+/// `supports_temperature` 表示模型是否接受温度字段。
+///
+/// # Returns
+/// # 返回值
+/// Returns the effective temperature sent to the provider, or `None` when the model does not support temperature.
+/// 返回发送给供应商的生效温度；模型不支持温度时返回 `None`。
+fn normalize_provider_temperature(
+    provider_id: &str,
+    model_id: &str,
+    requested_temperature: Option<f32>,
+    supports_temperature: bool,
+) -> Option<f64> {
+    if !supports_temperature {
+        return None;
+    }
+
+    // bounded_temperature keeps the existing provider-wide safety range before applying a stricter model floor.
+    // bounded_temperature 在应用更严格的模型下限前保留既有的供应商通用安全范围。
+    let bounded_temperature = requested_temperature.map(|value| f64::from(value).clamp(0.0, 2.0));
+    if provider_id == ALIBABA_TOKEN_PLAN_CN_PROVIDER_ID && model_id == QWEN_3_8_MAX_PREVIEW_MODEL_ID
+    {
+        return Some(
+            bounded_temperature
+                .unwrap_or(QWEN_3_8_REASONING_TEMPERATURE)
+                .max(QWEN_3_8_REASONING_TEMPERATURE),
+        );
+    }
+
+    bounded_temperature
 }
 
 /// Executes one provider prompt against the currently selected runtime family and returns a delta stream.
@@ -141,11 +196,19 @@ fn execute_provider_prompt_stream_with_capture_mode(
             Err(error) => return one_shot_provider_error_stream(error),
         }
     };
-    let temperature = active_agent
+    // requested_temperature preserves the existing precedence where an active agent override wins over the workbench value.
+    // requested_temperature 保留活动智能体覆盖优先于工作台值的既有优先级。
+    let requested_temperature = active_agent
         .and_then(|agent| agent.temperature)
-        .or(preparation.temperature)
-        .map(|value| value.clamp(0.0, 2.0) as f64)
-        .filter(|_| preparation.model_blueprint.supports_temperature());
+        .or(preparation.temperature);
+    // temperature applies exact provider/model normalization after the final model identity is known.
+    // temperature 在最终模型身份确定后应用精确的供应商/模型归一化。
+    let temperature = normalize_provider_temperature(
+        preparation.model_blueprint.provider_id.as_str(),
+        preparation.model_blueprint.model_id.as_str(),
+        requested_temperature,
+        preparation.model_blueprint.supports_temperature(),
+    );
     // maxTurns remains unlimited so only the model's no-tool response ends the provider loop.
     // maxTurns 保持无限，因此只有模型返回无工具调用的响应才会结束 Provider 循环。
     let max_turns = resolve_runtime_default_max_turns_limit(active_agent);
@@ -212,4 +275,56 @@ fn execute_provider_prompt_stream_with_capture_mode(
         preparation.tool_request_rejection_all_tools,
         preparation.tool_request_rejection_tool_ids.clone(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies Qwen 3.8 Token Plan requests default to 0.6, raise lower values, preserve higher values, and keep unrelated providers unchanged.
+    /// 验证 Token Plan 千问 3.8 请求默认使用 0.6、抬升更低值、保留更高值，并保持无关供应商行为不变。
+    #[test]
+    fn token_plan_qwen_temperature_contract_is_applied_exactly() {
+        assert_eq!(
+            normalize_provider_temperature(
+                ALIBABA_TOKEN_PLAN_CN_PROVIDER_ID,
+                QWEN_3_8_MAX_PREVIEW_MODEL_ID,
+                None,
+                true,
+            ),
+            Some(0.6),
+        );
+        assert_eq!(
+            normalize_provider_temperature(
+                ALIBABA_TOKEN_PLAN_CN_PROVIDER_ID,
+                QWEN_3_8_MAX_PREVIEW_MODEL_ID,
+                Some(0.2),
+                true,
+            ),
+            Some(0.6),
+        );
+        // higher_temperature remains represented through the caller's f32 contract, so compare its semantic value with a tight tolerance.
+        // higher_temperature 仍通过调用方的 f32 契约表示，因此使用严格容差比较其语义值。
+        let higher_temperature = normalize_provider_temperature(
+            ALIBABA_TOKEN_PLAN_CN_PROVIDER_ID,
+            QWEN_3_8_MAX_PREVIEW_MODEL_ID,
+            Some(0.9),
+            true,
+        )
+        .expect("supported Qwen 3.8 temperature must be present");
+        assert!((higher_temperature - 0.9).abs() < 1e-6);
+        assert_eq!(
+            normalize_provider_temperature("alibaba-coding-plan-cn", "qwen3.7-max", None, true),
+            None,
+        );
+        assert_eq!(
+            normalize_provider_temperature(
+                ALIBABA_TOKEN_PLAN_CN_PROVIDER_ID,
+                QWEN_3_8_MAX_PREVIEW_MODEL_ID,
+                Some(0.9),
+                false,
+            ),
+            None,
+        );
+    }
 }

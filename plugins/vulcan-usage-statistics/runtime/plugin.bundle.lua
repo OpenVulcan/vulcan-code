@@ -751,7 +751,10 @@ function M.dashboard_get(args)
     summary.longestStreakDays = streak_rows[1].longestStreakDays
     summary.peakDailyTokens = peak_rows[1].peakDailyTokens
     summary.successRate = summary.requests == 0 and 0 or summary.successes * 100 / summary.requests
-    summary.cacheHitRate = summary.inputTokens == 0 and 0 or summary.cachedInputTokens * 100 / summary.inputTokens
+    -- cacheEligibleInputTokens combines every normalized input-token category that could produce a cache hit.
+    -- cacheEligibleInputTokens 合并所有可能产生缓存命中的归一化输入 Token 类别。
+    local cache_eligible_input_tokens = summary.inputTokens + summary.cachedInputTokens + summary.cacheCreationInputTokens
+    summary.cacheHitRate = cache_eligible_input_tokens == 0 and 0 or summary.cachedInputTokens * 100 / cache_eligible_input_tokens
     -- model shares use the exact selected-range total and remain zero for an empty range.
     -- 模型占比使用精确的已选范围总量；空范围时保持为零。
     for _, model in ipairs(model_rows) do

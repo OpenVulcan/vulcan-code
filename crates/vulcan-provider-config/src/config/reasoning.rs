@@ -132,6 +132,10 @@ pub struct ReasoningProfileConfig {
     /// 用于诊断和未来界面提示的可选能力类型描述。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<ReasoningCapabilityKind>,
+    /// Optional fallback effort used when the remembered workbench choice is unsupported by this profile.
+    /// 当工作台记忆的档位不受当前配置支持时使用的可选回退档位。
+    #[serde(rename = "defaultEffort", skip_serializing_if = "Option::is_none")]
+    pub default_effort: Option<ReasoningEffortLevel>,
     /// Optional provider-specific payload used when the workbench explicitly requests reasoning-off behavior.
     /// 当工作台显式请求关闭思考时使用的可选供应商专属载荷。
     #[serde(skip_serializing_if = "Option::is_none")]

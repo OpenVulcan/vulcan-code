@@ -7538,7 +7538,7 @@ mod tests {
                         "outputTokens": 20,
                         "reasoningTokens": 5,
                         "totalTokens": 35,
-                        "cachedInputTokens": 4,
+                        "cachedInputTokens": 14,
                         "cacheCreationInputTokens": 2,
                         "durationMs": 500,
                         "averageDurationMs": 500,
@@ -7607,7 +7607,7 @@ mod tests {
                         "inputTokens": 10,
                         "outputTokens": 20,
                         "totalTokens": 35,
-                        "cachedInputTokens": 4,
+                        "cachedInputTokens": 14,
                         "timeToFirstTokenMs": 120,
                         "durationMs": 500,
                         "retryCount": 0,
@@ -8304,10 +8304,11 @@ return M
             "time_to_first_token_ms": 120,
             "duration_ms": 500,
             "input_tokens": 10,
+            "uncached_input_tokens": 10,
             "output_tokens": 20,
             "reasoning_tokens": 5,
             "total_tokens": 35,
-            "cached_input_tokens": 4,
+            "cached_input_tokens": 14,
             "cache_creation_input_tokens": 2,
             "finish_reason": "stop",
             "error_category": null,
@@ -8375,6 +8376,12 @@ return M
             }))
             .expect("query usage statistics dashboard");
         assert_eq!(dashboard["summary"]["totalTokens"], 35);
+        // cacheHitRate proves cached input may exceed uncached input without violating the percentage schema.
+        // cacheHitRate 证明缓存输入可以高于未缓存输入，同时仍满足百分比 Schema。
+        let cache_hit_rate = dashboard["summary"]["cacheHitRate"]
+            .as_f64()
+            .expect("read usage statistics cache hit rate");
+        assert!((cache_hit_rate - (14.0 * 100.0 / 26.0)).abs() < 0.000_001);
         assert_eq!(dashboard["heatmap"][0]["topModelName"], "Model One");
         assert_eq!(dashboard["series"][0]["value"], 10);
         // groupedErrors validates the same omitted-owner contract after prior action reuse.

@@ -247,6 +247,9 @@ fn validate_required_provider_fields(
 #[cfg(test)]
 mod tests {
     use super::resolve_active_provider_blueprint_with_ai_tools;
+    use crate::agent_runtime::ai_tool_router::{AiToolRouteKind, resolve_ai_tool_plan};
+    use crate::agent_runtime::provider_native_tools::build_provider_native_ai_tool_additional_params;
+    use crate::agent_runtime::provider_runtime_inputs::resolve_provider_additional_params;
     use crate::provider_config::{
         ModelInterleavedCapability, PersistedProviderEntry, PersistedProviderOptions,
         ProviderConfigurationFile, ReasoningEffortLevel,
@@ -290,5 +293,69 @@ mod tests {
         }
         assert!(blueprint.capabilities.supports_tool_call);
         assert!(blueprint.capabilities.supports_temperature);
+    }
+
+    /// Verifies Alibaba Token Plan selects implicit native web search without injecting a web_search object into the OpenAI-compatible tools array.
+    /// 验证阿里云 Token Plan 选择隐式原生联网搜索，同时不会向 OpenAI 兼容 tools 数组注入 web_search 对象。
+    #[test]
+    fn alibaba_token_plan_uses_implicit_native_web_search_without_tool_injection() {
+        // provider contains the minimum persisted credential entry required to resolve the real embedded definition.
+        // provider 包含解析真实内嵌定义所需的最小持久化凭据条目。
+        let mut provider = BTreeMap::new();
+        provider.insert(
+            String::from("alibaba-token-plan-cn"),
+            PersistedProviderEntry {
+                name: Some(String::from("Alibaba Token Plan (China)")),
+                options: PersistedProviderOptions {
+                    api_key: Some(String::from("test-key")),
+                    ..PersistedProviderOptions::default()
+                },
+                ..PersistedProviderEntry::default()
+            },
+        );
+        // config selects the only Token Plan model while retaining the default Harness-tool routing configuration.
+        // config 选择唯一的 Token Plan 模型，同时保留默认 Harness 工具路由配置。
+        let config = ProviderConfigurationFile {
+            model: Some(String::from("alibaba-token-plan-cn/qwen3.8-max-preview")),
+            provider,
+            ..ProviderConfigurationFile::default()
+        };
+
+        // blueprint follows the production resolver so the regression covers catalog parsing and effective capability resolution together.
+        // blueprint 走生产解析器，因此该回归测试同时覆盖目录解析与生效能力解析。
+        let blueprint = resolve_active_provider_blueprint_with_ai_tools(
+            &config,
+            ReasoningEffortLevel::XHigh,
+            &config.ai_tools,
+        )
+        .expect("Token Plan provider blueprint should resolve");
+
+        assert!(blueprint.capabilities.supports_tool_call);
+        assert_eq!(blueprint.capabilities.ai_tools.len(), 1);
+        assert!(blueprint.capabilities.ai_tools[0].native_provider_tool);
+        assert!(
+            blueprint.capabilities.ai_tools[0]
+                .fallback_tool_id
+                .is_none()
+        );
+        // ai_tool_plan must select the provider-native branch; only HostFallback decisions are registered as host tools.
+        // ai_tool_plan 必须选择 Provider 原生分支；只有 HostFallback 决策才会注册为宿主工具。
+        let ai_tool_plan = resolve_ai_tool_plan(&blueprint);
+        assert_eq!(
+            ai_tool_plan.decisions[0].route,
+            AiToolRouteKind::ProviderNative
+        );
+        // native_patch is intentionally empty: it marks the server-side native route as available without mutating the request's tools array.
+        // native_patch 刻意保持为空：它标记服务端原生路由可用，但不会修改请求中的 tools 数组。
+        let native_patch = build_provider_native_ai_tool_additional_params(&blueprint)
+            .expect("implicit native web search should resolve to an empty activation patch");
+        assert_eq!(native_patch, serde_json::json!({}));
+        // additional_params is the final provider-scoped fragment merged into the transport request and must not contain a tools array.
+        // additional_params 是最终合并进传输请求的 Provider 作用域片段，绝不能包含 tools 数组。
+        let additional_params = resolve_provider_additional_params(&blueprint)
+            .expect("xhigh reasoning should produce additional parameters");
+        assert_eq!(additional_params["reasoning_effort"], "xhigh");
+        assert_eq!(additional_params["tool_stream"], true);
+        assert!(additional_params.get("tools").is_none());
     }
 }
