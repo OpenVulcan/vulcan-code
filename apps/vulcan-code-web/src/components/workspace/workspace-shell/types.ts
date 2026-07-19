@@ -41,6 +41,7 @@ import type {
   WorkspaceFileFilterOptions,
   WorkspaceFileReadResponse,
 } from "@/types";
+import type { NotificationPresentationContext } from "@/notifications/types";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
 import type { WorkspacePageDescriptor } from "@/components/workspace/workspace-page-descriptor";
 // WorkspaceMainView identifies the active main surface inside the workbench.
@@ -80,6 +81,9 @@ export interface WorkspaceShellProps {
   // Selected conversation id.
   // 当前选中的会话标识。
   selectedConversationId: string | null;
+  // Publishes the exact persisted transcript currently visible in this workspace shell.
+  // 发布当前工作区壳中真实可见的持久化转录。
+  onNotificationPresentationContextChange: (context: NotificationPresentationContext) => void;
   // Conversation id currently being hydrated.
   // 当前正在水合的会话标识。
   loadingConversationId: string | null;

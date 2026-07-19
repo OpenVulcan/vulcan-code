@@ -18,6 +18,33 @@ import type { CommandSessionSummary, ContextInjectionSnapshot, ContextUsageSnaps
 import type { ProjectSummary } from "./projects-files";
 import type { ConversationHydrationProgress } from "./workbench";
 
+// ConversationRunOutcome identifies the strict terminal result of a settled run.
+// ConversationRunOutcome 标识已结束运行的严格终态结果。
+export type ConversationRunOutcome = "completed" | "failed";
+
+// ConversationRunSettledEvent describes one platform-neutral final run event.
+// ConversationRunSettledEvent 描述一个与平台无关的运行最终结束事件。
+export interface ConversationRunSettledEvent {
+  // eventId is the stable idempotency key for this terminal event.
+  // eventId 是本终态事件的稳定幂等键。
+  eventId: string;
+  // conversationId identifies the conversation that owned the run.
+  // conversationId 标识拥有本次运行的会话。
+  conversationId: string;
+  // projectId identifies the authoritative owning project when one exists.
+  // projectId 标识存在时的权威所属项目。
+  projectId?: string | null;
+  // runId is the exact stream task identity that owned the terminal report.
+  // runId 是持有终态报告的精确流任务身份。
+  runId: string;
+  // outcome is the strict terminal result.
+  // outcome 是严格终态结果。
+  outcome: ConversationRunOutcome;
+  // occurredAt is the Unix-millisecond timestamp text captured by the service.
+  // occurredAt 是服务端捕获的 Unix 毫秒时间戳文本。
+  occurredAt: string;
+}
+
 export interface ConversationSummary {
   // Stable conversation identifier.
   // 稳定会话标识。

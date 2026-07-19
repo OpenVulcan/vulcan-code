@@ -1,4 +1,10 @@
-import type { ShellClient } from "@/shell/protocol";
+import type {
+  ShellClient,
+  ShellNotificationCapability,
+  ShellNotificationPermission,
+  ShellNotificationPresentationState,
+  ShellNotificationRequest,
+} from "@/shell/protocol";
 
 // TauriWindowHandle exposes only the window APIs used by the custom title bar.
 // TauriWindowHandle 仅暴露自定义标题栏使用的窗口 API。
@@ -18,6 +24,32 @@ interface TauriWindowHandle {
   // Subscribes to native window resize events.
   // 订阅原生窗口尺寸变化事件。
   onResized: (handler: () => void) => Promise<() => void>;
+  // Returns whether the current desktop window is minimized.
+  // 返回当前桌面窗口是否已最小化。
+  isMinimized: () => Promise<boolean>;
+  // Returns whether the current desktop window has input focus.
+  // 返回当前桌面窗口是否拥有输入焦点。
+  isFocused: () => Promise<boolean>;
+  // Returns whether the current desktop window is visible.
+  // 返回当前桌面窗口是否可见。
+  isVisible: () => Promise<boolean>;
+  // Subscribes to native window focus changes.
+  // 订阅原生窗口焦点变化。
+  onFocusChanged: (handler: () => void) => Promise<() => void>;
+}
+
+// TauriNotificationApi exposes only official plugin calls used by the desktop shell facade.
+// TauriNotificationApi 仅暴露桌面壳门面使用的官方插件调用。
+interface TauriNotificationApi {
+  // isPermissionGranted checks current desktop notification authorization.
+  // isPermissionGranted 检查当前桌面通知授权。
+  isPermissionGranted: () => Promise<boolean>;
+  // requestPermission requests desktop notification authorization from a user action.
+  // requestPermission 通过用户操作请求桌面通知授权。
+  requestPermission: () => Promise<NotificationPermission>;
+  // sendNotification presents one native desktop notification.
+  // sendNotification 展示一条原生桌面通知。
+  sendNotification: (options: { title: string; body: string }) => void;
 }
 
 // TauriShellClient implements client-host actions through Tauri APIs.
@@ -26,6 +58,82 @@ export class TauriShellClient implements ShellClient {
   // windowPromise caches the dynamic current-window handle import.
   // windowPromise 缓存动态当前窗口句柄导入。
   private windowPromise: Promise<TauriWindowHandle> | null = null;
+  // notificationApiPromise caches the official notification plugin import.
+  // notificationApiPromise 缓存官方通知插件导入。
+  private notificationApiPromise: Promise<TauriNotificationApi> | null = null;
+  // knownPermission preserves an explicit denial for the current shell lifetime.
+  // knownPermission 在当前壳生命周期内保留明确拒绝结果。
+  private knownPermission: ShellNotificationPermission | null = null;
+
+  // getNotificationCapability reports native notification support provided by the registered plugin.
+  // getNotificationCapability 报告已注册插件提供的原生通知支持。
+  getNotificationCapability(): ShellNotificationCapability {
+    return { shellKind: "tauri", supported: true, activationSupported: false };
+  }
+
+  // getNotificationPermission checks native authorization without prompting the user.
+  // getNotificationPermission 检查原生授权状态，且不提示用户。
+  async getNotificationPermission(): Promise<ShellNotificationPermission> {
+    // granted is the authoritative positive permission fact exposed by the official plugin.
+    // granted 是官方插件暴露的权威肯定权限事实。
+    const granted = await (await this.notificationApi()).isPermissionGranted();
+    if (granted) {
+      this.knownPermission = "granted";
+      return "granted";
+    }
+    return this.knownPermission === "denied" ? "denied" : "default";
+  }
+
+  // requestNotificationPermission requests native authorization from an explicit settings action.
+  // requestNotificationPermission 通过明确设置操作请求原生授权。
+  async requestNotificationPermission(): Promise<ShellNotificationPermission> {
+    // permission stores the exact plugin response for subsequent non-prompting reads.
+    // permission 保存精确插件响应，供后续无提示读取。
+    const permission = await (await this.notificationApi()).requestPermission();
+    this.knownPermission = permission;
+    return permission;
+  }
+
+  // getNotificationPresentationState reads native minimized, visibility, and focus facts.
+  // getNotificationPresentationState 读取原生最小化、可见性与焦点事实。
+  async getNotificationPresentationState(): Promise<ShellNotificationPresentationState> {
+    // windowHandle is the single native window queried for one coherent presentation snapshot.
+    // windowHandle 是用于一次一致界面快照查询的唯一原生窗口。
+    const windowHandle = await this.currentWindow();
+    // stateFacts resolves independent native facts concurrently without changing their ownership.
+    // stateFacts 并发解析独立原生事实，且不改变其归属。
+    const [minimized, focused, visible] = await Promise.all([
+      windowHandle.isMinimized(),
+      windowHandle.isFocused(),
+      windowHandle.isVisible(),
+    ]);
+    return { foreground: visible && !minimized, focused, visible };
+  }
+
+  // subscribeNotificationPresentationChange listens to native focus and size transitions.
+  // subscribeNotificationPresentationChange 监听原生焦点与尺寸变化。
+  async subscribeNotificationPresentationChange(handler: () => void): Promise<() => void> {
+    // windowHandle owns both native subscriptions and their cleanup functions.
+    // windowHandle 持有两个原生订阅及其清理函数。
+    const windowHandle = await this.currentWindow();
+    // unlisteners are exact cleanup callbacks returned by Tauri.
+    // unlisteners 是 Tauri 返回的精确清理回调。
+    const unlisteners = await Promise.all([
+      windowHandle.onFocusChanged(handler),
+      windowHandle.onResized(handler),
+    ]);
+    return () => {
+      for (const unlisten of unlisteners) {
+        unlisten();
+      }
+    };
+  }
+
+  // showLocalNotification presents localized text through the official Tauri plugin.
+  // showLocalNotification 通过官方 Tauri 插件展示已本地化文案。
+  async showLocalNotification(request: ShellNotificationRequest): Promise<void> {
+    (await this.notificationApi()).sendNotification({ title: request.title, body: request.body });
+  }
 
   // supportsWindowControls reports that Tauri exposes native window controls.
   // supportsWindowControls 表示 Tauri 可提供原生窗口控制。
@@ -70,6 +178,15 @@ export class TauriShellClient implements ShellClient {
       this.windowPromise = import("@tauri-apps/api/window").then((api) => api.getCurrentWindow() as TauriWindowHandle);
     }
     return this.windowPromise;
+  }
+
+  // notificationApi loads and returns the official Tauri notification plugin facade.
+  // notificationApi 加载并返回官方 Tauri 通知插件门面。
+  private async notificationApi(): Promise<TauriNotificationApi> {
+    if (!this.notificationApiPromise) {
+      this.notificationApiPromise = import("@tauri-apps/plugin-notification").then((api) => api as TauriNotificationApi);
+    }
+    return this.notificationApiPromise;
   }
 }
 

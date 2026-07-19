@@ -145,6 +145,9 @@ pub enum ServiceEvent {
     /// Partial workbench update event.
     /// 局部工作台更新事件。
     WorkbenchDelta(Box<WorkbenchDeltaEnvelope>),
+    /// Fully settled conversation run lifecycle event.
+    /// 完全结束的会话运行生命周期事件。
+    ConversationRunSettled(Box<ConversationRunSettledEvent>),
     /// Session addon namespace change event.
     /// 会话附属状态命名空间变更事件。
     SessionAddonChanged(Box<SessionAddonChangedEvent>),

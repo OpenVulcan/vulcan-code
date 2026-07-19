@@ -9,6 +9,7 @@ import {
   Route,
   Image,
   Music,
+  Bell,
   RefreshCw,
   RotateCw,
   ScrollText,
@@ -137,6 +138,7 @@ export function settingsSubAreaGroups(t: ReturnType<typeof useI18n>["t"]): Setti
       items: [
         { id: "mcp-servers", label: t("settings.mcpServers"), icon: <FolderTree size={16} />, description: t("settings.mcpServers.description") },
         { id: "runtime-diagnostics", label: t("settings.runtimeDiagnostics"), icon: <RefreshCw size={16} />, description: t("settings.runtimeDiagnostics.description") },
+        { id: "notifications", label: t("settings.notifications"), icon: <Bell size={16} />, description: t("settings.notifications.description") },
         { id: "git-commit", label: t("settings.gitCommit"), icon: <GitCommitHorizontal size={16} />, description: t("settings.gitCommit.description") },
         { id: "prompt-composer", label: t("settings.promptComposer"), icon: <FileText size={16} />, description: t("settings.promptComposer.description") },
         { id: "about-licenses", label: t("settings.aboutLicenses"), icon: <ScrollText size={16} />, description: t("settings.aboutLicenses.description") },

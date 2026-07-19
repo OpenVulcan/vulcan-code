@@ -6,6 +6,33 @@ export type LocaleCode = "zh-CN" | "en-US"
 // TranslationKey 描述当前在外壳层支持本地化的文本键。
 export type TranslationKey =
   | "app.subtitle"
+  | "notifications.appTitle"
+  | "notifications.completed.generic"
+  | "notifications.completed.withTitle"
+  | "notifications.failed.generic"
+  | "notifications.failed.withTitle"
+  | "settings.notifications"
+  | "settings.notifications.description"
+  | "settings.notifications.supported"
+  | "settings.notifications.unsupported"
+  | "settings.notifications.localChannel"
+  | "settings.notifications.localChannel.description"
+  | "settings.notifications.permission"
+  | "settings.notifications.permission.unsupported"
+  | "settings.notifications.permission.default"
+  | "settings.notifications.permission.granted"
+  | "settings.notifications.permission.denied"
+  | "settings.notifications.requestPermission"
+  | "settings.notifications.requesting"
+  | "settings.notifications.categories"
+  | "settings.notifications.completed"
+  | "settings.notifications.failed"
+  | "settings.notifications.privacy"
+  | "settings.notifications.privacy.description"
+  | "settings.notifications.showTitle"
+  | "settings.notifications.limitations"
+  | "settings.notifications.browserLimitation"
+  | "settings.notifications.desktopLimitation"
   | "app.serviceConnectionRestored"
   | "app.serviceReconnecting"
   | "app.serviceCheckingRecovery"
@@ -1296,6 +1323,33 @@ export type TranslationKey =
 export const translations: Record<LocaleCode, Record<TranslationKey, string>> = {
   "zh-CN": {
     "app.subtitle": "Ai Coding",
+    "notifications.appTitle": "Vulcan Code",
+    "notifications.completed.generic": "会话已完成",
+    "notifications.completed.withTitle": "会话“{conversationTitle}”已完成",
+    "notifications.failed.generic": "会话执行失败",
+    "notifications.failed.withTitle": "会话“{conversationTitle}”执行失败",
+    "settings.notifications": "通知",
+    "settings.notifications.description": "管理当前客户端的会话完成通知、权限与隐私。",
+    "settings.notifications.supported": "当前壳支持",
+    "settings.notifications.unsupported": "当前壳不支持",
+    "settings.notifications.localChannel": "本地系统通知",
+    "settings.notifications.localChannel.description": "只影响当前浏览器或桌面客户端，不会同步到账号或其他设备。",
+    "settings.notifications.permission": "权限",
+    "settings.notifications.permission.unsupported": "不支持",
+    "settings.notifications.permission.default": "尚未授权",
+    "settings.notifications.permission.granted": "已授权",
+    "settings.notifications.permission.denied": "已拒绝",
+    "settings.notifications.requestPermission": "请求通知权限",
+    "settings.notifications.requesting": "正在请求…",
+    "settings.notifications.categories": "通知类别",
+    "settings.notifications.completed": "会话成功完成",
+    "settings.notifications.failed": "会话执行失败",
+    "settings.notifications.privacy": "通知隐私",
+    "settings.notifications.privacy.description": "通知不会展示模型回答正文。会话标题可能出现在锁屏界面。",
+    "settings.notifications.showTitle": "在通知中显示会话标题",
+    "settings.notifications.limitations": "能力边界",
+    "settings.notifications.browserLimitation": "浏览器页面关闭后无法继续接收本地服务事件；后台推送需要未来的 Service Worker 或远程推送端点。",
+    "settings.notifications.desktopLimitation": "系统通知身份、图标和勿扰模式由已安装应用与操作系统控制。",
     "app.serviceConnectionRestored": "本地服务连接已恢复。",
     "app.serviceReconnecting": "本地服务连接已断开，正在重连...",
     "app.serviceCheckingRecovery": "本地服务连接已断开，正在检测恢复...",
@@ -2583,6 +2637,33 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
   },
   "en-US": {
     "app.subtitle": "Ai Coding",
+    "notifications.appTitle": "Vulcan Code",
+    "notifications.completed.generic": "Conversation completed",
+    "notifications.completed.withTitle": "Conversation “{conversationTitle}” completed",
+    "notifications.failed.generic": "Conversation failed",
+    "notifications.failed.withTitle": "Conversation “{conversationTitle}” failed",
+    "settings.notifications": "Notifications",
+    "settings.notifications.description": "Manage conversation completion notifications, permission, and privacy for this client.",
+    "settings.notifications.supported": "Supported by this shell",
+    "settings.notifications.unsupported": "Unsupported by this shell",
+    "settings.notifications.localChannel": "Local system notifications",
+    "settings.notifications.localChannel.description": "Applies only to this browser or desktop client and is not synchronized to your account or other devices.",
+    "settings.notifications.permission": "Permission",
+    "settings.notifications.permission.unsupported": "Unsupported",
+    "settings.notifications.permission.default": "Not authorized",
+    "settings.notifications.permission.granted": "Granted",
+    "settings.notifications.permission.denied": "Denied",
+    "settings.notifications.requestPermission": "Request notification permission",
+    "settings.notifications.requesting": "Requesting…",
+    "settings.notifications.categories": "Notification categories",
+    "settings.notifications.completed": "Conversation completed successfully",
+    "settings.notifications.failed": "Conversation execution failed",
+    "settings.notifications.privacy": "Notification privacy",
+    "settings.notifications.privacy.description": "Notifications never include model response content. Conversation titles may appear on the lock screen.",
+    "settings.notifications.showTitle": "Show conversation titles in notifications",
+    "settings.notifications.limitations": "Capability boundaries",
+    "settings.notifications.browserLimitation": "A closed browser page cannot receive local service events; background delivery requires a future Service Worker or remote endpoint.",
+    "settings.notifications.desktopLimitation": "Notification identity, icons, and do-not-disturb behavior are controlled by the installed application and operating system.",
     "app.serviceConnectionRestored": "Local service connection restored.",
     "app.serviceReconnecting": "Local service connection lost. Reconnecting...",
     "app.serviceCheckingRecovery": "Local service connection lost. Checking recovery...",

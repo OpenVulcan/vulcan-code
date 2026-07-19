@@ -216,6 +216,18 @@ pub(super) async fn handle_finished_stream_event(
         finished_session_id,
     )
     .await;
+    if let Some(apply) = final_report_apply.as_ref()
+        && let Some(event) = conversation_run_settled_event_from_terminal_facts(
+            finished_session_id,
+            owning_project_id_for_session(&apply.workspace_snapshot, finished_session_id),
+            active_stream_task_id,
+            apply.conversation_run_outcome,
+            started_next_prompt,
+            current_unix_millis_text(),
+        )
+    {
+        app.emit(ServiceEvent::ConversationRunSettled(Box::new(event)));
+    }
     // A completion request exists only when terminal memory projection opened a completed-turn hook.
     // 仅当终态内存投影打开完成回合 Hook 时才存在完成请求。
     if let Some(completion_request) = final_report_apply
@@ -251,6 +263,55 @@ pub(super) async fn handle_finished_stream_event(
         );
     }
     FinishedStreamEventOutcome::Handled
+}
+
+/// Builds a settled lifecycle event only from terminal facts that close the visible conversation run.
+/// 仅根据闭合可见会话运行的终态事实构建最终结束生命周期事件。
+///
+/// # Parameters
+/// # 参数
+/// `conversation_id` identifies the regular conversation whose report was accepted.
+/// `conversation_id` 标识终态报告已被接纳的普通会话。
+/// `project_id` is the owning project resolved from the accepted workspace projection.
+/// `project_id` 是从已接纳工作区投影解析出的所属项目。
+/// `active_stream_task_id` is the exact stream identity that owned terminal side effects.
+/// `active_stream_task_id` 是持有终态副作用的精确流身份。
+/// `outcome` exists only when the completion gate declared the logical turn final.
+/// `outcome` 仅在完成闸门声明逻辑回合最终结束时存在。
+/// `started_next_prompt` indicates whether mailbox, queue, or goal continuation started another turn.
+/// `started_next_prompt` 表示 mailbox、队列或目标续跑是否启动了另一回合。
+/// `occurred_at` is the service timestamp captured for the emitted event.
+/// `occurred_at` 是为发出事件捕获的服务时间戳。
+///
+/// # Returns
+/// # 返回值
+/// A deterministic lifecycle event for final idle settlement, otherwise `None`.
+/// 最终空闲结束时返回确定性生命周期事件，否则返回 `None`。
+fn conversation_run_settled_event_from_terminal_facts(
+    conversation_id: SessionId,
+    project_id: Option<String>,
+    active_stream_task_id: Uuid,
+    outcome: Option<vulcan_service_api::ConversationRunOutcome>,
+    started_next_prompt: bool,
+    occurred_at: String,
+) -> Option<ConversationRunSettledEvent> {
+    if started_next_prompt {
+        return None;
+    }
+    // outcome is the finality proof produced by the authoritative completion gate.
+    // outcome 是权威完成闸门产生的最终性证明。
+    let outcome = outcome?;
+    // run_id is the exact stream UUID registered before execution began.
+    // run_id 是执行开始前注册的精确流 UUID。
+    let run_id = active_stream_task_id.to_string();
+    Some(ConversationRunSettledEvent {
+        event_id: format!("{conversation_id}:{run_id}:settled"),
+        conversation_id: conversation_id.to_string(),
+        project_id,
+        run_id,
+        outcome,
+        occurred_at,
+    })
 }
 
 /// Maps report error presence to the session-kernel terminal status.
@@ -299,5 +360,105 @@ mod tests {
             finished_turn_terminal_status(true),
             TurnTerminalStatus::Failed
         ));
+    }
+
+    /// Verifies completed and failed outcomes produce distinct deterministic lifecycle events.
+    /// 验证完成与失败结果会产生不同且确定的生命周期事件。
+    ///
+    /// # Parameters
+    /// # 参数
+    /// This test has no parameters.
+    /// 此测试没有参数。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// This test returns no value and fails through assertions.
+    /// 此测试无返回值，并通过断言报告失败。
+    #[test]
+    fn final_idle_terminal_facts_build_deterministic_settlement_events() {
+        // conversation_id identifies the exact regular session under test.
+        // conversation_id 标识本测试中的精确普通会话。
+        let conversation_id = SessionId::new_v4();
+        // run_id identifies one exact stream generation for deterministic event ids.
+        // run_id 标识一个精确流代次，用于生成确定性事件标识。
+        let run_id = Uuid::new_v4();
+        // completed is the event derived from a final successful report.
+        // completed 是从最终成功报告派生的事件。
+        let completed = conversation_run_settled_event_from_terminal_facts(
+            conversation_id,
+            Some(String::from("project-a")),
+            run_id,
+            Some(vulcan_service_api::ConversationRunOutcome::Completed),
+            false,
+            String::from("1000"),
+        )
+        .expect("final successful run should settle");
+        // failed is the event derived from the same exact run identity with a failure result.
+        // failed 是使用相同精确运行身份与失败结果派生的事件。
+        let failed = conversation_run_settled_event_from_terminal_facts(
+            conversation_id,
+            Some(String::from("project-a")),
+            run_id,
+            Some(vulcan_service_api::ConversationRunOutcome::Failed),
+            false,
+            String::from("1000"),
+        )
+        .expect("final failed run should settle");
+        assert_eq!(completed.event_id, failed.event_id);
+        assert_eq!(completed.run_id, run_id.to_string());
+        assert_eq!(completed.conversation_id, conversation_id.to_string());
+        assert_eq!(completed.project_id.as_deref(), Some("project-a"));
+        assert_eq!(
+            completed.outcome,
+            vulcan_service_api::ConversationRunOutcome::Completed
+        );
+        assert_eq!(
+            failed.outcome,
+            vulcan_service_api::ConversationRunOutcome::Failed
+        );
+    }
+
+    /// Verifies pending child work and immediate chained turns suppress settlement events.
+    /// 验证待处理子工作与立即链式回合会抑制最终结束事件。
+    ///
+    /// # Parameters
+    /// # 参数
+    /// This test has no parameters.
+    /// 此测试没有参数。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// This test returns no value and fails through assertions.
+    /// 此测试无返回值，并通过断言报告失败。
+    #[test]
+    fn unfinished_or_chained_terminal_facts_do_not_build_settlement_events() {
+        // conversation_id identifies the exact regular session under test.
+        // conversation_id 标识本测试中的精确普通会话。
+        let conversation_id = SessionId::new_v4();
+        // run_id identifies the exact owned stream generation.
+        // run_id 标识精确持有的流代次。
+        let run_id = Uuid::new_v4();
+        assert!(
+            conversation_run_settled_event_from_terminal_facts(
+                conversation_id,
+                None,
+                run_id,
+                None,
+                false,
+                String::from("1000"),
+            )
+            .is_none()
+        );
+        assert!(
+            conversation_run_settled_event_from_terminal_facts(
+                conversation_id,
+                None,
+                run_id,
+                Some(vulcan_service_api::ConversationRunOutcome::Completed),
+                true,
+                String::from("1000"),
+            )
+            .is_none()
+        );
     }
 }

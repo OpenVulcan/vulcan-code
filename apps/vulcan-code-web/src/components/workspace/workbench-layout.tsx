@@ -63,6 +63,12 @@ import type {
 } from "@/components/features/memory/MemoryArea";
 import { cn } from "@/lib/utils";
 import { useI18n, type LocaleCode, type TranslationKey } from "@/i18n";
+import { notificationCoordinator } from "@/notifications/coordinator";
+import {
+  resetNotificationPresentationContext,
+  setNotificationPresentationContext,
+} from "@/notifications/presentation-context";
+import type { NotificationPresentationContext } from "@/notifications/types";
 import type {
   AgentSkillsCatalogUpdate,
   ComposerSlashCommandSummary,
@@ -251,6 +257,22 @@ export function WorkbenchLayout(props: {
   // activeArea stores the currently selected feature area.
   // activeArea 保存当前选中的功能区域。
   const [activeArea, setActiveArea] = React.useState<MainAreaId>("chat");
+  // handleNotificationPresentationContextChange publishes the exact child workspace surface.
+  // handleNotificationPresentationContextChange 发布精确的子工作区界面。
+  const handleNotificationPresentationContextChange = React.useCallback(
+    (context: NotificationPresentationContext) => {
+      setNotificationPresentationContext(context);
+    },
+    [],
+  );
+  React.useEffect(() => {
+    if (activeArea !== "chat") {
+      resetNotificationPresentationContext();
+    }
+    return () => {
+      resetNotificationPresentationContext();
+    };
+  }, [activeArea]);
   // navigationSidebarOpen preserves sidebar collapse state across workspace and settings shells.
   // navigationSidebarOpen 在工作台与设置外壳之间保留侧栏折叠状态。
   const [navigationSidebarOpen, setNavigationSidebarOpen] = React.useState(true);
@@ -1076,6 +1098,15 @@ export function WorkbenchLayout(props: {
       });
   }, [handleOpenWorkspaceChat]);
 
+  React.useEffect(() => {
+    notificationCoordinator.setRouteHandler((route) => {
+      handleSelectConversation(route.conversationId);
+    });
+    return () => {
+      notificationCoordinator.setRouteHandler(null);
+    };
+  }, [handleSelectConversation]);
+
   // handleRenameConfirm commits the current rename dialog value.
   // handleRenameConfirm 提交当前重命名对话框值。
   const handleRenameConfirm = React.useCallback(async (target: RenameTarget, name: string) => {
@@ -1592,6 +1623,7 @@ export function WorkbenchLayout(props: {
             selectedDraftConversation={selectedDraftConversation}
             selectedConversation={selectedConversation}
             selectedConversationId={selectedConversationId}
+            onNotificationPresentationContextChange={handleNotificationPresentationContextChange}
             chromeActions={shellChromeActions}
             titlebarDragRegion={showWindowControls}
             onTitlebarDoubleClick={handleTitlebarDoubleClick}

@@ -80,6 +80,7 @@ pub fn run() {
     let managed_state = Arc::clone(&state);
     let shutdown_state = Arc::clone(&state);
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .manage(state)
         .on_window_event(move |_window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. })

@@ -1,5 +1,44 @@
 use super::*;
 
+/// Identifies the terminal outcome of one fully settled conversation run.
+/// 标识一次完全结束的会话运行终态结果。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum ConversationRunOutcome {
+    /// The conversation run completed successfully.
+    /// 会话运行已成功完成。
+    Completed,
+    /// The conversation run ended with an execution failure.
+    /// 会话运行因执行失败而结束。
+    Failed,
+}
+
+/// Describes one platform-neutral conversation run settlement event.
+/// 描述一个与平台无关的会话运行最终结束事件。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationRunSettledEvent {
+    /// Stable event identifier used by clients for idempotent consumption.
+    /// 客户端用于幂等消费的稳定事件标识。
+    pub event_id: String,
+    /// Conversation identifier owning the settled run.
+    /// 拥有本次终态运行的会话标识。
+    pub conversation_id: String,
+    /// Optional project identifier resolved from the authoritative workspace projection.
+    /// 从权威工作区投影解析出的可选项目标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    /// Exact stream task identifier that owned the terminal report.
+    /// 持有终态报告的精确流任务标识。
+    pub run_id: String,
+    /// Strict terminal result of the settled run.
+    /// 本次终态运行的严格结果。
+    pub outcome: ConversationRunOutcome,
+    /// Unix-millisecond timestamp text captured when settlement was emitted.
+    /// 发出终态事件时捕获的 Unix 毫秒时间戳文本。
+    pub occurred_at: String,
+}
+
 /// Summarizes one conversation in the WebUI sidebar.
 /// 汇总 WebUI 侧栏中的单个会话。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]

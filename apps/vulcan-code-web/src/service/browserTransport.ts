@@ -1,4 +1,5 @@
 import type {
+  ConversationRunSettledEvent,
   PluginUiInvalidatedEvent,
   SessionAddonChangedEvent,
   StartupSnapshot,
@@ -56,6 +57,7 @@ type BrowserServiceEvent =
   | { kind: "startup"; payload: StartupSnapshot }
   | { kind: "workbench"; payload: WorkbenchSnapshot }
   | { kind: "workbenchDelta"; payload: WorkbenchDeltaEnvelope }
+  | { kind: "conversationRunSettled"; payload: ConversationRunSettledEvent }
   | { kind: "sessionAddonChanged"; payload: SessionAddonChangedEvent }
   | { kind: "pluginUiInvalidated"; payload: PluginUiInvalidatedEvent };
 
@@ -65,6 +67,7 @@ const EVENT_KIND_TO_TOPIC: Record<BrowserServiceEvent["kind"], string> = {
   startup: "startup",
   workbench: "workbench",
   workbenchDelta: "workbench.delta",
+  conversationRunSettled: "conversation.run.settled",
   sessionAddonChanged: "session.addon.changed",
   pluginUiInvalidated: "plugin.ui.invalidated",
 };

@@ -1,6 +1,94 @@
+// ShellKind identifies the client host without coupling business events to an operating system.
+// ShellKind 标识客户端宿主，且不把业务事件耦合到操作系统。
+export type ShellKind = "browser" | "tauri" | "mobile";
+
+// ShellNotificationPermission normalizes notification authorization across client hosts.
+// ShellNotificationPermission 统一不同客户端宿主的通知授权状态。
+export type ShellNotificationPermission = "unsupported" | "default" | "granted" | "denied";
+
+// ShellNotificationCapability describes local notification support in one host.
+// ShellNotificationCapability 描述单个宿主中的本地通知支持能力。
+export interface ShellNotificationCapability {
+  // shellKind identifies the current client host.
+  // shellKind 标识当前客户端宿主。
+  shellKind: ShellKind;
+  // supported indicates whether local system notifications are available.
+  // supported 表示本地系统通知是否可用。
+  supported: boolean;
+  // activationSupported indicates whether notification clicks can be observed.
+  // activationSupported 表示是否可以观察通知点击。
+  activationSupported: boolean;
+}
+
+// ShellNotificationPresentationState contains current host focus and visibility facts.
+// ShellNotificationPresentationState 包含当前宿主焦点与可见性事实。
+export interface ShellNotificationPresentationState {
+  // foreground indicates that the host surface is visible and not minimized.
+  // foreground 表示宿主界面可见且未最小化。
+  foreground: boolean;
+  // focused indicates that the host window receives keyboard interaction.
+  // focused 表示宿主窗口正在接收键盘交互。
+  focused: boolean;
+  // visible indicates that the host surface is currently visible.
+  // visible 表示宿主界面当前可见。
+  visible: boolean;
+}
+
+// ShellNotificationRequest contains presentation-only data accepted by local shells.
+// ShellNotificationRequest 包含本地壳接收的纯展示数据。
+export interface ShellNotificationRequest {
+  // id correlates optional activation events with the originating intent.
+  // id 将可选激活事件与来源意图关联。
+  id: string;
+  // title is the localized notification title.
+  // title 是本地化通知标题。
+  title: string;
+  // body is the localized notification body.
+  // body 是本地化通知正文。
+  body: string;
+}
+
+// ShellNotificationActivation describes a local notification click when supported.
+// ShellNotificationActivation 描述支持时的本地通知点击。
+export interface ShellNotificationActivation {
+  // notificationId identifies the displayed notification request.
+  // notificationId 标识已展示的通知请求。
+  notificationId: string;
+}
+
 // ShellClient describes client-host capabilities that are not Core business RPC.
 // ShellClient 描述不属于 Core 业务 RPC 的客户端宿主能力。
 export interface ShellClient {
+  // Returns local notification capability metadata for this host.
+  // 返回当前宿主的本地通知能力元数据。
+  getNotificationCapability(): ShellNotificationCapability;
+
+  // Returns current local notification permission without prompting the user.
+  // 返回当前本地通知权限，且不提示用户。
+  getNotificationPermission(): Promise<ShellNotificationPermission>;
+
+  // Requests local notification permission from an explicit user action.
+  // 通过明确用户操作请求本地通知权限。
+  requestNotificationPermission(): Promise<ShellNotificationPermission>;
+
+  // Returns current host foreground, focus, and visibility state.
+  // 返回当前宿主的前台、焦点与可见性状态。
+  getNotificationPresentationState(): Promise<ShellNotificationPresentationState>;
+
+  // Subscribes to host focus or visibility changes.
+  // 订阅宿主焦点或可见性变化。
+  subscribeNotificationPresentationChange(handler: () => void): Promise<() => void>;
+
+  // Shows one localized local notification.
+  // 展示一条已本地化的本地通知。
+  showLocalNotification(request: ShellNotificationRequest): Promise<void>;
+
+  // Optionally subscribes to local notification activation events.
+  // 可选订阅本地通知激活事件。
+  subscribeNotificationActivation?: (
+    handler: (activation: ShellNotificationActivation) => void,
+  ) => Promise<() => void>;
+
   // Returns whether native window controls are available in this host.
   // 返回当前宿主是否支持原生窗口控制。
   supportsWindowControls(): boolean;

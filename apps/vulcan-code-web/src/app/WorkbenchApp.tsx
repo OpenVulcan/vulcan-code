@@ -11,6 +11,8 @@ import {
 } from "@/components/workspace/workbench-layout";
 import { I18nProvider, normalizeLocaleCode } from "@/i18n";
 import { translations, type LocaleCode, type TranslationKey } from "@/i18n-messages";
+import { notificationCoordinator } from "@/notifications/coordinator";
+import type { NotificationIntentV1, NotificationText } from "@/notifications/types";
 import {
   BROWSER_SERVICE_CONNECTION_EVENT,
   type BrowserServiceConnectionDetail,
@@ -27,6 +29,7 @@ import {
 import { coalesceWorkbenchDeltaEnvelopes } from "@/state/workbench-state";
 import type {
   StartupSnapshot,
+  ConversationRunSettledEvent,
   WorkbenchDeltaEnvelope,
   WorkbenchSnapshot,
 } from "@/types";
@@ -54,6 +57,9 @@ export function WorkbenchApp(props: {
   // workbench stores the latest workbench snapshot.
   // workbench 保存最近一次工作台快照。
   const [workbench, setWorkbench] = React.useState<WorkbenchSnapshot | null>(null);
+  // workbenchRef exposes the latest authoritative conversation titles to service event callbacks.
+  // workbenchRef 向服务事件回调暴露最近的权威会话标题。
+  const workbenchRef = React.useRef<WorkbenchSnapshot | null>(null);
   // workbenchDelta stores the latest partial workbench update signal.
   // workbenchDelta 保存最近一次局部工作台更新信号。
   const [workbenchDelta, setWorkbenchDelta] = React.useState<WorkbenchDeltaSignal | null>(null);
@@ -94,6 +100,16 @@ export function WorkbenchApp(props: {
   React.useEffect(() => {
     appLocaleRef.current = webuiAppLocale(workbench?.uiLocale ?? startup.uiLocale);
   }, [startup.uiLocale, workbench?.uiLocale]);
+
+  React.useEffect(() => {
+    workbenchRef.current = workbench;
+  }, [workbench]);
+
+  React.useEffect(() => {
+    void notificationCoordinator.start().catch((startError) => {
+      console.warn("Notification activation subscription failed.", startError);
+    });
+  }, []);
 
   React.useEffect(() => {
     // handleConnectionStatusChange maps transport-level connection changes to user-visible toasts.
@@ -317,6 +333,7 @@ export function WorkbenchApp(props: {
           workbenchSnapshotSeqRef.current += 1;
           workbenchRevisionRef.current = Math.max(workbenchRevisionRef.current, nextWorkbench.revision ?? 0);
           setWorkbench(nextWorkbench);
+          workbenchRef.current = nextWorkbench;
         }
         if (hasServiceRuntime()) {
           const subscriptions = await Promise.all([
@@ -340,6 +357,7 @@ export function WorkbenchApp(props: {
                 workbenchRevisionRef.current = revision;
                 workbenchSnapshotSeqRef.current += 1;
                 setWorkbench(payload);
+                workbenchRef.current = payload;
                 drainContiguousDeltas();
               }
             }),
@@ -348,6 +366,22 @@ export function WorkbenchApp(props: {
                 return;
               }
               enqueueWorkbenchDelta(payload);
+            }),
+            serviceClient.subscribe<ConversationRunSettledEvent>("conversation.run.settled", (payload) => {
+              if (cancelled) {
+                return;
+              }
+              // conversation is resolved from the latest accepted workbench projection by the event's exact id.
+              // conversation 通过事件精确标识从最近接纳的工作台投影中解析。
+              const conversation = workbenchRef.current?.conversations.find((item) => item.id === payload.conversationId);
+              // title is optional because a lifecycle event may arrive after the sidebar row was archived.
+              // title 可选，因为生命周期事件可能在侧栏行归档后到达。
+              const title = conversation?.title ?? null;
+              void notificationCoordinator.handleConversationRunSettled(
+                payload,
+                title,
+                (intent) => resolveNotificationText(appLocaleRef.current, intent),
+              );
             }),
           ]);
           if (cancelled) {
@@ -422,4 +456,35 @@ function webuiAppLocale(value: string | null | undefined): LocaleCode {
 // webuiAppTranslation 在 i18n provider 外读取单个本地化应用外壳文案。
 function webuiAppTranslation(locale: LocaleCode, key: TranslationKey): string {
   return translations[locale][key] ?? translations["zh-CN"][key];
+}
+
+// resolveNotificationText localizes one platform-neutral intent immediately before shell delivery.
+// resolveNotificationText 在壳投递前即时本地化一个与平台无关的意图。
+function resolveNotificationText(locale: LocaleCode, intent: NotificationIntentV1): NotificationText {
+  // genericKey selects the outcome-specific message without private title data.
+  // genericKey 选择不含私密标题数据的结果文案。
+  const genericKey: TranslationKey = intent.localizationKey === "notifications.completed"
+    ? "notifications.completed.generic"
+    : "notifications.failed.generic";
+  if (intent.privacyLevel === "generic") {
+    return {
+      title: webuiAppTranslation(locale, "notifications.appTitle"),
+      body: webuiAppTranslation(locale, genericKey),
+    };
+  }
+  // conversationTitle is required by the conversation_title intent contract.
+  // conversationTitle 由 conversation_title 意图契约强制要求。
+  const conversationTitle = intent.localizationArgs.conversationTitle;
+  if (typeof conversationTitle !== "string" || conversationTitle.length === 0) {
+    throw new Error("Conversation-title notification intent is missing conversationTitle.");
+  }
+  // titleKey selects the outcome-specific template that accepts the verified title argument.
+  // titleKey 选择接收已验证标题参数的结果文案模板。
+  const titleKey: TranslationKey = intent.localizationKey === "notifications.completed"
+    ? "notifications.completed.withTitle"
+    : "notifications.failed.withTitle";
+  return {
+    title: webuiAppTranslation(locale, "notifications.appTitle"),
+    body: webuiAppTranslation(locale, titleKey).replace("{conversationTitle}", conversationTitle),
+  };
 }

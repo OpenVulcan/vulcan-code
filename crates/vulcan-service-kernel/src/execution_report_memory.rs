@@ -9,7 +9,7 @@ use vulcan_agent_runtime::{
     conversation_protocol::SessionConversationState,
 };
 use vulcan_core::types::ProviderUsageSnapshot;
-use vulcan_service_api::ServiceEventEmitter;
+use vulcan_service_api::{ConversationRunOutcome, ServiceEventEmitter};
 use vulcan_workbench_model::{SessionId, SessionRunPhase, SessionRuntimeStateEntry, SessionState};
 use vulcan_workspace_store::{
     data_plane::ControllerRuntimeHandle, workspace_store::WorkspaceSnapshot,
@@ -152,6 +152,9 @@ pub(super) struct TerminalReportMemoryApply {
     /// Completed-turn hook request that should run asynchronously.
     /// 需要异步执行的完成回合 hook 请求。
     pub(super) completion_request: Option<ConversationCompletionRequest>,
+    /// Final conversation outcome when this report closes a regular user-facing turn.
+    /// 当本报告闭合普通用户会话回合时的最终会话结果。
+    pub(super) conversation_run_outcome: Option<ConversationRunOutcome>,
 }
 
 /// Exact conversation-hook side effect committed for one terminal report.
@@ -345,6 +348,7 @@ pub(super) fn apply_task_session_execution_report_to_memory(
     Ok(TerminalReportMemoryApply {
         workspace_snapshot,
         completion_request: None,
+        conversation_run_outcome: None,
     })
 }
 
@@ -692,9 +696,21 @@ pub(super) fn apply_execution_report_to_memory(
                 .unwrap_or(0)
         ),
     );
+    // conversation_run_outcome crosses the service boundary only for a genuinely final main-session turn.
+    // conversation_run_outcome 仅在主会话回合真正结束时跨越服务边界。
+    let conversation_run_outcome =
+        completion_gate
+            .completion_status()
+            .is_final()
+            .then_some(if report.error.is_some() {
+                ConversationRunOutcome::Failed
+            } else {
+                ConversationRunOutcome::Completed
+            });
     Ok(TerminalReportMemoryApply {
         workspace_snapshot,
         completion_request,
+        conversation_run_outcome,
     })
 }
 

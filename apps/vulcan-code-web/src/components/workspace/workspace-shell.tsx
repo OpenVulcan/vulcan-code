@@ -278,6 +278,43 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // effectiveRightPanelOpen suppresses stale right-panel state while a draft conversation is selected.
   // effectiveRightPanelOpen 在选中新建草稿会话时屏蔽残留的右侧面板状态。
   const effectiveRightPanelOpen = hasSelectedChatConversation && rightPanelOpen;
+  // activeContextTab is the exact right-panel tab currently rendered when the panel is visible.
+  // activeContextTab 是右侧面板可见时当前真实渲染的页签。
+  const activeContextTab = effectiveRightPanelOpen
+    ? contextTabState.tabs.find((tab) => tab.id === contextTabState.activeTabId) ?? null
+    : null;
+
+  React.useEffect(() => {
+    if (props.mainView !== "chat" || props.selectedDraftConversation !== null) {
+      props.onNotificationPresentationContextChange({
+        conversationViewActive: false,
+        visibleConversationId: null,
+      });
+      return;
+    }
+    if (activeContextTab?.kind === "subagent") {
+      // subagentTaskId is required by the subagent-tab construction contract; an invalid tab disables suppression.
+      // subagentTaskId 由子代理页签构造契约强制要求；无效页签会禁用抑制。
+      const subagentTaskId = activeContextTab.subagentTaskId;
+      props.onNotificationPresentationContextChange({
+        conversationViewActive: typeof subagentTaskId === "string" && subagentTaskId.length > 0,
+        visibleConversationId: typeof subagentTaskId === "string" && subagentTaskId.length > 0
+          ? subagentTaskId
+          : null,
+      });
+      return;
+    }
+    props.onNotificationPresentationContextChange({
+      conversationViewActive: props.selectedConversationId !== null,
+      visibleConversationId: props.selectedConversationId,
+    });
+  }, [
+    activeContextTab,
+    props.mainView,
+    props.onNotificationPresentationContextChange,
+    props.selectedConversationId,
+    props.selectedDraftConversation,
+  ]);
   React.useEffect(() => {
     setContextTabStateEntry({
       cacheKey: contextTabCacheKey,

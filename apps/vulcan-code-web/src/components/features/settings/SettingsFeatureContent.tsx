@@ -19,6 +19,7 @@ import {
   ProvidersArea,
 } from "@/components/features/settings/provider-list-settings";
 import { ProviderRetrySettingsArea } from "@/components/features/settings/provider-retry-settings";
+import { NotificationSettingsArea } from "@/components/features/settings/notification-settings-area";
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types";
 import {
   activeSettingsHeaderSummary,
@@ -134,6 +135,9 @@ export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
   }
   if (props.activeSettingsSubArea === "runtime-diagnostics") {
     return <LogsArea startup={props.startup} logs={props.workbench.logs} />;
+  }
+  if (props.activeSettingsSubArea === "notifications") {
+    return <NotificationSettingsArea />;
   }
   if (props.activeSettingsSubArea === "git-commit") {
     return <GitCommitSettingsArea actions={props.actions} workbench={props.workbench} />;
