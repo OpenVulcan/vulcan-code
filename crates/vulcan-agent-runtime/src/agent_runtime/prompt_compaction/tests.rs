@@ -34,6 +34,32 @@ fn test_plan(source_messages: Vec<vulcan_context::SessionMessageEntry>) -> Compa
     }
 }
 
+/// Verifies internal compaction requests cannot reapply dynamic VMM overlays to canonical source messages.
+/// 验证内部压缩请求不会把动态 VMM 覆盖层重新应用到规范来源消息。
+#[test]
+fn compaction_launch_request_excludes_dynamic_vmm_injection() {
+    let conversation_state = conversation_state_from_session_messages(&[test_message(
+        "user-1",
+        "canonical user content",
+    )])
+    .expect("canonical compaction source should replay");
+
+    let request = build_prompt_compaction_launch_request(
+        crate::model::SessionId::from_u128(1),
+        "session",
+        "D:/workspace",
+        ReasoningEffortLevel::Off,
+        PersistedAiToolConfiguration::default(),
+        conversation_state,
+        ContextCompactionRequestPromptMode::FullFidelityMerge,
+    );
+
+    assert!(request.context_injection.is_none());
+    assert!(request.provider_visible_agent_messages.is_empty());
+    assert_eq!(request.project_vmm, Default::default());
+    assert_eq!(request.session_vmm, Default::default());
+}
+
 /// Verifies the fast path uses the full cloned runtime conversation, not the planned source window.
 /// 验证快速路径使用完整克隆运行时会话，而不是计划源窗口。
 #[test]

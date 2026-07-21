@@ -91,6 +91,15 @@ pub struct VmmProfileSyncHookEffect {
     pub state: VmmProfileSyncState,
 }
 
+/// Typed VMM recall batch effect transported through hook metadata.
+/// 通过 hook metadata 传输的类型化 VMM 召回批次效果。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VmmRecallBatchHookEffect {
+    /// Authoritative structured recall batch returned by the built-in VMM hook.
+    /// 内置 VMM hook 返回的权威结构化召回批次。
+    pub batch: vulcan_vmm::VmmRecallBatch,
+}
+
 impl ConversationTimelineItem {
     /// Builds one timeline item.
     /// 构建一条 timeline 项。
@@ -123,6 +132,38 @@ pub fn vmm_profile_sync_effect_from_report(
         .next_back()
 }
 
+/// Extracts the latest typed VMM recall batch from one hook dispatch report.
+/// 从一次 hook 调度报告中提取最近一批类型化 VMM 召回结果。
+///
+/// # Parameters
+/// 参数
+/// `report` is the aggregated hook report whose metadata preserves hook ordering.
+/// `report` 是 metadata 保留 hook 顺序的聚合 hook 报告。
+///
+/// # Returns
+/// 返回值
+/// The unique typed VMM recall effect, absence, or an explicit malformed/ambiguous metadata error.
+/// 返回唯一类型化 VMM 召回效果、缺失结果，或明确的畸形/歧义 metadata 错误。
+pub fn vmm_recall_batch_effect_from_report(
+    report: &HookDispatchReport,
+) -> Result<Option<VmmRecallBatchHookEffect>, String> {
+    let Some(values) = report
+        .metadata
+        .get(super::HOOK_METADATA_VMM_RECALL_BATCH_EFFECT)
+    else {
+        return Ok(None);
+    };
+    let [value] = values.as_slice() else {
+        return Err(format!(
+            "VMM recall hook metadata requires exactly one typed effect, found {}.",
+            values.len()
+        ));
+    };
+    serde_json::from_value(value.clone())
+        .map(Some)
+        .map_err(|error| format!("Invalid typed VMM recall hook metadata: {error}"))
+}
+
 /// In-memory state for one logical user-to-assistant turn.
 /// 单个用户到助手逻辑回合的内存状态。
 #[derive(Debug, Clone)]
@@ -151,5 +192,48 @@ impl ActiveConversationTurn {
             timeline: Vec::new(),
             recorded_prompt_entry_ids: std::collections::BTreeSet::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod recall_effect_tests {
+    use super::*;
+
+    /// Builds one empty Hook report whose metadata can be populated by strict extraction tests.
+    /// 构建一份空 Hook 报告，供严格提取测试填充 metadata。
+    fn empty_report() -> HookDispatchReport {
+        HookDispatchReport::empty(HookPayload { value: json!({}) })
+    }
+
+    /// Verifies malformed reserved metadata is rejected instead of being mistaken for no recall.
+    /// 验证畸形保留 metadata 会被拒绝，而不会误判为无召回。
+    #[test]
+    fn malformed_recall_metadata_is_rejected() {
+        let mut report = empty_report();
+        report.metadata.insert(
+            HOOK_METADATA_VMM_RECALL_BATCH_EFFECT.to_string(),
+            vec![json!({"unexpected": true})],
+        );
+
+        let error = vmm_recall_batch_effect_from_report(&report)
+            .expect_err("malformed reserved metadata must fail closed");
+
+        assert!(error.contains("Invalid typed VMM recall hook metadata"));
+    }
+
+    /// Verifies duplicate reserved metadata is rejected as ambiguous ownership.
+    /// 验证重复保留 metadata 会因归属歧义而被拒绝。
+    #[test]
+    fn duplicate_recall_metadata_is_rejected() {
+        let mut report = empty_report();
+        report.metadata.insert(
+            HOOK_METADATA_VMM_RECALL_BATCH_EFFECT.to_string(),
+            vec![json!({"batch": {}}), json!({"batch": {}})],
+        );
+
+        let error = vmm_recall_batch_effect_from_report(&report)
+            .expect_err("duplicate reserved metadata must fail closed");
+
+        assert!(error.contains("exactly one typed effect"));
     }
 }

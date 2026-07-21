@@ -26,6 +26,9 @@ pub const HOOK_METADATA_VMM_WRITEBACK_EFFECTS: &str = "vmm_writeback_effects";
 /// Metadata key used by hooks to report VMM profile synchronization effects.
 /// hook 用于报告 VMM 画像同步副作用的 metadata 键。
 pub const HOOK_METADATA_VMM_PROFILE_SYNC_EFFECT: &str = "vmm_profile_sync_effect";
+/// Metadata key used by the built-in VMM precheck hook to return typed recall batches.
+/// 内置 VMM precheck hook 用于返回类型化召回批次的 metadata 键。
+pub const HOOK_METADATA_VMM_RECALL_BATCH_EFFECT: &str = "vmm_recall_batch_effect";
 
 /// Hook point fired before a user turn is sent to provider preparation.
 /// 在用户回合发送到 Provider 准备阶段前触发的 hook 点位。
@@ -84,7 +87,8 @@ pub use precheck::{ConversationPrecheckOutcome, ConversationPrecheckRequest};
 pub use runtime::ConversationHookRuntime;
 pub use types::{
     ConversationTimelineItem, ConversationTurnCompletionStatus, VmmProfileSyncHookEffect,
-    VmmWritebackHookEffect, vmm_profile_sync_effect_from_report,
+    VmmRecallBatchHookEffect, VmmWritebackHookEffect, vmm_profile_sync_effect_from_report,
+    vmm_recall_batch_effect_from_report,
 };
 
 use helpers::*;

@@ -238,6 +238,7 @@ mod subagent_workspace_mutation;
 mod task_mirror_status_projection;
 mod vmm;
 mod vmm_hooks;
+mod vmm_runtime_audit;
 mod webui_prompt_context;
 mod webui_prompt_lifecycle;
 mod webui_turn_chaining;
@@ -483,6 +484,7 @@ pub fn create_service_bridge_state(
         session_turn_admission_reservations: BTreeMap::new(),
         project_admission_reservations: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
+        session_vmm_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
     }))

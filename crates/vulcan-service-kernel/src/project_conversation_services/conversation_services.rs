@@ -297,6 +297,15 @@ pub(crate) async fn service_mark_conversation_read(
     };
 
     if let Some(runtime_state_update) = runtime_state_update {
+        // Advancing both runtime persistence lanes prevents queued snapshots from following this direct write.
+        // 同时推进两个运行态持久化通道，可阻止排队快照在本次直接写入后落盘。
+        invalidate_webui_session_persist_version(&state, session_id)?;
+        // persist_lock serializes this direct runtime/VMM checkpoint with every background writer.
+        // persist_lock 将本次直接运行态/VMM 检查点与全部后台写入者串行化。
+        let persist_lock = webui_workspace_persist_lock();
+        // persist_guard remains held until the coordinated checkpoint is fully durable.
+        // persist_guard 持有至协调检查点完全持久化。
+        let _persist_guard = persist_lock.lock().await;
         vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
             controller_runtime,
             session_id,

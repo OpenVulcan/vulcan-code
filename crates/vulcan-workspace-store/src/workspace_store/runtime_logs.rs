@@ -198,6 +198,30 @@ pub struct SessionRuntimeInjectionAppliedRecord<'a> {
     /// Folded baseline fingerprint after compaction when known.
     /// 已知的压缩后折叠基线指纹。
     pub merged_baseline_fingerprint: Option<String>,
+    /// Active VMM prompt-cache epoch when immutable anchors are present.
+    /// 存在不可变锚点时生效的 VMM 提示词缓存纪元。
+    pub cache_epoch_id: Option<String>,
+    /// Monotonic immutable-anchor revision inside the active VMM cache epoch.
+    /// 当前 VMM 缓存纪元内的单调不可变锚点修订号。
+    pub anchor_revision: Option<u64>,
+    /// Provider-context mutation classification used for continuation decisions.
+    /// continuation 决策使用的 Provider 上下文变更分类。
+    pub mutation_kind: Option<String>,
+    /// Stable VMM anchor identifiers included in the provider-facing request.
+    /// Provider 可见请求中包含的稳定 VMM 锚点标识。
+    pub vmm_anchor_ids: Vec<String>,
+    /// Bytes occupied by currently active VMM structured memory bodies.
+    /// 当前活动 VMM 结构化记忆正文占用的字节数。
+    pub active_memory_body_bytes: usize,
+    /// Estimated tokens occupied by active VMM structured memory bodies.
+    /// 活动 VMM 结构化记忆正文占用的估算 Token 数。
+    pub active_memory_estimated_tokens: usize,
+    /// Bytes held by immutable VMM anchors reclaimable at compaction.
+    /// 可在压缩时回收的不可变 VMM 锚点字节数。
+    pub reclaimable_anchor_bytes: usize,
+    /// Estimated tokens held by reclaimable immutable VMM anchors.
+    /// 可回收不可变 VMM 锚点占用的估算 Token 数。
+    pub reclaimable_anchor_estimated_tokens: usize,
     /// Event timestamp stored in runtime JSONL.
     /// 写入 runtime JSONL 的事件时间戳。
     pub timestamp: &'a str,
@@ -228,6 +252,14 @@ pub fn record_session_runtime_injection_applied(
         persistent_blocks,
         transient_prefix,
         merged_baseline_fingerprint,
+        cache_epoch_id,
+        anchor_revision,
+        mutation_kind,
+        vmm_anchor_ids,
+        active_memory_body_bytes,
+        active_memory_estimated_tokens,
+        reclaimable_anchor_bytes,
+        reclaimable_anchor_estimated_tokens,
         timestamp,
     } = request;
     let Some(session_dir) =
@@ -249,6 +281,14 @@ pub fn record_session_runtime_injection_applied(
             has_transient: transient_prefix.is_some_and(|prefix| !prefix.trim().is_empty()),
             merged_baseline_fingerprint,
             source_node_ids,
+            cache_epoch_id,
+            anchor_revision,
+            mutation_kind,
+            vmm_anchor_ids,
+            active_memory_body_bytes,
+            active_memory_estimated_tokens,
+            reclaimable_anchor_bytes,
+            reclaimable_anchor_estimated_tokens,
         },
     )
 }

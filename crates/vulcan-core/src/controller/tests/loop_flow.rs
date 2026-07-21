@@ -23,6 +23,7 @@ fn run_user_turn_executes_multi_turn_loop_and_refreshes_continuation() {
                     model_id: Some(String::from("mock-model")),
                     last_provider_message_id: Some(String::from("resp-1")),
                     updated_at: Some(String::from("1000")),
+                    ..ProviderContinuation::default()
                 }),
                 usage: None,
             },
@@ -37,6 +38,7 @@ fn run_user_turn_executes_multi_turn_loop_and_refreshes_continuation() {
                     model_id: Some(String::from("mock-model")),
                     last_provider_message_id: Some(String::from("resp-2")),
                     updated_at: Some(String::from("2000")),
+                    ..ProviderContinuation::default()
                 }),
                 usage: None,
             },
@@ -67,6 +69,14 @@ fn run_user_turn_executes_multi_turn_loop_and_refreshes_continuation() {
                 .as_deref(),
             Some("resp-2")
         );
+        assert_eq!(
+            controller
+                .snapshot()
+                .continuation
+                .last_local_message_id
+                .as_deref(),
+            result.final_assistant_message_id.as_deref()
+        );
         assert_eq!(executor.executed_requests().len(), 1);
 
         let built_requests = adapter.built_requests();
@@ -79,6 +89,13 @@ fn run_user_turn_executes_multi_turn_loop_and_refreshes_continuation() {
                 .last_provider_message_id
                 .as_deref(),
             Some("resp-1")
+        );
+        assert_eq!(
+            built_requests[1]
+                .continuation
+                .last_local_message_id
+                .as_deref(),
+            Some(controller.snapshot().messages[1].id.as_str())
         );
 
         assert!(matches!(
@@ -108,6 +125,46 @@ fn run_user_turn_executes_multi_turn_loop_and_refreshes_continuation() {
                     == Some(2)
         }));
     });
+}
+
+/// Clears a stale provider continuation when the latest response does not expose a reusable cursor.
+/// 当最新响应未提供可复用游标时，清除陈旧的 Provider continuation。
+#[test]
+fn refresh_continuation_clears_stale_cursor_when_response_has_none() {
+    let mut controller = VulcanCoreController::new(
+        build_test_config(2),
+        ConversationSnapshot {
+            continuation: ProviderContinuation {
+                provider_id: Some(String::from("mock-openai")),
+                model_id: Some(String::from("mock-model")),
+                last_provider_message_id: Some(String::from("resp-stale")),
+                last_local_message_id: Some(String::from("assistant-stale")),
+                updated_at: Some(String::from("1000")),
+                ..ProviderContinuation::default()
+            },
+            ..ConversationSnapshot::default()
+        },
+    )
+    .expect("valid core conversation snapshot");
+    controller.refresh_continuation(
+        &ProviderTurnResponse {
+            assistant_text: String::from("最新响应未返回 continuation 游标。"),
+            assistant_reasoning: String::new(),
+            provider_message_id: None,
+            provider_message_state: None,
+            tool_calls: Vec::new(),
+            continuation: None,
+            usage: None,
+        },
+        "assistant-new",
+    );
+
+    let continuation = &controller.snapshot().continuation;
+    assert!(continuation.provider_id.is_none());
+    assert!(continuation.model_id.is_none());
+    assert!(continuation.last_provider_message_id.is_none());
+    assert!(continuation.last_local_message_id.is_none());
+    assert!(continuation.updated_at.is_none());
 }
 
 /// Reuses the host-preseeded latest user prompt during streaming execution so the canonical snapshot does not duplicate one turn boundary.

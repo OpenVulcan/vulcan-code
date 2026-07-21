@@ -402,6 +402,10 @@ mod tests {
                 provider_id: Some(String::from("openai")),
                 model_id: Some(String::from("gpt-test")),
                 last_provider_message_id: Some(String::from("resp-prev")),
+                last_local_message_id: Some(String::from("assistant-1")),
+                context_cache_epoch_id: None,
+                context_anchor_revision: None,
+                context_rewrite_fingerprint: None,
                 updated_at: Some(String::from("100")),
             },
         }

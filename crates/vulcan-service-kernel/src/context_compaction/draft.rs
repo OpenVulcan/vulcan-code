@@ -284,18 +284,18 @@ pub(crate) const AUTO_COMPACTION_CONTINUATION_PREFIX: &str =
 ///
 /// # Returns
 /// 返回值
-/// Returns success after an optional atomic append, or the exact synthetic-message identity failure.
-/// 可选原子追加完成后返回成功，或返回准确的合成消息身份失败。
+/// Returns the exact synthetic user-message id after append, `None` when no real user exists, or an identity failure.
+/// 追加后返回精确合成用户消息标识；不存在真实用户时返回 `None`，身份异常时返回失败。
 pub(crate) fn append_auto_context_compaction_continuation_message(
     draft_runtime_state: &mut SessionRuntimeStateEntry,
     session_id: SessionId,
     created_at: &str,
     active_runtime_state: &SessionRuntimeStateEntry,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     let Some(last_user_message) =
         last_runtime_user_message_text(&active_runtime_state.conversation_state)
     else {
-        return Ok(());
+        return Ok(None);
     };
     let last_user_message = truncate_auto_compaction_last_user_message(&last_user_message);
     let message_id = build_session_record_message_id(
@@ -308,11 +308,12 @@ pub(crate) fn append_auto_context_compaction_continuation_message(
     );
     vulcan_context::append_user_text_message(
         &mut draft_runtime_state.conversation_state,
-        message_id,
+        message_id.clone(),
         text,
         Vec::new(),
     )
-    .map_err(|error| format!("Invalid automatic continuation message identity: {error}"))
+    .map_err(|error| format!("Invalid automatic continuation message identity: {error}"))?;
+    Ok(Some(message_id))
 }
 
 /// Returns the latest real user-text payload from one runtime conversation state.
@@ -461,14 +462,21 @@ pub(crate) fn build_webui_context_compaction_draft(
         execution.compaction_result.policy,
     )
     .map_err(|error| format!("Invalid compacted conversation message identity: {error}"))?;
-    if trigger == AUTO_CONTEXT_COMPACTION_TRIGGER {
+    let continuation_message_id = if trigger == AUTO_CONTEXT_COMPACTION_TRIGGER {
         append_auto_context_compaction_continuation_message(
             &mut draft_runtime_state,
             session_id,
             &checkpoint.created_at,
             active_runtime_state,
-        )?;
-    }
+        )?
+    } else {
+        None
+    };
+    draft_runtime_state.vmm_session_memory.begin_cache_epoch(
+        &checkpoint.id,
+        continuation_message_id.as_deref(),
+        &now,
+    )?;
     compact_conversation_records_after_summary(
         &mut draft_runtime_state.conversation_state,
         &summary_message_id,

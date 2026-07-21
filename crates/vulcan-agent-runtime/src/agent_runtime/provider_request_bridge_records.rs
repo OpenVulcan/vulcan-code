@@ -18,6 +18,10 @@ pub(crate) fn session_continuation_to_core_continuation(
         provider_id: continuation.provider_id.clone(),
         model_id: continuation.model_id.clone(),
         last_provider_message_id: continuation.last_provider_message_id.clone(),
+        last_local_message_id: continuation.last_local_message_id.clone(),
+        context_cache_epoch_id: continuation.context_cache_epoch_id.clone(),
+        context_anchor_revision: continuation.context_anchor_revision,
+        context_rewrite_fingerprint: continuation.context_rewrite_fingerprint.clone(),
         updated_at: continuation.updated_at.clone(),
     }
 }
@@ -31,6 +35,10 @@ pub(crate) fn core_continuation_to_session_continuation(
         provider_id: continuation.provider_id.clone(),
         model_id: continuation.model_id.clone(),
         last_provider_message_id: continuation.last_provider_message_id.clone(),
+        last_local_message_id: continuation.last_local_message_id.clone(),
+        context_cache_epoch_id: continuation.context_cache_epoch_id.clone(),
+        context_anchor_revision: continuation.context_anchor_revision,
+        context_rewrite_fingerprint: continuation.context_rewrite_fingerprint.clone(),
         updated_at: continuation.updated_at.clone(),
     }
 }

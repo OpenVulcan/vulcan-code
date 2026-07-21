@@ -219,6 +219,31 @@ fn archive_and_restore_preserve_segment_lines() {
     let request = test_session_request(SegmentPolicy::default());
     let session_dir = create_segmented_session_in_location(&root, false, request.clone())
         .expect("create session");
+    // vmm_state establishes one durable lease whose exact bytes and owner must survive both directory moves.
+    // vmm_state 建立一份持久租约，其精确字节与所有者必须经过两次目录移动后保持不变。
+    let mut vmm_state = vulcan_vmm::VmmSessionMemoryState::default();
+    vmm_state
+        .apply_recall_batch(
+            &request.session_id,
+            "archive-user-anchor",
+            &vulcan_vmm::VmmRecallBatch {
+                ttl_turns: 3,
+                injection_tag: String::from("VMM_MEMORY"),
+                injection_description: String::from("Relevant memories."),
+                items: vec![vulcan_vmm::ContextItem {
+                    text: String::from("archive-memory-body"),
+                    memory_id: 71,
+                    ..vulcan_vmm::ContextItem::default()
+                }],
+            },
+            "2026-06-06T10:00:30Z",
+        )
+        .expect("archive VMM fixture should be built");
+    write_vmm_state(&session_dir, &request.session_id, &vmm_state)
+        .expect("archive VMM fixture should be written");
+    // before_vmm_bytes preserve the exact independent document for byte-stability assertions.
+    // before_vmm_bytes 保留独立文档的精确字节，用于断言字节稳定性。
+    let before_vmm_bytes = fs::read(vmm_state_path(&session_dir)).expect("read active VMM state");
     append_segmented_session_events(
         &session_dir,
         &[test_event(
@@ -243,6 +268,19 @@ fn archive_and_restore_preserve_segment_lines() {
     let archived_lines =
         read_segment_event_lines(&archived_dir.join("s001.jsonl")).expect("read archived lines");
     assert_eq!(before_lines, archived_lines);
+    // archived_vmm_bytes prove archival moved rather than regenerated the independent VMM document.
+    // archived_vmm_bytes 证明归档移动而非重新生成了独立 VMM 文档。
+    let archived_vmm_bytes =
+        fs::read(vmm_state_path(&archived_dir)).expect("read archived VMM state");
+    assert_eq!(before_vmm_bytes, archived_vmm_bytes);
+    // archived_vmm_state verifies the moved document still validates against the same session identity.
+    // archived_vmm_state 验证移动后的文档仍能通过同一会话身份校验。
+    let archived_vmm_state: vulcan_vmm::VmmSessionMemoryState =
+        read_required_json(&vmm_state_path(&archived_dir)).expect("load archived VMM state");
+    archived_vmm_state
+        .validate(&request.session_id)
+        .expect("archived VMM state should retain its owner identity");
+    assert_eq!(archived_vmm_state, vmm_state);
     let archived_metadata: SegmentedSessionMetadata =
         read_required_json(&archived_dir.join(SEGMENTED_METADATA_FILE))
             .expect("read archived metadata");
@@ -264,6 +302,19 @@ fn archive_and_restore_preserve_segment_lines() {
     let restored_lines =
         read_segment_event_lines(&restored_dir.join("s001.jsonl")).expect("read restored lines");
     assert_eq!(before_lines, restored_lines);
+    // restored_vmm_bytes prove restoration preserves the exact archived VMM document.
+    // restored_vmm_bytes 证明恢复保留了归档时的精确 VMM 文档。
+    let restored_vmm_bytes =
+        fs::read(vmm_state_path(&restored_dir)).expect("read restored VMM state");
+    assert_eq!(before_vmm_bytes, restored_vmm_bytes);
+    // restored_vmm_state verifies identity and lease state remain valid after the round trip.
+    // restored_vmm_state 验证完整归档往返后身份与租约状态仍然有效。
+    let restored_vmm_state: vulcan_vmm::VmmSessionMemoryState =
+        read_required_json(&vmm_state_path(&restored_dir)).expect("load restored VMM state");
+    restored_vmm_state
+        .validate(&request.session_id)
+        .expect("restored VMM state should retain its owner identity");
+    assert_eq!(restored_vmm_state, vmm_state);
     let restored_metadata: SegmentedSessionMetadata =
         read_required_json(&restored_dir.join(SEGMENTED_METADATA_FILE))
             .expect("read restored metadata");

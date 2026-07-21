@@ -382,6 +382,9 @@ pub struct ServiceBridgeState {
     /// Latest background persistence version keyed by session id.
     /// 按会话标识索引的最新后台持久化版本。
     pub(crate) session_persist_versions: BTreeMap<SessionId, u64>,
+    /// Latest independent VMM persistence version keyed by session id.
+    /// 按会话标识索引的最新独立 VMM 持久化版本。
+    pub(crate) session_vmm_persist_versions: BTreeMap<SessionId, u64>,
     /// Latest live transcript persistence version keyed by session id.
     /// 按会话标识索引的最新运行中转录持久化版本。
     pub(crate) session_transcript_persist_versions: BTreeMap<SessionId, u64>,

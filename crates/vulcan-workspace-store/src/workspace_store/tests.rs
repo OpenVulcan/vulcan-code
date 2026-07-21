@@ -729,6 +729,10 @@ fn runtime_state_rebuild_from_recent_messages_preserves_continuation() {
                 provider_id: Some(String::from("openai")),
                 model_id: Some(String::from("gpt-test")),
                 last_provider_message_id: Some(String::from("resp-1")),
+                last_local_message_id: Some(String::from("assistant-1")),
+                context_cache_epoch_id: Some(String::from("epoch-1")),
+                context_anchor_revision: Some(2),
+                context_rewrite_fingerprint: Some(String::from("rewrite-1")),
                 updated_at: Some(String::from("123")),
             },
             ..SessionConversationState::default()
@@ -760,5 +764,13 @@ fn runtime_state_rebuild_from_recent_messages_preserves_continuation() {
             .last_provider_message_id
             .as_deref(),
         Some("resp-1")
+    );
+    assert_eq!(
+        rebuilt
+            .conversation_state
+            .continuation
+            .last_local_message_id
+            .as_deref(),
+        Some("assistant-1")
     );
 }

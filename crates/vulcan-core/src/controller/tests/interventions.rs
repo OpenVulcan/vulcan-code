@@ -27,6 +27,7 @@ fn run_user_turn_streaming_intervention_reaches_next_provider_request() {
                         model_id: Some(String::from("mock-model")),
                         last_provider_message_id: Some(String::from("resp-intervention-1")),
                         updated_at: Some(String::from("4001")),
+                        ..ProviderContinuation::default()
                     }),
                     usage: None,
                 },
@@ -46,6 +47,7 @@ fn run_user_turn_streaming_intervention_reaches_next_provider_request() {
                         model_id: Some(String::from("mock-model")),
                         last_provider_message_id: Some(String::from("resp-intervention-2")),
                         updated_at: Some(String::from("4002")),
+                        ..ProviderContinuation::default()
                     }),
                     usage: None,
                 },
@@ -263,6 +265,7 @@ fn run_user_turn_streaming_intervention_waits_for_full_tool_batch() {
                         model_id: Some(String::from("mock-model")),
                         last_provider_message_id: Some(String::from("resp-batch-1")),
                         updated_at: Some(String::from("4101")),
+                        ..ProviderContinuation::default()
                     }),
                     usage: None,
                 },
@@ -282,6 +285,7 @@ fn run_user_turn_streaming_intervention_waits_for_full_tool_batch() {
                         model_id: Some(String::from("mock-model")),
                         last_provider_message_id: Some(String::from("resp-batch-2")),
                         updated_at: Some(String::from("4102")),
+                        ..ProviderContinuation::default()
                     }),
                     usage: None,
                 },

@@ -962,7 +962,8 @@ pub(in crate::workspace_store) fn rebuild_runtime_log_index(
                     .insert(event.repair_id.clone(), line.seq);
             }
             vulcan_context::RuntimeLogEvent::ToolBatchStarted(_)
-            | vulcan_context::RuntimeLogEvent::ToolBatchCompleted(_) => {}
+            | vulcan_context::RuntimeLogEvent::ToolBatchCompleted(_)
+            | vulcan_context::RuntimeLogEvent::VmmLifecycle(_) => {}
         }
     }
     index

@@ -240,6 +240,10 @@ where
             provider_id: Some(provider_id.to_string()),
             model_id: Some(response_model.unwrap_or_else(|| model_id.to_string())),
             last_provider_message_id: None,
+            last_local_message_id: None,
+            context_cache_epoch_id: None,
+            context_anchor_revision: None,
+            context_rewrite_fingerprint: None,
             updated_at: Some(current_unix_millis_text()),
         }),
     })

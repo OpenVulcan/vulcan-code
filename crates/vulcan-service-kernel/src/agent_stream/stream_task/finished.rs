@@ -176,6 +176,29 @@ pub(super) async fn handle_finished_stream_event(
         ),
     );
 
+    if let Some(apply) = final_report_apply.as_ref()
+        && !apply.vmm_lifecycle_events.is_empty()
+    {
+        // vmm_lifecycle_events contain only stable identities, hashes, counters, and byte totals.
+        // vmm_lifecycle_events 仅包含稳定身份、哈希、计数与字节总量。
+        let vmm_lifecycle_events = apply.vmm_lifecycle_events.clone();
+        let data_root = controller_runtime.data_root.clone();
+        spawn_service_task(async move {
+            let timestamp = current_unix_millis_text();
+            if let Err(error) = crate::vmm_runtime_audit::record_vmm_lifecycle_events(
+                &data_root,
+                finished_session_id,
+                &timestamp,
+                vmm_lifecycle_events,
+            ) {
+                webui_trace(
+                    "runtime_vmm_terminal_audit_failed",
+                    format!("session={finished_session_id} error={error}"),
+                );
+            }
+        });
+    }
+
     if let (Some(apply), Some((final_boundary_events, terminal_boundary_event, session_title))) =
         (final_report_apply.as_ref(), terminal_lifecycle)
         && let Some(project_id) =

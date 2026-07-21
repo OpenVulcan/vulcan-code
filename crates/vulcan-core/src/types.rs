@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
@@ -88,6 +89,133 @@ pub struct ControllerConfig {
     pub context_injection: Option<ProviderContextInjection>,
 }
 
+impl ControllerConfig {
+    /// Builds the exact structured prompt layers rendered for one provider request after persistent context injection.
+    /// 构建持久上下文注入后单次 Provider 请求实际渲染的精确结构化提示词层。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Prompt layers whose runtime-context section contains persistent blocks in their provider-visible order.
+    /// 返回运行时上下文区按 Provider 可见顺序包含持久块的提示词层。
+    pub fn provider_prompt_layers_with_persistent_injection(&self) -> ProviderPromptLayers {
+        let mut layers = if self.prompt_layers.is_empty() {
+            ProviderPromptLayers::from_system_prompt(self.system_prompt.clone())
+        } else {
+            self.prompt_layers.clone()
+        };
+        let persistent_text = self
+            .context_injection
+            .as_ref()
+            .map(|injection| injection.persistent_blocks.join("\n\n"))
+            .unwrap_or_default();
+        if persistent_text.trim().is_empty() {
+            return layers;
+        }
+        // runtime_context placement must match the request builder so continuation fingerprints cover exact bytes.
+        // runtime_context 的放置方式必须与请求构建器一致，使 continuation 指纹覆盖精确字节。
+        let existing_runtime_context = layers.runtime_context.trim();
+        layers.runtime_context = if existing_runtime_context.is_empty() {
+            persistent_text
+        } else {
+            format!("{existing_runtime_context}\n\n{persistent_text}")
+        };
+        layers
+    }
+
+    /// Builds the stable fingerprint of provider input layers whose change rewrites previously covered context.
+    /// 构建 Provider 输入层的稳定指纹；这些层一旦变化就会改写先前已覆盖的上下文。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A versioned SHA-256 fingerprint of the effective system prompt and persistent injection blocks.
+    /// 返回有效系统提示词与持久注入块的带版本 SHA-256 指纹。
+    pub fn provider_rewrite_fingerprint(&self) -> String {
+        // effective_system_prompt is rendered from the same injected structured layers used by transport assembly.
+        // effective_system_prompt 根据传输装配使用的同一份注入后结构化层渲染。
+        let effective_system_prompt = self
+            .provider_prompt_layers_with_persistent_injection()
+            .render_or_legacy(self.system_prompt.as_str());
+        provider_rewrite_fingerprint_for_system_prompt(effective_system_prompt.as_str())
+    }
+
+    /// Returns whether the saved provider continuation can be reused without replaying rewritten input.
+    /// 返回能否在不回放已改写输入的前提下复用已保存的 Provider continuation。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `continuation` is the provider cursor and its covered rewrite/anchor revisions.
+    /// `continuation` 是 Provider 游标及其已覆盖的改写与锚点修订。
+    /// `uncovered_message_ids` are the exact local message ids appended after the saved continuation boundary.
+    /// `uncovered_message_ids` 是保存在 continuation 边界之后追加的精确本地消息标识集合。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` only when rewrite-sensitive input matches and every context overlay mutation is proven safe.
+    /// 仅当改写敏感输入一致且上下文覆盖层变更均可证明安全时返回 `true`。
+    pub fn continuation_reuse_is_proven(
+        &self,
+        continuation: &ProviderContinuation,
+        uncovered_message_ids: &[&str],
+    ) -> bool {
+        // current_rewrite_fingerprint covers all non-append-only Provider input layers.
+        // current_rewrite_fingerprint 覆盖全部非追加式 Provider 输入层。
+        let current_rewrite_fingerprint = self.provider_rewrite_fingerprint();
+        if continuation.last_provider_message_id.is_some()
+            && continuation.context_rewrite_fingerprint.as_deref()
+                != Some(current_rewrite_fingerprint.as_str())
+        {
+            return false;
+        }
+        match self.context_injection.as_ref() {
+            Some(injection) => {
+                injection.continuation_reuse_is_proven(continuation, uncovered_message_ids)
+            }
+            None => {
+                continuation.context_cache_epoch_id.is_none()
+                    && continuation.context_anchor_revision.is_none()
+            }
+        }
+    }
+}
+
+/// Builds the versioned rewrite fingerprint for one exact Provider-visible system prompt.
+/// 为一份精确的 Provider 可见系统提示词构建带版本的改写指纹。
+///
+/// # Parameters
+/// 参数
+/// `system_prompt` is the fully rendered system input sent to the Provider.
+/// `system_prompt` 是发送给 Provider 的完整渲染系统输入。
+///
+/// # Returns
+/// 返回值
+/// A lowercase SHA-256 fingerprint suitable for continuation coverage comparison.
+/// 返回适用于 continuation 覆盖比较的小写 SHA-256 指纹。
+pub fn provider_rewrite_fingerprint_for_system_prompt(system_prompt: &str) -> String {
+    // hasher uses a domain/version prefix so future protocol changes cannot collide silently.
+    // hasher 使用领域与版本前缀，避免未来协议变化时静默碰撞。
+    let mut hasher = Sha256::new();
+    hasher.update(b"vulcan-provider-rewrite-fingerprint:v1\0");
+    hasher.update(system_prompt.len().to_le_bytes());
+    hasher.update(system_prompt.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// Returns whether one `usize` field is zero for compact protocol serialization.
+/// 返回一个 `usize` 字段是否为零，用于紧凑协议序列化。
+///
+/// # Parameters
+/// 参数
+/// `value` is the borrowed numeric field inspected by serde.
+/// `value` 是由 serde 检查的借用数值字段。
+///
+/// # Returns
+/// 返回值
+/// `true` only for zero.
+/// 仅在数值为零时返回 `true`。
+fn is_zero_usize(value: &usize) -> bool {
+    *value == 0
+}
+
 /// Represents provider-facing context-injection text resolved before one controller run starts.
 /// 表示单次控制器运行开始前解析完成的 Provider 可见上下文注入文本。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -100,6 +228,42 @@ pub struct ProviderContextInjection {
     /// 应前置到目标用户提示词的临时块。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub transient_prefix: String,
+    /// Immutable prefixes bound to exact canonical user-message identifiers.
+    /// 绑定到精确规范用户消息标识的不可变前缀。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub anchored_prefixes: Vec<ProviderContextAnchor>,
+    /// Strongest canonical-history mutation represented by this overlay.
+    /// 该覆盖层所代表的最强规范历史变更类型。
+    #[serde(default)]
+    pub mutation_kind: ProviderContextMutationKind,
+    /// Active prompt-cache epoch covered by the immutable anchors.
+    /// 不可变锚点所归属的当前提示词缓存纪元。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_epoch_id: Option<String>,
+    /// Monotonic immutable-anchor revision within the active cache epoch.
+    /// 当前缓存纪元内的单调不可变锚点修订号。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_revision: Option<u64>,
+    /// Fingerprint of provider input layers that rewrite existing system or historical content.
+    /// 会改写既有系统层或历史内容的 Provider 输入层指纹。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rewrite_fingerprint: Option<String>,
+    /// Bytes occupied by currently active structured VMM memory bodies.
+    /// 当前活动结构化 VMM 记忆正文占用的字节数。
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub active_memory_body_bytes: usize,
+    /// Estimated tokens occupied by currently active structured VMM memory bodies.
+    /// 当前活动结构化 VMM 记忆正文占用的估算 Token 数。
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub active_memory_estimated_tokens: usize,
+    /// Bytes held by immutable VMM anchors reclaimable at the next compaction.
+    /// 可在下次压缩回收的不可变 VMM 锚点字节数。
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub reclaimable_anchor_bytes: usize,
+    /// Estimated tokens held by immutable VMM anchors reclaimable at the next compaction.
+    /// 可在下次压缩回收的不可变 VMM 锚点估算 Token 数。
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub reclaimable_anchor_estimated_tokens: usize,
     /// Stable fingerprint for diagnostics and continuation safety checks.
     /// 用于诊断与 continuation 安全检查的稳定指纹。
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -110,7 +274,9 @@ impl ProviderContextInjection {
     /// Returns whether no provider-facing injection content is present.
     /// 返回是否不存在任何 Provider 可见注入内容。
     pub fn is_empty(&self) -> bool {
-        self.persistent_blocks.is_empty() && self.transient_prefix.trim().is_empty()
+        self.persistent_blocks.is_empty()
+            && self.transient_prefix.trim().is_empty()
+            && self.anchored_prefixes.is_empty()
     }
 
     /// Returns whether transient provider-facing content is present.
@@ -118,6 +284,124 @@ impl ProviderContextInjection {
     pub fn has_transient(&self) -> bool {
         !self.transient_prefix.trim().is_empty()
     }
+
+    /// Returns whether continuation reuse must be disabled because prior provider input changed.
+    /// 返回是否因既有 Provider 输入发生变化而必须禁用 continuation 复用。
+    pub fn requires_historical_rewrite(&self) -> bool {
+        self.has_transient()
+            || matches!(
+                self.mutation_kind,
+                ProviderContextMutationKind::HistoricalRewrite
+                    | ProviderContextMutationKind::EpochReset
+            )
+    }
+
+    /// Returns whether an append-only overlay is provably covered after the saved continuation boundary.
+    /// 返回追加式覆盖层是否可证明全部位于已保存 continuation 边界之后。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `continuation` is the provider cursor and its last covered cache revision.
+    /// `continuation` 是 Provider 游标及其最近覆盖的缓存修订。
+    /// `uncovered_message_ids` are exact local message ids after the cursor boundary and must own every uncovered anchor.
+    /// `uncovered_message_ids` 是游标边界之后的精确本地消息标识，必须承载全部未覆盖锚点。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` for no rewrite or a same-epoch monotonic append whose uncovered suffix is bound to the unsent tail; unknown coverage is unsafe.
+    /// 无重写，或同纪元单调追加且未覆盖后缀绑定到未发送尾部时返回 `true`；覆盖未知时不安全。
+    pub fn continuation_reuse_is_proven(
+        &self,
+        continuation: &ProviderContinuation,
+        uncovered_message_ids: &[&str],
+    ) -> bool {
+        if self.requires_historical_rewrite() {
+            return false;
+        }
+        if self.anchored_prefixes.is_empty() {
+            return self.mutation_kind != ProviderContextMutationKind::AppendOnly
+                && continuation.context_cache_epoch_id.is_none()
+                && continuation.context_anchor_revision.is_none();
+        }
+        if self.mutation_kind != ProviderContextMutationKind::AppendOnly {
+            return false;
+        }
+        if continuation.last_provider_message_id.is_none() {
+            return true;
+        }
+        // current_revision must describe this exact ordered anchor vector before suffix coverage can be trusted.
+        // current_revision 必须精确描述当前有序锚点向量，之后才能信任后缀覆盖关系。
+        let Some(current_revision) = self.anchor_revision else {
+            return false;
+        };
+        if usize::try_from(current_revision).ok() != Some(self.anchored_prefixes.len()) {
+            return false;
+        }
+        // covered_anchor_count is the immutable prefix already represented by the cursor.
+        // covered_anchor_count 是游标已经表示的不可变锚点前缀长度。
+        let covered_anchor_count = match (
+            self.cache_epoch_id.as_deref(),
+            continuation.context_cache_epoch_id.as_deref(),
+            continuation.context_anchor_revision,
+        ) {
+            (Some(current_epoch), Some(covered_epoch), Some(covered_revision))
+                if current_epoch == covered_epoch && covered_revision <= current_revision =>
+            {
+                let Ok(covered_anchor_count) = usize::try_from(covered_revision) else {
+                    return false;
+                };
+                covered_anchor_count
+            }
+            // A legacy cursor with no VMM coverage may only precede the initial epoch.
+            // 没有 VMM 覆盖信息的旧游标只能位于初始纪元之前。
+            (Some("initial"), None, None) => 0,
+            _ => return false,
+        };
+        // Every uncovered anchor must target a message after the exact local cursor boundary; revision order alone cannot prove placement.
+        // 每个未覆盖锚点都必须指向精确本地游标边界之后的消息；仅凭修订顺序无法证明位置。
+        self.anchored_prefixes[covered_anchor_count..]
+            .iter()
+            .all(|anchor| {
+                uncovered_message_ids
+                    .iter()
+                    .any(|message_id| *message_id == anchor.target_message_id)
+            })
+    }
+}
+
+/// One immutable provider prefix bound to an exact canonical user-message identifier.
+/// 绑定到精确规范用户消息标识的一条不可变 Provider 前缀。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderContextAnchor {
+    /// Stable anchor identifier retained for diagnostics.
+    /// 为诊断保留的稳定锚点标识。
+    pub anchor_id: String,
+    /// Exact canonical user-message identifier receiving this prefix.
+    /// 接收该前缀的精确规范用户消息标识。
+    pub target_message_id: String,
+    /// Frozen provider-visible prefix applied only to the target message.
+    /// 仅应用到目标消息的冻结 Provider 可见前缀。
+    pub prefix: String,
+}
+
+/// Provider-context mutation classification used for continuation safety.
+/// 用于 continuation 安全判定的 Provider 上下文变更分类。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderContextMutationKind {
+    /// No provider-visible canonical-history mutation occurred.
+    /// 未发生 Provider 可见规范历史变更。
+    #[default]
+    None,
+    /// New content was appended without rewriting any previously sent message.
+    /// 新内容以追加方式进入，未改写任何既有已发送消息。
+    AppendOnly,
+    /// A previously sent provider message would be rendered differently.
+    /// 某条既有已发送 Provider 消息将以不同内容重新渲染。
+    HistoricalRewrite,
+    /// Context compaction replaced the provider-visible history baseline.
+    /// 上下文压缩替换了 Provider 可见历史基线。
+    EpochReset,
 }
 
 /// Represents one provider continuation cursor snapshot kept beside the canonical history.
@@ -133,6 +417,22 @@ pub struct ProviderContinuation {
     /// Latest provider-visible assistant message identifier.
     /// 最近一次 Provider 可见的助手消息标识。
     pub last_provider_message_id: Option<String>,
+    /// Exact local canonical message identifier represented by the latest provider cursor.
+    /// 最近一次 Provider 游标所表示的精确本地规范消息标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_local_message_id: Option<String>,
+    /// Prompt-cache epoch covered by the latest provider response.
+    /// 最近一次 Provider 响应所覆盖的提示词缓存纪元。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_cache_epoch_id: Option<String>,
+    /// Immutable-anchor revision covered by the latest provider response.
+    /// 最近一次 Provider 响应所覆盖的不可变锚点修订号。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_anchor_revision: Option<u64>,
+    /// Rewrite-sensitive context fingerprint covered by the latest provider response.
+    /// 最近一次 Provider 响应所覆盖的改写敏感上下文指纹。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_rewrite_fingerprint: Option<String>,
     /// Unix-millis timestamp string recorded when the cursor was refreshed.
     /// 游标刷新时记录的 Unix 毫秒时间戳文本。
     pub updated_at: Option<String>,
@@ -829,4 +1129,114 @@ pub enum CoreEventKind {
     /// The controller encountered an error.
     /// 控制器遇到错误。
     Error,
+}
+
+#[cfg(test)]
+mod continuation_proof_tests {
+    use super::*;
+
+    /// Builds one scoped provider cursor whose rewrite fingerprint matches the supplied configuration.
+    /// 构建一条作用域明确且改写指纹与给定配置匹配的 Provider 游标。
+    fn matching_continuation(config: &ControllerConfig) -> ProviderContinuation {
+        ProviderContinuation {
+            last_provider_message_id: Some(String::from("response-1")),
+            last_local_message_id: Some(String::from("assistant-1")),
+            context_rewrite_fingerprint: Some(config.provider_rewrite_fingerprint()),
+            ..ProviderContinuation::default()
+        }
+    }
+
+    /// Verifies persistent context fingerprints cover the exact titled runtime-context bytes rendered by transports.
+    /// 验证持久上下文指纹覆盖传输层实际渲染的带标题运行时上下文字节。
+    #[test]
+    fn persistent_fingerprint_matches_exact_structured_prompt_rendering() {
+        let config = ControllerConfig {
+            system_prompt: String::from("system"),
+            prompt_layers: ProviderPromptLayers::from_system_prompt(String::from("system")),
+            context_injection: Some(ProviderContextInjection {
+                persistent_blocks: vec![String::from("persistent")],
+                ..ProviderContextInjection::default()
+            }),
+            ..ControllerConfig::default()
+        };
+        let rendered = config
+            .provider_prompt_layers_with_persistent_injection()
+            .render_or_legacy(config.system_prompt.as_str());
+
+        assert_eq!(rendered, "system\n\n## Runtime Context\npersistent");
+        assert_eq!(
+            config.provider_rewrite_fingerprint(),
+            provider_rewrite_fingerprint_for_system_prompt(&rendered)
+        );
+    }
+
+    /// Verifies plain system text cannot collide with structurally injected persistent runtime context.
+    /// 验证普通系统文本不会与结构化注入的持久运行时上下文发生指纹碰撞。
+    #[test]
+    fn persistent_runtime_context_does_not_collide_with_plain_system_suffix() {
+        let injected = ControllerConfig {
+            system_prompt: String::from("system"),
+            prompt_layers: ProviderPromptLayers::from_system_prompt(String::from("system")),
+            context_injection: Some(ProviderContextInjection {
+                persistent_blocks: vec![String::from("persistent")],
+                ..ProviderContextInjection::default()
+            }),
+            ..ControllerConfig::default()
+        };
+        let plain = ControllerConfig {
+            system_prompt: String::from("system\n\npersistent"),
+            prompt_layers: ProviderPromptLayers::from_system_prompt(String::from(
+                "system\n\npersistent",
+            )),
+            ..ControllerConfig::default()
+        };
+
+        assert_ne!(
+            injected.provider_rewrite_fingerprint(),
+            plain.provider_rewrite_fingerprint()
+        );
+    }
+
+    /// Verifies a cursor that covered VMM anchors cannot survive their disappearance from current input.
+    /// 验证覆盖过 VMM 锚点的游标无法在当前输入中的锚点消失后继续复用。
+    #[test]
+    fn disappeared_anchor_epoch_forces_full_replay() {
+        let config = ControllerConfig::default();
+        let mut continuation = matching_continuation(&config);
+        continuation.context_cache_epoch_id = Some(String::from("epoch-1"));
+        continuation.context_anchor_revision = Some(1);
+
+        assert!(!config.continuation_reuse_is_proven(&continuation, &[]));
+    }
+
+    /// Verifies anchored content cannot bypass suffix proof through an inconsistent mutation classification.
+    /// 验证锚定内容无法通过不一致的变更分类绕过后缀证明。
+    #[test]
+    fn anchor_without_append_only_classification_is_rejected() {
+        let mut config = ControllerConfig {
+            context_injection: Some(ProviderContextInjection {
+                anchored_prefixes: vec![ProviderContextAnchor {
+                    anchor_id: String::from("anchor-1"),
+                    target_message_id: String::from("user-2"),
+                    prefix: String::from("memory"),
+                }],
+                mutation_kind: ProviderContextMutationKind::None,
+                cache_epoch_id: Some(String::from("initial")),
+                anchor_revision: Some(1),
+                ..ProviderContextInjection::default()
+            }),
+            ..ControllerConfig::default()
+        };
+        let continuation = matching_continuation(&config);
+
+        assert!(!config.continuation_reuse_is_proven(&continuation, &["user-2"]));
+
+        config
+            .context_injection
+            .as_mut()
+            .expect("context injection should exist")
+            .mutation_kind = ProviderContextMutationKind::AppendOnly;
+        let continuation = matching_continuation(&config);
+        assert!(config.continuation_reuse_is_proven(&continuation, &["user-2"]));
+    }
 }

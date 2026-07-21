@@ -35,6 +35,22 @@ pub struct SessionProviderContinuationState {
     /// Latest provider-visible assistant message identifier returned by the upstream API.
     /// 上游接口返回的最近一次 Provider 可见助手消息标识。
     pub last_provider_message_id: Option<String>,
+    /// Exact local canonical message identifier represented by the latest provider cursor.
+    /// 最近一次 Provider 游标所表示的精确本地规范消息标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_local_message_id: Option<String>,
+    /// Prompt-cache epoch covered by the latest provider response.
+    /// 最近一次 Provider 响应所覆盖的提示词缓存纪元。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_cache_epoch_id: Option<String>,
+    /// Immutable-anchor revision covered by the latest provider response.
+    /// 最近一次 Provider 响应所覆盖的不可变锚点修订号。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_anchor_revision: Option<u64>,
+    /// Rewrite-sensitive context fingerprint covered by the provider cursor.
+    /// Provider 游标所覆盖的改写敏感上下文指纹。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_rewrite_fingerprint: Option<String>,
     /// Unix-millis text capturing when the continuation cursor was last refreshed.
     /// 捕获 continuation 游标最近刷新时间的 Unix 毫秒文本。
     pub updated_at: Option<String>,

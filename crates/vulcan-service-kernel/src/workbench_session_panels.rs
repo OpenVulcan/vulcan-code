@@ -455,10 +455,19 @@ pub(crate) fn context_injection_snapshot_from_runtime_state(
     runtime_state: Option<&SessionRuntimeStateEntry>,
 ) -> Option<ContextInjectionSnapshot> {
     let runtime_state = runtime_state?;
-    let dynamic_cards = context_injection_cards_to_summary(context_injection_panel_cards_for_kind(
+    let mut dynamic_panel_cards = runtime_state
+        .vmm_session_memory
+        .active_panel_card()
+        .into_iter()
+        .collect::<Vec<_>>();
+    dynamic_panel_cards.extend(context_injection_panel_cards_for_kind(
         &runtime_state.context_injection_state,
         Some(InjectionKind::Transient),
     ));
+    // Expired VMM residents are appended last so the WebUI presents them in a dedicated bottom region.
+    // 过期 VMM 驻留项最后追加，使 WebUI 将其展示在独立的底部区域。
+    dynamic_panel_cards.extend(runtime_state.vmm_session_memory.expired_panel_card());
+    let dynamic_cards = context_injection_cards_to_summary(dynamic_panel_cards);
     let static_profile = static_vmm_profile_snapshot(runtime_state);
     let mut static_cards = Vec::new();
     static_cards.extend(context_injection_cards_to_summary(
@@ -610,6 +619,7 @@ pub(crate) fn compact_panel_preview(content: &str) -> String {
 mod tests {
     use super::*;
     use vulcan_service_api::PendingPromptsChangedDelta;
+    use vulcan_vmm::{ContextItem, VmmRecallBatch};
 
     /// Verifies a pending-question registry failure cannot be projected as an empty request list.
     /// 验证待回答问题注册表失败无法被投影为空请求列表。
@@ -927,5 +937,64 @@ mod tests {
                 .and_then(|attention| attention.updated_at.as_deref()),
             Some("1780000000000")
         );
+    }
+
+    /// Verifies active VMM memories render before the dedicated expired bottom region.
+    /// 验证活动 VMM 记忆会展示在独立的底部过期区域之前。
+    #[test]
+    fn context_injection_snapshot_places_expired_vmm_region_last() {
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        // expiring_batch creates one resident that crosses its TTL boundary after the first turn.
+        // expiring_batch 创建一条在首个回合后跨越 TTL 边界的驻留记忆。
+        let expiring_batch = VmmRecallBatch {
+            ttl_turns: 1,
+            injection_tag: String::from("VMM_MEMORY"),
+            injection_description: String::from("Relevant memories."),
+            items: vec![ContextItem {
+                text: String::from("expired-memory"),
+                memory_id: 7,
+                ..ContextItem::default()
+            }],
+        };
+        runtime_state
+            .vmm_session_memory
+            .apply_recall_batch("session-a", "user-1", &expiring_batch, "1")
+            .expect("expiring recall should succeed");
+        runtime_state
+            .vmm_session_memory
+            .register_active_turn("turn-1", "1")
+            .expect("logical turn should register");
+        runtime_state
+            .vmm_session_memory
+            .consume_turn("turn-1", "2")
+            .expect("logical turn should expire the resident");
+        // active_batch adds one still-active identity without reviving the expired identity.
+        // active_batch 新增一条仍活动的身份，同时不恢复已过期身份。
+        let active_batch = VmmRecallBatch {
+            ttl_turns: 3,
+            injection_tag: String::from("VMM_MEMORY"),
+            injection_description: String::from("Relevant memories."),
+            items: vec![ContextItem {
+                text: String::from("active-memory"),
+                memory_id: 8,
+                ..ContextItem::default()
+            }],
+        };
+        runtime_state
+            .vmm_session_memory
+            .apply_recall_batch("session-a", "user-2", &active_batch, "3")
+            .expect("active recall should succeed");
+
+        let snapshot = context_injection_snapshot_from_runtime_state(Some(&runtime_state))
+            .expect("runtime state should project a context injection snapshot");
+        let tags = snapshot
+            .dynamic_cards
+            .iter()
+            .map(|card| card.tag.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(tags, vec!["VMM_MEMORY", "VMM_MEMORY_EXPIRED"]);
+        assert_eq!(snapshot.dynamic_cards[0].items[0].ttl_label, "剩余 3 回合");
+        assert_eq!(snapshot.dynamic_cards[1].items[0].ttl_label, "已过期");
     }
 }

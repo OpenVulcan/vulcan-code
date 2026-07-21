@@ -71,6 +71,7 @@ pub async fn rollback_persisted_session_before_user_prompt(
     runtime_state.last_compaction_id = target.last_compaction_id;
     runtime_state.context_start_message_id = target.context_start_message_id;
     runtime_state.conversation_state.continuation = Default::default();
+    reset_vmm_state_for_history_rewrite(&target.session_dir)?;
     let state_document =
         state_document_from_runtime_state(&session.id.to_string(), &runtime_state)?;
     write_state(&target.session_dir, &state_document)?;
@@ -253,6 +254,7 @@ fn rebuild_forked_persisted_session_runtime_from_source_replay(
     runtime_state.last_compaction_id = source_replay.last_compaction_id.clone();
     runtime_state.context_start_message_id = retained_context_start_message_id;
     runtime_state.conversation_state.continuation = Default::default();
+    reset_vmm_state_for_history_rewrite(session_dir)?;
     let state_document = state_document_from_runtime_state(target_session_id_text, &runtime_state)?;
     write_state(session_dir, &state_document)?;
     rebuild_runtime_log_from_conversation_state(

@@ -202,19 +202,25 @@ fn spawn_session_versioned_workspace_persist_task<F, Fut>(
     F: FnOnce() -> Fut + Send + 'static,
     Fut: Future<Output = ()> + Send + 'static,
 {
-    // persist_version records the newest whole-session persistence generation before spawning.
-    // persist_version 记录启动后台任务前最新的整会话持久化代际。
-    let persist_version = match next_webui_session_persist_version(&state, session_id) {
-        Ok(version) => version,
-        Err(error) => {
-            eprintln!("[webui-service] {version_error_label}: {error}");
-            return;
-        }
-    };
+    // persist_versions fence both the complete snapshot and its independent vmm.json publication.
+    // persist_versions 同时隔离完整快照及其独立 vmm.json 发布。
+    let (session_persist_version, vmm_persist_version) =
+        match next_webui_session_runtime_persist_versions(&state, session_id) {
+            Ok(versions) => versions,
+            Err(error) => {
+                eprintln!("[webui-service] {version_error_label}: {error}");
+                return;
+            }
+        };
     spawn_service_task(async move {
         let persist_lock = webui_workspace_persist_lock();
         let _persist_guard = persist_lock.lock().await;
-        if !webui_session_persist_version_is_current(&state, session_id, persist_version) {
+        if !webui_session_runtime_persist_versions_are_current(
+            &state,
+            session_id,
+            session_persist_version,
+            vmm_persist_version,
+        ) {
             return;
         }
         persist().await;

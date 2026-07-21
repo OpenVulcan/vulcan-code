@@ -62,14 +62,14 @@ use super::{
     current_unix_millis_text, current_workspace_snapshot_from_shared_state,
     emit_service_event_with_trace, finish_webui_session_kernel_turn,
     historical_context_budget_snapshot_from_runtime_state,
-    merge_runtime_state_records_into_display_messages, next_webui_session_persist_version,
+    merge_runtime_state_records_into_display_messages, next_webui_session_runtime_persist_versions,
     normalized_workspace_path_text_from_path, owning_project_id_for_session,
     persistent_injection_fingerprint, persistent_injection_source_node_ids,
     record_webui_runtime_injection_merged, remove_active_stream_task_if_id,
     replace_conversation_messages_in_workbench_window, session_ai_tool_configuration_or_default,
     spawn_service_task, spawn_workspace_session_persist_task,
     sync_hydrated_session_dialogue_ready_marker, webui_session_kernel_generation,
-    webui_session_persist_version_is_current, webui_trace, webui_workspace_persist_lock,
+    webui_session_runtime_persist_versions_are_current, webui_trace, webui_workspace_persist_lock,
     workbench_surface_matches_conversation, workspace_path_for_session, workspace_root,
     workspace_snapshot_contains_regular_session,
 };
@@ -86,6 +86,12 @@ const MAX_CONSECUTIVE_AUTO_COMPACTION_FAILURES: usize = 3;
 /// Fixed input-token reserve kept free when deciding whether compaction input must be clone-pruned.
 /// 判断压缩输入是否必须进行克隆剪枝时保留的固定输入 Token 安全阈值。
 const CONTEXT_COMPACTION_INPUT_SAFETY_RESERVE_TOKENS: usize = 30_000;
+/// Reclaimable VMM anchor tokens that independently justify cache-boundary compaction.
+/// 可独立触发缓存边界压缩的 VMM 可回收锚点 Token 数。
+const VMM_RECLAIMABLE_ANCHOR_COMPACTION_TOKENS: usize = 32_768;
+/// Effective input-window ratio at which reclaimable VMM anchors justify earlier compaction.
+/// VMM 可回收锚点足以提前触发压缩的生效输入窗口比例。
+const VMM_RECLAIMABLE_ANCHOR_COMPACTION_RATIO: f32 = 0.05;
 /// Minimum allowed reserve for compaction-input pruning decisions.
 /// 压缩输入剪枝决策允许使用的最低安全阈值。
 const MIN_CONTEXT_COMPACTION_INPUT_SAFETY_RESERVE_TOKENS: usize = 20_000;

@@ -40,6 +40,77 @@ pub(crate) fn build_provider_request_preview_markdown(
         .unwrap_or_else(|| String::from("（无附加请求头）"));
     let continuation_markdown =
         render_provider_continuation_markdown(&request_snapshot.continuation);
+    // current_rewrite_fingerprint hashes the exact final system prompt shown in this request snapshot.
+    // current_rewrite_fingerprint 对该请求快照中展示的精确最终系统提示词计算哈希。
+    let current_rewrite_fingerprint =
+        vulcan_core::types::provider_rewrite_fingerprint_for_system_prompt(
+            request_snapshot.system_prompt.as_str(),
+        );
+    // local_boundary_matches locates the exact canonical message represented by the scoped provider cursor.
+    // local_boundary_matches 定位限定作用域的 Provider 游标所表示的精确规范消息。
+    let local_boundary_matches = request_snapshot
+        .continuation
+        .last_local_message_id
+        .as_deref()
+        .map(|boundary_id| {
+            request_snapshot
+                .history
+                .iter()
+                .enumerate()
+                .filter_map(|(index, message)| (message.id == boundary_id).then_some(index))
+                .collect::<Vec<_>>()
+        });
+    // continuation_boundary_is_proven mirrors dispatch: a cursor must have one unique historical local boundary.
+    // continuation_boundary_is_proven 与实际分发一致：游标必须具备唯一历史本地边界。
+    let continuation_boundary_is_proven = if request_snapshot
+        .continuation
+        .last_provider_message_id
+        .is_none()
+    {
+        true
+    } else {
+        local_boundary_matches
+            .as_deref()
+            .is_some_and(|indices| indices.len() == 1)
+    };
+    // uncovered_history_start begins after the proven boundary, or at zero when no cursor exists.
+    // uncovered_history_start 从已证明边界之后开始；没有游标时从零开始。
+    let uncovered_history_start = local_boundary_matches
+        .as_deref()
+        .and_then(|indices| indices.first())
+        .map_or(0, |index| index.saturating_add(1));
+    // uncovered_message_ids contains historical suffix ids plus the successful exact anchor target for the current prompt.
+    // uncovered_message_ids 包含历史后缀标识，以及当前提示消息上成功绑定的精确锚点目标。
+    let mut uncovered_message_ids = request_snapshot.history[uncovered_history_start..]
+        .iter()
+        .map(|message| message.id.as_str())
+        .collect::<Vec<_>>();
+    if let Some(injection) = preparation.context_injection.as_ref() {
+        for target_message_id in injection
+            .anchored_prefixes
+            .iter()
+            .map(|anchor| anchor.target_message_id.as_str())
+            .filter(|target_message_id| {
+                request_snapshot
+                    .history
+                    .iter()
+                    .all(|message| message.id != *target_message_id)
+            })
+        {
+            if !uncovered_message_ids.contains(&target_message_id) {
+                uncovered_message_ids.push(target_message_id);
+            }
+        }
+    }
+    let context_injection_diagnostics = render_provider_context_injection_diagnostics(
+        preparation.context_injection.as_ref(),
+        &request_snapshot.continuation,
+        current_rewrite_fingerprint.as_str(),
+        &uncovered_message_ids,
+        continuation_boundary_is_proven,
+        preparation.model_blueprint.api_family_key() != "openai-responses"
+            || vulcan_vmm::VmmRuntimeFeaturePolicy::from_env().openai_append_continuation_enabled,
+    );
     let ai_tool_plan_markdown = render_ai_tool_plan_markdown(preparation);
     let context_budget_label = preparation
         .context_budget
@@ -123,6 +194,8 @@ pub(crate) fn build_provider_request_preview_markdown(
             "{}\n\n",
             "## Continuation\n",
             "{}\n\n",
+            "## Context Injection Diagnostics\n",
+            "{}\n\n",
             "## Outgoing History\n",
             "{}\n\n",
             "## Effective Outgoing Prompt\n",
@@ -161,6 +234,7 @@ pub(crate) fn build_provider_request_preview_markdown(
         context_request_mode_markdown,
         render_text_code_fence(&request_snapshot.system_prompt),
         continuation_markdown,
+        context_injection_diagnostics,
         outgoing_history_markdown,
         render_text_code_fence(&request_snapshot.prompt),
         ai_tool_plan_markdown,
@@ -356,6 +430,10 @@ fn render_provider_continuation_markdown(continuation: &CoreProviderContinuation
     if continuation.provider_id.is_none()
         && continuation.model_id.is_none()
         && continuation.last_provider_message_id.is_none()
+        && continuation.last_local_message_id.is_none()
+        && continuation.context_cache_epoch_id.is_none()
+        && continuation.context_anchor_revision.is_none()
+        && continuation.context_rewrite_fingerprint.is_none()
         && continuation.updated_at.is_none()
     {
         return String::from("（本次请求没有 continuation 游标）");
@@ -365,9 +443,122 @@ fn render_provider_continuation_markdown(continuation: &CoreProviderContinuation
         "provider_id": continuation.provider_id,
         "model_id": continuation.model_id,
         "last_provider_message_id": continuation.last_provider_message_id,
+        "last_local_message_id": continuation.last_local_message_id,
+        "context_cache_epoch_id": continuation.context_cache_epoch_id,
+        "context_anchor_revision": continuation.context_anchor_revision,
+        "context_rewrite_fingerprint": continuation.context_rewrite_fingerprint,
         "updated_at": continuation.updated_at,
     });
     render_json_code_fence(&payload)
+}
+
+/// Renders cache-epoch, anchor revision, mutation class, and continuation safety diagnostics.
+/// 渲染缓存纪元、锚点修订、变更分类与 continuation 安全诊断。
+///
+/// # Parameters
+/// 参数
+/// `injection` is the exact provider context overlay applied to the request.
+/// `injection` 是应用到请求的精确 Provider 上下文覆盖层。
+/// `continuation` is the scoped provider cursor considered for reuse.
+/// `continuation` 是参与复用判断的 Provider 作用域游标。
+/// `current_rewrite_fingerprint` is the fingerprint of the exact current Provider system input.
+/// `current_rewrite_fingerprint` 是当前精确 Provider 系统输入的指纹。
+/// `uncovered_message_ids` are exact local messages appended after the saved cursor boundary.
+/// `uncovered_message_ids` 是保存在游标边界之后追加的精确本地消息集合。
+/// `continuation_boundary_is_proven` reports whether the scoped cursor has one unique local boundary.
+/// `continuation_boundary_is_proven` 表示限定作用域的游标是否具备唯一的本地边界。
+/// `append_continuation_feature_enabled` is the effective provider-specific rollout decision.
+/// `append_continuation_feature_enabled` 是生效的 Provider 专属追加续传灰度决策。
+///
+/// # Returns
+/// 返回值
+/// A compact Markdown list with a deterministic continuation decision reason.
+/// 返回包含确定性 continuation 决策原因的紧凑 Markdown 列表。
+fn render_provider_context_injection_diagnostics(
+    injection: Option<&vulcan_core::types::ProviderContextInjection>,
+    continuation: &CoreProviderContinuation,
+    current_rewrite_fingerprint: &str,
+    uncovered_message_ids: &[&str],
+    continuation_boundary_is_proven: bool,
+    append_continuation_feature_enabled: bool,
+) -> String {
+    // The mutation label is stable user-facing diagnostic text, independent of debug formatting.
+    // 变更标签是稳定的用户诊断文本，不依赖调试格式。
+    let mutation_label = injection.map_or("none", |injection| match injection.mutation_kind {
+        vulcan_core::types::ProviderContextMutationKind::None => "none",
+        vulcan_core::types::ProviderContextMutationKind::AppendOnly => "append_only",
+        vulcan_core::types::ProviderContextMutationKind::HistoricalRewrite => "historical_rewrite",
+        vulcan_core::types::ProviderContextMutationKind::EpochReset => "epoch_reset",
+    });
+    // rewrite_fingerprint_matches proves the cursor covered the exact current system input.
+    // rewrite_fingerprint_matches 证明游标覆盖了精确的当前系统输入。
+    let rewrite_fingerprint_matches =
+        continuation.context_rewrite_fingerprint.as_deref() == Some(current_rewrite_fingerprint);
+    // overlay_reuse_is_proven applies the same transient and anchor-coverage predicate as dispatch.
+    // overlay_reuse_is_proven 应用与实际分发相同的临时内容和锚点覆盖判定。
+    let overlay_reuse_is_proven = match injection {
+        Some(injection) => {
+            injection.continuation_reuse_is_proven(continuation, uncovered_message_ids)
+        }
+        None => {
+            continuation.context_cache_epoch_id.is_none()
+                && continuation.context_anchor_revision.is_none()
+        }
+    };
+    // append_vmm_change identifies the only continuation behavior controlled by the rollout switch.
+    // append_vmm_change 标识唯一受灰度开关控制的 continuation 行为。
+    let append_vmm_change = injection.is_some_and(|injection| {
+        injection.mutation_kind == vulcan_core::types::ProviderContextMutationKind::AppendOnly
+            && !injection.anchored_prefixes.is_empty()
+    });
+    // The decision reason mirrors the provider continuation safety predicate exactly.
+    // 决策原因与 Provider continuation 安全判定谓词严格一致。
+    let continuation_decision = if continuation.last_provider_message_id.is_none() {
+        "不复用：当前没有 Provider continuation 游标"
+    } else if !continuation_boundary_is_proven {
+        "不复用：Provider continuation 缺少唯一的本地规范消息边界"
+    } else if append_vmm_change && !append_continuation_feature_enabled {
+        "不复用：OpenAI Responses 追加式 VMM continuation 灰度开关已关闭"
+    } else if !rewrite_fingerprint_matches {
+        "不复用：系统或持久上下文指纹与游标覆盖内容不一致"
+    } else if overlay_reuse_is_proven {
+        "允许复用：无历史改写，且锚点覆盖关系可证明安全"
+    } else if injection.is_some_and(|injection| injection.requires_historical_rewrite()) {
+        "不复用：上下文覆盖层会改写既有 Provider 输入"
+    } else {
+        "不复用：缓存纪元或锚点修订覆盖关系无法证明安全"
+    };
+    format!(
+        concat!(
+            "- 变更分类：`{}`\n",
+            "- 缓存纪元：`{}`\n",
+            "- 锚点修订：`{}`\n",
+            "- 锚点数量：`{}`\n",
+            "- 覆盖层指纹：`{}`\n",
+            "- 当前改写指纹：`{}`\n",
+            "- 活跃 VMM 正文：`{} bytes / ~{} tokens`\n",
+            "- 可回收 VMM 锚点：`{} bytes / ~{} tokens`\n",
+            "- Continuation：{}"
+        ),
+        mutation_label,
+        injection
+            .and_then(|injection| injection.cache_epoch_id.as_deref())
+            .unwrap_or("none"),
+        injection
+            .and_then(|injection| injection.anchor_revision)
+            .map(|revision| revision.to_string())
+            .unwrap_or_else(|| String::from("none")),
+        injection.map_or(0, |injection| injection.anchored_prefixes.len()),
+        injection.map_or("none", |injection| injection.fingerprint.as_str()),
+        current_rewrite_fingerprint,
+        injection.map_or(0, |injection| injection.active_memory_body_bytes),
+        injection.map_or(0, |injection| injection.active_memory_estimated_tokens),
+        injection.map_or(0, |injection| injection.reclaimable_anchor_bytes),
+        injection.map_or(0, |injection| {
+            injection.reclaimable_anchor_estimated_tokens
+        }),
+        continuation_decision,
+    )
 }
 
 /// Wraps arbitrary text inside a safe fenced code block for request previews.

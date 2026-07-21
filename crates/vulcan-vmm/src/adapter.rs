@@ -348,72 +348,190 @@ fn vmm_context_item_to_injection_item(item: &ContextItem) -> Option<InjectionIns
 /// Renders one VMM precheck memory item for provider-visible model context.
 /// 为模型可见上下文渲染一条 VMM precheck 记忆项。
 fn render_vmm_precheck_memory_model(item: &InjectionStateItem) -> String {
-    let text = vmm_metadata_text(item);
+    render_vmm_context_item_model(&vmm_context_item_from_injection_item(item))
+}
+
+/// Renders one compact VMM precheck memory panel row.
+/// 渲染一条紧凑的 VMM precheck 记忆面板行。
+fn render_vmm_precheck_memory_panel(item: &InjectionStateItem) -> String {
+    render_vmm_context_item_panel(&vmm_context_item_from_injection_item(item))
+}
+
+/// Renders one detailed VMM precheck memory tooltip body.
+/// 渲染一段详细的 VMM precheck 记忆悬停正文。
+fn render_vmm_precheck_memory_detail(item: &InjectionStateItem) -> String {
+    render_vmm_context_item_detail(&vmm_context_item_from_injection_item(item))
+}
+
+/// Renders one structured VMM context item into immutable provider-visible text.
+/// 将一条结构化 VMM 上下文项渲染为不可变的 Provider 可见文本。
+///
+/// # Parameters
+/// 参数
+/// `item` is the recalled VMM context item whose semantic payload must be frozen.
+/// `item` 是需要冻结语义载荷的 VMM 召回上下文项。
+///
+/// # Returns
+/// 返回值
+/// A single-line provider block preserving the established VMM metadata format.
+/// 返回保留既有 VMM 元数据格式的单行 Provider 文本块。
+pub fn render_vmm_context_item_model(item: &ContextItem) -> String {
+    let text = collapse_context_item_text(&item.text);
     if text.is_empty() {
-        return item.content.clone();
+        return String::new();
     }
-    let turn_label = format_vmm_metadata_turn_label(item);
-    let source_score = format_context_source_score(vmm_metadata_score(item));
-    let created_time = vmm_metadata_created_datetime(item)
+    let turn_label = format_vmm_context_item_turn_label(item);
+    let source_score = format_context_source_score(item.score);
+    let created_time = format_context_created_time(&item.created_datetime)
         .map(|time| format!("|TIME:{time}"))
         .unwrap_or_default();
-    let memory_id = vmm_metadata_memory_id(item);
-    let memory_label = if memory_id > 0 {
-        format!("|MEMORY_ID:{memory_id}")
+    let memory_label = if item.memory_id > 0 {
+        format!("|MEMORY_ID:{}", item.memory_id)
     } else {
         String::new()
     };
     format!("[{turn_label}{memory_label}|SOURCE:{source_score}{created_time}]{text}")
 }
 
-/// Renders one compact VMM precheck memory panel row.
-/// 渲染一条紧凑的 VMM precheck 记忆面板行。
-fn render_vmm_precheck_memory_panel(item: &InjectionStateItem) -> String {
-    let text = vmm_metadata_text(item);
-    if text.is_empty() {
-        item.content.clone()
-    } else {
-        text
-    }
+/// Renders one structured VMM context item for the compact memory panel.
+/// 为紧凑记忆面板渲染一条结构化 VMM 上下文项。
+///
+/// # Parameters
+/// 参数
+/// `item` is the recalled VMM context item shown in the panel.
+/// `item` 是需要在面板中展示的 VMM 召回上下文项。
+///
+/// # Returns
+/// 返回值
+/// Normalized memory text suitable for one compact panel row.
+/// 返回适合单条紧凑面板行的规范化记忆文本。
+pub fn render_vmm_context_item_panel(item: &ContextItem) -> String {
+    collapse_context_item_text(&item.text)
 }
 
-/// Renders one detailed VMM precheck memory tooltip body.
-/// 渲染一段详细的 VMM precheck 记忆悬停正文。
-fn render_vmm_precheck_memory_detail(item: &InjectionStateItem) -> String {
+/// Renders one structured VMM context item for the detailed memory tooltip.
+/// 为记忆详情悬停框渲染一条结构化 VMM 上下文项。
+///
+/// # Parameters
+/// 参数
+/// `item` is the recalled VMM context item whose metadata is displayed.
+/// `item` 是需要展示元数据的 VMM 召回上下文项。
+///
+/// # Returns
+/// 返回值
+/// A multiline Chinese detail body matching the existing memory-panel contract.
+/// 返回符合既有记忆面板契约的多行中文详情正文。
+pub fn render_vmm_context_item_detail(item: &ContextItem) -> String {
     let mut lines = Vec::new();
-    let text = vmm_metadata_text(item);
+    let text = render_vmm_context_item_panel(item);
     if !text.is_empty() {
         lines.push(format!("内容：{text}"));
     }
-    if let Some(created_datetime) = vmm_metadata_created_datetime(item) {
+    if let Some(created_datetime) = format_context_created_time(&item.created_datetime) {
         lines.push(format!("时间：{created_datetime}"));
     }
-    let memory_id = vmm_metadata_memory_id(item);
-    if memory_id > 0 {
-        lines.push(format!("记忆 ID：{memory_id}"));
+    if item.memory_id > 0 {
+        lines.push(format!("记忆 ID：{}", item.memory_id));
     }
-    lines.push(format!("来源：{}", format_vmm_metadata_turn_label(item)));
+    lines.push(format!(
+        "来源：{}",
+        format_vmm_context_item_turn_label(item)
+    ));
     lines.push(format!(
         "相关性：{}",
-        format_context_source_score(vmm_metadata_score(item))
+        format_context_source_score(item.score)
     ));
     lines.push(format!(
         "可回查：{}",
-        if vmm_metadata_has_dialogue(item) {
-            "是"
-        } else {
-            "否"
-        }
+        if item.has_dialogue { "是" } else { "否" }
     ));
     lines.join("\n")
 }
 
-/// Builds the dialogue lookup marker from structured VMM metadata.
-/// 从结构化 VMM 元数据构建对话回查标记。
-fn format_vmm_metadata_turn_label(item: &InjectionStateItem) -> String {
-    let turn_id = vmm_metadata_turn_id(item);
-    if vmm_metadata_has_dialogue(item) && turn_id > 0 {
-        format!("TURN_ID:{turn_id}")
+/// Builds a structured VMM context item from one legacy generic injection item.
+/// 从一条旧版通用注入项构建结构化 VMM 上下文项。
+///
+/// # Parameters
+/// 参数
+/// `item` is an item whose renderer id already established VMM ownership.
+/// `item` 是已由渲染器标识确认归属于 VMM 的注入项。
+///
+/// # Returns
+/// 返回值
+/// The exact structured fields understood by the legacy VMM renderer.
+/// 返回旧版 VMM 渲染器所理解的精确结构化字段。
+pub(crate) fn vmm_context_item_from_injection_item(item: &InjectionStateItem) -> ContextItem {
+    ContextItem {
+        text: vmm_metadata_text(item),
+        score: vmm_metadata_score(item),
+        turn_id: vmm_metadata_turn_id(item),
+        has_dialogue: vmm_metadata_has_dialogue(item),
+        created_datetime: vmm_metadata_created_datetime(item).unwrap_or_default(),
+        memory_id: vmm_metadata_memory_id(item),
+    }
+}
+
+/// Proves that one generic injection item was emitted by the legacy VMM PreCheck adapter.
+/// 证明一条通用注入项由旧版 VMM PreCheck 适配器产出。
+///
+/// # Parameters
+/// 参数
+/// `item` is the persisted generic injection item whose ownership is being established.
+/// `item` 是需要确认归属的已持久化通用注入项。
+///
+/// # Returns
+/// 返回值
+/// `true` only when renderer id, source id, and every authoritative metadata field match the legacy writer contract.
+/// 仅当渲染器标识、来源标识与全部权威元数据字段都符合旧版写入契约时返回 `true`。
+pub(crate) fn is_legacy_vmm_precheck_injection_item(item: &InjectionStateItem) -> bool {
+    if item.renderer_id.as_deref() != Some(VMM_PRECHECK_MEMORY_RENDERER_ID)
+        || item.source_display.as_deref() != Some("VMM")
+    {
+        return false;
+    }
+    // metadata must independently prove the exact structured payload written by the legacy adapter.
+    // metadata 必须独立证明其符合旧版适配器写入的精确结构化载荷。
+    let Some(metadata) = item.metadata.as_ref().and_then(Value::as_object) else {
+        return false;
+    };
+    metadata
+        .get(VMM_METADATA_TEXT)
+        .is_some_and(Value::is_string)
+        && metadata
+            .get(VMM_METADATA_SCORE)
+            .and_then(Value::as_f64)
+            .is_some()
+        && metadata
+            .get(VMM_METADATA_TURN_ID)
+            .and_then(Value::as_u64)
+            .is_some()
+        && metadata
+            .get(VMM_METADATA_HAS_DIALOGUE)
+            .is_some_and(Value::is_boolean)
+        && metadata
+            .get(VMM_METADATA_CREATED_DATETIME)
+            .is_some_and(Value::is_string)
+        && metadata
+            .get(VMM_METADATA_MEMORY_ID)
+            .and_then(Value::as_u64)
+            .is_some()
+}
+
+/// Builds the dialogue lookup marker from one structured VMM item.
+/// 从一条结构化 VMM 项构建对话回查标记。
+///
+/// # Parameters
+/// 参数
+/// `item` is the VMM context item whose source marker is needed.
+/// `item` 是需要生成来源标记的 VMM 上下文项。
+///
+/// # Returns
+/// 返回值
+/// `TURN_ID:<id>` for expandable dialogue rows, otherwise `NOTURN`.
+/// 对可展开对话行返回 `TURN_ID:<id>`，否则返回 `NOTURN`。
+fn format_vmm_context_item_turn_label(item: &ContextItem) -> String {
+    if item.has_dialogue && item.turn_id > 0 {
+        format!("TURN_ID:{}", item.turn_id)
     } else {
         String::from("NOTURN")
     }

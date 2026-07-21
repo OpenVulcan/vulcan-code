@@ -101,7 +101,7 @@ mod tests {
 
     use super::*;
     use crate::agent_runtime::provider_stream::ProviderStreamDelta;
-    use crate::agent_runtime::provider_transport_openai_responses_http::SUPPRESS_OPENAI_RESPONSES_CONTINUATION_PARAM;
+    use crate::agent_runtime::provider_transport_openai_responses_http::FORCE_FULL_OPENAI_RESPONSES_REPLAY_PARAM;
     use crate::agent_runtime::provider_transport_stream_runtime::PreparedProviderTransportAdapterInputs;
     use reqwest::header::HeaderMap;
     use serde_json::json;
@@ -110,7 +110,9 @@ mod tests {
     use vulcan_core::types::{
         ConversationMessage as CoreConversationMessage,
         ConversationPayload as CoreConversationPayload,
+        ProviderContextAnchor as CoreProviderContextAnchor,
         ProviderContextInjection as CoreProviderContextInjection,
+        ProviderContextMutationKind as CoreProviderContextMutationKind,
         ProviderContinuation as CoreProviderContinuation,
         ProviderPromptLayers as CoreProviderPromptLayers,
     };
@@ -157,17 +159,43 @@ mod tests {
     /// 创建一份携带 OpenAI Responses continuation 游标与单条出站用户提示词的会话快照。
     fn build_test_snapshot() -> CoreConversationSnapshot {
         CoreConversationSnapshot {
-            messages: vec![CoreConversationMessage {
-                id: String::from("user-1"),
-                payload: CoreConversationPayload::UserText {
-                    text: String::from("hello"),
-                    attachments: Vec::new(),
+            messages: vec![
+                CoreConversationMessage {
+                    id: String::from("user-covered"),
+                    payload: CoreConversationPayload::UserText {
+                        text: String::from("earlier"),
+                        attachments: Vec::new(),
+                    },
                 },
-            }],
+                CoreConversationMessage {
+                    id: String::from("assistant-boundary"),
+                    payload: CoreConversationPayload::Assistant {
+                        text: String::from("earlier response"),
+                        reasoning: String::new(),
+                        provider_message_id: Some(String::from("resp_prev")),
+                        provider_message_state: None,
+                        usage: None,
+                        tool_calls: Vec::new(),
+                    },
+                },
+                CoreConversationMessage {
+                    id: String::from("user-1"),
+                    payload: CoreConversationPayload::UserText {
+                        text: String::from("hello"),
+                        attachments: Vec::new(),
+                    },
+                },
+            ],
             continuation: CoreProviderContinuation {
                 provider_id: Some(String::from("openai")),
                 model_id: Some(String::from("gpt-5")),
                 last_provider_message_id: Some(String::from("resp_prev")),
+                last_local_message_id: Some(String::from("assistant-boundary")),
+                context_cache_epoch_id: None,
+                context_anchor_revision: None,
+                context_rewrite_fingerprint: Some(
+                    build_test_controller_config(None, None).provider_rewrite_fingerprint(),
+                ),
                 updated_at: Some(String::from("123")),
             },
             ..CoreConversationSnapshot::default()
@@ -206,6 +234,192 @@ mod tests {
         assert_eq!(params["reasoning"]["effort"], "high");
     }
 
+    /// Verifies append-only exact-message VMM anchors preserve OpenAI Responses continuation reuse.
+    /// 验证追加式精确消息 VMM 锚点会保留 OpenAI Responses continuation 复用。
+    #[tokio::test]
+    async fn openai_responses_adapter_preserves_continuation_for_append_only_anchor() {
+        let adapter = build_test_openai_responses_adapter();
+        let mut snapshot = build_test_snapshot();
+        // A cursor created before the first VMM anchor has no anchor coverage, but the initial anchor is tail-only.
+        // 首个 VMM 锚点建立前产生的游标没有锚点覆盖信息，但初始锚点只位于尾部。
+        snapshot.continuation.context_cache_epoch_id = None;
+        snapshot.continuation.context_anchor_revision = None;
+        let config = build_test_controller_config(
+            Some(json!({"reasoning": {"effort": "high"}})),
+            Some(CoreProviderContextInjection {
+                anchored_prefixes: vec![CoreProviderContextAnchor {
+                    anchor_id: String::from("vmm-memory-1"),
+                    target_message_id: String::from("user-1"),
+                    prefix: String::from("<VMM_MEMORY>memory</VMM_MEMORY>"),
+                }],
+                mutation_kind: CoreProviderContextMutationKind::AppendOnly,
+                cache_epoch_id: Some(String::from("initial")),
+                anchor_revision: Some(1),
+                ..CoreProviderContextInjection::default()
+            }),
+        );
+
+        let request = adapter
+            .build_request(&snapshot, &config)
+            .await
+            .expect("append-only anchored request should build");
+        let params = request
+            .snapshot
+            .additional_params
+            .expect("continuation params should exist");
+
+        assert_eq!(params["previous_response_id"], "resp_prev");
+        assert!(
+            params
+                .get(FORCE_FULL_OPENAI_RESPONSES_REPLAY_PARAM)
+                .is_none()
+        );
+    }
+
+    /// Verifies an uncovered initial anchor cannot reuse a cursor when it targets already-covered history instead of the unsent tail.
+    /// 验证未覆盖的初始锚点若指向已覆盖历史而不是未发送尾部，就不能复用游标。
+    #[tokio::test]
+    async fn openai_responses_adapter_rejects_uncovered_anchor_on_historical_message() {
+        // adapter exercises the production continuation proof and exact-message request builder.
+        // adapter 覆盖生产 continuation 证明与精确消息请求构建器。
+        let adapter = build_test_openai_responses_adapter();
+        // snapshot contains one covered user message, the exact cursor boundary, and the unsent user tail.
+        // snapshot 包含一条已覆盖用户消息、精确游标边界和未发送用户尾部。
+        let mut snapshot = build_test_snapshot();
+        snapshot.continuation.context_cache_epoch_id = None;
+        snapshot.continuation.context_anchor_revision = None;
+        // config attempts to add revision one to user-covered, which the existing cursor already covers.
+        // config 尝试把第一版锚点加入已被现有游标覆盖的 user-covered。
+        let config = build_test_controller_config(
+            None,
+            Some(CoreProviderContextInjection {
+                anchored_prefixes: vec![CoreProviderContextAnchor {
+                    anchor_id: String::from("vmm-memory-1"),
+                    target_message_id: String::from("user-covered"),
+                    prefix: String::from("<VMM_MEMORY>memory</VMM_MEMORY>"),
+                }],
+                mutation_kind: CoreProviderContextMutationKind::AppendOnly,
+                cache_epoch_id: Some(String::from("initial")),
+                anchor_revision: Some(1),
+                ..CoreProviderContextInjection::default()
+            }),
+        );
+
+        let request = adapter.build_request(&snapshot, &config).await.expect(
+            "unsafe historical anchor should force full replay instead of failing assembly",
+        );
+        let params = request
+            .snapshot
+            .additional_params
+            .expect("suppression params should exist");
+
+        assert_eq!(
+            params[FORCE_FULL_OPENAI_RESPONSES_REPLAY_PARAM],
+            serde_json::Value::Bool(true)
+        );
+        assert!(params.get("previous_response_id").is_none());
+    }
+
+    /// Verifies caller-provided cursors cannot bypass provider/model scoping when no local cursor is reusable.
+    /// 验证在没有可复用本地游标时，调用方提供的游标不能绕过 Provider/模型作用域限制。
+    #[tokio::test]
+    async fn openai_responses_adapter_strips_unproven_caller_cursor() {
+        let adapter = build_test_openai_responses_adapter();
+        // snapshot belongs to another provider, so its cursor is discarded by exact scoping.
+        // snapshot 属于另一个 Provider，因此其游标会被精确作用域校验丢弃。
+        let mut snapshot = build_test_snapshot();
+        snapshot.continuation.provider_id = Some(String::from("other-provider"));
+        // config includes an untrusted cursor that must not replace host continuation state.
+        // config 包含不得替代宿主 continuation 状态的不可信游标。
+        let config = build_test_controller_config(
+            Some(json!({
+                "previous_response_id": "resp_unproven",
+                "reasoning": { "effort": "low" }
+            })),
+            None,
+        );
+
+        let request = adapter
+            .build_request(&snapshot, &config)
+            .await
+            .expect("request should build without an unproven cursor");
+        let params = request
+            .snapshot
+            .additional_params
+            .expect("unrelated params should remain");
+
+        assert!(params.get("previous_response_id").is_none());
+        assert_eq!(params["reasoning"]["effort"], "low");
+    }
+
+    /// Verifies a legacy provider cursor without an exact local canonical boundary forces one full replay.
+    /// 验证缺少精确本地规范边界的旧版 Provider 游标会强制执行一次完整回放。
+    #[tokio::test]
+    async fn openai_responses_adapter_replays_when_local_boundary_is_missing() {
+        let adapter = build_test_openai_responses_adapter();
+        // snapshot retains an upstream id but removes the local boundary introduced by the new protocol.
+        // snapshot 保留上游标识，但移除新协议引入的本地边界。
+        let mut snapshot = build_test_snapshot();
+        snapshot.continuation.last_local_message_id = None;
+        let config = build_test_controller_config(None, None);
+
+        let request = adapter
+            .build_request(&snapshot, &config)
+            .await
+            .expect("legacy continuation should fall back to a full replay");
+        let params = request
+            .snapshot
+            .additional_params
+            .expect("full-replay marker should exist");
+
+        assert_eq!(
+            params[FORCE_FULL_OPENAI_RESPONSES_REPLAY_PARAM],
+            serde_json::Value::Bool(true)
+        );
+        assert!(params.get("previous_response_id").is_none());
+    }
+
+    /// Verifies a compaction epoch mismatch suppresses OpenAI Responses continuation reuse.
+    /// 验证压缩纪元不匹配会抑制 OpenAI Responses continuation 复用。
+    #[tokio::test]
+    async fn openai_responses_adapter_suppresses_continuation_for_epoch_reset() {
+        let adapter = build_test_openai_responses_adapter();
+        // snapshot records an earlier VMM epoch already covered by the upstream cursor.
+        // snapshot 记录上游游标已经覆盖的早期 VMM 纪元。
+        let mut snapshot = build_test_snapshot();
+        snapshot.continuation.context_cache_epoch_id = Some(String::from("initial"));
+        snapshot.continuation.context_anchor_revision = Some(1);
+        let config = build_test_controller_config(
+            None,
+            Some(CoreProviderContextInjection {
+                anchored_prefixes: vec![CoreProviderContextAnchor {
+                    anchor_id: String::from("vmm-baseline-1"),
+                    target_message_id: String::from("user-1"),
+                    prefix: String::from("<VMM_MEMORY_BASELINE>memory</VMM_MEMORY_BASELINE>"),
+                }],
+                mutation_kind: CoreProviderContextMutationKind::AppendOnly,
+                cache_epoch_id: Some(String::from("compaction-1")),
+                anchor_revision: Some(1),
+                ..CoreProviderContextInjection::default()
+            }),
+        );
+
+        let request = adapter
+            .build_request(&snapshot, &config)
+            .await
+            .expect("epoch-reset request should build without continuation reuse");
+        let params = request
+            .snapshot
+            .additional_params
+            .expect("suppression params should exist");
+
+        assert_eq!(
+            params[FORCE_FULL_OPENAI_RESPONSES_REPLAY_PARAM],
+            serde_json::Value::Bool(true)
+        );
+        assert!(params.get("previous_response_id").is_none());
+    }
+
     /// Verifies transient provider-facing injection suppresses OpenAI Responses continuation reuse.
     /// 验证临时 Provider 可见注入会抑制 OpenAI Responses continuation 复用。
     #[tokio::test]
@@ -239,10 +453,130 @@ mod tests {
             .expect("additional params should exist");
 
         assert_eq!(
-            params[SUPPRESS_OPENAI_RESPONSES_CONTINUATION_PARAM],
+            params[FORCE_FULL_OPENAI_RESPONSES_REPLAY_PARAM],
             serde_json::Value::Bool(true)
         );
         assert!(params.get("previous_response_id").is_none());
         assert_eq!(params["reasoning"]["effort"], "high");
+    }
+
+    /// Verifies removing a previously covered persistent context layer suppresses OpenAI Responses continuation reuse.
+    /// 验证移除先前已覆盖的持久上下文层会抑制 OpenAI Responses continuation 复用。
+    #[tokio::test]
+    async fn openai_responses_adapter_suppresses_continuation_after_persistent_layer_removal() {
+        // adapter is the production request builder under test.
+        // adapter 是本测试覆盖的生产请求构建器。
+        let adapter = build_test_openai_responses_adapter();
+        // old_config models the persistent layer covered by the previous provider response.
+        // old_config 模拟上一 Provider 响应已经覆盖的持久上下文层。
+        let old_config = build_test_controller_config(
+            None,
+            Some(CoreProviderContextInjection {
+                persistent_blocks: vec![String::from("<persistent>old</persistent>")],
+                ..CoreProviderContextInjection::default()
+            }),
+        );
+        // snapshot proves the previous response covered that exact rewrite-sensitive input.
+        // snapshot 证明上一响应覆盖了该精确的改写敏感输入。
+        let mut snapshot = build_test_snapshot();
+        snapshot.continuation.context_rewrite_fingerprint =
+            Some(old_config.provider_rewrite_fingerprint());
+        // config removes that layer entirely, so replaying the old cursor would reconstruct different input.
+        // config 完全移除该层，因此复用旧游标会重建出不同的输入。
+        let config = build_test_controller_config(None, None);
+
+        let request = adapter
+            .build_request(&snapshot, &config)
+            .await
+            .expect("persistent-layer removal request should build");
+        // params expose the host-only suppression marker consumed by the HTTP adapter.
+        // params 暴露由 HTTP 适配器消费的宿主内部抑制标记。
+        let params = request
+            .snapshot
+            .additional_params
+            .expect("suppression params should exist");
+
+        assert_eq!(
+            params[FORCE_FULL_OPENAI_RESPONSES_REPLAY_PARAM],
+            serde_json::Value::Bool(true)
+        );
+        assert!(params.get("previous_response_id").is_none());
+    }
+
+    /// Verifies an unchanged persistent context fingerprint preserves OpenAI Responses continuation reuse.
+    /// 验证未变化的持久上下文指纹会保留 OpenAI Responses continuation 复用。
+    #[tokio::test]
+    async fn openai_responses_adapter_preserves_continuation_for_stable_persistent_layer() {
+        // adapter is the production request builder under test.
+        // adapter 是本测试覆盖的生产请求构建器。
+        let adapter = build_test_openai_responses_adapter();
+        // config carries the identical fingerprint and therefore preserves replay equivalence.
+        // config 携带相同指纹，因此保持回放输入等价。
+        let config = build_test_controller_config(
+            None,
+            Some(CoreProviderContextInjection {
+                persistent_blocks: vec![String::from("<persistent>stable</persistent>")],
+                rewrite_fingerprint: Some(String::from("persistent-stable")),
+                ..CoreProviderContextInjection::default()
+            }),
+        );
+        // snapshot records the exact persistent system input already covered by the previous response.
+        // snapshot 记录上一响应已经覆盖的精确持久系统输入。
+        let mut snapshot = build_test_snapshot();
+        snapshot.continuation.context_rewrite_fingerprint =
+            Some(config.provider_rewrite_fingerprint());
+
+        let request = adapter
+            .build_request(&snapshot, &config)
+            .await
+            .expect("stable persistent-layer request should build");
+        // params must retain the provider cursor and omit the host-only suppression marker.
+        // params 必须保留 Provider 游标且不包含宿主内部抑制标记。
+        let params = request
+            .snapshot
+            .additional_params
+            .expect("continuation params should exist");
+
+        assert_eq!(params["previous_response_id"], "resp_prev");
+        assert!(
+            params
+                .get(FORCE_FULL_OPENAI_RESPONSES_REPLAY_PARAM)
+                .is_none()
+        );
+    }
+
+    /// Verifies changing a system prompt covered by the previous response suppresses OpenAI Responses continuation reuse.
+    /// 验证修改上一响应已覆盖的系统提示词会抑制 OpenAI Responses continuation 复用。
+    #[tokio::test]
+    async fn openai_responses_adapter_suppresses_continuation_after_system_prompt_change() {
+        // adapter is the production request builder under test.
+        // adapter 是本测试覆盖的生产请求构建器。
+        let adapter = build_test_openai_responses_adapter();
+        // snapshot covers the baseline `system` prompt produced by the shared test helper.
+        // snapshot 覆盖共享测试辅助函数产出的基线 `system` 提示词。
+        let snapshot = build_test_snapshot();
+        // config replaces both canonical prompt representations with the new system instruction.
+        // config 用新的系统指令同步替换两种规范提示词表示。
+        let mut config = build_test_controller_config(None, None);
+        config.system_prompt = String::from("changed-system");
+        config.prompt_layers =
+            CoreProviderPromptLayers::from_system_prompt(String::from("changed-system"));
+
+        let request = adapter
+            .build_request(&snapshot, &config)
+            .await
+            .expect("system-prompt change request should build");
+        // params expose the host-only suppression marker and must not carry the stale cursor.
+        // params 暴露宿主内部抑制标记，且不得携带陈旧游标。
+        let params = request
+            .snapshot
+            .additional_params
+            .expect("suppression params should exist");
+
+        assert_eq!(
+            params[FORCE_FULL_OPENAI_RESPONSES_REPLAY_PARAM],
+            serde_json::Value::Bool(true)
+        );
+        assert!(params.get("previous_response_id").is_none());
     }
 }

@@ -491,6 +491,7 @@ async fn load_workspace_snapshot_with_runtime_state(
             );
         }
         if !validated_row.archived && load_runtime_state {
+            persistence::recover_segmented_runtime_checkpoint_transaction(&session_dir, &row.id)?;
             let mut runtime_state = if let Some(state_document) = read_state(&session_dir)? {
                 if state_document.runtime_state.is_null() {
                     None
@@ -516,7 +517,11 @@ async fn load_workspace_snapshot_with_runtime_state(
                     runtime_state.get_or_insert_with(SessionRuntimeStateEntry::default),
                 );
             }
+            if runtime_state.is_none() && has_vmm_session_artifacts(&session_dir)? {
+                runtime_state = Some(SessionRuntimeStateEntry::default());
+            }
             if let Some(mut runtime_state) = runtime_state {
+                hydrate_vmm_session_state(&session_dir, &row.id, &mut runtime_state)?;
                 let _ = sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state);
                 runtime_state_map.insert(session_id, runtime_state);
             }

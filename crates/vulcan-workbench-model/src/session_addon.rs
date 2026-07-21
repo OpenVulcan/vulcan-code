@@ -557,6 +557,26 @@ impl SessionAddonState {
         changed
     }
 
+    /// Removes one exact addon namespace and advances the document revision when present.
+    /// 移除一个精确附属状态命名空间，并在其存在时推进文档版本。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `namespace` is the exact known namespace to remove.
+    /// `namespace` 是需要移除的精确已知命名空间。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when a persisted namespace was physically removed.
+    /// 物理移除了一个持久化命名空间时返回 `true`。
+    pub fn remove_namespace(&mut self, namespace: SessionAddonNamespace) -> bool {
+        let removed = self.namespaces.remove(&namespace).is_some();
+        if removed {
+            self.revision = self.revision.saturating_add(1).max(1);
+        }
+        removed
+    }
+
     /// Reads the session AI capability configuration from the addon namespace.
     /// 从附属状态命名空间读取会话 AI 能力配置。
     ///

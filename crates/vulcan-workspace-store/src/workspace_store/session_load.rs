@@ -18,6 +18,7 @@ pub use pages::{
     load_session_transcript_window_for_project_created_at,
 };
 
+use super::persistence::recover_segmented_runtime_checkpoint_transaction;
 use super::segmented_session_store::{
     ensure_runtime_log_from_segmented_context,
     find_segmented_session_directory_for_task_store_created_at,

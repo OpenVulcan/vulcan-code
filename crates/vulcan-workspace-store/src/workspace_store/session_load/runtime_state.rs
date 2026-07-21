@@ -19,11 +19,18 @@ pub(super) fn load_segmented_runtime_state(
     else {
         return Ok(None);
     };
+    recover_segmented_runtime_checkpoint_transaction(&session_dir, &session_id.to_string())?;
     let runtime_conversation_state = ensure_runtime_log_from_segmented_context(&session_dir)?;
     let Some(state_document) = read_state(&session_dir)? else {
         let mut runtime_state = runtime_state_from_runtime_log(runtime_conversation_state)?;
         let _ =
             apply_session_addon_state_to_loaded_runtime_state(&session_dir, &mut runtime_state)?;
+        if runtime_state.is_none() && has_vmm_session_artifacts(&session_dir)? {
+            runtime_state = Some(SessionRuntimeStateEntry::default());
+        }
+        if let Some(runtime_state) = runtime_state.as_mut() {
+            hydrate_vmm_session_state(&session_dir, &session_id.to_string(), runtime_state)?;
+        }
         return Ok(runtime_state);
     };
     let has_runtime_state = !state_document.runtime_state.is_null();
@@ -31,6 +38,12 @@ pub(super) fn load_segmented_runtime_state(
         let mut runtime_state = runtime_state_from_runtime_log(runtime_conversation_state)?;
         let _ =
             apply_session_addon_state_to_loaded_runtime_state(&session_dir, &mut runtime_state)?;
+        if runtime_state.is_none() && has_vmm_session_artifacts(&session_dir)? {
+            runtime_state = Some(SessionRuntimeStateEntry::default());
+        }
+        if let Some(runtime_state) = runtime_state.as_mut() {
+            hydrate_vmm_session_state(&session_dir, &session_id.to_string(), runtime_state)?;
+        }
         return Ok(runtime_state);
     }
     let mut runtime_state = if has_runtime_state {
@@ -53,9 +66,12 @@ pub(super) fn load_segmented_runtime_state(
     let Some(mut runtime_state) = runtime_state else {
         return Ok(None);
     };
+    let vmm_hydrated =
+        hydrate_vmm_session_state(&session_dir, &session_id.to_string(), &mut runtime_state)?;
     if !has_runtime_state
         && !applied_context
         && !addon_applied
+        && !vmm_hydrated
         && runtime_state.conversation_state.messages.is_empty()
         && runtime_state.conversation_state.records.is_empty()
     {

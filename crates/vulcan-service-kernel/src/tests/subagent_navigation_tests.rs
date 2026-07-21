@@ -183,6 +183,7 @@ fn preserved_subagent_navigation_refresh_reads_child_surface_without_task_list_r
         session_turn_admission_reservations: BTreeMap::new(),
         project_admission_reservations: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
+        session_vmm_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
     };
@@ -519,6 +520,7 @@ fn unclosed_subagent_cache_without_visible_round_builds_navigation() {
         session_turn_admission_reservations: BTreeMap::new(),
         project_admission_reservations: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
+        session_vmm_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
     };
@@ -1954,6 +1956,7 @@ fn registry_terminal_status_remains_visible_after_stale_listener_is_suppressed()
         session_turn_admission_reservations: BTreeMap::new(),
         project_admission_reservations: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
+        session_vmm_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
     };
@@ -2084,6 +2087,7 @@ fn inactive_same_parent_subagent_panel_falls_back_to_parent_surface() {
         session_turn_admission_reservations: BTreeMap::new(),
         project_admission_reservations: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
+        session_vmm_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
     };
@@ -2181,6 +2185,7 @@ fn webui_active_subagent_panel_cannot_cross_selected_session() {
         session_turn_admission_reservations: BTreeMap::new(),
         project_admission_reservations: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
+        session_vmm_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
     };

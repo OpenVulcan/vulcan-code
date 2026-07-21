@@ -38,6 +38,23 @@ fn turn_completion_keeps_supplement_inside_timeline() {
     assert_eq!(turn.timeline[0].content, "supplement");
 }
 
+/// Verifies independently reconstructed logical turns receive distinct collision-resistant identities.
+/// 验证独立重建的逻辑回合会获得不同且抗碰撞的身份。
+#[test]
+fn reconstructed_turn_ids_are_unique_and_session_scoped() {
+    let mut runtime = ConversationHookRuntime::new();
+    let session_id = SessionId::from_u128(43);
+    let state = SessionConversationState::default();
+
+    let first = runtime.reconstruct_turn_from_state(session_id, &state);
+    let second = runtime.reconstruct_turn_from_state(session_id, &state);
+    let expected_prefix = format!("session-{session_id}-turn-");
+
+    assert_ne!(first.turn_id, second.turn_id);
+    assert!(first.turn_id.starts_with(&expected_prefix));
+    assert!(second.turn_id.starts_with(&expected_prefix));
+}
+
 /// Verifies an explicit child execution dispatches tool hooks without creating memory lifecycle turns.
 /// 验证显式子代理执行会派发工具 hook，但不会创建记忆生命周期回合。
 #[test]
@@ -171,6 +188,10 @@ fn awaiting_subagent_completion_keeps_active_turn() {
 
     assert!(runtime.has_active_turn(session_id));
     assert_eq!(
+        runtime.active_turn_id(session_id),
+        Some(awaiting_turn_id.as_str())
+    );
+    assert_eq!(
         awaiting_request
             .payload
             .get("completion_status")
@@ -209,6 +230,7 @@ fn awaiting_subagent_completion_keeps_active_turn() {
 
     assert_eq!(awaiting_turn_id, completed_turn_id);
     assert!(!runtime.has_active_turn(session_id));
+    assert_eq!(runtime.active_turn_id(session_id), None);
     assert_eq!(
         completed_request
             .payload

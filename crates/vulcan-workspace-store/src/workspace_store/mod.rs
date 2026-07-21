@@ -14,6 +14,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
+use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use vldb_controller_client::ControllerSqliteValue;
@@ -35,10 +36,13 @@ use self::segmented_session_store::{
     SegmentedSessionEventKind, append_segmented_boundary_events, append_segmented_session_events,
     backup_runtime_log_before_compaction, create_segmented_session_in_location,
     find_segmented_session_directory, find_segmented_session_directory_by_id,
-    load_session_boundary_state, read_runtime_log_lines, read_segmented_session_event_window,
-    read_state, record_runtime_audit_event, record_runtime_injection_applied,
-    replace_session_boundary_state, segmented_session_directory,
+    has_vmm_session_artifacts, hydrate_vmm_session_state, load_session_boundary_state,
+    read_runtime_log_lines, read_segmented_session_event_window, read_state,
+    record_runtime_audit_event, record_runtime_injection_applied,
+    record_vmm_store_lifecycle_event_best_effort, replace_session_boundary_state,
+    reset_vmm_state_for_history_rewrite, segmented_session_directory,
     segmented_session_directory_exists, state_document_from_runtime_state, write_state,
+    write_vmm_state,
 };
 use self::session_addon_store::read_session_addon_state;
 pub use goal_store::{
@@ -78,6 +82,46 @@ const SESSION_TRANSCRIPT_MIN_ROW_LIMIT: usize = 100;
 /// App metadata key used to persist collapsed task-project identifiers.
 /// 用于持久化已折叠任务项目标识的应用元数据键。
 const COLLAPSED_TASK_PROJECTS_METADATA_KEY: &str = "workspace.collapsed_task_projects";
+
+/// Persists one independently versioned VMM snapshot before its first provider-visible request.
+/// 在首次 Provider 可见请求之前持久化一份独立版本化 VMM 快照。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the exact segmented directory owning `vmm.json`.
+/// `session_dir` 是拥有 `vmm.json` 的精确分段目录。
+/// `session_id` is the exact persisted session owner.
+/// `session_id` 是精确的持久化会话所有者。
+/// `state` is the complete VMM lease and cache-anchor snapshot.
+/// `state` 是完整的 VMM 租约与缓存锚点快照。
+///
+/// # Returns
+/// 返回值
+/// Success only after the new revision is durably published or an identical write is confirmed.
+/// 仅在新版本持久发布或确认写入内容完全相同时返回成功。
+pub fn persist_session_vmm_state_before_provider_request(
+    session_dir: &Path,
+    session_id: &str,
+    state: &vulcan_vmm::VmmSessionMemoryState,
+) -> Result<(), String> {
+    if !vulcan_vmm::VmmRuntimeFeaturePolicy::from_env().session_state_enabled {
+        return Ok(());
+    }
+    match write_vmm_state(session_dir, session_id, state) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let timestamp = current_unix_millis_text();
+            record_vmm_store_lifecycle_event_best_effort(
+                session_dir,
+                &timestamp,
+                vulcan_context::RuntimeVmmLifecycleAction::WriteFailed,
+                Some(state),
+                "provider_boundary_vmm_write_failed",
+            );
+            Err(error)
+        }
+    }
+}
 
 mod boundary_store;
 mod loading;

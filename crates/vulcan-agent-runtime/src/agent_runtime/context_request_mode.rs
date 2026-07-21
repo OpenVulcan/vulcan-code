@@ -11,6 +11,30 @@ pub(crate) fn resolve_preparation_context_request_mode(
     preparation: &ExecutionPreparation,
     request_snapshot: &ProviderRequestSnapshot,
 ) -> ContextRequestMode {
+    // local_boundary_is_proven requires the persisted cursor boundary to occur exactly once in current history.
+    // local_boundary_is_proven 要求持久化游标边界在当前历史中精确出现一次。
+    let local_boundary_is_proven = request_snapshot
+        .continuation
+        .last_local_message_id
+        .as_deref()
+        .is_some_and(|boundary_id| {
+            request_snapshot
+                .history
+                .iter()
+                .filter(|message| message.id == boundary_id)
+                .count()
+                == 1
+        });
+    // continuation_message_id is exposed to incremental diagnostics only with an exact local boundary.
+    // continuation_message_id 仅在具备精确本地边界时暴露给增量诊断。
+    let continuation_message_id = if local_boundary_is_proven {
+        request_snapshot
+            .continuation
+            .last_provider_message_id
+            .as_deref()
+    } else {
+        None
+    };
     resolve_context_request_mode(ContextRequestModeInput {
         internal_request: preparation.prompt_purpose.disables_provider_tools(),
         provider_id: &request_snapshot.provider_id,
@@ -21,9 +45,6 @@ pub(crate) fn resolve_preparation_context_request_mode(
         context_budget: preparation.context_budget.as_ref(),
         continuation_provider_id: request_snapshot.continuation.provider_id.as_deref(),
         continuation_model_id: request_snapshot.continuation.model_id.as_deref(),
-        continuation_message_id: request_snapshot
-            .continuation
-            .last_provider_message_id
-            .as_deref(),
+        continuation_message_id,
     })
 }

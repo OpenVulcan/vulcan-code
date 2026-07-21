@@ -15,6 +15,10 @@ use vulcan_workspace_store::{
     data_plane::ControllerRuntimeHandle, workspace_store::WorkspaceSnapshot,
 };
 
+use super::vmm_runtime_audit::{
+    VmmRemovedLeaseAuditAction, build_vmm_lifecycle_events_for_state_diff,
+};
+
 use super::{
     AgentRuntimeBridge, ContextUsageChangedDelta, ServiceBridgeState, ServiceEvent,
     SharedServiceBridgeState, UpdateConversationRunPhaseDelta, WorkbenchDelta,
@@ -155,6 +159,9 @@ pub(super) struct TerminalReportMemoryApply {
     /// Final conversation outcome when this report closes a regular user-facing turn.
     /// 当本报告闭合普通用户会话回合时的最终会话结果。
     pub(super) conversation_run_outcome: Option<ConversationRunOutcome>,
+    /// Body-free VMM lifecycle events produced by terminal TTL consumption.
+    /// 终态 TTL 消费产生的不含正文 VMM 生命周期事件。
+    pub(super) vmm_lifecycle_events: Vec<vulcan_context::RuntimeVmmLifecycleEvent>,
 }
 
 /// Exact conversation-hook side effect committed for one terminal report.
@@ -217,6 +224,27 @@ impl TerminalConversationHookAction {
     }
 }
 
+/// Returns whether one terminal action owns the single VMM TTL consumption boundary.
+/// 返回单个终态动作是否拥有唯一 VMM TTL 消费边界。
+///
+/// # Parameters
+/// 参数
+/// `action` is the exclusive terminal hook action selected from authoritative facts.
+/// `action` 是根据权威事实选择的互斥终态 Hook 动作。
+/// `completion_status` identifies whether descendant work still belongs to the same turn.
+/// `completion_status` 标识后代工作是否仍属于同一回合。
+///
+/// # Returns
+/// 返回值
+/// `true` only for a successful, fully completed logical user turn.
+/// 仅成功且完整结束的逻辑用户回合返回 `true`。
+fn terminal_action_consumes_vmm_ttl(
+    action: TerminalConversationHookAction,
+    completion_status: ConversationTurnCompletionStatus,
+) -> bool {
+    action == TerminalConversationHookAction::Complete && completion_status.is_final()
+}
+
 /// Immutable facts required to commit one terminal conversation-hook action.
 /// 提交单个终态会话 Hook 操作所需的不可变事实。
 struct TerminalConversationHookRequest<'a> {
@@ -244,6 +272,9 @@ struct TerminalConversationHookRequest<'a> {
     /// Exclusive logical-turn action selected before hook runtime locking.
     /// 在锁定 Hook 运行时前选择的互斥逻辑回合操作。
     action: TerminalConversationHookAction,
+    /// Optional exact VMM active-turn identity that must match before Hook ownership is consumed.
+    /// 在消费 Hook 所有权前必须匹配的可选精确 VMM 活动回合身份。
+    expected_vmm_turn_id: Option<&'a str>,
 }
 
 /// Commits the exact terminal conversation-hook action before workspace state becomes visible.
@@ -269,6 +300,19 @@ fn commit_terminal_conversation_hook(
             .conversation_hook_runtime
             .lock()
             .map_err(|error| format!("failed to lock conversation hook runtime: {error}"))?;
+        if let Some(expected_turn_id) = request.expected_vmm_turn_id {
+            // actual_turn_id is copied before the mutating completion call so mismatch cannot remove Hook ownership.
+            // actual_turn_id 在可变完成调用前复制，使身份不匹配无法移除 Hook 所有权。
+            let actual_turn_id = hook_runtime
+                .active_turn_id(request.session_id)
+                .map(str::to_string);
+            if actual_turn_id.as_deref() != Some(expected_turn_id) {
+                return Err(format!(
+                    "VMM active logical turn `{expected_turn_id}` does not match the retained conversation Hook turn {:?}.",
+                    actual_turn_id
+                ));
+            }
+        }
         // turn_id and completion_request are produced atomically from the same retained logical turn.
         // turn_id 与 completion_request 由同一个保留逻辑回合原子地产生。
         let (turn_id, completion_request) = hook_runtime
@@ -349,6 +393,7 @@ pub(super) fn apply_task_session_execution_report_to_memory(
         workspace_snapshot,
         completion_request: None,
         conversation_run_outcome: None,
+        vmm_lifecycle_events: Vec::new(),
     })
 }
 
@@ -542,7 +587,7 @@ pub(super) fn apply_execution_report_to_memory(
     // Measures in-memory workspace mutation for the terminal execution report.
     // 衡量终态执行报告写入内存工作区的耗时。
     let workspace_apply_started_at = current_unix_millis_value();
-    let (workspace_snapshot, terminal_run_phase, terminal_status_label) = {
+    let (workspace_snapshot, terminal_run_phase, terminal_status_label, vmm_lifecycle_events) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -566,6 +611,9 @@ pub(super) fn apply_execution_report_to_memory(
                     updated_at: now.clone(),
                     ..SessionRuntimeStateEntry::default()
                 });
+            // vmm_state_before_terminal is the exact audit baseline before terminal TTL consumption.
+            // vmm_state_before_terminal 是终态 TTL 消费前的精确审计基线。
+            let vmm_state_before_terminal = runtime_state.vmm_session_memory.clone();
             let apply_result = apply_terminal_execution_report_to_state(
                 &mut runtime_state,
                 session_id,
@@ -583,6 +631,32 @@ pub(super) fn apply_execution_report_to_memory(
             // completion_status freezes the inspected gate decision for hook commit and context consumption.
             // completion_status 固化已检查的闸门决策，供 Hook 提交与上下文消费共同使用。
             let completion_status = completion_gate.completion_status();
+            // consumes_vmm_ttl identifies the single final boundary before either state machine commits ownership.
+            // consumes_vmm_ttl 在任一状态机提交所有权前标识唯一终态边界。
+            let consumes_vmm_ttl = terminal_action_consumes_vmm_ttl(hook_action, completion_status);
+            // expected_vmm_turn_id preflights TTL mutation on the detached draft before Hook ownership is removed.
+            // expected_vmm_turn_id 在 Hook 所有权被移除前，先对分离草稿执行 TTL 变更预检。
+            let expected_vmm_turn_id = if consumes_vmm_ttl
+                && !runtime_state.vmm_session_memory.is_pristine()
+            {
+                // turn_id is the exact detached VMM owner that must match the active Hook turn.
+                // turn_id 是必须与活动 Hook 回合匹配的精确分离 VMM 所有者。
+                let turn_id = runtime_state
+                    .vmm_session_memory
+                    .active_turn_id
+                    .clone()
+                    .ok_or_else(|| {
+                        String::from(
+                            "Durable VMM state has no registered active logical turn at terminal completion.",
+                        )
+                    })?;
+                runtime_state
+                    .vmm_session_memory
+                    .consume_turn(&turn_id, &now)?;
+                Some(turn_id)
+            } else {
+                None
+            };
             // hook_commit makes logical-turn ownership explicit before any workspace mutation is installed.
             // hook_commit 在安装任何工作区变更前显式提交逻辑回合所有权。
             let hook_commit = commit_terminal_conversation_hook(
@@ -598,19 +672,16 @@ pub(super) fn apply_execution_report_to_memory(
                     completion_status,
                     pending_subagent_count: completion_gate.pending_subagent_count,
                     action: hook_action,
+                    expected_vmm_turn_id: expected_vmm_turn_id.as_deref(),
                 },
             )?;
             if let TerminalConversationHookCommit::Completion { turn_id, request } = hook_commit {
                 completion_request = Some(request);
-                if completion_status.is_final() {
+                if consumes_vmm_ttl {
                     runtime_state
                         .context_injection_state
                         .consume_turn(&turn_id, &now);
                     runtime_state.vmm_profile_sync.record_completed_turn();
-                    let profile_sync = runtime_state.vmm_profile_sync.clone();
-                    agent_runtime
-                        .vmm_hook_runtime
-                        .store_profile_sync_state(session_id, profile_sync)?;
                 }
             }
             if let Some(session) =
@@ -645,12 +716,19 @@ pub(super) fn apply_execution_report_to_memory(
             );
             sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
             if is_main_session {
-                agent_runtime
+                // Snapshot refresh is a derived runtime projection after the authoritative workspace commit.
+                // 快照刷新是权威工作区提交后的派生运行时投影。
+                if let Err(snapshot_refresh_error) = agent_runtime
                     .vmm_hook_runtime
                     .replace_snapshot(build_vmm_hook_config_snapshot(
                         &agent_runtime.provider_configuration,
                         workspace,
-                    ))?;
+                    ))
+                {
+                    eprintln!(
+                        "[webui-service] failed to refresh VMM hook runtime after terminal workspace commit for session {session_id}: {snapshot_refresh_error}"
+                    );
+                }
             }
             let terminal_run_phase = if apply_result.is_success {
                 SessionRunPhase::Ready
@@ -662,7 +740,23 @@ pub(super) fn apply_execution_report_to_memory(
             } else {
                 SessionState::Blocked.label().to_string()
             };
-            (workspace.clone(), terminal_run_phase, terminal_status_label)
+            // vmm_lifecycle_events retain no provider-visible memory text.
+            // vmm_lifecycle_events 不保留任何 Provider 可见记忆正文。
+            let vmm_lifecycle_events = build_vmm_lifecycle_events_for_state_diff(
+                &vmm_state_before_terminal,
+                &runtime_state_snapshot.vmm_session_memory,
+                runtime_state_snapshot
+                    .vmm_session_memory
+                    .last_consumed_turn_id
+                    .as_deref(),
+                VmmRemovedLeaseAuditAction::Expired,
+            );
+            (
+                workspace.clone(),
+                terminal_run_phase,
+                terminal_status_label,
+                vmm_lifecycle_events,
+            )
         }
     };
     webui_trace_if_slow(
@@ -711,6 +805,7 @@ pub(super) fn apply_execution_report_to_memory(
         workspace_snapshot,
         completion_request,
         conversation_run_outcome,
+        vmm_lifecycle_events,
     })
 }
 
@@ -983,5 +1078,27 @@ mod tests {
             TerminalConversationHookAction::from_terminal_facts(false, true, true),
             TerminalConversationHookAction::None
         );
+    }
+
+    /// Verifies failures, stopped ownership termination, and incomplete descendant work do not consume TTL.
+    /// 验证失败、停止后的所有权终止以及未完成后代工作都不会消费 TTL。
+    #[test]
+    fn vmm_ttl_consumption_requires_successful_final_completion() {
+        assert!(terminal_action_consumes_vmm_ttl(
+            TerminalConversationHookAction::Complete,
+            ConversationTurnCompletionStatus::Completed,
+        ));
+        assert!(!terminal_action_consumes_vmm_ttl(
+            TerminalConversationHookAction::Complete,
+            ConversationTurnCompletionStatus::AwaitingSubagents,
+        ));
+        assert!(!terminal_action_consumes_vmm_ttl(
+            TerminalConversationHookAction::Terminate,
+            ConversationTurnCompletionStatus::Completed,
+        ));
+        assert!(!terminal_action_consumes_vmm_ttl(
+            TerminalConversationHookAction::None,
+            ConversationTurnCompletionStatus::Completed,
+        ));
     }
 }

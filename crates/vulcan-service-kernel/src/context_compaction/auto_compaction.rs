@@ -32,17 +32,37 @@ pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
     let Some(context_budget) = preparation.context_budget.as_ref() else {
         return Ok(None);
     };
-    if !context_budget.should_compact() {
+    // vmm_cache_pressure measures immutable text that can only be reclaimed at a compaction boundary.
+    // vmm_cache_pressure 衡量只能在压缩边界回收的不可变文本。
+    let vmm_cache_pressure = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .workspace_snapshot
+        .as_ref()
+        .and_then(|workspace| workspace.session_runtime_state.get(&request.session_id))
+        .map(|runtime_state| runtime_state.vmm_session_memory.cache_pressure())
+        .unwrap_or_default();
+    // vmm_pressure_requires_compaction raises priority only after an absolute or proportional threshold.
+    // vmm_pressure_requires_compaction 仅在达到绝对或比例阈值后提高压缩优先级。
+    let vmm_pressure_requires_compaction =
+        vmm_cache_pressure_requires_compaction(context_budget, vmm_cache_pressure);
+    if !context_budget.should_compact() && !vmm_pressure_requires_compaction {
         return Ok(None);
     }
     let session_id = request.session_id;
-    let budget_note = context_budget.summary_note();
+    let budget_note = format!(
+        "{}；VMM 可回收锚点约 {} tokens（{} bytes）",
+        context_budget.summary_note(),
+        vmm_cache_pressure.reclaimable_anchor_estimated_tokens,
+        vmm_cache_pressure.reclaimable_anchor_bytes,
+    );
     webui_trace(
         "stream_auto_compaction_needed",
         format!(
-            "session={session_id} severity={:?} usage={}",
+            "session={session_id} severity={:?} usage={} vmm_reclaimable_tokens={} vmm_pressure_trigger={vmm_pressure_requires_compaction}",
             context_budget.severity,
-            context_budget.usage_label()
+            context_budget.usage_label(),
+            vmm_cache_pressure.reclaimable_anchor_estimated_tokens,
         ),
     );
 
@@ -261,6 +281,37 @@ pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
     }
 }
 
+/// Returns whether reclaimable immutable VMM anchors justify an earlier automatic compaction.
+/// 返回可回收不可变 VMM 锚点是否足以提前触发自动压缩。
+///
+/// # Parameters
+/// 参数
+/// `context_budget` supplies the automatic-compaction policy and effective input limit.
+/// `context_budget` 提供自动压缩策略与生效输入上限。
+/// `pressure` contains body-free aggregate VMM capacity estimates.
+/// `pressure` 包含不含正文的 VMM 聚合容量估算。
+///
+/// # Returns
+/// 返回值
+/// `true` only when automatic compaction is allowed and either pressure threshold is met.
+/// 仅当允许自动压缩且达到任一压力阈值时返回 `true`。
+fn vmm_cache_pressure_requires_compaction(
+    context_budget: &vulcan_context::ContextBudgetSnapshot,
+    pressure: vulcan_vmm::VmmCachePressure,
+) -> bool {
+    if !context_budget.compaction_auto_enabled || !context_budget.baseline_matches_active_runtime {
+        return false;
+    }
+    if pressure.reclaimable_anchor_estimated_tokens >= VMM_RECLAIMABLE_ANCHOR_COMPACTION_TOKENS {
+        return true;
+    }
+    context_budget.effective_input_limit.is_some_and(|limit| {
+        limit > 0
+            && pressure.reclaimable_anchor_estimated_tokens as f32 / limit as f32
+                >= VMM_RECLAIMABLE_ANCHOR_COMPACTION_RATIO
+    })
+}
+
 /// Returns the current consecutive automatic compaction failure count for one session.
 /// 返回单个会话当前连续自动压缩失败次数。
 pub(crate) fn webui_auto_context_compaction_failure_count(
@@ -325,6 +376,7 @@ pub(crate) fn refreshed_execution_request_after_context_compaction(
         .and_then(|event| event.turn_id.clone());
     refreshed.context_injection = core_provider_context_injection_from_state_for_turn(
         &runtime_state.context_injection_state,
+        &runtime_state.vmm_session_memory,
         turn_marker.as_deref(),
     );
     Ok(refreshed)
@@ -437,4 +489,71 @@ pub(crate) fn build_webui_context_compaction_job_request(
         command_session_runtime: Arc::clone(&agent_runtime.command_session_runtime),
         token_budget_runtime: Arc::clone(&agent_runtime.token_budget_runtime),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds one automatic-compaction budget with an exact effective input limit.
+    /// 构建一份具有精确生效输入上限的自动压缩预算。
+    fn automatic_budget(effective_input_limit: usize) -> vulcan_context::ContextBudgetSnapshot {
+        vulcan_context::ContextBudgetSnapshot {
+            effective_input_limit: Some(effective_input_limit),
+            compaction_auto_enabled: true,
+            baseline_matches_active_runtime: true,
+            ..vulcan_context::ContextBudgetSnapshot::default()
+        }
+    }
+
+    /// Verifies absolute and proportional reclaimable-anchor thresholds raise compaction pressure.
+    /// 验证可回收锚点的绝对阈值与比例阈值都会提高压缩压力。
+    #[test]
+    fn reclaimable_vmm_anchor_pressure_triggers_only_at_explicit_thresholds() {
+        let budget = automatic_budget(100_000);
+        assert!(vmm_cache_pressure_requires_compaction(
+            &budget,
+            vulcan_vmm::VmmCachePressure {
+                reclaimable_anchor_estimated_tokens: VMM_RECLAIMABLE_ANCHOR_COMPACTION_TOKENS,
+                ..vulcan_vmm::VmmCachePressure::default()
+            }
+        ));
+        assert!(vmm_cache_pressure_requires_compaction(
+            &budget,
+            vulcan_vmm::VmmCachePressure {
+                reclaimable_anchor_estimated_tokens: 5_000,
+                ..vulcan_vmm::VmmCachePressure::default()
+            }
+        ));
+        assert!(!vmm_cache_pressure_requires_compaction(
+            &budget,
+            vulcan_vmm::VmmCachePressure {
+                reclaimable_anchor_estimated_tokens: 4_999,
+                ..vulcan_vmm::VmmCachePressure::default()
+            }
+        ));
+    }
+
+    /// Verifies disabled automatic compaction and stale baselines suppress VMM pressure triggers.
+    /// 验证禁用自动压缩与陈旧基线都会抑制 VMM 压力触发。
+    #[test]
+    fn reclaimable_vmm_anchor_pressure_respects_compaction_guards() {
+        let mut disabled_budget = automatic_budget(100_000);
+        disabled_budget.compaction_auto_enabled = false;
+        let mut stale_budget = automatic_budget(100_000);
+        stale_budget.baseline_matches_active_runtime = false;
+        let pressure = vulcan_vmm::VmmCachePressure {
+            reclaimable_anchor_estimated_tokens: VMM_RECLAIMABLE_ANCHOR_COMPACTION_TOKENS,
+            ..vulcan_vmm::VmmCachePressure::default()
+        };
+
+        assert!(!vmm_cache_pressure_requires_compaction(
+            &disabled_budget,
+            pressure
+        ));
+        assert!(!vmm_cache_pressure_requires_compaction(
+            &stale_budget,
+            pressure
+        ));
+    }
 }

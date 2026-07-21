@@ -133,6 +133,7 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         session_turn_admission_reservations: BTreeMap::new(),
         project_admission_reservations: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
+        session_vmm_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
     }));
@@ -286,6 +287,138 @@ fn regular_execution_report_hook_lock_failure_preserves_workspace_state() {
         Some(&SessionRunPhase::Thinking)
     );
     assert!(!workspace.session_runtime_state.contains_key(&session_id));
+}
+
+/// Verifies a VMM/Hook turn mismatch is rejected before either terminal state machine consumes ownership.
+/// 验证 VMM 与 Hook 回合身份不匹配时，会在任一终态状态机消费所有权之前被拒绝。
+#[test]
+fn regular_execution_report_vmm_turn_mismatch_preserves_both_owners() {
+    // session_id identifies the regular session whose exact terminal ownership is under test.
+    // session_id 标识正在测试精确终态所有权的普通会话。
+    let session_id = SessionId::new_v4();
+    // state contains one durable VMM lease registered to a deliberately divergent turn id.
+    // state 包含一条持久 VMM 租约，并将其登记到刻意分歧的回合标识。
+    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+        session_id,
+    )));
+    {
+        // guard initializes the detached-state baseline that must remain unchanged after rejection.
+        // guard 初始化拒绝后必须保持不变的分离状态基线。
+        let mut guard = state.lock().expect("lock VMM mismatch fixture");
+        // runtime_state owns the durable lease and divergent active turn.
+        // runtime_state 拥有持久租约与分歧的活动回合。
+        let runtime_state = guard
+            .workspace_snapshot
+            .as_mut()
+            .expect("workspace fixture should exist")
+            .session_runtime_state
+            .entry(session_id)
+            .or_default();
+        runtime_state
+            .vmm_session_memory
+            .apply_recall_batch(
+                &session_id.to_string(),
+                "user-anchor",
+                &vulcan_vmm::VmmRecallBatch {
+                    ttl_turns: 1,
+                    injection_tag: String::from("VMM_MEMORY"),
+                    injection_description: String::from("Relevant memories."),
+                    items: vec![vulcan_vmm::ContextItem {
+                        text: String::from("terminal ownership memory"),
+                        memory_id: 901,
+                        ..vulcan_vmm::ContextItem::default()
+                    }],
+                },
+                "1",
+            )
+            .expect("VMM mismatch lease should be created");
+        runtime_state
+            .vmm_session_memory
+            .register_active_turn("vmm-divergent-turn", "2")
+            .expect("VMM divergent turn should be registered");
+    }
+    // agent_runtime owns the real conversation Hook turn that must survive mismatch rejection.
+    // agent_runtime 拥有必须在不匹配拒绝后保留的真实会话 Hook 回合。
+    let agent_runtime = test_agent_runtime_bridge();
+    // retained_hook_turn_id captures the exact owner before the terminal attempt.
+    // retained_hook_turn_id 捕获终态尝试前的精确所有者。
+    let retained_hook_turn_id = {
+        let mut hook_runtime = agent_runtime
+            .conversation_hook_runtime
+            .lock()
+            .expect("lock Hook mismatch fixture");
+        hook_runtime.record_queued_user_prompt(
+            session_id,
+            "prompt-1",
+            Some(String::from("project-a")),
+            String::from("D:\\openvulcan\\vulcan-code"),
+            PendingSessionPromptSource::UserFollowup,
+            "complete this turn",
+        );
+        hook_runtime
+            .active_turn_id(session_id)
+            .expect("Hook turn should be active")
+            .to_string()
+    };
+    assert_ne!(retained_hook_turn_id, "vmm-divergent-turn");
+    // report is a successful user turn that would consume TTL if both identities matched.
+    // report 是一个成功用户回合，若两个身份匹配本应消费 TTL。
+    let report = ExecutionRunReport {
+        session_id,
+        preparation: None,
+        assistant_output: Some(String::from("terminal response")),
+        thinking_output: None,
+        conversation_state: None,
+        provider_request_count: 1,
+        last_successful_provider_usage: None,
+        cumulative_successful_provider_usage: None,
+        embedded_turn_usage_segments: Vec::new(),
+        mcp_discovery_rows: Vec::new(),
+        mcp_discovery_errors: Vec::new(),
+        warnings: Vec::new(),
+        error: None,
+        controller_events: Vec::new(),
+    };
+    // error proves the cross-state identity fence rejected the terminal commit.
+    // error 证明跨状态身份栅栏拒绝了终态提交。
+    let error = match apply_execution_report_to_memory(
+        &ServiceEventEmitter::new(Vec::new()),
+        &state,
+        &agent_runtime,
+        report,
+    ) {
+        Ok(_) => panic!("VMM/Hook turn mismatch must reject terminal commit"),
+        Err(error) => error,
+    };
+    assert!(error.contains("does not match the retained conversation Hook turn"));
+    assert_eq!(
+        agent_runtime
+            .conversation_hook_runtime
+            .lock()
+            .expect("lock Hook runtime after mismatch")
+            .active_turn_id(session_id),
+        Some(retained_hook_turn_id.as_str())
+    );
+    {
+        // guard keeps the retained workspace borrowed through both unchanged-state assertions.
+        // guard 在两个状态不变断言期间保持对工作区的借用。
+        let guard = state.lock().expect("lock workspace after mismatch");
+        // persisted_vmm_state confirms the detached preflight never became visible after Hook rejection.
+        // persisted_vmm_state 确认 Hook 拒绝后，分离预检从未变为可见状态。
+        let persisted_vmm_state = &guard
+            .workspace_snapshot
+            .as_ref()
+            .expect("workspace should remain available")
+            .session_runtime_state
+            .get(&session_id)
+            .expect("VMM runtime state should remain present")
+            .vmm_session_memory;
+        assert_eq!(persisted_vmm_state.completed_turn_sequence, 0);
+        assert_eq!(
+            persisted_vmm_state.active_turn_id.as_deref(),
+            Some("vmm-divergent-turn")
+        );
+    }
 }
 
 /// Verifies a Provider fallback commits a durable rejection instead of authorizing continuation.
@@ -2474,42 +2607,44 @@ fn completion_gate_ignores_send_message_resumed_child_task() {
     assert_eq!(replacement_gate.pending_subagent_count, 1);
 }
 
-/// Verifies live transcript persistence versioning does not invalidate session persistence.
-/// 验证运行中转录持久化版本不会使会话持久化版本失效。
+/// Verifies live transcript persistence versioning does not invalidate session and VMM persistence.
+/// 验证运行中转录持久化版本不会使会话与 VMM 持久化版本失效。
 #[test]
 fn live_transcript_persist_version_is_independent_from_session_persist_version() {
     // session_id identifies the session whose persistence lanes are compared.
     // session_id 标识需要比较持久化通道的会话。
     let session_id = SessionId::new_v4();
-    // state carries independent version tables for session and live transcript writes.
-    // state 携带会话写入与运行中转录写入的独立版本表。
+    // state carries independent version tables for runtime snapshots and live transcript writes.
+    // state 携带运行态快照写入与运行中转录写入的独立版本表。
     let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
         session_id,
     )));
 
-    // session_version belongs to the full session/runtime persistence lane.
-    // session_version 属于完整会话与运行态持久化通道。
-    let session_version = next_webui_session_persist_version(&state, session_id)
-        .expect("session persist version should allocate");
+    // runtime_versions belong to the coupled full-session and independent VMM persistence lanes.
+    // runtime_versions 属于耦合分配的完整会话与独立 VMM 持久化通道。
+    let runtime_versions = next_webui_session_runtime_persist_versions(&state, session_id)
+        .expect("runtime persist versions should allocate");
     // transcript_version belongs to the live transcript-only persistence lane.
     // transcript_version 属于仅运行中转录持久化通道。
     let transcript_version = next_webui_session_transcript_persist_version(&state, session_id)
         .expect("transcript persist version should allocate");
 
-    assert!(webui_session_persist_version_is_current(
+    assert!(webui_session_runtime_persist_versions_are_current(
         &state,
         session_id,
-        session_version
+        runtime_versions.0,
+        runtime_versions.1,
     ));
     assert!(webui_session_transcript_persist_version_is_current(
         &state,
         session_id,
         transcript_version
     ));
-    assert!(!webui_session_persist_version_is_current(
+    assert!(!webui_session_runtime_persist_versions_are_current(
         &state,
         session_id,
-        session_version.saturating_add(1)
+        runtime_versions.0.saturating_add(1),
+        runtime_versions.1,
     ));
 }
 

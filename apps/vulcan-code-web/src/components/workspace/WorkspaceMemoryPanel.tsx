@@ -511,8 +511,17 @@ function ContextInjectionCardView(props: {
 }) {
   const { t } = useI18n();
   const sourceLabel = contextInjectionCardSourceLabel(props.card);
+  // expiredGroup identifies the bottom-only VMM region retained until context compaction.
+  // expiredGroup 标识仅在底部展示并保留到上下文压缩时清理的 VMM 区域。
+  const expiredGroup = props.card.tag === "VMM_MEMORY_EXPIRED";
   return (
-    <>
+    <section className={`context-injection-card-group${expiredGroup ? " expired" : ""}`}>
+        {expiredGroup ? (
+          <header className="context-injection-expired-header">
+            <strong>{t("workspaceMemory.expiredRegionTitle")}</strong>
+            <span>{t("workspaceMemory.expiredRegionDescription")}</span>
+          </header>
+        ) : null}
         {props.card.items.map((item, index) => {
           const memoryId = contextInjectionMemoryId(item);
           const turnId = contextInjectionTurnId(item);
@@ -577,7 +586,7 @@ function ContextInjectionCardView(props: {
           </article>
           );
         })}
-    </>
+    </section>
   );
 }
 

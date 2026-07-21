@@ -48,6 +48,107 @@ pub const DEFAULT_PROFILE_NODE_LIMIT: u32 = 256;
 /// 宿主允许的每个目标画像节点拉取最大值。
 pub const MAX_PROFILE_NODE_LIMIT: u32 = 512;
 
+/// Internal environment switch for independent `vmm.json` session state.
+/// 独立 `vmm.json` 会话状态的内部环境开关。
+pub const VMM_SESSION_STATE_FEATURE_ENV: &str = "VULCAN_VMM_SESSION_STATE_ENABLED";
+/// Internal environment switch for immutable exact-message VMM anchors.
+/// 不可变精确消息 VMM 锚点的内部环境开关。
+pub const VMM_STABLE_ANCHORS_FEATURE_ENV: &str = "VULCAN_VMM_STABLE_ANCHORS_ENABLED";
+/// Internal environment switch for append-only OpenAI Responses continuation reuse.
+/// 追加式 OpenAI Responses continuation 复用的内部环境开关。
+pub const VMM_OPENAI_APPEND_CONTINUATION_FEATURE_ENV: &str =
+    "VULCAN_VMM_OPENAI_APPEND_CONTINUATION_ENABLED";
+
+/// Independently resolved internal rollout controls for the VMM session-state redesign.
+/// VMM 会话状态重构分别解析的内部灰度控制项。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VmmRuntimeFeaturePolicy {
+    /// Whether typed recall may read and mutate independently persisted VMM session state.
+    /// 类型化召回是否可以读取和修改独立持久化的 VMM 会话状态。
+    pub session_state_enabled: bool,
+    /// Whether immutable VMM anchors are rendered into exact provider messages.
+    /// 是否把不可变 VMM 锚点渲染到精确 Provider 消息中。
+    pub stable_anchors_enabled: bool,
+    /// Whether append-only VMM changes may reuse OpenAI Responses continuation.
+    /// 追加式 VMM 变更是否可以复用 OpenAI Responses continuation。
+    pub openai_append_continuation_enabled: bool,
+}
+
+impl Default for VmmRuntimeFeaturePolicy {
+    /// Enables the fully migrated VMM design when no internal rollout override is present.
+    /// 未提供内部灰度覆盖时启用完整迁移后的 VMM 设计。
+    fn default() -> Self {
+        Self {
+            session_state_enabled: true,
+            stable_anchors_enabled: true,
+            openai_append_continuation_enabled: true,
+        }
+    }
+}
+
+impl VmmRuntimeFeaturePolicy {
+    /// Resolves all independent VMM rollout controls from process environment variables.
+    /// 从进程环境变量解析全部独立 VMM 灰度控制项。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A policy whose unset or unrecognized values preserve the enabled production default.
+    /// 返回一份策略；未设置或无法识别的值保持生产环境默认启用。
+    pub fn from_env() -> Self {
+        Self {
+            session_state_enabled: environment_feature_enabled(VMM_SESSION_STATE_FEATURE_ENV),
+            stable_anchors_enabled: environment_feature_enabled(VMM_STABLE_ANCHORS_FEATURE_ENV),
+            openai_append_continuation_enabled: environment_feature_enabled(
+                VMM_OPENAI_APPEND_CONTINUATION_FEATURE_ENV,
+            ),
+        }
+    }
+}
+
+/// Resolves one internal Boolean feature switch while preserving safe enabled defaults.
+/// 解析单个内部布尔功能开关，同时保持安全的默认启用行为。
+///
+/// # Parameters
+/// 参数
+/// `name` is the exact environment variable name.
+/// `name` 是精确的环境变量名称。
+///
+/// # Returns
+/// 返回值
+/// `false` only for explicit `0`, `false`, `off`, or `no`; every other state remains enabled.
+/// 仅显式为 `0`、`false`、`off` 或 `no` 时返回 `false`；其他状态均保持启用。
+fn environment_feature_enabled(name: &str) -> bool {
+    let Some(value) = std::env::var_os(name) else {
+        return true;
+    };
+    let Some(value) = value.to_str() else {
+        return true;
+    };
+    feature_value_enabled(Some(value))
+}
+
+/// Resolves one optional UTF-8 feature value using the internal Boolean spelling contract.
+/// 使用内部布尔拼写契约解析一个可选 UTF-8 功能值。
+///
+/// # Parameters
+/// 参数
+/// `value` is the optional environment value after UTF-8 validation.
+/// `value` 是完成 UTF-8 验证后的可选环境值。
+///
+/// # Returns
+/// 返回值
+/// `false` only for explicit disabled spellings; absence and unknown values remain enabled.
+/// 仅显式禁用拼写返回 `false`；缺失值与未知值保持启用。
+fn feature_value_enabled(value: Option<&str>) -> bool {
+    let Some(value) = value else {
+        return true;
+    };
+    !matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "0" | "false" | "off" | "no"
+    )
+}
+
 /// Reserved future install-management state.
 /// 预留的未来安装管理状态。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -655,5 +756,18 @@ mod tests {
             VmmEffectiveConfig::resolve(&oversized, None, None).profile_node_limit,
             MAX_PROFILE_NODE_LIMIT
         );
+    }
+
+    /// Verifies rollout feature values require an explicit disabled spelling.
+    /// 验证灰度功能值只有显式禁用拼写才会关闭。
+    #[test]
+    fn feature_value_defaults_enabled_and_recognizes_disabled_spellings() {
+        assert!(feature_value_enabled(None));
+        assert!(feature_value_enabled(Some("true")));
+        assert!(feature_value_enabled(Some("unexpected")));
+        assert!(!feature_value_enabled(Some("0")));
+        assert!(!feature_value_enabled(Some(" FALSE ")));
+        assert!(!feature_value_enabled(Some("off")));
+        assert!(!feature_value_enabled(Some("no")));
     }
 }

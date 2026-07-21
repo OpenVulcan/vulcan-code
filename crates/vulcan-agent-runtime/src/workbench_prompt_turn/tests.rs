@@ -7,6 +7,7 @@ use vulcan_provider_config::config::{
     PersistedAiToolConfiguration, ProjectVulcanCodeConfigurationFile,
 };
 use vulcan_session_boundary::{SessionBoundaryEventKind, SessionEventVisibility};
+use vulcan_vmm::{ContextItem, VmmPromptAnchorKind, VmmRecallBatch, VmmSessionMemoryState};
 use vulcan_workbench_model::{
     PendingSessionPromptSource, SessionId, SessionMessageEntry, SessionMessageKind,
     SessionRuntimeStateEntry,
@@ -21,6 +22,19 @@ use crate::{
 };
 
 use super::*;
+
+/// Verifies canonical user ids cannot collide when multiple starts occur within one timestamp tick.
+/// 验证多次启动发生在同一时间戳粒度内时规范用户标识仍不会碰撞。
+#[test]
+fn canonical_user_message_ids_are_unique_and_session_scoped() {
+    let session_id = SessionId::from_u128(902);
+    let first = new_canonical_user_message_id(session_id);
+    let second = new_canonical_user_message_id(session_id);
+
+    assert_ne!(first, second);
+    assert!(first.starts_with(&format!("session-{session_id}-protocol-user-")));
+    assert!(second.starts_with(&format!("session-{session_id}-protocol-user-")));
+}
 
 /// Begins one user-authored prompt turn used by session boundary tests.
 /// 启动一条供 会话边界测试使用的用户提示词回合。
@@ -244,6 +258,124 @@ fn hidden_model_guidance_stays_out_of_visible_transcript() {
             .request
             .prompt
             .contains("<hidden_host_guidance>\nPlan file: D:/workspace/docs/plan/demo.md")
+    );
+}
+
+/// Verifies remote PreCheck failure leaves expired VMM state resident without adding a prompt anchor.
+/// 验证远端 PreCheck 失败时，过期 VMM 状态保持驻留且不会新增提示词锚点。
+#[test]
+fn precheck_failure_preserves_expired_vmm_resident_and_registers_terminal_turn() {
+    // session_id matches the fixed owner used by begin_user_prompt.
+    // session_id 与 begin_user_prompt 使用的固定所有者一致。
+    let session_id = SessionId::from_u128(902);
+    // runtime_state starts with one canonical message and one lease that expires before the tested turn.
+    // runtime_state 初始包含一条规范消息，以及一条在被测回合前到期的租约。
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    append_user_text_message(
+        &mut runtime_state.conversation_state,
+        "old-user",
+        "old question",
+        Vec::new(),
+    )
+    .expect("old canonical user message should append");
+    runtime_state.vmm_session_memory = VmmSessionMemoryState::default();
+    runtime_state
+        .vmm_session_memory
+        .apply_recall_batch(
+            &session_id.to_string(),
+            "old-user",
+            &VmmRecallBatch {
+                ttl_turns: 1,
+                injection_tag: String::from("VMM_MEMORY"),
+                injection_description: String::from("Relevant memories."),
+                items: vec![ContextItem {
+                    text: String::from("expiring memory"),
+                    memory_id: 7,
+                    ..ContextItem::default()
+                }],
+            },
+            "1",
+        )
+        .expect("initial VMM recall should succeed");
+    runtime_state
+        .vmm_session_memory
+        .register_active_turn("old-turn", "1")
+        .expect("old logical turn should register");
+    runtime_state
+        .vmm_session_memory
+        .consume_turn("old-turn", "2")
+        .expect("old logical turn should expire the lease");
+    // start creates the exact next canonical user message before the failing hook outcome is applied.
+    // start 会在应用失败 Hook 结果前创建精确的下一条规范用户消息。
+    let start = begin_user_prompt(&mut runtime_state);
+    // target_message_id is the authoritative new anchor target under test.
+    // target_message_id 是被测的新锚点权威目标。
+    let target_message_id = start
+        .canonical_user_message_id
+        .clone()
+        .expect("user followup must create a canonical message");
+    // precheck_outcome preserves correlation while replacing the remote report with a failure.
+    // precheck_outcome 保留关联标识，同时将远端报告替换为失败结果。
+    let mut precheck_outcome = start.precheck_request.clone().skip();
+    precheck_outcome.report = Err(String::from("simulated remote precheck failure"));
+    // expected_turn_id is the exact boundary that must be registered before Provider execution.
+    // expected_turn_id 是 Provider 执行前必须登记的精确边界。
+    let expected_turn_id = precheck_outcome.turn_id.clone();
+
+    let continuation = continue_shared_prompt_turn_after_precheck_with_runtime_state(
+        &mut runtime_state,
+        SharedPromptTurnContinueInput {
+            start,
+            precheck_outcome,
+            ai_tool_configuration: PersistedAiToolConfiguration::default(),
+            project_configuration: ProjectVulcanCodeConfigurationFile::default(),
+            runtime_reasoning_effort: None,
+            provider_reasoning_effort: None,
+            patch_visible_user_prompt_record: true,
+        },
+    )
+    .expect("local VMM state should continue despite remote precheck failure");
+
+    assert!(continuation.precheck_failure_detail.is_some());
+    assert!(
+        runtime_state
+            .vmm_session_memory
+            .pending_prompt_events
+            .is_empty()
+    );
+    assert!(
+        runtime_state
+            .vmm_session_memory
+            .active_panel_card()
+            .is_none()
+    );
+    assert!(
+        runtime_state
+            .vmm_session_memory
+            .expired_panel_card()
+            .is_some()
+    );
+    assert_eq!(
+        runtime_state.vmm_session_memory.active_turn_id.as_deref(),
+        Some(expected_turn_id.as_str())
+    );
+    assert_eq!(
+        runtime_state
+            .vmm_session_memory
+            .cache_epoch
+            .anchors
+            .last()
+            .map(|anchor| (&anchor.kind, anchor.target_message_id.as_str())),
+        Some((&VmmPromptAnchorKind::Memory, "old-user"))
+    );
+    assert_ne!(
+        runtime_state
+            .vmm_session_memory
+            .cache_epoch
+            .anchors
+            .last()
+            .map(|anchor| anchor.target_message_id.as_str()),
+        Some(target_message_id.as_str())
     );
 }
 

@@ -100,7 +100,7 @@ impl VulcanCoreController {
             }
 
             let assistant_message_id = self.append_assistant_turn(&response);
-            self.refresh_continuation(&response);
+            self.refresh_continuation(&response, assistant_message_id.as_str());
 
             if response.tool_calls.is_empty() {
                 self.phase = ControllerPhase::Completed;
@@ -324,7 +324,7 @@ impl VulcanCoreController {
             }
 
             let assistant_message_id = self.append_assistant_turn(&response);
-            self.refresh_continuation(&response);
+            self.refresh_continuation(&response, assistant_message_id.as_str());
 
             if response.tool_calls.is_empty() {
                 self.phase = ControllerPhase::Completed;

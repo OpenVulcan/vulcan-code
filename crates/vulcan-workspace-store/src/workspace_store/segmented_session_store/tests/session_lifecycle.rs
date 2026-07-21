@@ -16,6 +16,13 @@ fn create_session_writes_metadata_state_and_first_segment() {
     assert!(session_dir.join(SEGMENTED_STATE_FILE).exists());
     assert!(session_dir.join(SEGMENTED_TASK_DIR).is_dir());
     assert!(session_dir.join(SEGMENTED_BLOB_DIR).is_dir());
+    assert!(!vmm_state_path(&session_dir).exists());
+    assert!(!session_dir.join(SEGMENTED_VMM_MIGRATION_FILE).exists());
+    assert!(
+        !session_dir
+            .join(SEGMENTED_VMM_MIGRATION_COMPLETED_FILE)
+            .exists()
+    );
 
     let metadata: SegmentedSessionMetadata =
         read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE)).expect("read metadata");
@@ -117,6 +124,41 @@ fn fork_session_directory_rewrites_structural_identity() {
         "last_turn_id": "turn-alpha"
     });
     write_state(&source_dir, &source_state).expect("write source state");
+    let mut source_vmm_state = vulcan_vmm::VmmSessionMemoryState::default();
+    source_vmm_state
+        .apply_recall_batch(
+            &source_session_id,
+            "source-user-anchor",
+            &vulcan_vmm::VmmRecallBatch {
+                ttl_turns: 3,
+                injection_tag: String::from("VMM_MEMORY"),
+                injection_description: String::from("Relevant memories."),
+                items: vec![vulcan_vmm::ContextItem {
+                    text: String::from("source-only-memory"),
+                    memory_id: 91,
+                    ..vulcan_vmm::ContextItem::default()
+                }],
+            },
+            "2026-06-06T10:00:00Z",
+        )
+        .expect("source VMM state should be built");
+    write_vmm_state(&source_dir, &source_session_id, &source_vmm_state)
+        .expect("source VMM state should be written");
+    fs::write(
+        source_dir.join(SEGMENTED_VMM_MIGRATION_COMPLETED_FILE),
+        b"source-only-completion-marker",
+    )
+    .expect("source VMM migration completion fixture should be written");
+    fs::write(
+        source_dir.join("vmm.corrupt.1.test.json"),
+        b"source-only-corrupt-evidence",
+    )
+    .expect("source VMM quarantine fixture should be written");
+    fs::write(
+        source_dir.join(".vmm.json.vulcan-stage-test"),
+        b"source-only-staging-evidence",
+    )
+    .expect("source VMM staging fixture should be written");
     let source_runtime_conversation = conversation_state_from_session_messages(&[test_message(
         &format!("{source_session_id}-runtime-user"),
         SessionMessageKind::User,
@@ -263,6 +305,23 @@ fn fork_session_directory_rewrites_structural_identity() {
         .expect("target state exists");
     assert_eq!(target_state.session_id, target_session_id);
     assert_eq!(target_state.updated_at, "2026-06-07T10:00:00Z");
+    assert!(vmm_state_path(&source_dir).exists());
+    assert!(
+        source_dir
+            .join(SEGMENTED_VMM_MIGRATION_COMPLETED_FILE)
+            .exists()
+    );
+    assert!(source_dir.join("vmm.corrupt.1.test.json").exists());
+    assert!(source_dir.join(".vmm.json.vulcan-stage-test").exists());
+    assert!(!vmm_state_path(&target_dir).exists());
+    assert!(!target_dir.join(SEGMENTED_VMM_MIGRATION_FILE).exists());
+    assert!(
+        !target_dir
+            .join(SEGMENTED_VMM_MIGRATION_COMPLETED_FILE)
+            .exists()
+    );
+    assert!(!target_dir.join("vmm.corrupt.1.test.json").exists());
+    assert!(!target_dir.join(".vmm.json.vulcan-stage-test").exists());
     assert_eq!(
         target_state.session_boundary_state["thread_id"],
         target_session_id

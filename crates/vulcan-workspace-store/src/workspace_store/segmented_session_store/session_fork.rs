@@ -99,6 +99,7 @@ fn copy_segmented_session_tree_without_tasks(
             copy_segmented_directory_tree(&source_path, &target_path)?;
         } else if file_type.is_file() {
             if file_name_text == SEGMENTED_METADATA_FILE
+                || is_vmm_session_artifact_file_name(file_name_text.as_ref())
                 || display_segment_files.contains(file_name_text.as_ref())
             {
                 continue;
@@ -193,7 +194,8 @@ fn rewrite_forked_persisted_identity_artifacts(
     replacements: &BTreeMap<String, String>,
 ) -> Result<(), String> {
     rewrite_forked_state_identity_artifact(session_dir, session_id, updated_at, replacements)?;
-    rewrite_forked_runtime_identity_artifacts(session_dir, updated_at, replacements)
+    rewrite_forked_runtime_identity_artifacts(session_dir, updated_at, replacements)?;
+    purge_vmm_state_from_fork_target(session_dir, session_id, updated_at)
 }
 
 /// Rewrites state.json ownership fields while preserving copied runtime state content.

@@ -241,13 +241,39 @@ fn webui_context_compaction_draft_separates_manual_stats_and_auto_continuation()
         )
         .with_runtime_metadata("user-latest", "1780000000002"),
     ];
-    let active_runtime_state = SessionRuntimeStateEntry {
+    let mut active_runtime_state = SessionRuntimeStateEntry {
         conversation_state: conversation_state_from_session_messages(&messages)
             .expect("valid replayed conversation identities"),
         live_context_budget_fingerprint: Some(String::from("budget-live")),
         live_context_assembly_fingerprint: Some(String::from("assembly-live")),
         ..SessionRuntimeStateEntry::default()
     };
+    active_runtime_state
+        .vmm_session_memory
+        .apply_recall_batch(
+            &session_id.to_string(),
+            "user-old",
+            &vulcan_vmm::VmmRecallBatch {
+                ttl_turns: 3,
+                injection_tag: String::from("VMM_MEMORY"),
+                injection_description: String::from("Relevant memories."),
+                items: vec![vulcan_vmm::ContextItem {
+                    text: String::from("active-compaction-memory"),
+                    memory_id: 77,
+                    ..vulcan_vmm::ContextItem::default()
+                }],
+            },
+            "1780000000003",
+        )
+        .expect("active VMM lease should be prepared before compaction");
+    active_runtime_state
+        .conversation_state
+        .continuation
+        .last_provider_message_id = Some(String::from("resp-before-compaction"));
+    active_runtime_state
+        .conversation_state
+        .continuation
+        .last_local_message_id = Some(String::from("assistant-before-compaction"));
     let plan = CompactionPlan {
         source_messages: vec![messages[0].clone()],
         source_until_message_id: Some(String::from("user-old")),
@@ -293,6 +319,54 @@ fn webui_context_compaction_draft_separates_manual_stats_and_auto_continuation()
                     if text.starts_with(AUTO_COMPACTION_CONTINUATION_PREFIX)
             )),
         "manual compaction must not append the automatic continuation note"
+    );
+    assert_eq!(
+        manual_draft
+            .runtime_state
+            .vmm_session_memory
+            .cache_epoch
+            .epoch_id,
+        "test-auto-continuation"
+    );
+    assert!(
+        manual_draft
+            .runtime_state
+            .vmm_session_memory
+            .cache_epoch
+            .anchors
+            .is_empty()
+    );
+    assert!(
+        manual_draft
+            .runtime_state
+            .vmm_session_memory
+            .cache_epoch
+            .needs_active_baseline
+    );
+    assert!(
+        manual_draft
+            .runtime_state
+            .conversation_state
+            .continuation
+            .last_provider_message_id
+            .is_none()
+    );
+    assert!(
+        manual_draft
+            .runtime_state
+            .conversation_state
+            .continuation
+            .last_local_message_id
+            .is_none()
+    );
+    assert_eq!(
+        active_runtime_state
+            .vmm_session_memory
+            .cache_epoch
+            .anchors
+            .len(),
+        1,
+        "draft construction must not mutate the active VMM epoch"
     );
     // manual_turn_stats is materialized inside the draft before any active-state replacement occurs.
     // manual_turn_stats 在替换任何活动状态前已物化于候选状态内部。
@@ -387,6 +461,42 @@ fn webui_context_compaction_draft_separates_manual_stats_and_auto_continuation()
             .iter()
             .all(|record| !record.body.contains(AUTO_COMPACTION_CONTINUATION_PREFIX)),
         "automatic continuation is model-visible runtime state, not a visible transcript record"
+    );
+    // The synthetic continuation id is the only legal target for the automatic VMM baseline.
+    // 合成续接消息标识是自动 VMM 基线唯一合法的目标。
+    let synthetic_continuation_id = auto_draft
+        .runtime_state
+        .conversation_state
+        .messages
+        .iter()
+        .find_map(|message| match &message.payload {
+            SessionConversationPayload::UserText { text, .. }
+                if text.starts_with(AUTO_COMPACTION_CONTINUATION_PREFIX) =>
+            {
+                Some(message.id.as_str())
+            }
+            _ => None,
+        })
+        .expect("automatic compaction should append one synthetic continuation id");
+    let baseline_anchor = auto_draft
+        .runtime_state
+        .vmm_session_memory
+        .cache_epoch
+        .anchors
+        .first()
+        .expect("automatic compaction should bind one active VMM baseline");
+    assert_eq!(
+        baseline_anchor.kind,
+        vulcan_vmm::VmmPromptAnchorKind::Baseline
+    );
+    assert_eq!(baseline_anchor.target_message_id, synthetic_continuation_id);
+    assert!(baseline_anchor.prefix.contains("active-compaction-memory"));
+    assert!(
+        !auto_draft
+            .runtime_state
+            .vmm_session_memory
+            .cache_epoch
+            .needs_active_baseline
     );
 }
 

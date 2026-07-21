@@ -6,8 +6,8 @@ use vulcan_service_api::ServiceEvent;
 use super::*;
 use crate::{
     apply_session_phase_to_state, emit_context_injection_changed_delta,
-    emit_service_event_with_trace, owning_project_id_for_session,
-    retain_hydrated_conversation_windows_for_workspace,
+    emit_service_event_with_trace, invalidate_webui_session_vmm_persist_version,
+    owning_project_id_for_session, retain_hydrated_conversation_windows_for_workspace,
 };
 
 /// Builds the shared precheck plan for a WebUI session using the service VMM layering rules.
@@ -152,6 +152,14 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
         session_id,
         Some(start.precheck_request.turn_id()),
     )?;
+    // Capture the independent VMM revision before typed precheck effects mutate the draft snapshot.
+    // 在类型化 precheck 效果修改草稿快照前捕获独立 VMM 版本。
+    let vmm_state_before_precheck = workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .map(|runtime_state| runtime_state.vmm_session_memory.clone())
+        .unwrap_or_default();
+    let vmm_revision_before_precheck = vmm_state_before_precheck.revision;
     webui_after_precheck_trace(
         "after_precheck_03_runtime_state_ready",
         format!(
@@ -187,6 +195,34 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
             current_unix_millis_value().saturating_sub(project_configuration_started_at)
         ),
     );
+    // Effective disable revokes session leases before pending events bind to the current user message.
+    // 生效禁用会在待处理事件绑定当前用户消息之前撤销会话租约。
+    let effective_vmm_enabled = {
+        let session_layer = workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .map(|runtime_state| &runtime_state.vmm);
+        vulcan_vmm::VmmEffectiveConfig::resolve(
+            &agent_runtime.provider_configuration.vmm,
+            Some(&project_configuration.vmm),
+            session_layer,
+        )
+        .enabled
+    };
+    if vulcan_vmm::VmmRuntimeFeaturePolicy::from_env().session_state_enabled
+        && !effective_vmm_enabled
+    {
+        let runtime_state = workspace_snapshot
+            .session_runtime_state
+            .get_mut(&session_id)
+            .ok_or_else(|| format!("会话 `{session_id}` 缺少运行态，无法应用 VMM 禁用转换。"))?;
+        // now timestamps the exact effective-disable transition.
+        // now 为精确的生效禁用转换提供时间戳。
+        let now = current_unix_millis_text();
+        if runtime_state.vmm_session_memory.disable(&now)?.changed {
+            runtime_state.updated_at = now;
+        }
+    }
     let runtime_reasoning_effort = workspace_snapshot
         .session_runtime_state
         .get(&session_id)
@@ -221,27 +257,6 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
         format!(
             "session={session_id} elapsed_ms={}",
             current_unix_millis_value().saturating_sub(shared_continue_started_at)
-        ),
-    );
-    let vmm_snapshot_started_at = current_unix_millis_value();
-    agent_runtime
-        .vmm_hook_runtime
-        .replace_snapshot(build_vmm_hook_config_snapshot(
-            &agent_runtime.provider_configuration,
-            &workspace_snapshot,
-        ))?;
-    webui_trace(
-        "precheck_continue_hook_snapshot_ready",
-        format!(
-            "session={session_id} elapsed_ms={}",
-            current_unix_millis_value().saturating_sub(vmm_snapshot_started_at)
-        ),
-    );
-    webui_after_precheck_trace(
-        "after_precheck_07_hook_snapshot_ready",
-        format!(
-            "session={session_id} elapsed_ms={}",
-            current_unix_millis_value().saturating_sub(vmm_snapshot_started_at)
         ),
     );
     if let Some(detail) = continuation.precheck_failure_detail.as_deref() {
@@ -315,6 +330,139 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
             current_unix_millis_value().saturating_sub(task_session_root_started_at)
         ),
     );
+    // A changed lease or anchor must be durable before the provider can observe its prompt text.
+    // 已变化的租约或锚点必须在 Provider 观察到对应提示词文本前完成持久化。
+    let vmm_state_after_precheck = workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .map(|runtime_state| runtime_state.vmm_session_memory.clone())
+        .ok_or_else(|| format!("会话 `{session_id}` 缺少 VMM 运行态，无法完成请求前持久化。"))?;
+    // vmm_state_changed freezes whether the committed draft must advance independent persistence.
+    // vmm_state_changed 固化已提交草稿是否必须推进独立持久化。
+    let vmm_state_changed = vmm_state_after_precheck.revision != vmm_revision_before_precheck;
+    // changed_vmm_session_dir validates the exact persistence target before shared-state commit.
+    // changed_vmm_session_dir 在共享状态提交前验证精确持久化目标。
+    let changed_vmm_session_dir = if vmm_state_changed {
+        Some(request.task_session_store_root.clone().ok_or_else(|| {
+            format!("会话 `{session_id}` 缺少分段目录，无法在 Provider 请求前持久化 VMM 状态。")
+        })?)
+    } else {
+        None
+    };
+    // The authoritative in-memory draft commits before its recoverable independent file projection.
+    // 权威内存草稿先于其可恢复的独立文件投影提交。
+    // now timestamps the authoritative pre-provider workspace transition.
+    // now 为权威的 Provider 调用前工作区转换提供时间戳。
+    let now = current_unix_millis_text();
+    workspace_snapshot
+        .session_run_phases
+        .insert(session_id, SessionRunPhase::Preparing);
+    if let Some(runtime_state) = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&session_id)
+    {
+        runtime_state.updated_at = now;
+    }
+    if let Some(session) = workspace_snapshot
+        .sessions
+        .iter_mut()
+        .find(|session| session.id == session_id)
+    {
+        session.status = SessionState::Running;
+        session.focus = String::from("正在请求");
+        session.last_updated_label = String::from("刚刚");
+    }
+    // phase_commit_started_at measures the authoritative in-memory commit and its required projections.
+    // phase_commit_started_at 测量权威内存提交及其必要投影的耗时。
+    let phase_commit_started_at = current_unix_millis_value();
+    commit_workspace_snapshot_and_emit_session_phase_delta(
+        app,
+        state,
+        workspace_snapshot.clone(),
+        session_id,
+        SessionRunPhase::Preparing,
+    )?;
+    if let Some(session_dir) = changed_vmm_session_dir.as_deref() {
+        // Advancing the VMM lineage prevents queued older runtime snapshots from reaching disk.
+        // 推进 VMM 谱系可阻止排队中的旧运行态快照触达磁盘。
+        invalidate_webui_session_vmm_persist_version(state, session_id)?;
+        vulcan_workspace_store::workspace_store::persist_session_vmm_state_before_provider_request(
+            session_dir,
+            &session_id.to_string(),
+            &vmm_state_after_precheck,
+        )?;
+    }
+    // The VMM Hook projection refreshes only after authoritative memory and required disk state agree.
+    // VMM Hook 投影仅在权威内存与所需磁盘状态一致后刷新。
+    // vmm_snapshot_started_at measures the derived Hook projection refresh.
+    // vmm_snapshot_started_at 测量派生 Hook 投影刷新的耗时。
+    let vmm_snapshot_started_at = current_unix_millis_value();
+    agent_runtime
+        .vmm_hook_runtime
+        .replace_snapshot(build_vmm_hook_config_snapshot(
+            &agent_runtime.provider_configuration,
+            &workspace_snapshot,
+        ))?;
+    webui_trace(
+        "precheck_continue_hook_snapshot_ready",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(vmm_snapshot_started_at)
+        ),
+    );
+    webui_after_precheck_trace(
+        "after_precheck_07_hook_snapshot_ready",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(vmm_snapshot_started_at)
+        ),
+    );
+    if let Err(error) = emit_context_injection_changed_delta(app, state, session_id) {
+        webui_trace(
+            "context_injection_delta_emit_failed_after_commit",
+            format!("session={session_id} error={error}"),
+        );
+    }
+    webui_trace(
+        "precheck_continue_phase_committed",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(phase_commit_started_at)
+        ),
+    );
+    webui_after_precheck_trace(
+        "after_precheck_15_phase_delta_committed",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(phase_commit_started_at)
+        ),
+    );
+    // vmm_lifecycle_events describe only identities, hashes, counters, and byte totals.
+    // vmm_lifecycle_events 仅描述身份、哈希、计数与字节总量。
+    let vmm_lifecycle_events =
+        super::super::vmm_runtime_audit::build_vmm_lifecycle_events_for_state_diff(
+            &vmm_state_before_precheck,
+            &vmm_state_after_precheck,
+            Some(&prompt_turn_id),
+            super::super::vmm_runtime_audit::VmmRemovedLeaseAuditAction::Revoked,
+        );
+    if !vmm_lifecycle_events.is_empty() {
+        let data_root = controller_runtime.data_root.clone();
+        spawn_service_task(async move {
+            let timestamp = current_unix_millis_text();
+            if let Err(error) = super::super::vmm_runtime_audit::record_vmm_lifecycle_events(
+                &data_root,
+                session_id,
+                &timestamp,
+                vmm_lifecycle_events,
+            ) {
+                webui_trace(
+                    "runtime_vmm_lifecycle_audit_failed",
+                    format!("session={session_id} error={error}"),
+                );
+            }
+        });
+    }
     let runtime_updates_started_at = current_unix_millis_value();
     request.runtime_system_updates =
         match vulcan_workspace_store::workspace_store::load_session_runtime_system_updates(
@@ -346,6 +494,35 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
         let transient_prefix = injection
             .has_transient()
             .then(|| injection.transient_prefix.clone());
+        // cache_epoch_id and anchor_revision expose exact continuation coverage without memory text.
+        // cache_epoch_id 与 anchor_revision 在不记录记忆正文的前提下暴露精确 continuation 覆盖范围。
+        let cache_epoch_id = injection.cache_epoch_id.clone();
+        let anchor_revision = injection.anchor_revision;
+        // mutation_kind is serialized as the stable protocol spelling used by ProviderContextInjection.
+        // mutation_kind 按 ProviderContextInjection 使用的稳定协议拼写序列化。
+        let mutation_kind = Some(match injection.mutation_kind {
+            vulcan_core::types::ProviderContextMutationKind::None => String::from("none"),
+            vulcan_core::types::ProviderContextMutationKind::AppendOnly => {
+                String::from("append_only")
+            }
+            vulcan_core::types::ProviderContextMutationKind::HistoricalRewrite => {
+                String::from("historical_rewrite")
+            }
+            vulcan_core::types::ProviderContextMutationKind::EpochReset => {
+                String::from("epoch_reset")
+            }
+        });
+        // vmm_anchor_ids retain only stable identities for cache diagnostics.
+        // vmm_anchor_ids 仅保留用于缓存诊断的稳定身份。
+        let vmm_anchor_ids = injection
+            .anchored_prefixes
+            .iter()
+            .map(|anchor| anchor.anchor_id.clone())
+            .collect::<Vec<_>>();
+        let active_memory_body_bytes = injection.active_memory_body_bytes;
+        let active_memory_estimated_tokens = injection.active_memory_estimated_tokens;
+        let reclaimable_anchor_bytes = injection.reclaimable_anchor_bytes;
+        let reclaimable_anchor_estimated_tokens = injection.reclaimable_anchor_estimated_tokens;
         spawn_service_task(async move {
             let timestamp = current_unix_millis_text();
             if let Err(error) =
@@ -358,6 +535,14 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
                         persistent_blocks: &persistent_blocks,
                         transient_prefix: transient_prefix.as_deref(),
                         merged_baseline_fingerprint: None,
+                        cache_epoch_id,
+                        anchor_revision,
+                        mutation_kind,
+                        vmm_anchor_ids,
+                        active_memory_body_bytes,
+                        active_memory_estimated_tokens,
+                        reclaimable_anchor_bytes,
+                        reclaimable_anchor_estimated_tokens,
                         timestamp: &timestamp,
                     },
                 )
@@ -407,48 +592,6 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
             format!("session={session_id}"),
         );
     }
-    let now = current_unix_millis_text();
-    workspace_snapshot
-        .session_run_phases
-        .insert(session_id, SessionRunPhase::Preparing);
-    if let Some(runtime_state) = workspace_snapshot
-        .session_runtime_state
-        .get_mut(&session_id)
-    {
-        runtime_state.updated_at = now.clone();
-    }
-    if let Some(session) = workspace_snapshot
-        .sessions
-        .iter_mut()
-        .find(|session| session.id == session_id)
-    {
-        session.status = SessionState::Running;
-        session.focus = String::from("正在请求");
-        session.last_updated_label = String::from("刚刚");
-    }
-    let phase_commit_started_at = current_unix_millis_value();
-    commit_workspace_snapshot_and_emit_session_phase_delta(
-        app,
-        state,
-        workspace_snapshot,
-        session_id,
-        SessionRunPhase::Preparing,
-    )?;
-    emit_context_injection_changed_delta(app, state, session_id)?;
-    webui_trace(
-        "precheck_continue_phase_committed",
-        format!(
-            "session={session_id} elapsed_ms={}",
-            current_unix_millis_value().saturating_sub(phase_commit_started_at)
-        ),
-    );
-    webui_after_precheck_trace(
-        "after_precheck_15_phase_delta_committed",
-        format!(
-            "session={session_id} elapsed_ms={}",
-            current_unix_millis_value().saturating_sub(phase_commit_started_at)
-        ),
-    );
     if runs_user_prompt_precheck {
         let state_for_persist = state.clone();
         let controller_runtime_for_persist = controller_runtime.clone();

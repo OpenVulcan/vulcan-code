@@ -277,6 +277,7 @@ mod tests {
             persistent_blocks: vec![String::from("<perm>\n固定\n</perm>")],
             transient_prefix: String::from("<temp>\n临时\n</temp>"),
             fingerprint: String::from("fingerprint"),
+            ..CoreProviderContextInjection::default()
         };
 
         let inputs = prepare_provider_transport_entry_inputs(

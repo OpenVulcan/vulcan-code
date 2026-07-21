@@ -45,6 +45,10 @@ pub struct SessionRuntimeStateEntry {
     /// 会话级 VMM 记忆集成覆盖配置。
     #[serde(default, skip_serializing_if = "VmmConfigLayer::is_empty")]
     pub vmm: VmmConfigLayer,
+    /// Session-owned VMM lease state persisted exclusively in the independent `vmm.json` document.
+    /// 仅持久化到独立 `vmm.json` 文档的会话归属 VMM 租约状态。
+    #[serde(skip)]
+    pub vmm_session_memory: VmmSessionMemoryState,
     /// Session-level todolist shown in the conversation tool panel.
     /// 在会话工具面板中展示的会话级 todolist。
     #[serde(default, skip_serializing_if = "SessionTodolistState::is_empty")]

@@ -633,6 +633,8 @@ export type TranslationKey =
   | "workspaceContext.loadingReviewPanel"
   | "workspaceContext.loadingFilesPanel"
   | "workspaceMemory.handleDynamicMemory"
+  | "workspaceMemory.expiredRegionTitle"
+  | "workspaceMemory.expiredRegionDescription"
   | "workspaceMemory.suppressForSession"
   | "workspaceMemory.permanentDeleteInvalid"
   | "workspaceMemory.viewDetails"
@@ -1951,6 +1953,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "workspaceContext.loadingReviewPanel": "正在加载审核面板。",
     "workspaceContext.loadingFilesPanel": "正在加载文件面板。",
     "workspaceMemory.handleDynamicMemory": "处理动态记忆",
+    "workspaceMemory.expiredRegionTitle": "已过期",
+    "workspaceMemory.expiredRegionDescription": "以下记忆等待上下文压缩后清理",
     "workspaceMemory.suppressForSession": "仅本会话不再注入",
     "workspaceMemory.permanentDeleteInvalid": "永久删除无效记忆",
     "workspaceMemory.viewDetails": "查看详情",
@@ -3266,6 +3270,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "workspaceContext.loadingReviewPanel": "Loading review panel.",
     "workspaceContext.loadingFilesPanel": "Loading files panel.",
     "workspaceMemory.handleDynamicMemory": "Handle dynamic memory",
+    "workspaceMemory.expiredRegionTitle": "Expired",
+    "workspaceMemory.expiredRegionDescription": "These memories will be removed after context compaction",
     "workspaceMemory.suppressForSession": "Stop injecting in this session",
     "workspaceMemory.permanentDeleteInvalid": "Permanently delete invalid memory",
     "workspaceMemory.viewDetails": "View details",

@@ -11,7 +11,7 @@ use vulcan_provider_config::config::{
     PersistedPromptSkillState, ReasoningEffortLevel,
 };
 use vulcan_session_core::SessionRuntimeKernel;
-use vulcan_vmm::{PostActionRequest, ProfileNodeEntry, VmmConfigLayer};
+use vulcan_vmm::{PostActionRequest, ProfileNodeEntry, VmmConfigLayer, VmmSessionMemoryState};
 
 /// Returns whether the canonical conversation state has no durable payload.
 /// 返回规范会话状态是否没有任何需要持久化的有效载荷。
@@ -21,6 +21,10 @@ fn session_conversation_state_is_empty(state: &SessionConversationState) -> bool
         && state.continuation.provider_id.is_none()
         && state.continuation.model_id.is_none()
         && state.continuation.last_provider_message_id.is_none()
+        && state.continuation.last_local_message_id.is_none()
+        && state.continuation.context_cache_epoch_id.is_none()
+        && state.continuation.context_anchor_revision.is_none()
+        && state.continuation.context_rewrite_fingerprint.is_none()
         && state.continuation.updated_at.is_none()
 }
 

@@ -155,7 +155,8 @@ impl RuntimeConversationProjection {
             | RuntimeLogEvent::InjectionMerged(_)
             | RuntimeLogEvent::ProviderRequestCheckpoint(_)
             | RuntimeLogEvent::ProviderResponseCheckpoint(_)
-            | RuntimeLogEvent::ProviderLoweringRepair(_) => {}
+            | RuntimeLogEvent::ProviderLoweringRepair(_)
+            | RuntimeLogEvent::VmmLifecycle(_) => {}
         }
         Ok(())
     }
@@ -740,5 +741,6 @@ fn runtime_replay_event_kind(event: &RuntimeLogEvent) -> &'static str {
         RuntimeLogEvent::ProviderRequestCheckpoint(_) => "provider_request_checkpoint",
         RuntimeLogEvent::ProviderResponseCheckpoint(_) => "provider_response_checkpoint",
         RuntimeLogEvent::ProviderLoweringRepair(_) => "provider_lowering_repair",
+        RuntimeLogEvent::VmmLifecycle(_) => "vmm_lifecycle",
     }
 }

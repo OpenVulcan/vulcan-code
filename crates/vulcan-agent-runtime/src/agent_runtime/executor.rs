@@ -212,6 +212,10 @@ mod tests {
                 provider_id: Some(String::from("openai")),
                 model_id: Some(String::from("gpt-test")),
                 last_provider_message_id: Some(String::from("resp_prev")),
+                last_local_message_id: Some(String::from("history-assistant-1")),
+                context_cache_epoch_id: None,
+                context_anchor_revision: None,
+                context_rewrite_fingerprint: None,
                 updated_at: Some(String::from("123")),
             },
         };
@@ -341,6 +345,10 @@ mod tests {
                 provider_id: Some(String::from("openai")),
                 model_id: Some(String::from("gpt-test")),
                 last_provider_message_id: Some(String::from("resp_prev")),
+                last_local_message_id: Some(String::from("history-assistant-1")),
+                context_cache_epoch_id: None,
+                context_anchor_revision: None,
+                context_rewrite_fingerprint: None,
                 updated_at: Some(String::from("123")),
             },
         };
@@ -479,6 +487,10 @@ mod tests {
                 provider_id: Some(String::from("openai-compatible")),
                 model_id: Some(String::from("gpt-test")),
                 last_provider_message_id: Some(String::from("resp-1")),
+                last_local_message_id: Some(String::from("assistant-1")),
+                context_cache_epoch_id: Some(String::from("epoch-1")),
+                context_anchor_revision: Some(3),
+                context_rewrite_fingerprint: Some(String::from("rewrite-1")),
                 updated_at: Some(String::from("123")),
             },
         };
@@ -507,6 +519,22 @@ mod tests {
                 .last_provider_message_id
                 .as_deref(),
             Some("resp-1")
+        );
+        assert_eq!(
+            rebuilt_state.continuation.last_local_message_id.as_deref(),
+            Some("assistant-1")
+        );
+        assert_eq!(
+            rebuilt_state.continuation.context_cache_epoch_id.as_deref(),
+            Some("epoch-1")
+        );
+        assert_eq!(rebuilt_state.continuation.context_anchor_revision, Some(3));
+        assert_eq!(
+            rebuilt_state
+                .continuation
+                .context_rewrite_fingerprint
+                .as_deref(),
+            Some("rewrite-1")
         );
     }
 
@@ -896,14 +924,18 @@ mod tests {
         assert_eq!(metadata["tool_name"], "write_file");
     }
 
-    /// Verifies OpenAI Responses continuation injection preserves existing additional params while adding one missing `previous_response_id`.
-    /// 验证 OpenAI Responses 的 continuation 注入会在补入缺失 `previous_response_id` 的同时保留既有附加参数。
+    /// Verifies OpenAI Responses continuation injection preserves unrelated params while enforcing the scoped host cursor.
+    /// 验证 OpenAI Responses continuation 注入会保留无关参数，同时强制采用限定作用域的宿主游标。
     #[test]
     fn openai_responses_continuation_injection_preserves_existing_additional_params() {
         let continuation = CoreProviderContinuation {
             provider_id: Some(String::from("openai")),
             model_id: Some(String::from("gpt-5")),
             last_provider_message_id: Some(String::from("resp_prev")),
+            last_local_message_id: Some(String::from("assistant-1")),
+            context_cache_epoch_id: None,
+            context_anchor_revision: None,
+            context_rewrite_fingerprint: None,
             updated_at: Some(String::from("123")),
         };
 
@@ -917,16 +949,29 @@ mod tests {
         assert_eq!(merged["reasoning"]["effort"], "high");
         assert_eq!(merged["previous_response_id"], "resp_prev");
 
-        let preserved = inject_previous_response_id_into_additional_params(
+        let replaced = inject_previous_response_id_into_additional_params(
             Some(json!({
                 "previous_response_id": "resp_existing",
                 "reasoning": { "effort": "medium" }
             })),
             &continuation,
         )
-        .expect("preserved params should exist");
-        assert_eq!(preserved["previous_response_id"], "resp_existing");
-        assert_eq!(preserved["reasoning"]["effort"], "medium");
+        .expect("reconciled params should exist");
+        assert_eq!(replaced["previous_response_id"], "resp_prev");
+        assert_eq!(replaced["reasoning"]["effort"], "medium");
+
+        // stripped rejects a caller cursor when no scoped local continuation proves ownership.
+        // stripped 在没有限定作用域的本地 continuation 证明所有权时拒绝调用方游标。
+        let stripped = inject_previous_response_id_into_additional_params(
+            Some(json!({
+                "previous_response_id": "resp_unproven",
+                "reasoning": { "effort": "low" }
+            })),
+            &CoreProviderContinuation::default(),
+        )
+        .expect("remaining params should exist");
+        assert!(stripped.get("previous_response_id").is_none());
+        assert_eq!(stripped["reasoning"]["effort"], "low");
     }
 
     /// Verifies host-controlled OpenAI-compatible snapshots treat tool-result messages as the real outgoing prompt of the next turn.
@@ -956,6 +1001,10 @@ mod tests {
             provider_id: Some(String::from("groq")),
             model_id: Some(String::from("llama-4")),
             last_provider_message_id: Some(String::from("assistant-1")),
+            last_local_message_id: Some(String::from("assistant-1")),
+            context_cache_epoch_id: None,
+            context_anchor_revision: None,
+            context_rewrite_fingerprint: None,
             updated_at: Some(String::from("123")),
         };
 
@@ -1010,6 +1059,10 @@ mod tests {
             provider_id: Some(String::from("openai-responses")),
             model_id: Some(String::from("gpt-4.1")),
             last_provider_message_id: Some(String::from("resp_prev")),
+            last_local_message_id: Some(String::from("assistant-1")),
+            context_cache_epoch_id: None,
+            context_anchor_revision: None,
+            context_rewrite_fingerprint: None,
             updated_at: Some(String::from("123")),
         };
 

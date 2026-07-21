@@ -51,10 +51,10 @@ fn build_test_attachment(
     }
 }
 
-/// Verifies the direct OpenAI Responses request payload strips reasoning replay, injects chained continuation, and preserves function-call output shapes.
-/// 验证直连 OpenAI Responses 请求载荷会剥离思考回放、注入串联 continuation，并保留 function-call output 形状。
+/// Verifies a chained OpenAI Responses request sends only the new tool-result tail already missing from the provider cursor.
+/// 验证串联的 OpenAI Responses 请求只发送 Provider 游标尚未覆盖的新工具结果尾部。
 #[test]
-fn request_payload_strips_reasoning_replay_and_preserves_responses_shapes() {
+fn chained_request_payload_sends_only_new_tool_result_tail() {
     let request = OpenAiCompatibleCoreTurnRequest {
         snapshot: CoreProviderRequestSnapshot {
             provider_id: String::from("openai"),
@@ -73,7 +73,10 @@ fn request_payload_strips_reasoning_replay_and_preserves_responses_shapes() {
                 "previous_response_id": "resp_prev"
             })),
             request_headers: None,
-            continuation: CoreProviderContinuation::default(),
+            continuation: CoreProviderContinuation {
+                last_local_message_id: Some(String::from("assistant-1")),
+                ..CoreProviderContinuation::default()
+            },
         },
         current_history: vec![CoreConversationMessage {
             id: String::from("assistant-1"),
@@ -124,14 +127,10 @@ fn request_payload_strips_reasoning_replay_and_preserves_responses_shapes() {
     assert_eq!(payload["stream"], true);
     assert_eq!(payload["previous_response_id"], "resp_prev");
     assert_eq!(payload["include"][0], "reasoning.encrypted_content");
-    assert_eq!(input[0]["role"], "assistant");
-    assert_eq!(input[0]["content"][0]["type"], "output_text");
-    assert!(input[0].get("reasoning").is_none());
-    assert_eq!(input[1]["type"], "function_call");
-    assert_eq!(input[1]["call_id"], "call-1");
-    assert_eq!(input[2]["type"], "function_call_output");
-    assert_eq!(input[2]["call_id"], "call-1");
-    assert_eq!(input[2]["output"], "tool result body");
+    assert_eq!(input.len(), 1);
+    assert_eq!(input[0]["type"], "function_call_output");
+    assert_eq!(input[0]["call_id"], "call-1");
+    assert_eq!(input[0]["output"], "tool result body");
     assert_eq!(payload["tools"][0]["type"], "function");
     assert_eq!(payload["tools"][0]["strict"], true);
     assert_eq!(
@@ -139,6 +138,141 @@ fn request_payload_strips_reasoning_replay_and_preserves_responses_shapes() {
         false
     );
     assert_eq!(payload["tools"][0]["parameters"]["required"][0], "path");
+}
+
+/// Verifies a chained request preserves every local message appended after the exact cursor boundary.
+/// 验证串联请求会保留精确游标边界之后追加的每一条本地消息。
+#[test]
+fn chained_request_payload_sends_complete_uncovered_suffix() {
+    // user_message builds deterministic text-only inputs for the covered and uncovered regions.
+    // user_message 为已覆盖区与未覆盖区构建确定性的纯文本输入。
+    let user_message = |id: &str, text: &str| CoreConversationMessage {
+        id: id.to_string(),
+        payload: CoreConversationPayload::UserText {
+            text: text.to_string(),
+            attachments: Vec::new(),
+        },
+    };
+    // boundary_message is the exact local assistant response represented by resp_prev.
+    // boundary_message 是 resp_prev 所表示的精确本地助手响应。
+    let boundary_message = CoreConversationMessage {
+        id: String::from("assistant-boundary"),
+        payload: CoreConversationPayload::Assistant {
+            text: String::from("covered response"),
+            reasoning: String::new(),
+            provider_message_id: Some(String::from("resp_prev")),
+            provider_message_state: None,
+            tool_calls: Vec::new(),
+            usage: None,
+        },
+    };
+    // request carries one covered message pair, one intermediate unsent message, and the current prompt.
+    // request 携带一组已覆盖消息、一条中间未发送消息与当前提示消息。
+    let request = OpenAiCompatibleCoreTurnRequest {
+        snapshot: CoreProviderRequestSnapshot {
+            provider_id: String::from("openai"),
+            model_id: String::from("gpt-5"),
+            system_prompt: String::from("system prompt"),
+            prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                String::from("system prompt"),
+            ),
+            prompt: String::from("current tail"),
+            history: Vec::new(),
+            temperature: None,
+            max_turns: 8,
+            tool_schemas: Vec::new(),
+            additional_params: Some(json!({"previous_response_id": "resp_prev"})),
+            request_headers: None,
+            continuation: CoreProviderContinuation {
+                last_local_message_id: Some(String::from("assistant-boundary")),
+                ..CoreProviderContinuation::default()
+            },
+        },
+        current_history: vec![
+            user_message("user-covered", "covered question"),
+            boundary_message,
+            user_message("user-intermediate", "intermediate tail"),
+        ],
+        current_prompt: user_message("user-current", "current tail"),
+        interleaved_reasoning: None,
+    };
+
+    let payload = build_openai_responses_request_payload("gpt-5", request, &[])
+        .expect("chained suffix payload should build");
+    let input = payload["input"]
+        .as_array()
+        .expect("input should be an array");
+
+    assert_eq!(input.len(), 2);
+    assert_eq!(input[0]["content"][0]["text"], "intermediate tail");
+    assert_eq!(input[1]["content"][0]["text"], "current tail");
+}
+
+/// Verifies a cursor-free OpenAI Responses request replays canonical history before the new tail.
+/// 验证不带游标的 OpenAI Responses 请求会在新增尾部之前回放规范历史。
+#[test]
+fn cursor_free_request_payload_replays_history_and_new_tail() {
+    // request models the same function-call exchange without provider continuation coverage.
+    // request 模拟同一段函数调用交互，但不存在 Provider continuation 覆盖。
+    let request = OpenAiCompatibleCoreTurnRequest {
+        snapshot: CoreProviderRequestSnapshot {
+            provider_id: String::from("openai"),
+            model_id: String::from("gpt-5"),
+            system_prompt: String::from("system prompt"),
+            prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                String::from("system prompt"),
+            ),
+            prompt: String::from("tool result body"),
+            history: Vec::new(),
+            temperature: None,
+            max_turns: 8,
+            tool_schemas: Vec::new(),
+            additional_params: None,
+            request_headers: None,
+            continuation: CoreProviderContinuation::default(),
+        },
+        current_history: vec![CoreConversationMessage {
+            id: String::from("assistant-1"),
+            payload: CoreConversationPayload::Assistant {
+                text: String::from("我先读取文件。"),
+                reasoning: String::from("这段思考不应回放。"),
+                provider_message_id: Some(String::from("resp-1")),
+                provider_message_state: None,
+                tool_calls: vec![CoreConversationToolCall {
+                    id: String::from("fc_1"),
+                    tool_call_id: Some(String::from("call-1")),
+                    tool_name: String::from("read_file"),
+                    arguments: json!({ "path": "src/main.rs" }),
+                }],
+                usage: None,
+            },
+        }],
+        current_prompt: CoreConversationMessage {
+            id: String::from("tool-result-1"),
+            payload: CoreConversationPayload::ToolResult {
+                tool_call_id: Some(String::from("call-1")),
+                text: String::from("tool result body"),
+            },
+        },
+        interleaved_reasoning: None,
+    };
+
+    // payload must carry each historical function item once before its output.
+    // payload 必须在函数输出之前各携带一次历史函数项。
+    let payload = build_openai_responses_request_payload("gpt-5", request, &[])
+        .expect("cursor-free payload should build");
+    let input = payload["input"]
+        .as_array()
+        .expect("input should be an array");
+
+    assert_eq!(input.len(), 3);
+    assert_eq!(input[0]["role"], "assistant");
+    assert_eq!(input[0]["content"][0]["type"], "output_text");
+    assert!(input[0].get("reasoning").is_none());
+    assert_eq!(input[1]["type"], "function_call");
+    assert_eq!(input[1]["call_id"], "call-1");
+    assert_eq!(input[2]["type"], "function_call_output");
+    assert_eq!(input[2]["call_id"], "call-1");
 }
 
 /// Verifies OpenAI Responses preserves provider-native tools while appending host function tools.
@@ -406,7 +540,7 @@ fn completed_response_builds_canonical_turn_response() {
     }))
     .expect("response should deserialize");
 
-    let turn_response = build_openai_responses_turn_response("openai", "gpt-5", response, false)
+    let turn_response = build_openai_responses_turn_response("openai", "gpt-5", response)
         .expect("turn response should build");
 
     assert_eq!(
@@ -461,7 +595,7 @@ fn fallback_response_preserves_structured_output_items() {
     )
     .expect("fallback response should synthesize");
 
-    let turn_response = build_openai_responses_turn_response("openai", "gpt-5", response, false)
+    let turn_response = build_openai_responses_turn_response("openai", "gpt-5", response)
         .expect("turn response should build");
 
     assert_eq!(
@@ -485,7 +619,7 @@ fn fallback_response_rebuilds_delta_only_output() {
     )
     .expect("fallback response should synthesize");
 
-    let turn_response = build_openai_responses_turn_response("openai", "gpt-5", response, false)
+    let turn_response = build_openai_responses_turn_response("openai", "gpt-5", response)
         .expect("turn response should build");
 
     assert_eq!(

@@ -82,7 +82,9 @@ pub fn compact_conversation_with_summary(
     compacted_messages.extend(retained_tail);
     validate_session_conversation_message_identities(&compacted_messages)?;
     state.messages = compacted_messages;
-    state.continuation.last_provider_message_id = None;
+    // continuation is fully reset because a rewritten canonical window invalidates every provider and local coverage proof.
+    // continuation 会被完整重置，因为改写后的规范窗口会使全部 Provider 与本地覆盖证明失效。
+    state.continuation = Default::default();
     state.continuation.updated_at = Some(updated_at.into());
     Ok(())
 }
@@ -141,7 +143,9 @@ pub fn compact_conversation_with_summary_until(
     compacted_messages.extend(retained_tail);
     validate_session_conversation_message_identities(&compacted_messages)?;
     state.messages = compacted_messages;
-    state.continuation.last_provider_message_id = None;
+    // continuation is fully reset because a rewritten canonical window invalidates every provider and local coverage proof.
+    // continuation 会被完整重置，因为改写后的规范窗口会使全部 Provider 与本地覆盖证明失效。
+    state.continuation = Default::default();
     state.continuation.updated_at = Some(updated_at.into());
     Ok(())
 }
@@ -1072,6 +1076,7 @@ mod tests {
                 model_id: Some(String::from("model")),
                 last_provider_message_id: Some(String::from("response-1")),
                 updated_at: Some(String::from("before")),
+                ..vulcan_context::SessionProviderContinuationState::default()
             },
         };
         // original_state captures both the message window and continuation before validation.

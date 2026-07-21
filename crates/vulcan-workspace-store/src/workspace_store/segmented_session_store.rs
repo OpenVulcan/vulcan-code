@@ -94,6 +94,7 @@ mod session_management;
 mod session_reading;
 mod state_documents;
 mod task_types;
+mod vmm_state;
 
 pub(super) use message_events::*;
 pub(super) use message_mapping::*;
@@ -108,6 +109,7 @@ pub(super) use session_management::*;
 pub(super) use session_reading::*;
 pub(super) use state_documents::*;
 pub(super) use task_types::*;
+pub(super) use vmm_state::*;
 
 /// Builds an active or archived session directory path.
 /// 构建活动或归档会话目录路径。

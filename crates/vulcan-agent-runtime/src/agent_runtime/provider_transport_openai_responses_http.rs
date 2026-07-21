@@ -41,10 +41,10 @@ use vulcan_core::types::{
 };
 use vulcan_tools_manager::{VulcanToolSchemaProjectionProfile, project_tool_parameters_schema};
 
-/// Internal additional-params key used to suppress OpenAI Responses continuation persistence.
-/// 用于抑制 OpenAI Responses continuation 持久化的内部附加参数键。
-pub(crate) const SUPPRESS_OPENAI_RESPONSES_CONTINUATION_PARAM: &str =
-    "__vulcan_suppress_openai_responses_continuation";
+/// Internal additional-params key used to force one full OpenAI Responses history replay without sending a stale cursor.
+/// 用于强制单次完整回放 OpenAI Responses 历史且不发送陈旧游标的内部附加参数键。
+pub(crate) const FORCE_FULL_OPENAI_RESPONSES_REPLAY_PARAM: &str =
+    "__vulcan_force_full_openai_responses_replay";
 
 /// One active Responses function-call request keyed by its exact output index.
 /// 按精确输出索引保存的一条活动 Responses 函数调用请求。
@@ -259,14 +259,6 @@ where
     let client =
         build_openai_responses_http_client(provider_id, provider_label, api_key, request_headers)?;
     let endpoint = build_openai_responses_endpoint(base_url);
-    let suppress_continuation = request
-        .snapshot
-        .additional_params
-        .as_ref()
-        .and_then(|value| value.as_object())
-        .and_then(|object| object.get(SUPPRESS_OPENAI_RESPONSES_CONTINUATION_PARAM))
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false);
     let payload =
         build_openai_responses_request_payload(model_id, request, provider_tool_definitions)?;
     let dry_run = provider_request_dry_run_active(api_key);
@@ -526,12 +518,7 @@ where
         });
     };
 
-    build_openai_responses_turn_response(
-        provider_id,
-        model_id,
-        completed_response,
-        suppress_continuation,
-    )
+    build_openai_responses_turn_response(provider_id, model_id, completed_response)
 }
 
 /// Starts one Responses request from an exact `response.output_item.added` function item.
@@ -858,6 +845,9 @@ fn build_openai_responses_request_payload(
         ..
     } = request;
 
+    // continuation_boundary_id locates the exact canonical suffix represented by previous_response_id.
+    // continuation_boundary_id 定位 `previous_response_id` 所表示规范窗口之后的精确后缀。
+    let continuation_boundary_id = snapshot.continuation.last_local_message_id.clone();
     let system_prompt = provider_fallback_system_prompt(&snapshot);
     let mut payload = match snapshot.additional_params {
         Some(Value::Object(object)) => object,
@@ -868,9 +858,47 @@ fn build_openai_responses_request_payload(
         }
         None => JsonMap::new(),
     };
-    payload.remove(SUPPRESS_OPENAI_RESPONSES_CONTINUATION_PARAM);
+    payload.remove(FORCE_FULL_OPENAI_RESPONSES_REPLAY_PARAM);
 
-    let mut input = current_history
+    // has_previous_response_id proves the provider already owns current_history through its continuation cursor.
+    // has_previous_response_id 证明 Provider 已通过 continuation 游标持有 current_history。
+    let has_previous_response_id = payload
+        .get("previous_response_id")
+        .and_then(Value::as_str)
+        .is_some_and(|response_id| !response_id.trim().is_empty());
+    // history_start is zero for a full replay or the first exact message after the provider-covered local boundary.
+    // history_start 在完整回放时为零，否则为 Provider 已覆盖本地边界之后的第一条精确消息位置。
+    let history_start = if has_previous_response_id {
+        let boundary_id = continuation_boundary_id
+            .as_deref()
+            .filter(|message_id| !message_id.trim().is_empty())
+            .ok_or_else(|| VulcanCoreError::InvalidState {
+                message: String::from(
+                    "OpenAI Responses continuation requires an exact local canonical message boundary.",
+                ),
+            })?;
+        // matching_indices prevents a missing or duplicated local identity from dropping or replaying an ambiguous suffix.
+        // matching_indices 防止缺失或重复的本地身份导致后缀丢失或歧义回放。
+        let matching_indices = current_history
+            .iter()
+            .enumerate()
+            .filter_map(|(index, message)| (message.id == boundary_id).then_some(index))
+            .collect::<Vec<_>>();
+        let [boundary_index] = matching_indices.as_slice() else {
+            return Err(VulcanCoreError::InvalidState {
+                message: format!(
+                    "OpenAI Responses continuation local boundary `{boundary_id}` matched {} historical messages; exactly one is required.",
+                    matching_indices.len()
+                ),
+            });
+        };
+        boundary_index.saturating_add(1)
+    } else {
+        0
+    };
+    // input replays the complete window only without a cursor; chained requests send every uncovered message exactly once.
+    // input 仅在没有游标时回放完整窗口；串联请求逐条且仅一次发送所有未覆盖消息。
+    let mut input = current_history[history_start..]
         .iter()
         .map(core_message_to_openai_responses_input_items)
         .collect::<Result<Vec<_>, _>>()?
@@ -1104,7 +1132,6 @@ fn build_openai_responses_turn_response(
     provider_id: &str,
     model_id: &str,
     response: OpenAiResponsesCompletedResponse,
-    suppress_continuation: bool,
 ) -> Result<CoreProviderTurnResponse, VulcanCoreError> {
     let mut assistant_content = Vec::new();
 
@@ -1159,16 +1186,13 @@ fn build_openai_responses_turn_response(
         }
     }
 
-    let mut turn_response = build_openai_compatible_turn_response(
+    let turn_response = build_openai_compatible_turn_response(
         provider_id,
         model_id,
         Some(response.id),
         &assistant_content,
         response.usage.and_then(openai_responses_usage_to_snapshot),
     );
-    if suppress_continuation {
-        turn_response.continuation = None;
-    }
     Ok(turn_response)
 }
 

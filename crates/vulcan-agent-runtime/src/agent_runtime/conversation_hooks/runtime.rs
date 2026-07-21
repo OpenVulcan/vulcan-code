@@ -10,9 +10,6 @@ pub struct ConversationHookRuntime {
     /// Active logical turns keyed by session id.
     /// 按会话标识索引的活动逻辑回合。
     pub(super) active_turns: BTreeMap<SessionId, ActiveConversationTurn>,
-    /// Monotonic sequence used to generate local turn ids.
-    /// 用于生成本地回合标识的单调序列。
-    next_turn_sequence: u64,
 }
 
 impl ConversationHookRuntime {
@@ -44,6 +41,24 @@ impl ConversationHookRuntime {
         self.active_turns.contains_key(&session_id)
     }
 
+    /// Returns the exact active logical turn identifier for one session without mutating ownership.
+    /// 在不改变所有权的前提下返回单个会话的精确活动逻辑回合标识。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_id` is the exact session whose retained turn identity is requested.
+    /// `session_id` 是需要读取保留回合身份的精确会话。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The borrowed active turn id when present, otherwise `None`.
+    /// 存在时返回借用的活动回合标识，否则返回 `None`。
+    pub fn active_turn_id(&self, session_id: SessionId) -> Option<&str> {
+        self.active_turns
+            .get(&session_id)
+            .map(|turn| turn.turn_id.as_str())
+    }
+
     /// Registers every built-in conversation hook point descriptor.
     /// 注册所有内置会话 hook 点位描述。
     fn register_builtin_points(&mut self) {
@@ -73,8 +88,7 @@ impl ConversationHookRuntime {
             .is_some_and(|turn| turn.recorded_prompt_entry_ids.contains(prompt_entry_id));
         let is_new_turn = !self.active_turns.contains_key(&session_id);
         let turn_id = if is_new_turn {
-            self.next_turn_sequence = self.next_turn_sequence.saturating_add(1);
-            let turn_id = format!("session-{session_id}-turn-{}", self.next_turn_sequence);
+            let turn_id = new_conversation_turn_id(session_id);
             self.active_turns.insert(
                 session_id,
                 ActiveConversationTurn::new(turn_id.clone(), prompt.to_string()),
@@ -455,7 +469,6 @@ impl ConversationHookRuntime {
         session_id: SessionId,
         conversation_state: &SessionConversationState,
     ) -> ActiveConversationTurn {
-        self.next_turn_sequence = self.next_turn_sequence.saturating_add(1);
         let user_content = conversation_state
             .messages
             .iter()
@@ -465,10 +478,7 @@ impl ConversationHookRuntime {
                 _ => None,
             })
             .unwrap_or_default();
-        ActiveConversationTurn::new(
-            format!("session-{session_id}-turn-{}", self.next_turn_sequence),
-            user_content,
-        )
+        ActiveConversationTurn::new(new_conversation_turn_id(session_id), user_content)
     }
 
     /// Ensures runtime-only events still have a turn container.
@@ -477,8 +487,7 @@ impl ConversationHookRuntime {
         if let Some(turn) = self.active_turns.get(&session_id) {
             return turn.turn_id.clone();
         }
-        self.next_turn_sequence = self.next_turn_sequence.saturating_add(1);
-        let turn_id = format!("session-{session_id}-turn-{}", self.next_turn_sequence);
+        let turn_id = new_conversation_turn_id(session_id);
         self.active_turns.insert(
             session_id,
             ActiveConversationTurn::new(turn_id.clone(), String::new()),
@@ -512,4 +521,20 @@ impl ConversationHookRuntime {
         let request = HookDispatchRequest::new(context, HookPayload { value: payload });
         spawn_hook_dispatch(dispatcher, request);
     }
+}
+
+/// Generates one collision-resistant runtime-only logical turn identifier.
+/// 生成一个抗碰撞的仅运行期逻辑回合标识。
+///
+/// # Parameters
+/// 参数
+/// `session_id` is the exact session owner embedded for diagnostics.
+/// `session_id` 是嵌入标识、用于诊断的精确会话归属。
+///
+/// # Returns
+/// 返回值
+/// A session-scoped UUID turn id that cannot silently repeat after numeric exhaustion.
+/// 返回会话作用域的 UUID 回合标识，不会因数值耗尽而静默重复。
+fn new_conversation_turn_id(session_id: SessionId) -> String {
+    format!("session-{session_id}-turn-{}", uuid::Uuid::new_v4())
 }

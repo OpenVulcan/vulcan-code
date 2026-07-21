@@ -96,11 +96,18 @@ pub(crate) async fn service_suppress_context_injection_item(
                 updated_at: current_unix_millis_text(),
                 ..SessionRuntimeStateEntry::default()
             });
+        // mutation_timestamp keeps the independent VMM state and enclosing runtime entry aligned.
+        // mutation_timestamp 使独立 VMM 状态与外层运行态条目保持时间一致。
+        let mutation_timestamp = current_unix_millis_text();
         let mut changed = false;
         if let Some(dedupe_key) = dedupe_key.as_deref() {
             changed |= runtime_state
                 .context_injection_state
                 .remove_items_by_dedupe_key(Some(InjectionKind::Transient), dedupe_key);
+            changed |= runtime_state
+                .vmm_session_memory
+                .revoke_lease(dedupe_key, &mutation_timestamp)?
+                .changed;
         }
         if !changed && let Some(memory_id) = memory_id {
             changed |= runtime_state
@@ -110,9 +117,13 @@ pub(crate) async fn service_suppress_context_injection_item(
                     "memory_id",
                     memory_id,
                 );
+            changed |= runtime_state
+                .vmm_session_memory
+                .revoke_lease(&format!("memory:{memory_id}"), &mutation_timestamp)?
+                .changed;
         }
         if changed {
-            runtime_state.updated_at = current_unix_millis_text();
+            runtime_state.updated_at = mutation_timestamp;
         }
         (controller_runtime, workspace.clone(), session_id, changed)
     };

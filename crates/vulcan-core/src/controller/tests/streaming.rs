@@ -26,6 +26,7 @@ fn run_user_turn_streaming_records_provider_deltas_before_finalizing() {
                     model_id: Some(String::from("mock-model")),
                     last_provider_message_id: Some(String::from("resp-stream-1")),
                     updated_at: Some(String::from("2001")),
+                    ..ProviderContinuation::default()
                 }),
                 usage: None,
             },
@@ -113,6 +114,7 @@ fn run_user_turn_streaming_skips_partial_checkpoint_when_batch_tool_fails() {
                     model_id: Some(String::from("mock-model")),
                     last_provider_message_id: Some(String::from("resp-tools-1")),
                     updated_at: Some(String::from("3001")),
+                    ..ProviderContinuation::default()
                 }),
                 usage: Some(ProviderUsageSnapshot {
                     input_tokens: Some(10),

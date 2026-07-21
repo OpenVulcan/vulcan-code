@@ -557,6 +557,10 @@ fn spawn_agent_clone_latest_runtime_preserves_parent_snapshot() {
             provider_id: Some(String::from("openai")),
             model_id: Some(String::from("gpt-test")),
             last_provider_message_id: Some(String::from("resp_1")),
+            last_local_message_id: Some(String::from("assistant-1")),
+            context_cache_epoch_id: None,
+            context_anchor_revision: None,
+            context_rewrite_fingerprint: None,
             updated_at: Some(String::from("1")),
         },
     };
@@ -1020,6 +1024,7 @@ fn task_runtime_preparation_request_clears_parent_context_injection() {
         persistent_blocks: vec![String::from("<memory>parent-only</memory>")],
         transient_prefix: String::new(),
         fingerprint: String::from("parent-injection"),
+        ..vulcan_core::types::ProviderContextInjection::default()
     });
     let context = TaskExecutionRuntimeContext::new(
         provider_config,

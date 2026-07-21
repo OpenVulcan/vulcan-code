@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::ProviderContinuation;
 
 /// Request object used to append one provider-visible inter-agent message.
 /// 用于追加单条 Provider 可见代理间消息的请求对象。
@@ -355,9 +356,20 @@ impl VulcanCoreController {
         message_id
     }
 
-    /// Refreshes the provider continuation snapshot from the latest assistant response.
-    /// 根据最近一次助手响应刷新 Provider continuation 快照。
-    pub(super) fn refresh_continuation(&mut self, response: &ProviderTurnResponse) {
+    /// Refreshes the provider continuation snapshot from the latest assistant response and its exact local boundary.
+    /// 根据最近一次助手响应及其精确本地边界刷新 Provider continuation 快照。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `response` is the authoritative provider response carrying the upstream cursor.
+    /// `response` 是携带上游游标的权威 Provider 响应。
+    /// `assistant_message_id` is the exact local canonical assistant message represented by that response.
+    /// `assistant_message_id` 是该响应所表示的精确本地规范助手消息标识。
+    pub(super) fn refresh_continuation(
+        &mut self,
+        response: &ProviderTurnResponse,
+        assistant_message_id: &str,
+    ) {
         let mut next = response.continuation.clone().unwrap_or_default();
         next.provider_id
             .get_or_insert_with(|| self.config.provider_id.clone());
@@ -365,6 +377,18 @@ impl VulcanCoreController {
             .get_or_insert_with(|| self.config.model_id.clone());
         next.last_provider_message_id
             .get_or_insert_with(|| response.provider_message_id.clone().unwrap_or_default());
+        next.last_local_message_id = Some(assistant_message_id.to_string());
+        next.context_cache_epoch_id = self
+            .config
+            .context_injection
+            .as_ref()
+            .and_then(|injection| injection.cache_epoch_id.clone());
+        next.context_anchor_revision = self
+            .config
+            .context_injection
+            .as_ref()
+            .and_then(|injection| injection.anchor_revision);
+        next.context_rewrite_fingerprint = Some(self.config.provider_rewrite_fingerprint());
         if next
             .last_provider_message_id
             .as_ref()
@@ -372,6 +396,10 @@ impl VulcanCoreController {
         {
             next.updated_at.get_or_insert_with(current_unix_millis_text);
             self.snapshot.continuation = next;
+        } else {
+            // A response without a usable upstream cursor invalidates any cursor retained from an older response.
+            // 未携带可用上游游标的响应会使此前响应保留的任何游标失效。
+            self.snapshot.continuation = ProviderContinuation::default();
         }
     }
 }

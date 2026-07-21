@@ -13,21 +13,22 @@ mod snapshot;
 mod tests;
 
 use super::segmented_session_store::{
-    SegmentPolicy, SegmentedSessionCreateRequest, SegmentedSessionForkRequest,
-    SegmentedSessionForkSource, SegmentedSessionReplayResult,
-    append_segmented_session_message_update, archive_segmented_session_by_created_date,
-    create_segmented_session_in_location, find_segmented_session_directory,
+    SEGMENTED_VMM_CHECKPOINT_FILE, SegmentPolicy, SegmentedSessionCreateRequest,
+    SegmentedSessionForkRequest, SegmentedSessionForkSource, SegmentedSessionReplayResult,
+    SegmentedSessionStateDocument, append_segmented_session_message_update,
+    archive_segmented_session_by_created_date, create_segmented_session_in_location,
+    durable_vmm_state_conflicts_with_checkpoint, find_segmented_session_directory,
     find_segmented_session_directory_by_id,
     find_segmented_session_directory_for_task_store_created_at,
-    fork_segmented_session_directory_from_source, read_session_metadata,
-    rebuild_runtime_log_from_conversation_state, rename_segmented_session_by_created_date,
-    repair_segmented_session_display_if_needed, replay_segmented_session_context,
-    replay_segmented_session_context_without_repair, restore_segmented_session_by_created_date,
-    rewrite_json_value_identity_tokens, rewrite_string_identity_tokens,
-    state_document_from_runtime_state, sync_runtime_log_from_compacted_conversation_state,
-    sync_runtime_log_from_conversation_state, to_store_error,
-    truncate_segmented_session_before_message, update_segmented_message_checkpoint, write_metadata,
-    write_segmented_session_fork_source, write_state,
+    fork_segmented_session_directory_from_source, read_optional_json, read_session_metadata,
+    rebuild_runtime_log_from_conversation_state, record_vmm_store_lifecycle_event_best_effort,
+    rename_segmented_session_by_created_date, repair_segmented_session_display_if_needed,
+    replay_segmented_session_context, replay_segmented_session_context_without_repair,
+    restore_segmented_session_by_created_date, rewrite_json_value_identity_tokens,
+    rewrite_string_identity_tokens, state_document_from_runtime_state,
+    sync_runtime_log_from_compacted_conversation_state, sync_runtime_log_from_conversation_state,
+    to_store_error, truncate_segmented_session_before_message, update_segmented_message_checkpoint,
+    write_json_file_atomic, write_metadata, write_segmented_session_fork_source, write_state,
 };
 use super::session_addon_store::{read_session_addon_state, write_session_addon_state};
 use super::*;
@@ -41,7 +42,13 @@ use vulcan_core::types::ConversationAttachment;
 
 use index::*;
 use locators::*;
-use runtime_tail::*;
+pub(in crate::workspace_store) use runtime_tail::{
+    persist_segmented_runtime_checkpoint_transactionally,
+    recover_segmented_runtime_checkpoint_transaction,
+};
+use runtime_tail::{
+    persist_segmented_session_runtime_state_checkpoint, persist_segmented_session_update,
+};
 #[cfg(test)]
 use snapshot::effective_session_messages_for_persistence;
 

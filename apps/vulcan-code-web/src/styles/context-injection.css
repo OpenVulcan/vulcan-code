@@ -374,3 +374,32 @@
   font-size: 12px;
   line-height: 1.45;
 }
+
+.context-injection-card-group {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.context-injection-card-group.expired {
+  margin-top: 4px;
+  border-top: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
+  padding-top: 10px;
+}
+
+.context-injection-expired-header {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  color: var(--muted-foreground);
+}
+
+.context-injection-expired-header strong {
+  color: color-mix(in oklab, #b45309 82%, var(--foreground));
+  font-size: 12px;
+}
+
+.context-injection-expired-header span {
+  font-size: 11px;
+  line-height: 1.4;
+}

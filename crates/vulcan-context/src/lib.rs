@@ -43,8 +43,8 @@ pub use runtime::{
     RuntimeSystemUpdateEvent, RuntimeSystemUpdateLoweringHint, RuntimeSystemUpdateTrust,
     RuntimeToolBatchCompletedEvent, RuntimeToolBatchStartedEvent, RuntimeToolCallEvent,
     RuntimeToolResultEvent, RuntimeToolResultStatus, RuntimeUserMessageEvent,
-    conversation_state_from_runtime_log_lines, decode_runtime_log_event_line_json,
-    runtime_log_lines_from_conversation_state,
+    RuntimeVmmLifecycleAction, RuntimeVmmLifecycleEvent, conversation_state_from_runtime_log_lines,
+    decode_runtime_log_event_line_json, runtime_log_lines_from_conversation_state,
 };
 pub use transcript::{
     SessionCompactionEntry, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,

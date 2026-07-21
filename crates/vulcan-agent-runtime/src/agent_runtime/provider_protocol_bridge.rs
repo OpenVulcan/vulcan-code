@@ -26,11 +26,10 @@ pub(crate) fn scope_continuation_to_active_provider(
     if saved_provider_id != provider_id {
         return CoreProviderContinuation::default();
     }
-    if continuation
-        .model_id
-        .as_deref()
-        .is_some_and(|saved_model_id| saved_model_id != model_id)
-    {
+    let Some(saved_model_id) = continuation.model_id.as_deref() else {
+        return CoreProviderContinuation::default();
+    };
+    if saved_model_id != model_id {
         return CoreProviderContinuation::default();
     }
 
@@ -41,25 +40,40 @@ pub(crate) fn scope_continuation_to_active_provider(
             .last_provider_message_id
             .clone()
             .filter(|value| !value.trim().is_empty()),
+        last_local_message_id: continuation
+            .last_local_message_id
+            .clone()
+            .filter(|value| !value.trim().is_empty()),
+        context_cache_epoch_id: continuation.context_cache_epoch_id.clone(),
+        context_anchor_revision: continuation.context_anchor_revision,
+        context_rewrite_fingerprint: continuation.context_rewrite_fingerprint.clone(),
         updated_at: continuation.updated_at.clone(),
     }
 }
 
-/// Injects `previous_response_id` into one additional-params payload when the current continuation snapshot already carries a usable upstream response identifier.
-/// 当当前 continuation 快照已经携带可用的上游响应标识时，将 `previous_response_id` 注入到附加参数载荷中。
+/// Reconciles the host-owned `previous_response_id` parameter with one scoped continuation snapshot.
+/// 根据限定作用域的 continuation 快照校准宿主拥有的 `previous_response_id` 参数。
+///
+/// Caller-supplied cursor values are removed or replaced because they have no matching local coverage proof.
+/// 调用方自行提供的游标值会被删除或替换，因为它们没有匹配的本地覆盖证明。
 pub(crate) fn inject_previous_response_id_into_additional_params(
     additional_params: Option<Value>,
     continuation: &CoreProviderContinuation,
 ) -> Option<Value> {
-    let Some(previous_response_id) = continuation
+    // previous_response_id is authoritative only when it came from the scoped local continuation.
+    // previous_response_id 仅在来源于限定作用域的本地 continuation 时才具备权威性。
+    let previous_response_id = continuation
         .last_provider_message_id
         .as_ref()
         .filter(|value| !value.trim().is_empty())
-        .cloned()
-    else {
-        return additional_params;
-    };
+        .cloned();
 
+    if additional_params.is_none() && previous_response_id.is_none() {
+        return None;
+    }
+
+    // object preserves unrelated provider parameters while reserving cursor ownership for the host.
+    // object 保留无关 Provider 参数，同时为宿主保留游标所有权。
     let mut object = match additional_params {
         Some(Value::Object(object)) => object,
         Some(other) => {
@@ -69,10 +83,13 @@ pub(crate) fn inject_previous_response_id_into_additional_params(
         }
         None => JsonMap::new(),
     };
-
-    object
-        .entry(String::from("previous_response_id"))
-        .or_insert_with(|| Value::String(previous_response_id));
+    object.remove("previous_response_id");
+    if let Some(previous_response_id) = previous_response_id {
+        object.insert(
+            String::from("previous_response_id"),
+            Value::String(previous_response_id),
+        );
+    }
     Some(Value::Object(object))
 }
 
@@ -177,6 +194,10 @@ pub(crate) fn build_openai_compatible_turn_response(
             provider_id: Some(provider_id.to_string()),
             model_id: Some(model_id.to_string()),
             last_provider_message_id: provider_message_id,
+            last_local_message_id: None,
+            context_cache_epoch_id: None,
+            context_anchor_revision: None,
+            context_rewrite_fingerprint: None,
             updated_at: Some(current_unix_millis_text()),
         }),
     }

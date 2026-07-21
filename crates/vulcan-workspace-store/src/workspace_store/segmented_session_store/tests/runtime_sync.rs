@@ -1273,6 +1273,14 @@ fn runtime_log_sync_preserves_audit_events_when_rebuilding() {
             has_transient: true,
             merged_baseline_fingerprint: None,
             source_node_ids: vec![String::from("persistent:0:persistent-a")],
+            cache_epoch_id: Some(String::from("initial")),
+            anchor_revision: Some(1),
+            mutation_kind: Some(String::from("append_only")),
+            vmm_anchor_ids: vec![String::from("vmm-memory-1")],
+            active_memory_body_bytes: 96,
+            active_memory_estimated_tokens: 32,
+            reclaimable_anchor_bytes: 0,
+            reclaimable_anchor_estimated_tokens: 0,
         },
     )
     .expect("record injection audit");

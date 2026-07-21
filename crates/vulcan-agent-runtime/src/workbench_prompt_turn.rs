@@ -34,7 +34,7 @@ use crate::{
         },
         conversation_hooks::{
             ConversationHookRuntime, ConversationPrecheckOutcome, ConversationPrecheckRequest,
-            vmm_profile_sync_effect_from_report,
+            vmm_profile_sync_effect_from_report, vmm_recall_batch_effect_from_report,
         },
         events::{RuntimeEvent, RuntimeEventKind},
         vmm_hooks::{VMM_PRECHECK_HOOK_ID, vmm_profile_placement_phase},
@@ -124,6 +124,9 @@ pub struct SharedPromptTurnStart {
     /// Visible user transcript record generated for this turn, when one was appended.
     /// 本回合追加可见用户转录记录时生成的记录标识。
     pub visible_user_prompt_record_id: Option<String>,
+    /// Exact canonical user-message id appended before precheck, when this source persists one.
+    /// 当该来源会持久化规范消息时，在 precheck 前追加的精确规范用户消息标识。
+    pub canonical_user_message_id: Option<String>,
 }
 
 impl fmt::Debug for SharedPromptTurnStart {
@@ -159,6 +162,7 @@ impl fmt::Debug for SharedPromptTurnStart {
                 "visible_user_prompt_record_id",
                 &self.visible_user_prompt_record_id,
             )
+            .field("canonical_user_message_id", &self.canonical_user_message_id)
             .finish_non_exhaustive()
     }
 }
@@ -476,6 +480,10 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
         input.append_canonical_user_message && input.source.persists_canonical_user_message();
     let append_visible_user_prompt_record = input.append_visible_user_prompt_record
         && input.source.appends_visible_user_prompt_record();
+    // canonical_user_message_id must remain unique even when consecutive starts share one millisecond timestamp.
+    // canonical_user_message_id 即使连续启动共享同一个毫秒时间戳也必须保持唯一。
+    let canonical_user_message_id =
+        append_canonical_user_message.then(|| new_canonical_user_message_id(input.session_id));
     let mut visible_user_prompt_record_id = None;
     if append_canonical_user_message
         && let Some(hydrated_conversation_state) = hydrated_conversation_state.as_ref()
@@ -485,7 +493,10 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
         let mut validation_state = hydrated_conversation_state.clone();
         append_user_text_message(
             &mut validation_state,
-            format!("session-{}-protocol-user-{now}", input.session_id),
+            canonical_user_message_id
+                .as_ref()
+                .expect("canonical id exists when canonical append is enabled")
+                .clone(),
             sanitized_prompt.clone(),
             input.attachments.clone(),
         )
@@ -506,7 +517,10 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
     } else if append_canonical_user_message {
         append_user_text_message(
             &mut runtime_state.conversation_state,
-            format!("session-{}-protocol-user-{now}", input.session_id),
+            canonical_user_message_id
+                .as_ref()
+                .expect("canonical id exists when canonical append is enabled")
+                .clone(),
             sanitized_prompt.clone(),
             input.attachments.clone(),
         )
@@ -569,7 +583,27 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
         ai_capability_target_order_overrides: input.ai_capability_target_order_overrides,
         boundary_events,
         visible_user_prompt_record_id,
+        canonical_user_message_id,
     })
+}
+
+/// Generates one collision-resistant canonical user-message identifier for exact anchor ownership.
+/// 为精确锚点归属生成一个抗碰撞的规范用户消息标识。
+///
+/// # Parameters
+/// 参数
+/// `session_id` is the exact session owner embedded for diagnostics.
+/// `session_id` 是嵌入标识、用于诊断的精确会话归属。
+///
+/// # Returns
+/// 返回值
+/// A session-scoped UUID message id suitable for unique transcript and continuation boundaries.
+/// 返回适用于唯一转录与 continuation 边界的会话作用域 UUID 消息标识。
+fn new_canonical_user_message_id(session_id: SessionId) -> String {
+    format!(
+        "session-{session_id}-protocol-user-{}",
+        uuid::Uuid::new_v4()
+    )
 }
 
 /// Builds session-boundary prompt-turn boundary events from the shared reducer input.
@@ -733,8 +767,69 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
     let request_attachments = input.start.attachments.clone();
     let mut system_prompt_hook_blocks = Vec::new();
     let mut precheck_failure_detail = None;
+    // feature_policy governs local VMM state independently from the remote PreCheck outcome.
+    // feature_policy 独立于远端 PreCheck 结果控制本地 VMM 状态。
+    let feature_policy = vulcan_vmm::VmmRuntimeFeaturePolicy::from_env();
+    if feature_policy.session_state_enabled {
+        if let Some(target_message_id) = input.start.canonical_user_message_id.as_deref() {
+            // now is shared by the atomic local pre-provider VMM boundary transition.
+            // now 由 Provider 调用前的原子本地 VMM 边界转换共享。
+            let now = current_unix_millis_text();
+            // mode_report records an explicit rollout epoch transition when policy changed.
+            // mode_report 记录策略变化时的显式灰度纪元转换。
+            let mode_report = runtime_state
+                .vmm_session_memory
+                .synchronize_stable_anchor_rendering(feature_policy.stable_anchors_enabled, &now)?;
+            // pending_report binds local expiry and compaction state even when the remote hook fails.
+            // pending_report 即使在远端 Hook 失败时也会绑定本地到期与压缩状态。
+            let pending_report = runtime_state
+                .vmm_session_memory
+                .bind_pending_state_to_user(target_message_id, &now)?;
+            // active_turn_report fences terminal TTL consumption to this exact logical turn.
+            // active_turn_report 将终态 TTL 消费限定到当前精确逻辑回合。
+            let active_turn_report = runtime_state
+                .vmm_session_memory
+                .register_active_turn(&expected_turn_id, &now)?;
+            if mode_report.changed {
+                runtime_state.conversation_state.continuation = Default::default();
+            }
+            if mode_report.changed || pending_report.changed || active_turn_report.changed {
+                runtime_state.updated_at = now;
+            }
+        } else if input.start.source.runs_completed_turn_hooks()
+            && runtime_state.vmm_session_memory.requires_persistence()
+        {
+            return Err(String::from(
+                "VMM active session state requires an exact canonical user-message id before a terminal user turn can start.",
+            ));
+        }
+    }
     match input.precheck_outcome.report {
         Ok(report) => {
+            if feature_policy.session_state_enabled
+                && let Some(effect) = vmm_recall_batch_effect_from_report(&report)?
+            {
+                let target_message_id = input
+                    .start
+                    .canonical_user_message_id
+                    .as_deref()
+                    .ok_or_else(|| {
+                        String::from(
+                            "VMM recall effect requires the exact canonical user-message id created before precheck.",
+                        )
+                    })?;
+                let now = current_unix_millis_text();
+                runtime_state.vmm_session_memory.apply_recall_batch(
+                    &session_id.to_string(),
+                    target_message_id,
+                    &effect.batch,
+                    &now,
+                )?;
+                runtime_state
+                    .vmm_session_memory
+                    .register_active_turn(&expected_turn_id, &now)?;
+                runtime_state.updated_at = now;
+            }
             if let Some(effect) = vmm_profile_sync_effect_from_report(&report) {
                 runtime_state.vmm_profile_sync = effect.state;
                 runtime_state.updated_at = current_unix_millis_text();
@@ -793,6 +888,7 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
     let runtime_policy = vulcan_session_core::ExecutionRuntimePolicy::main_session();
     let context_injection = core_provider_context_injection_from_state_for_turn(
         &runtime_state.context_injection_state,
+        &runtime_state.vmm_session_memory,
         Some(&input.precheck_outcome.turn_id),
     );
     let request = ExecutionPreparationRequest {

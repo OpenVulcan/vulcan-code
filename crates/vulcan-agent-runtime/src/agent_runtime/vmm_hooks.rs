@@ -3,8 +3,9 @@
 
 use crate::agent_runtime::conversation_hooks::{
     HOOK_CONVERSATION_COMPACTED, HOOK_CONVERSATION_TURN_COMPLETED, HOOK_CONVERSATION_TURN_PRECHECK,
-    HOOK_METADATA_VMM_PROFILE_SYNC_EFFECT, HOOK_METADATA_VMM_WRITEBACK_EFFECTS,
-    VmmProfileSyncHookEffect, VmmWritebackHookEffect,
+    HOOK_METADATA_VMM_PROFILE_SYNC_EFFECT, HOOK_METADATA_VMM_RECALL_BATCH_EFFECT,
+    HOOK_METADATA_VMM_WRITEBACK_EFFECTS, VmmProfileSyncHookEffect, VmmRecallBatchHookEffect,
+    VmmWritebackHookEffect,
 };
 use crate::model::{SessionId, VmmProfileSyncState, VmmWritebackOutboxEntry};
 use serde_json::{Value, json};
@@ -20,9 +21,9 @@ use vulcan_hooks::{
 };
 use vulcan_vmm::{
     GetProfileNodesRequest, ProfileNodeEntry, ProfileTarget, TonicVmmClient, VmmClient,
-    VmmConfigDiagnostic, VmmConfigLayer, VmmEffectiveConfig, VmmTransportConfig,
-    chat_compact_request_from_payload, injection_from_precheck_response,
-    post_action_request_from_completed_payload, precheck_request_from_payload,
+    VmmConfigDiagnostic, VmmConfigLayer, VmmEffectiveConfig, VmmRecallBatch, VmmTransportConfig,
+    chat_compact_request_from_payload, post_action_request_from_completed_payload,
+    precheck_request_from_payload,
 };
 
 /// Stable id used by the built-in VMM precheck hook.
@@ -440,8 +441,8 @@ fn current_unix_millis_text() -> String {
         .unwrap_or_else(|_| String::from("0"))
 }
 
-/// Runs the VMM precheck request and returns context injections.
-/// 执行 VMM 预检查请求并返回上下文注入。
+/// Runs the VMM precheck request and returns a typed recall effect.
+/// 执行 VMM 预检查请求并返回类型化召回效果。
 async fn handle_vmm_precheck(
     runtime: VmmHookRuntimeHandle,
     invocation: HookInvocation,
@@ -461,10 +462,15 @@ async fn handle_vmm_precheck(
         .pre_check(request)
         .await
         .map_err(|error| HookError::handler(error.to_string()))?;
-    let injection = injection_from_precheck_response(&response, &config);
     let mut metadata = BTreeMap::new();
     let mut system_prompt_blocks = Vec::new();
-    let mut injections = injection.into_iter().collect::<Vec<_>>();
+    let mut injections = Vec::new();
+    if let Some(batch) = VmmRecallBatch::from_precheck_response(&response, &config) {
+        metadata.insert(
+            HOOK_METADATA_VMM_RECALL_BATCH_EFFECT.to_string(),
+            json!(VmmRecallBatchHookEffect { batch }),
+        );
+    }
     if let Some(profile_sync) = profile_sync {
         if let Some(session_id) = invocation_session_id(&invocation) {
             runtime

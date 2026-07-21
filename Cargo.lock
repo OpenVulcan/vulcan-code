@@ -6625,6 +6625,7 @@ dependencies = [
  "futures-util",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "uuid",
 ]
@@ -6941,6 +6942,7 @@ dependencies = [
  "protoc-bin-vendored",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "tonic 0.12.3",
  "tonic-build 0.12.3",

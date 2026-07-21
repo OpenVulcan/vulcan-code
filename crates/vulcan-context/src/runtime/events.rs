@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use vulcan_core::types::{ConversationAttachment, ProviderUsageSnapshot};
 
 /// Current schema version used by runtime JSONL event lines.
@@ -93,6 +94,9 @@ pub enum RuntimeLogEvent {
     /// Provider lowering downgrade, repair, or rejection captured for audit.
     /// 为审计捕获的 Provider 转换降级、修复或拒绝。
     ProviderLoweringRepair(RuntimeProviderLoweringRepairEvent),
+    /// Body-free VMM lease, anchor, persistence, or recovery lifecycle audit.
+    /// 不含正文的 VMM 租约、锚点、持久化或恢复生命周期审计。
+    VmmLifecycle(RuntimeVmmLifecycleEvent),
 }
 
 /// Runtime record for one user-authored message.
@@ -705,4 +709,139 @@ pub struct RuntimeInjectionAppliedEvent {
     /// 本次已应用注入视图包含的稳定非正文来源标识。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_node_ids: Vec<String>,
+    /// Active VMM prompt-cache epoch when immutable anchors are present.
+    /// 存在不可变锚点时生效的 VMM 提示词缓存纪元。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_epoch_id: Option<String>,
+    /// Monotonic immutable-anchor revision inside the active VMM cache epoch.
+    /// 当前 VMM 缓存纪元内的单调不可变锚点修订号。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_revision: Option<u64>,
+    /// Provider-context mutation classification used by continuation safety checks.
+    /// continuation 安全检查使用的 Provider 上下文变更分类。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mutation_kind: Option<String>,
+    /// Stable VMM anchor identifiers included in this provider-facing request.
+    /// 本次 Provider 可见请求包含的稳定 VMM 锚点标识。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vmm_anchor_ids: Vec<String>,
+    /// Bytes occupied by currently active VMM structured memory bodies.
+    /// 当前活动 VMM 结构化记忆正文占用的字节数。
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub active_memory_body_bytes: usize,
+    /// Estimated tokens occupied by currently active VMM structured memory bodies.
+    /// 当前活动 VMM 结构化记忆正文占用的估算 Token 数。
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub active_memory_estimated_tokens: usize,
+    /// Bytes held by immutable VMM anchors reclaimable at the next compaction.
+    /// 可在下次压缩回收的不可变 VMM 锚点字节数。
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub reclaimable_anchor_bytes: usize,
+    /// Estimated tokens held by reclaimable immutable VMM anchors.
+    /// 可回收不可变 VMM 锚点占用的估算 Token 数。
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub reclaimable_anchor_estimated_tokens: usize,
+}
+
+/// Returns whether one serialized capacity diagnostic equals zero.
+/// 返回单个序列化容量诊断值是否为零。
+///
+/// # Parameters
+/// 参数
+/// `value` is the borrowed diagnostic count inspected by serde.
+/// `value` 是由 serde 检查的借用诊断计数。
+///
+/// # Returns
+/// 返回值
+/// `true` only when the count is zero.
+/// 仅当计数为零时返回 `true`。
+fn is_zero_usize(value: &usize) -> bool {
+    *value == 0
+}
+
+/// Stable VMM lifecycle action recorded without provider-visible memory text.
+/// 在不记录 Provider 可见记忆正文的情况下持久化的稳定 VMM 生命周期动作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeVmmLifecycleAction {
+    /// One or more session memory leases were created.
+    /// 创建了一条或多条会话记忆租约。
+    LeaseCreated,
+    /// Existing semantically identical leases had their TTL refreshed.
+    /// 既有语义相同租约的 TTL 已刷新。
+    LeaseRefreshed,
+    /// Existing stable memory identities received append-only semantic replacements.
+    /// 既有稳定记忆身份获得了追加式语义替换。
+    LeaseReplaced,
+    /// Terminal TTL consumption physically deleted active leases.
+    /// 终态 TTL 消费物理删除了活动租约。
+    LeaseExpired,
+    /// Explicit VMM disablement revoked active leases.
+    /// 显式禁用 VMM 撤销了活动租约。
+    LeaseRevoked,
+    /// Pending body-free revocations were bound to one exact user message.
+    /// 待处理无正文失效声明已绑定到一条精确用户消息。
+    RevocationBound,
+    /// A new VMM prompt-cache epoch replaced the previous epoch.
+    /// 新 VMM 提示词缓存纪元替换了旧纪元。
+    CacheEpochRebuilt,
+    /// Context compaction physically reclaimed immutable VMM anchor bytes.
+    /// 上下文压缩物理回收了不可变 VMM 锚点字节。
+    CompactionReclaimed,
+    /// Deterministically identified legacy VMM injection state was migrated.
+    /// 可确定归属的旧版 VMM 注入状态已迁移。
+    LegacyMigrated,
+    /// An interrupted or degraded VMM file operation was recovered.
+    /// 中断或降级的 VMM 文件操作已恢复。
+    FileRecovered,
+    /// A corrupt VMM file was isolated for diagnostics.
+    /// 损坏的 VMM 文件已隔离供诊断。
+    FileQuarantined,
+    /// A VMM persistence attempt failed and remains eligible for retry.
+    /// VMM 持久化尝试失败且仍可重试。
+    WriteFailed,
+}
+
+/// Body-free runtime audit payload for one VMM lifecycle transition.
+/// 单次 VMM 生命周期转换的不含正文运行时审计载荷。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeVmmLifecycleEvent {
+    /// Stable event identifier unique inside the owning session lifecycle.
+    /// 在所属会话生命周期内唯一的稳定事件标识。
+    pub event_id: String,
+    /// Logical turn identifier associated with this transition when available.
+    /// 可用时与本次转换关联的逻辑回合标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    /// Exact VMM lifecycle action represented by this event.
+    /// 本事件表示的精确 VMM 生命周期动作。
+    pub action: RuntimeVmmLifecycleAction,
+    /// Active cache epoch after the transition when available.
+    /// 可用时转换后的活动缓存纪元。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_epoch_id: Option<String>,
+    /// Immutable-anchor revision after the transition when available.
+    /// 可用时转换后的不可变锚点修订号。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_revision: Option<u64>,
+    /// Completed logical-turn sequence after the transition.
+    /// 转换后的已完成逻辑回合序号。
+    #[serde(default)]
+    pub completed_turn_sequence: u64,
+    /// Stable memory keys affected by the transition.
+    /// 本次转换影响的稳定记忆键。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub memory_keys: Vec<String>,
+    /// Semantic hashes keyed by stable memory identity without retaining memory text.
+    /// 按稳定记忆身份索引且不保留记忆正文的语义哈希。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub semantic_content_hashes: BTreeMap<String, String>,
+    /// Aggregate Provider-visible memory or anchor bytes affected by the transition.
+    /// 本次转换影响的 Provider 可见记忆或锚点聚合字节数。
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub body_bytes: usize,
+    /// Stable diagnostic reason containing no memory body.
+    /// 不包含记忆正文的稳定诊断原因。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
