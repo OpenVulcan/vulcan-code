@@ -15,7 +15,7 @@ pub struct PersistedUserPromptEditDraft {
 
 /// Persisted rollback result written before replaying an edited prompt.
 /// 在重放编辑后提示词之前写入的持久化回滚结果。
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PersistedUserPromptRollbackResult {
     /// Retained transcript messages before the edited user prompt.
     /// 编辑用户提示词之前保留的转录消息。
@@ -23,6 +23,164 @@ pub struct PersistedUserPromptRollbackResult {
     /// Runtime state rebuilt from the retained canonical conversation state.
     /// 从保留的规范会话状态重建出的运行态。
     pub runtime_state: SessionRuntimeStateEntry,
+    /// Transaction backup that restores the original session until the edited submission commits.
+    /// 在编辑后提交确认前用于恢复原会话的事务备份。
+    rollback_backup: PersistedSessionEditRollbackBackup,
+}
+
+impl PersistedUserPromptRollbackResult {
+    /// Commits the destructive edit by deleting its transaction backup.
+    /// 通过删除事务备份提交本次破坏性编辑。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns success after the backup directory is removed.
+    /// 在备份目录删除后返回成功。
+    pub fn commit(mut self) -> Result<(), String> {
+        self.rollback_backup.commit()
+    }
+
+    /// Restores the exact persisted session tree captured before destructive editing.
+    /// 恢复破坏性编辑前捕获的完整持久化会话目录树。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns success after the original session directory is restored.
+    /// 在原始会话目录恢复后返回成功。
+    pub fn restore(mut self) -> Result<(), String> {
+        self.rollback_backup.restore()
+    }
+}
+
+/// Transaction backup for one destructive persisted-session edit.
+/// 单次破坏性持久化会话编辑的事务备份。
+#[derive(Debug)]
+struct PersistedSessionEditRollbackBackup {
+    /// Authoritative session directory currently being edited.
+    /// 当前正在编辑的权威会话目录。
+    session_dir: PathBuf,
+    /// Exact pre-edit copy used for rollback.
+    /// 用于回滚的编辑前完整副本。
+    backup_dir: PathBuf,
+    /// Transaction root kept outside the session catalog scan tree.
+    /// 位于会话目录扫描树之外的事务根目录。
+    backup_root: PathBuf,
+    /// Whether drop must still restore the original directory.
+    /// Drop 时是否仍需恢复原始目录。
+    restore_on_drop: bool,
+}
+
+impl PersistedSessionEditRollbackBackup {
+    /// Copies the complete session tree before any destructive edit write occurs.
+    /// 在任何破坏性编辑写入发生前复制完整会话目录树。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_dir` is the authoritative persisted session directory.
+    /// `session_dir` 是权威持久化会话目录。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns an armed rollback backup whose drop path restores the original tree.
+    /// 返回一个已启用回滚的备份，其 Drop 路径会恢复原目录树。
+    fn create(session_dir: &Path) -> Result<Self, String> {
+        let sessions_root = session_dir
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_BACKUP_SESSIONS_ROOT_MISSING"))?;
+        let data_root = sessions_root
+            .parent()
+            .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_BACKUP_DATA_ROOT_MISSING"))?;
+        let backup_root = data_root.join(".user-prompt-edit-backups");
+        let directory_name = session_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_BACKUP_NAME_INVALID"))?;
+        let backup_dir = backup_root.join(format!("{directory_name}-{}", Uuid::new_v4()));
+        if let Err(error) = copy_segmented_directory_tree(session_dir, &backup_dir) {
+            let _ = std::fs::remove_dir_all(&backup_dir);
+            remove_empty_edit_backup_root(&backup_root);
+            return Err(format!(
+                "ERR_USER_PROMPT_EDIT_BACKUP_CREATE_FAILED: {error}"
+            ));
+        }
+        Ok(Self {
+            session_dir: session_dir.to_path_buf(),
+            backup_dir,
+            backup_root,
+            restore_on_drop: true,
+        })
+    }
+
+    /// Commits the edit and disarms automatic restoration.
+    /// 提交编辑并解除自动恢复。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns success after the backup is deleted.
+    /// 在备份删除后返回成功。
+    fn commit(&mut self) -> Result<(), String> {
+        // An accepted edited submission owns the rewritten session even when stale backup cleanup fails.
+        // 编辑后的提交一旦被接受，即使陈旧备份清理失败，也应继续拥有已改写会话。
+        self.restore_on_drop = false;
+        if self.backup_dir.exists() {
+            std::fs::remove_dir_all(&self.backup_dir).map_err(to_store_error)?;
+        }
+        remove_empty_edit_backup_root(&self.backup_root);
+        Ok(())
+    }
+
+    /// Restores the pre-edit directory with a rename-based swap.
+    /// 通过基于重命名的交换恢复编辑前目录。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns success after the backup becomes the authoritative session directory.
+    /// 在备份重新成为权威会话目录后返回成功。
+    fn restore(&mut self) -> Result<(), String> {
+        if !self.restore_on_drop {
+            return Ok(());
+        }
+        let failed_dir = self.backup_root.join(format!("failed-{}", Uuid::new_v4()));
+        if self.session_dir.exists() {
+            std::fs::rename(&self.session_dir, &failed_dir).map_err(to_store_error)?;
+        }
+        if let Err(error) = std::fs::rename(&self.backup_dir, &self.session_dir) {
+            if failed_dir.exists() {
+                let _ = std::fs::rename(&failed_dir, &self.session_dir);
+            }
+            return Err(to_store_error(error));
+        }
+        self.restore_on_drop = false;
+        if failed_dir.exists() {
+            let _ = std::fs::remove_dir_all(failed_dir);
+        }
+        remove_empty_edit_backup_root(&self.backup_root);
+        Ok(())
+    }
+}
+
+/// Removes an empty edit-transaction root without disturbing other active backups.
+/// 删除空的编辑事务根目录，同时不影响其他活动备份。
+///
+/// # Parameters
+/// 参数
+/// `backup_root` is the transaction directory outside the session catalog tree.
+/// `backup_root` 是位于会话目录树之外的事务目录。
+fn remove_empty_edit_backup_root(backup_root: &Path) {
+    if backup_root.exists() {
+        let _ = std::fs::remove_dir(backup_root);
+    }
+}
+
+impl Drop for PersistedSessionEditRollbackBackup {
+    /// Restores the original session if submission exits before commit.
+    /// 如果提交在确认前退出，则恢复原始会话。
+    fn drop(&mut self) {
+        if self.restore_on_drop {
+            let _ = self.restore();
+        }
+    }
 }
 
 /// Fork result returned after copying one persisted segmented session.
@@ -58,32 +216,45 @@ pub async fn rollback_persisted_session_before_user_prompt(
     message_id: &str,
 ) -> Result<PersistedUserPromptRollbackResult, String> {
     let target = locate_persisted_user_prompt_target(controller, session, project_id, message_id)?;
-    truncate_segmented_session_before_message(
-        &target.session_dir,
-        message_id,
-        &target.retained_messages,
-    )?;
-    let mut runtime_state = SessionRuntimeStateEntry {
-        conversation_state: target.retained_conversation_state,
-        updated_at: current_unix_millis_text(),
-        ..SessionRuntimeStateEntry::default()
-    };
-    runtime_state.last_compaction_id = target.last_compaction_id;
-    runtime_state.context_start_message_id = target.context_start_message_id;
-    runtime_state.conversation_state.continuation = Default::default();
-    reset_vmm_state_for_history_rewrite(&target.session_dir)?;
-    let state_document =
-        state_document_from_runtime_state(&session.id.to_string(), &runtime_state)?;
-    write_state(&target.session_dir, &state_document)?;
-    rebuild_runtime_log_from_conversation_state(
-        &target.session_dir,
-        &runtime_state.conversation_state,
-        &runtime_state.updated_at,
-    )?;
-    Ok(PersistedUserPromptRollbackResult {
-        retained_messages: target.retained_messages,
-        runtime_state,
-    })
+    let mut rollback_backup = PersistedSessionEditRollbackBackup::create(&target.session_dir)?;
+    let rollback_result = (|| {
+        truncate_segmented_session_before_message(
+            &target.session_dir,
+            message_id,
+            &target.retained_messages,
+        )?;
+        let mut runtime_state = SessionRuntimeStateEntry {
+            conversation_state: target.retained_conversation_state,
+            updated_at: current_unix_millis_text(),
+            ..SessionRuntimeStateEntry::default()
+        };
+        runtime_state.last_compaction_id = target.last_compaction_id;
+        runtime_state.context_start_message_id = target.context_start_message_id;
+        runtime_state.conversation_state.continuation = Default::default();
+        reset_vmm_state_for_history_rewrite(&target.session_dir)?;
+        let state_document =
+            state_document_from_runtime_state(&session.id.to_string(), &runtime_state)?;
+        write_state(&target.session_dir, &state_document)?;
+        rebuild_runtime_log_from_conversation_state(
+            &target.session_dir,
+            &runtime_state.conversation_state,
+            &runtime_state.updated_at,
+        )?;
+        Ok::<SessionRuntimeStateEntry, String>(runtime_state)
+    })();
+    match rollback_result {
+        Ok(runtime_state) => Ok(PersistedUserPromptRollbackResult {
+            retained_messages: target.retained_messages,
+            runtime_state,
+            rollback_backup,
+        }),
+        Err(error) => match rollback_backup.restore() {
+            Ok(()) => Err(error),
+            Err(restore_error) => Err(format!(
+                "{error}; ERR_USER_PROMPT_EDIT_ROLLBACK_RESTORE_FAILED: {restore_error}"
+            )),
+        },
+    }
 }
 
 /// Forks a persisted segmented session by copying its backing directory and indexing the clone.
@@ -522,6 +693,83 @@ fn locate_persisted_user_prompt_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Creates an isolated persisted-session directory for edit rollback tests.
+    /// 为编辑回滚测试创建隔离的持久化会话目录。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the test root and its authoritative session directory.
+    /// 返回测试根目录及其权威会话目录。
+    fn edit_backup_fixture() -> (PathBuf, PathBuf) {
+        let root =
+            std::env::temp_dir().join(format!("vulcan-user-prompt-edit-backup-{}", Uuid::new_v4()));
+        let session_dir = root.join("sessions").join("project-test").join("session");
+        std::fs::create_dir_all(session_dir.join("runtime")).expect("create edit backup fixture");
+        std::fs::write(session_dir.join("metadata.json"), "original metadata")
+            .expect("write original metadata");
+        std::fs::write(
+            session_dir.join("runtime").join("r001.jsonl"),
+            "original runtime",
+        )
+        .expect("write original runtime");
+        (root, session_dir)
+    }
+
+    /// Verifies failed prompt editing restores the exact pre-edit directory tree.
+    /// 验证提示词编辑失败时会恢复精确的编辑前目录树。
+    #[test]
+    fn persisted_edit_backup_restores_original_tree_after_failure() {
+        let (root, session_dir) = edit_backup_fixture();
+        let mut backup =
+            PersistedSessionEditRollbackBackup::create(&session_dir).expect("create edit backup");
+        let sessions_root = session_dir
+            .parent()
+            .and_then(Path::parent)
+            .expect("sessions root");
+        assert!(!backup.backup_dir.starts_with(sessions_root));
+        std::fs::write(session_dir.join("metadata.json"), "rewritten metadata")
+            .expect("rewrite metadata");
+        std::fs::write(session_dir.join("unexpected.jsonl"), "partial edit")
+            .expect("write partial edit artifact");
+
+        backup.restore().expect("restore original session");
+
+        assert_eq!(
+            std::fs::read_to_string(session_dir.join("metadata.json"))
+                .expect("read restored metadata"),
+            "original metadata"
+        );
+        assert_eq!(
+            std::fs::read_to_string(session_dir.join("runtime").join("r001.jsonl"))
+                .expect("read restored runtime"),
+            "original runtime"
+        );
+        assert!(!session_dir.join("unexpected.jsonl").exists());
+        std::fs::remove_dir_all(root).expect("remove edit backup fixture");
+    }
+
+    /// Verifies committed prompt editing keeps the rewritten tree and deletes its backup.
+    /// 验证提示词编辑提交后会保留改写目录并删除事务备份。
+    #[test]
+    fn persisted_edit_backup_commit_keeps_rewritten_tree() {
+        let (root, session_dir) = edit_backup_fixture();
+        let mut backup =
+            PersistedSessionEditRollbackBackup::create(&session_dir).expect("create edit backup");
+        let backup_dir = backup.backup_dir.clone();
+        std::fs::write(session_dir.join("metadata.json"), "rewritten metadata")
+            .expect("rewrite metadata");
+
+        backup.commit().expect("commit edit backup");
+
+        assert_eq!(
+            std::fs::read_to_string(session_dir.join("metadata.json"))
+                .expect("read committed metadata"),
+            "rewritten metadata"
+        );
+        assert!(!backup_dir.exists());
+        std::fs::remove_dir_all(root).expect("remove edit backup fixture");
+    }
 
     /// Builds one persisted transcript message for fork-anchor lookup tests.
     /// 为分叉锚点查找测试构建一条持久化转录消息。

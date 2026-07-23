@@ -2,6 +2,7 @@
 //! 会话运行时 RPC 路由。
 
 use super::*;
+use crate::conversation_submission::ExistingSessionHydrationPolicy;
 
 /// Exact public RPC wire names owned by this domain router.
 /// 本领域路由持有的精确公开 RPC 线协议名称。
@@ -99,6 +100,7 @@ pub(super) async fn dispatch(
                 rpc_optional_param(params, "disabledAiCapabilityKinds")?,
                 rpc_optional_param(params, "disabledAiCapabilityTargetSelectors")?,
                 rpc_optional_param(params, "aiCapabilityTargetOrderOverrides")?,
+                ExistingSessionHydrationPolicy::HydrateIfEmpty,
             )
             .await,
         ),

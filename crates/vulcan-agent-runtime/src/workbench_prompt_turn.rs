@@ -509,6 +509,10 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
         visible_user_prompt_record_id = Some(append_shared_user_prompt_record_with_attachments(
             runtime_state,
             input.session_id,
+            canonical_user_message_id
+                .as_ref()
+                .expect("canonical id exists when canonical append is enabled")
+                .clone(),
             &now,
             &sanitized_prompt,
             input.attachments.clone(),

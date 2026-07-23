@@ -11,7 +11,9 @@ use vulcan_service_api::{
     ComposerAttachmentSummary, ServiceEvent, ServiceEventEmitter, SubmitConversationPromptAck,
     UpdateConversationRunPhaseDelta, WorkbenchDelta, WorkbenchDeltaEnvelope,
 };
-use vulcan_workbench_model::{PendingSessionPromptSource, SessionRunPhase, SessionState};
+use vulcan_workbench_model::{
+    PendingSessionPromptSource, SessionId, SessionRunPhase, SessionState,
+};
 
 use super::{
     SharedServiceBridgeState, UserPromptEditSubmitRequest, active_kernel_session_ids,
@@ -50,6 +52,39 @@ pub(crate) use preflight::*;
 pub(crate) use queue::*;
 pub(crate) use runtime_options::*;
 
+/// Defines how an existing session obtains dialogue context before prompt submission.
+/// 定义已有会话在提交提示词前如何取得对话上下文。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ExistingSessionHydrationPolicy {
+    /// Loads persisted dialogue when the retained runtime context is empty.
+    /// 当保留运行态上下文为空时加载持久化对话。
+    HydrateIfEmpty,
+    /// Trusts the retained snapshot even when a destructive edit intentionally made it empty.
+    /// 即使破坏性编辑有意将其清空，也信任保留快照。
+    TrustRetainedSnapshot,
+}
+
+/// Determines whether an existing submission must hydrate missing dialogue from persistence.
+/// 判断已有会话提交是否必须从持久化层水合缺失对话。
+///
+/// # Parameters
+/// 参数
+/// `session_id` is present only for submissions targeting an existing session.
+/// `session_id` 仅在提交目标为已有会话时存在。
+/// `policy` describes whether the retained snapshot is authoritative when empty.
+/// `policy` 描述保留快照为空时是否仍具权威性。
+///
+/// # Returns
+/// 返回值
+/// Returns true only when an existing ordinary submission requires hydration.
+/// 仅当已有会话的普通提交需要水合时返回 true。
+fn existing_submission_requires_hydration(
+    session_id: Option<SessionId>,
+    policy: ExistingSessionHydrationPolicy,
+) -> bool {
+    session_id.is_some() && policy == ExistingSessionHydrationPolicy::HydrateIfEmpty
+}
+
 /// Submits a WebUI user prompt into a new or existing conversation.
 /// 将 WebUI 用户提示词提交到新会话或已有会话。
 ///
@@ -79,6 +114,8 @@ pub(crate) use runtime_options::*;
 /// `disabled_ai_capability_target_selectors` 禁用本回合选定 AI 能力目标。
 /// `ai_capability_target_order_overrides` overrides selected AI capability target ordering.
 /// `ai_capability_target_order_overrides` 覆盖选定 AI 能力目标排序。
+/// `existing_session_hydration_policy` controls whether an empty retained session is rehydrated.
+/// `existing_session_hydration_policy` 控制是否重新水合空的保留会话。
 ///
 /// # Returns
 /// 返回值
@@ -97,6 +134,7 @@ pub(super) async fn service_submit_conversation_prompt(
     disabled_ai_capability_kinds: Option<Vec<String>>,
     disabled_ai_capability_target_selectors: Option<Vec<String>>,
     ai_capability_target_order_overrides: Option<BTreeMap<String, Vec<String>>>,
+    existing_session_hydration_policy: ExistingSessionHydrationPolicy,
 ) -> Result<SubmitConversationPromptAck, String> {
     // Measures the whole submit RPC body from service entry to final response.
     // 衡量提交 RPC 主体从服务入口到最终返回的整体耗时。
@@ -181,7 +219,11 @@ pub(super) async fn service_submit_conversation_prompt(
                 "disk",
             )
         };
-    if let Some(session_id) = submission_session_id {
+    if existing_submission_requires_hydration(
+        submission_session_id,
+        existing_session_hydration_policy,
+    ) && let Some(session_id) = submission_session_id
+    {
         hydrate_retained_submission_session_if_needed(
             controller_runtime.clone(),
             &mut workspace_snapshot,
@@ -647,4 +689,35 @@ pub(crate) fn emit_queued_prompt_run_phase_delta(
         ServiceEvent::WorkbenchDelta(Box::new(event)),
     );
     Ok((generation, run_phase))
+}
+
+#[cfg(test)]
+mod submission_hydration_policy_tests {
+    use super::*;
+
+    /// Verifies a first-prompt edit treats its intentionally empty retained history as authoritative.
+    /// 验证编辑第一条提示词时会将有意清空的保留历史视为权威状态。
+    #[test]
+    fn first_prompt_edit_does_not_rehydrate_the_removed_original_prompt() {
+        let session_id = SessionId::from_u128(901);
+
+        assert!(!existing_submission_requires_hydration(
+            Some(session_id),
+            ExistingSessionHydrationPolicy::TrustRetainedSnapshot,
+        ));
+        assert!(existing_submission_requires_hydration(
+            Some(session_id),
+            ExistingSessionHydrationPolicy::HydrateIfEmpty,
+        ));
+    }
+
+    /// Verifies new-session submissions never enter the existing-session hydration path.
+    /// 验证新会话提交永远不会进入已有会话水合路径。
+    #[test]
+    fn new_session_submission_never_requires_existing_session_hydration() {
+        assert!(!existing_submission_requires_hydration(
+            None,
+            ExistingSessionHydrationPolicy::HydrateIfEmpty,
+        ));
+    }
 }

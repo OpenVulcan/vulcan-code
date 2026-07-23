@@ -2,7 +2,222 @@
 //! 用户提示词编辑提交辅助逻辑。
 
 use super::*;
-use crate::owning_project_id_for_session;
+use crate::{ServiceBridgeState, owning_project_id_for_session};
+use vulcan_service_api::{ConversationMessage, ConversationSummary};
+use vulcan_workbench_model::{
+    SessionId, SessionMessageEntry, SessionRunPhase, SessionRuntimeStateEntry, SessionSummary,
+};
+
+/// Session-scoped in-memory state captured before applying a destructive prompt edit.
+/// 应用破坏性提示词编辑前捕获的会话级内存状态。
+#[derive(Clone)]
+struct UserPromptEditWorkspaceBackup {
+    /// Original retained transcript messages.
+    /// 原始保留转录消息。
+    session_messages: Option<Vec<SessionMessageEntry>>,
+    /// Original canonical runtime state.
+    /// 原始规范运行态。
+    runtime_state: Option<SessionRuntimeStateEntry>,
+    /// Original visible run phase.
+    /// 原始可见运行阶段。
+    run_phase: Option<SessionRunPhase>,
+    /// Original session summary.
+    /// 原始会话摘要。
+    session: SessionSummary,
+    /// Whether the session was marked dialogue-ready.
+    /// 会话是否被标记为对话就绪。
+    hydrated: bool,
+    /// Original projected workbench messages for this conversation.
+    /// 此会话原始投影后的工作台消息。
+    conversation_messages: Vec<ConversationMessage>,
+    /// Original projected workbench conversation summary.
+    /// 原始投影后的工作台会话摘要。
+    conversation_summary: Option<ConversationSummary>,
+}
+
+impl UserPromptEditWorkspaceBackup {
+    /// Captures the exact session-scoped state that destructive editing may replace.
+    /// 捕获破坏性编辑可能替换的精确会话级状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `guard` is the locked service state before edit projection.
+    /// `guard` 是编辑投影前已加锁的服务状态。
+    /// `session_id` identifies the edited session.
+    /// `session_id` 标识被编辑的会话。
+    /// `session` is the original authoritative session summary.
+    /// `session` 是原始权威会话摘要。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns a restorable session-scoped snapshot.
+    /// 返回可恢复的会话级快照。
+    fn capture(
+        guard: &ServiceBridgeState,
+        session_id: SessionId,
+        session: SessionSummary,
+    ) -> Result<Self, String> {
+        let conversation_id = session_id.to_string();
+        let workspace = guard
+            .workspace_snapshot
+            .as_ref()
+            .ok_or_else(|| String::from("ERR_WORKSPACE_SNAPSHOT_NOT_READY"))?;
+        Ok(Self {
+            session_messages: workspace.session_messages.get(&session_id).cloned(),
+            runtime_state: workspace.session_runtime_state.get(&session_id).cloned(),
+            run_phase: workspace.session_run_phases.get(&session_id).copied(),
+            session,
+            hydrated: workspace.hydrated_session_ids.contains(&session_id),
+            conversation_messages: guard
+                .workbench
+                .messages
+                .iter()
+                .filter(|message| message.conversation_id == conversation_id)
+                .cloned()
+                .collect(),
+            conversation_summary: guard
+                .workbench
+                .conversations
+                .iter()
+                .find(|conversation| conversation.id == conversation_id)
+                .cloned(),
+        })
+    }
+
+    /// Restores the captured session state without overwriting unrelated live sessions.
+    /// 恢复已捕获的会话状态，同时不覆盖其他无关实时会话。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `guard` is the locked service state receiving the restoration.
+    /// `guard` 是接收恢复内容的已加锁服务状态。
+    /// `session_id` identifies the edited session.
+    /// `session_id` 标识被编辑的会话。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns ordered workbench events for the restored transcript and conversation summary.
+    /// 返回用于恢复后转录与会话摘要的有序工作台事件。
+    fn restore(
+        &self,
+        guard: &mut ServiceBridgeState,
+        session_id: SessionId,
+    ) -> Result<Vec<WorkbenchDeltaEnvelope>, String> {
+        let conversation_id = session_id.to_string();
+        let current_conversation_messages = guard
+            .workbench
+            .messages
+            .iter()
+            .filter(|message| message.conversation_id == conversation_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let current_conversation_summary = guard
+            .workbench
+            .conversations
+            .iter()
+            .find(|conversation| conversation.id == conversation_id)
+            .cloned();
+        let workspace = guard
+            .workspace_snapshot
+            .as_mut()
+            .ok_or_else(|| String::from("ERR_WORKSPACE_SNAPSHOT_NOT_READY"))?;
+        match &self.session_messages {
+            Some(messages) => {
+                workspace
+                    .session_messages
+                    .insert(session_id, messages.clone());
+            }
+            None => {
+                workspace.session_messages.remove(&session_id);
+            }
+        }
+        match &self.runtime_state {
+            Some(runtime_state) => {
+                workspace
+                    .session_runtime_state
+                    .insert(session_id, runtime_state.clone());
+            }
+            None => {
+                workspace.session_runtime_state.remove(&session_id);
+            }
+        }
+        match self.run_phase {
+            Some(run_phase) => {
+                workspace.session_run_phases.insert(session_id, run_phase);
+            }
+            None => {
+                workspace.session_run_phases.remove(&session_id);
+            }
+        }
+        if self.hydrated {
+            workspace.hydrated_session_ids.insert(session_id);
+        } else {
+            workspace.hydrated_session_ids.remove(&session_id);
+        }
+        if let Some(session) = workspace
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            *session = self.session.clone();
+        }
+        let message_patch = build_conversation_messages_patched_delta(
+            &conversation_id,
+            current_conversation_messages.as_slice(),
+            self.conversation_messages.as_slice(),
+        );
+        replace_conversation_messages_in_workbench_window(
+            &mut guard.workbench.messages,
+            &conversation_id,
+            self.conversation_messages.clone(),
+        );
+        if let Some(original_summary) = &self.conversation_summary
+            && let Some(conversation) = guard
+                .workbench
+                .conversations
+                .iter_mut()
+                .find(|conversation| conversation.id == conversation_id)
+        {
+            *conversation = original_summary.clone();
+        }
+        if let Ok(workbench) = workbench_with_live_pending_question(guard) {
+            guard.workbench = workbench;
+        }
+        let mut events = Vec::new();
+        if let Some(message_patch) = message_patch {
+            guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+            let generation = guard.workbench_generation;
+            guard.workbench.revision = generation;
+            events.push(WorkbenchDeltaEnvelope {
+                generation,
+                delta: WorkbenchDelta::ConversationMessagesPatched(message_patch),
+            });
+        }
+        if let Some(original_summary) = &self.conversation_summary
+            && current_conversation_summary.as_ref().is_none_or(|current| {
+                current.run_phase != original_summary.run_phase
+                    || current.status != original_summary.status
+                    || current.last_updated_label != original_summary.last_updated_label
+            })
+        {
+            guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+            let generation = guard.workbench_generation;
+            guard.workbench.revision = generation;
+            events.push(WorkbenchDeltaEnvelope {
+                generation,
+                delta: WorkbenchDelta::UpdateConversationRunPhase(
+                    UpdateConversationRunPhaseDelta {
+                        conversation_id,
+                        run_phase: original_summary.run_phase.clone(),
+                        status: Some(original_summary.status.clone()),
+                        last_updated_label: Some(original_summary.last_updated_label.clone()),
+                    },
+                ),
+            });
+        }
+        Ok(events)
+    }
+}
 
 /// Applies a user prompt edit and resubmits the edited prompt into the conversation.
 /// 应用用户提示词编辑，并将编辑后的提示词重新提交到会话。
@@ -73,11 +288,13 @@ pub(crate) async fn service_submit_user_prompt_edit(
         &request.message_id,
     )
     .await?;
-    let message_patch_event = {
+    let (message_patch_event, workspace_backup) = {
         let mut guard = state
             .lock()
             .map_err(|_| String::from("ERR_SERVICE_STATE_LOCK_FAILED"))?;
         let conversation_id = session_id.to_string();
+        let workspace_backup =
+            UserPromptEditWorkspaceBackup::capture(&guard, session_id, source_session.clone())?;
         let before_conversation_messages = guard
             .workbench
             .messages
@@ -94,7 +311,7 @@ pub(crate) async fn service_submit_user_prompt_edit(
             .insert(session_id, rollback.retained_messages.clone());
         workspace
             .session_runtime_state
-            .insert(session_id, rollback.runtime_state);
+            .insert(session_id, rollback.runtime_state.clone());
         sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
         workspace
             .session_run_phases
@@ -124,8 +341,20 @@ pub(crate) async fn service_submit_user_prompt_edit(
             &conversation_id,
             retained_conversation_messages,
         );
-        guard.workbench = workbench_with_live_pending_question(&guard)?;
-        message_patch.map(|message_patch| {
+        match workbench_with_live_pending_question(&guard) {
+            Ok(workbench) => {
+                guard.workbench = workbench;
+            }
+            Err(error) => {
+                return match workspace_backup.restore(&mut guard, session_id) {
+                    Ok(_) => Err(error),
+                    Err(restore_error) => Err(format!(
+                        "{error}; ERR_USER_PROMPT_EDIT_WORKSPACE_RESTORE_FAILED: {restore_error}"
+                    )),
+                };
+            }
+        }
+        let message_patch_event = message_patch.map(|message_patch| {
             guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
             let generation = guard.workbench_generation;
             guard.workbench.revision = generation;
@@ -133,7 +362,8 @@ pub(crate) async fn service_submit_user_prompt_edit(
                 generation,
                 delta: WorkbenchDelta::ConversationMessagesPatched(message_patch),
             }
-        })
+        });
+        (message_patch_event, workspace_backup)
     };
     if let Some(event) = message_patch_event {
         emit_service_event_with_trace(
@@ -142,9 +372,9 @@ pub(crate) async fn service_submit_user_prompt_edit(
             ServiceEvent::WorkbenchDelta(Box::new(event)),
         );
     }
-    service_submit_conversation_prompt(
-        app,
-        state,
+    let submission_result = service_submit_conversation_prompt(
+        app.clone(),
+        state.clone(),
         None,
         Some(request.conversation_id),
         request.prompt,
@@ -155,6 +385,42 @@ pub(crate) async fn service_submit_user_prompt_edit(
         None,
         None,
         None,
+        ExistingSessionHydrationPolicy::TrustRetainedSnapshot,
     )
-    .await
+    .await;
+    match submission_result {
+        Ok(acknowledgement) => {
+            if let Err(error) = rollback.commit() {
+                webui_submit_trace(
+                    "user_prompt_edit_backup_cleanup_failed",
+                    format!("session={session_id} error={error}"),
+                );
+            }
+            Ok(acknowledgement)
+        }
+        Err(submission_error) => {
+            let disk_restore_result = rollback.restore();
+            let workspace_restore_result = state
+                .lock()
+                .map_err(|_| String::from("ERR_SERVICE_STATE_LOCK_FAILED"))
+                .and_then(|mut guard| workspace_backup.restore(&mut guard, session_id));
+            if let Ok(events) = workspace_restore_result.as_ref() {
+                for event in events {
+                    emit_service_event_with_trace(
+                        &app,
+                        "workbench_user_prompt_edit_restore_messages_patch_emit",
+                        ServiceEvent::WorkbenchDelta(Box::new(event.clone())),
+                    );
+                }
+            }
+            match (disk_restore_result, workspace_restore_result) {
+                (Ok(()), Ok(_)) => Err(submission_error),
+                (disk_result, workspace_result) => Err(format!(
+                    "{submission_error}; ERR_USER_PROMPT_EDIT_RESTORE_FAILED: disk={}; workspace={}",
+                    disk_result.err().unwrap_or_else(|| String::from("ok")),
+                    workspace_result.err().unwrap_or_else(|| String::from("ok"))
+                )),
+            }
+        }
+    }
 }
