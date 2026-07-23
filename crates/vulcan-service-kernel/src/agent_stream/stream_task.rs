@@ -128,6 +128,19 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
     let registration_failure_app = app.clone();
     let registration_failure_state = state.clone();
     let task_future = async move {
+        // request is enriched exactly once with the authorized session selection before tool resolution.
+        // request 在工具解析前仅使用已授权会话选择增强一次。
+        let mut request = request;
+        if request.knowledge_access.is_none() {
+            request.knowledge_access =
+                match resolve_turn_knowledge_access(&task_state, session_id).await {
+                    Ok(access) => access,
+                    Err(error) => {
+                        eprintln!("[webui-service] knowledge access resolution failed: {error}");
+                        None
+                    }
+                };
+        }
         let stream_task_started_at = current_unix_millis_value();
         webui_after_precheck_trace(
             "after_precheck_20_stream_task_entered",
@@ -453,5 +466,68 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
             ),
         }
     }
+}
+
+/// Resolves the non-widening knowledge access snapshot for one provider turn.
+/// 为一个 Provider 回合解析不可扩大的资料库访问快照。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the current workspace, runtime state, and retained knowledge runtime.
+/// `state` 持有当前工作区、运行态与保留的资料库运行时。
+/// `session_id` identifies the conversation whose selection must be applied.
+/// `session_id` 标识必须应用其选择的会话。
+///
+/// # Returns
+/// 返回值
+/// A project-bound access snapshot, possibly with an empty library list, or `None` without a project.
+/// 绑定项目且资料库列表可能为空的访问快照；无所属项目时返回 `None`。
+async fn resolve_turn_knowledge_access(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<Option<ExecutionKnowledgeAccessContext>, String> {
+    let (runtime, project_id, selection) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let Some(runtime) = guard.knowledge_runtime.clone() else {
+            return Ok(None);
+        };
+        let Some(workspace) = guard.workspace_snapshot.as_ref() else {
+            return Ok(None);
+        };
+        let Some(project_id) = owning_project_id_for_session(workspace, session_id) else {
+            return Ok(None);
+        };
+        let selection = workspace
+            .session_runtime_state
+            .get(&session_id)
+            .map(|runtime_state| runtime_state.knowledge_library_selection.clone())
+            .unwrap_or_default();
+        (runtime, project_id, selection)
+    };
+    let mut library_ids = match selection.mode {
+        vulcan_workbench_model::SessionKnowledgeLibrarySelectionMode::Inherit => {
+            runtime.authorized_library_ids(&project_id, true).await?
+        }
+        vulcan_workbench_model::SessionKnowledgeLibrarySelectionMode::Explicit => {
+            let authorized: BTreeSet<String> = runtime
+                .authorized_library_ids(&project_id, false)
+                .await?
+                .into_iter()
+                .collect();
+            selection
+                .library_ids
+                .into_iter()
+                .filter(|library_id| authorized.contains(library_id))
+                .collect()
+        }
+    };
+    library_ids.sort();
+    library_ids.dedup();
+    Ok(Some(ExecutionKnowledgeAccessContext {
+        project_id,
+        library_ids,
+    }))
 }
 use content_delta::handle_content_delta_stream_event;

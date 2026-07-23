@@ -114,7 +114,7 @@ pub fn execute_attachment_cleanup(
         save_attachment_asset_index_document(&asset_root, &document)?;
     }
 
-    for (index, planned_path) in matched_indices.into_iter().zip(planned_paths.into_iter()) {
+    for (index, planned_path) in matched_indices.into_iter().zip(planned_paths) {
         let record = &document.assets[index];
         purged_asset_count += 1;
         purged_byte_len = purged_byte_len.saturating_add(record.byte_len.unwrap_or(0));

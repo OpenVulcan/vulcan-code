@@ -564,6 +564,7 @@ async fn run_git_commit_summary_model(
         boundary_events: Vec::new(),
         runtime_system_updates: Vec::new(),
         controller_runtime: None,
+        knowledge_access: None,
         session_goal_context: None,
         session_plan_context: None,
         embedded_turn_usage_segments: Vec::new(),

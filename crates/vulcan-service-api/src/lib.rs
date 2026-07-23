@@ -49,6 +49,7 @@ mod conversation;
 mod conversation_hydration;
 mod git_settings;
 mod host_tools;
+mod knowledge_base;
 mod media;
 mod planning_state;
 mod provider_retry;
@@ -69,6 +70,7 @@ pub use conversation::*;
 pub use conversation_hydration::*;
 pub use git_settings::*;
 pub use host_tools::*;
+pub use knowledge_base::*;
 pub use media::*;
 pub use planning_state::*;
 pub use provider_retry::*;
@@ -306,10 +308,10 @@ mod tests {
     #[test]
     fn webui_service_origin_allows_only_loopback_http_and_tauri_origins() {
         for origin in [
-            "http://localhost:5173",
+            "http://localhost:17601",
             "https://localhost:443",
-            "http://127.0.0.1:5173",
-            "http://[::1]:5173",
+            "http://127.0.0.1:17601",
+            "http://[::1]:17601",
             "tauri://localhost",
             "http://tauri.localhost",
             "https://tauri.localhost",
@@ -334,7 +336,7 @@ mod tests {
     #[test]
     fn webui_service_required_origin_rejects_missing_origin() {
         assert!(webui_service_required_origin_text_is_allowed(Some(
-            "http://127.0.0.1:5173"
+            "http://127.0.0.1:17601"
         )));
         assert!(!webui_service_required_origin_text_is_allowed(None));
         assert!(!webui_service_required_origin_text_is_allowed(Some(

@@ -38,7 +38,8 @@ pub use session::{
 };
 pub use session_addon::{
     SESSION_ADDON_SCHEMA_VERSION, SessionAddonNamespace, SessionAddonState, SessionContextAnchor,
-    SessionRuntimeControls, SessionWorkMode, VersionedSessionAddonValue,
+    SessionKnowledgeLibrarySelection, SessionKnowledgeLibrarySelectionMode, SessionRuntimeControls,
+    SessionWorkMode, VersionedSessionAddonValue,
 };
 pub use subagent::{
     SUBAGENT_TASK_STOPPED_SUMMARY_TEXT, SelectedSubagentTaskPanel, SubagentCloseAgentProjection,

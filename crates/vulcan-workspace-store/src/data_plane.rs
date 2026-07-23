@@ -27,7 +27,7 @@ static APP_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Shared schema version stored in the application metadata table.
 /// 存储在应用元数据表中的共享结构版本号。
-pub const APP_SCHEMA_VERSION: i64 = 10;
+pub const APP_SCHEMA_VERSION: i64 = 13;
 
 /// Long-lived controller handle kept by the host runtime after startup succeeds.
 /// 启动成功后由宿主运行时持有的长生命周期控制器句柄。
@@ -261,7 +261,7 @@ async fn cleanup_failed_controller_bootstrap(
 
 /// Applies additive schema migrations required by newer application builds.
 /// 应用较新应用版本所需的追加式结构迁移。
-async fn ensure_application_schema_migrations(
+pub(crate) async fn ensure_application_schema_migrations(
     client: &ControllerClient,
     sqlite_binding_id: &str,
 ) -> Result<(), String> {
@@ -328,7 +328,101 @@ CREATE TABLE IF NOT EXISTS thread_goals (
         r#"
 CREATE INDEX IF NOT EXISTS idx_thread_goals_status
 ON thread_goals(status, updated_at_ms DESC);
+
+CREATE TABLE IF NOT EXISTS knowledge_libraries (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    name_key TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL DEFAULT '',
+    lifecycle_state TEXT NOT NULL DEFAULT 'active'
+        CHECK(lifecycle_state IN ('active', 'deleting', 'error')),
+    document_count INTEGER NOT NULL DEFAULT 0,
+    chunk_count INTEGER NOT NULL DEFAULT 0,
+    index_status TEXT NOT NULL DEFAULT 'empty',
+    last_completed_import_at_ms INTEGER,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_library_project_bindings (
+    library_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    default_enabled INTEGER NOT NULL DEFAULT 0,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (library_id, project_id),
+    FOREIGN KEY (library_id) REFERENCES knowledge_libraries(id) ON DELETE CASCADE,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_library_project_bindings_project
+ON knowledge_library_project_bindings(project_id, default_enabled DESC, library_id);
+
+CREATE TABLE IF NOT EXISTS knowledge_import_jobs (
+    id TEXT PRIMARY KEY,
+    library_id TEXT NOT NULL,
+    source_root TEXT NOT NULL,
+    operation_kind TEXT NOT NULL DEFAULT 'import',
+    state TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    scanned_files INTEGER NOT NULL DEFAULT 0,
+    total_files INTEGER NOT NULL DEFAULT 0,
+    processed_files INTEGER NOT NULL DEFAULT 0,
+    total_index_items INTEGER NOT NULL DEFAULT 0,
+    processed_index_items INTEGER NOT NULL DEFAULT 0,
+    current_file TEXT,
+    changed_files INTEGER NOT NULL DEFAULT 0,
+    unchanged_files INTEGER NOT NULL DEFAULT 0,
+    deleted_files INTEGER NOT NULL DEFAULT 0,
+    skipped_files INTEGER NOT NULL DEFAULT 0,
+    processed_bytes INTEGER NOT NULL DEFAULT 0,
+    warnings_json TEXT NOT NULL DEFAULT '[]',
+    error_message TEXT,
+    created_at_ms INTEGER NOT NULL,
+    started_at_ms INTEGER,
+    finished_at_ms INTEGER,
+    FOREIGN KEY (library_id) REFERENCES knowledge_libraries(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_import_jobs_library
+ON knowledge_import_jobs(library_id, created_at_ms DESC);
 "#,
+    )
+    .await?;
+    ensure_optional_schema_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE knowledge_import_jobs ADD COLUMN operation_kind TEXT NOT NULL DEFAULT 'import';",
+    )
+    .await?;
+    ensure_optional_schema_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE knowledge_import_jobs ADD COLUMN total_files INTEGER NOT NULL DEFAULT 0;",
+    )
+    .await?;
+    ensure_optional_schema_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE knowledge_import_jobs ADD COLUMN processed_files INTEGER NOT NULL DEFAULT 0;",
+    )
+    .await?;
+    ensure_optional_schema_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE knowledge_import_jobs ADD COLUMN current_file TEXT;",
+    )
+    .await?;
+    ensure_optional_schema_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE knowledge_import_jobs ADD COLUMN total_index_items INTEGER NOT NULL DEFAULT 0;",
+    )
+    .await?;
+    ensure_optional_schema_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE knowledge_import_jobs ADD COLUMN processed_index_items INTEGER NOT NULL DEFAULT 0;",
     )
     .await?;
     Ok(())
@@ -362,7 +456,7 @@ async fn ensure_optional_schema_statement(
     statement: &str,
 ) -> Result<(), String> {
     let migration_result = client
-        .execute_sqlite_batch_typed(APP_SPACE_ID, sqlite_binding_id, statement, vec![Vec::new()])
+        .execute_sqlite_script_typed(APP_SPACE_ID, sqlite_binding_id, statement, Vec::new())
         .await;
 
     match migration_result {
@@ -425,7 +519,7 @@ fn ensure_parent_directory(path: &Path) -> Result<(), String> {
 
 /// Builds the initial SQLite schema used by the Vulcan application data plane.
 /// 构建 Vulcan 应用数据平面使用的初始 SQLite 结构。
-fn build_application_schema_script() -> String {
+pub(crate) fn build_application_schema_script() -> String {
     format!(
         r#"
 PRAGMA foreign_keys = ON;

@@ -1,6 +1,7 @@
 //! Built-in native tools exposed to the host runtime foundation.
 //! 暴露给宿主运行时基础架构的内建原生工具。
 
+use crate::agent_runtime::ExecutionKnowledgeAccessContext;
 use crate::agent_runtime::config::{AgentRuntimeConfig, RuntimeAgentKind, RuntimeSkillKind};
 use crate::model::SessionId;
 use crate::project_temp_maintenance;
@@ -68,6 +69,15 @@ pub const CREATE_GOAL_TOOL_ID: &str = "create_goal";
 /// Stable identifier for the current-thread goal status update tool.
 /// 当前线程目标状态更新工具的稳定标识。
 pub const UPDATE_GOAL_TOOL_ID: &str = "update_goal";
+/// Stable identifier for project knowledge search.
+/// 项目资料检索的稳定标识。
+pub const KNOWLEDGE_SEARCH_TOOL_ID: &str = "knowledge_search";
+/// Stable identifier for project knowledge browsing.
+/// 项目资料浏览的稳定标识。
+pub const KNOWLEDGE_BROWSE_TOOL_ID: &str = "knowledge_browse";
+/// Stable identifier for project knowledge reading.
+/// 项目资料读取的稳定标识。
+pub const KNOWLEDGE_READ_TOOL_ID: &str = "knowledge_read";
 
 /// Quiet window used after Ctrl+C before the terminal is considered drained.
 /// Ctrl+C 后认为终端排空所需的静默窗口。
@@ -80,11 +90,13 @@ const TERMINAL_INTERRUPT_DRAIN_MAX_MS: u64 = 1_500;
 /// Soft byte limit for coalescing adjacent model-visible terminal chunks.
 /// 合并相邻模型可见终端分片时使用的软字节限制。
 const TERMINAL_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES: usize = 2_048;
+mod knowledge_base;
 mod prompt_skill;
 mod registry;
 mod shell_command;
 #[cfg(test)]
 mod shell_session;
+pub(crate) use knowledge_base::*;
 pub(crate) use prompt_skill::*;
 pub(crate) use registry::*;
 pub(crate) use shell_command::*;
@@ -198,6 +210,9 @@ pub struct NativeToolExecutionRequest {
     /// Optional controller runtime used by native tools that persist workspace state.
     /// 持久化工作区状态的原生工具使用的可选控制器运行时。
     pub controller_runtime: Option<ControllerRuntimeHandle>,
+    /// Optional project-authorized and session-enabled knowledge-library snapshot.
+    /// 可选的项目授权且会话已启用资料库快照。
+    pub knowledge_access: Option<ExecutionKnowledgeAccessContext>,
     /// Optional host-managed spill directory used for oversized output paging.
     /// 用于超长输出分页落盘的可选宿主管理超限目录。
     pub spill_root: Option<PathBuf>,
@@ -331,6 +346,9 @@ pub fn build_native_tool_catalog(
         build_get_goal_tool(),
         build_create_goal_tool(),
         build_update_goal_tool(),
+        build_knowledge_search_tool(),
+        build_knowledge_browse_tool(),
+        build_knowledge_read_tool(),
         build_prompt_skill_detail_tool(),
         build_shell_command_tool(shell_support.clone(), plugin_runtime),
         build_terminal_session_tool(command_session_runtime, shell_support),

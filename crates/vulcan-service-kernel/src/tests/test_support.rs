@@ -323,6 +323,7 @@ pub(super) fn test_service_state_with_parent_session(
         service_runtime: None,
         webui_service_discovery: None,
         controller_runtime: None,
+        knowledge_runtime: None,
         luaskills_runtime: None,
         cached_luaskills_catalog: None,
         token_budget_runtime: None,

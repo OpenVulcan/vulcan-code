@@ -110,8 +110,9 @@ pub mod vulcan_plugin_hooks;
 pub use config::{RuntimeSkillKind, ensure_runtime_defaults};
 pub use events::ExecutionStreamEvent;
 pub use execution_models::{
-    ExecutionPreparation, ExecutionPreparationRequest, ExecutionPromptPurpose,
-    ExecutionProviderVisibleAgentMessage, ExecutionRunReport, ExecutionSessionGoalContext,
+    ExecutionKnowledgeAccessContext, ExecutionPreparation, ExecutionPreparationRequest,
+    ExecutionPromptPurpose, ExecutionProviderVisibleAgentMessage, ExecutionRunReport,
+    ExecutionSessionGoalContext,
 };
 pub use extension_generation::ExtensionGeneration;
 pub use runtime::RuntimeFoundation;

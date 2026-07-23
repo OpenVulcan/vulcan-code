@@ -71,7 +71,7 @@ use ai_fallback::{append_ai_tool_fallback_aliases, append_configured_ai_tool_bac
 use descriptors::{
     entry_declares_luaskill_sid, entry_declares_pwd, luaskills_descriptor_to_vulcan,
     mcp_tool_binding_to_vulcan, native_descriptor_to_vulcan, native_plan_policy,
-    native_tool_id_is_vmm_memory_tool,
+    native_tool_id_is_knowledge_tool, native_tool_id_is_vmm_memory_tool,
 };
 #[cfg(test)]
 use luaskills_dispatch::luaskills_entry_to_call_view;
@@ -130,6 +130,7 @@ pub fn build_vulcan_tools_manager(
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     workspace_root: Option<PathBuf>,
     controller_runtime: Option<ControllerRuntimeHandle>,
+    knowledge_access: Option<crate::agent_runtime::ExecutionKnowledgeAccessContext>,
     conversation_attachments: Vec<ConversationAttachment>,
     candidate_native_tool_ids: Vec<String>,
     candidate_luaskills_tools: Vec<RuntimeEntryDescriptor>,
@@ -166,6 +167,13 @@ pub fn build_vulcan_tools_manager(
         if native_tool_id_is_vmm_memory_tool(&tool_id) && !vmm_ai_tools_enabled {
             continue;
         }
+        if native_tool_id_is_knowledge_tool(&tool_id)
+            && knowledge_access
+                .as_ref()
+                .is_none_or(|context| context.library_ids.is_empty())
+        {
+            continue;
+        }
         let Some(definition) = native_catalog.definition(&tool_id) else {
             continue;
         };
@@ -175,6 +183,7 @@ pub fn build_vulcan_tools_manager(
         let tool_id = definition.descriptor.id.clone();
         let workspace_root_for_context = workspace_root.clone();
         let controller_runtime_for_context = controller_runtime.clone();
+        let knowledge_access_for_context = knowledge_access.clone();
         let enabled_prompt_skill_names_for_context = enabled_prompt_skill_names.clone();
         let prepared_prompt_skills_for_context = prepared_prompt_skills.clone();
         let prompt_skill_user_root_for_context = prompt_skill_user_root.clone();
@@ -191,6 +200,7 @@ pub fn build_vulcan_tools_manager(
                 let tool_id = tool_id.clone();
                 let workspace_root = workspace_root_for_context.clone();
                 let controller_runtime = controller_runtime_for_context.clone();
+                let knowledge_access = knowledge_access_for_context.clone();
                 let prompt_skill_user_root = prompt_skill_user_root_for_context.clone();
                 let enabled_prompt_skill_names = enabled_prompt_skill_names_for_context.clone();
                 let prepared_prompt_skills = prepared_prompt_skills_for_context.clone();
@@ -208,6 +218,7 @@ pub fn build_vulcan_tools_manager(
                                 spill_root: None,
                                 workspace_root,
                                 controller_runtime,
+                                knowledge_access,
                                 enabled_prompt_skill_names,
                                 prepared_prompt_skills,
                                 prompt_skill_user_root,

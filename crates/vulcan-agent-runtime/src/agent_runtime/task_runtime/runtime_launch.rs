@@ -32,7 +32,13 @@ pub(super) fn build_task_runtime_preparation_request(
     );
     let mut request = context.request_template.clone();
     request.session_id = invocation.task_id;
-    request.controller_runtime = None;
+    if request
+        .knowledge_access
+        .as_ref()
+        .is_none_or(|access| access.library_ids.is_empty())
+    {
+        request.controller_runtime = None;
+    }
     request.execution_scope = ExecutionScope::TaskSession {
         root_session_id: SessionNodeId::from(invocation.root_session_id),
         task_session_id: SessionNodeId::from(invocation.task_id),

@@ -2,20 +2,21 @@ use super::{
     CommandSessionBackend, CommandSessionInputEvent, CommandSessionOutputChunk,
     CommandSessionSnapshot, NativeToolExecutionRequest, SUBMIT_PLAN_MARKER, TerminalSessionInput,
     TerminalSessionKeyEncoding, ThreadGoal, ThreadGoalStatus, build_agent_list_tool,
+    build_knowledge_browse_tool, build_knowledge_read_tool, build_knowledge_search_tool,
     build_mcp_server_list_tool, build_prompt_skill_detail_tool, build_shell_command_tool,
     build_shell_session_tool, build_skill_list_tool, build_submit_plan_tool,
     build_terminal_session_tool, build_todolist_tool, build_workspace_describe_tool,
     coalesce_terminal_output_chunks, display_submit_plan_path, effective_start_append_newline,
-    encode_terminal_inputs, goal_response_value, normalize_terminal_session_name,
-    resolve_session_shell_behavior, resolve_shell_command_launcher,
-    resolve_shell_command_working_directory, shell_command_args_schema, shell_specific_newline,
-    strip_simple_ansi_sequences, strip_terminal_transaction_sentinel,
-    terminal_inputs_request_interrupt, terminal_interrupt_drain_chunk_is_visible,
-    terminal_output_chunks_contain_pattern, terminal_screen_text_from_chunks,
-    terminal_session_args_schema, terminal_transaction_command_text,
-    validate_shell_session_start_stdin_policy, validate_terminal_session_start_shell_policy,
-    validate_terminal_transaction_start, windows_console_input_events_from_inputs,
-    wrap_terminal_transaction_command,
+    encode_terminal_inputs, goal_response_value, knowledge_document_lines,
+    normalize_terminal_session_name, resolve_session_shell_behavior,
+    resolve_shell_command_launcher, resolve_shell_command_working_directory,
+    shell_command_args_schema, shell_specific_newline, strip_simple_ansi_sequences,
+    strip_terminal_transaction_sentinel, terminal_inputs_request_interrupt,
+    terminal_interrupt_drain_chunk_is_visible, terminal_output_chunks_contain_pattern,
+    terminal_screen_text_from_chunks, terminal_session_args_schema,
+    terminal_transaction_command_text, validate_shell_session_start_stdin_policy,
+    validate_terminal_session_start_shell_policy, validate_terminal_transaction_start,
+    windows_console_input_events_from_inputs, wrap_terminal_transaction_command,
 };
 use crate::agent_runtime::config::{
     AgentRuntimeConfig, RuntimeAgentDefinition, RuntimeAgentKind, RuntimeAgentRoute,
@@ -86,6 +87,7 @@ fn test_native_request(arguments: serde_json::Value) -> NativeToolExecutionReque
         session_id: None,
         workspace_root: None,
         controller_runtime: None,
+        knowledge_access: None,
         spill_root: None,
         enabled_prompt_skill_names: Vec::new(),
         prepared_prompt_skills: Vec::new(),
@@ -163,6 +165,7 @@ async fn prompt_skill_detail_uses_execution_prepared_snapshot() {
     assert!(output.contains("scripts\\review.ps1") || output.contains("scripts/review.ps1"));
 }
 
+mod knowledge_base;
 mod planning;
 mod shell;
 mod terminal;

@@ -69,6 +69,7 @@ fn build_task_start_test_runtime_context(
             boundary_events: Vec::new(),
             runtime_system_updates: Vec::new(),
             controller_runtime: None,
+            knowledge_access: None,
             session_goal_context: None,
             session_plan_context: None,
             embedded_turn_usage_segments: Vec::new(),

@@ -33,9 +33,9 @@ use vulcan_agent_runtime::session_event_runtime::{
     STREAMING_RECORD_STATE_SEALED,
 };
 use vulcan_agent_runtime::{
-    ExecutionPreparation, ExecutionPreparationRequest, ExecutionProviderVisibleAgentMessage,
-    ExecutionRunReport, ExecutionStreamEvent, RuntimePromptIntervention,
-    RuntimePromptInterventionError,
+    ExecutionKnowledgeAccessContext, ExecutionPreparation, ExecutionPreparationRequest,
+    ExecutionProviderVisibleAgentMessage, ExecutionRunReport, ExecutionStreamEvent,
+    RuntimePromptIntervention, RuntimePromptInterventionError,
     agent_profile::AgentProfileCatalog,
     agent_runtime::{
         context_injection_runtime::{
@@ -204,6 +204,7 @@ mod fallback_workbench_projection;
 mod git;
 mod git_diff_services;
 mod host_tools_settings;
+mod knowledge_base_services;
 mod mcp_settings;
 mod pending_prompt_services;
 mod pending_prompts;
@@ -309,6 +310,7 @@ use git::{
 };
 use git_diff_services::*;
 use host_tools_settings::{host_tools_settings, host_tools_settings_with_native_tools};
+use knowledge_base_services::*;
 use mcp_settings::*;
 use pending_prompt_services::{
     service_edit_pending_prompt, service_remove_pending_prompt, service_reorder_pending_prompts,
@@ -462,6 +464,7 @@ pub fn create_service_bridge_state(
         service_runtime: None,
         webui_service_discovery: None,
         controller_runtime: None,
+        knowledge_runtime: None,
         luaskills_runtime: None,
         cached_luaskills_catalog: None,
         token_budget_runtime: None,

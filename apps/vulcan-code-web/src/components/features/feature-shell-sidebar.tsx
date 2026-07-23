@@ -1,6 +1,7 @@
 import * as React from "react"
 import {
   BrainCircuit,
+  BookMarked,
   ChartNoAxesCombined,
   ChevronDown,
   Hammer,
@@ -425,6 +426,7 @@ const areaIconMap: Record<MainAreaId, React.ReactNode> = {
   skills: <Puzzle size={17} />,
   agents: <Network size={17} />,
   memory: <BrainCircuit size={17} />,
+  knowledge: <BookMarked size={17} />,
   settings: <Settings size={17} />,
 }
 
@@ -437,6 +439,7 @@ function primaryFeatureAreas(t: ReturnType<typeof useI18n>["t"]): FeatureAreaSum
     { id: "skills", label: t("area.skills"), description: t("area.skills.description"), status: t("feature.status.preview") },
     { id: "agents", label: t("area.agents"), description: t("area.agents.description"), status: t("feature.status.preview") },
     { id: "memory", label: t("area.memory"), description: t("area.memory.description"), status: t("feature.status.preview") },
+    { id: "knowledge", label: t("area.knowledge"), description: t("area.knowledge.description"), status: t("feature.status.available") },
   ]
 }
 
@@ -487,6 +490,11 @@ function featureSidebarRows(
         detail: section.description,
         icon: vmmSectionIcon(section.id),
       })),
+    ]
+  }
+  if (activeArea === "knowledge") {
+    return [
+      { id: "knowledge-libraries", label: t("area.knowledge"), detail: t("area.knowledge.description"), icon: <BookMarked size={16} /> },
     ]
   }
   return []

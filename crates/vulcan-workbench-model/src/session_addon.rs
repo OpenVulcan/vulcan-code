@@ -12,7 +12,7 @@ use crate::{SessionId, SessionPlanModeState, SessionRuntimeStateEntry, SessionTo
 
 /// Current schema version for the durable session addon document.
 /// 当前持久化会话附属状态文档的结构版本。
-pub const SESSION_ADDON_SCHEMA_VERSION: u32 = 1;
+pub const SESSION_ADDON_SCHEMA_VERSION: u32 = 2;
 
 /// One stable namespace inside the session addon document.
 /// 会话附属状态文档中的一个稳定命名空间。
@@ -39,6 +39,9 @@ pub enum SessionAddonNamespace {
     /// Session-level VMM state and memory settings.
     /// 会话级 VMM 状态与记忆设置。
     Vmm,
+    /// Session-level knowledge-library selection, separate from conversational memory.
+    /// 与会话记忆分离的会话级资料库选择。
+    KnowledgeBases,
     /// Session-level todolist updated by the model-facing todolist tool.
     /// 由模型可见 todolist 工具更新的会话级 todolist。
     Todolist,
@@ -78,6 +81,7 @@ impl SessionAddonNamespace {
             "prompt_skills" => Some(Self::PromptSkills),
             "context_injection" => Some(Self::ContextInjection),
             "vmm" => Some(Self::Vmm),
+            "knowledge_bases" => Some(Self::KnowledgeBases),
             "todolist" => Some(Self::Todolist),
             "composer" => Some(Self::Composer),
             "request_preview" => Some(Self::RequestPreview),
@@ -102,6 +106,7 @@ impl SessionAddonNamespace {
             Self::PromptSkills => "prompt_skills",
             Self::ContextInjection => "context_injection",
             Self::Vmm => "vmm",
+            Self::KnowledgeBases => "knowledge_bases",
             Self::Todolist => "todolist",
             Self::Composer => "composer",
             Self::RequestPreview => "request_preview",
@@ -290,7 +295,7 @@ impl<'de> Deserialize<'de> for SessionAddonState {
             .collect();
 
         Ok(Self {
-            schema_version: raw.schema_version,
+            schema_version: raw.schema_version.max(SESSION_ADDON_SCHEMA_VERSION),
             session_id: raw.session_id,
             revision: raw.revision,
             namespaces,
@@ -398,6 +403,13 @@ impl SessionAddonState {
             );
         }
 
+        if !runtime_state.knowledge_library_selection.is_default() {
+            let _ = state.set_knowledge_library_selection(
+                &runtime_state.knowledge_library_selection,
+                updated_at.clone(),
+            );
+        }
+
         if !runtime_state.todolist.is_empty() {
             let _ = state.set_typed_namespace(
                 SessionAddonNamespace::Todolist,
@@ -459,6 +471,7 @@ impl SessionAddonState {
         if let Some(vmm) = self.typed_namespace(SessionAddonNamespace::Vmm) {
             runtime_state.vmm = vmm;
         }
+        runtime_state.knowledge_library_selection = self.knowledge_library_selection();
         if let Some(todolist) = self.todolist() {
             runtime_state.todolist = todolist;
         }
@@ -687,6 +700,45 @@ impl SessionAddonState {
         self.set_typed_namespace(SessionAddonNamespace::Todolist, todolist, updated_at)
     }
 
+    /// Reads the session knowledge-library selection from its independent namespace.
+    /// 从独立命名空间读取会话资料库选择。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The persisted selection, defaulting to project inheritance when absent or invalid.
+    /// 返回持久化选择；缺失或无效时默认继承项目配置。
+    pub fn knowledge_library_selection(&self) -> SessionKnowledgeLibrarySelection {
+        self.typed_namespace(SessionAddonNamespace::KnowledgeBases)
+            .unwrap_or_default()
+    }
+
+    /// Writes a normalized session knowledge-library selection.
+    /// 写入一份规范化的会话资料库选择。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `selection` is the project-inherit or explicit selection to persist.
+    /// `selection` 是要持久化的项目继承或显式选择。
+    /// `updated_at` is the timestamp applied when the value changes.
+    /// `updated_at` 是值变化时应用的时间戳。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when the durable namespace changed.
+    /// 持久化命名空间发生变化时返回 `true`。
+    pub fn set_knowledge_library_selection(
+        &mut self,
+        selection: &SessionKnowledgeLibrarySelection,
+        updated_at: String,
+    ) -> bool {
+        let normalized = selection.clone().normalized();
+        self.set_typed_namespace(
+            SessionAddonNamespace::KnowledgeBases,
+            &normalized,
+            updated_at,
+        )
+    }
+
     /// Writes work mode to the addon namespace.
     /// 将工作模式写入附属状态命名空间。
     ///
@@ -724,6 +776,64 @@ impl SessionAddonState {
         self.namespaces
             .get(&namespace)
             .and_then(|entry| serde_json::from_value(entry.value.clone()).ok())
+    }
+}
+
+/// Session selection strategy for project-authorized knowledge libraries.
+/// 项目已授权资料库的会话选择策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionKnowledgeLibrarySelectionMode {
+    /// Inherit libraries marked default-enabled for the current project.
+    /// 继承当前项目中标记为默认启用的资料库。
+    #[default]
+    Inherit,
+    /// Use only explicitly listed libraries after authorization intersection.
+    /// 与授权集合求交后，仅使用显式列出的资料库。
+    Explicit,
+}
+
+/// Durable per-session knowledge-library selection.
+/// 持久化的每会话资料库选择。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionKnowledgeLibrarySelection {
+    /// Selection strategy.
+    /// 选择策略。
+    #[serde(default)]
+    pub mode: SessionKnowledgeLibrarySelectionMode,
+    /// Explicit library IDs, used only when mode is explicit.
+    /// 显式资料库标识符，仅在 explicit 模式下使用。
+    #[serde(default)]
+    pub library_ids: Vec<String>,
+}
+
+impl SessionKnowledgeLibrarySelection {
+    /// Returns a canonical selection with deterministic unique identifiers.
+    /// 返回具有确定性唯一标识符的规范选择。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A sorted and deduplicated explicit selection, or an identifier-free inherited selection.
+    /// 返回排序去重后的显式选择，或不含标识符的继承选择。
+    pub fn normalized(mut self) -> Self {
+        self.library_ids.sort();
+        self.library_ids.dedup();
+        if self.mode == SessionKnowledgeLibrarySelectionMode::Inherit {
+            self.library_ids.clear();
+        }
+        self
+    }
+
+    /// Returns whether the selection uses the implicit project defaults.
+    /// 返回该选择是否使用隐式项目默认值。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when the selection is the default inherit mode without explicit identifiers.
+    /// 当选择为默认继承模式且不含显式标识符时返回 `true`。
+    pub fn is_default(&self) -> bool {
+        self.mode == SessionKnowledgeLibrarySelectionMode::Inherit && self.library_ids.is_empty()
     }
 }
 
@@ -820,6 +930,63 @@ impl SessionRuntimeControls {
 }
 
 impl Eq for SessionRuntimeControls {}
+
+#[cfg(test)]
+mod knowledge_library_selection_tests {
+    use super::*;
+
+    /// Verifies explicit knowledge selections are sorted, deduplicated, and round-trip safely.
+    /// 验证显式资料库选择会排序、去重并安全往返。
+    #[test]
+    fn explicit_selection_is_normalized() {
+        let session_id = SessionId::new_v4();
+        let mut addon = SessionAddonState::new(session_id);
+        let selection = SessionKnowledgeLibrarySelection {
+            mode: SessionKnowledgeLibrarySelectionMode::Explicit,
+            library_ids: vec![String::from("b"), String::from("a"), String::from("b")],
+        };
+
+        assert!(addon.set_knowledge_library_selection(&selection, String::from("1")));
+        assert_eq!(
+            addon.knowledge_library_selection().library_ids,
+            vec![String::from("a"), String::from("b")]
+        );
+        assert_eq!(selection.clone().normalized().library_ids, vec!["a", "b"]);
+    }
+
+    /// Verifies inherited selection never persists irrelevant explicit identifiers.
+    /// 验证继承型选择绝不会持久化无关的显式标识符。
+    #[test]
+    fn inherited_selection_clears_explicit_ids() {
+        let mut addon = SessionAddonState::new(SessionId::new_v4());
+        let selection = SessionKnowledgeLibrarySelection {
+            mode: SessionKnowledgeLibrarySelectionMode::Inherit,
+            library_ids: vec![String::from("ignored")],
+        };
+
+        addon.set_knowledge_library_selection(&selection, String::from("1"));
+        assert!(addon.knowledge_library_selection().library_ids.is_empty());
+    }
+
+    /// Verifies legacy addon documents upgrade monotonically while preserving known namespaces.
+    /// 验证旧版附属状态文档在保留已知命名空间时单调升级。
+    #[test]
+    fn legacy_addon_schema_upgrades_to_current_version() {
+        let session_id = SessionId::new_v4();
+        let payload = serde_json::json!({
+            "schemaVersion": 1,
+            "sessionId": session_id,
+            "revision": 0,
+            "namespaces": {}
+        });
+
+        let addon: SessionAddonState =
+            serde_json::from_value(payload).expect("deserialize legacy addon document");
+
+        assert_eq!(addon.schema_version, SESSION_ADDON_SCHEMA_VERSION);
+        assert_eq!(addon.session_id, session_id);
+    }
+}
 
 /// Session-scoped user work mode managed outside transcript hydration.
 /// 在转录水合之外管理的会话级用户工作模式。

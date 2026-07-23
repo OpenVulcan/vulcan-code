@@ -20,8 +20,11 @@ $script:IsLinuxPlatform   = [System.Runtime.InteropServices.RuntimeInformation]:
 $ThirdParty = Join-Path $ProjectDir "third_party"
 $VldbControllerDir = Join-Path $ThirdParty "vldb_controller"
 $VldbControllerBinDir = Join-Path $VldbControllerDir "bin"
+# VldbControllerOutputBinDir is the runtime directory preferred by packaged and debug launches.
+# VldbControllerOutputBinDir 是打包运行与调试启动优先使用的运行时目录。
+$VldbControllerOutputBinDir = Join-Path $ProjectDir "output\bin"
 $VldbControllerRepo = "OpenVulcan/vldb-controller"
-$VldbControllerTag = "v0.2.1"
+$VldbControllerTag = "v0.2.3"
 
 # RtkPluginDir is the real RTK plugin package owned and distributed by Vulcan Code.
 # RtkPluginDir 是由 Vulcan Code 持有并分发的真实 RTK 插件包。
@@ -194,6 +197,26 @@ function Get-VldbControllerAssetInfo {
     throw "Unsupported platform for vldb-controller bootstrap"
 }
 
+# Sync-VldbControllerRuntimeBinary copies the installed controller into the runtime-preferred output directory.
+# Sync-VldbControllerRuntimeBinary 将已安装控制器复制到运行时优先使用的 output 目录。
+# SourcePath identifies the exact verified executable installed under third_party; BinaryName is its platform filename.
+# SourcePath 指向 third_party 下已安装的准确可执行文件；BinaryName 是对应平台文件名。
+# This function returns no value and throws when the runtime copy cannot be completed.
+# 此函数不返回值，并在运行时副本无法完成同步时抛出错误。
+function Sync-VldbControllerRuntimeBinary {
+    param(
+        [string]$SourcePath,
+        [string]$BinaryName
+    )
+
+    Ensure-Dir $VldbControllerOutputBinDir
+    # runtimeBinaryPath is the exact executable path resolved first by Vulcan Code launches.
+    # runtimeBinaryPath 是 Vulcan Code 启动时优先解析的准确可执行文件路径。
+    $runtimeBinaryPath = Join-Path $VldbControllerOutputBinDir $BinaryName
+    Copy-Item -LiteralPath $SourcePath -Destination $runtimeBinaryPath -Force
+    Write-Host "==> vldb-controller runtime binary synchronized: $runtimeBinaryPath"
+}
+
 # Get-RtkAssetInfo resolves the RTK release asset for the current host platform and architecture.
 function Get-RtkAssetInfo {
     $archKey = Get-CurrentArchitectureKey
@@ -297,6 +320,7 @@ function Install-VldbControllerBinary {
 
     if ((Test-Path -LiteralPath $markerFile) -and (Test-Path -LiteralPath $binaryDest)) {
         Write-Host "==> vldb-controller host binary already installed ($assetName)."
+        Sync-VldbControllerRuntimeBinary -SourcePath $binaryDest -BinaryName $assetInfo.binary_name
         return
     }
 
@@ -347,6 +371,7 @@ function Install-VldbControllerBinary {
             Remove-Item -Force -ErrorAction SilentlyContinue
         New-Item -ItemType File -Path $markerFile -Force | Out-Null
         Write-Host "==> vldb-controller host binary installed successfully."
+        Sync-VldbControllerRuntimeBinary -SourcePath $binaryDest -BinaryName $assetInfo.binary_name
     } finally {
         Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
     }

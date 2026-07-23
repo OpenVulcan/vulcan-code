@@ -22,7 +22,7 @@ The tool id is `skill`, singular. It reads prompt Skills. Do not call `luaskill`
 
 ## Runtime Versions
 
-- LuaSkills: `0.5.3`.
+- LuaSkills: `0.5.4`.
 - mlua: `0.12.0-rc.1`.
 - LuaJIT: `LuaJIT 2.1.ROLLING`.
 - LuaJIT source: `luajit-src 210.7.1+18b087c`.

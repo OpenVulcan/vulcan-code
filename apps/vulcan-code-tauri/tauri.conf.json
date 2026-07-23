@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "ai.vulcan.code",
   "build": {
-    "beforeDevCommand": "pnpm --dir vulcan-code-web dev --host 127.0.0.1 --port 5173",
+    "beforeDevCommand": "pnpm --dir vulcan-code-web dev --host 127.0.0.1 --port 17601 --strictPort",
     "beforeBuildCommand": "pnpm --dir vulcan-code-web build",
-    "devUrl": "http://127.0.0.1:5173",
+    "devUrl": "http://127.0.0.1:17601",
     "frontendDist": "../vulcan-code-web/dist"
   },
   "app": {

@@ -41,12 +41,157 @@ export type TranslationKey =
   | "area.agentSkills"
   | "area.agents"
   | "area.memory"
+  | "area.knowledge"
   | "area.settings"
   | "area.chat.description"
   | "area.skills.description"
   | "area.agentSkills.description"
   | "area.agents.description"
   | "area.memory.description"
+  | "area.knowledge.description"
+  | "knowledge.name"
+  | "knowledge.name.placeholder"
+  | "knowledge.create"
+  | "knowledge.filter.aria"
+  | "knowledge.filter.placeholder"
+  | "knowledge.refresh"
+  | "knowledge.emptyLibraries"
+  | "knowledge.libraryCounts"
+  | "knowledge.defaultDescription"
+  | "knowledge.saveName"
+  | "knowledge.view"
+  | "knowledge.importDirectory"
+  | "knowledge.sources.title"
+  | "knowledge.sources.description"
+  | "knowledge.sources.add"
+  | "knowledge.sources.loading"
+  | "knowledge.sources.empty"
+  | "knowledge.sources.documents"
+  | "knowledge.sources.counts"
+  | "knowledge.sources.lastScanned"
+  | "knowledge.sources.sync"
+  | "knowledge.sources.modify"
+  | "knowledge.sources.modifyPickerTitle"
+  | "knowledge.cancelImport"
+  | "knowledge.cancelOperation"
+  | "knowledge.repairIndex"
+  | "knowledge.rebuildIndex"
+  | "knowledge.indexHealth.title"
+  | "knowledge.indexHealth.description"
+  | "knowledge.indexHealth.loading"
+  | "knowledge.indexHealth.searchable"
+  | "knowledge.indexHealth.needsRepair"
+  | "knowledge.indexHealth.authoritative"
+  | "knowledge.indexHealth.indexed"
+  | "knowledge.indexHealth.missing"
+  | "knowledge.indexHealth.orphaned"
+  | "knowledge.indexHealth.contentRevision"
+  | "knowledge.indexHealth.dictionaryRevision"
+  | "knowledge.indexHealth.tokenizer"
+  | "knowledge.delete"
+  | "knowledge.deleteConfirm"
+  | "knowledge.projectAuthorization"
+  | "knowledge.documentProject"
+  | "knowledge.sessionDefaultEnabled"
+  | "knowledge.currentSession"
+  | "knowledge.selectionExplicit"
+  | "knowledge.selectionInherited"
+  | "knowledge.inheritProjectDefault"
+  | "knowledge.documents"
+  | "knowledge.search.placeholder"
+  | "knowledge.search"
+  | "knowledge.searching"
+  | "knowledge.search.empty"
+  | "knowledge.viewer.maximize"
+  | "knowledge.viewer.restore"
+  | "knowledge.viewer.loadingDocuments"
+  | "knowledge.viewer.loadingFolder"
+  | "knowledge.viewer.loadMore"
+  | "knowledge.viewer.loadingDocument"
+  | "knowledge.viewer.selectDocument"
+  | "knowledge.viewer.clearSearch"
+  | "knowledge.viewer.searchCount"
+  | "knowledge.search.substring"
+  | "knowledge.body"
+  | "knowledge.documentCounts"
+  | "knowledge.emptyDocuments"
+  | "knowledge.markdown.preview"
+  | "knowledge.markdown.source"
+  | "knowledge.previousPage"
+  | "knowledge.page"
+  | "knowledge.nextPage"
+  | "knowledge.close"
+  | "knowledge.emptySelection"
+  | "knowledge.importConfirm"
+  | "knowledge.pickerTitle"
+  | "knowledge.nameRequired"
+  | "knowledge.operationCompleted"
+  | "knowledge.importProgress"
+  | "knowledge.importCompleted"
+  | "knowledge.importDialog.title"
+  | "knowledge.operationDialog.title.import"
+  | "knowledge.operationDialog.title.repair"
+  | "knowledge.operationDialog.title.rebuild"
+  | "knowledge.importDialog.preparing"
+  | "knowledge.importDialog.scanning"
+  | "knowledge.importDialog.processing"
+  | "knowledge.importDialog.completed"
+  | "knowledge.importDialog.cancelled"
+  | "knowledge.importDialog.failed"
+  | "knowledge.importDialog.discovered"
+  | "knowledge.importDialog.total"
+  | "knowledge.importDialog.bytes"
+  | "knowledge.importDialog.indexItems"
+  | "knowledge.importDialog.current"
+  | "knowledge.importDialog.waiting"
+  | "knowledge.importDialog.close"
+  | "knowledge.importDialog.cancelling"
+  | "knowledge.importDialog.cancellingDetail"
+  | "knowledge.importDialog.committing"
+  | "knowledge.importDialog.indexing"
+  | "knowledge.importDialog.repairing"
+  | "knowledge.importDialog.rebuilding"
+  | "knowledge.importDialog.verifying"
+  | "knowledge.importDialog.finalizing"
+  | "knowledge.importDialog.committingFallback"
+  | "knowledge.importDialog.indexingFallback"
+  | "knowledge.importDialog.repairingFallback"
+  | "knowledge.importDialog.rebuildingFallback"
+  | "knowledge.importDialog.verifyingFallback"
+  | "knowledge.importDialog.finalizingFallback"
+  | "knowledge.importPhase.scanning"
+  | "knowledge.importPhase.parsing"
+  | "knowledge.importPhase.committing"
+  | "knowledge.importPhase.indexing"
+  | "knowledge.importPhase.repairing"
+  | "knowledge.importPhase.rebuilding"
+  | "knowledge.importPhase.verifying"
+  | "knowledge.importPhase.finalizing"
+  | "knowledge.importPhase.completed"
+  | "knowledge.importPhase.cancelled"
+  | "knowledge.composer.aria"
+  | "knowledge.composer.label"
+  | "knowledge.composer.noneAuthorized"
+  | "knowledge.composer.description"
+  | "knowledge.package.import"
+  | "knowledge.package.export"
+  | "knowledge.package.exportPickerTitle"
+  | "knowledge.package.importPickerTitle"
+  | "knowledge.package.noPackages"
+  | "knowledge.package.inspecting"
+  | "knowledge.package.inspect"
+  | "knowledge.package.importTitle"
+  | "knowledge.package.counts"
+  | "knowledge.package.nameConflict"
+  | "knowledge.package.createStrategy"
+  | "knowledge.package.renameRequired"
+  | "knowledge.package.createDescription"
+  | "knowledge.package.replaceStrategy"
+  | "knowledge.package.replaceDescription"
+  | "knowledge.package.replaceConfirm"
+  | "knowledge.package.exportCompleted"
+  | "knowledge.package.importCompleted"
+  | "knowledge.package.replaceCompleted"
   | "area.settings.description"
   | "feature.status.available"
   | "feature.status.preview"
@@ -474,6 +619,7 @@ export type TranslationKey =
   | "conversationRow.confirmArchive"
   | "projectFolderPicker.title"
   | "projectFolderPicker.pathAria"
+  | "projectFolderPicker.openPath"
   | "projectFolderPicker.parent"
   | "projectFolderPicker.rootsAria"
   | "projectFolderPicker.noRoots"
@@ -503,6 +649,11 @@ export type TranslationKey =
   | "projectSettings.pinnedProject"
   | "projectSettings.projectSpaceSummary"
   | "projectSettings.vmmMemory"
+  | "projectSettings.knowledgeBases"
+  | "projectSettings.knowledgeBasesDetail"
+  | "projectSettings.knowledgeBasesDescription"
+  | "projectSettings.knowledgeBasesLoading"
+  | "projectSettings.knowledgeBasesSaved"
   | "projectSettings.projectOverride"
   | "projectSettings.inheritGlobal"
   | "projectSettings.promptSkillCount"
@@ -1361,12 +1512,157 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "area.agentSkills": "技能",
     "area.agents": "智能体",
     "area.memory": "记忆",
+    "area.knowledge": "资料库",
     "area.settings": "设置",
     "area.chat.description": "项目会话、消息流与模型输入区",
     "area.skills.description": "LuaSkills 技能、插件与运行时设置",
     "area.agentSkills.description": "标准 Agent Skills 技能目录",
     "area.agents.description": "智能体、专家画像与调度提示词",
     "area.memory.description": "VMM 用户、项目与会话记忆",
+      "area.knowledge.description": "Markdown、Jieba 与 BM25 项目资料",
+      "knowledge.name": "资料库名称",
+      "knowledge.name.placeholder": "新资料库名称",
+      "knowledge.create": "创建",
+      "knowledge.filter.aria": "筛选资料库",
+      "knowledge.filter.placeholder": "筛选资料库",
+      "knowledge.refresh": "刷新",
+      "knowledge.emptyLibraries": "尚无资料库。",
+      "knowledge.libraryCounts": "{documents} 文档 · {chunks} 切片 · {status}",
+      "knowledge.defaultDescription": "Markdown 原文、Jieba 分词与 BM25 检索。",
+      "knowledge.saveName": "保存名称",
+      "knowledge.view": "查看",
+      "knowledge.importDirectory": "导入目录",
+      "knowledge.sources.title": "导入目录",
+      "knowledge.sources.description": "每个目录独立记录；同步时按源文件 SHA-256 仅更新新增、变化和删除的 Markdown 文档。",
+      "knowledge.sources.add": "添加目录",
+      "knowledge.sources.loading": "正在加载导入目录…",
+      "knowledge.sources.empty": "尚未添加导入目录。",
+      "knowledge.sources.documents": "{count} 份文档",
+      "knowledge.sources.counts": "{documents} 份文档 · {chunks} 个切片",
+      "knowledge.sources.lastScanned": "上次扫描 {time}",
+      "knowledge.sources.sync": "增量同步",
+      "knowledge.sources.modify": "修改目录",
+      "knowledge.sources.modifyPickerTitle": "为“{name}”选择新的 Markdown 目录",
+      "knowledge.cancelImport": "取消导入",
+      "knowledge.cancelOperation": "取消操作",
+      "knowledge.repairIndex": "补全索引",
+      "knowledge.rebuildIndex": "重建索引",
+      "knowledge.indexHealth.title": "索引完整性",
+      "knowledge.indexHealth.description": "实时核对权威切片、物理 FTS 记录、内容版本和 Jieba 词典版本。",
+      "knowledge.indexHealth.loading": "正在检查索引完整性…",
+      "knowledge.indexHealth.searchable": "可检索",
+      "knowledge.indexHealth.needsRepair": "需要补全",
+      "knowledge.indexHealth.authoritative": "权威切片",
+      "knowledge.indexHealth.indexed": "索引记录",
+      "knowledge.indexHealth.missing": "缺失或错配",
+      "knowledge.indexHealth.orphaned": "冗余、孤立或错配",
+      "knowledge.indexHealth.contentRevision": "内容版本 {indexed} / {current}",
+      "knowledge.indexHealth.dictionaryRevision": "词典版本 {indexed} / {current}",
+      "knowledge.indexHealth.tokenizer": "分词器 {tokenizer}",
+      "knowledge.delete": "删除",
+      "knowledge.deleteConfirm": "确认永久删除资料库“{name}”？",
+      "knowledge.projectAuthorization": "项目授权",
+      "knowledge.documentProject": "文档浏览项目",
+      "knowledge.sessionDefaultEnabled": "会话默认启用",
+      "knowledge.currentSession": "当前会话启用",
+      "knowledge.selectionExplicit": "显式选择",
+      "knowledge.selectionInherited": "继承项目默认",
+      "knowledge.inheritProjectDefault": "继承项目默认",
+      "knowledge.documents": "文档",
+      "knowledge.search.placeholder": "使用 Jieba BM25 搜索内容",
+      "knowledge.search": "搜索",
+      "knowledge.searching": "搜索中…",
+      "knowledge.search.empty": "未找到匹配内容。",
+      "knowledge.viewer.maximize": "最大化资料库阅读器",
+      "knowledge.viewer.restore": "还原资料库阅读器",
+      "knowledge.viewer.loadingDocuments": "正在加载资料目录…",
+      "knowledge.viewer.loadingFolder": "正在加载…",
+      "knowledge.viewer.loadMore": "加载更多",
+      "knowledge.viewer.loadingDocument": "正在加载文档…",
+      "knowledge.viewer.selectDocument": "请从左侧目录选择一份文档。",
+      "knowledge.viewer.clearSearch": "清除搜索",
+      "knowledge.viewer.searchCount": "{count} 份文档",
+      "knowledge.search.substring": "子串匹配",
+      "knowledge.body": "正文",
+      "knowledge.documentCounts": "{lines} 行 · {chunks} 切片",
+      "knowledge.emptyDocuments": "当前资料库暂无可浏览文档。",
+      "knowledge.markdown.preview": "Markdown 预览",
+      "knowledge.markdown.source": "查看原文",
+      "knowledge.previousPage": "上一页",
+      "knowledge.page": "第 {page} 页",
+      "knowledge.nextPage": "下一页",
+      "knowledge.close": "关闭",
+      "knowledge.emptySelection": "创建或选择一个资料库开始使用。",
+      "knowledge.importConfirm": "导入 Markdown",
+      "knowledge.pickerTitle": "选择 Markdown 资料目录",
+      "knowledge.nameRequired": "请输入资料库名称。",
+      "knowledge.operationCompleted": "{operation}完成。",
+      "knowledge.importProgress": "{phase} · {files} 文件 · {bytes} 字节",
+      "knowledge.importCompleted": "导入完成：扫描 {scanned}，变化 {changed}，删除 {deleted}，切片 {chunks}。",
+      "knowledge.importDialog.title": "导入 Markdown 资料",
+      "knowledge.operationDialog.title.import": "导入 Markdown 资料",
+      "knowledge.operationDialog.title.repair": "补全资料库索引",
+      "knowledge.operationDialog.title.rebuild": "重建资料库索引",
+      "knowledge.importDialog.preparing": "正在创建后台任务",
+      "knowledge.importDialog.scanning": "正在扫描，已发现 {discovered} 个 Markdown 文件",
+      "knowledge.importDialog.processing": "正在处理 {processed} / {total}（{percent}%）",
+      "knowledge.importDialog.completed": "操作已完成",
+      "knowledge.importDialog.cancelled": "操作已取消",
+      "knowledge.importDialog.failed": "操作未完成",
+      "knowledge.importDialog.discovered": "已发现 {count} 个 Markdown 文件",
+      "knowledge.importDialog.total": "总计 {count} 个 Markdown 文件",
+      "knowledge.importDialog.bytes": "已读取 {count} 字节",
+      "knowledge.importDialog.indexItems": "索引进度 {processed} / {total}",
+      "knowledge.importDialog.current": "当前目录、文件或阶段",
+      "knowledge.importDialog.waiting": "等待任务进度…",
+      "knowledge.importDialog.close": "关闭",
+      "knowledge.importDialog.cancelling": "正在取消…",
+      "knowledge.importDialog.cancellingDetail": "取消请求已提交，正在停止当前批次…",
+      "knowledge.importDialog.committing": "正在原子提交资料内容…",
+      "knowledge.importDialog.indexing": "正在更新搜索索引 {processed} / {total}（{percent}%）",
+      "knowledge.importDialog.repairing": "正在补全搜索索引 {processed} / {total}（{percent}%）",
+      "knowledge.importDialog.rebuilding": "正在恢复搜索索引 {processed} / {total}（{percent}%）",
+      "knowledge.importDialog.verifying": "正在校验搜索索引…",
+      "knowledge.importDialog.finalizing": "正在完成导入并清理暂存数据…",
+      "knowledge.importDialog.committingFallback": "正在执行资料库原子提交",
+      "knowledge.importDialog.indexingFallback": "正在更新增量搜索索引",
+      "knowledge.importDialog.repairingFallback": "正在补全缺失或错配的搜索索引",
+      "knowledge.importDialog.rebuildingFallback": "正在从权威切片恢复搜索索引",
+      "knowledge.importDialog.verifyingFallback": "正在检查索引版本与分词器",
+      "knowledge.importDialog.finalizingFallback": "正在更新资料库统计并清理暂存数据",
+      "knowledge.importPhase.scanning": "扫描文件",
+      "knowledge.importPhase.parsing": "解析文件",
+      "knowledge.importPhase.committing": "提交内容",
+      "knowledge.importPhase.indexing": "更新索引",
+      "knowledge.importPhase.repairing": "补全索引",
+      "knowledge.importPhase.rebuilding": "恢复索引",
+      "knowledge.importPhase.verifying": "校验索引",
+      "knowledge.importPhase.finalizing": "完成导入",
+      "knowledge.importPhase.completed": "已完成",
+      "knowledge.importPhase.cancelled": "已取消",
+      "knowledge.composer.aria": "选择本会话资料库",
+      "knowledge.composer.label": "资料库",
+      "knowledge.composer.noneAuthorized": "当前项目没有已授权资料库",
+      "knowledge.composer.description": "设置下一回合可访问的资料库",
+      "knowledge.package.import": "导入完整库",
+      "knowledge.package.export": "导出完整库",
+      "knowledge.package.exportPickerTitle": "选择资料库包导出目录",
+      "knowledge.package.importPickerTitle": "选择 .vkb 资料库包",
+      "knowledge.package.noPackages": "当前目录没有子目录或 .vkb 资料库包。",
+      "knowledge.package.inspecting": "正在检查…",
+      "knowledge.package.inspect": "检查并继续",
+      "knowledge.package.importTitle": "导入完整资料库",
+      "knowledge.package.counts": "{documents} 文档 · {chunks} 切片 · {bytes}",
+      "knowledge.package.nameConflict": "资料库名称“{name}”已存在。默认不会覆盖，请改名导入或显式选择覆盖。",
+      "knowledge.package.createStrategy": "新建资料库",
+      "knowledge.package.renameRequired": "请修改为一个未使用的名称；原资料库不会被改动。",
+      "knowledge.package.createDescription": "使用包内原名称创建新资料库，并保留现有资料库。",
+      "knowledge.package.replaceStrategy": "覆盖现有资料库",
+      "knowledge.package.replaceDescription": "保留目标资料库标识、项目授权和会话引用，用包内完整数据替换内容。",
+      "knowledge.package.replaceConfirm": "确认覆盖资料库“{name}”？当前 {documents} 份文档、{chunks} 个切片将被包内数据替换。该操作会保留资料库标识、项目授权与会话引用。",
+      "knowledge.package.exportCompleted": "资料库包已导出到：{path}",
+      "knowledge.package.importCompleted": "完整资料库已导入，无需重建索引。",
+      "knowledge.package.replaceCompleted": "资料库已安全覆盖，原授权与会话引用已保留。",
     "area.settings.description": "项目、模型、工具、诊断与系统设置",
     "feature.status.available": "可用",
     "feature.status.preview": "预览",
@@ -1793,7 +2089,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversationRow.planAttention": "有计划确认",
     "conversationRow.confirmArchive": "确认归档对话",
     "projectFolderPicker.title": "选择项目目录",
-    "projectFolderPicker.pathAria": "目录路径",
+      "projectFolderPicker.pathAria": "目录路径",
+      "projectFolderPicker.openPath": "打开输入的路径",
     "projectFolderPicker.parent": "上级",
     "projectFolderPicker.rootsAria": "盘符",
     "projectFolderPicker.noRoots": "没有可用盘符",
@@ -1823,6 +2120,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "projectSettings.pinnedProject": "已置顶项目",
     "projectSettings.projectSpaceSummary": "项目空间摘要",
     "projectSettings.vmmMemory": "VMM 记忆",
+    "projectSettings.knowledgeBases": "资料库",
+    "projectSettings.knowledgeBasesDetail": "项目授权与会话继承默认值",
+    "projectSettings.knowledgeBasesDescription": "授权决定本项目可使用的资料库；默认启用决定新会话继承项目设置时自动启用哪些库。",
+    "projectSettings.knowledgeBasesLoading": "正在加载资料库授权…",
+    "projectSettings.knowledgeBasesSaved": "资料库授权已保存。",
     "projectSettings.projectOverride": "项目覆盖",
     "projectSettings.inheritGlobal": "继承全局",
     "projectSettings.promptSkillCount": "{count} 个技能",
@@ -2678,12 +2980,157 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "area.agentSkills": "Skills",
     "area.agents": "Agents",
     "area.memory": "Memory",
+    "area.knowledge": "Knowledge",
     "area.settings": "Settings",
     "area.chat.description": "Project sessions, message stream, and model input",
     "area.skills.description": "LuaSkills skills, plugins, and runtime settings",
     "area.agentSkills.description": "Standard Agent Skills catalog",
     "area.agents.description": "Agents, expert profiles, and delegation prompts",
     "area.memory.description": "VMM user, project, and conversation memory",
+      "area.knowledge.description": "Project Markdown with Jieba BM25 search",
+      "knowledge.name": "Knowledge library name",
+      "knowledge.name.placeholder": "New knowledge library",
+      "knowledge.create": "Create",
+      "knowledge.filter.aria": "Filter knowledge libraries",
+      "knowledge.filter.placeholder": "Filter libraries",
+      "knowledge.refresh": "Refresh",
+      "knowledge.emptyLibraries": "No knowledge libraries yet.",
+      "knowledge.libraryCounts": "{documents} documents · {chunks} chunks · {status}",
+      "knowledge.defaultDescription": "Markdown source with Jieba tokenization and BM25 search.",
+      "knowledge.saveName": "Save name",
+      "knowledge.view": "View",
+      "knowledge.importDirectory": "Import directory",
+      "knowledge.sources.title": "Import directories",
+      "knowledge.sources.description": "Each directory is recorded independently. Synchronization hashes source files with SHA-256 and updates only added, changed, or deleted Markdown documents.",
+      "knowledge.sources.add": "Add directory",
+      "knowledge.sources.loading": "Loading import directories…",
+      "knowledge.sources.empty": "No import directories have been added.",
+      "knowledge.sources.documents": "{count} documents",
+      "knowledge.sources.counts": "{documents} documents · {chunks} chunks",
+      "knowledge.sources.lastScanned": "Last scanned {time}",
+      "knowledge.sources.sync": "Incremental sync",
+      "knowledge.sources.modify": "Change directory",
+      "knowledge.sources.modifyPickerTitle": "Select a new Markdown directory for “{name}”",
+      "knowledge.cancelImport": "Cancel import",
+      "knowledge.cancelOperation": "Cancel operation",
+      "knowledge.repairIndex": "Repair index",
+      "knowledge.rebuildIndex": "Rebuild index",
+      "knowledge.indexHealth.title": "Index integrity",
+      "knowledge.indexHealth.description": "Checks authoritative chunks, physical FTS rows, content revisions, and Jieba dictionary revisions.",
+      "knowledge.indexHealth.loading": "Checking index integrity…",
+      "knowledge.indexHealth.searchable": "Searchable",
+      "knowledge.indexHealth.needsRepair": "Repair required",
+      "knowledge.indexHealth.authoritative": "Authoritative chunks",
+      "knowledge.indexHealth.indexed": "Indexed rows",
+      "knowledge.indexHealth.missing": "Missing or mismatched",
+      "knowledge.indexHealth.orphaned": "Extra, orphaned, or mismatched",
+      "knowledge.indexHealth.contentRevision": "Content revision {indexed} / {current}",
+      "knowledge.indexHealth.dictionaryRevision": "Dictionary revision {indexed} / {current}",
+      "knowledge.indexHealth.tokenizer": "Tokenizer {tokenizer}",
+      "knowledge.delete": "Delete",
+      "knowledge.deleteConfirm": "Permanently delete knowledge library “{name}”?",
+      "knowledge.projectAuthorization": "Project authorization",
+      "knowledge.documentProject": "Document project",
+      "knowledge.sessionDefaultEnabled": "Enabled by default in sessions",
+      "knowledge.currentSession": "Current session",
+      "knowledge.selectionExplicit": "Explicit selection",
+      "knowledge.selectionInherited": "Inheriting project defaults",
+      "knowledge.inheritProjectDefault": "Inherit project defaults",
+      "knowledge.documents": "Documents",
+      "knowledge.search.placeholder": "Search content with Jieba BM25",
+      "knowledge.search": "Search",
+      "knowledge.searching": "Searching…",
+      "knowledge.search.empty": "No matching content found.",
+      "knowledge.viewer.maximize": "Maximize knowledge viewer",
+      "knowledge.viewer.restore": "Restore knowledge viewer",
+      "knowledge.viewer.loadingDocuments": "Loading library folders…",
+      "knowledge.viewer.loadingFolder": "Loading…",
+      "knowledge.viewer.loadMore": "Load more",
+      "knowledge.viewer.loadingDocument": "Loading document…",
+      "knowledge.viewer.selectDocument": "Select a document from the folder tree.",
+      "knowledge.viewer.clearSearch": "Clear search",
+      "knowledge.viewer.searchCount": "{count} documents",
+      "knowledge.search.substring": "Substring match",
+      "knowledge.body": "Body",
+      "knowledge.documentCounts": "{lines} lines · {chunks} chunks",
+      "knowledge.emptyDocuments": "This library has no browsable documents.",
+      "knowledge.markdown.preview": "Markdown preview",
+      "knowledge.markdown.source": "View source",
+      "knowledge.previousPage": "Previous",
+      "knowledge.page": "Page {page}",
+      "knowledge.nextPage": "Next",
+      "knowledge.close": "Close",
+      "knowledge.emptySelection": "Create or select a knowledge library to begin.",
+      "knowledge.importConfirm": "Import Markdown",
+      "knowledge.pickerTitle": "Select a Markdown source directory",
+      "knowledge.nameRequired": "Enter a knowledge library name.",
+      "knowledge.operationCompleted": "{operation} completed.",
+      "knowledge.importProgress": "{phase} · {files} files · {bytes} bytes",
+      "knowledge.importCompleted": "Import completed: scanned {scanned}, changed {changed}, deleted {deleted}, chunks {chunks}.",
+      "knowledge.importDialog.title": "Import Markdown knowledge",
+      "knowledge.operationDialog.title.import": "Import Markdown knowledge",
+      "knowledge.operationDialog.title.repair": "Repair knowledge index",
+      "knowledge.operationDialog.title.rebuild": "Rebuild knowledge index",
+      "knowledge.importDialog.preparing": "Creating background operation",
+      "knowledge.importDialog.scanning": "Scanning: {discovered} Markdown files discovered",
+      "knowledge.importDialog.processing": "Processing {processed} / {total} ({percent}%)",
+      "knowledge.importDialog.completed": "Operation completed",
+      "knowledge.importDialog.cancelled": "Operation cancelled",
+      "knowledge.importDialog.failed": "Operation did not complete",
+      "knowledge.importDialog.discovered": "{count} Markdown files discovered",
+      "knowledge.importDialog.total": "{count} Markdown files total",
+      "knowledge.importDialog.bytes": "{count} bytes read",
+      "knowledge.importDialog.indexItems": "Index progress {processed} / {total}",
+      "knowledge.importDialog.current": "Current directory, file, or phase",
+      "knowledge.importDialog.waiting": "Waiting for operation progress…",
+      "knowledge.importDialog.close": "Close",
+      "knowledge.importDialog.cancelling": "Cancelling…",
+      "knowledge.importDialog.cancellingDetail": "Cancellation requested; stopping after the current batch…",
+      "knowledge.importDialog.committing": "Atomically committing knowledge content…",
+      "knowledge.importDialog.indexing": "Updating search index {processed} / {total} ({percent}%)",
+      "knowledge.importDialog.repairing": "Repairing search index {processed} / {total} ({percent}%)",
+      "knowledge.importDialog.rebuilding": "Recovering search index {processed} / {total} ({percent}%)",
+      "knowledge.importDialog.verifying": "Verifying the search index…",
+      "knowledge.importDialog.finalizing": "Finalizing the import and clearing staging data…",
+      "knowledge.importDialog.committingFallback": "Executing the atomic knowledge commit",
+      "knowledge.importDialog.indexingFallback": "Updating the incremental search index",
+      "knowledge.importDialog.repairingFallback": "Repairing missing or mismatched search rows",
+      "knowledge.importDialog.rebuildingFallback": "Recovering search index from authoritative chunks",
+      "knowledge.importDialog.verifyingFallback": "Checking index revisions and tokenizer",
+      "knowledge.importDialog.finalizingFallback": "Updating library counts and clearing staging data",
+      "knowledge.importPhase.scanning": "Scanning files",
+      "knowledge.importPhase.parsing": "Parsing files",
+      "knowledge.importPhase.committing": "Committing content",
+      "knowledge.importPhase.indexing": "Updating index",
+      "knowledge.importPhase.repairing": "Repairing index",
+      "knowledge.importPhase.rebuilding": "Recovering index",
+      "knowledge.importPhase.verifying": "Verifying index",
+      "knowledge.importPhase.finalizing": "Finalizing import",
+      "knowledge.importPhase.completed": "Completed",
+      "knowledge.importPhase.cancelled": "Cancelled",
+      "knowledge.composer.aria": "Select knowledge libraries for this session",
+      "knowledge.composer.label": "Knowledge",
+      "knowledge.composer.noneAuthorized": "No knowledge libraries are authorized for this project",
+      "knowledge.composer.description": "Set the knowledge libraries available to the next turn",
+      "knowledge.package.import": "Import library",
+      "knowledge.package.export": "Export library",
+      "knowledge.package.exportPickerTitle": "Select a package export directory",
+      "knowledge.package.importPickerTitle": "Select a .vkb knowledge package",
+      "knowledge.package.noPackages": "This directory contains no child directories or .vkb packages.",
+      "knowledge.package.inspecting": "Inspecting…",
+      "knowledge.package.inspect": "Inspect and continue",
+      "knowledge.package.importTitle": "Import complete knowledge library",
+      "knowledge.package.counts": "{documents} documents · {chunks} chunks · {bytes}",
+      "knowledge.package.nameConflict": "A library named “{name}” already exists. It will not be overwritten by default; rename the import or explicitly choose replacement.",
+      "knowledge.package.createStrategy": "Create new library",
+      "knowledge.package.renameRequired": "Enter an unused name. The existing library will remain unchanged.",
+      "knowledge.package.createDescription": "Create a new library with the package name and preserve every existing library.",
+      "knowledge.package.replaceStrategy": "Replace existing library",
+      "knowledge.package.replaceDescription": "Preserve the target ID, project access, and session references while replacing all library content.",
+      "knowledge.package.replaceConfirm": "Replace “{name}”? Its {documents} documents and {chunks} chunks will be replaced by the package. The library ID, project access, and session references will be preserved.",
+      "knowledge.package.exportCompleted": "Knowledge package exported to: {path}",
+      "knowledge.package.importCompleted": "Complete knowledge library imported without rebuilding its index.",
+      "knowledge.package.replaceCompleted": "Knowledge library safely replaced; project access and session references were preserved.",
     "area.settings.description": "Projects, models, tools, diagnostics, and system settings",
     "feature.status.available": "Available",
     "feature.status.preview": "Preview",
@@ -3110,7 +3557,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversationRow.planAttention": "Plan confirmation waiting",
     "conversationRow.confirmArchive": "Confirm archive conversation",
     "projectFolderPicker.title": "Choose project directory",
-    "projectFolderPicker.pathAria": "Directory path",
+      "projectFolderPicker.pathAria": "Directory path",
+      "projectFolderPicker.openPath": "Open the entered path",
     "projectFolderPicker.parent": "Parent",
     "projectFolderPicker.rootsAria": "Drives",
     "projectFolderPicker.noRoots": "No drives available",
@@ -3140,6 +3588,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "projectSettings.pinnedProject": "Pinned project",
     "projectSettings.projectSpaceSummary": "Project space summary",
     "projectSettings.vmmMemory": "VMM memory",
+    "projectSettings.knowledgeBases": "Knowledge bases",
+    "projectSettings.knowledgeBasesDetail": "Project access and session inheritance defaults",
+    "projectSettings.knowledgeBasesDescription": "Authorization controls which libraries this project may use. Default enablement controls which libraries new sessions inherit.",
+    "projectSettings.knowledgeBasesLoading": "Loading knowledge-base access…",
+    "projectSettings.knowledgeBasesSaved": "Knowledge-base access saved.",
     "projectSettings.projectOverride": "Project override",
     "projectSettings.inheritGlobal": "Inherit global",
     "projectSettings.promptSkillCount": "{count} skills",

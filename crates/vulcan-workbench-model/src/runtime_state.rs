@@ -13,6 +13,8 @@ use vulcan_provider_config::config::{
 use vulcan_session_core::SessionRuntimeKernel;
 use vulcan_vmm::{PostActionRequest, ProfileNodeEntry, VmmConfigLayer, VmmSessionMemoryState};
 
+use crate::SessionKnowledgeLibrarySelection;
+
 /// Returns whether the canonical conversation state has no durable payload.
 /// 返回规范会话状态是否没有任何需要持久化的有效载荷。
 fn session_conversation_state_is_empty(state: &SessionConversationState) -> bool {

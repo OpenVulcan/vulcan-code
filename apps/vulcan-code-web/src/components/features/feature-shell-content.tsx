@@ -9,6 +9,7 @@ import {
 } from "@/components/features/skills/SkillsArea";
 import { AgentsArea, type AgentActionProps } from "@/components/features/agents/AgentsArea";
 import { AgentSkillsArea } from "@/components/features/agent-skills/AgentSkillsArea";
+import { KnowledgeBaseArea } from "@/components/features/knowledge/KnowledgeBaseArea";
 import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types";
 import {
   MemoryArea,
@@ -123,6 +124,13 @@ export function FeatureContent(props: {
           memories={props.workbench.memories}
           snapshot={props.workbench.vmmMemory}
         />
+      </div>
+    );
+  }
+  if (props.activeArea === "knowledge") {
+    return (
+      <div className="feature-content">
+        <KnowledgeBaseArea />
       </div>
     );
   }

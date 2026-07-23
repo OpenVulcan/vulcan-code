@@ -1,4 +1,4 @@
-import { Bot, BrainCircuit, Database, FolderCog } from "lucide-react";
+import { BookMarked, Bot, BrainCircuit, Database, FolderCog } from "lucide-react";
 import type { TranslationKey } from "@/i18n";
 import type { ProjectSummary, WorkbenchSnapshot } from "@/types";
 import type {
@@ -24,6 +24,12 @@ export function projectSettingsSections(project: ProjectSummary, workbench: Work
       icon: <BrainCircuit size={16} />,
       label: t("projectSettings.vmmMemory"),
       detail: workbench.vmmMemory.projectDraft.hasOverride ? t("projectSettings.projectOverride") : t("projectSettings.inheritGlobal"),
+    },
+    {
+      id: "knowledge-bases",
+      icon: <BookMarked size={16} />,
+      label: t("projectSettings.knowledgeBases"),
+      detail: t("projectSettings.knowledgeBasesDetail"),
     },
     {
       id: "agent-skills",

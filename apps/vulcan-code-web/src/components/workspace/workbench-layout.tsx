@@ -801,6 +801,11 @@ export function WorkbenchLayout(props: {
       setWorkspaceMainView("memory");
       return;
     }
+    if (area === "knowledge") {
+      setActiveArea("chat");
+      setWorkspaceMainView("knowledge");
+      return;
+    }
     setActiveArea(area);
     setWorkspaceMainView("chat");
   }, []);
@@ -827,6 +832,12 @@ export function WorkbenchLayout(props: {
   const handleOpenWorkspaceMemory = React.useCallback(() => {
     setActiveArea("chat");
     setWorkspaceMainView("memory");
+  }, []);
+  // handleOpenWorkspaceKnowledge opens knowledge library management inside the workbench main panel.
+  // handleOpenWorkspaceKnowledge 在工作台主面板内打开资料库管理。
+  const handleOpenWorkspaceKnowledge = React.useCallback(() => {
+    setActiveArea("chat");
+    setWorkspaceMainView("knowledge");
   }, []);
   // handleOpenWorkspaceChat returns the workbench main panel to the conversation surface.
   // handleOpenWorkspaceChat 将工作台主面板切回会话界面。
@@ -1660,6 +1671,7 @@ export function WorkbenchLayout(props: {
             onOpenAgentSkills={handleOpenWorkspaceAgentSkills}
             onOpenAgents={handleOpenWorkspaceAgents}
             onOpenMemory={handleOpenWorkspaceMemory}
+            onOpenKnowledge={handleOpenWorkspaceKnowledge}
             onSelectArea={handleSelectTopFeatureArea}
             onSelectSkillSubArea={setActiveWorkbenchSkillSubArea}
             onSelectMemorySubArea={setActiveWorkbenchMemorySubArea}

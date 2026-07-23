@@ -7449,8 +7449,8 @@ mod tests {
     /// 验证固定桥请求严格保留 JSON 对象载荷语义。
     #[test]
     fn bridge_request_requires_object_payload() {
-        // objectRequest represents the typed object emitted by LuaSkills 0.5.3.
-        // objectRequest 表示 LuaSkills 0.5.3 发出的强类型对象。
+        // objectRequest represents the typed object emitted by LuaSkills 0.5.4.
+        // objectRequest 表示 LuaSkills 0.5.4 发出的强类型对象。
         let object_request = json!({"plugin_id": "fixture", "payload": {}});
         // extracted is the exact borrowed identity and object payload.
         // extracted 是精确借用的身份与对象载荷。
@@ -8733,8 +8733,8 @@ return M
         manager
             .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
             .expect("load repository plugin catalog");
-        // runtime executes the real Context7 module initialization under LuaSkills 0.5.3.
-        // runtime 在 LuaSkills 0.5.3 下执行真实 Context7 模块初始化。
+        // runtime executes the real Context7 module initialization under LuaSkills 0.5.4.
+        // runtime 在 LuaSkills 0.5.4 下执行真实 Context7 模块初始化。
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()

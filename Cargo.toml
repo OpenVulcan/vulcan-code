@@ -79,8 +79,8 @@ vulcan-token-counter = { path = "crates/vulcan-token-counter" }
 vulcan-tools-luaskills-call = { path = "crates/vulcan-tools-luaskills-call" }
 vulcan-luaskills-prompt = { path = "crates/vulcan-luaskills-prompt" }
 vulcan-luaskills-config = { path = "crates/vulcan-luaskills-config" }
-vldb-controller-client = "0.2.1"
-luaskills = "=0.5.3"
+vldb-controller-client = "0.2.3"
+luaskills = "=0.5.4"
 async-trait = "0.1.89"
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service"] }
@@ -91,6 +91,7 @@ flate2 = "1.1.9"
 fs2 = "0.4"
 libc = "0.2"
 sha2 = "0.10.9"
+pulldown-cmark = "0.13.3"
 tar = "0.4.45"
 xz2 = { version = "0.1.7", features = ["static"] }
 zip = { version = "2.4.2", default-features = false, features = ["deflate"] }

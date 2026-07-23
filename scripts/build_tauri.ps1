@@ -234,6 +234,22 @@ if ($LASTEXITCODE -ne 0) {
 # ProfileName 选择包含已构建桌面壳的 Cargo profile 目录。
 $ProfileName = if ($Release) { "release" } else { "debug" }
 
+# CargoMetadataJson captures Cargo's authoritative workspace paths after applying environment and configuration overrides.
+# CargoMetadataJson 捕获 Cargo 在应用环境与配置覆盖后的权威工作区路径。
+$CargoMetadataJson = cargo metadata --format-version 1 --no-deps
+if ($LASTEXITCODE -ne 0) {
+    throw "Cargo metadata failed while resolving the build artifact directory."
+}
+# CargoMetadata parses the authoritative target directory instead of assuming a repository-local target folder.
+# CargoMetadata 解析权威 target 目录，不再假定制品位于仓库内 target 目录。
+$CargoMetadata = $CargoMetadataJson | ConvertFrom-Json
+# CargoTargetDir stores the effective Cargo artifact root, including CARGO_TARGET_DIR overrides.
+# CargoTargetDir 保存实际 Cargo 制品根目录，包括 CARGO_TARGET_DIR 覆盖。
+$CargoTargetDir = [string]$CargoMetadata.target_directory
+if ([string]::IsNullOrWhiteSpace($CargoTargetDir)) {
+    throw "Cargo metadata did not return target_directory."
+}
+
 # BinaryFileName stores the platform-specific Tauri shell binary name.
 # BinaryFileName 保存平台相关的 Tauri 桌面壳二进制名称。
 $BinaryFileName = "vulcan-code-tauri"
@@ -241,7 +257,9 @@ if ($IsWindowsPlatform) {
     $BinaryFileName = "vulcan-code-tauri.exe"
 }
 
-$BuiltBinaryPath = Join-Path $ProjectDir "target\$ProfileName\$BinaryFileName"
+# BuiltBinaryPath points at the shell artifact under Cargo's effective target directory.
+# BuiltBinaryPath 指向 Cargo 实际 target 目录下的桌面壳制品。
+$BuiltBinaryPath = Join-Path $CargoTargetDir "$ProfileName\$BinaryFileName"
 
 # HelperFileName stores the platform-specific Windows console helper binary name.
 # HelperFileName 保存平台相关的 Windows 控制台 helper 二进制名称。
@@ -252,7 +270,7 @@ if ($IsWindowsPlatform) {
 
 # BuiltHelperPath stores the helper executable built for the same Cargo profile as the shell.
 # BuiltHelperPath 保存与桌面壳相同 Cargo profile 构建出的 helper 可执行文件。
-$BuiltHelperPath = Join-Path $ProjectDir "target\$ProfileName\$HelperFileName"
+$BuiltHelperPath = Join-Path $CargoTargetDir "$ProfileName\$HelperFileName"
 
 # OutputBinDir stores the stable runtime binary output directory used by make run.
 # OutputBinDir 保存 make run 使用的稳定运行时二进制输出目录。

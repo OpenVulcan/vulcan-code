@@ -46,7 +46,7 @@ import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-sna
 import type { WorkspacePageDescriptor } from "@/components/workspace/workspace-page-descriptor";
 // WorkspaceMainView identifies the active main surface inside the workbench.
 // WorkspaceMainView 标识工作台内部当前激活的主内容界面。
-export type WorkspaceMainView = "chat" | "agent-skills" | "skills" | "agents" | "memory";
+export type WorkspaceMainView = "chat" | "agent-skills" | "skills" | "agents" | "memory" | "knowledge";
 
 // WorkspaceShellProps contains the visible workspace layout state and injected service edges.
 // WorkspaceShellProps 包含可见工作区布局状态和注入的服务边界。
@@ -126,6 +126,9 @@ export interface WorkspaceShellProps {
   // Opens the memory feature area from the workbench sidebar.
   // 从工作台侧栏打开记忆功能区。
   onOpenMemory: () => void;
+  // Opens the knowledge library management area from the workbench sidebar.
+  // 从工作台侧栏打开资料库管理区域。
+  onOpenKnowledge: () => void;
   // Selects one top-level application area from the sidebar brand menu.
   // 从侧栏品牌菜单选择一个顶层应用区域。
   onSelectArea: (area: MainAreaId) => void;

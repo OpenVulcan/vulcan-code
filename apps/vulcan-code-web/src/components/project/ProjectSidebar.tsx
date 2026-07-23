@@ -16,6 +16,7 @@ import {
   Boxes,
   Bot,
   BrainCircuit,
+  BookMarked,
   Folder,
   FolderPlus,
   Hammer,
@@ -71,6 +72,9 @@ export function ProjectSidebar(props: {
   // Opens the memory feature area from the workbench sidebar.
   // 从工作台侧栏打开记忆功能区。
   onOpenMemory: () => void;
+  // Opens the knowledge library management area from the workbench sidebar.
+  // 从工作台侧栏打开资料库管理区域。
+  onOpenKnowledge: () => void;
   // Selects one top-level application area from the sidebar brand menu.
   // 从侧栏品牌菜单选择一个顶层应用区域。
   onSelectArea: (area: MainAreaId) => void;
@@ -92,6 +96,9 @@ export function ProjectSidebar(props: {
   // Whether the embedded memory settings view is currently active.
   // 内嵌记忆设置视图当前是否激活。
   memoryActive: boolean;
+  // Whether the embedded knowledge library management view is currently active.
+  // 内嵌资料库管理视图当前是否激活。
+  knowledgeActive: boolean;
   onExpandedProjectIdsChange: (projectIds: string[]) => void;
   onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
   onReorderProjects: (projectIds: string[]) => void;
@@ -166,7 +173,7 @@ export function ProjectSidebar(props: {
   const regularProjects = React.useMemo(() => props.projects.filter((project) => !project.pinned), [props.projects]);
   // featureSurfaceActive tracks whether the global sidebar selection is a non-chat feature page.
   // featureSurfaceActive 跟踪全局侧栏选择是否处于非会话功能页面。
-  const featureSurfaceActive = props.skillsActive || props.agentSkillsActive || props.agentsActive || props.memoryActive;
+  const featureSurfaceActive = props.skillsActive || props.agentSkillsActive || props.agentsActive || props.memoryActive || props.knowledgeActive;
   // visibleProjectRows keeps pinned projects inline while the sidebar is expanded.
   // visibleProjectRows 在侧栏展开时将置顶项目保留在常规项目列表内。
   const visibleProjectRows = sidebarState === "collapsed" ? regularProjects : props.projects;
@@ -303,8 +310,8 @@ export function ProjectSidebar(props: {
     <Sidebar className={cn(activeProjectDragId && "project-drag-active")} collapsible="icon" variant="inset">
       <SidebarHeader>
         <SidebarBrandMenu
-          activeArea={props.agentSkillsActive ? "agent-skills" : props.agentsActive ? "agents" : props.skillsActive ? "skills" : props.memoryActive ? "memory" : "chat"}
-          currentLabel={props.agentSkillsActive ? t("area.agentSkills") : props.agentsActive ? t("area.agents") : props.skillsActive ? t("area.skills") : props.memoryActive ? t("area.memory") : t("sidebar.console")}
+          activeArea={props.agentSkillsActive ? "agent-skills" : props.agentsActive ? "agents" : props.skillsActive ? "skills" : props.memoryActive ? "memory" : props.knowledgeActive ? "knowledge" : "chat"}
+          currentLabel={props.agentSkillsActive ? t("area.agentSkills") : props.agentsActive ? t("area.agents") : props.skillsActive ? t("area.skills") : props.memoryActive ? t("area.memory") : props.knowledgeActive ? t("area.knowledge") : t("sidebar.console")}
           onSelectArea={props.onSelectArea}
           titlebarDragRegion={props.titlebarDragRegion}
           onTitlebarDoubleClick={props.onTitlebarDoubleClick}
@@ -354,6 +361,17 @@ export function ProjectSidebar(props: {
             >
               <BrainCircuit size={16} />
               <span className="vcn-sidebar-label workspace-sidebar-feature-label">{t("area.memory")}</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              active={props.knowledgeActive}
+              className="workspace-sidebar-feature-button"
+              onClick={props.onOpenKnowledge}
+              tooltip={t("area.knowledge")}
+            >
+              <BookMarked size={16} />
+              <span className="vcn-sidebar-label workspace-sidebar-feature-label">{t("area.knowledge")}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu> : null}

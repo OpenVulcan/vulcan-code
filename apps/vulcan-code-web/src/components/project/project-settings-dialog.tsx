@@ -19,6 +19,7 @@ import {
   ProjectOverviewSection,
   ProjectVmmSection,
 } from "./project-settings-sections";
+import { ProjectKnowledgeBasesSection } from "./project-knowledge-bases-section";
 import type {
   ProjectAgentSkillState,
   ProjectAttachmentCleanupKinds,
@@ -635,6 +636,10 @@ export function ProjectSettingsDialog(props: {
                 onSetProjectAgentSkill={(name, stateKey) => void setProjectAgentSkill(name, stateKey)}
                 workbench={props.workbench}
               />
+            ) : null}
+
+            {activeSection === "knowledge-bases" ? (
+              <ProjectKnowledgeBasesSection projectId={project.id} />
             ) : null}
 
             {activeSection === "attachments" ? (

@@ -1,5 +1,7 @@
 use super::*;
-use crate::ExecutionSessionGoalContext;
+use crate::{ExecutionKnowledgeAccessContext, ExecutionSessionGoalContext};
+use vldb_controller_client::{ClientRegistration, ControllerClient, ControllerClientConfig};
+use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
 
 /// Builds a resolved TaskSession configuration for controller-config tests.
 /// 为控制器配置测试构建已解析 TaskSession 配置。
@@ -56,6 +58,7 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         boundary_events: Vec::new(),
         runtime_system_updates: Vec::new(),
         controller_runtime: None,
+        knowledge_access: None,
         session_goal_context: None,
         session_plan_context: None,
         embedded_turn_usage_segments: Vec::new(),
@@ -1173,6 +1176,88 @@ fn task_runtime_preparation_request_clears_parent_transient_runtime_state() {
     assert!(child_request.session_goal_context.is_none());
     assert!(child_request.session_plan_context.is_none());
     assert!(child_request.embedded_turn_usage_segments.is_empty());
+}
+
+/// Verifies a child request inherits the immutable knowledge snapshot without losing its storage handle.
+/// 验证子请求继承不可变资料库快照且不会丢失其存储句柄。
+#[test]
+fn task_runtime_preparation_request_preserves_enabled_knowledge_access() {
+    let parent_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let provider_config = ProviderConfigurationFile::default();
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+        &provider_config,
+        &AgentProfileCatalog::default(),
+        None,
+        None,
+    );
+    let mut parent_request = test_parent_execution_request(parent_session_id);
+    let controller_client = ControllerClient::new(
+        ControllerClientConfig {
+            auto_spawn: false,
+            ..ControllerClientConfig::default()
+        },
+        ClientRegistration {
+            client_name: String::from("knowledge-child-test"),
+            host_kind: String::from("test"),
+            process_id: std::process::id(),
+            process_name: String::from("vulcan-agent-runtime-test"),
+            lease_ttl_secs: Some(60),
+        },
+    );
+    parent_request.controller_runtime = Some(ControllerRuntimeHandle {
+        client: controller_client,
+        endpoint: String::from("http://127.0.0.1:1"),
+        executable: String::from("unused"),
+        data_root: std::env::temp_dir(),
+        sqlite_path: std::env::temp_dir().join("unused.sqlite3"),
+        sqlite_binding_id: String::from("knowledge-child-test-binding"),
+    });
+    parent_request.knowledge_access = Some(ExecutionKnowledgeAccessContext {
+        project_id: String::from("project-a"),
+        library_ids: vec![String::from("550e8400-e29b-41d4-a716-446655440000")],
+    });
+    let context = TaskExecutionRuntimeContext::new(
+        provider_config,
+        Arc::new(foundation),
+        None,
+        parent_request,
+    );
+    let invocation = TaskExecutionRequest {
+        current_session_id: parent_session_id,
+        root_session_id: parent_session_id,
+        task_id,
+        execution_id: String::from("knowledge-execution"),
+        public_task_id: String::from("knowledge-child"),
+        prompt: String::from("search project knowledge"),
+        description: Some(String::from("Search project knowledge")),
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("search project knowledge"),
+        display_title: String::from("Search project knowledge"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    let resolved_config = test_resolved_config(
+        &build_test_controller_config("Base prompt"),
+        &invocation.invocation_config,
+    );
+
+    let (_, child_request) =
+        build_task_runtime_preparation_request(&context, &invocation, &resolved_config)
+            .expect("valid knowledge-enabled task runtime preparation");
+
+    let access = child_request
+        .knowledge_access
+        .expect("child should inherit knowledge access");
+    assert_eq!(access.project_id, "project-a");
+    assert_eq!(
+        access.library_ids,
+        vec![String::from("550e8400-e29b-41d4-a716-446655440000")]
+    );
+    assert!(child_request.controller_runtime.is_some());
 }
 
 /// Verifies stored child-task controller snapshots keep runtime knobs but not prompt material.

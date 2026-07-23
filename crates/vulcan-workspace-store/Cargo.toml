@@ -11,10 +11,15 @@ workspace = true
 
 [dependencies]
 dirs.workspace = true
+futures-util = "0.3.31"
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+pulldown-cmark.workspace = true
+tempfile = "3.27.0"
 tokio.workspace = true
 uuid.workspace = true
+zip.workspace = true
 vldb-controller-client.workspace = true
 vulcan-change-set.workspace = true
 vulcan-session-boundary.workspace = true

@@ -58,6 +58,7 @@ import { useComposerSlashCommands } from "@/components/composer/composer-panel/u
 import { useComposerAiCapabilities } from "@/components/composer/composer-panel/use-composer-ai-capabilities";
 import { useComposerSendController } from "@/components/composer/composer-panel/use-composer-send-controller";
 import { useComposerPlanMode } from "@/components/composer/composer-panel/use-composer-plan-mode";
+import { ComposerKnowledgeControl } from "@/components/composer/composer-knowledge-control";
 export { ComposerSessionProgressCapsule } from "@/components/composer/composer-panel/progress-capsule";
 // ComposerPanel renders the first-version message input surface.
 // ComposerPanel 渲染第一版消息输入区域。
@@ -477,6 +478,10 @@ export function ComposerPanel(props: {
               onOpenGoal={() => void openGoalDialog()}
               onPlanModeChange={(enabled) => void handlePlanModeChange(enabled)}
               onVmmPolicyChange={(policy, mode) => void props.onSetSessionVmmPolicy(policy, mode)}
+            />
+            <ComposerKnowledgeControl
+              conversationId={props.conversationId}
+              projectId={props.projectId}
             />
             {planModeEnabled ? (
               <ComposerPlanModeChip

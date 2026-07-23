@@ -161,6 +161,14 @@ fn run_service_bootstrap(
         controller_report.handle.sqlite_path.display()
     ));
     let controller_runtime = controller_report.handle.clone();
+    let knowledge_runtime = vulcan_workspace_store::knowledge_base::KnowledgeBaseRuntime::new(
+        controller_runtime.clone(),
+    );
+    bootstrap_step(
+        runtime.block_on(knowledge_runtime.recover_interrupted_jobs()),
+        "vldb",
+        "VLDB",
+    )?;
 
     update_startup(
         state,
@@ -840,6 +848,7 @@ fn run_service_bootstrap(
         guard.agent_runtime = Some(agent_runtime);
         guard.service_runtime = Some(runtime.clone());
         guard.controller_runtime = Some(controller_runtime);
+        guard.knowledge_runtime = Some(knowledge_runtime);
         guard.luaskills_runtime = luaskills_runtime;
         guard.cached_luaskills_catalog = Some(luaskills_catalog);
         guard.token_budget_runtime = Some(token_budget_runtime);

@@ -6,6 +6,7 @@ use super::*;
 mod configuration;
 mod conversation_runtime;
 mod extensibility;
+mod knowledge_base;
 mod project_conversation;
 mod workspace_io;
 
@@ -54,6 +55,10 @@ async fn dispatch_known_service_rpc(
     // outcome is reused because each router either claims exact ownership or leaves it untouched.
     // outcome 被复用，因为每个路由要么声明精确所有权，要么保持未处理。
     let outcome = workspace_io::dispatch(state.clone(), method, params).await?;
+    if outcome.is_handled() {
+        return Ok(outcome);
+    }
+    let outcome = knowledge_base::dispatch(app.clone(), state.clone(), method, params).await?;
     if outcome.is_handled() {
         return Ok(outcome);
     }
@@ -152,6 +157,7 @@ pub(crate) fn service_rpc_method_names() -> BTreeSet<&'static str> {
         conversation_runtime::RPC_METHODS,
         configuration::RPC_METHODS,
         project_conversation::RPC_METHODS,
+        knowledge_base::RPC_METHODS,
     ]
     .into_iter()
     .flatten()
@@ -169,7 +175,6 @@ mod tests {
         // methods combines all domain contracts without deriving ownership from implementation fallbacks.
         // methods 合并全部领域契约，不从实现兜底中推导所有权。
         let methods = service_rpc_method_names();
-        assert_eq!(methods.len(), 126);
         // unique_methods proves no earlier router can shadow a later domain branch.
         // unique_methods 证明前置路由不会遮蔽后续领域分支。
         let declared_method_count = workspace_io::RPC_METHODS.len()
@@ -177,6 +182,7 @@ mod tests {
             + conversation_runtime::RPC_METHODS.len()
             + configuration::RPC_METHODS.len()
             + project_conversation::RPC_METHODS.len();
+        let declared_method_count = declared_method_count + knowledge_base::RPC_METHODS.len();
         assert_eq!(methods.len(), declared_method_count);
         assert!(methods.contains("service_submit_conversation_prompt"));
         assert!(methods.contains("service_set_vulcan_plugin_enabled"));
@@ -185,6 +191,12 @@ mod tests {
         assert!(methods.contains("service_delete_plugin_mcp_secret"));
         assert!(methods.contains("workspace.diff.snapshot"));
         assert!(methods.contains("service_remove_project"));
+        assert!(methods.contains("service_create_knowledge_library"));
+        assert!(methods.contains("service_list_knowledge_sources"));
+        assert!(methods.contains("service_import_knowledge_directory"));
+        assert!(methods.contains("service_search_knowledge_library"));
+        assert!(methods.contains("service_search_knowledge"));
+        assert!(methods.contains("service_set_session_knowledge_libraries"));
     }
 
     /// Verifies unknown methods retain the browser bridge's canonical diagnostic.

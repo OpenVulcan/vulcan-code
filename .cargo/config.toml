@@ -1,0 +1,4 @@
+# Keep vendored MSVC C dependencies aligned with Rust's dynamic C runtime.
+# 让通过 MSVC 编译的内置 C 依赖统一使用 Rust 默认的动态 C 运行时。
+[env]
+CL = { value = "/MD", force = false }

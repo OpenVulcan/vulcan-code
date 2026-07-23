@@ -2,6 +2,7 @@
 //! 供WebUI壳层复用的共享控制器工作区存储与引导表面。
 
 pub mod data_plane;
+pub mod knowledge_base;
 pub mod provider_usage;
 pub mod workspace_store;
 

@@ -30,6 +30,15 @@ function projectFolderPickerPathKey(path: string): string {
 // ProjectFolderPickerDialogProps groups service-backed project directory picker inputs.
 // ProjectFolderPickerDialogProps 汇总服务驱动的项目目录选择器输入。
 export interface ProjectFolderPickerDialogProps {
+  // Optional dialog title override for host features reusing the directory browser.
+  // 宿主功能复用目录浏览器时使用的可选弹窗标题覆盖。
+  title?: string;
+  // Optional confirmation label override.
+  // 可选的确认按钮文案覆盖。
+  confirmLabel?: string;
+  // Optional native directory opened immediately when the dialog becomes visible.
+  // 对话框变为可见时立即打开的可选原生目录。
+  initialPath?: string | null;
   // Whether the picker dialog is currently open.
   // 当前选择器弹窗是否打开。
   open: boolean;
@@ -47,6 +56,9 @@ export interface ProjectFolderPickerDialogProps {
 // ProjectFolderPickerDialog renders a service-host directory browser.
 // ProjectFolderPickerDialog 渲染服务宿主目录浏览器。
 export function ProjectFolderPickerDialog({
+  title,
+  confirmLabel,
+  initialPath,
   open,
   onBrowse,
   onConfirm,
@@ -65,6 +77,9 @@ export function ProjectFolderPickerDialog({
   // submitting tracks the final project-add request.
   // submitting 跟踪最终添加项目请求。
   const [submitting, setSubmitting] = React.useState(false);
+  // submittingRef synchronously prevents duplicate confirmation before React rerenders.
+  // submittingRef 在 React 重新渲染前同步阻止重复确认。
+  const submittingRef = React.useRef(false);
   // error stores the latest picker error.
   // error 保存最近一次选择器错误。
   const [error, setError] = React.useState<string | null>(null);
@@ -123,16 +138,17 @@ export function ProjectFolderPickerDialog({
     if (!open) {
       return;
     }
-    void loadDirectory(null);
-  }, [loadDirectory, open]);
+    void loadDirectory(initialPath ?? null);
+  }, [initialPath, loadDirectory, open]);
 
   // handleConfirm submits the current path as the new project directory.
   // handleConfirm 将当前路径作为新项目目录提交。
   const handleConfirm = React.useCallback(async () => {
     const selectedPath = pathInput.trim() || listing?.path || "";
-    if (!selectedPath || submitting) {
+    if (!selectedPath || submittingRef.current) {
       return;
     }
+    submittingRef.current = true;
     setSubmitting(true);
     setError(null);
     try {
@@ -141,9 +157,10 @@ export function ProjectFolderPickerDialog({
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
-  }, [listing?.path, onConfirm, onOpenChange, pathInput, submitting]);
+  }, [listing?.path, onConfirm, onOpenChange, pathInput]);
 
   // handlePathSubmit loads the manually entered path.
   // handlePathSubmit 加载手动输入的路径。
@@ -153,23 +170,23 @@ export function ProjectFolderPickerDialog({
   }, [loadDirectory, pathInput]);
 
   return (
-    <Dialog open={open} onOpenChange={(nextOpen) => !submitting && onOpenChange(nextOpen)}>
+    <Dialog open={open} onOpenChange={(nextOpen) => !submittingRef.current && onOpenChange(nextOpen)}>
       <DialogContent
         className="project-folder-picker-dialog"
         onEscapeKeyDown={(event) => {
-          if (submitting) {
+          if (submittingRef.current) {
             event.preventDefault();
           }
         }}
         onInteractOutside={(event) => {
-          if (submitting) {
+          if (submittingRef.current) {
             event.preventDefault();
           }
         }}
         showCloseButton={!submitting}
       >
         <DialogHeader>
-          <DialogTitle>{t("projectFolderPicker.title")}</DialogTitle>
+          <DialogTitle>{title ?? t("projectFolderPicker.title")}</DialogTitle>
         </DialogHeader>
         <form className="project-folder-picker-path-row" onSubmit={handlePathSubmit}>
           <Input
@@ -178,7 +195,7 @@ export function ProjectFolderPickerDialog({
             onChange={(event) => setPathInput(event.target.value)}
             value={pathInput}
           />
-          <Button disabled={loading || submitting} size="icon" type="submit" variant="outline">
+          <Button aria-label={t("projectFolderPicker.openPath")} disabled={loading || submitting} size="icon" type="submit" variant="outline">
             {loading ? <Spinner className="size-4" /> : <ChevronRight size={16} />}
           </Button>
         </form>
@@ -255,7 +272,7 @@ export function ProjectFolderPickerDialog({
           </Button>
           <Button disabled={!listing?.canSelect || submitting || loading} onClick={handleConfirm} type="button">
             {submitting ? <Spinner className="size-4" /> : <Check size={16} />}
-            {submitting ? t("projectFolderPicker.adding") : t("sidebar.addProject")}
+            {submitting ? t("projectFolderPicker.adding") : (confirmLabel ?? t("sidebar.addProject"))}
           </Button>
         </DialogFooter>
       </DialogContent>

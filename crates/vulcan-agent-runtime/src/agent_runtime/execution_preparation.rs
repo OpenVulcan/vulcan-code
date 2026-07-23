@@ -164,6 +164,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         luaskills_runtime,
         (!workspace_path.is_empty()).then(|| PathBuf::from(workspace_path.clone())),
         request.controller_runtime.clone(),
+        request.knowledge_access.clone(),
         conversation_attachments.clone(),
         tool_exposure.native_tool_ids.clone(),
         tool_exposure.luaskills_tools.clone(),

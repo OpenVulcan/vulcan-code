@@ -7,7 +7,9 @@ use super::tool_exposure::{
 };
 use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::config::PLAN_AGENT_ID;
-use crate::agent_runtime::execution_models::{ExecutionPreparationRequest, ExecutionPromptPurpose};
+use crate::agent_runtime::execution_models::{
+    ExecutionKnowledgeAccessContext, ExecutionPreparationRequest, ExecutionPromptPurpose,
+};
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::conversation_protocol::SessionConversationState;
 use crate::mcp::configured_mcp_runtime_access;
@@ -16,7 +18,8 @@ use crate::provider_config::{
     ProjectPromptSkillsConfiguration, ProviderConfigurationFile, ReasoningEffortLevel,
 };
 use crate::tooling::native::{
-    CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, TODOLIST_TOOL_ID, UPDATE_GOAL_TOOL_ID,
+    CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, KNOWLEDGE_BROWSE_TOOL_ID, KNOWLEDGE_READ_TOOL_ID,
+    KNOWLEDGE_SEARCH_TOOL_ID, TODOLIST_TOOL_ID, UPDATE_GOAL_TOOL_ID,
 };
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::json;
@@ -446,6 +449,64 @@ fn prepare_execution_captures_matching_tool_descriptor_and_definition_snapshot()
     assert_eq!(descriptor_ids, definition_ids);
 }
 
+/// Verifies the provider schema hides knowledge tools when the turn has no effective library.
+/// 验证回合没有生效资料库时 Provider Schema 会隐藏资料库工具。
+#[test]
+fn prepare_execution_hides_knowledge_tools_without_effective_access() {
+    let config = test_provider_config();
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+        &config,
+        &AgentProfileCatalog::default(),
+        None,
+        Some(configured_mcp_runtime_access(&config)),
+    );
+    let request = test_execution_preparation_request();
+
+    let prepared = prepare_execution_with_tool_snapshot(&foundation, None, &config, &request)
+        .expect("preparation should resolve");
+    let definition_ids = prepared
+        .tool_snapshot
+        .resolved_tool_definitions
+        .iter()
+        .map(|definition| definition.descriptor.id.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(!definition_ids.contains(&KNOWLEDGE_SEARCH_TOOL_ID));
+    assert!(!definition_ids.contains(&KNOWLEDGE_BROWSE_TOOL_ID));
+    assert!(!definition_ids.contains(&KNOWLEDGE_READ_TOOL_ID));
+}
+
+/// Verifies all three read-only tools become visible for one non-empty immutable access snapshot.
+/// 验证非空不可变访问快照会让三个只读资料库工具全部可见。
+#[test]
+fn prepare_execution_exposes_knowledge_tools_for_effective_access() {
+    let config = test_provider_config();
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+        &config,
+        &AgentProfileCatalog::default(),
+        None,
+        Some(configured_mcp_runtime_access(&config)),
+    );
+    let mut request = test_execution_preparation_request();
+    request.knowledge_access = Some(ExecutionKnowledgeAccessContext {
+        project_id: String::from("project-a"),
+        library_ids: vec![String::from("550e8400-e29b-41d4-a716-446655440000")],
+    });
+
+    let prepared = prepare_execution_with_tool_snapshot(&foundation, None, &config, &request)
+        .expect("knowledge-enabled preparation should resolve");
+    let definition_ids = prepared
+        .tool_snapshot
+        .resolved_tool_definitions
+        .iter()
+        .map(|definition| definition.descriptor.id.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(definition_ids.contains(&KNOWLEDGE_SEARCH_TOOL_ID));
+    assert!(definition_ids.contains(&KNOWLEDGE_BROWSE_TOOL_ID));
+    assert!(definition_ids.contains(&KNOWLEDGE_READ_TOOL_ID));
+}
+
 /// Verifies context-compaction preparation clears every provider-visible tool snapshot.
 /// 验证上下文压缩准备阶段会清空所有 Provider 可见工具快照。
 #[test]
@@ -669,6 +730,7 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         boundary_events: Vec::new(),
         runtime_system_updates: Vec::new(),
         controller_runtime: None,
+        knowledge_access: None,
         session_goal_context: None,
         session_plan_context: None,
         embedded_turn_usage_segments: Vec::new(),

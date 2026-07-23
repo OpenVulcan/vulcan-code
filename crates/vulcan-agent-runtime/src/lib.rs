@@ -45,11 +45,12 @@ pub mod workbench_prompt_turn;
 pub mod workspace_path;
 
 pub use agent_runtime::{
-    ExecutionPreparation, ExecutionPreparationRequest, ExecutionPromptPurpose,
-    ExecutionProviderVisibleAgentMessage, ExecutionRunReport, ExecutionSessionGoalContext,
-    ExecutionStreamEvent, RuntimeFoundation, RuntimePromptIntervention,
-    RuntimePromptInterventionError, RuntimeSkillKind, ensure_runtime_defaults, stream_runtime_run,
-    stream_runtime_run_with_intervention, stream_runtime_run_with_intervention_and_plugins,
+    ExecutionKnowledgeAccessContext, ExecutionPreparation, ExecutionPreparationRequest,
+    ExecutionPromptPurpose, ExecutionProviderVisibleAgentMessage, ExecutionRunReport,
+    ExecutionSessionGoalContext, ExecutionStreamEvent, RuntimeFoundation,
+    RuntimePromptIntervention, RuntimePromptInterventionError, RuntimeSkillKind,
+    ensure_runtime_defaults, stream_runtime_run, stream_runtime_run_with_intervention,
+    stream_runtime_run_with_intervention_and_plugins,
 };
 pub use tooling::bridge as vulcan_tools_bridge;
 pub use vulcan_host_tools::project_temp_maintenance;

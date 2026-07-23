@@ -106,7 +106,7 @@ wait_for_vite() {
     # AttemptIndex 保存端口探测使用的有界重试计数器。
     AttemptIndex=0
     while [ "$AttemptIndex" -lt 20 ]; do
-        if node -e "const net=require('net');const s=net.createConnection(5173,'127.0.0.1');s.setTimeout(250);s.on('connect',()=>{s.destroy();process.exit(0)});s.on('timeout',()=>{s.destroy();process.exit(1)});s.on('error',()=>process.exit(1));" >/dev/null 2>&1; then
+        if node -e "const net=require('net');const s=net.createConnection(17601,'127.0.0.1');s.setTimeout(250);s.on('connect',()=>{s.destroy();process.exit(0)});s.on('timeout',()=>{s.destroy();process.exit(1)});s.on('error',()=>process.exit(1));" >/dev/null 2>&1; then
             return 0
         fi
         AttemptIndex=$((AttemptIndex + 1))
@@ -119,12 +119,12 @@ trap cleanup_vite EXIT INT TERM
 
 cd "$ProjectDir"
 
-echo "==> Starting WebUI dev server at http://127.0.0.1:5173 ..."
-"$PnpmCommand" --dir "$WebAppDir" run dev --host 127.0.0.1 --port 5173 >/dev/null 2>&1 &
+echo "==> Starting WebUI dev server at http://127.0.0.1:17601 ..."
+"$PnpmCommand" --dir "$WebAppDir" run dev --host 127.0.0.1 --port 17601 --strictPort >/dev/null 2>&1 &
 ViteProcessId=$!
 
 if ! wait_for_vite; then
-    echo "WebUI dev server did not become ready at http://127.0.0.1:5173" >&2
+    echo "WebUI dev server did not become ready at http://127.0.0.1:17601" >&2
     exit 1
 fi
 

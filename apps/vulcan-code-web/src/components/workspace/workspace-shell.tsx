@@ -20,6 +20,7 @@ import {
   FloatingAgentCategoryMenu,
 } from "@/components/features/agents/AgentsArea";
 import { AgentSkillsArea, FloatingAgentSkillCategoryMenu } from "@/components/features/agent-skills/AgentSkillsArea";
+import { KnowledgeBaseArea } from "@/components/features/knowledge/KnowledgeBaseArea";
 import {
   ProjectSidebar,
 } from "@/components/project/ProjectSidebar";
@@ -925,6 +926,11 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       ),
       side: "left",
     }],
+  } : props.mainView === "knowledge" ? {
+    content: <KnowledgeBaseArea />,
+    detail: t("area.knowledge.description"),
+    headerActions: null,
+    title: t("area.knowledge"),
   } : {
     content: (
       <ChatArea
@@ -1033,10 +1039,12 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onOpenAgentSkills={props.onOpenAgentSkills}
         onOpenAgents={props.onOpenAgents}
         onOpenMemory={props.onOpenMemory}
+        onOpenKnowledge={props.onOpenKnowledge}
         onSelectArea={props.onSelectArea}
         titlebarDragRegion={props.titlebarDragRegion}
         onTitlebarDoubleClick={props.onTitlebarDoubleClick}
         memoryActive={props.mainView === "memory"}
+        knowledgeActive={props.mainView === "knowledge"}
         agentsActive={props.mainView === "agents"}
         skillsActive={props.mainView === "skills"}
         agentSkillsActive={props.mainView === "agent-skills"}

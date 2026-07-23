@@ -432,10 +432,8 @@ pub(crate) fn session_addon_state_from_workspace_snapshot(
                     .unwrap_or(default_ai_tool_configuration);
                 let _ = addon_state.set_ai_tool_configuration(configuration, updated_at.clone());
             }
-            SessionAddonNamespace::Todolist => {
-                if !runtime_state.todolist.is_empty() {
-                    let _ = addon_state.set_todolist(&runtime_state.todolist, updated_at.clone());
-                }
+            SessionAddonNamespace::Todolist if !runtime_state.todolist.is_empty() => {
+                let _ = addon_state.set_todolist(&runtime_state.todolist, updated_at.clone());
             }
             _ => {}
         }

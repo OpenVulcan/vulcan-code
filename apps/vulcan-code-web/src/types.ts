@@ -8,3 +8,4 @@ export * from "./types/memory-vmm";
 export * from "./types/runtime-context";
 export * from "./types/planning-questions";
 export * from "./types/workbench";
+export * from "./types/knowledge-base";
