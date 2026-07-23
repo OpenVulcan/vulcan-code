@@ -6760,6 +6760,7 @@ dependencies = [
 name = "vulcan-prompt-composer"
 version = "0.1.0"
 dependencies = [
+ "encoding_rs",
  "vulcan-runtime-assets",
 ]
 
@@ -6768,6 +6769,7 @@ name = "vulcan-prompt-skills"
 version = "0.1.0"
 dependencies = [
  "dirs",
+ "encoding_rs",
  "include_dir",
  "serde",
  "serde_json",
@@ -6793,6 +6795,7 @@ name = "vulcan-runtime-assets"
 version = "0.1.0"
 dependencies = [
  "dirs",
+ "encoding_rs",
 ]
 
 [[package]]
@@ -6923,11 +6926,13 @@ dependencies = [
 name = "vulcan-task-session"
 version = "0.1.0"
 dependencies = [
+ "encoding_rs",
  "serde",
  "serde_json",
  "serde_yaml",
  "vulcan-context",
  "vulcan-context-compaction",
+ "vulcan-runtime-assets",
  "vulcan-session-core",
 ]
 
@@ -7004,6 +7009,7 @@ name = "vulcan-workspace-store"
 version = "0.1.0"
 dependencies = [
  "dirs",
+ "encoding_rs",
  "futures-util",
  "pulldown-cmark",
  "serde",

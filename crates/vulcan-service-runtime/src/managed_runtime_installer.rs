@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 use tar::Archive;
+use vulcan_runtime_assets::text_decode::decode_complete_user_text;
 use xz2::read::XzDecoder;
 use zip::ZipArchive;
 
@@ -1433,8 +1434,8 @@ where
     // combined_text 接受把版本报告到任一标准流的工具。
     let combined_text = format!(
         "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        decode_process_output_bytes(&output.stdout),
+        decode_process_output_bytes(&output.stderr)
     );
     if !combined_text.contains(expected) {
         return Err(format!(
@@ -1463,7 +1464,7 @@ fn ensure_process_success(label: &str, output: &Output) -> Result<(), String> {
 /// Truncate one process diagnostic without splitting UTF-8 code points.
 /// 在不拆分 UTF-8 码点的情况下截断一个进程诊断。
 fn truncate_diagnostic(bytes: &[u8]) -> String {
-    let text = String::from_utf8_lossy(bytes);
+    let text = decode_process_output_bytes(bytes);
     if text.len() <= MAX_PROCESS_DIAGNOSTIC_BYTES {
         return text.trim().to_string();
     }
@@ -1472,6 +1473,19 @@ fn truncate_diagnostic(bytes: &[u8]) -> String {
         boundary -= 1;
     }
     format!("{}…", text[..boundary].trim())
+}
+
+/// Decodes complete managed-runtime process output as user text while retaining a lossy last-resort diagnostic.
+/// 将完整的受管运行时进程输出解码为用户文本，并保留有损的最终诊断回退。
+///
+/// Parameters: `bytes` contains one complete stdout or stderr payload.
+/// Returns: UTF-8 or GB18030 text, falling back to replacement decoding only for malformed diagnostics.
+/// 参数：`bytes` 包含一段完整的 stdout 或 stderr 载荷。
+/// 返回值：UTF-8 或 GB18030 文本；仅在诊断字节损坏时回退到替代字符解码。
+fn decode_process_output_bytes(bytes: &[u8]) -> String {
+    decode_complete_user_text(bytes)
+        .map(|decoded| decoded.content)
+        .unwrap_or_else(|_| String::from_utf8_lossy(bytes).into_owned())
 }
 
 /// Resolve a canonical target path relative to one canonical containing directory.

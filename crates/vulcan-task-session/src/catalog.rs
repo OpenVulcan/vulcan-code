@@ -776,10 +776,7 @@ pub fn parse_subagent_definition_file(
     definition_file: &Path,
     scope: SubagentDefinitionScope,
 ) -> Result<SubagentDefinition, SubagentCatalogLoadError> {
-    let raw = fs::read_to_string(definition_file).map_err(|error| SubagentCatalogLoadError {
-        path: definition_file.to_path_buf(),
-        message: format!("Failed to read subagent definition: {error}"),
-    })?;
+    let raw = read_subagent_definition_text(definition_file)?;
     let id = if definition_file.is_relative() {
         canonical_id_for_file(Path::new(""), definition_file).ok_or_else(|| {
             SubagentCatalogLoadError {
@@ -1681,10 +1678,7 @@ fn parse_subagent_definition_file_in_root(
     scope: SubagentDefinitionScope,
     package_id: Option<&str>,
 ) -> Result<SubagentDefinition, SubagentCatalogLoadError> {
-    let raw = fs::read_to_string(definition_file).map_err(|error| SubagentCatalogLoadError {
-        path: definition_file.to_path_buf(),
-        message: format!("Failed to read subagent definition: {error}"),
-    })?;
+    let raw = read_subagent_definition_text(definition_file)?;
     let relative_id = canonical_id_for_file(base_root, definition_file).ok_or_else(|| {
         SubagentCatalogLoadError {
             path: definition_file.to_path_buf(),
@@ -1719,6 +1713,28 @@ fn parse_subagent_definition_file_in_root(
         sidecar_file,
         sidecar,
     })
+}
+
+/// Reads one complete user-authored subagent Markdown definition as UTF-8 or GB18030.
+/// 将一个完整的用户子智能体 Markdown 定义读取为 UTF-8 或 GB18030。
+///
+/// Parameters: `definition_file` identifies the exact Markdown source.
+/// Returns: normalized Unicode text or a path-aware catalog loading error.
+/// 参数：`definition_file` 标识精确的 Markdown 来源。
+/// 返回值：规范化后的 Unicode 文本，或包含路径信息的目录加载错误。
+fn read_subagent_definition_text(
+    definition_file: &Path,
+) -> Result<String, SubagentCatalogLoadError> {
+    let bytes = fs::read(definition_file).map_err(|error| SubagentCatalogLoadError {
+        path: definition_file.to_path_buf(),
+        message: format!("Failed to read subagent definition: {error}"),
+    })?;
+    vulcan_runtime_assets::text_decode::decode_complete_user_text(&bytes)
+        .map(|decoded| decoded.content)
+        .map_err(|error| SubagentCatalogLoadError {
+            path: definition_file.to_path_buf(),
+            message: format!("Failed to decode subagent definition as UTF-8 or GB18030: {error}"),
+        })
 }
 
 /// Rejects non-plugin definitions that attempt to occupy the host-owned plugin category.
@@ -2307,6 +2323,37 @@ mod tests {
         assert_eq!(definition.name, "Code Reviewer");
         assert_eq!(definition.mode, SubagentDefinitionMode::Expert);
         assert_eq!(definition.system_prompt.as_deref(), Some("Review code."));
+    }
+
+    /// Verifies a GBK subagent Markdown definition is decoded before frontmatter parsing.
+    /// 验证 GBK 子智能体 Markdown 定义会在解析前置元数据前完成解码。
+    #[test]
+    fn parses_gbk_subagent_definition_file() {
+        let root = std::env::temp_dir().join(format!(
+            "vulcan-subagent-gbk-definition-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after Unix epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("GBK subagent root should create");
+        let path = root.join("gbk-reviewer.md");
+        let source = "---\nname: 中文审查员\n---\n检查服务端用户等级规则。";
+        let (encoded, _, had_errors) = encoding_rs::GBK.encode(source);
+        assert!(!had_errors);
+        fs::write(&path, encoded.as_ref()).expect("GBK subagent definition should write");
+
+        let definition = parse_subagent_definition_file(&path, SubagentDefinitionScope::User)
+            .expect("GBK subagent definition should parse");
+
+        assert_eq!(definition.id, "gbk-reviewer");
+        assert_eq!(definition.name, "中文审查员");
+        assert_eq!(
+            definition.system_prompt.as_deref(),
+            Some("检查服务端用户等级规则。")
+        );
+        fs::remove_dir_all(root).expect("GBK subagent root should be removable");
     }
 
     /// Verifies relative logical Markdown paths preserve category prefixes in parsed ids.

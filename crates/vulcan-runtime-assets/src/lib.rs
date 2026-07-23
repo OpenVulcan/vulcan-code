@@ -3,6 +3,10 @@
 
 use std::path::{Path, PathBuf};
 
+/// Shared external user-text decoding boundaries.
+/// 共享的外部用户文本解码边界。
+pub mod text_decode;
+
 /// Convert one raw host path into native text without Windows verbatim prefixes.
 /// 把一个原始宿主路径转换为不含 Windows verbatim 前缀的原生文本。
 ///

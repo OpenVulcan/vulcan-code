@@ -542,6 +542,27 @@ fn project_rules_file_cache_reuses_unchanged_snapshot() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies project rules encoded as GBK are normalized before prompt composition.
+/// 验证 GBK 编码的项目规则会在提示词组合前完成规范化。
+#[test]
+fn project_rules_file_cache_decodes_gbk_snapshot() {
+    let root = unique_temp_dir("vulcan-project-rules-cache-gbk");
+    fs::create_dir_all(&root).expect("create workspace");
+    let source = "始终先读取项目文档。\n";
+    let (encoded, _, had_errors) = encoding_rs::GBK.encode(source);
+    assert!(!had_errors);
+    fs::write(root.join(DEFAULT_PROJECT_RULES_FILE_NAME), encoded.as_ref())
+        .expect("write GBK project rules");
+
+    let snapshot = ProjectRulesFileCache::new()
+        .load_workspace_default(&root)
+        .expect("GBK project rules should decode")
+        .expect("GBK project rules should exist");
+
+    assert_eq!(snapshot.text, source.trim());
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies project-rules file cache refreshes after content changes.
 /// 验证项目规则文件缓存会在内容变化后刷新。
 #[test]

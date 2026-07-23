@@ -3,6 +3,7 @@
 
 use super::super::selection::WebuiWorkspaceDiffSelection;
 use super::*;
+use vulcan_host_tools::output_decode::decode_shell_output_bytes;
 
 /// Annotates file summaries using the selected WebUI diff request context.
 /// 使用已解析的 WebUI diff 选择上下文标注文件摘要行数。
@@ -153,7 +154,7 @@ pub(crate) fn webui_git_merge_base(
     if !output.status.success() {
         return Err(format_webui_git_error("git merge-base", &output));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    Ok(decode_shell_output_bytes(&output.stdout).trim().to_string())
 }
 
 /// Number of pathspecs passed to one line-count metadata command.
@@ -187,7 +188,7 @@ fn webui_git_blob_ids_from_metadata_command(
             .split(|byte| *byte == 0)
             .filter(|entry| !entry.is_empty())
         {
-            let text = String::from_utf8_lossy(entry);
+            let text = decode_shell_output_bytes(entry);
             let Some((metadata, path)) = text.split_once('\t') else {
                 continue;
             };
@@ -337,7 +338,7 @@ pub(crate) fn parse_webui_git_cat_file_line_counts(output: &[u8]) -> BTreeMap<St
             break;
         };
         let header_end = cursor + header_end_offset;
-        let header = String::from_utf8_lossy(&output[cursor..header_end]);
+        let header = decode_shell_output_bytes(&output[cursor..header_end]);
         let mut parts = header.split_whitespace();
         let Some(oid) = parts.next() else {
             break;

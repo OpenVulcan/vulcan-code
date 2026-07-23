@@ -8,5 +8,8 @@ license.workspace = true
 [dependencies]
 vulcan-runtime-assets.workspace = true
 
+[dev-dependencies]
+encoding_rs = "0.8.35"
+
 [lints]
 workspace = true

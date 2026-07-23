@@ -9,6 +9,7 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use vulcan_runtime_assets::text_decode::decode_complete_user_text;
 use vulcan_session_core::ExecutionRuntimePolicyRequest;
 
 /// Relative directory name that stores user-authored agent markdown files.
@@ -301,9 +302,16 @@ fn collect_markdown_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<
 /// Loads one user-authored agent markdown file into one structured profile.
 /// 将单个用户自定义 Agent Markdown 文件加载为结构化配置。
 fn load_user_agent_profile(path: &Path) -> Result<UserAgentProfile, String> {
-    let text = fs::read_to_string(path)
+    let bytes = fs::read(path)
         .map_err(|error| format!("读取 Agent 文件 `{}` 失败：{}。", path.display(), error))?;
-    let (frontmatter, prompt) = split_frontmatter_and_body(&text, path)?;
+    let text = decode_complete_user_text(&bytes).map_err(|error| {
+        format!(
+            "Agent 文件 `{}` 不是有效 UTF-8 或 GB18030：{}。",
+            path.display(),
+            error
+        )
+    })?;
+    let (frontmatter, prompt) = split_frontmatter_and_body(&text.content, path)?;
     if prompt.trim().is_empty() {
         return Err(format!(
             "Agent 文件 `{}` 缺少有效提示词正文。",
@@ -482,6 +490,25 @@ mod tests {
         assert!(is_reserved_agent_identifier("explore"));
         assert!(is_reserved_agent_identifier("default-worker"));
         assert!(!is_reserved_agent_identifier("custom-agent"));
+    }
+
+    /// Verifies a user-authored GBK Agent Markdown file is decoded before frontmatter parsing.
+    /// 验证用户编写的 GBK Agent Markdown 会在解析前置元数据前完成解码。
+    #[test]
+    fn user_agent_profile_decodes_gbk_markdown() {
+        let root =
+            tempfile::tempdir().expect("temporary GBK Agent profile directory should be created");
+        let path = root.path().join("gbk-reviewer.md");
+        let source = "---\nid: gbk-reviewer\nname: 中文审查员\n---\n\n检查服务端用户等级规则。\n";
+        let (encoded, _, had_errors) = encoding_rs::GBK.encode(source);
+        assert!(!had_errors);
+        fs::write(&path, encoded.as_ref()).expect("GBK Agent profile should be written");
+
+        let profile = load_user_agent_profile(&path).expect("GBK Agent profile should parse");
+
+        assert_eq!(profile.id, "gbk-reviewer");
+        assert_eq!(profile.name, "中文审查员");
+        assert_eq!(profile.prompt, "检查服务端用户等级规则。");
     }
 
     /// Verifies duplicate canonical Agent identifiers fail deterministically instead of overwriting by read_dir order.

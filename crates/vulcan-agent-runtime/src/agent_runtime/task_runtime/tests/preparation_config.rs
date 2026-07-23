@@ -1205,14 +1205,14 @@ fn task_runtime_preparation_request_preserves_enabled_knowledge_access() {
             lease_ttl_secs: Some(60),
         },
     );
-    parent_request.controller_runtime = Some(ControllerRuntimeHandle {
-        client: controller_client,
-        endpoint: String::from("http://127.0.0.1:1"),
-        executable: String::from("unused"),
-        data_root: std::env::temp_dir(),
-        sqlite_path: std::env::temp_dir().join("unused.sqlite3"),
-        sqlite_binding_id: String::from("knowledge-child-test-binding"),
-    });
+    parent_request.controller_runtime = Some(ControllerRuntimeHandle::new(
+        controller_client,
+        String::from("http://127.0.0.1:1"),
+        String::from("unused"),
+        std::env::temp_dir(),
+        std::env::temp_dir().join("unused.sqlite3"),
+        String::from("knowledge-child-test-binding"),
+    ));
     parent_request.knowledge_access = Some(ExecutionKnowledgeAccessContext {
         project_id: String::from("project-a"),
         library_ids: vec![String::from("550e8400-e29b-41d4-a716-446655440000")],

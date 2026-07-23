@@ -9,6 +9,9 @@ use encoding_rs::{
 use std::char::decode_utf16;
 use std::mem;
 use sys_locale::get_locale;
+pub use vulcan_runtime_assets::text_decode::{
+    DecodedUserText, UserTextDecodeError, decode_complete_user_text,
+};
 
 /// Stable UTF-8 BOM prefix recognized at the start of shell output.
 /// 在 shell 输出起始位置识别的稳定 UTF-8 BOM 前缀。

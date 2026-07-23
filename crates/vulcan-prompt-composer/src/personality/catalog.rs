@@ -7,6 +7,7 @@ use crate::personality::defaults::{
     DEFAULT_PERSONALITY_ID, FRIENDLY_PERSONALITY_TEXT, PRAGMATIC_PERSONALITY_TEXT,
 };
 use crate::source::hashing::stable_text_hash;
+use crate::source::loader::TextPromptResourceLoader;
 use crate::types::PersonalitySelection;
 
 /// One resolved personality definition.
@@ -111,12 +112,7 @@ impl PersonalityCatalog {
             if !matches!(extension, "md" | "txt") {
                 continue;
             }
-            let text = fs::read_to_string(&path).map_err(|error| {
-                PromptComposerError::ResourceLoad(format!(
-                    "{}: {error}",
-                    vulcan_runtime_assets::native_host_path_text_from_path(&path)
-                ))
-            })?;
+            let text = TextPromptResourceLoader::read_text_file(&path)?;
             let trimmed = text.trim();
             if trimmed.is_empty() {
                 continue;

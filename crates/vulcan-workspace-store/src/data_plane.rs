@@ -1,11 +1,13 @@
 //! Controller-backed application data-plane bootstrap helpers.
 //! 基于控制器的应用数据平面引导辅助模块。
 
+use crate::knowledge_base::KnowledgeBaseRuntimeSharedState;
 use crate::provider_config::{PersistedControllerConfiguration, PersistedControllerProcessMode};
 use crate::runtime_assets;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use vldb_controller_client::{
@@ -51,6 +53,9 @@ pub struct ControllerRuntimeHandle {
     /// Bootstrap-scoped SQLite binding identifier used by the current controller runtime handle.
     /// 当前控制器运行时句柄使用的单次引导作用域 SQLite 绑定标识符。
     pub sqlite_binding_id: String,
+    /// Process-local knowledge state shared by every runtime reconstructed from this handle.
+    /// 由基于当前句柄重建的所有运行时共享的进程内资料库状态。
+    pub(crate) knowledge_runtime_state: Arc<KnowledgeBaseRuntimeSharedState>,
 }
 
 impl fmt::Debug for ControllerRuntimeHandle {
@@ -65,6 +70,38 @@ impl fmt::Debug for ControllerRuntimeHandle {
             .field("sqlite_path", &self.sqlite_path)
             .field("sqlite_binding_id", &self.sqlite_binding_id)
             .finish()
+    }
+}
+
+impl ControllerRuntimeHandle {
+    /// Builds one long-lived controller handle and initializes its shared knowledge runtime state.
+    /// 构建一个长生命周期控制器句柄，并初始化其共享资料库运行时状态。
+    ///
+    /// `client` is the connected controller proxy, `endpoint` is its normalized URL,
+    /// `executable` identifies the controller process, `data_root` owns application data,
+    /// `sqlite_path` points to the application database, and `sqlite_binding_id` identifies
+    /// the bootstrap-scoped application binding. The returned handle shares one knowledge
+    /// activation and mutation state across every clone.
+    /// `client` 是已连接的控制器代理，`endpoint` 是其标准化 URL，`executable` 标识控制器进程，
+    /// `data_root` 保存应用数据，`sqlite_path` 指向应用数据库，`sqlite_binding_id` 标识单次引导作用域的
+    /// 应用绑定。返回的句柄会在所有克隆之间共享同一份资料库激活与变更状态。
+    pub fn new(
+        client: ControllerClient,
+        endpoint: String,
+        executable: String,
+        data_root: PathBuf,
+        sqlite_path: PathBuf,
+        sqlite_binding_id: String,
+    ) -> Self {
+        Self {
+            client,
+            endpoint,
+            executable,
+            data_root,
+            sqlite_path,
+            sqlite_binding_id,
+            knowledge_runtime_state: Arc::new(KnowledgeBaseRuntimeSharedState::default()),
+        }
     }
 }
 
@@ -173,14 +210,14 @@ pub async fn bootstrap_application_data_plane(
 
     match bootstrap_result {
         Ok((status, sqlite_binding_id)) => Ok(ControllerBootstrapReport {
-            handle: ControllerRuntimeHandle {
+            handle: ControllerRuntimeHandle::new(
                 client,
                 endpoint,
                 executable,
                 data_root,
                 sqlite_path,
                 sqlite_binding_id,
-            },
+            ),
             status,
         }),
         Err(error) => {

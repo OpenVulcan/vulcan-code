@@ -18,6 +18,7 @@ use vulcan_agent_runtime::{
 };
 use vulcan_context::estimate_mixed_language_text_tokens;
 use vulcan_hooks::{HookActor, HookCapabilitySet, HookContext, HookScope};
+use vulcan_host_tools::output_decode::decode_shell_output_bytes;
 use vulcan_session_core::{ExecutionRuntimePolicy, ExecutionScope, SessionNodeId};
 use vulcan_workbench_model::SessionId;
 
@@ -468,7 +469,7 @@ fn load_git_commit_summary_command_section(
             &output,
         ));
     }
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stdout = decode_shell_output_bytes(&output.stdout).trim().to_string();
     let body = if stdout.is_empty() {
         "(none)".to_string()
     } else {

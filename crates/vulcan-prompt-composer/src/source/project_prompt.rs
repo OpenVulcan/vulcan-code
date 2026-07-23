@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use crate::error::PromptComposerError;
+use crate::source::loader::TextPromptResourceLoader;
 use crate::source::snapshot::ProjectPromptSnapshot;
 
 /// Metadata marker used to detect whether one project-prompt file changed.
@@ -140,12 +141,7 @@ fn project_prompt_file_marker(
 fn read_project_prompt_snapshot(
     path: &Path,
 ) -> Result<Option<ProjectPromptSnapshot>, PromptComposerError> {
-    let text = fs::read_to_string(path).map_err(|error| {
-        PromptComposerError::ResourceLoad(format!(
-            "{}: {error}",
-            vulcan_runtime_assets::native_host_path_text_from_path(path)
-        ))
-    })?;
+    let text = TextPromptResourceLoader::read_text_file(path)?;
     let text = text.trim();
     if text.is_empty() {
         return Ok(None);

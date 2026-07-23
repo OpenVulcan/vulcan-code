@@ -6,6 +6,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+use vulcan_host_tools::output_decode::decode_shell_output_bytes;
 
 use super::command::{format_webui_git_error, run_webui_git_command};
 use super::model::{
@@ -136,7 +137,7 @@ pub(crate) fn resolve_webui_git_repository_root(
     if !output.status.success() {
         return Ok(None);
     }
-    let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let root = decode_shell_output_bytes(&output.stdout).trim().to_string();
     if root.is_empty() {
         return Ok(None);
     }
@@ -153,7 +154,7 @@ pub(crate) fn resolve_webui_git_repository_root(
 /// 返回：成功时返回原始 stdout 文本，失败时返回格式化后的 Git 错误。
 fn webui_git_stdout_or_error(label: &str, output: std::process::Output) -> Result<String, String> {
     if output.status.success() {
-        return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+        return Ok(decode_shell_output_bytes(&output.stdout));
     }
     Err(format_webui_git_error(label, &output))
 }
@@ -606,7 +607,7 @@ pub(crate) fn load_webui_current_git_branch(
     if !output.status.success() {
         return Ok(None);
     }
-    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let branch = decode_shell_output_bytes(&output.stdout).trim().to_string();
     Ok((!branch.is_empty()).then_some(branch))
 }
 
@@ -625,7 +626,7 @@ pub(crate) fn load_webui_default_git_branch(
         ],
     )?;
     if origin_head.status.success() {
-        let branch = String::from_utf8_lossy(&origin_head.stdout)
+        let branch = decode_shell_output_bytes(&origin_head.stdout)
             .trim()
             .to_string();
         if !branch.is_empty() {
@@ -660,7 +661,7 @@ pub(crate) fn load_webui_git_branches(
     }
     let mut seen = BTreeSet::new();
     let mut branches = Vec::new();
-    for raw_line in String::from_utf8_lossy(&output.stdout).lines() {
+    for raw_line in decode_shell_output_bytes(&output.stdout).lines() {
         let branch = raw_line.trim();
         if branch.is_empty() || branch.ends_with("/HEAD") || !seen.insert(branch.to_string()) {
             continue;
@@ -699,7 +700,7 @@ pub(crate) fn load_webui_unpushed_commits(
         return Ok(Vec::new());
     }
     let mut commits = Vec::new();
-    for raw_record in String::from_utf8_lossy(&output.stdout).split('\x1e') {
+    for raw_record in decode_shell_output_bytes(&output.stdout).split('\x1e') {
         let fields = raw_record
             .trim_matches('\n')
             .split('\x1f')
@@ -727,7 +728,7 @@ pub(crate) fn load_webui_head_commit_identity(
     if !output.status.success() {
         return Ok(None);
     }
-    let text = String::from_utf8_lossy(&output.stdout);
+    let text = decode_shell_output_bytes(&output.stdout);
     let fields = text.trim().split('\x1f').collect::<Vec<_>>();
     if fields.len() < 2 || fields[0].trim().is_empty() {
         return Ok(None);
@@ -858,7 +859,7 @@ fn load_webui_untracked_git_diff_sections(
         .split(|byte| *byte == 0)
         .filter(|part| !part.is_empty())
     {
-        let relative_path = String::from_utf8_lossy(raw_path).replace('\\', "/");
+        let relative_path = decode_shell_output_bytes(raw_path).replace('\\', "/");
         if let Some(section) =
             load_webui_untracked_file_diff_section(repository_root, &relative_path)?
         {
@@ -956,7 +957,7 @@ fn load_webui_git_revision_count(
     if !output.status.success() {
         return Err(format_webui_git_error("git rev-list --count", &output));
     }
-    let count_text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let count_text = decode_shell_output_bytes(&output.stdout).trim().to_string();
     count_text
         .parse::<usize>()
         .map_err(|error| format!("failed to parse git revision count `{count_text}`: {error}"))

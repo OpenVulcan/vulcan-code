@@ -90,6 +90,27 @@ fn parses_skill_frontmatter_and_body() {
     assert_eq!(skill.interface, PromptSkillInterfaceMetadata::default());
 }
 
+/// Verifies a user-authored GBK SKILL.md is normalized before frontmatter parsing.
+/// 验证用户编写的 GBK SKILL.md 会在解析前言前完成规范化。
+#[test]
+fn parses_gbk_skill_file() {
+    let root = temp_dir();
+    let skill_dir = root.join("gbk-helper");
+    fs::create_dir_all(&skill_dir).expect("GBK skill directory should create");
+    let source =
+        "---\nname: gbk-helper\ndescription: Use for GBK tests.\n---\n\n# 中文技能\n读取项目文档。";
+    let (encoded, _, had_errors) = encoding_rs::GBK.encode(source);
+    assert!(!had_errors);
+    let skill_file = skill_dir.join(SKILL_FILE_NAME);
+    fs::write(&skill_file, encoded.as_ref()).expect("GBK SKILL.md should write");
+
+    let skill = parse_prompt_skill_file(&skill_file).expect("GBK SKILL.md should parse");
+
+    assert_eq!(skill.name, "gbk-helper");
+    assert_eq!(skill.body, "# 中文技能\n读取项目文档。");
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies package loading freezes deterministic relative paths for model-facing detail output.
 /// 验证技能包加载会为面向模型的详情输出冻结确定的相对路径。
 #[test]

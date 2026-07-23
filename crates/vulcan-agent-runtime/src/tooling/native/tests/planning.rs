@@ -183,9 +183,12 @@ async fn submit_plan_tool_replaces_marked_target_without_session_record() {
         .await
         .expect("workspace directory");
     let target = workspace_root.join("generated.md");
-    tokio_fs::write(&target, format!("{SUBMIT_PLAN_MARKER}\n\n# Plan\n"))
+    let initial_plan = format!("{SUBMIT_PLAN_MARKER}\n\n# 计划\n\n检查服务端用户等级。\n");
+    let (encoded_initial_plan, _, had_errors) = encoding_rs::GBK.encode(&initial_plan);
+    assert!(!had_errors);
+    tokio_fs::write(&target, encoded_initial_plan.as_ref())
         .await
-        .expect("tool plan");
+        .expect("GBK tool plan");
     let tool = build_submit_plan_tool();
     let result = tool
         .invoke(test_native_request_with_workspace(

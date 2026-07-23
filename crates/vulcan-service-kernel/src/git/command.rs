@@ -6,7 +6,10 @@ use std::{
     path::Path,
     process::{Command, Stdio},
 };
-use vulcan_host_tools::process_creation::apply_windows_release_no_window_to_std_command;
+use vulcan_host_tools::{
+    output_decode::decode_shell_output_bytes,
+    process_creation::apply_windows_release_no_window_to_std_command,
+};
 
 /// Runs one bounded Git command with filters and pagers disabled.
 /// 在禁用过滤器与分页器的情况下运行单个有界 Git 命令。
@@ -184,7 +187,7 @@ fn run_webui_git_command_with_stdin_context(
 /// Formats a Git command failure with stderr preserved for diagnostics.
 /// 格式化 Git 命令失败信息，并保留 stderr 方便诊断。
 pub(crate) fn format_webui_git_error(label: &str, output: &std::process::Output) -> String {
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stderr = decode_shell_output_bytes(&output.stderr).trim().to_string();
     if stderr.is_empty() {
         format!("{label} failed with status {}", output.status)
     } else {

@@ -9,6 +9,7 @@ use std::{
 
 use encoding_rs::GB18030;
 use ignore::WalkBuilder;
+use vulcan_host_tools::output_decode::decode_complete_user_text;
 use vulcan_service_api::{
     WorkspaceFileDirectoryListing, WorkspaceFileEntryKind, WorkspaceFileEntrySummary,
     WorkspaceFileFilterOptions, WorkspaceFileReadResponse,

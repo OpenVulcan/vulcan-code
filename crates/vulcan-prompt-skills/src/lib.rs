@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use vulcan_runtime_assets::text_decode::decode_complete_user_text;
 
 mod install;
 
@@ -1964,11 +1965,15 @@ pub fn parse_prompt_skill_file_with_scope(
             ),
         });
     }
-    let raw = fs::read_to_string(skill_file).map_err(|error| PromptSkillLoadError {
+    let raw_bytes = fs::read(skill_file).map_err(|error| PromptSkillLoadError {
         path: skill_file.to_path_buf(),
         message: format!("Failed to read SKILL.md: {error}"),
     })?;
-    parse_prompt_skill_text_with_scope(skill_file, &raw, scope)
+    let raw = decode_complete_user_text(&raw_bytes).map_err(|error| PromptSkillLoadError {
+        path: skill_file.to_path_buf(),
+        message: format!("Failed to decode SKILL.md as UTF-8 or GB18030: {error}"),
+    })?;
+    parse_prompt_skill_text_with_scope(skill_file, &raw.content, scope)
 }
 
 /// Parses one prompt skill markdown string with YAML frontmatter.

@@ -113,21 +113,24 @@ pub(crate) struct WorkspaceFileDecodedText {
 /// Decodes workspace text preview bytes with UTF-8 first and GB18030 fallback.
 /// 优先使用 UTF-8 解码工作区文本预览字节，并回退到 GB18030。
 pub(crate) fn workspace_file_decode_text_preview(bytes: &[u8]) -> WorkspaceFileDecodedText {
-    match std::str::from_utf8(bytes) {
-        Ok(content) => {
-            return WorkspaceFileDecodedText {
-                content: content.to_string(),
-                encoding: String::from("utf-8"),
-            };
-        }
-        Err(error) if error.error_len().is_none() && error.valid_up_to() > 0 => {
-            return WorkspaceFileDecodedText {
-                content: String::from_utf8_lossy(&bytes[..error.valid_up_to()]).into_owned(),
-                encoding: String::from("utf-8"),
-            };
-        }
-        Err(_) => {}
+    if let Err(error) = std::str::from_utf8(bytes)
+        && error.error_len().is_none()
+        && error.valid_up_to() > 0
+    {
+        return WorkspaceFileDecodedText {
+            content: String::from_utf8_lossy(&bytes[..error.valid_up_to()]).into_owned(),
+            encoding: String::from("utf-8"),
+        };
     }
+    if let Ok(decoded) = decode_complete_user_text(bytes) {
+        return WorkspaceFileDecodedText {
+            content: decoded.content,
+            encoding: decoded.encoding.to_owned(),
+        };
+    }
+
+    // Preview buffers may end inside a GB18030 character because the read limit is byte-based.
+    // 预览缓冲区按字节限制读取，因此可能恰好结束在一个 GB18030 字符内部。
     let (content, _, _) = GB18030.decode(bytes);
     WorkspaceFileDecodedText {
         content: content.into_owned(),

@@ -15,7 +15,9 @@ use tokio::io::AsyncReadExt;
 use tokio::process::ChildStderr;
 use tokio::process::Command;
 use tokio::sync::{Mutex as AsyncMutex, broadcast};
-use vulcan_host_tools::process_creation::apply_windows_release_no_window;
+use vulcan_host_tools::{
+    output_decode::decode_shell_output_bytes, process_creation::apply_windows_release_no_window,
+};
 
 use crate::error::McpRuntimeError;
 use crate::rmcp_support::{
@@ -238,7 +240,7 @@ fn finish_stderr_line(
     }
     // decoded is created only after a complete bounded line is assembled.
     // decoded 仅在完整有界行组装完成后创建。
-    let decoded = String::from_utf8_lossy(pending_line);
+    let decoded = decode_shell_output_bytes(pending_line);
     let sanitized = redact_stderr_chunk(&decoded, sensitive_values);
     push_bounded_stderr_log(recent_logs, sanitized);
     pending_line.clear();

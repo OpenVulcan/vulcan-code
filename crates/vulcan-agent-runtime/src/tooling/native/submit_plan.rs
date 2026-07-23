@@ -653,10 +653,17 @@ async fn execute_submit_plan_tool(
             .ok_or_else(|| NativeToolError::new("replace=true requires the original plan path."))?;
         let path = PathBuf::from(path);
         ensure_workspace_child_path(&workspace_root, &path).await?;
-        let existing = tokio_fs::read_to_string(&path).await.map_err(|error| {
+        let existing_bytes = tokio_fs::read(&path).await.map_err(|error| {
             NativeToolError::new(format!("failed to read original plan: {error}"))
         })?;
-        if !existing.contains(SUBMIT_PLAN_MARKER) {
+        let existing =
+            vulcan_runtime_assets::text_decode::decode_complete_user_text(&existing_bytes)
+                .map_err(|error| {
+                    NativeToolError::new(format!(
+                        "failed to decode original plan as UTF-8 or GB18030: {error}"
+                    ))
+                })?;
+        if !existing.content.contains(SUBMIT_PLAN_MARKER) {
             return Err(NativeToolError::new(
                 "Refusing to replace a file that was not created by submit_plan.",
             ));

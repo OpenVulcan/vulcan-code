@@ -20,6 +20,10 @@ use crate::types::{OpenAiEncoding, TokenCounterError, TokenizerBackend};
 /// 在抑制 tokie 内部 panic hook 噪声输出时使用的全局保护锁。
 static TOKIE_COUNT_PANIC_HOOK_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
+/// Byte length at which tokie 0.0.9 enters its UTF-8-unsafe parallel encoder.
+/// tokie 0.0.9 进入非 UTF-8 安全并行编码器时的字节长度。
+const TOKIE_UNSAFE_PARALLEL_THRESHOLD_BYTES: usize = 10_000;
+
 /// Loaded tokenizer implementation for one OpenAI base encoding.
 /// 单个 OpenAI 基础编码已加载的 tokenizer 实现。
 pub(super) enum LoadedOpenAiTokenizer {
@@ -92,12 +96,59 @@ pub(super) fn safe_count_tokie_tokens(
     tokenizer: &TokieTokenizer,
     text: &str,
 ) -> Result<usize, String> {
-    run_tokie_count_with_quiet_panic_hook(|| tokenizer.count_tokens(text)).map_err(|payload| {
+    // Tokie 0.0.9 splits long input at raw byte offsets and then constructs unchecked UTF-8
+    // slices. Keep every call below that branch and preserve the explicit Tokie backend.
+    // Tokie 0.0.9 会按原始字节偏移切分长输入，再构造未经检查的 UTF-8 切片。
+    // 让每次调用都低于该分支阈值，同时保留显式 Tokie 后端。
+    run_tokie_count_with_quiet_panic_hook(|| {
+        tokie_safe_text_segments(text)
+            .into_iter()
+            .map(|segment| tokenizer.count_tokens(segment))
+            .sum()
+    })
+    .map_err(|payload| {
         format!(
             "tokie tokenizer panicked: {}",
             panic_payload_message(&payload)
         )
     })
+}
+
+/// Splits text below tokie's unsafe parallel threshold without cutting a UTF-8 code point.
+/// 在不切断 UTF-8 码点的前提下，将文本拆分到 Tokie 非安全并行阈值以下。
+///
+/// Parameters: `text` is one complete Unicode token-counting payload.
+/// Returns: ordered non-overlapping segments that reconstruct the exact input.
+/// 参数：`text` 是一段完整的 Unicode Token 统计载荷。
+/// 返回值：按顺序排列且互不重叠、可精确还原输入的分段。
+fn tokie_safe_text_segments(text: &str) -> Vec<&str> {
+    if text.len() < TOKIE_UNSAFE_PARALLEL_THRESHOLD_BYTES {
+        return vec![text];
+    }
+
+    let maximum_segment_bytes = TOKIE_UNSAFE_PARALLEL_THRESHOLD_BYTES - 1;
+    let mut segments = Vec::with_capacity(text.len().div_ceil(maximum_segment_bytes));
+    let mut segment_start = 0;
+    while segment_start < text.len() {
+        let mut segment_end = (segment_start + maximum_segment_bytes).min(text.len());
+        while !text.is_char_boundary(segment_end) {
+            segment_end -= 1;
+        }
+        if segment_end < text.len()
+            && let Some((whitespace_offset, whitespace)) = text[segment_start..segment_end]
+                .char_indices()
+                .rev()
+                .find(|(_, character)| character.is_whitespace())
+        {
+            let whitespace_end = segment_start + whitespace_offset + whitespace.len_utf8();
+            if whitespace_end > segment_start {
+                segment_end = whitespace_end;
+            }
+        }
+        segments.push(&text[segment_start..segment_end]);
+        segment_start = segment_end;
+    }
+    segments
 }
 
 /// Runs one tokie count closure while hiding tokenizer-internal panic-hook noise.
@@ -353,7 +404,14 @@ mod tests {
         },
     };
 
-    use super::run_tokie_count_with_quiet_panic_hook;
+    use tokie::Tokenizer as TokieTokenizer;
+
+    use crate::{TokenCounter, TokenEstimatePrecision, counter::default_tokenizer_resource_dir};
+
+    use super::{
+        TOKIE_UNSAFE_PARALLEL_THRESHOLD_BYTES, run_tokie_count_with_quiet_panic_hook,
+        safe_count_tokie_tokens, tokie_safe_text_segments,
+    };
 
     /// Verifies tokie panic containment suppresses hook output and restores the previous hook.
     /// 验证 tokie panic 隔离会抑制 hook 输出并恢复先前的 hook。
@@ -379,5 +437,39 @@ mod tests {
         assert_eq!(observed.load(Ordering::SeqCst), 1);
 
         panic::set_hook(previous_hook);
+    }
+
+    /// Verifies long multilingual context is segmented safely before tokie's parallel encoder runs.
+    /// 验证长多语言上下文会在 Tokie 并行编码器运行前完成安全分段。
+    #[test]
+    fn tokie_long_multilingual_context_uses_safe_utf8_segments() {
+        let tokenizer_path = default_tokenizer_resource_dir()
+            .join("exact")
+            .join("qwen")
+            .join("tokenizer.tkz");
+        let tokenizer =
+            TokieTokenizer::from_file(&tokenizer_path).expect("load bundled Qwen tokenizer");
+        let text = "System prompt 用户资料库检索 服务端 用户等级如何获取 ".repeat(600);
+
+        let segments = tokie_safe_text_segments(&text);
+        assert!(segments.len() > 1);
+        assert!(
+            segments
+                .iter()
+                .all(|segment| segment.len() < TOKIE_UNSAFE_PARALLEL_THRESHOLD_BYTES)
+        );
+        assert_eq!(segments.concat(), text);
+        assert!(
+            safe_count_tokie_tokens(&tokenizer, &text)
+                .expect("long Tokie input should use safe segments")
+                > 0
+        );
+
+        let counter = TokenCounter::new().expect("create default token counter");
+        let estimate = counter
+            .estimate("qwen3.8-max-preview", &text)
+            .expect("estimate long Qwen context through safe Tokie segments");
+        assert!(estimate.tokens > 0);
+        assert_eq!(estimate.precision, TokenEstimatePrecision::Exact);
     }
 }

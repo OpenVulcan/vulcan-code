@@ -18,3 +18,4 @@ pub use models::{
     KnowledgeSearchResult, KnowledgeSourceSummary, MAX_KNOWLEDGE_PACKAGE_BYTES,
 };
 pub use runtime::KnowledgeBaseRuntime;
+pub(crate) use runtime::KnowledgeBaseRuntimeSharedState;

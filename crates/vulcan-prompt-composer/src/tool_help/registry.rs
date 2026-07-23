@@ -4,6 +4,7 @@ use std::path::Path;
 
 use crate::error::PromptComposerError;
 use crate::source::hashing::stable_text_hash;
+use crate::source::loader::TextPromptResourceLoader;
 use crate::tool_help::builtin::built_in_tool_help_entries;
 
 /// One registered tool-help entry.
@@ -113,12 +114,7 @@ impl ToolHelpRegistry {
             if !matches!(extension, "md" | "txt") {
                 continue;
             }
-            let text = fs::read_to_string(&path).map_err(|error| {
-                PromptComposerError::ResourceLoad(format!(
-                    "{}: {error}",
-                    vulcan_runtime_assets::native_host_path_text_from_path(&path)
-                ))
-            })?;
+            let text = TextPromptResourceLoader::read_text_file(&path)?;
             let trimmed = text.trim();
             if trimmed.is_empty() {
                 continue;

@@ -15,4 +15,8 @@ serde_json.workspace = true
 serde_yaml = "0.9"
 vulcan-context.workspace = true
 vulcan-context-compaction.workspace = true
+vulcan-runtime-assets.workspace = true
 vulcan-session-core.workspace = true
+
+[dev-dependencies]
+encoding_rs = "0.8.35"

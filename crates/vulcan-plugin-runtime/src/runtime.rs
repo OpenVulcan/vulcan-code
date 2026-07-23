@@ -30,6 +30,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 use vulcan_hooks::{HookInvocation, HookResult};
+use vulcan_runtime_assets::text_decode::decode_complete_user_text;
 
 /// Maximum Lua execution time used while probing one plugin package.
 /// 探测单个插件包时使用的 Lua 最大执行时长。
@@ -6779,8 +6780,12 @@ fn run_plugin_dependency_command(command: &mut Command, label: &str) -> Result<(
     Err(format!(
         "Failed to {label} (status {}): stdout={} stderr={}",
         output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        decode_complete_user_text(&output.stdout)
+            .map(|decoded| decoded.content)
+            .unwrap_or_else(|_| String::from_utf8_lossy(&output.stdout).into_owned()),
+        decode_complete_user_text(&output.stderr)
+            .map(|decoded| decoded.content)
+            .unwrap_or_else(|_| String::from_utf8_lossy(&output.stderr).into_owned())
     ))
 }
 

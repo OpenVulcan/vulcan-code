@@ -32,6 +32,7 @@ use vldb_controller_client::{
     ControllerSqliteEnableRequest, ControllerSqliteTokenizerMode, ControllerSqliteValue, SpaceKind,
     SpaceRegistration,
 };
+use vulcan_runtime_assets::text_decode::decode_complete_user_text;
 use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 /// Maximum number of Markdown files accepted by one import.
@@ -100,6 +101,24 @@ pub struct KnowledgeBaseRuntime {
     /// Long-lived controller data-plane handle.
     /// 长生命周期控制器数据面句柄。
     controller: ControllerRuntimeHandle,
+    /// Per-library exclusive mutation locks.
+    /// 每资料库独占变更锁。
+    mutation_locks: Arc<Mutex<BTreeMap<String, Arc<Mutex<()>>>>>,
+    /// Serializes first-time binding activation and protects the active-binding cache.
+    /// 串行化首次绑定激活并保护活动绑定缓存。
+    binding_activation_lock: Arc<Mutex<()>>,
+    /// Library identifiers whose controller SQLite binding is already active.
+    /// 控制器 SQLite 绑定已经激活的资料库标识符。
+    active_bindings: Arc<Mutex<BTreeSet<String>>>,
+    /// Exact active import or index-maintenance operations with cooperative cancellation.
+    /// 支持协作取消的精确活动导入或索引维护操作。
+    active_operations: Arc<Mutex<BTreeMap<String, ActiveKnowledgeOperation>>>,
+}
+
+/// Process-local knowledge runtime state shared by every wrapper over one controller handle.
+/// 由同一控制器句柄的所有包装运行时共享的进程内资料库状态。
+#[derive(Default)]
+pub(crate) struct KnowledgeBaseRuntimeSharedState {
     /// Per-library exclusive mutation locks.
     /// 每资料库独占变更锁。
     mutation_locks: Arc<Mutex<BTreeMap<String, Arc<Mutex<()>>>>>,
@@ -686,12 +705,15 @@ impl KnowledgeBaseRuntime {
     /// Creates a knowledge runtime from the established application data plane.
     /// 从已建立的应用数据面创建资料库运行时。
     pub fn new(controller: ControllerRuntimeHandle) -> Self {
+        // sharedState ensures independently reconstructed AI and WebUI runtimes coordinate the same bindings and operations.
+        // sharedState 确保独立重建的 AI 与 WebUI 运行时协调同一组绑定和操作。
+        let shared_state = controller.knowledge_runtime_state.clone();
         Self {
             controller,
-            mutation_locks: Arc::new(Mutex::new(BTreeMap::new())),
-            binding_activation_lock: Arc::new(Mutex::new(())),
-            active_bindings: Arc::new(Mutex::new(BTreeSet::new())),
-            active_operations: Arc::new(Mutex::new(BTreeMap::new())),
+            mutation_locks: shared_state.mutation_locks.clone(),
+            binding_activation_lock: shared_state.binding_activation_lock.clone(),
+            active_bindings: shared_state.active_bindings.clone(),
+            active_operations: shared_state.active_operations.clone(),
         }
     }
 
@@ -2472,14 +2494,16 @@ impl KnowledgeBaseRuntime {
                 unchanged_files += 1;
                 continue;
             }
-            let utf8_bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
-            let content = match std::str::from_utf8(utf8_bytes) {
-                Ok(content) => normalize_markdown_newlines(content),
+            let content = match decode_complete_user_text(&bytes) {
+                Ok(decoded) => normalize_markdown_newlines(&decoded.content),
                 Err(error) => {
                     skipped_files += 1;
                     push_warning(
                         &mut warnings,
-                        format!("{} 不是有效 UTF-8：{error}", candidate.relative_path),
+                        format!(
+                            "{} 不是有效 UTF-8 或 GB18030：{error}",
+                            candidate.relative_path
+                        ),
                     );
                     continue;
                 }
@@ -6665,14 +6689,14 @@ mod tests {
         ensure_application_schema_migrations(&client, &app_binding_id)
             .await
             .expect("apply app schema migrations");
-        let runtime = KnowledgeBaseRuntime::new(ControllerRuntimeHandle {
-            client: client.clone(),
+        let runtime = KnowledgeBaseRuntime::new(ControllerRuntimeHandle::new(
+            client.clone(),
             endpoint,
-            executable: executable.display().to_string(),
+            executable.display().to_string(),
             data_root,
-            sqlite_path: app_path,
-            sqlite_binding_id: app_binding_id,
-        });
+            app_path,
+            app_binding_id,
+        ));
 
         // abandonedExtraction simulates a package TempDir left behind by process termination.
         // abandonedExtraction 模拟进程终止后遗留的资料库包临时解压目录。
@@ -6751,12 +6775,73 @@ mod tests {
             .expect("search Chinese content");
         assert!(!search.hits.is_empty());
         assert!(!search.fts_queries[0].expression.is_empty());
+        // independentRuntime reproduces the native AI tool path that reconstructs the runtime from the same controller handle.
+        // independentRuntime 复现原生 AI 工具使用同一控制器句柄重新构造运行时的路径。
+        let independent_runtime = KnowledgeBaseRuntime::new(runtime.controller.clone());
+        // independentSearch must reuse the controller binding instead of reopening the locked SQLite file.
+        // independentSearch 必须复用控制器绑定，而不是重新打开已经锁定的 SQLite 文件。
+        let independent_search = independent_runtime
+            .search(std::slice::from_ref(&library.id), "火山资料库", 10)
+            .await
+            .expect("search Chinese content through independent runtime");
+        assert!(!independent_search.hits.is_empty());
+        // thirdRuntime exposes controller state corruption after one same-binding re-enable.
+        // thirdRuntime 用于暴露同一绑定重复启用一次后的控制器状态损坏。
+        let third_runtime = KnowledgeBaseRuntime::new(runtime.controller.clone());
+        // thirdSearch must remain idempotent even after the binding has already been enabled twice.
+        // thirdSearch 必须在绑定已经启用两次后仍保持幂等。
+        let third_search = third_runtime
+            .search(std::slice::from_ref(&library.id), "火山资料库", 10)
+            .await
+            .expect("search Chinese content through third runtime");
+        assert!(
+            third_search.failures.is_empty(),
+            "third runtime search failures: {:?}",
+            third_search.failures
+        );
+        assert!(!third_search.hits.is_empty());
         let substring_search = runtime
             .search(std::slice::from_ref(&library.id), "levelup", 10)
             .await
             .expect("supplement Jieba BM25 with identifier substring matches");
         assert_eq!(substring_search.hits.len(), 1);
         assert_eq!(substring_search.hits[0].match_kind, "substring");
+
+        // LegacyEncodingLibrary isolates GBK ingestion from the UTF-8 incremental fixtures below.
+        // LegacyEncodingLibrary 将 GBK 导入与下方 UTF-8 增量夹具隔离。
+        let legacy_encoding_root = temporary.path().join("legacy-encoding-source");
+        fs::create_dir_all(&legacy_encoding_root).expect("create legacy encoding source root");
+        let legacy_markdown = "# 服务端等级\n\n服务端用户等级获取规则使用 GBK 文档。\n";
+        let (legacy_bytes, _, legacy_encode_had_errors) = encoding_rs::GBK.encode(legacy_markdown);
+        assert!(!legacy_encode_had_errors);
+        fs::write(
+            legacy_encoding_root.join("server-level.md"),
+            legacy_bytes.as_ref(),
+        )
+        .expect("write GBK Markdown fixture");
+        let legacy_encoding_library = runtime
+            .create_library("GBK 资料库", "", &[])
+            .await
+            .expect("create GBK library");
+        let legacy_encoding_import = runtime
+            .import_markdown_directory(&legacy_encoding_library.id, &legacy_encoding_root)
+            .await
+            .expect("import GBK Markdown through the shared decoder");
+        assert_eq!(legacy_encoding_import.changed_files, 1);
+        let legacy_encoding_search = runtime
+            .search(
+                std::slice::from_ref(&legacy_encoding_library.id),
+                "用户等级",
+                10,
+            )
+            .await
+            .expect("search GBK Markdown through Jieba BM25");
+        assert!(!legacy_encoding_search.hits.is_empty());
+        runtime
+            .delete_library(&legacy_encoding_library.id)
+            .await
+            .expect("delete GBK library");
+
         // ImportTimestamp must describe content ingestion rather than later derived-index maintenance.
         // ImportTimestamp 必须描述内容导入，而不是后续派生索引维护。
         let import_timestamp = runtime
