@@ -10,12 +10,13 @@ use vulcan_session_boundary::{SessionBoundaryEventKind, SessionEventVisibility};
 use vulcan_vmm::{ContextItem, VmmPromptAnchorKind, VmmRecallBatch, VmmSessionMemoryState};
 use vulcan_workbench_model::{
     PendingSessionPromptSource, SessionId, SessionMessageEntry, SessionMessageKind,
-    SessionRuntimeStateEntry,
+    SessionRuntimeStateEntry, VmmProfileSyncState,
 };
 
 use crate::{
     agent_runtime::conversation_hooks::{
-        ConversationHookRuntime, HOOK_METADATA_VMM_RECALL_BATCH_EFFECT, VmmRecallBatchHookEffect,
+        ConversationHookRuntime, HOOK_METADATA_VMM_PROFILE_SYNC_EFFECT,
+        HOOK_METADATA_VMM_RECALL_BATCH_EFFECT, VmmProfileSyncHookEffect, VmmRecallBatchHookEffect,
     },
     conversation_protocol::{
         SessionConversationPayload, append_user_text_message,
@@ -94,6 +95,9 @@ fn typed_vmm_recall_targets_visible_canonical_user_message() {
     // precheck_outcome starts from the correctly correlated skipped report before recall metadata is attached.
     // precheck_outcome 从正确关联的跳过报告开始，再附加召回元数据。
     let mut precheck_outcome = start.precheck_request.clone().skip();
+    // profile_outcome remains independent and empty because this test targets recall ownership only.
+    // profile_outcome 保持独立且为空，因为该测试只验证召回归属。
+    let profile_outcome = start.profile_request.clone().skip();
     // report is the single successful hook report consumed by the shared prompt continuation.
     // report 是共享提示词续接逻辑消费的唯一成功 Hook 报告。
     let report = precheck_outcome
@@ -117,11 +121,12 @@ fn typed_vmm_recall_targets_visible_canonical_user_message() {
     );
     // continuation applies typed recall state and builds the provider-facing exact-message anchors.
     // continuation 会应用类型化召回状态并构建 Provider 可见的精确消息锚点。
-    let continuation = continue_shared_prompt_turn_after_precheck_with_runtime_state(
+    let continuation = continue_shared_prompt_turn_after_preparation_with_runtime_state(
         &mut runtime_state,
         SharedPromptTurnContinueInput {
             start,
             precheck_outcome,
+            profile_outcome,
             ai_tool_configuration: PersistedAiToolConfiguration::default(),
             project_configuration: ProjectVulcanCodeConfigurationFile::default(),
             runtime_reasoning_effort: None,
@@ -318,6 +323,171 @@ fn goal_continuation_begin_never_persists_user_message() {
     );
 }
 
+/// Verifies a skipped Goal-continuation precheck still reuses the persisted VMM profile baseline.
+/// 验证目标续轮跳过 precheck 时仍会复用持久化的 VMM 画像基线。
+#[test]
+fn goal_continuation_reuses_persisted_vmm_profile_baseline() {
+    // runtime_state owns the baseline created by the first successful VMM profile synchronization.
+    // runtime_state 持有首次 VMM 画像同步成功后创建的基线。
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    runtime_state.vmm_profile_sync.base_profile_content =
+        Some(String::from("[USER]\n[P1][L2][W0] stable profile"));
+    // hook_runtime prepares the Goal continuation identity without running remote precheck handlers.
+    // hook_runtime 在不运行远端 precheck 处理器的情况下准备目标续轮身份。
+    let mut hook_runtime = ConversationHookRuntime::new();
+    // start models the exact hidden Goal-continuation path used by automatic turn chaining.
+    // start 模拟自动回合续接使用的精确隐藏目标续轮路径。
+    let start = begin_shared_prompt_turn_with_runtime_state(
+        &mut runtime_state,
+        &mut hook_runtime,
+        SharedPromptTurnRuntimeBeginInput {
+            session_id: SessionId::from_u128(906),
+            session_title: "主会话",
+            workspace_path: "D:/workspace",
+            prompt_entry_id: String::from("goal-baseline-entry"),
+            prompt: "Continue working toward the active thread goal.",
+            hidden_model_guidance: None,
+            provider_visible_agent_messages: Vec::new(),
+            attachments: Vec::new(),
+            append_canonical_user_message: false,
+            append_visible_user_prompt_record: false,
+            source: PendingSessionPromptSource::GoalContinuation,
+            execution_mode: String::from("Build"),
+            reasoning_effort: None,
+            disabled_ai_capability_kinds: BTreeSet::new(),
+            disabled_ai_capability_target_selectors: BTreeSet::new(),
+            ai_capability_target_order_overrides: BTreeMap::new(),
+            owning_project_id: Some(String::from("project-a")),
+            prior_session_messages: None,
+        },
+    )
+    .expect("goal continuation prompt should start");
+    // precheck_outcome is intentionally empty because Goal continuation skips every user precheck hook.
+    // precheck_outcome 刻意为空，因为目标续轮会跳过全部用户 precheck Hook。
+    let precheck_outcome = start.precheck_request.clone().skip();
+    // profile_outcome models an independently completed profile line with no remote refresh.
+    // profile_outcome 模拟不执行远端刷新的独立画像线路完成结果。
+    let profile_outcome = start.profile_request.clone().skip();
+    // continuation must reconstruct the stable system block from persisted runtime state.
+    // continuation 必须从持久化运行态重新构建稳定系统块。
+    let continuation = continue_shared_prompt_turn_after_preparation_with_runtime_state(
+        &mut runtime_state,
+        SharedPromptTurnContinueInput {
+            start,
+            precheck_outcome,
+            profile_outcome,
+            ai_tool_configuration: PersistedAiToolConfiguration::default(),
+            project_configuration: ProjectVulcanCodeConfigurationFile::default(),
+            runtime_reasoning_effort: None,
+            provider_reasoning_effort: None,
+            patch_visible_user_prompt_record: false,
+        },
+    )
+    .expect("goal continuation should prepare a provider request");
+    // blocks is the exact provider-visible system-hook collection for the continued request.
+    // blocks 是续轮请求中 Provider 精确可见的系统 Hook 集合。
+    let blocks = &continuation.request.system_prompt_hook_blocks;
+
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].tag, "vmm_profile");
+    assert_eq!(
+        blocks[0].phase,
+        vulcan_hooks::SystemPromptHookPhase::FirstSession
+    );
+    assert_eq!(blocks[0].source.as_deref(), Some("VMM profile full"));
+    assert_eq!(blocks[0].content, "[USER]\n[P1][L2][W0] stable profile");
+}
+
+/// Verifies precheck output cannot mutate or replace the system-profile line.
+/// 验证 precheck 输出无法修改或替换系统画像线路。
+#[test]
+fn precheck_cannot_own_vmm_profile_state_or_system_block() {
+    // runtime_state owns the authoritative baseline before either preparation line completes.
+    // runtime_state 在两条准备线路完成前持有权威画像基线。
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    runtime_state.vmm_profile_sync.base_profile_content =
+        Some(String::from("[USER]\nauthoritative profile"));
+    // start prepares sibling profile and precheck requests for one correlated prompt turn.
+    // start 为一个关联提示词回合准备同级画像与 precheck 请求。
+    let start = begin_user_prompt(&mut runtime_state);
+    // profile_outcome carries the sole legitimate profile-state update for this regression scenario.
+    // profile_outcome 在该回归场景中携带唯一合法的画像状态更新。
+    let mut profile_outcome = start.profile_request.clone().skip();
+    let profile_report = profile_outcome
+        .report
+        .as_mut()
+        .expect("skipped profile request should produce an empty successful report");
+    profile_report.metadata.insert(
+        HOOK_METADATA_VMM_PROFILE_SYNC_EFFECT.to_string(),
+        vec![serde_json::json!(VmmProfileSyncHookEffect {
+            state: VmmProfileSyncState {
+                base_profile_content: Some(String::from("[USER]\nprofile-line update")),
+                ..VmmProfileSyncState::default()
+            }
+        })],
+    );
+    // precheck_outcome deliberately carries forbidden profile metadata and a duplicate reserved block.
+    // precheck_outcome 刻意携带禁止的画像元数据及重复保留块。
+    let mut precheck_outcome = start.precheck_request.clone().skip();
+    let precheck_report = precheck_outcome
+        .report
+        .as_mut()
+        .expect("skipped precheck should produce an empty successful report");
+    precheck_report.metadata.insert(
+        HOOK_METADATA_VMM_PROFILE_SYNC_EFFECT.to_string(),
+        vec![serde_json::json!(VmmProfileSyncHookEffect {
+            state: VmmProfileSyncState {
+                base_profile_content: Some(String::from("[USER]\nprecheck overwrite")),
+                ..VmmProfileSyncState::default()
+            }
+        })],
+    );
+    precheck_report
+        .system_prompt_blocks
+        .push(vulcan_hooks::SystemPromptHookBlock {
+            tag: String::from("vmm_profile"),
+            description: String::from("foreign precheck block"),
+            content: String::from("[USER]\nprecheck block"),
+            source: Some(String::from("precheck")),
+            phase: vulcan_hooks::SystemPromptHookPhase::SubsequentSession,
+        });
+
+    let continuation = continue_shared_prompt_turn_after_preparation_with_runtime_state(
+        &mut runtime_state,
+        SharedPromptTurnContinueInput {
+            start,
+            precheck_outcome,
+            profile_outcome,
+            ai_tool_configuration: PersistedAiToolConfiguration::default(),
+            project_configuration: ProjectVulcanCodeConfigurationFile::default(),
+            runtime_reasoning_effort: None,
+            provider_reasoning_effort: None,
+            patch_visible_user_prompt_record: true,
+        },
+    )
+    .expect("independent preparation lines should produce a provider request");
+    let profile_blocks = continuation
+        .request
+        .system_prompt_hook_blocks
+        .iter()
+        .filter(|block| block.tag == "vmm_profile")
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        runtime_state
+            .vmm_profile_sync
+            .base_profile_content
+            .as_deref(),
+        Some("[USER]\nprofile-line update")
+    );
+    assert_eq!(profile_blocks.len(), 1);
+    assert_eq!(profile_blocks[0].content, "[USER]\nprofile-line update");
+    assert_eq!(
+        profile_blocks[0].source.as_deref(),
+        Some("VMM profile full")
+    );
+}
+
 /// Verifies hidden model guidance reaches the provider request without polluting transcript records.
 /// 验证隐藏模型引导会进入 Provider 请求，但不会污染转录记录。
 #[test]
@@ -350,14 +520,18 @@ fn hidden_model_guidance_stays_out_of_visible_transcript() {
     )
     .expect("plan execution prompt should start");
     let precheck_outcome = start.precheck_request.clone().skip();
-    // expected_hook_turn_id is the validated precheck correlation that must survive request construction.
-    // expected_hook_turn_id 是必须在请求构建后保留的已验证预检关联。
-    let expected_hook_turn_id = precheck_outcome.turn_id.clone();
-    let continuation = continue_shared_prompt_turn_after_precheck_with_runtime_state(
+    // profile_outcome is separately correlated even when no profile handler contributes state.
+    // profile_outcome 即使没有画像处理器贡献状态也保持独立关联。
+    let profile_outcome = start.profile_request.clone().skip();
+    // expected_hook_turn_id is the shared preparation identity that must survive request construction.
+    // expected_hook_turn_id 是必须在请求构建后保留的共享准备身份。
+    let expected_hook_turn_id = start.preparation_turn_id.clone();
+    let continuation = continue_shared_prompt_turn_after_preparation_with_runtime_state(
         &mut runtime_state,
         SharedPromptTurnContinueInput {
             start,
             precheck_outcome,
+            profile_outcome,
             ai_tool_configuration: PersistedAiToolConfiguration::default(),
             project_configuration: ProjectVulcanCodeConfigurationFile::default(),
             runtime_reasoning_effort: None,
@@ -443,15 +617,19 @@ fn precheck_failure_preserves_expired_vmm_resident_and_registers_terminal_turn()
     // precheck_outcome 保留关联标识，同时将远端报告替换为失败结果。
     let mut precheck_outcome = start.precheck_request.clone().skip();
     precheck_outcome.report = Err(String::from("simulated remote precheck failure"));
-    // expected_turn_id is the exact boundary that must be registered before Provider execution.
-    // expected_turn_id 是 Provider 执行前必须登记的精确边界。
-    let expected_turn_id = precheck_outcome.turn_id.clone();
+    // profile_outcome proves a precheck failure does not alter the independent profile line.
+    // profile_outcome 证明 precheck 失败不会改变独立画像线路。
+    let profile_outcome = start.profile_request.clone().skip();
+    // expected_turn_id is the shared preparation boundary registered before Provider execution.
+    // expected_turn_id 是 Provider 执行前登记的共享准备边界。
+    let expected_turn_id = start.preparation_turn_id.clone();
 
-    let continuation = continue_shared_prompt_turn_after_precheck_with_runtime_state(
+    let continuation = continue_shared_prompt_turn_after_preparation_with_runtime_state(
         &mut runtime_state,
         SharedPromptTurnContinueInput {
             start,
             precheck_outcome,
+            profile_outcome,
             ai_tool_configuration: PersistedAiToolConfiguration::default(),
             project_configuration: ProjectVulcanCodeConfigurationFile::default(),
             runtime_reasoning_effort: None,

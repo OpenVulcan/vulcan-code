@@ -34,10 +34,14 @@ use crate::{
         },
         conversation_hooks::{
             ConversationHookRuntime, ConversationPrecheckOutcome, ConversationPrecheckRequest,
+            ConversationProfileOutcome, ConversationProfileRequest,
             vmm_profile_sync_effect_from_report, vmm_recall_batch_effect_from_report,
         },
         events::{RuntimeEvent, RuntimeEventKind},
-        vmm_hooks::{VMM_PRECHECK_HOOK_ID, vmm_profile_placement_phase},
+        vmm_hooks::{
+            VMM_PRECHECK_HOOK_ID, stabilize_vmm_profile_system_prompt_blocks,
+            vmm_profile_placement_phase,
+        },
     },
     conversation_protocol::{
         append_user_text_message, merge_session_messages_with_conversation_state_records,
@@ -72,13 +76,16 @@ pub struct SharedPromptPrecheckPlan {
     pub progress_labels: Vec<String>,
 }
 
-/// Prepared prompt turn that must continue after precheck completes.
-/// 需要在 precheck 完成后继续的提示词回合。
+/// Prepared prompt turn that must continue after profile preparation and optional precheck complete.
+/// 需要在画像准备及可选 precheck 完成后继续的提示词回合。
 #[derive(Clone)]
 pub struct SharedPromptTurnStart {
     /// Session that owns this prompt turn.
     /// 拥有该提示词回合的会话。
     pub session_id: SessionId,
+    /// Shared immutable identity used to correlate both preparation lines and the provider turn.
+    /// 用于关联两条准备线路及 Provider 回合的共享不可变标识。
+    pub preparation_turn_id: String,
     /// Human-readable session title used by diagnostics.
     /// 诊断信息使用的人类可读会话标题。
     pub session_title: String,
@@ -91,6 +98,9 @@ pub struct SharedPromptTurnStart {
     /// Prepared precheck request returned by the shared hook runtime.
     /// 共享 hook 运行时返回的已准备 precheck 请求。
     pub precheck_request: ConversationPrecheckRequest,
+    /// Independent profile preparation request sharing the same prompt-turn identity.
+    /// 共享同一提示词回合身份的独立画像准备请求。
+    pub profile_request: ConversationProfileRequest,
     /// Prompt text after builtin manual-injection syntax is removed.
     /// 移除内建手动注入语法后的提示词文本。
     pub prompt: String,
@@ -124,8 +134,8 @@ pub struct SharedPromptTurnStart {
     /// Visible user transcript record generated for this turn, when one was appended.
     /// 本回合追加可见用户转录记录时生成的记录标识。
     pub visible_user_prompt_record_id: Option<String>,
-    /// Exact canonical user-message id appended before precheck, when this source persists one.
-    /// 当该来源会持久化规范消息时，在 precheck 前追加的精确规范用户消息标识。
+    /// Exact canonical user-message id appended before both preparation lines, when persisted.
+    /// 当该来源会持久化规范消息时，在两条准备线路前追加的精确规范用户消息标识。
     pub canonical_user_message_id: Option<String>,
 }
 
@@ -134,6 +144,7 @@ impl fmt::Debug for SharedPromptTurnStart {
         formatter
             .debug_struct("SharedPromptTurnStart")
             .field("session_id", &self.session_id)
+            .field("preparation_turn_id", &self.preparation_turn_id)
             .field("session_title", &self.session_title)
             .field("workspace_path", &self.workspace_path)
             .field("source", &self.source)
@@ -176,6 +187,9 @@ pub struct SharedPromptTurnContinuation {
     /// Precheck failure detail that shells may surface using their own UI.
     /// 外壳可用自身界面呈现的 precheck 失败详情。
     pub precheck_failure_detail: Option<String>,
+    /// Profile preparation failure detail that does not suppress the persisted baseline.
+    /// 不会抑制持久化基线的画像准备失败详情。
+    pub profile_failure_detail: Option<String>,
 }
 
 /// Input required to begin one shared prompt turn.
@@ -290,15 +304,18 @@ pub struct SharedPromptTurnRuntimeBeginInput<'a> {
     pub prior_session_messages: Option<&'a [SessionMessageEntry]>,
 }
 
-/// Input required to continue one shared prompt turn after precheck.
-/// precheck 后继续一个共享提示词回合所需的输入。
+/// Input required to continue one shared prompt turn after independent preparation lines finish.
+/// 独立准备线路完成后继续一个共享提示词回合所需的输入。
 pub struct SharedPromptTurnContinueInput {
-    /// Started prompt turn waiting for precheck completion.
-    /// 正在等待 precheck 完成的已启动提示词回合。
+    /// Started prompt turn waiting for both independent preparation outcomes.
+    /// 正在等待两条独立准备线路结果的已启动提示词回合。
     pub start: SharedPromptTurnStart,
     /// Completed precheck outcome.
     /// 已完成的 precheck 结果。
     pub precheck_outcome: ConversationPrecheckOutcome,
+    /// Completed independent profile preparation outcome.
+    /// 已完成的独立画像准备结果。
+    pub profile_outcome: ConversationProfileOutcome,
     /// Effective AI tool configuration for the actual provider request.
     /// 真实 Provider 请求使用的有效 AI 工具配置。
     pub ai_tool_configuration: PersistedAiToolConfiguration,
@@ -541,7 +558,7 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
             .as_deref(),
     );
     let hook_conversation_state = runtime_state.conversation_state.clone();
-    let precheck_request = conversation_hook_runtime.prepare_user_prompt_precheck(
+    let hook_requests = conversation_hook_runtime.prepare_user_prompt_hook_requests(
         input.session_id,
         &input.prompt_entry_id,
         input.owning_project_id.clone(),
@@ -551,27 +568,31 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
         &sanitized_prompt,
         &hook_conversation_state,
     );
-    let precheck_turn_id = precheck_request.turn_id().to_string();
-    runtime_state.active_precheck_turn_id = Some(precheck_turn_id.clone());
+    // preparation_turn_id correlates sibling requests without making either line the owner.
+    // preparation_turn_id 关联同级请求，而不让任一线路成为另一线路的所有者。
+    let preparation_turn_id = hook_requests.turn_id;
+    runtime_state.active_precheck_turn_id = Some(preparation_turn_id.clone());
     if !injection_ops.is_empty() {
         runtime_state
             .context_injection_state
-            .apply_inserts_for_turn(injection_ops, &now, Some(&precheck_turn_id));
+            .apply_inserts_for_turn(injection_ops, &now, Some(&preparation_turn_id));
         runtime_state.updated_at = now.clone();
     }
     let boundary_events = prompt_turn_boundary_events(
         &input,
-        &precheck_turn_id,
+        &preparation_turn_id,
         &sanitized_prompt,
         &start_attachments,
         &now,
     );
     Ok(SharedPromptTurnStart {
         session_id: input.session_id,
+        preparation_turn_id,
         session_title: input.session_title.to_string(),
         workspace_path: input.workspace_path.to_string(),
         source: input.source,
-        precheck_request,
+        precheck_request: hook_requests.precheck,
+        profile_request: hook_requests.profile,
         prompt: sanitized_prompt,
         hidden_model_guidance: input
             .hidden_model_guidance
@@ -688,21 +709,21 @@ fn append_hidden_model_guidance_to_prompt(prompt: String, guidance: Option<&str>
     format!("{prompt}\n\n<hidden_host_guidance>\n{guidance}\n</hidden_host_guidance>")
 }
 
-/// Continues one prompt turn after precheck using shared workbench semantics.
-/// 使用工作台与服务共用语义在 precheck 后继续一个提示词回合。
+/// Continues one prompt turn after independent profile and precheck preparation.
+/// 在独立画像与 precheck 准备完成后继续一个提示词回合。
 ///
 /// # Parameters
 /// 参数
 /// `workspace_snapshot` is the shell-owned workspace snapshot being mutated.
 /// `workspace_snapshot` 是外壳持有并将被修改的工作区快照。
-/// `input` carries precheck and execution inputs.
-/// `input` 携带 precheck 与执行输入。
+/// `input` carries independent profile, precheck, and execution inputs.
+/// `input` 携带相互独立的画像、precheck 与执行输入。
 ///
 /// # Returns
 /// 返回值
 /// A continuation containing the real provider execution request.
 /// 返回包含真实 Provider 执行请求的 continuation。
-pub fn continue_shared_prompt_turn_after_precheck(
+pub fn continue_shared_prompt_turn_after_preparation(
     workspace_snapshot: &mut WorkspaceSnapshot,
     input: SharedPromptTurnContinueInput,
 ) -> Result<SharedPromptTurnContinuation, String> {
@@ -712,7 +733,7 @@ pub fn continue_shared_prompt_turn_after_precheck(
             .session_runtime_state
             .get_mut(&session_id)
             .ok_or_else(|| format!("会话 `{session_id}` 缺少运行态，无法继续提示词回合。"))?;
-        continue_shared_prompt_turn_after_precheck_with_runtime_state(runtime_state, input)?
+        continue_shared_prompt_turn_after_preparation_with_runtime_state(runtime_state, input)?
     };
     let merged_messages = merge_session_messages_with_conversation_state_records(
         workspace_snapshot
@@ -728,8 +749,8 @@ pub fn continue_shared_prompt_turn_after_precheck(
     Ok(continuation)
 }
 
-/// Continues one prompt turn after precheck using shared runtime-state scoped semantics.
-/// 使用共享的运行态作用域语义在 precheck 后继续一个提示词回合。
+/// Continues one prompt turn after independent preparation using runtime-state scoped semantics.
+/// 使用运行态作用域语义在独立准备完成后继续一个提示词回合。
 ///
 /// # Parameters
 /// 参数
@@ -742,7 +763,7 @@ pub fn continue_shared_prompt_turn_after_precheck(
 /// 返回值
 /// A continuation containing the real provider execution request.
 /// 返回包含真实 Provider 执行请求的 continuation。
-pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
+pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
     runtime_state: &mut SessionRuntimeStateEntry,
     input: SharedPromptTurnContinueInput,
 ) -> Result<SharedPromptTurnContinuation, String> {
@@ -753,16 +774,28 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
             input.precheck_outcome.session_id
         ));
     }
-    let expected_turn_id = input.start.precheck_request.turn_id().to_string();
+    let expected_turn_id = input.start.preparation_turn_id.clone();
     if input.precheck_outcome.turn_id != expected_turn_id {
         return Err(format!(
             "precheck 结果回合不匹配：期望 {expected_turn_id}，实际 {}",
             input.precheck_outcome.turn_id
         ));
     }
+    if input.profile_outcome.session_id != session_id {
+        return Err(format!(
+            "画像准备结果会话不匹配：期望 {session_id}，实际 {}",
+            input.profile_outcome.session_id
+        ));
+    }
+    if input.profile_outcome.turn_id != expected_turn_id {
+        return Err(format!(
+            "画像准备结果回合不匹配：期望 {expected_turn_id}，实际 {}",
+            input.profile_outcome.turn_id
+        ));
+    }
     if runtime_state.active_precheck_turn_id.as_deref() != Some(expected_turn_id.as_str()) {
         return Err(format!(
-            "precheck 结果已过期：当前等待 {:?}，收到 {expected_turn_id}",
+            "提示词准备结果已过期：当前等待 {:?}，收到 {expected_turn_id}",
             runtime_state.active_precheck_turn_id
         ));
     }
@@ -771,6 +804,7 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
     let request_attachments = input.start.attachments.clone();
     let mut system_prompt_hook_blocks = Vec::new();
     let mut precheck_failure_detail = None;
+    let mut profile_failure_detail = None;
     // feature_policy governs local VMM state independently from the remote PreCheck outcome.
     // feature_policy 独立于远端 PreCheck 结果控制本地 VMM 状态。
     let feature_policy = vulcan_vmm::VmmRuntimeFeaturePolicy::from_env();
@@ -808,6 +842,43 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
             ));
         }
     }
+    // Profile preparation owns only the persistent baseline and append-only profile deltas.
+    // 画像准备仅持有持久化基线与仅追加画像增量。
+    match input.profile_outcome.report {
+        Ok(report) => {
+            if let Some(effect) = vmm_profile_sync_effect_from_report(&report) {
+                runtime_state.vmm_profile_sync = effect.state;
+                runtime_state.updated_at = current_unix_millis_text();
+            }
+            if !report.injections.is_empty() {
+                let now = current_unix_millis_text();
+                runtime_state
+                    .context_injection_state
+                    .apply_inserts_for_turn(report.injections, &now, Some(&expected_turn_id));
+                runtime_state.updated_at = now;
+            }
+            system_prompt_hook_blocks = report.system_prompt_blocks;
+        }
+        Err(error) => {
+            let detail = format!(
+                "会话 `{}` 的画像准备未能完成，已继续复用持久化画像基线：{error}",
+                input.start.session_title
+            );
+            append_runtime_event_projection_to_state(
+                runtime_state,
+                session_id,
+                &current_unix_millis_text(),
+                &RuntimeEvent::new(
+                    RuntimeEventKind::Failed,
+                    "画像准备 Hook 执行失败",
+                    detail.clone(),
+                ),
+            )?;
+            profile_failure_detail = Some(detail);
+        }
+    }
+    // User-prompt precheck owns recall, prompt transformation, and its own non-profile Hook outputs.
+    // 用户提示 precheck 仅持有召回、提示词转换及其自身的非画像 Hook 输出。
     match input.precheck_outcome.report {
         Ok(report) => {
             if feature_policy.session_state_enabled
@@ -834,10 +905,6 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
                     .register_active_turn(&expected_turn_id, &now)?;
                 runtime_state.updated_at = now;
             }
-            if let Some(effect) = vmm_profile_sync_effect_from_report(&report) {
-                runtime_state.vmm_profile_sync = effect.state;
-                runtime_state.updated_at = current_unix_millis_text();
-            }
             if let Some(rewritten_prompt) = report
                 .payload
                 .value
@@ -857,14 +924,10 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
                 let now = current_unix_millis_text();
                 runtime_state
                     .context_injection_state
-                    .apply_inserts_for_turn(
-                        report.injections,
-                        &now,
-                        Some(&input.precheck_outcome.turn_id),
-                    );
+                    .apply_inserts_for_turn(report.injections, &now, Some(&expected_turn_id));
                 runtime_state.updated_at = now;
             }
-            system_prompt_hook_blocks = report.system_prompt_blocks;
+            system_prompt_hook_blocks.extend(report.system_prompt_blocks);
         }
         Err(error) => {
             let detail = format!(
@@ -884,6 +947,12 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
             precheck_failure_detail = Some(detail);
         }
     }
+    // Persisted profile projection is authoritative after both lines, so precheck cannot add or replace it.
+    // 两条线路结束后持久化画像投影仍具权威性，因此 precheck 无法添加或替换它。
+    stabilize_vmm_profile_system_prompt_blocks(
+        &mut system_prompt_hook_blocks,
+        &runtime_state.vmm_profile_sync,
+    );
     request_prompt = append_hidden_model_guidance_to_prompt(
         request_prompt,
         input.start.hidden_model_guidance.as_deref(),
@@ -893,7 +962,7 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
     let context_injection = core_provider_context_injection_from_state_for_turn(
         &runtime_state.context_injection_state,
         &runtime_state.vmm_session_memory,
-        Some(&input.precheck_outcome.turn_id),
+        Some(&expected_turn_id),
     );
     let request = ExecutionPreparationRequest {
         session_id,
@@ -946,6 +1015,7 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
     Ok(SharedPromptTurnContinuation {
         request,
         precheck_failure_detail,
+        profile_failure_detail,
     })
 }
 

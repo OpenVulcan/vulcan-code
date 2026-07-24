@@ -308,7 +308,7 @@ pub(super) async fn maybe_start_session_goal_continuation_if_idle(
             &mut guard,
             session_id,
             goal_dispatch_version,
-            start.precheck_request.turn_id(),
+            &start.preparation_turn_id,
             ActiveTurnKind::GoalContinuation,
         )?;
         start

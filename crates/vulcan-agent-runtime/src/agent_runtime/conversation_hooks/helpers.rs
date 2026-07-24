@@ -3,6 +3,12 @@ use super::*;
 pub(crate) fn host_hook_point_descriptors() -> Vec<HookPointDescriptor> {
     vec![
         HookPointDescriptor::new(
+            HOOK_CONVERSATION_PROFILE_PREPARE,
+            [HookMode::Observe, HookMode::Transform, HookMode::Effect],
+            "Prepares persistent session profile context independently from user-prompt recall.",
+        )
+        .with_default_scope(HookScope::Session),
+        HookPointDescriptor::new(
             HOOK_CONVERSATION_TURN_PRECHECK,
             [HookMode::Observe, HookMode::Transform, HookMode::Effect],
             "Runs before a user prompt enters provider preparation and may return context injections.",

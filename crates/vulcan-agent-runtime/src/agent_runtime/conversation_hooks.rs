@@ -30,6 +30,9 @@ pub const HOOK_METADATA_VMM_PROFILE_SYNC_EFFECT: &str = "vmm_profile_sync_effect
 /// 内置 VMM precheck hook 用于返回类型化召回批次的 metadata 键。
 pub const HOOK_METADATA_VMM_RECALL_BATCH_EFFECT: &str = "vmm_recall_batch_effect";
 
+/// Hook point fired to prepare persistent session profile context independently from user recall.
+/// 独立于用户召回、用于准备持久会话画像上下文的 Hook 点位。
+pub const HOOK_CONVERSATION_PROFILE_PREPARE: &str = "conversation.profile.prepare";
 /// Hook point fired before a user turn is sent to provider preparation.
 /// 在用户回合发送到 Provider 准备阶段前触发的 hook 点位。
 pub const HOOK_CONVERSATION_TURN_PRECHECK: &str = "conversation.turn.precheck";
@@ -69,6 +72,9 @@ pub const HOOK_GIT_COMMIT_SUMMARY_CONTEXT: &str = "git.commit_summary.context";
 /// Host-side safety ceiling for waiting on precheck hook results.
 /// 等待 precheck hook 结果的宿主侧安全兜底上限。
 const PRECHECK_DISPATCH_TIMEOUT_MS: u64 = 120_000;
+/// Host-side safety ceiling for waiting on profile preparation hook results.
+/// 等待画像准备 Hook 结果的宿主侧安全兜底上限。
+const PROFILE_DISPATCH_TIMEOUT_MS: u64 = 120_000;
 /// Host-side safety ceiling for completed-turn hook dispatch.
 /// 完成回合 hook 调度的宿主侧安全兜底上限。
 const COMPLETION_DISPATCH_TIMEOUT_MS: u64 = 120_000;
@@ -76,6 +82,7 @@ const COMPLETION_DISPATCH_TIMEOUT_MS: u64 = 120_000;
 mod completion;
 mod helpers;
 mod precheck;
+mod profile;
 mod runtime;
 #[cfg(test)]
 mod tests;
@@ -84,7 +91,8 @@ mod types;
 pub use completion::{ConversationCompletionOutcome, ConversationCompletionRequest};
 pub(crate) use helpers::host_hook_point_descriptors;
 pub use precheck::{ConversationPrecheckOutcome, ConversationPrecheckRequest};
-pub use runtime::ConversationHookRuntime;
+pub use profile::{ConversationProfileOutcome, ConversationProfileRequest};
+pub use runtime::{ConversationHookRuntime, ConversationPromptHookRequests};
 pub use types::{
     ConversationTimelineItem, ConversationTurnCompletionStatus, VmmProfileSyncHookEffect,
     VmmRecallBatchHookEffect, VmmWritebackHookEffect, vmm_profile_sync_effect_from_report,

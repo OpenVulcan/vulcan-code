@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use vulcan_agent_runtime::{
     ExecutionPreparationRequest,
     agent_runtime::{
-        conversation_hooks::ConversationPrecheckOutcome,
+        conversation_hooks::{ConversationPrecheckOutcome, ConversationProfileOutcome},
         events::{RuntimeEvent, RuntimeEventKind},
     },
     session_event_runtime::append_runtime_event_projection_to_state,
@@ -14,7 +14,7 @@ use vulcan_agent_runtime::{
     workbench_prompt_turn::{
         SharedPromptPrecheckPlan, SharedPromptTurnBeginInput, SharedPromptTurnContinueInput,
         SharedPromptTurnStart, begin_shared_prompt_turn,
-        continue_shared_prompt_turn_after_precheck, shared_prompt_precheck_plan,
+        continue_shared_prompt_turn_after_preparation, shared_prompt_precheck_plan,
     },
 };
 use vulcan_service_api::ServiceEventEmitter;

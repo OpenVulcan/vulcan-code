@@ -238,7 +238,7 @@ mod tests {
     use crate::workbench_prompt_turn::{
         SharedPromptTurnContinueInput, SharedPromptTurnRuntimeBeginInput,
         begin_shared_prompt_turn_with_runtime_state,
-        continue_shared_prompt_turn_after_precheck_with_runtime_state,
+        continue_shared_prompt_turn_after_preparation_with_runtime_state,
     };
     use serde_json::json;
     use std::collections::BTreeMap;
@@ -649,11 +649,15 @@ mod tests {
         )
         .expect("begin shared prompt turn");
         let precheck_outcome = start.precheck_request.clone().skip();
-        let continuation = continue_shared_prompt_turn_after_precheck_with_runtime_state(
+        // profile_outcome keeps profile preparation distinct in this transport-focused test.
+        // profile_outcome 在该传输链路测试中保持画像准备的独立性。
+        let profile_outcome = start.profile_request.clone().skip();
+        let continuation = continue_shared_prompt_turn_after_preparation_with_runtime_state(
             &mut runtime_state,
             SharedPromptTurnContinueInput {
                 start,
                 precheck_outcome,
+                profile_outcome,
                 project_configuration: Default::default(),
                 runtime_reasoning_effort: None,
                 provider_reasoning_effort: None,

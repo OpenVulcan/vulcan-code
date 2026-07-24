@@ -254,7 +254,7 @@ pub(crate) async fn maybe_start_webui_mailbox_turn_if_ready(
         start_webui_session_kernel_turn(
             &mut guard,
             session_id,
-            start.precheck_request.turn_id(),
+            &start.preparation_turn_id,
             ActiveTurnKind::MailboxTriggered,
         )?;
         if let Some(kernel) = guard.session_runtime_kernels.get_mut(&session_id) {

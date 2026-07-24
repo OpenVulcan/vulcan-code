@@ -1,5 +1,20 @@
 use super::*;
 
+/// Independently dispatchable profile and precheck requests for one prompt turn.
+/// 单个提示词回合中可独立派发的画像与 precheck 请求。
+#[derive(Clone)]
+pub struct ConversationPromptHookRequests {
+    /// Profile preparation request whose payload owns system-profile placement metadata.
+    /// 持有系统画像放置元数据的画像准备请求。
+    pub profile: ConversationProfileRequest,
+    /// User-recall precheck request whose payload contains no system-profile metadata.
+    /// 不包含系统画像元数据的用户召回 precheck 请求。
+    pub precheck: ConversationPrecheckRequest,
+    /// Shared immutable prompt-turn correlation id.
+    /// 两条线路共享的不可变提示词回合关联标识。
+    pub turn_id: String,
+}
+
 /// Session-level conversation hook dispatcher and turn assembler.
 /// 会话级会话 hook 调度器与回合组装器。
 #[derive(Clone, Default)]
@@ -68,9 +83,33 @@ impl ConversationHookRuntime {
             .expect("built-in conversation hook points should be valid");
     }
 
-    /// Opens or updates the logical turn for one user prompt and fires precheck/user hooks.
-    /// 为一条用户提示打开或更新逻辑回合，并触发 precheck/user hook。
-    pub fn prepare_user_prompt_precheck(
+    /// Opens or updates one logical user turn and prepares independent profile and precheck requests.
+    /// 为一条用户提示打开或更新逻辑回合，并准备相互独立的画像与 precheck 请求。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_id` identifies the owning conversation session.
+    /// `session_id` 标识所属会话。
+    /// `prompt_entry_id` identifies the exact queued or submitted prompt entry.
+    /// `prompt_entry_id` 标识精确的排队或已提交提示项。
+    /// `project_id` optionally identifies the owning project.
+    /// `project_id` 可选标识所属项目。
+    /// `workspace_path` is the exact workspace used for layered Hook configuration.
+    /// `workspace_path` 是 Hook 分层配置使用的精确工作区。
+    /// `source` identifies how this prompt entered the conversation.
+    /// `source` 标识该提示如何进入会话。
+    /// `system_prompt_hook_phase` belongs only to the profile-preparation payload.
+    /// `system_prompt_hook_phase` 仅属于画像准备载荷。
+    /// `prompt` is the sanitized user-visible or hidden prompt content.
+    /// `prompt` 是经过清理的用户可见或隐藏提示内容。
+    /// `conversation_state` supplies immutable history counters without sharing mutable payloads.
+    /// `conversation_state` 提供不可变历史计数，但不会让两条线路共享可变载荷。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Two sibling requests with one shared turn id and distinct payload ownership.
+    /// 返回共享一个回合标识且载荷归属不同的两条同级请求。
+    pub fn prepare_user_prompt_hook_requests(
         &mut self,
         session_id: SessionId,
         prompt_entry_id: &str,
@@ -80,7 +119,7 @@ impl ConversationHookRuntime {
         system_prompt_hook_phase: SystemPromptHookPhase,
         prompt: &str,
         conversation_state: &SessionConversationState,
-    ) -> ConversationPrecheckRequest {
+    ) -> ConversationPromptHookRequests {
         let event_kind = pending_prompt_source_event_kind(source);
         let was_recorded_while_queued = self
             .active_turns
@@ -113,14 +152,15 @@ impl ConversationHookRuntime {
             turn.turn_id.clone()
         };
 
-        let payload = json!({
+        // precheck_payload owns user-prompt recall context and contains no system-profile fields.
+        // precheck_payload 持有用户提示召回上下文，且不包含系统画像字段。
+        let precheck_payload = json!({
             "session_id": session_id.to_string(),
-            "project_id": project_id,
-            "workspace_path": workspace_path,
+            "project_id": project_id.clone(),
+            "workspace_path": workspace_path.clone(),
             "turn_id": turn_id,
             "event_kind": event_kind,
             "is_new_turn": is_new_turn,
-            "system_prompt_hook_phase": system_prompt_hook_phase.as_str(),
             "was_recorded_while_queued": was_recorded_while_queued,
             "user_content": prompt,
             "visible_history_count": visible_history_count(conversation_state),
@@ -131,11 +171,36 @@ impl ConversationHookRuntime {
             self.dispatch_json(
                 HOOK_CONVERSATION_USER_EVENT,
                 session_id,
-                payload.clone(),
+                precheck_payload.clone(),
                 HookScope::Session,
             );
         }
-        ConversationPrecheckRequest::new(self.dispatcher.clone(), session_id, payload, turn_id)
+        // profile_payload owns only session profile context and cannot inspect the user prompt.
+        // profile_payload 仅持有会话画像上下文，无法读取用户提示词。
+        let profile_payload = json!({
+            "session_id": session_id.to_string(),
+            "project_id": project_id,
+            "workspace_path": workspace_path,
+            "turn_id": turn_id,
+            "system_prompt_hook_phase": system_prompt_hook_phase.as_str(),
+            "message_count": conversation_state.messages.len(),
+            "record_count": conversation_state.records.len(),
+        });
+        ConversationPromptHookRequests {
+            profile: ConversationProfileRequest::new(
+                self.dispatcher.clone(),
+                session_id,
+                profile_payload,
+                turn_id.clone(),
+            ),
+            precheck: ConversationPrecheckRequest::new(
+                self.dispatcher.clone(),
+                session_id,
+                precheck_payload,
+                turn_id.clone(),
+            ),
+            turn_id,
+        }
     }
 
     /// Records a queued user prompt as timeline-only input without running precheck.

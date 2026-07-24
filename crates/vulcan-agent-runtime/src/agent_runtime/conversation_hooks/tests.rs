@@ -1,13 +1,145 @@
 use super::*;
 use crate::conversation_protocol::{SessionConversationMessage, SessionConversationPayload};
 
+/// Verifies profile preparation dispatches independently when user precheck is explicitly skipped.
+/// 验证显式跳过用户 precheck 时画像准备仍会独立派发。
+#[test]
+fn profile_preparation_dispatches_when_precheck_is_skipped() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use vulcan_hooks::{FnHookHandler, HookInvocation, HookMode, HookRegistration, HookResult};
+
+    // runtime owns two handlers registered on distinct Hook points.
+    // runtime 持有注册在不同 Hook 点位上的两个处理器。
+    let mut runtime = ConversationHookRuntime::new();
+    // profile_calls counts only the independent profile handler.
+    // profile_calls 只统计独立画像处理器。
+    let profile_calls = Arc::new(AtomicUsize::new(0));
+    // precheck_calls proves skipping recall never suppresses profile dispatch.
+    // precheck_calls 证明跳过召回绝不会抑制画像派发。
+    let precheck_calls = Arc::new(AtomicUsize::new(0));
+    // profile_counter is moved into the profile-only handler.
+    // profile_counter 被移入纯画像处理器。
+    let profile_counter = Arc::clone(&profile_calls);
+    runtime
+        .dispatcher_mut()
+        .register(
+            HookRegistration::new(
+                "test.profile.prepare",
+                HOOK_CONVERSATION_PROFILE_PREPARE,
+                HookMode::Effect,
+            ),
+            Arc::new(FnHookHandler::new(move |_invocation: HookInvocation| {
+                let profile_counter = Arc::clone(&profile_counter);
+                async move {
+                    profile_counter.fetch_add(1, Ordering::SeqCst);
+                    Ok(HookResult::default())
+                }
+            })),
+        )
+        .expect("profile handler should register");
+    // precheck_counter is moved into the recall-only handler.
+    // precheck_counter 被移入纯召回处理器。
+    let precheck_counter = Arc::clone(&precheck_calls);
+    runtime
+        .dispatcher_mut()
+        .register(
+            HookRegistration::new(
+                "test.turn.precheck",
+                HOOK_CONVERSATION_TURN_PRECHECK,
+                HookMode::Effect,
+            ),
+            Arc::new(FnHookHandler::new(move |_invocation: HookInvocation| {
+                let precheck_counter = Arc::clone(&precheck_counter);
+                async move {
+                    precheck_counter.fetch_add(1, Ordering::SeqCst);
+                    Ok(HookResult::default())
+                }
+            })),
+        )
+        .expect("precheck handler should register");
+    // session_id identifies the single correlated prompt turn under test.
+    // session_id 标识被测的唯一关联提示词回合。
+    let session_id = SessionId::from_u128(148);
+    // conversation_state supplies an empty canonical history for request construction.
+    // conversation_state 为请求构建提供空规范历史。
+    let conversation_state = SessionConversationState::default();
+    // requests prepares sibling payloads without making either line own the other.
+    // requests 准备同级载荷，而不让任一线路持有另一线路。
+    let requests = runtime.prepare_user_prompt_hook_requests(
+        session_id,
+        "goal-continuation",
+        Some(String::from("project")),
+        String::from("D:/workspace"),
+        PendingSessionPromptSource::GoalContinuation,
+        SystemPromptHookPhase::SubsequentSession,
+        "Continue working toward the active thread goal.",
+        &conversation_state,
+    );
+    // profile_request owns system-profile placement metadata and its dedicated Hook dispatch.
+    // profile_request 持有系统画像放置元数据及其专用 Hook 派发。
+    let profile_request = requests.profile;
+    // precheck_request owns only the user-recall payload and remains independently skippable.
+    // precheck_request 仅持有用户召回载荷，并可独立跳过。
+    let precheck_request = requests.precheck;
+    // test_runtime waits for the independent profile worker without invoking user precheck.
+    // test_runtime 等待独立画像工作线程，同时不调用用户 precheck。
+    let test_runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime should build");
+    // profile_outcome proves the profile-only dispatch completed successfully.
+    // profile_outcome 证明纯画像派发已成功完成。
+    let profile_outcome = test_runtime.block_on(profile_request.run());
+    // precheck_outcome intentionally skips the recall-only dispatcher.
+    // precheck_outcome 刻意跳过纯召回调度器。
+    let precheck_outcome = precheck_request.skip();
+
+    assert!(profile_outcome.report.is_ok());
+    assert!(precheck_outcome.report.is_ok());
+    assert_eq!(profile_outcome.turn_id, precheck_outcome.turn_id);
+    assert_eq!(
+        profile_outcome.report.as_ref().ok().and_then(|report| {
+            report
+                .payload
+                .value
+                .get("system_prompt_hook_phase")
+                .and_then(Value::as_str)
+        }),
+        Some("subsequent_session")
+    );
+    assert!(
+        profile_outcome
+            .report
+            .as_ref()
+            .is_ok_and(|report| { report.payload.value.get("user_content").is_none() })
+    );
+    assert!(precheck_outcome.report.as_ref().is_ok_and(|report| {
+        report
+            .payload
+            .value
+            .get("system_prompt_hook_phase")
+            .is_none()
+            && report
+                .payload
+                .value
+                .get("user_content")
+                .and_then(Value::as_str)
+                == Some("Continue working toward the active thread goal.")
+    }));
+    assert_eq!(profile_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(precheck_calls.load(Ordering::SeqCst), 0);
+}
+
 #[test]
 fn turn_completion_keeps_supplement_inside_timeline() {
     let mut runtime = ConversationHookRuntime::new();
     let session_id = SessionId::from_u128(42);
     let state = SessionConversationState::default();
 
-    runtime.prepare_user_prompt_precheck(
+    runtime.prepare_user_prompt_hook_requests(
         session_id,
         "entry-1",
         Some(String::from("project")),
@@ -17,7 +149,7 @@ fn turn_completion_keeps_supplement_inside_timeline() {
         "first",
         &state,
     );
-    runtime.prepare_user_prompt_precheck(
+    runtime.prepare_user_prompt_hook_requests(
         session_id,
         "entry-2",
         Some(String::from("project")),
@@ -120,9 +252,9 @@ fn tool_runtime_event_stays_out_of_completed_timeline() {
     let session_id = SessionId::from_u128(144);
     let state = SessionConversationState::default();
 
-    // precheck_request owns the immutable turn correlation used by the tool event.
-    // precheck_request 持有工具事件使用的不可变回合关联。
-    let precheck_request = runtime.prepare_user_prompt_precheck(
+    // requests exposes the shared immutable turn correlation used by the tool event.
+    // requests 暴露工具事件使用的共享不可变回合关联。
+    let requests = runtime.prepare_user_prompt_hook_requests(
         session_id,
         "entry-1",
         Some(String::from("project")),
@@ -134,7 +266,7 @@ fn tool_runtime_event_stays_out_of_completed_timeline() {
     );
     runtime.record_tool_runtime_event_for_execution(
         session_id,
-        precheck_request.turn_id(),
+        &requests.turn_id,
         &RuntimeEvent::new(RuntimeEventKind::ToolFinished, "tool", "finished"),
     );
 
@@ -164,7 +296,7 @@ fn awaiting_subagent_completion_keeps_active_turn() {
         }],
         ..SessionConversationState::default()
     };
-    runtime.prepare_user_prompt_precheck(
+    runtime.prepare_user_prompt_hook_requests(
         session_id,
         "entry-1",
         Some(String::from("project")),
@@ -297,7 +429,7 @@ async fn precheck_hook_injections_are_returned_to_send_pipeline() {
         .expect("hook registration should succeed");
 
     let outcome = runtime
-        .prepare_user_prompt_precheck(
+        .prepare_user_prompt_hook_requests(
             SessionId::from_u128(44),
             "entry-1",
             None,
@@ -307,6 +439,7 @@ async fn precheck_hook_injections_are_returned_to_send_pipeline() {
             "hello",
             &SessionConversationState::default(),
         )
+        .precheck
         .run()
         .await;
     let report = outcome.report.expect("precheck hook should complete");
@@ -340,7 +473,7 @@ async fn precheck_hook_timeout_records_failure_without_hanging() {
 
     let started_at = Instant::now();
     let outcome = runtime
-        .prepare_user_prompt_precheck(
+        .prepare_user_prompt_hook_requests(
             SessionId::from_u128(45),
             "entry-1",
             None,
@@ -350,6 +483,7 @@ async fn precheck_hook_timeout_records_failure_without_hanging() {
             "hello",
             &SessionConversationState::default(),
         )
+        .precheck
         .run()
         .await;
 
@@ -408,7 +542,7 @@ async fn effect_hook_dispatch_runs_on_private_worker_runtime() {
         .expect("hook registration should succeed");
 
     let session_id = SessionId::from_u128(46);
-    runtime.prepare_user_prompt_precheck(
+    runtime.prepare_user_prompt_hook_requests(
         session_id,
         "entry-1",
         None,
@@ -479,7 +613,7 @@ async fn completion_hook_dispatch_preserves_dispatcher_failure_stage() {
         .expect("completion hook registration should succeed");
 
     let session_id = SessionId::from_u128(146);
-    runtime.prepare_user_prompt_precheck(
+    runtime.prepare_user_prompt_hook_requests(
         session_id,
         "entry-1",
         None,

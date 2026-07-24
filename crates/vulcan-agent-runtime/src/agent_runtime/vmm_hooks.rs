@@ -2,7 +2,8 @@
 //! 面向会话记忆集成的内置 VulcanMemoryMesh hook 注册逻辑。
 
 use crate::agent_runtime::conversation_hooks::{
-    HOOK_CONVERSATION_COMPACTED, HOOK_CONVERSATION_TURN_COMPLETED, HOOK_CONVERSATION_TURN_PRECHECK,
+    HOOK_CONVERSATION_COMPACTED, HOOK_CONVERSATION_PROFILE_PREPARE,
+    HOOK_CONVERSATION_TURN_COMPLETED, HOOK_CONVERSATION_TURN_PRECHECK,
     HOOK_METADATA_VMM_PROFILE_SYNC_EFFECT, HOOK_METADATA_VMM_RECALL_BATCH_EFFECT,
     HOOK_METADATA_VMM_WRITEBACK_EFFECTS, VmmProfileSyncHookEffect, VmmRecallBatchHookEffect,
     VmmWritebackHookEffect,
@@ -29,6 +30,9 @@ use vulcan_vmm::{
 /// Stable id used by the built-in VMM precheck hook.
 /// 内置 VMM 预检查 hook 使用的稳定标识。
 pub const VMM_PRECHECK_HOOK_ID: &str = "builtin.vmm.precheck";
+/// Stable id used by the independent built-in VMM profile preparation hook.
+/// 独立内置 VMM 画像准备 Hook 使用的稳定标识。
+const VMM_PROFILE_PREPARE_HOOK_ID: &str = "builtin.vmm.profile_prepare";
 /// Stable id used by the built-in VMM post-action hook.
 /// 内置 VMM 回合完成回写 hook 使用的稳定标识。
 const VMM_POST_ACTION_HOOK_ID: &str = "builtin.vmm.post_action";
@@ -360,6 +364,19 @@ pub fn register_builtin_vmm_hooks(
     dispatcher: &mut HookDispatcher,
     runtime: VmmHookRuntimeHandle,
 ) -> Result<(), HookError> {
+    let profile_runtime = runtime.clone();
+    dispatcher.register(
+        vmm_hook_registration(
+            VMM_PROFILE_PREPARE_HOOK_ID,
+            HOOK_CONVERSATION_PROFILE_PREPARE,
+            HookMode::Transform,
+        ),
+        Arc::new(FnHookHandler::new(move |invocation: HookInvocation| {
+            let runtime = profile_runtime.clone();
+            async move { handle_vmm_profile_prepare(runtime, invocation).await }
+        })),
+    )?;
+
     let precheck_runtime = runtime.clone();
     dispatcher.register(
         vmm_hook_registration(
@@ -432,6 +449,12 @@ fn should_run_vmm_precheck(config: &VmmEffectiveConfig) -> bool {
     config.diagnose_precheck_flow(true) == VmmConfigDiagnostic::Ready
 }
 
+/// Returns whether independent VMM profile preparation may run now.
+/// 返回独立 VMM 画像准备当前是否可以运行。
+fn should_run_vmm_profile_prepare(config: &VmmEffectiveConfig) -> bool {
+    config.diagnose_memory_flow(true) == VmmConfigDiagnostic::Ready
+}
+
 /// Returns the current Unix timestamp in milliseconds as stable text.
 /// 返回当前 Unix 毫秒时间戳的稳定文本形式。
 fn current_unix_millis_text() -> String {
@@ -441,8 +464,64 @@ fn current_unix_millis_text() -> String {
         .unwrap_or_else(|_| String::from("0"))
 }
 
-/// Runs the VMM precheck request and returns a typed recall effect.
-/// 执行 VMM 预检查请求并返回类型化召回效果。
+/// Prepares the persistent VMM profile baseline and append-only profile deltas.
+/// 准备持久化 VMM 画像基线与仅追加的画像增量。
+///
+/// # Parameters
+/// 参数
+/// `runtime` owns the authoritative profile state and effective configuration snapshot.
+/// `runtime` 持有权威画像状态与有效配置快照。
+/// `invocation` carries the exact session and prompt-turn boundary.
+/// `invocation` 携带精确会话及提示词回合边界。
+///
+/// # Returns
+/// 返回值
+/// A profile-only Hook result that never contains precheck recall state.
+/// 返回绝不包含 precheck 召回状态的纯画像 Hook 结果。
+async fn handle_vmm_profile_prepare(
+    runtime: VmmHookRuntimeHandle,
+    invocation: HookInvocation,
+) -> Result<HookResult, HookError> {
+    let config = runtime
+        .resolve_effective_config(&invocation)
+        .map_err(HookError::handler)?;
+    if !should_run_vmm_profile_prepare(&config) {
+        return Ok(HookResult::default());
+    }
+    ensure_vmm_ready(&config)?;
+    let client = connect_vmm_client(&config).await?;
+    let Some(profile_sync) =
+        maybe_sync_vmm_profile(&client, &runtime, &invocation, &config).await?
+    else {
+        return Ok(HookResult::default());
+    };
+    if let Some(session_id) = invocation_session_id(&invocation) {
+        runtime
+            .store_profile_sync_for_session(&session_id, profile_sync.state.clone())
+            .map_err(HookError::handler)?;
+    }
+    // metadata transports the updated profile state on the profile-only line.
+    // metadata 仅在画像线路上传输更新后的画像状态。
+    let mut metadata = BTreeMap::new();
+    metadata.insert(
+        HOOK_METADATA_VMM_PROFILE_SYNC_EFFECT.to_string(),
+        json!(VmmProfileSyncHookEffect {
+            state: profile_sync.state
+        }),
+    );
+    // system_prompt_blocks contains only the stable baseline owned by profile preparation.
+    // system_prompt_blocks 仅包含画像准备持有的稳定基线。
+    let system_prompt_blocks = profile_sync.block.into_iter().collect();
+    Ok(HookResult {
+        injections: profile_sync.injections,
+        system_prompt_blocks,
+        metadata,
+        ..HookResult::default()
+    })
+}
+
+/// Runs the VMM precheck request and returns only a typed recall effect.
+/// 执行 VMM precheck 请求并且只返回类型化召回效果。
 async fn handle_vmm_precheck(
     runtime: VmmHookRuntimeHandle,
     invocation: HookInvocation,
@@ -455,7 +534,6 @@ async fn handle_vmm_precheck(
     }
     ensure_vmm_ready(&config)?;
     let client = connect_vmm_client(&config).await?;
-    let profile_sync = maybe_sync_vmm_profile(&client, &runtime, &invocation, &config).await?;
     let request = precheck_request_from_payload(&invocation.payload.value, &config)
         .map_err(|error| HookError::handler(error.to_string()))?;
     let response = client
@@ -463,34 +541,13 @@ async fn handle_vmm_precheck(
         .await
         .map_err(|error| HookError::handler(error.to_string()))?;
     let mut metadata = BTreeMap::new();
-    let mut system_prompt_blocks = Vec::new();
-    let mut injections = Vec::new();
     if let Some(batch) = VmmRecallBatch::from_precheck_response(&response, &config) {
         metadata.insert(
             HOOK_METADATA_VMM_RECALL_BATCH_EFFECT.to_string(),
             json!(VmmRecallBatchHookEffect { batch }),
         );
     }
-    if let Some(profile_sync) = profile_sync {
-        if let Some(session_id) = invocation_session_id(&invocation) {
-            runtime
-                .store_profile_sync_for_session(&session_id, profile_sync.state.clone())
-                .map_err(HookError::handler)?;
-        }
-        metadata.insert(
-            HOOK_METADATA_VMM_PROFILE_SYNC_EFFECT.to_string(),
-            json!(VmmProfileSyncHookEffect {
-                state: profile_sync.state
-            }),
-        );
-        if let Some(block) = profile_sync.block {
-            system_prompt_blocks.push(block);
-        }
-        injections.extend(profile_sync.injections);
-    }
     Ok(HookResult {
-        injections,
-        system_prompt_blocks,
         metadata,
         ..HookResult::default()
     })
@@ -604,8 +661,8 @@ fn ensure_vmm_ready(config: &VmmEffectiveConfig) -> Result<(), HookError> {
     }
 }
 
-/// VMM profile synchronization output for one precheck dispatch.
-/// 单次 precheck 调度产生的 VMM 画像同步输出。
+/// VMM profile synchronization output for one independent profile dispatch.
+/// 单次独立画像派发产生的 VMM 画像同步输出。
 struct VmmProfileSyncOutput {
     /// Updated session-scoped profile sync state.
     /// 更新后的会话级画像同步状态。
@@ -633,7 +690,6 @@ async fn maybe_sync_vmm_profile(
         .last_compaction_id_for_invocation(invocation)
         .map_err(HookError::handler)?;
     let sync_phase = vmm_profile_sync_phase(&state, latest_compaction_id.as_deref());
-    let placement_phase = invocation_system_prompt_hook_phase(invocation).unwrap_or(sync_phase);
 
     match sync_phase {
         SystemPromptHookPhase::FirstSession | SystemPromptHookPhase::AfterContextCompaction => {
@@ -646,7 +702,7 @@ async fn maybe_sync_vmm_profile(
                 latest_compaction_id,
                 current_unix_millis_text(),
             );
-            let block = base_profile_block(&state, placement_phase, "full");
+            let block = base_profile_block(&state);
             Ok(Some(VmmProfileSyncOutput {
                 state,
                 block,
@@ -654,7 +710,7 @@ async fn maybe_sync_vmm_profile(
             }))
         }
         SystemPromptHookPhase::SubsequentSession => {
-            let block = base_profile_block(&state, placement_phase, "baseline");
+            let block = base_profile_block(&state);
             let mut injections = Vec::new();
             // Initial base refreshes do not count as turn one; this check refreshes only
             // after the configured number of completed turns since that base.
@@ -719,19 +775,6 @@ pub fn vmm_profile_sync_phase(
         return SystemPromptHookPhase::AfterContextCompaction;
     }
     SystemPromptHookPhase::SubsequentSession
-}
-
-/// Reads the host-calculated system prompt hook phase from one invocation payload.
-/// 从一次调用载荷中读取宿主计算的系统提示词 hook 阶段。
-fn invocation_system_prompt_hook_phase(
-    invocation: &HookInvocation,
-) -> Option<SystemPromptHookPhase> {
-    match payload_string(&invocation.payload.value, "system_prompt_hook_phase")?.as_str() {
-        "first_session" => Some(SystemPromptHookPhase::FirstSession),
-        "after_context_compaction" => Some(SystemPromptHookPhase::AfterContextCompaction),
-        "subsequent_session" => Some(SystemPromptHookPhase::SubsequentSession),
-        _ => None,
-    }
 }
 
 /// Fetches active profile nodes for every supported VMM target.
@@ -1001,17 +1044,58 @@ fn vmm_profile_hook_block(
     }
 }
 
-/// Builds the persistent system-prompt block for the cached profile baseline.
-/// 为缓存画像基点构建持续系统提示词块。
-fn base_profile_block(
-    state: &VmmProfileSyncState,
-    phase: SystemPromptHookPhase,
-    kind: &str,
-) -> Option<SystemPromptHookBlock> {
+/// Builds the byte-stable system-prompt block for the persisted profile baseline.
+/// 为持久化画像基线构建字节稳定的系统提示词块。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the exact baseline content and the compaction boundary that created it.
+/// `state` 持有精确的基线正文及创建该基线的压缩边界。
+///
+/// # Returns
+/// 返回值
+/// The stable baseline block, or `None` before the first successful profile synchronization.
+/// 返回稳定的基线块；首次画像同步成功前返回 `None`。
+fn base_profile_block(state: &VmmProfileSyncState) -> Option<SystemPromptHookBlock> {
+    // baseline_phase changes only when context compaction creates a new full baseline.
+    // baseline_phase 仅在上下文压缩创建新全量基线时发生变化。
+    let baseline_phase = if state.covered_compaction_id.is_some() {
+        SystemPromptHookPhase::AfterContextCompaction
+    } else {
+        SystemPromptHookPhase::FirstSession
+    };
     state
         .base_profile_content
         .as_deref()
-        .map(|content| vmm_profile_hook_block(content, phase, kind))
+        .map(|content| vmm_profile_hook_block(content, baseline_phase, "full"))
+}
+
+/// Restores the persisted VMM profile baseline into every provider request without duplicating it.
+/// 将持久化的 VMM 画像基线恢复到每次 Provider 请求中，同时避免重复。
+///
+/// # Parameters
+/// 参数
+/// `blocks` contains all request-scoped system Hook blocks from independent preparation lines.
+/// `blocks` 包含来自各独立准备线路的全部请求级系统 Hook 块。
+/// `state` owns the authoritative profile baseline reused across every Provider request.
+/// `state` 持有在每次 Provider 请求间复用的权威画像基线。
+pub(crate) fn stabilize_vmm_profile_system_prompt_blocks(
+    blocks: &mut Vec<SystemPromptHookBlock>,
+    state: &VmmProfileSyncState,
+) {
+    // insertion_index preserves the profile line's relative position while removing duplicate or foreign copies.
+    // insertion_index 在移除重复或外来副本时保留画像线路的相对位置。
+    let insertion_index = blocks
+        .iter()
+        .position(|block| block.tag == VMM_PROFILE_SYSTEM_PROMPT_TAG);
+    blocks.retain(|block| block.tag != VMM_PROFILE_SYSTEM_PROMPT_TAG);
+    let Some(stable_block) = base_profile_block(state) else {
+        return;
+    };
+    // VMM is the earliest built-in profile handler, so a missing request copy is restored at the front.
+    // VMM 是最早的内置画像处理器，因此请求中缺失副本时会在最前方恢复。
+    let insertion_index = insertion_index.unwrap_or(0).min(blocks.len());
+    blocks.insert(insertion_index, stable_block);
 }
 
 /// Builds one hidden-user delta profile injection for refresh changes.
@@ -1210,6 +1294,72 @@ mod tests {
             state.profile_sync.get(&session_id.to_string()),
             Some(&runtime_profile)
         );
+    }
+
+    /// Verifies one persisted profile baseline remains byte-stable until a new compaction baseline is created.
+    /// 验证同一持久化画像基线在创建新压缩基线前始终保持字节稳定。
+    #[test]
+    fn persisted_profile_baseline_block_remains_stable_until_compaction() {
+        // state owns the first-session baseline reused by ordinary turns and incremental refreshes.
+        // state 持有由普通回合及增量刷新复用的首次会话基线。
+        let mut state = VmmProfileSyncState {
+            base_profile_content: Some(String::from("[USER]\nstable profile")),
+            ..VmmProfileSyncState::default()
+        };
+        // first_block is the exact system contribution emitted when the baseline is created.
+        // first_block 是创建基线时发出的精确系统贡献块。
+        let first_block = base_profile_block(&state).expect("baseline block should exist");
+        state.completed_turns_since_sync = 7;
+        state.delta_profile_content = Some(String::from("incremental change"));
+        state.updated_at = Some(String::from("later"));
+        // subsequent_block proves ordinary turn counters and deltas cannot rewrite the baseline wrapper.
+        // subsequent_block 证明普通回合计数及增量不得改写基线包装。
+        let subsequent_block =
+            base_profile_block(&state).expect("subsequent baseline block should exist");
+
+        assert_eq!(subsequent_block, first_block);
+        assert_eq!(first_block.phase, SystemPromptHookPhase::FirstSession);
+        assert_eq!(first_block.source.as_deref(), Some("VMM profile full"));
+
+        state.covered_compaction_id = Some(String::from("compaction-1"));
+        // compacted_block is the only permitted baseline wrapper transition for this state.
+        // compacted_block 是该状态唯一允许发生的基线包装转换。
+        let compacted_block =
+            base_profile_block(&state).expect("compacted baseline block should exist");
+        // repeated_compacted_block proves later requests after the same compaction remain identical.
+        // repeated_compacted_block 证明同一压缩后的后续请求仍保持一致。
+        let repeated_compacted_block =
+            base_profile_block(&state).expect("repeated compacted baseline block should exist");
+
+        assert_ne!(compacted_block, first_block);
+        assert_eq!(
+            compacted_block.phase,
+            SystemPromptHookPhase::AfterContextCompaction
+        );
+        assert_eq!(compacted_block.source.as_deref(), Some("VMM profile full"));
+        assert_eq!(repeated_compacted_block, compacted_block);
+    }
+
+    /// Verifies disabling precheck recall never disables the independent profile preparation line.
+    /// 验证禁用 precheck 召回绝不会禁用独立画像准备线路。
+    #[test]
+    fn profile_preparation_does_not_depend_on_precheck_enablement() {
+        // config is a memory-ready VMM configuration with recall explicitly disabled.
+        // config 是已满足普通记忆链路条件但显式禁用召回的 VMM 配置。
+        let mut config = VmmEffectiveConfig {
+            grpc_target: String::from("http://127.0.0.1:50051"),
+            user_id: Some(1),
+            project_id: Some(2),
+            precheck_enabled: false,
+            ..VmmEffectiveConfig::default()
+        };
+
+        assert!(should_run_vmm_profile_prepare(&config));
+        assert!(!should_run_vmm_precheck(&config));
+
+        config.enabled = false;
+        assert!(!should_run_vmm_profile_prepare(&config));
+        assert!(!should_run_vmm_precheck(&config));
     }
 
     /// Verifies poisoned VMM runtime state rejects every authoritative read and write operation.

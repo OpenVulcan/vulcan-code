@@ -274,7 +274,7 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
             &mut guard,
             session_id,
             expected_goal_dispatch_version,
-            precheck_start.precheck_request.turn_id(),
+            &precheck_start.preparation_turn_id,
             ActiveTurnKind::UserPrompt,
         )?;
         precheck_start
@@ -294,7 +294,7 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
         start_webui_session_kernel_turn(
             &mut guard,
             session_id,
-            precheck_start.precheck_request.turn_id(),
+            &precheck_start.preparation_turn_id,
             ActiveTurnKind::UserPrompt,
         )?;
         precheck_start

@@ -413,7 +413,7 @@ pub(super) async fn service_submit_conversation_prompt(
         )
     }?;
     let accepted_message_id = precheck_start.visible_user_prompt_record_id.clone();
-    let turn_id = Some(precheck_start.precheck_request.turn_id().to_string());
+    let turn_id = Some(precheck_start.preparation_turn_id.clone());
     webui_submit_trace(
         "submit_prompt_turn_begin_ready",
         format!(
@@ -438,14 +438,14 @@ pub(super) async fn service_submit_conversation_prompt(
             start_reserved_webui_session_kernel_user_turn(
                 &mut guard,
                 session_id,
-                precheck_start.precheck_request.turn_id(),
+                &precheck_start.preparation_turn_id,
                 kernel_reservation_id,
             )?;
         } else {
             start_webui_session_kernel_user_turn(
                 &mut guard,
                 session_id,
-                precheck_start.precheck_request.turn_id(),
+                &precheck_start.preparation_turn_id,
             )?;
         }
         webui_submit_trace(

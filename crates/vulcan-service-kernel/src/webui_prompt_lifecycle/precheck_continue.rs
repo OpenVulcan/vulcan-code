@@ -87,6 +87,8 @@ pub(crate) fn webui_shared_prompt_precheck_plan(
 /// `agent_runtime` 持有 Provider、hook 与 AI 工具配置。
 /// `start` is the prompt turn start produced by the shared reducer.
 /// `start` 是共享 reducer 产出的提示词回合起点。
+/// `profile_outcome` is the independently dispatched profile preparation result.
+/// `profile_outcome` 是独立派发的画像准备结果。
 /// `precheck_outcome` is either a real hook result or a skipped outcome.
 /// `precheck_outcome` 是真实 hook 结果或跳过后的结果。
 ///
@@ -94,12 +96,13 @@ pub(crate) fn webui_shared_prompt_precheck_plan(
 /// 返回值
 /// A provider execution request when the turn should continue, or `None` when stopped.
 /// 当回合应继续时返回 Provider 执行请求；停止时返回 `None`。
-pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
+pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     start: SharedPromptTurnStart,
+    profile_outcome: ConversationProfileOutcome,
     precheck_outcome: ConversationPrecheckOutcome,
 ) -> Result<Option<ExecutionPreparationRequest>, String> {
     let session_id = start.session_id;
@@ -150,7 +153,7 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
     ensure_webui_session_runtime_state(
         &mut workspace_snapshot,
         session_id,
-        Some(start.precheck_request.turn_id()),
+        Some(&start.preparation_turn_id),
     )?;
     // Capture the independent VMM revision before typed precheck effects mutate the draft snapshot.
     // 在类型化 precheck 效果修改草稿快照前捕获独立 VMM 版本。
@@ -232,12 +235,13 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
     // canonicalUserMessageId identifies the exact provider-history row that must receive post-precheck Goal text.
     // canonicalUserMessageId 标识必须接收预检后目标文本的精确 Provider 历史行。
     let canonical_user_message_id = start.canonical_user_message_id.clone();
-    let prompt_turn_id = start.precheck_request.turn_id().to_string();
+    let prompt_turn_id = start.preparation_turn_id.clone();
     let shared_continue_started_at = current_unix_millis_value();
-    let continuation = continue_shared_prompt_turn_after_precheck(
+    let continuation = continue_shared_prompt_turn_after_preparation(
         &mut workspace_snapshot,
         SharedPromptTurnContinueInput {
             start,
+            profile_outcome,
             precheck_outcome,
             ai_tool_configuration,
             project_configuration,
@@ -269,6 +273,15 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
             format!("warning · Precheck hook 执行失败：{detail}"),
         ) {
             eprintln!("[webui-service] record precheck warning failed: {error}");
+        }
+    }
+    if let Some(detail) = continuation.profile_failure_detail.as_deref() {
+        eprintln!("[webui-service] profile hook failed but request will continue: {detail}");
+        if let Err(error) = push_webui_service_diagnostic(
+            state,
+            format!("warning · 画像准备 Hook 执行失败：{detail}"),
+        ) {
+            eprintln!("[webui-service] record profile warning failed: {error}");
         }
     }
     if let Some(message_id) = visible_user_prompt_record_id.as_deref()
@@ -679,8 +692,8 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
     Ok(Some(request))
 }
 
-/// Spawns the shared precheck continuation chain for one WebUI prompt turn.
-/// 为一个 WebUI 提示词回合启动共享 precheck continuation 链路。
+/// Spawns independent profile preparation plus the optional user-precheck continuation chain.
+/// 为一个 WebUI 提示词回合启动独立画像准备及可选用户 precheck 续接链路。
 ///
 /// # Parameters
 /// 参数
@@ -694,40 +707,60 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
 /// `agent_runtime` 持有 Provider 与 hook 运行时。
 /// `start` is the first-stage prompt turn.
 /// `start` 是第一阶段提示词回合。
-pub(crate) fn spawn_webui_precheck_continue_task(
+/// `run_precheck` decides whether the user-recall line dispatches or returns a skipped outcome.
+/// `run_precheck` 决定用户召回线路是执行派发还是返回跳过结果。
+pub(crate) fn spawn_webui_prompt_prepare_continue_task(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     controller_runtime: ControllerRuntimeHandle,
     agent_runtime: AgentRuntimeBridge,
     start: SharedPromptTurnStart,
+    run_precheck: bool,
 ) {
     let session_id = start.session_id;
-    webui_trace("precheck_task_spawn", format!("session={session_id}"));
+    webui_trace(
+        "prompt_prepare_task_spawn",
+        format!("session={session_id} run_precheck={run_precheck}"),
+    );
     spawn_service_task(async move {
-        let precheck_started_at = current_unix_millis_value();
-        webui_trace("precheck_task_run_start", format!("session={session_id}"));
-        let precheck_outcome = start.precheck_request.clone().run().await;
+        let preparation_started_at = current_unix_millis_value();
+        webui_trace(
+            "prompt_prepare_task_run_start",
+            format!("session={session_id} run_precheck={run_precheck}"),
+        );
+        // profile_request always runs, while precheck_request remains governed only by user-recall policy.
+        // profile_request 始终运行，而 precheck_request 仅受用户召回策略控制。
+        let profile_request = start.profile_request.clone();
+        let precheck_request = start.precheck_request.clone();
+        // profile_outcome and precheck_outcome retain separate reports even when they execute concurrently.
+        // profile_outcome 与 precheck_outcome 即使并发执行也保留相互独立的报告。
+        let (profile_outcome, precheck_outcome) = if run_precheck {
+            tokio::join!(profile_request.run(), precheck_request.run())
+        } else {
+            (profile_request.run().await, precheck_request.skip())
+        };
         webui_after_precheck_trace(
             "after_precheck_00_outcome_ready",
             format!(
                 "session={session_id} elapsed_ms={}",
-                current_unix_millis_value().saturating_sub(precheck_started_at)
+                current_unix_millis_value().saturating_sub(preparation_started_at)
             ),
         );
         webui_trace(
-            "precheck_task_run_finished",
+            "prompt_prepare_task_run_finished",
             format!(
-                "session={session_id} elapsed_ms={}",
-                current_unix_millis_value().saturating_sub(precheck_started_at)
+                "session={session_id} run_precheck={run_precheck} elapsed_ms={}",
+                current_unix_millis_value().saturating_sub(preparation_started_at)
             ),
         );
         let continue_started_at = current_unix_millis_value();
-        match continue_webui_prompt_turn_after_precheck_from_state(
+        match continue_webui_prompt_turn_after_preparation_from_state(
             &app,
             &state,
             &controller_runtime,
             &agent_runtime,
             start,
+            profile_outcome,
             precheck_outcome,
         ) {
             Ok(Some(request)) => {
@@ -739,7 +772,7 @@ pub(crate) fn spawn_webui_precheck_continue_task(
                     ),
                 );
                 webui_trace(
-                    "precheck_task_continue_finished",
+                    "prompt_prepare_task_continue_finished",
                     format!(
                         "session={session_id} will_spawn_stream=true elapsed_ms={}",
                         current_unix_millis_value().saturating_sub(continue_started_at)
@@ -749,7 +782,7 @@ pub(crate) fn spawn_webui_precheck_continue_task(
             }
             Ok(None) => {
                 webui_trace(
-                    "precheck_task_continue_finished",
+                    "prompt_prepare_task_continue_finished",
                     format!(
                         "session={session_id} will_spawn_stream=false elapsed_ms={}",
                         current_unix_millis_value().saturating_sub(continue_started_at)
@@ -757,8 +790,10 @@ pub(crate) fn spawn_webui_precheck_continue_task(
                 );
             }
             Err(error) => {
-                eprintln!("[webui-service] continue WebUI prompt after precheck failed: {error}");
-                if let Err(cleanup_error) = mark_webui_precheck_continuation_failed(
+                eprintln!(
+                    "[webui-service] continue WebUI prompt after preparation failed: {error}"
+                );
+                if let Err(cleanup_error) = mark_webui_prompt_preparation_failed(
                     &app,
                     &state,
                     &controller_runtime,
@@ -767,7 +802,7 @@ pub(crate) fn spawn_webui_precheck_continue_task(
                     &error,
                 ) {
                     eprintln!(
-                        "[webui-service] cleanup failed WebUI precheck continuation failed: {cleanup_error}"
+                        "[webui-service] cleanup failed WebUI prompt preparation failed: {cleanup_error}"
                     );
                 }
             }
@@ -795,8 +830,8 @@ pub(crate) fn spawn_webui_precheck_continue_task(
 ///
 /// # Returns
 /// 返回值
-/// Whether any continuation or precheck task was started.
-/// 是否已经启动 continuation 或 precheck 任务。
+/// Whether the independent prompt-preparation continuation task was started.
+/// 是否已经启动独立提示词准备续接任务。
 pub(crate) fn start_webui_precheck_or_continue(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
@@ -817,73 +852,21 @@ pub(crate) fn start_webui_precheck_or_continue(
         ),
     );
     if precheck_plan.should_skip_precheck || !precheck_plan.has_precheck_hooks {
-        let skipped_continue_started_at = current_unix_millis_value();
-        let precheck_outcome = start.precheck_request.clone().skip();
-        // continuation is resolved explicitly so the synchronous skip path shares terminal cleanup with async precheck.
-        // continuation 被显式解析，使同步跳过路径与异步 precheck 共享终态清理。
-        let continuation = continue_webui_prompt_turn_after_precheck_from_state(
-            app,
-            state,
-            controller_runtime,
-            agent_runtime,
+        // Profile preparation remains asynchronous and mandatory even when user recall is skipped.
+        // 即使跳过用户召回，画像准备仍保持异步且必须执行。
+        spawn_webui_prompt_prepare_continue_task(
+            app.clone(),
+            state.clone(),
+            controller_runtime.clone(),
+            agent_runtime.clone(),
             start,
-            precheck_outcome,
+            false,
         );
-        // continuation now carries only a successfully prepared request or an intentional no-stream result.
-        // continuation 现在只携带成功准备的请求或有意不启动流的结果。
-        let continuation = match continuation {
-            Ok(continuation) => continuation,
-            Err(error) => {
-                mark_webui_precheck_continuation_failed(
-                    app,
-                    state,
-                    controller_runtime,
-                    agent_runtime,
-                    session_id,
-                    &error,
-                )
-                .map_err(|cleanup_error| {
-                    format!(
-                        "{error}; failed to clean rejected prompt continuation: {cleanup_error}"
-                    )
-                })?;
-                return Err(error);
-            }
-        };
-        if let Some(request) = continuation {
-            webui_after_precheck_trace(
-                "after_precheck_18_stream_spawn_call",
-                format!(
-                    "session={session_id} elapsed_ms_since_skip_continue={}",
-                    current_unix_millis_value().saturating_sub(skipped_continue_started_at)
-                ),
-            );
-            spawn_agent_stream_task(
-                app.clone(),
-                state.clone(),
-                controller_runtime.clone(),
-                agent_runtime.clone(),
-                request,
-            );
-            webui_trace(
-                "precheck_dispatch_skipped_spawned_stream",
-                format!(
-                    "session={} elapsed_ms={}",
-                    session_id,
-                    current_unix_millis_value().saturating_sub(skipped_continue_started_at)
-                ),
-            );
-            return Ok(true);
-        }
         webui_trace(
-            "precheck_dispatch_skipped_no_stream",
-            format!(
-                "session={} elapsed_ms={}",
-                session_id,
-                current_unix_millis_value().saturating_sub(skipped_continue_started_at)
-            ),
+            "precheck_dispatch_skipped_profile_task_spawned",
+            format!("session={session_id}"),
         );
-        return Ok(false);
+        return Ok(true);
     }
     // Emits the memory-recall phase only after the shared plan confirms dispatch will run.
     // 仅在共享计划确认会调度 precheck 后才发出记忆召回阶段。
@@ -903,12 +886,13 @@ pub(crate) fn start_webui_precheck_or_continue(
         session_id,
         SessionRunPhase::MemoryRecall,
     )?;
-    spawn_webui_precheck_continue_task(
+    spawn_webui_prompt_prepare_continue_task(
         app.clone(),
         state.clone(),
         controller_runtime.clone(),
         agent_runtime.clone(),
         start,
+        true,
     );
     webui_trace(
         "precheck_dispatch_spawned_task",
@@ -917,8 +901,8 @@ pub(crate) fn start_webui_precheck_or_continue(
     Ok(true)
 }
 
-/// Marks a WebUI prompt turn as stopped when precheck continuation cannot be applied.
-/// 当 WebUI 提示词回合无法应用 precheck continuation 时，将其标记为已停止。
+/// Marks a WebUI prompt turn as stopped when either preparation outcome cannot be applied.
+/// 当 WebUI 提示词回合无法应用任一准备线路结果时，将其标记为已停止。
 ///
 /// # Parameters
 /// 参数
@@ -939,7 +923,7 @@ pub(crate) fn start_webui_precheck_or_continue(
 /// 返回值
 /// `Ok(())` after the failed state is projected and persisted.
 /// 失败状态完成投影与持久化后返回 `Ok(())`。
-pub(crate) fn mark_webui_precheck_continuation_failed(
+pub(crate) fn mark_webui_prompt_preparation_failed(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
@@ -967,7 +951,7 @@ pub(crate) fn mark_webui_precheck_continuation_failed(
             &now,
             &RuntimeEvent::new(
                 RuntimeEventKind::Failed,
-                "Precheck 结果已忽略",
+                "提示词准备结果已忽略",
                 error.to_string(),
             ),
         )?;
@@ -982,7 +966,7 @@ pub(crate) fn mark_webui_precheck_continuation_failed(
         .find(|session| session.id == session_id)
     {
         session.status = SessionState::Blocked;
-        session.focus = String::from("Precheck 结果无法应用，已停止本轮请求。");
+        session.focus = String::from("提示词准备结果无法应用，已停止本轮请求。");
         session.last_updated_label = String::from("刚刚");
     }
     // owning_project_id is derived from the validated failure draft before ownership is terminated.
