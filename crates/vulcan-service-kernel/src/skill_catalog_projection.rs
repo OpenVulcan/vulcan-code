@@ -446,6 +446,16 @@ pub(crate) fn lua_skills_catalog_summary(
                         }
                     })
                     .collect(),
+                config: skill.config.as_ref().map(|config| LuaSkillConfigSummary {
+                    complete: config.complete,
+                    revision: config.revision.clone(),
+                    store_scope: config.store_scope.clone(),
+                    item_count: config.items.len(),
+                    missing_count: config.missing_count,
+                    invalid_count: config.invalid_count,
+                    business_issue_count: config.business_issue_count,
+                    orphaned_count: config.orphaned_count,
+                }),
             })
             .collect(),
     }

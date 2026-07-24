@@ -8,6 +8,12 @@ use super::*;
 #[cfg(test)]
 pub(super) const RPC_METHODS: &[&str] = &[
     "service_refresh_luaskills_catalog",
+    "service_describe_luaskill_config",
+    "service_validate_luaskill_config",
+    "service_set_luaskill_config",
+    "service_delete_luaskill_config",
+    "service_refresh_luaskill_config",
+    "service_poll_luaskill_config_events",
     "service_inspect_local_plugin",
     "service_install_local_plugin",
     "service_update_local_plugin",
@@ -73,6 +79,40 @@ pub(super) async fn dispatch(
         "service_refresh_luaskills_catalog" => {
             rpc_json_result(service_refresh_luaskills_catalog(app.clone(), state).await)
         }
+        "service_describe_luaskill_config" => rpc_json_result(
+            service_describe_luaskill_config(state, rpc_required_param(params, "skillId")?).await,
+        ),
+        "service_validate_luaskill_config" => rpc_json_result(
+            service_validate_luaskill_config(state, rpc_required_param(params, "skillId")?).await,
+        ),
+        "service_set_luaskill_config" => rpc_json_result(
+            service_set_luaskill_config(app.clone(), state, rpc_required_param(params, "request")?)
+                .await,
+        ),
+        "service_delete_luaskill_config" => rpc_json_result(
+            service_delete_luaskill_config(
+                app.clone(),
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_refresh_luaskill_config" => rpc_json_result(
+            service_refresh_luaskill_config(
+                app.clone(),
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_poll_luaskill_config_events" => rpc_json_result(
+            service_poll_luaskill_config_events(
+                app.clone(),
+                state,
+                rpc_optional_param(params, "afterSequence")?,
+            )
+            .await,
+        ),
         "service_inspect_local_plugin" => rpc_json_result(
             service_inspect_local_plugin(state, rpc_required_param(params, "sourcePath")?).await,
         ),

@@ -267,6 +267,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config() {
         Arc::new(crate::tooling::CommandSessionRuntime::new()),
         global_vmm,
         None,
+        None,
     );
     let base_ids = vec![
         String::from("vmm_memory_search"),

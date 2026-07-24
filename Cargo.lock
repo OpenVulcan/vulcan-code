@@ -2910,9 +2910,9 @@ dependencies = [
 
 [[package]]
 name = "luaskills"
-version = "0.5.4"
+version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b5772a368a04e0c2c6d28b9ed2dc91e202460134b73622265fde285ae5099e1"
+checksum = "7eb2b996127efd03b9ad49f32f4b8dfe45b8466474c7d1670e0ebeb8f5a84bd5"
 dependencies = [
  "base64 0.22.1",
  "encoding_rs",
@@ -2920,6 +2920,7 @@ dependencies = [
  "libc",
  "libloading 0.8.9",
  "mlua",
+ "notify",
  "reqwest 0.12.28",
  "semver",
  "serde",
@@ -6832,6 +6833,7 @@ dependencies = [
  "futures-util",
  "ignore",
  "keyring",
+ "luaskills",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

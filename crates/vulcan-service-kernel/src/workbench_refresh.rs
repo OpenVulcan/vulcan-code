@@ -558,6 +558,7 @@ pub(crate) fn native_tool_summaries_from_agent_runtime(
         std::sync::Arc::clone(&agent_runtime.command_session_runtime),
         agent_runtime.provider_configuration.vmm.clone(),
         Some(agent_runtime.vulcan_plugin_runtime.clone()),
+        agent_runtime.luaskills_runtime.clone(),
     );
     native_catalog
         .descriptors

@@ -109,10 +109,14 @@ fn bootstrap_luaskills_runtime_blocking(
         })?,
     );
     let skill_roots = ensure_runtime_root_layout(&runtime_root)?;
+    // skill_config_root is the single host-owned package configuration root shared by every LuaSkills engine.
+    // skill_config_root 是所有 LuaSkills 引擎共享的唯一宿主持有技能包配置根目录。
+    let skill_config_root = crate::data_plane::application_luaskills_config_root()?;
     let system_lua_lib_dir = runtime_root.join("system_lua_lib");
     let host_options = build_host_options(
         &runtime_root,
         &managed_runtime_distribution_root,
+        &skill_config_root,
         controller,
         &runtime_settings,
     );
@@ -802,6 +806,7 @@ fn ensure_runtime_root_layout(runtime_root: &Path) -> Result<Vec<RuntimeSkillRoo
 fn build_host_options(
     runtime_root: &Path,
     managed_runtime_distribution_root: &Path,
+    skill_config_root: &Path,
     controller: PersistedControllerConfiguration,
     runtime_settings: &LuaSkillsRuntimeSettings,
 ) -> LuaRuntimeHostOptions {
@@ -813,6 +818,7 @@ fn build_host_options(
     let lua_managed_runtime_distribution_root =
         runtime_assets::native_host_path(managed_runtime_distribution_root);
     let mut host_options = LuaRuntimeHostOptions::with_runtime_root(lua_runtime_root.clone());
+    host_options.skill_config_root = Some(runtime_assets::native_host_path(skill_config_root));
     host_options.managed_runtime_distribution_root = Some(lua_managed_runtime_distribution_root);
     host_options.managed_runtime_environment_root =
         Some(lua_runtime_root.join("dependencies").join("envs"));

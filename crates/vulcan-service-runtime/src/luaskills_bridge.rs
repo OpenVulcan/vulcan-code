@@ -2,6 +2,7 @@
 //! Core Service 运行时使用的最小 LuaSkills 引导模块。
 
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -16,9 +17,13 @@ use luaskills::skill::manager::collect_effective_skill_instances_from_roots;
 use luaskills::{
     LuaEngine, LuaEngineOptions, LuaRuntimeCapabilityOptions, LuaRuntimeDatabaseProviderMode,
     LuaRuntimeHostOptions, LuaRuntimeManagedRuntimeConfig, LuaRuntimeSpaceControllerProcessMode,
-    LuaVmPoolConfig, RuntimeEntryDescriptor, RuntimeSkillRoot, SkillInstallRequest,
-    SkillInstallSourceType, SkillManagementAuthority, SkillManager, SkillManagerConfig, SkillMeta,
-    SkillUninstallOptions, ToolCacheConfig,
+    LuaVmPoolConfig, RuntimeEntryDescriptor, RuntimeSkillConfigEventBatch,
+    RuntimeSkillConfigStoreRefresh, RuntimeSkillPackageConfigDescriptor,
+    RuntimeSkillPackageConfigItemDescriptor, RuntimeSkillPackageConfigStatus, RuntimeSkillRoot,
+    SkillConfigDeleteResult, SkillConfigWriteResult, SkillInstallRequest, SkillInstallSourceType,
+    SkillManagementAuthority, SkillManager, SkillManagerConfig, SkillMeta,
+    SkillPackageConfigInputValue, SkillPackageConfigItemState, SkillUninstallOptions,
+    ToolCacheConfig,
 };
 use vulcan_luaskills_config::{
     LuaSkillsRuntimeSettings, load_runtime_settings, runtime_settings_file_path,
@@ -76,6 +81,60 @@ impl RootSkillBootstrapSourceType {
     }
 }
 
+/// LuaSkillConfigCapabilityCache remembers package versions that have no declared configuration items.
+/// LuaSkillConfigCapabilityCache 记录已确认没有配置声明项的技能包版本。
+#[derive(Debug, Default)]
+struct LuaSkillConfigCapabilityCache {
+    /// Latest configless version observed for each effective skill identifier.
+    /// 每个生效技能标识最近一次确认无配置声明的版本。
+    configless_versions: BTreeMap<String, String>,
+}
+
+impl LuaSkillConfigCapabilityCache {
+    /// Returns whether one exact skill version is already known to have no configuration declarations.
+    /// 返回某个精确技能版本是否已确认没有配置声明。
+    ///
+    /// `skill_id` is the effective package identifier and `version` is its manifest version.
+    /// `skill_id` 是生效技能包标识，`version` 是其清单版本。
+    ///
+    /// Returns true only for an exact negative-cache hit.
+    /// 仅在精确命中负缓存时返回 true。
+    fn is_known_configless(&self, skill_id: &str, version: &str) -> bool {
+        self.configless_versions
+            .get(skill_id)
+            .is_some_and(|cached_version| cached_version == version)
+    }
+
+    /// Records the authoritative declaration probe for one exact skill version.
+    /// 记录某个精确技能版本的权威声明探测结果。
+    ///
+    /// `has_configuration` is true when at least one configuration item is declared.
+    /// `has_configuration` 在至少声明一个配置项时为 true。
+    ///
+    /// Positive probes remove stale negative entries; negative probes replace the remembered version.
+    /// 正向探测会移除过期负缓存；负向探测会替换已记录版本。
+    fn record_probe(&mut self, skill_id: &str, version: &str, has_configuration: bool) {
+        if has_configuration {
+            self.configless_versions.remove(skill_id);
+        } else {
+            self.configless_versions
+                .insert(skill_id.to_string(), version.to_string());
+        }
+    }
+
+    /// Invalidates every negative result associated with one skill identifier.
+    /// 使某个技能标识关联的所有负向结果失效。
+    ///
+    /// `skill_id` identifies the package changed by a successful management operation.
+    /// `skill_id` 标识被成功管理操作修改的技能包。
+    ///
+    /// Returns whether a cached entry was removed.
+    /// 返回是否移除了缓存条目。
+    fn invalidate(&mut self, skill_id: &str) -> bool {
+        self.configless_versions.remove(skill_id).is_some()
+    }
+}
+
 /// Long-lived LuaSkills handle retained by the service runtime.
 /// 由服务运行时保留的长生命周期 LuaSkills 句柄。
 #[derive(Clone)]
@@ -104,6 +163,9 @@ pub struct TauriLuaSkillsHandle {
     /// Current native managed-runtime installation progress during an active attempt.
     /// 活动尝试期间当前的原生受管运行时安装进度。
     pub managed_runtime_progress: Arc<Mutex<Option<ManagedRuntimeBootstrapProgress>>>,
+    /// Process-local negative cache for package versions without configuration declarations.
+    /// 进程内技能包版本无配置声明负缓存。
+    config_capability_cache: Arc<Mutex<LuaSkillConfigCapabilityCache>>,
     /// Runtime settings captured when the retained engine was created.
     /// 创建保留引擎时捕获的运行时设置。
     pub effective_runtime_settings: LuaSkillsRuntimeSettings,
@@ -128,6 +190,7 @@ impl std::fmt::Debug for TauriLuaSkillsHandle {
             .field("skill_roots", &self.skill_roots)
             .field("managed_runtime_report", &self.managed_runtime_report)
             .field("managed_runtime_progress", &self.managed_runtime_progress)
+            .field("config_capability_cache", &self.config_capability_cache)
             .field(
                 "effective_runtime_settings",
                 &self.effective_runtime_settings,
@@ -221,6 +284,9 @@ pub struct TauriLuaSkillSummary {
     /// Whether this skill belongs to the host-owned ROOT layer.
     /// 该技能是否属于宿主自有 ROOT 层。
     pub system_owned: bool,
+    /// Optional package configuration declaration and status without effective values.
+    /// 不包含有效值的可选技能包配置声明与状态。
+    pub config: Option<RuntimeSkillPackageConfigDescriptor>,
 }
 
 /// Lightweight runtime tool summary for one LuaSkill package.
@@ -295,6 +361,10 @@ where
         })?,
     );
     let skill_roots = ensure_runtime_root_layout(&runtime_root)?;
+    // skill_config_root is the single host-owned package configuration root shared by every LuaSkills engine.
+    // skill_config_root 是所有 LuaSkills 引擎共享的唯一宿主持有技能包配置根目录。
+    let skill_config_root =
+        vulcan_workspace_store::data_plane::application_luaskills_config_root()?;
     let managed_runtime_report = bootstrap_managed_runtimes(
         &runtime_root,
         &managed_runtime_distribution_root,
@@ -310,6 +380,7 @@ where
     let host_options = build_host_options(
         &runtime_root,
         &managed_runtime_distribution_root,
+        &skill_config_root,
         controller,
         &runtime_settings,
     );
@@ -338,6 +409,7 @@ where
         skill_roots,
         managed_runtime_report: Arc::new(Mutex::new(managed_runtime_report)),
         managed_runtime_progress: Arc::new(Mutex::new(None)),
+        config_capability_cache: Arc::new(Mutex::new(LuaSkillConfigCapabilityCache::default())),
         effective_runtime_settings: runtime_settings,
     })
 }
@@ -352,6 +424,351 @@ pub fn load_luaskills_catalog(
         .lock()
         .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法读取插件目录。"))?;
     build_luaskills_catalog(handle, &engine)
+}
+
+/// Describes one effective skill package configuration while enforcing host-side secret masking.
+/// 描述单个生效技能包配置，并强制执行宿主侧秘密值遮蔽。
+///
+/// `handle` owns the live engine and `skill_id` selects one effective package.
+/// `handle` 持有活动引擎，`skill_id` 选择一个生效技能包。
+///
+/// Returns no descriptor for a package without declarations, otherwise returns every non-sensitive value.
+/// 对未声明配置的技能包返回空，否则返回包含所有非敏感值的描述。
+pub fn describe_luaskill_package_config(
+    handle: &TauriLuaSkillsHandle,
+    skill_id: &str,
+) -> Result<Option<RuntimeSkillPackageConfigDescriptor>, String> {
+    let engine = handle
+        .engine
+        .lock()
+        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法读取技能包配置。"))?;
+    describe_host_safe_package_config(&engine, skill_id)
+}
+
+/// Validates one effective skill package configuration without changing persisted values.
+/// 校验单个生效技能包配置且不修改持久化值。
+///
+/// `handle` owns the live engine and `skill_id` selects the package.
+/// `handle` 持有活动引擎，`skill_id` 选择目标技能包。
+///
+/// Returns the authoritative LuaSkills completeness and validity status.
+/// 返回 LuaSkills 权威的完整性与合法性状态。
+pub fn validate_luaskill_package_config(
+    handle: &TauriLuaSkillsHandle,
+    skill_id: &str,
+) -> Result<RuntimeSkillPackageConfigStatus, String> {
+    let engine = handle
+        .engine
+        .lock()
+        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法校验技能包配置。"))?;
+    engine.validate_skill_package_config(skill_id)
+}
+
+/// Atomically updates one non-empty typed package configuration batch using CAS.
+/// 使用 CAS 原子更新一组非空类型化技能包配置。
+///
+/// `expected_revision` must be the revision observed by the editor.
+/// `expected_revision` 必须是编辑器观察到的修订号。
+///
+/// Returns the write result and a freshly projected host-safe descriptor.
+/// 返回写入结果与重新投影的宿主安全描述。
+pub fn set_luaskill_package_config(
+    handle: &TauriLuaSkillsHandle,
+    skill_id: &str,
+    values: BTreeMap<String, SkillPackageConfigInputValue>,
+    expected_revision: &str,
+) -> Result<(SkillConfigWriteResult, RuntimeSkillPackageConfigDescriptor), String> {
+    let mut engine = handle
+        .engine
+        .lock()
+        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法更新技能包配置。"))?;
+    let result = engine.set_skill_config_values(skill_id, values, Some(expected_revision))?;
+    let descriptor = describe_host_safe_package_config(&engine, skill_id)?
+        .ok_or_else(|| format!("技能 `{skill_id}` 未声明技能包配置。"))?;
+    Ok((result, descriptor))
+}
+
+/// Deletes one explicit or orphaned package configuration value using CAS.
+/// 使用 CAS 删除单个显式或遗留技能包配置值。
+///
+/// `key` identifies the exact persisted key and `expected_revision` protects concurrent changes.
+/// `key` 标识精确持久化键，`expected_revision` 保护并发变更。
+///
+/// Returns the deletion result and a freshly projected host-safe descriptor.
+/// 返回删除结果与重新投影的宿主安全描述。
+pub fn delete_luaskill_package_config_value(
+    handle: &TauriLuaSkillsHandle,
+    skill_id: &str,
+    key: &str,
+    expected_revision: &str,
+) -> Result<(SkillConfigDeleteResult, RuntimeSkillPackageConfigDescriptor), String> {
+    let mut engine = handle
+        .engine
+        .lock()
+        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法删除技能包配置。"))?;
+    let result = engine.delete_skill_config_value(skill_id, key, Some(expected_revision))?;
+    let descriptor = describe_host_safe_package_config(&engine, skill_id)?
+        .ok_or_else(|| format!("技能 `{skill_id}` 未声明技能包配置。"))?;
+    Ok((result, descriptor))
+}
+
+/// Polls ordered package configuration events after one optional cursor.
+/// 轮询一个可选游标之后的有序技能包配置事件。
+///
+/// `limit` is bounded by LuaSkills and `after_sequence` is engine-local.
+/// `limit` 由 LuaSkills 约束，`after_sequence` 仅在当前引擎内有效。
+///
+/// Returns the authoritative bounded event batch.
+/// 返回权威的有界事件批次。
+pub fn poll_luaskill_package_config_events(
+    handle: &TauriLuaSkillsHandle,
+    after_sequence: Option<&str>,
+    limit: usize,
+) -> Result<RuntimeSkillConfigEventBatch, String> {
+    let engine = handle
+        .engine
+        .lock()
+        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法轮询技能包配置事件。"))?;
+    engine.poll_skill_config_events(after_sequence, limit)
+}
+
+/// Explicitly refreshes one selected package configuration store or both configured stores.
+/// 显式刷新一个选定技能包配置存储或两个已配置存储。
+///
+/// `handle` owns the live engine and `store_scope` is `skills`, `system-skills`, or absent.
+/// `handle` 持有活动引擎，`store_scope` 为 `skills`、`system-skills` 或缺省。
+///
+/// Returns one authoritative result for each refreshed store.
+/// 返回每个已刷新存储对应的权威结果。
+pub fn refresh_luaskill_package_config(
+    handle: &TauriLuaSkillsHandle,
+    store_scope: Option<&str>,
+) -> Result<Vec<RuntimeSkillConfigStoreRefresh>, String> {
+    let engine = handle
+        .engine
+        .lock()
+        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法刷新技能包配置。"))?;
+    engine.refresh_skill_config(store_scope)
+}
+
+/// Builds one host-safe descriptor without ever requesting sensitive effective values.
+/// 构建一份宿主安全描述，且绝不请求敏感有效值。
+///
+/// `engine` supplies the authoritative declaration and value snapshot.
+/// `engine` 提供权威声明与值快照。
+///
+/// Returns at most one effective package descriptor for the requested skill.
+/// 对请求技能最多返回一个生效技能包描述。
+fn describe_host_safe_package_config(
+    engine: &LuaEngine,
+    skill_id: &str,
+) -> Result<Option<RuntimeSkillPackageConfigDescriptor>, String> {
+    let descriptors = engine.describe_skill_package_config(Some(skill_id), false)?;
+    let mut descriptor = take_declared_package_config_descriptor(skill_id, descriptors)?;
+    if let Some(descriptor) = descriptor.as_mut() {
+        for item in &mut descriptor.items {
+            item.value = host_safe_effective_config_value(engine, skill_id, item)?;
+        }
+    }
+    Ok(descriptor)
+}
+
+/// Selects one effective package descriptor and drops descriptors without declared items.
+/// 选择单个生效技能包描述，并丢弃没有声明项的描述。
+///
+/// `skill_id` identifies the requested package and `descriptors` is the authoritative LuaSkills response.
+/// `skill_id` 标识请求的技能包，`descriptors` 是 LuaSkills 的权威响应。
+///
+/// Returns no descriptor for a package without configuration options and rejects inconsistent duplicates.
+/// 对没有配置选项的技能包返回空，并拒绝不一致的重复描述。
+fn take_declared_package_config_descriptor(
+    skill_id: &str,
+    mut descriptors: Vec<RuntimeSkillPackageConfigDescriptor>,
+) -> Result<Option<RuntimeSkillPackageConfigDescriptor>, String> {
+    let descriptor = descriptors.pop();
+    if !descriptors.is_empty() {
+        return Err(format!(
+            "技能 `{skill_id}` 返回了多个生效配置描述，运行时状态不一致。"
+        ));
+    }
+    Ok(descriptor.filter(|descriptor| !descriptor.items.is_empty()))
+}
+
+/// Resolves whether one package manifest declares configuration while reusing stable negative probes.
+/// 解析单个技能包清单是否声明配置，并复用稳定的负向探测结果。
+///
+/// `handle` owns the negative cache, `meta` is the parsed manifest, and `version` is its semantic version.
+/// `handle` 持有负缓存，`meta` 是已解析清单，`version` 是其语义版本。
+///
+/// Returns false for exact negative-cache hits or manifests without declared configuration items.
+/// 对精确负缓存命中或没有配置声明项的清单返回 false。
+fn package_declares_configuration(
+    handle: &TauriLuaSkillsHandle,
+    meta: &SkillMeta,
+    skill_id: &str,
+    version: &str,
+) -> Result<bool, String> {
+    // known_configless reads the cache under a short lock and releases it before inspecting the manifest.
+    // known_configless 在短锁内读取缓存，并在检查清单前释放锁。
+    let known_configless = handle
+        .config_capability_cache
+        .lock()
+        .map_err(|_| String::from("LuaSkills 配置能力缓存锁已损坏，无法读取目录。"))?
+        .is_known_configless(skill_id, version);
+    if known_configless {
+        return Ok(false);
+    }
+
+    // has_configuration comes directly from the strict package manifest so load failures cannot become false negative cache entries.
+    // has_configuration 直接来自严格技能包清单，避免把加载失败写成错误的负缓存。
+    let has_configuration = meta.package_config().next().is_some();
+    handle
+        .config_capability_cache
+        .lock()
+        .map_err(|_| String::from("LuaSkills 配置能力缓存锁已损坏，无法更新目录。"))?
+        .record_probe(skill_id, version, has_configuration);
+    Ok(has_configuration)
+}
+
+/// Invalidates one skill's configless capability probe after a successful package mutation.
+/// 在成功的技能包变更后使单个技能的无配置能力探测失效。
+///
+/// `handle` owns the shared cache and `skill_id` identifies the changed package.
+/// `handle` 持有共享缓存，`skill_id` 标识发生变化的技能包。
+///
+/// Returns an error only when the shared cache lock is poisoned.
+/// 仅当共享缓存锁损坏时返回错误。
+fn invalidate_config_capability_cache(
+    handle: &TauriLuaSkillsHandle,
+    skill_id: &str,
+) -> Result<(), String> {
+    handle
+        .config_capability_cache
+        .lock()
+        .map_err(|_| String::from("LuaSkills 配置能力缓存锁已损坏，无法使缓存失效。"))?
+        .invalidate(skill_id);
+    Ok(())
+}
+
+/// Resolves one effective value only when the declaration explicitly permits host disclosure.
+/// 仅在声明明确允许宿主披露时解析单个有效值。
+///
+/// `engine` owns persisted values, `skill_id` selects the package, and `item` is its declaration.
+/// `engine` 持有持久化值，`skill_id` 选择技能包，`item` 是对应声明。
+///
+/// Returns a canonical non-sensitive effective value, or no value for sensitive, missing, or invalid items.
+/// 返回规范的非敏感有效值；敏感、缺失或非法配置项返回空值。
+fn host_safe_effective_config_value(
+    engine: &LuaEngine,
+    skill_id: &str,
+    item: &RuntimeSkillPackageConfigItemDescriptor,
+) -> Result<Option<String>, String> {
+    if item.sensitive {
+        return Ok(None);
+    }
+    match item.state {
+        SkillPackageConfigItemState::Configured => engine
+            .get_skill_config_value(skill_id, &item.key)?
+            .map(|value| canonical_configured_config_value(item, &value))
+            .transpose(),
+        SkillPackageConfigItemState::Default => canonical_default_config_value(item),
+        SkillPackageConfigItemState::Unset
+        | SkillPackageConfigItemState::Missing
+        | SkillPackageConfigItemState::Invalid => Ok(None),
+    }
+}
+
+/// Normalizes one already-valid non-sensitive persisted value for WebUI disclosure.
+/// 为 WebUI 披露规范化一个已经合法的非敏感持久化值。
+///
+/// `item` is the authoritative declaration and `value` is its raw persisted string.
+/// `item` 是权威声明，`value` 是对应原始持久化字符串。
+///
+/// Returns the canonical runtime string or an explicit state-consistency error.
+/// 返回规范运行时字符串，或显式状态一致性错误。
+fn canonical_configured_config_value(
+    item: &RuntimeSkillPackageConfigItemDescriptor,
+    value: &str,
+) -> Result<String, String> {
+    let canonical = match item.value_type.as_str() {
+        "integer" => value
+            .parse::<i64>()
+            .map(|value| value.to_string())
+            .map_err(|error| error.to_string()),
+        "float" => value
+            .parse::<f64>()
+            .map(|value| {
+                if value == 0.0 {
+                    String::from("0")
+                } else {
+                    value.to_string()
+                }
+            })
+            .map_err(|error| error.to_string()),
+        "boolean" => value
+            .parse::<bool>()
+            .map(|value| value.to_string())
+            .map_err(|error| error.to_string()),
+        "string" | "enum" => return Ok(value.to_string()),
+        value_type => {
+            return Err(format!(
+                "CONFIG_DECLARATION_INVALID: configuration '{}' has unknown declared type '{}'",
+                item.key, value_type
+            ));
+        }
+    };
+    canonical.map_err(|error| {
+        format!(
+            "CONFIG_VALUE_INVALID: configuration '{}' is marked configured but cannot be normalized: {error}",
+            item.key
+        )
+    })
+}
+
+/// Converts one already-validated typed declaration default into its canonical runtime string.
+/// 把一个已经校验的类型化声明默认值转换为规范运行时字符串。
+///
+/// `item` is an immutable declaration descriptor produced by LuaSkills.
+/// `item` 是 LuaSkills 生成的不可变声明描述。
+///
+/// Returns the canonical default or no value when the declaration has no default.
+/// 返回规范默认值；声明没有默认值时返回空值。
+fn canonical_default_config_value(
+    item: &RuntimeSkillPackageConfigItemDescriptor,
+) -> Result<Option<String>, String> {
+    let Some(value) = item.default.as_ref() else {
+        return Ok(None);
+    };
+    let canonical = match (item.value_type.as_str(), value) {
+        ("integer", serde_json::Value::Number(number)) if number.as_i64().is_some() => {
+            number.to_string()
+        }
+        ("float", serde_json::Value::Number(number)) => {
+            // parsed is finite because LuaSkills validates manifest defaults before publishing descriptors.
+            // parsed 是有限值，因为 LuaSkills 会在发布描述前校验清单默认值。
+            let parsed = number.as_f64().ok_or_else(|| {
+                format!(
+                    "CONFIG_DECLARATION_INVALID: configuration '{}' default is not a finite float",
+                    item.key
+                )
+            })?;
+            if parsed == 0.0 {
+                String::from("0")
+            } else {
+                parsed.to_string()
+            }
+        }
+        ("string" | "enum", serde_json::Value::String(text)) => text.clone(),
+        ("boolean", serde_json::Value::Bool(flag)) => flag.to_string(),
+        _ => {
+            return Err(format!(
+                "CONFIG_DECLARATION_INVALID: configuration '{}' default does not match declared type '{}'",
+                item.key,
+                item.value_type.as_str()
+            ));
+        }
+    };
+    Ok(Some(canonical))
 }
 
 /// Persist Vulcan-owned LuaSkills runtime settings and return the refreshed catalog projection.
@@ -453,6 +870,7 @@ pub fn install_luaskill(
     let result = engine
         .install_skill_in_root(&handle.skill_roots, &user_root, &request)
         .map_err(|error| format!("安装 LuaSkills 技能失败：{error}"))?;
+    invalidate_config_capability_cache(handle, &result.skill_id)?;
     let catalog = reload_catalog_after_management(handle, &mut engine)?;
     Ok((result.message, catalog))
 }
@@ -487,6 +905,7 @@ pub fn update_luaskill(
             .update_skill_in_root(&handle.skill_roots, &target_root, &request)
             .map_err(|error| format!("更新 LuaSkills 技能失败：{error}"))?
     };
+    invalidate_config_capability_cache(handle, &result.skill_id)?;
     let catalog = reload_catalog_after_management(handle, &mut engine)?;
     Ok((result.message, catalog))
 }
@@ -563,6 +982,7 @@ pub fn uninstall_luaskill(
             &SkillUninstallOptions::default(),
         )
         .map_err(|error| format!("卸载 LuaSkills 技能失败：{error}"))?;
+    invalidate_config_capability_cache(handle, &result.skill_id)?;
     let catalog = reload_catalog_after_management(handle, &mut engine)?;
     Ok((result.message, catalog))
 }
@@ -634,6 +1054,20 @@ fn build_luaskills_catalog(
         };
         let system_owned = resolved.root_name.eq_ignore_ascii_case("ROOT");
         let version = meta.version().to_string();
+        let declares_configuration =
+            package_declares_configuration(handle, &meta, &resolved.skill_id, &version)?;
+        // config is probed only for enabled packages because LuaSkills registers effective declarations only for loaded skills.
+        // config 仅对已启用技能包执行探测，因为 LuaSkills 只为已加载技能注册生效配置声明。
+        let config = if enabled && declares_configuration {
+            let descriptors = engine
+                .describe_skill_package_config(Some(&resolved.skill_id), false)
+                .map_err(|error| {
+                    format!("读取技能包配置状态失败（{}）：{error}", resolved.skill_id)
+                })?;
+            take_declared_package_config_descriptor(&resolved.skill_id, descriptors)?
+        } else {
+            None
+        };
         skills.push(TauriLuaSkillSummary {
             skill_id: resolved.skill_id,
             display_name: meta.name,
@@ -649,6 +1083,7 @@ fn build_luaskills_catalog(
             capability,
             tools,
             system_owned,
+            config,
         });
     }
     skills.sort_by(|left, right| {
@@ -969,6 +1404,7 @@ fn ordinary_uninstall_target_root_for_skill(
 fn build_host_options(
     runtime_root: &Path,
     managed_runtime_distribution_root: &Path,
+    skill_config_root: &Path,
     controller: PersistedControllerConfiguration,
     runtime_settings: &LuaSkillsRuntimeSettings,
 ) -> LuaRuntimeHostOptions {
@@ -980,6 +1416,8 @@ fn build_host_options(
     let lua_managed_runtime_distribution_root =
         vulcan_runtime_assets::native_host_path(managed_runtime_distribution_root);
     let mut host_options = LuaRuntimeHostOptions::with_runtime_root(lua_runtime_root.clone());
+    host_options.skill_config_root =
+        Some(vulcan_runtime_assets::native_host_path(skill_config_root));
     host_options.managed_runtime_distribution_root = Some(lua_managed_runtime_distribution_root);
     host_options.managed_runtime_environment_root =
         Some(lua_runtime_root.join("dependencies").join("envs"));
@@ -1104,4 +1542,144 @@ fn read_skill_meta_from_directory(skill_dir: &Path, skill_id: &str) -> Result<Sk
         .map_err(|error| format!("读取技能清单失败（{}）：{error}", manifest_path.display()))?;
     serde_yaml::from_str::<SkillMeta>(&manifest_text)
         .map_err(|error| format!("解析技能清单失败（{skill_id}）：{error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Builds one upstream-compatible descriptor without declared configuration items.
+    /// 构建一份不含配置声明项且兼容上游契约的描述。
+    ///
+    /// `skill_id` and `version` identify the fixture package.
+    /// `skill_id` 与 `version` 标识测试技能包。
+    ///
+    /// Returns a descriptor suitable for testing configless package handling.
+    /// 返回适合测试无配置技能包处理的描述。
+    fn empty_config_descriptor(
+        skill_id: &str,
+        version: &str,
+    ) -> RuntimeSkillPackageConfigDescriptor {
+        serde_json::from_value(json!({
+            "skill_id": skill_id,
+            "skill_version": version,
+            "complete": true,
+            "revision": "0",
+            "store_scope": "skills",
+            "missing_count": 0,
+            "invalid_count": 0,
+            "business_issue_count": 0,
+            "orphaned_count": 0,
+            "orphaned": [],
+            "items": []
+        }))
+        .expect("deserialize empty upstream descriptor")
+    }
+
+    /// Verifies configless descriptors are not exposed as configurable packages.
+    /// 验证无配置项描述不会作为可配置技能包暴露。
+    #[test]
+    fn empty_package_config_descriptor_is_filtered() {
+        let descriptor = take_declared_package_config_descriptor(
+            "fixture",
+            vec![empty_config_descriptor("fixture", "1.0.0")],
+        )
+        .expect("filter descriptor");
+
+        assert!(descriptor.is_none());
+    }
+
+    /// Verifies the negative cache is exact by version and supports positive and mutation invalidation.
+    /// 验证负缓存按版本精确命中，并支持正向探测与包变更失效。
+    #[test]
+    fn config_capability_negative_cache_tracks_version_and_invalidation() {
+        let mut cache = LuaSkillConfigCapabilityCache::default();
+
+        assert!(!cache.is_known_configless("fixture", "1.0.0"));
+        cache.record_probe("fixture", "1.0.0", false);
+        assert!(cache.is_known_configless("fixture", "1.0.0"));
+        assert!(!cache.is_known_configless("fixture", "1.1.0"));
+
+        cache.record_probe("fixture", "1.0.0", true);
+        assert!(!cache.is_known_configless("fixture", "1.0.0"));
+
+        cache.record_probe("fixture", "1.0.0", false);
+        assert!(cache.invalidate("fixture"));
+        assert!(!cache.is_known_configless("fixture", "1.0.0"));
+    }
+
+    /// Verifies declaration defaults use the same canonical strings returned by LuaSkills.
+    /// 验证声明默认值使用与 LuaSkills 返回值一致的规范字符串。
+    #[test]
+    fn package_config_defaults_use_canonical_runtime_strings() {
+        // descriptor is deserialized through the public upstream contract to keep the fixture aligned with 0.5.5.
+        // descriptor 通过公开上游契约反序列化，使测试夹具与 0.5.5 保持一致。
+        let descriptor: RuntimeSkillPackageConfigDescriptor = serde_json::from_value(json!({
+            "skill_id": "fixture",
+            "skill_version": "1.0.0",
+            "complete": true,
+            "revision": "2",
+            "store_scope": "skills",
+            "missing_count": 0,
+            "invalid_count": 0,
+            "business_issue_count": 0,
+            "orphaned_count": 0,
+            "orphaned": [],
+            "items": [
+                {
+                    "key": "retries",
+                    "type": "integer",
+                    "required": false,
+                    "sensitive": false,
+                    "description": "retry count",
+                    "constraints": {},
+                    "options": [],
+                    "default": 3,
+                    "advanced": false,
+                    "restart_required": false,
+                    "deprecated": false,
+                    "state": "default",
+                    "satisfied": true,
+                    "value": null
+                },
+                {
+                    "key": "ratio",
+                    "type": "float",
+                    "required": false,
+                    "sensitive": false,
+                    "description": "ratio",
+                    "constraints": {},
+                    "options": [],
+                    "default": -0.0,
+                    "advanced": false,
+                    "restart_required": false,
+                    "deprecated": false,
+                    "state": "default",
+                    "satisfied": true,
+                    "value": null
+                }
+            ]
+        }))
+        .expect("deserialize upstream descriptor");
+
+        assert_eq!(
+            canonical_default_config_value(&descriptor.items[0]).expect("integer default"),
+            Some(String::from("3"))
+        );
+        assert_eq!(
+            canonical_default_config_value(&descriptor.items[1]).expect("float default"),
+            Some(String::from("0"))
+        );
+        assert_eq!(
+            canonical_configured_config_value(&descriptor.items[0], "003")
+                .expect("configured integer"),
+            "3"
+        );
+        assert_eq!(
+            canonical_configured_config_value(&descriptor.items[1], "-0")
+                .expect("configured float"),
+            "0"
+        );
+    }
 }

@@ -20,16 +20,19 @@ import {
 import { loadWorkbenchSnapshot } from "@/service/workbench-snapshot-service";
 import {
   deleteSubagentDefinition,
+  deleteLuaSkillConfig,
   deletePluginMcpSecret,
   installLuaSkill,
   installLocalPlugin,
   inspectLocalPlugin,
+  describeLuaSkillConfig,
   deleteAgentSkill,
   deleteAgentSkillCategory,
   openAgentSkillsUserDirectory,
   openSubagentUserDirectory,
   refreshAgentSkillsCatalog,
   refreshLuaSkillsCatalog,
+  pollLuaSkillConfigEvents,
   retryLuaSkillsManagedRuntimes,
   refreshSubagentCatalog,
   restoreSubagentDefinitionDefault,
@@ -37,6 +40,7 @@ import {
   saveAgentSkill,
   saveAgentSkillCategory,
   saveLuaSkillsRuntimeSettings,
+  setLuaSkillConfig,
   saveSubagentDefinition,
   setAgentSkillEnabled,
   setAgentSkillCategory,
@@ -50,6 +54,7 @@ import {
   uninstallUserPlugin,
   updateLocalPlugin,
   updateLuaSkill,
+  validateLuaSkillConfig,
 } from "@/service/skills-actions-service";
 import { saveVmmMemoryConfig } from "@/service/memory-actions-service";
 import { applyPreviewProjectAction, applyPreviewProjectIcon, applyPreviewProjectOrder } from "@/state/workbench-preview-actions";
@@ -320,6 +325,11 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     onSetLuaSkillToolRegistrationState: (skillId, localName, registrationState) => (
       runLuaSkillsCatalogAction(() => setLuaSkillToolRegistrationState(skillId, localName, registrationState))
     ),
+    onDescribeLuaSkillConfig: describeLuaSkillConfig,
+    onValidateLuaSkillConfig: validateLuaSkillConfig,
+    onSetLuaSkillConfig: setLuaSkillConfig,
+    onDeleteLuaSkillConfig: deleteLuaSkillConfig,
+    onPollLuaSkillConfigEvents: pollLuaSkillConfigEvents,
   }), [runLuaSkillsCatalogAction]);
 
   // agentSkillActions groups the independent prompt-based Agent Skills boundary.

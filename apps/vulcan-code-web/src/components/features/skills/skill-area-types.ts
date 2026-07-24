@@ -1,5 +1,5 @@
 import type { FeatureHeaderSummary } from "@/components/features/feature-area-types"
-import type { LuaSkillsManagedRuntimeTarget, LuaSkillsRuntimeSettings, PluginSummary, VulcanPluginInitialSecret, VulcanPluginPermissionPreview } from "@/types"
+import type { LuaSkillConfigDeleteRequest, LuaSkillConfigDeleteResult, LuaSkillConfigDescriptor, LuaSkillConfigEventBatch, LuaSkillConfigSetRequest, LuaSkillConfigSetResult, LuaSkillConfigValidation, LuaSkillsManagedRuntimeTarget, LuaSkillsRuntimeSettings, PluginSummary, VulcanPluginInitialSecret, VulcanPluginPermissionPreview } from "@/types"
 
 // SkillActionProps groups service-backed actions used by the skill page.
 // SkillActionProps 分组技能页面使用的服务端动作。
@@ -49,6 +49,21 @@ export interface SkillActionProps {
   // Persists one Lua Skill tool registration state.
   // 持久化单个 Lua Skill 工具注册状态。
   onSetLuaSkillToolRegistrationState: (skillId: string, localName: string, registrationState: string) => Promise<void>
+  // Loads one host-safe package configuration descriptor.
+  // 加载单个宿主安全技能包配置描述。
+  onDescribeLuaSkillConfig: (skillId: string) => Promise<LuaSkillConfigDescriptor | null>
+  // Validates one package configuration without changing it.
+  // 校验单个技能包配置且不修改它。
+  onValidateLuaSkillConfig: (skillId: string) => Promise<LuaSkillConfigValidation>
+  // Atomically persists one typed package configuration batch.
+  // 原子持久化一组类型化技能包配置。
+  onSetLuaSkillConfig: (request: LuaSkillConfigSetRequest) => Promise<LuaSkillConfigSetResult>
+  // Deletes one explicit or orphaned package configuration value.
+  // 删除单个显式或遗留技能包配置值。
+  onDeleteLuaSkillConfig: (request: LuaSkillConfigDeleteRequest) => Promise<LuaSkillConfigDeleteResult>
+  // Polls package configuration events after one optional cursor.
+  // 轮询一个可选游标之后的技能包配置事件。
+  onPollLuaSkillConfigEvents: (afterSequence?: string | null) => Promise<LuaSkillConfigEventBatch>
 }
 
 // PluginSkillSubAreaId identifies one exact plugin-owned detail page.

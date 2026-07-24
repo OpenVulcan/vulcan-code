@@ -250,6 +250,545 @@ pub(crate) async fn service_refresh_luaskills_catalog(
     refresh_plugin_catalog_local_state_and_emit(&app, &state).await
 }
 
+/// Loads one host-safe LuaSkills package configuration descriptor for the WebUI.
+/// 为 WebUI 加载单个宿主安全的 LuaSkills 技能包配置描述。
+///
+/// `state` owns the retained engine and `skill_id` selects one effective package.
+/// `state` 持有保留引擎，`skill_id` 选择一个生效技能包。
+///
+/// Returns no descriptor when the package declares no configuration.
+/// 当技能包未声明配置时返回空。
+pub(crate) async fn service_describe_luaskill_config(
+    state: SharedServiceBridgeState,
+    skill_id: String,
+) -> Result<Option<LuaSkillConfigDescriptor>, String> {
+    let handle = service_luaskills_handle(&state)?;
+    let descriptor = run_extension_management_blocking("describe package config", move || {
+        vulcan_service_runtime::luaskills_bridge::describe_luaskill_package_config(
+            &handle, &skill_id,
+        )
+    })
+    .await?;
+    descriptor
+        .map(project_luaskill_config_descriptor)
+        .transpose()
+}
+
+/// Validates one LuaSkills package configuration without changing persisted values.
+/// 校验单个 LuaSkills 技能包配置且不修改持久化值。
+///
+/// `state` owns the retained engine and `skill_id` selects one effective package.
+/// `state` 持有保留引擎，`skill_id` 选择一个生效技能包。
+///
+/// Returns the authoritative completeness and validity result.
+/// 返回权威的完整性与合法性结果。
+pub(crate) async fn service_validate_luaskill_config(
+    state: SharedServiceBridgeState,
+    skill_id: String,
+) -> Result<LuaSkillConfigValidation, String> {
+    let handle = service_luaskills_handle(&state)?;
+    let status = run_extension_management_blocking("validate package config", move || {
+        vulcan_service_runtime::luaskills_bridge::validate_luaskill_package_config(
+            &handle, &skill_id,
+        )
+    })
+    .await?;
+    Ok(project_luaskill_config_validation(status))
+}
+
+/// Atomically updates one typed LuaSkills package configuration batch and refreshes catalog state.
+/// 原子更新一组类型化 LuaSkills 技能包配置并刷新目录状态。
+///
+/// `request` carries the exact skill id, observed revision, and non-empty typed values.
+/// `request` 携带精确技能标识、已观察修订号与非空类型化值。
+///
+/// Returns the freshly projected host-safe descriptor after a successful CAS transaction.
+/// CAS 事务成功后返回重新投影的宿主安全描述。
+pub(crate) async fn service_set_luaskill_config(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: LuaSkillConfigSetRequest,
+) -> Result<LuaSkillConfigSetResult, String> {
+    if request.values.is_empty() {
+        return Err(String::from(
+            "CONFIG_BATCH_EMPTY: package configuration updates require at least one value",
+        ));
+    }
+    let values = request
+        .values
+        .into_iter()
+        .map(|(key, value)| project_luaskill_config_input(value).map(|projected| (key, projected)))
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    let _management_guard = lock_luaskills_management_mutation().await;
+    let handle = service_luaskills_handle(&state)?;
+    let skill_id = request.skill_id;
+    let expected_revision = request.expected_revision;
+    let (result, descriptor) = run_extension_management_blocking("set package config", move || {
+        vulcan_service_runtime::luaskills_bridge::set_luaskill_package_config(
+            &handle,
+            &skill_id,
+            values,
+            &expected_revision,
+        )
+    })
+    .await?;
+    refresh_luaskills_local_state_and_emit(&app, &state).await?;
+    project_luaskill_config_set_result(result, descriptor)
+}
+
+/// Projects one upstream write result while removing canonical values for sensitive declarations.
+/// 投影单个上游写入结果，并移除敏感声明对应的规范值。
+///
+/// `result` is the committed transaction result and `descriptor` is the matching post-write snapshot.
+/// `result` 是已提交事务结果，`descriptor` 是对应的写入后快照。
+///
+/// Returns a host-safe mutation result with restart metadata.
+/// 返回包含重启元数据的宿主安全变更结果。
+fn project_luaskill_config_set_result(
+    result: luaskills::SkillConfigWriteResult,
+    descriptor: luaskills::RuntimeSkillPackageConfigDescriptor,
+) -> Result<LuaSkillConfigSetResult, String> {
+    // sensitive_keys is derived from the authoritative post-write declaration snapshot.
+    // sensitive_keys 从权威的写入后声明快照派生。
+    let sensitive_keys = descriptor
+        .items
+        .iter()
+        .filter(|item| item.sensitive)
+        .map(|item| item.key.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    // restart_required_keys is limited to values that actually changed in this transaction.
+    // restart_required_keys 仅包含当前事务中实际发生变化的值。
+    let restart_required_keys = descriptor
+        .items
+        .iter()
+        .filter(|item| item.restart_required && result.changed_keys.contains(&item.key))
+        .map(|item| item.key.clone())
+        .collect();
+    // values retains canonical results only for declarations allowed by host disclosure policy.
+    // values 仅为宿主披露策略允许的声明保留规范结果。
+    let values = result
+        .values
+        .into_iter()
+        .filter(|(key, _)| !sensitive_keys.contains(key.as_str()))
+        .collect();
+    Ok(LuaSkillConfigSetResult {
+        descriptor: project_luaskill_config_descriptor(descriptor)?,
+        revision: result.revision,
+        changed: result.changed,
+        values,
+        changed_keys: result.changed_keys,
+        restart_required_keys,
+    })
+}
+
+/// Deletes one explicit or orphaned LuaSkills package configuration value and refreshes catalog state.
+/// 删除单个显式或遗留 LuaSkills 技能包配置值并刷新目录状态。
+///
+/// `request` carries the exact skill id, key, and observed revision.
+/// `request` 携带精确技能标识、配置键与已观察修订号。
+///
+/// Returns the freshly projected host-safe descriptor after a successful CAS transaction.
+/// CAS 事务成功后返回重新投影的宿主安全描述。
+pub(crate) async fn service_delete_luaskill_config(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: LuaSkillConfigDeleteRequest,
+) -> Result<LuaSkillConfigDeleteResult, String> {
+    let _management_guard = lock_luaskills_management_mutation().await;
+    let handle = service_luaskills_handle(&state)?;
+    let skill_id = request.skill_id;
+    let key = request.key;
+    let expected_revision = request.expected_revision;
+    let (result, descriptor) =
+        run_extension_management_blocking("delete package config", move || {
+            vulcan_service_runtime::luaskills_bridge::delete_luaskill_package_config_value(
+                &handle,
+                &skill_id,
+                &key,
+                &expected_revision,
+            )
+        })
+        .await?;
+    refresh_luaskills_local_state_and_emit(&app, &state).await?;
+    project_luaskill_config_delete_result(result, descriptor)
+}
+
+/// Projects one upstream deletion result together with its matching host-safe snapshot.
+/// 把单个上游删除结果及其对应宿主安全快照一并投影。
+///
+/// `result` is the committed deletion and `descriptor` is the post-delete snapshot.
+/// `result` 是已提交删除结果，`descriptor` 是删除后快照。
+///
+/// Returns the complete host-safe deletion result.
+/// 返回完整宿主安全删除结果。
+fn project_luaskill_config_delete_result(
+    result: luaskills::SkillConfigDeleteResult,
+    descriptor: luaskills::RuntimeSkillPackageConfigDescriptor,
+) -> Result<LuaSkillConfigDeleteResult, String> {
+    Ok(LuaSkillConfigDeleteResult {
+        descriptor: project_luaskill_config_descriptor(descriptor)?,
+        revision: result.revision,
+        deleted: result.deleted,
+        key: result.key,
+    })
+}
+
+/// Explicitly refreshes one selected LuaSkills configuration store or both stores.
+/// 显式刷新一个选定 LuaSkills 配置存储或两个存储。
+///
+/// `request` contains only the optional exact upstream store scope.
+/// `request` 仅包含可选的精确上游存储作用域。
+///
+/// Returns one value-free refresh result per selected store and updates the catalog when changed.
+/// 每个选定存储返回一个不含值的刷新结果，并在发生变化时更新目录。
+pub(crate) async fn service_refresh_luaskill_config(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: LuaSkillConfigRefreshRequest,
+) -> Result<Vec<LuaSkillConfigStoreRefresh>, String> {
+    let _management_guard = lock_luaskills_management_mutation().await;
+    let handle = service_luaskills_handle(&state)?;
+    let refreshes = run_extension_management_blocking("refresh package config", move || {
+        vulcan_service_runtime::luaskills_bridge::refresh_luaskill_package_config(
+            &handle,
+            request.store_scope.as_deref(),
+        )
+    })
+    .await?;
+    if refreshes.iter().any(|refresh| refresh.changed) {
+        refresh_luaskills_local_state_and_emit(&app, &state).await?;
+    }
+    Ok(refreshes
+        .into_iter()
+        .map(|refresh| LuaSkillConfigStoreRefresh {
+            store_scope: refresh.store_scope,
+            revision: refresh.revision,
+            changed: refresh.changed,
+        })
+        .collect())
+}
+
+/// Polls ordered LuaSkills configuration events and synchronizes catalog state after observed changes.
+/// 轮询有序 LuaSkills 配置事件，并在观察到变更后同步目录状态。
+///
+/// `after_sequence` is an optional engine-local cursor.
+/// `after_sequence` 是可选的引擎内游标。
+///
+/// Returns a bounded event batch with a new cursor.
+/// 返回带新游标的有界事件批次。
+pub(crate) async fn service_poll_luaskill_config_events(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    after_sequence: Option<String>,
+) -> Result<LuaSkillConfigEventBatch, String> {
+    let handle = service_luaskills_handle(&state)?;
+    let (batch, cursor_recovered) =
+        run_extension_management_blocking("poll package config events", move || {
+            poll_luaskill_config_events_to_current_boundary(&handle, after_sequence)
+        })
+        .await?;
+    if cursor_recovered || !batch.events.is_empty() {
+        refresh_luaskills_local_state_and_emit(&app, &state).await?;
+    }
+    Ok(project_luaskill_config_event_batch(batch))
+}
+
+/// Polls every currently retained configuration event through bounded upstream pages.
+/// 通过有界上游分页轮询当前保留的全部配置事件。
+///
+/// `handle` owns the retained engine and `after_sequence` is the caller's last committed cursor.
+/// `handle` 持有保留引擎，`after_sequence` 是调用方最后提交的游标。
+///
+/// Returns one aggregated bounded queue snapshot and whether an expired cursor required resynchronization.
+/// 返回聚合后的有界队列快照，以及是否因游标过期执行了重新同步。
+fn poll_luaskill_config_events_to_current_boundary(
+    handle: &vulcan_service_runtime::luaskills_bridge::TauriLuaSkillsHandle,
+    after_sequence: Option<String>,
+) -> Result<(luaskills::RuntimeSkillConfigEventBatch, bool), String> {
+    // page_limit bounds each call according to the upstream event contract.
+    // page_limit 按上游事件契约限制每次调用。
+    const PAGE_LIMIT: usize = 128;
+    // cursor advances only after one complete upstream page has been retained locally.
+    // cursor 仅在完整保留一个上游分页后推进。
+    let mut cursor = after_sequence;
+    // events accumulates at most the upstream retained queue capacity.
+    // events 最多累积到上游保留队列容量。
+    let mut events = Vec::new();
+    // cursor_recovered records one explicit summary-resynchronization requirement.
+    // cursor_recovered 记录一次明确的摘要重新同步要求。
+    let mut cursor_recovered = false;
+    loop {
+        let batch =
+            match vulcan_service_runtime::luaskills_bridge::poll_luaskill_package_config_events(
+                handle,
+                cursor.as_deref(),
+                PAGE_LIMIT,
+            ) {
+                Ok(batch) => batch,
+                Err(error) if !cursor_recovered => {
+                    let Some(recovery_cursor) =
+                        expired_luaskill_config_event_recovery_cursor(&error)
+                    else {
+                        return Err(error);
+                    };
+                    cursor = Some(recovery_cursor);
+                    cursor_recovered = true;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+        // page_length decides whether another upstream page is currently available.
+        // page_length 决定当前是否还有下一个上游分页。
+        let page_length = batch.events.len();
+        cursor = Some(batch.next_sequence.clone());
+        events.extend(batch.events);
+        if page_length < PAGE_LIMIT || events.len() >= luaskills::SKILL_CONFIG_EVENT_QUEUE_CAPACITY
+        {
+            return Ok((
+                luaskills::RuntimeSkillConfigEventBatch {
+                    events,
+                    next_sequence: cursor.unwrap_or_else(|| String::from("0")),
+                },
+                cursor_recovered,
+            ));
+        }
+    }
+}
+
+/// Extracts the exact recovery boundary from one upstream expired-cursor diagnostic.
+/// 从单个上游游标过期诊断中提取精确恢复边界。
+///
+/// `error` must use LuaSkills 0.5.5's stable expired-cursor message.
+/// `error` 必须使用 LuaSkills 0.5.5 的稳定游标过期消息。
+///
+/// Returns the canonical cursor immediately before the oldest retained event.
+/// 返回最老保留事件之前的规范游标。
+fn expired_luaskill_config_event_recovery_cursor(error: &str) -> Option<String> {
+    // marker is the exact boundary label emitted by LuaSkills after its stable error code.
+    // marker 是 LuaSkills 在稳定错误码之后输出的精确边界标签。
+    const MARKER: &str = " precedes the oldest retained sequence ";
+    if !error.starts_with("CONFIG_EVENT_CURSOR_EXPIRED: event cursor ") {
+        return None;
+    }
+    let (_, oldest) = error.rsplit_once(MARKER)?;
+    oldest
+        .parse::<u64>()
+        .ok()?
+        .checked_sub(1)
+        .map(|sequence| sequence.to_string())
+}
+
+/// Converts one JSON scalar into the exact LuaSkills typed configuration input.
+/// 把单个 JSON 标量转换为精确的 LuaSkills 类型化配置输入。
+///
+/// `value` must be a string, signed integer, finite float, or boolean.
+/// `value` 必须是字符串、有符号整数、有限浮点数或布尔值。
+///
+/// Returns one upstream input scalar or an explicit type error.
+/// 返回一个上游输入标量或显式类型错误。
+fn project_luaskill_config_input(
+    value: serde_json::Value,
+) -> Result<luaskills::SkillPackageConfigInputValue, String> {
+    match value {
+        serde_json::Value::String(value) => {
+            Ok(luaskills::SkillPackageConfigInputValue::String(value))
+        }
+        serde_json::Value::Number(value) => {
+            if let Some(value) = value.as_i64() {
+                return Ok(luaskills::SkillPackageConfigInputValue::Integer(value));
+            }
+            let value = value.as_f64().ok_or_else(|| {
+                String::from(
+                    "CONFIG_VALUE_TYPE_INVALID: configuration values must be finite JSON scalars",
+                )
+            })?;
+            if !value.is_finite() {
+                return Err(String::from(
+                    "CONFIG_VALUE_TYPE_INVALID: configuration values must be finite JSON scalars",
+                ));
+            }
+            Ok(luaskills::SkillPackageConfigInputValue::Float(value))
+        }
+        serde_json::Value::Bool(value) => {
+            Ok(luaskills::SkillPackageConfigInputValue::Boolean(value))
+        }
+        _ => Err(String::from(
+            "CONFIG_VALUE_TYPE_INVALID: configuration values must be string, integer, float, or boolean scalars",
+        )),
+    }
+}
+
+/// Projects one upstream package configuration descriptor into the host WebUI contract.
+/// 把单个上游技能包配置描述投影为宿主 WebUI 契约。
+///
+/// `descriptor` has already had every sensitive effective value removed by the service runtime.
+/// `descriptor` 已由服务运行时移除所有敏感有效值。
+///
+/// Returns a camel-case wire descriptor or a serialization failure for declaration metadata.
+/// 返回 camelCase 线协议描述，或声明元数据序列化失败。
+fn project_luaskill_config_descriptor(
+    descriptor: luaskills::RuntimeSkillPackageConfigDescriptor,
+) -> Result<LuaSkillConfigDescriptor, String> {
+    let items = descriptor
+        .items
+        .into_iter()
+        .map(|item| {
+            // item_key preserves the declaration identity for both the row and any attached validation issue.
+            // item_key 同时为配置项行与其附加校验问题保留声明身份。
+            let item_key = item.key.clone();
+            let value_type = item.value_type.as_str().to_string();
+            let constraints = serde_json::to_value(item.constraints)
+                .map_err(|error| format!("序列化技能包配置约束失败：{error}"))?;
+            let format = item
+                .format
+                .map(|format| {
+                    serde_json::to_value(format)
+                        .map_err(|error| format!("序列化技能包配置格式失败：{error}"))
+                })
+                .transpose()?
+                .and_then(|value| value.as_str().map(str::to_string));
+            let state = serde_json::to_value(item.state)
+                .map_err(|error| format!("序列化技能包配置状态失败：{error}"))?
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| String::from("技能包配置状态未序列化为字符串。"))?;
+            Ok(LuaSkillConfigItem {
+                key: item.key,
+                value_type,
+                required: item.required,
+                sensitive: item.sensitive,
+                description: item.description,
+                constraints,
+                options: item
+                    .options
+                    .into_iter()
+                    .map(|option| LuaSkillConfigEnumOption {
+                        value: option.value,
+                        label: option.label,
+                        description: option.description,
+                    })
+                    .collect(),
+                default: item.default,
+                title: item.title,
+                group: item.group,
+                order: item.order,
+                advanced: item.advanced,
+                placeholder: item.placeholder,
+                example: item.example,
+                format,
+                restart_required: item.restart_required,
+                deprecated: item.deprecated,
+                deprecation_message: item.deprecation_message,
+                state,
+                satisfied: item.satisfied,
+                validation_error: item.validation_error.map(|error| LuaSkillConfigIssue {
+                    key: Some(item_key),
+                    code: error.code,
+                    message: error.message,
+                }),
+                value: item.value,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(LuaSkillConfigDescriptor {
+        skill_id: descriptor.skill_id,
+        skill_version: descriptor.skill_version,
+        complete: descriptor.complete,
+        revision: descriptor.revision,
+        store_scope: descriptor.store_scope,
+        missing_count: descriptor.missing_count,
+        invalid_count: descriptor.invalid_count,
+        business_issue_count: descriptor.business_issue_count,
+        orphaned_count: descriptor.orphaned_count,
+        orphaned: descriptor.orphaned,
+        items,
+    })
+}
+
+/// Projects one upstream package configuration validation status into the WebUI contract.
+/// 把单个上游技能包配置校验状态投影为 WebUI 契约。
+///
+/// `status` is the authoritative immutable LuaSkills validation snapshot.
+/// `status` 是权威的 LuaSkills 不可变校验快照。
+///
+/// Returns the complete host validation result.
+/// 返回完整宿主校验结果。
+fn project_luaskill_config_validation(
+    status: luaskills::RuntimeSkillPackageConfigStatus,
+) -> LuaSkillConfigValidation {
+    LuaSkillConfigValidation {
+        skill_id: status.skill_id,
+        complete: status.complete,
+        revision: status.revision,
+        store_scope: status.store_scope,
+        missing: status
+            .missing
+            .into_iter()
+            .map(|issue| LuaSkillConfigIssue {
+                key: Some(issue.key),
+                code: issue.code,
+                message: issue.message,
+            })
+            .collect(),
+        invalid: status
+            .invalid
+            .into_iter()
+            .map(|issue| LuaSkillConfigIssue {
+                key: Some(issue.key),
+                code: issue.code,
+                message: issue.message,
+            })
+            .collect(),
+        business_issues: status
+            .business_issues
+            .into_iter()
+            .map(|issue| LuaSkillConfigIssue {
+                key: issue.key,
+                code: issue.code,
+                message: issue.message,
+            })
+            .collect(),
+        orphaned: status.orphaned,
+        orphaned_count: status.orphaned_count,
+    }
+}
+
+/// Projects one upstream ordered event batch into the WebUI contract.
+/// 把单个上游有序事件批次投影为 WebUI 契约。
+///
+/// `batch` contains no persisted configuration values.
+/// `batch` 不包含任何持久化配置值。
+///
+/// Returns the complete event batch and cursor.
+/// 返回完整事件批次与游标。
+fn project_luaskill_config_event_batch(
+    batch: luaskills::RuntimeSkillConfigEventBatch,
+) -> LuaSkillConfigEventBatch {
+    LuaSkillConfigEventBatch {
+        events: batch
+            .events
+            .into_iter()
+            .map(|event| LuaSkillConfigEvent {
+                sequence: event.sequence,
+                event_type: event.event_type,
+                store_scope: event.store_scope,
+                skill_id: event.skill_id,
+                revision: event.revision,
+                changed_keys: event.changed_keys,
+                source: event.source,
+                restart_required_keys: event.restart_required_keys,
+                complete: event.complete,
+                error: event.error.map(|error| LuaSkillConfigIssue {
+                    key: None,
+                    code: error.code,
+                    message: error.message,
+                }),
+            })
+            .collect(),
+        next_sequence: batch.next_sequence,
+    }
+}
+
 /// Inspects one local user plugin package and returns its complete authorization preview.
 /// 检查一个本地用户插件包并返回其完整授权预览。
 pub(crate) async fn service_inspect_local_plugin(
@@ -4011,5 +4550,156 @@ mod tests {
                     .expect("override path should resolve")
             )
         );
+    }
+
+    /// Verifies package configuration input projection accepts only the four official scalar forms.
+    /// 验证技能包配置输入投影仅接受四种正式标量形式。
+    #[test]
+    fn luaskill_config_input_projection_accepts_only_official_scalars() {
+        assert!(matches!(
+            project_luaskill_config_input(json!("value")).expect("string input"),
+            luaskills::SkillPackageConfigInputValue::String(value) if value == "value"
+        ));
+        assert!(matches!(
+            project_luaskill_config_input(json!(42)).expect("integer input"),
+            luaskills::SkillPackageConfigInputValue::Integer(42)
+        ));
+        assert!(matches!(
+            project_luaskill_config_input(json!(1.5)).expect("float input"),
+            luaskills::SkillPackageConfigInputValue::Float(value) if value == 1.5
+        ));
+        assert!(matches!(
+            project_luaskill_config_input(json!(true)).expect("boolean input"),
+            luaskills::SkillPackageConfigInputValue::Boolean(true)
+        ));
+        assert!(project_luaskill_config_input(json!({"value": "secret"})).is_err());
+        assert!(project_luaskill_config_input(json!(["secret"])).is_err());
+        assert!(project_luaskill_config_input(serde_json::Value::Null).is_err());
+    }
+
+    /// Verifies the WebUI event projection contains metadata but no configuration values.
+    /// 验证 WebUI 事件投影包含元数据但不包含配置值。
+    #[test]
+    fn luaskill_config_event_projection_is_value_free() {
+        let projected =
+            project_luaskill_config_event_batch(luaskills::RuntimeSkillConfigEventBatch {
+                events: vec![luaskills::RuntimeSkillConfigEvent {
+                    sequence: String::from("7"),
+                    event_type: String::from("config_changed"),
+                    store_scope: String::from("skills"),
+                    skill_id: Some(String::from("fixture")),
+                    revision: String::from("8"),
+                    changed_keys: vec![String::from("api_token")],
+                    source: String::from("local_write"),
+                    restart_required_keys: Vec::new(),
+                    complete: Some(true),
+                    error: None,
+                }],
+                next_sequence: String::from("7"),
+            });
+        let json = serde_json::to_value(projected).expect("serialize event projection");
+
+        assert_eq!(json["events"][0]["changedKeys"], json!(["api_token"]));
+        assert!(json["events"][0].get("value").is_none());
+        assert!(json["events"][0].get("values").is_none());
+    }
+
+    /// Verifies expired event cursors recover only from the exact LuaSkills diagnostic contract.
+    /// 验证过期事件游标仅从精确的 LuaSkills 诊断契约恢复。
+    #[test]
+    fn luaskill_config_event_cursor_recovery_is_strict() {
+        assert_eq!(
+            expired_luaskill_config_event_recovery_cursor(
+                "CONFIG_EVENT_CURSOR_EXPIRED: event cursor 2 precedes the oldest retained sequence 9"
+            )
+            .as_deref(),
+            Some("8")
+        );
+        assert!(
+            expired_luaskill_config_event_recovery_cursor(
+                "CONFIG_EVENT_CURSOR_INVALID: event cursor 9 is newer than the current sequence 2"
+            )
+            .is_none()
+        );
+        assert!(
+            expired_luaskill_config_event_recovery_cursor(
+                "CONFIG_EVENT_CURSOR_EXPIRED: event cursor 2 precedes the oldest retained sequence invalid"
+            )
+            .is_none()
+        );
+    }
+
+    /// Verifies write-result projection removes sensitive canonical values and reports restart keys.
+    /// 验证写入结果投影会移除敏感规范值并报告重启键。
+    #[test]
+    fn luaskill_config_write_projection_is_host_safe() {
+        // result is decoded through the upstream public wire contract because its durability field is intentionally private.
+        // result 通过上游公开线协议解码，因为其耐久化字段刻意保持私有。
+        let result: luaskills::SkillConfigWriteResult = serde_json::from_value(json!({
+            "revision": "4",
+            "changed": true,
+            "values": {
+                "api_token": "secret-value",
+                "endpoint": "https://example.com"
+            },
+            "changed_keys": ["api_token", "endpoint"]
+        }))
+        .expect("decode upstream write result");
+        // descriptor is the authoritative post-write declaration snapshot used for disclosure.
+        // descriptor 是用于披露判断的权威写入后声明快照。
+        let descriptor: luaskills::RuntimeSkillPackageConfigDescriptor =
+            serde_json::from_value(json!({
+                "skill_id": "fixture",
+                "skill_version": "1.0.0",
+                "complete": true,
+                "revision": "4",
+                "store_scope": "skills",
+                "missing_count": 0,
+                "invalid_count": 0,
+                "business_issue_count": 0,
+                "orphaned_count": 0,
+                "orphaned": [],
+                "items": [
+                    {
+                        "key": "api_token",
+                        "type": "string",
+                        "required": true,
+                        "sensitive": true,
+                        "description": "secret",
+                        "constraints": {},
+                        "options": [],
+                        "advanced": false,
+                        "restart_required": true,
+                        "deprecated": false,
+                        "state": "configured",
+                        "satisfied": true
+                    },
+                    {
+                        "key": "endpoint",
+                        "type": "string",
+                        "required": true,
+                        "sensitive": false,
+                        "description": "endpoint",
+                        "constraints": {},
+                        "options": [],
+                        "advanced": false,
+                        "restart_required": false,
+                        "deprecated": false,
+                        "state": "configured",
+                        "satisfied": true,
+                        "value": "https://example.com"
+                    }
+                ]
+            }))
+            .expect("decode upstream descriptor");
+
+        let projected =
+            project_luaskill_config_set_result(result, descriptor).expect("project write result");
+        assert_eq!(
+            projected.values.get("endpoint").map(String::as_str),
+            Some("https://example.com")
+        );
+        assert!(!projected.values.contains_key("api_token"));
+        assert_eq!(projected.restart_required_keys, vec!["api_token"]);
     }
 }

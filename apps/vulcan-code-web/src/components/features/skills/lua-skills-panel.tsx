@@ -13,6 +13,7 @@ import {
   LuaSkillDetailDialog,
   LuaSkillToolsDialog,
 } from "@/components/features/skills/lua-skill-card";
+import { LuaSkillConfigDialog } from "@/components/features/skills/lua-skill-config-dialog";
 import { useI18n } from "@/i18n";
 import type { LuaSkillSummary } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
@@ -81,6 +82,9 @@ export function LuaSkillsPanel(props: {
   // toolsSkillId stores the Lua Skill selected for the tools dialog.
   // toolsSkillId 保存当前打开工具弹窗的 Lua Skill 标识。
   const [toolsSkillId, setToolsSkillId] = React.useState<string | null>(null);
+  // configSkillId stores the Lua Skill selected for package configuration.
+  // configSkillId 保存当前打开技能包配置的 Lua Skill 标识。
+  const [configSkillId, setConfigSkillId] = React.useState<string | null>(null);
   // detailSkill derives the selected details skill from the latest snapshot.
   // detailSkill 从最新快照派生当前详情技能，避免弹窗持有旧对象。
   const detailSkill = React.useMemo(
@@ -92,6 +96,12 @@ export function LuaSkillsPanel(props: {
   const toolsSkill = React.useMemo(
     () => props.skills.find((skill) => skill.skillId === toolsSkillId) ?? null,
     [props.skills, toolsSkillId],
+  );
+  // configSkill derives the selected configuration skill from the latest snapshot.
+  // configSkill 从最新快照派生当前配置技能。
+  const configSkill = React.useMemo(
+    () => props.skills.find((skill) => skill.skillId === configSkillId) ?? null,
+    [configSkillId, props.skills],
   );
   // visibleSkills applies text, enabled-state, and ownership filters to the current snapshot.
   // visibleSkills 对当前快照应用文本、启停状态与归属筛选。
@@ -176,6 +186,7 @@ export function LuaSkillsPanel(props: {
             busy={busyAction !== null}
             key={skill.skillId}
             onOpenDetail={(selectedSkill) => setDetailSkillId(selectedSkill.skillId)}
+            onOpenConfig={(selectedSkill) => setConfigSkillId(selectedSkill.skillId)}
             onOpenTools={(selectedSkill) => setToolsSkillId(selectedSkill.skillId)}
             onRunAction={runAction}
             skill={skill}
@@ -199,6 +210,16 @@ export function LuaSkillsPanel(props: {
         onOpenChange={(open) => {
           if (!open) {
             setToolsSkillId(null);
+          }
+        }}
+      />
+      <LuaSkillConfigDialog
+        actions={props.actions}
+        open={configSkillId !== null && configSkill !== null}
+        skill={configSkill}
+        onOpenChange={(open) => {
+          if (!open) {
+            setConfigSkillId(null);
           }
         }}
       />

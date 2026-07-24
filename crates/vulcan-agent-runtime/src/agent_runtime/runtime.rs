@@ -21,7 +21,7 @@ use crate::mcp::{
 use crate::provider_config::{PersistedLuaSkillsConfiguration, ProviderConfigurationFile};
 use crate::tooling::native::{
     CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, KNOWLEDGE_BROWSE_TOOL_ID, KNOWLEDGE_READ_TOOL_ID,
-    KNOWLEDGE_SEARCH_TOOL_ID, TODOLIST_TOOL_ID, UPDATE_GOAL_TOOL_ID,
+    KNOWLEDGE_SEARCH_TOOL_ID, RUNTIME_CONFIG_TOOL_ID, TODOLIST_TOOL_ID, UPDATE_GOAL_TOOL_ID,
 };
 use crate::tooling::{CommandSessionRuntime, NativeToolCatalog, build_native_tool_catalog};
 use luaskills::RuntimeEntryDescriptor;
@@ -282,6 +282,7 @@ impl RuntimeFoundation {
             Arc::clone(&command_session_runtime),
             config.vmm.clone(),
             vulcan_plugin_runtime.clone(),
+            luaskills_runtime.clone(),
         );
         let mut warnings = subagent_catalog
             .errors
@@ -801,6 +802,7 @@ fn append_universal_native_tools(
         KNOWLEDGE_SEARCH_TOOL_ID,
         KNOWLEDGE_BROWSE_TOOL_ID,
         KNOWLEDGE_READ_TOOL_ID,
+        RUNTIME_CONFIG_TOOL_ID,
     ] {
         if available_native_tool_ids.contains(tool_id) && !names.iter().any(|name| name == tool_id)
         {

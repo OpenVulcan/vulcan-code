@@ -1450,6 +1450,27 @@ export type TranslationKey =
   | "skills.lua.toolImplicit"
   | "skills.lua.toolDisabled"
   | "skills.lua.syncing"
+  | "skills.luaConfig.title"
+  | "skills.luaConfig.description"
+  | "skills.luaConfig.loading"
+  | "skills.luaConfig.empty"
+  | "skills.luaConfig.complete"
+  | "skills.luaConfig.incomplete"
+  | "skills.luaConfig.required"
+  | "skills.luaConfig.sensitive"
+  | "skills.luaConfig.restartRequired"
+  | "skills.luaConfig.deprecated"
+  | "skills.luaConfig.secretConfigured"
+  | "skills.luaConfig.preserveSecret"
+  | "skills.luaConfig.selectValue"
+  | "skills.luaConfig.deleteValue"
+  | "skills.luaConfig.reload"
+  | "skills.luaConfig.advanced"
+  | "skills.luaConfig.orphaned"
+  | "skills.luaConfig.externalChange"
+  | "skills.luaConfig.revisionConflict"
+  | "skills.luaConfig.saving"
+  | "skills.luaConfig.save"
   | "skills.plugins.emptyTitle"
   | "skills.plugins.emptyDetail"
   | "skills.plugins.loadingPage"
@@ -2921,6 +2942,27 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.lua.toolImplicit": "隐式启用",
     "skills.lua.toolDisabled": "关闭工具",
     "skills.lua.syncing": "同步中",
+    "skills.luaConfig.title": "技能包配置",
+    "skills.luaConfig.description": "按照技能包声明管理配置。",
+    "skills.luaConfig.loading": "正在加载技能包配置…",
+    "skills.luaConfig.empty": "当前技能包没有声明配置项。",
+    "skills.luaConfig.complete": "配置完整",
+    "skills.luaConfig.incomplete": "配置不完整",
+    "skills.luaConfig.required": "必填",
+    "skills.luaConfig.sensitive": "敏感",
+    "skills.luaConfig.restartRequired": "修改后需重启",
+    "skills.luaConfig.deprecated": "已弃用",
+    "skills.luaConfig.secretConfigured": "已配置；留空不会修改当前值。",
+    "skills.luaConfig.preserveSecret": "保留当前敏感值",
+    "skills.luaConfig.selectValue": "请选择",
+    "skills.luaConfig.deleteValue": "删除显式配置值",
+    "skills.luaConfig.reload": "重新加载最新配置",
+    "skills.luaConfig.advanced": "高级配置",
+    "skills.luaConfig.orphaned": "遗留配置键",
+    "skills.luaConfig.externalChange": "检测到外部配置变更，已加载最新修订并保留未提交草稿。",
+    "skills.luaConfig.revisionConflict": "配置已被其他运行时修改，已加载最新修订并保留未提交草稿，请确认后重新保存。",
+    "skills.luaConfig.saving": "保存中…",
+    "skills.luaConfig.save": "保存配置",
     "skills.plugins.emptyTitle": "暂无 Vulcan 插件",
     "skills.plugins.emptyDetail": "随包的 Vulcan 插件会显示在这里。",
     "skills.plugins.loadingPage": "正在加载插件页面…",
@@ -4389,6 +4431,27 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.lua.toolImplicit": "Implicit",
     "skills.lua.toolDisabled": "Disable",
     "skills.lua.syncing": "Syncing",
+    "skills.luaConfig.title": "Package Configuration",
+    "skills.luaConfig.description": "Manage configuration from the package declarations.",
+    "skills.luaConfig.loading": "Loading package configuration…",
+    "skills.luaConfig.empty": "This package declares no configuration items.",
+    "skills.luaConfig.complete": "Complete",
+    "skills.luaConfig.incomplete": "Incomplete",
+    "skills.luaConfig.required": "Required",
+    "skills.luaConfig.sensitive": "Sensitive",
+    "skills.luaConfig.restartRequired": "Restart required",
+    "skills.luaConfig.deprecated": "Deprecated",
+    "skills.luaConfig.secretConfigured": "Configured; leaving this blank preserves the current value.",
+    "skills.luaConfig.preserveSecret": "Preserve current sensitive value",
+    "skills.luaConfig.selectValue": "Select a value",
+    "skills.luaConfig.deleteValue": "Delete explicit configuration value",
+    "skills.luaConfig.reload": "Reload latest configuration",
+    "skills.luaConfig.advanced": "Advanced configuration",
+    "skills.luaConfig.orphaned": "Orphaned configuration keys",
+    "skills.luaConfig.externalChange": "An external configuration change was detected. The latest revision was loaded and unsaved edits were preserved.",
+    "skills.luaConfig.revisionConflict": "Another runtime changed this configuration. The latest revision was loaded and unsaved edits were preserved; review and save again.",
+    "skills.luaConfig.saving": "Saving…",
+    "skills.luaConfig.save": "Save configuration",
     "skills.plugins.emptyTitle": "No Vulcan plugins",
     "skills.plugins.emptyDetail": "Bundled Vulcan plugins appear here.",
     "skills.plugins.loadingPage": "Loading plugin page…",

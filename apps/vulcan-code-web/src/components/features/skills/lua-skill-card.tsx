@@ -3,6 +3,7 @@ import {
   ChevronDown,
   Package,
   RotateCw,
+  Settings2,
   Trash2,
   Wrench,
 } from "lucide-react";
@@ -25,6 +26,18 @@ import { useI18n } from "@/i18n";
 import type { LuaSkillSummary, LuaSkillToolSummary } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 
+// hasLuaSkillConfigOptions determines whether one catalog row exposes actual package configuration options.
+// hasLuaSkillConfigOptions 判断单个目录行是否暴露实际技能包配置选项。
+//
+// The skill parameter supplies the projected configuration summary.
+// skill 参数提供投影后的配置摘要。
+//
+// Returns true only when the package declares at least one configuration item.
+// 仅当技能包至少声明一个配置项时返回 true。
+export function hasLuaSkillConfigOptions(skill: Pick<LuaSkillSummary, "config">): boolean {
+  return Boolean(skill.config && skill.config.itemCount > 0);
+}
+
 // LuaSkillCard renders one Lua Skill package and its tool summary.
 // LuaSkillCard 渲染单个 Lua Skill 包及其工具摘要。
 export function LuaSkillCard(props: {
@@ -40,6 +53,9 @@ export function LuaSkillCard(props: {
   // Opens the tools dialog for this Lua Skill.
   // 打开当前 Lua Skill 的工具弹窗。
   onOpenTools: (skill: LuaSkillSummary) => void;
+  // Opens the package configuration dialog for this Lua Skill.
+  // 打开当前 Lua Skill 的技能包配置弹窗。
+  onOpenConfig: (skill: LuaSkillSummary) => void;
   // Runs a labeled async action with page-level busy state.
   // 使用页面级忙碌状态运行带标签的异步动作。
   onRunAction: (label: string, action: () => Promise<void>) => Promise<void>;
@@ -63,6 +79,9 @@ export function LuaSkillCard(props: {
   // disabledToolCount counts tools explicitly hidden from the model.
   // disabledToolCount 统计被明确隐藏于模型的工具。
   const disabledToolCount = props.skill.tools.filter((tool) => tool.registrationState === "disabled").length;
+  // hasConfigOptions controls both configuration status and the configuration action.
+  // hasConfigOptions 同时控制配置状态与配置操作入口。
+  const hasConfigOptions = hasLuaSkillConfigOptions(props.skill);
 
   return (
     <article className="agent-definition-row lua-skill-definition-row">
@@ -91,6 +110,11 @@ export function LuaSkillCard(props: {
             <Badge variant="outline">{t("skills.label.explicit")} {explicitToolCount}</Badge>
             <Badge variant="outline">{t("skills.label.implicit")} {implicitToolCount}</Badge>
             {disabledToolCount > 0 ? <Badge variant="outline">{t("skills.label.closed")} {disabledToolCount}</Badge> : null}
+            {hasConfigOptions && props.skill.config ? (
+              <Badge variant={props.skill.config.complete ? "secondary" : "outline"}>
+                {props.skill.config.complete ? t("skills.luaConfig.complete") : t("skills.luaConfig.incomplete")}
+              </Badge>
+            ) : null}
           </div>
         </div>
         <p>{source}</p>
@@ -117,6 +141,16 @@ export function LuaSkillCard(props: {
         >
           <Wrench size={14} />
         </button>
+        {hasConfigOptions ? (
+          <button
+            className="agent-definition-icon-button"
+            onClick={() => props.onOpenConfig(props.skill)}
+            title={t("skills.luaConfig.title")}
+            type="button"
+          >
+            <Settings2 size={14} />
+          </button>
+        ) : null}
         {props.skill.managed ? (
           <button
             className="agent-definition-icon-button"

@@ -543,6 +543,34 @@ pub fn application_data_root() -> PathBuf {
     }
 }
 
+/// Resolves the fixed absolute host-owned root used by LuaSkills package configuration stores.
+/// 解析 LuaSkills 技能包配置存储使用的固定绝对宿主持有根目录。
+///
+/// Returns an explicit error when the platform home directory is unavailable or not absolute.
+/// 平台主目录不可用或不是绝对路径时返回显式错误。
+pub fn application_luaskills_config_root() -> Result<PathBuf, String> {
+    #[cfg(test)]
+    // root uses the process-isolated absolute temporary data plane during unit tests.
+    // root 在单元测试中使用进程隔离的绝对临时数据平面。
+    let root = application_data_root();
+
+    #[cfg(not(test))]
+    // root requires the platform home directory and deliberately has no current-directory fallback.
+    // root 要求平台主目录存在，并刻意不提供当前目录回退。
+    let root = dirs::home_dir()
+        .ok_or_else(|| String::from("无法解析 LuaSkills 技能包配置根：系统主目录不可用。"))?
+        .join(".vulcan")
+        .join("code");
+
+    if !root.is_absolute() {
+        return Err(format!(
+            "LuaSkills 技能包配置根必须是绝对路径：{}",
+            root.display()
+        ));
+    }
+    Ok(root.join("luaskills-config"))
+}
+
 /// Ensures the parent directory of one target file exists.
 /// 确保某个目标文件的父目录已经存在。
 fn ensure_parent_directory(path: &Path) -> Result<(), String> {
@@ -687,5 +715,15 @@ mod tests {
         assert!(first.starts_with("app-state@"));
         assert!(second.starts_with("app-state@"));
         assert_ne!(first, second);
+    }
+
+    /// Verifies that LuaSkills package configuration uses one stable root below the application data plane.
+    /// 验证 LuaSkills 技能包配置使用应用数据平面下的唯一稳定根目录。
+    #[test]
+    fn luaskills_config_root_is_stable_below_application_data_root() {
+        assert_eq!(
+            application_luaskills_config_root().expect("resolve LuaSkills config root"),
+            application_data_root().join("luaskills-config")
+        );
     }
 }

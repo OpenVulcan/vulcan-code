@@ -3,6 +3,13 @@ import type {
   AgentSkillCategorySaveRequest,
   AgentSkillSaveRequest,
   LuaSkillsCatalogUpdate,
+  LuaSkillConfigDeleteRequest,
+  LuaSkillConfigDeleteResult,
+  LuaSkillConfigDescriptor,
+  LuaSkillConfigEventBatch,
+  LuaSkillConfigSetRequest,
+  LuaSkillConfigSetResult,
+  LuaSkillConfigValidation,
   LuaSkillsManagedRuntimeTarget,
   LuaSkillsRuntimeSettings,
   PluginUiModuleSource,
@@ -95,6 +102,97 @@ export async function refreshLuaSkillsCatalog(): Promise<LuaSkillsCatalogUpdate>
     return luaSkillsCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench(() => undefined));
   }
   return serviceClient.request<LuaSkillsCatalogUpdate>("service_refresh_luaskills_catalog");
+}
+
+// describeLuaSkillConfig loads one host-safe effective package configuration descriptor.
+// describeLuaSkillConfig 加载单个宿主安全的生效技能包配置描述。
+//
+// Parameters: skillId is the exact effective package identifier.
+// 参数：skillId 是精确的生效技能包标识。
+// Returns: one descriptor or null when the package declares no configuration.
+// 返回值：一个配置描述，技能包未声明配置时返回 null。
+export async function describeLuaSkillConfig(skillId: string): Promise<LuaSkillConfigDescriptor | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<LuaSkillConfigDescriptor | null>(
+    "service_describe_luaskill_config",
+    { skillId },
+  );
+}
+
+// validateLuaSkillConfig validates one effective package configuration.
+// validateLuaSkillConfig 校验单个生效技能包配置。
+//
+// Parameters: skillId is the exact effective package identifier.
+// 参数：skillId 是精确的生效技能包标识。
+// Returns: the authoritative completeness and validity result.
+// 返回值：权威的完整性与合法性结果。
+export async function validateLuaSkillConfig(skillId: string): Promise<LuaSkillConfigValidation> {
+  if (!hasServiceRuntime()) {
+    throw new Error("LuaSkills package configuration requires the local service runtime.");
+  }
+  return serviceClient.request<LuaSkillConfigValidation>(
+    "service_validate_luaskill_config",
+    { skillId },
+  );
+}
+
+// setLuaSkillConfig atomically updates one typed package configuration batch.
+// setLuaSkillConfig 原子更新一组类型化技能包配置。
+//
+// Parameters: request contains the exact package id, observed revision, and changed values.
+// 参数：request 包含精确技能包标识、已观察修订号与变更值。
+// Returns: the host-safe mutation result and fresh descriptor after the CAS transaction.
+// 返回值：CAS 事务后的宿主安全变更结果与最新描述。
+export async function setLuaSkillConfig(
+  request: LuaSkillConfigSetRequest,
+): Promise<LuaSkillConfigSetResult> {
+  if (!hasServiceRuntime()) {
+    throw new Error("LuaSkills package configuration requires the local service runtime.");
+  }
+  return serviceClient.request<LuaSkillConfigSetResult>(
+    "service_set_luaskill_config",
+    { request },
+  );
+}
+
+// deleteLuaSkillConfig deletes one explicit or orphaned package configuration value.
+// deleteLuaSkillConfig 删除单个显式或遗留技能包配置值。
+//
+// Parameters: request contains the exact package id, key, and observed revision.
+// 参数：request 包含精确技能包标识、配置键与已观察修订号。
+// Returns: the host-safe deletion result and fresh descriptor after the CAS transaction.
+// 返回值：CAS 事务后的宿主安全删除结果与最新描述。
+export async function deleteLuaSkillConfig(
+  request: LuaSkillConfigDeleteRequest,
+): Promise<LuaSkillConfigDeleteResult> {
+  if (!hasServiceRuntime()) {
+    throw new Error("LuaSkills package configuration requires the local service runtime.");
+  }
+  return serviceClient.request<LuaSkillConfigDeleteResult>(
+    "service_delete_luaskill_config",
+    { request },
+  );
+}
+
+// pollLuaSkillConfigEvents polls ordered configuration changes after one optional cursor.
+// pollLuaSkillConfigEvents 轮询一个可选游标之后的有序配置变更。
+//
+// Parameters: afterSequence is the engine-local cursor returned by the previous call.
+// 参数：afterSequence 是上一次调用返回的引擎内游标。
+// Returns: a bounded event batch and the next cursor.
+// 返回值：有界事件批次与下一游标。
+export async function pollLuaSkillConfigEvents(
+  afterSequence?: string | null,
+): Promise<LuaSkillConfigEventBatch> {
+  if (!hasServiceRuntime()) {
+    return { events: [], nextSequence: afterSequence ?? "0" };
+  }
+  return serviceClient.request<LuaSkillConfigEventBatch>(
+    "service_poll_luaskill_config_events",
+    { afterSequence: afterSequence ?? null },
+  );
 }
 
 // retryLuaSkillsManagedRuntimes retries the packaged Python and Node bootstrap through the local service.

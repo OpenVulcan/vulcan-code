@@ -78,6 +78,9 @@ pub const KNOWLEDGE_BROWSE_TOOL_ID: &str = "knowledge_browse";
 /// Stable identifier for project knowledge reading.
 /// 项目资料读取的稳定标识。
 pub const KNOWLEDGE_READ_TOOL_ID: &str = "knowledge_read";
+/// Stable identifier for read-only LuaSkills package configuration discovery.
+/// 只读 LuaSkills 技能包配置发现的稳定标识。
+pub const RUNTIME_CONFIG_TOOL_ID: &str = "runtime-config";
 
 /// Quiet window used after Ctrl+C before the terminal is considered drained.
 /// Ctrl+C 后认为终端排空所需的静默窗口。
@@ -103,10 +106,12 @@ pub(crate) use shell_command::*;
 #[cfg(test)]
 pub(crate) use shell_session::*;
 mod goal;
+mod runtime_config;
 mod submit_plan;
 mod todolist;
 
 pub(crate) use goal::*;
+pub(crate) use runtime_config::*;
 pub(crate) use submit_plan::*;
 pub(crate) use todolist::*;
 mod terminal;
@@ -322,6 +327,7 @@ pub fn build_native_tool_catalog(
     command_session_runtime: Arc<CommandSessionRuntime>,
     vmm_global: VmmConfigLayer,
     plugin_runtime: Option<vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
+    luaskills_runtime: Option<crate::luaskills_runtime::LuaSkillsRuntimeHandle>,
 ) -> NativeToolCatalog {
     let snapshot = NativeToolRuntimeSnapshot {
         workspace_directory: std::env::current_dir()
@@ -337,7 +343,7 @@ pub fn build_native_tool_catalog(
     let snapshot = Arc::new(snapshot);
     let shell_support =
         HostCommandShellSupport::from_configured_default_id(configured_default_command_shell_id);
-    let definitions = vec![
+    let mut definitions = vec![
         build_workspace_describe_tool(snapshot.clone()),
         build_agent_list_tool(snapshot.clone(), config),
         build_skill_list_tool(snapshot.clone(), config),
@@ -358,6 +364,9 @@ pub fn build_native_tool_catalog(
         build_vmm_memory_write_tool(snapshot.clone()),
         build_vmm_memory_delete_tool(snapshot),
     ];
+    if let Some(runtime) = luaskills_runtime {
+        definitions.push(build_runtime_config_tool(runtime));
+    }
     let mut definition_map = BTreeMap::new();
     let mut descriptors = Vec::new();
     for definition in definitions {

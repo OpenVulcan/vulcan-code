@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeMap;
 
 /// Re-export the Vulcan-owned LuaSkills runtime settings wire contract.
 /// 重新导出 Vulcan 自有 LuaSkills 运行时设置传输契约。
@@ -173,6 +174,373 @@ pub struct LuaSkillSummary {
     /// Tool rows exposed by this skill.
     /// 该技能暴露的工具行。
     pub tools: Vec<LuaSkillToolSummary>,
+    /// Optional package configuration summary declared by this skill.
+    /// 当前技能声明的可选技能包配置摘要。
+    pub config: Option<LuaSkillConfigSummary>,
+}
+
+/// Compact package configuration status projected into one Lua Skill row.
+/// 投影到单个 Lua Skill 行中的精简技能包配置状态。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillConfigSummary {
+    /// Whether every required and configured item is currently valid.
+    /// 当前所有必填项和已配置项是否均合法。
+    pub complete: bool,
+    /// Revision of the immutable configuration snapshot.
+    /// 不可变配置快照的修订号。
+    pub revision: String,
+    /// Persisted store scope selected by the effective package root.
+    /// 生效技能包根选择的持久化存储作用域。
+    pub store_scope: String,
+    /// Number of declared configuration items.
+    /// 已声明配置项数量。
+    pub item_count: usize,
+    /// Number of missing required configuration items.
+    /// 缺失的必填配置项数量。
+    pub missing_count: usize,
+    /// Number of invalid persisted declared values.
+    /// 非法的已持久化声明值数量。
+    pub invalid_count: usize,
+    /// Number of cross-field business validation issues.
+    /// 跨字段业务校验问题数量。
+    pub business_issue_count: usize,
+    /// Number of persisted keys no longer declared by the package.
+    /// 技能包不再声明的持久化键数量。
+    pub orphaned_count: usize,
+}
+
+/// One package configuration enumeration option.
+/// 单个技能包配置枚举选项。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillConfigEnumOption {
+    /// Stable persisted machine value.
+    /// 稳定的持久化机器值。
+    pub value: String,
+    /// Human-readable option label.
+    /// 人类可读的选项名称。
+    pub label: String,
+    /// Human-readable option description.
+    /// 人类可读的选项说明。
+    pub description: String,
+}
+
+/// Structured package configuration validation issue.
+/// 结构化技能包配置校验问题。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillConfigIssue {
+    /// Optional configuration key associated with the issue.
+    /// 与当前问题关联的可选配置键。
+    pub key: Option<String>,
+    /// Stable machine-readable issue code.
+    /// 稳定的机器可读问题代码。
+    pub code: String,
+    /// Human-readable issue message without secret values.
+    /// 不包含秘密值的人类可读问题消息。
+    pub message: String,
+}
+
+/// One host-safe package configuration item descriptor.
+/// 单个宿主安全的技能包配置项描述。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillConfigItem {
+    /// Stable package-level configuration key.
+    /// 稳定的包级配置键。
+    pub key: String,
+    /// Declared configuration value type.
+    /// 声明的配置值类型。
+    #[serde(rename = "type")]
+    pub value_type: String,
+    /// Whether one effective value is required.
+    /// 是否要求存在一个有效值。
+    pub required: bool,
+    /// Whether the value is sensitive under host disclosure policy.
+    /// 当前值在宿主披露策略下是否敏感。
+    pub sensitive: bool,
+    /// Human-readable declaration description.
+    /// 人类可读的声明说明。
+    pub description: String,
+    /// Type-specific declaration constraints.
+    /// 类型专属声明约束。
+    pub constraints: serde_json::Value,
+    /// Enumeration options for enum declarations.
+    /// 枚举声明使用的选项。
+    pub options: Vec<LuaSkillConfigEnumOption>,
+    /// Optional typed default value declared by the package.
+    /// 技能包声明的可选类型化默认值。
+    pub default: Option<serde_json::Value>,
+    /// Optional short display title.
+    /// 可选的简短显示标题。
+    pub title: Option<String>,
+    /// Optional host-facing group label.
+    /// 可选的宿主侧分组名称。
+    pub group: Option<String>,
+    /// Optional display order inside the group.
+    /// 分组内的可选显示顺序。
+    pub order: Option<i32>,
+    /// Whether hosts should place this item in an advanced section.
+    /// 宿主是否应把当前项放入高级区域。
+    pub advanced: bool,
+    /// Optional input placeholder.
+    /// 可选输入占位文本。
+    pub placeholder: Option<String>,
+    /// Optional typed example value.
+    /// 可选类型化示例值。
+    pub example: Option<serde_json::Value>,
+    /// Optional host rendering format.
+    /// 可选宿主渲染格式。
+    pub format: Option<String>,
+    /// Whether changing this item may require a restart.
+    /// 修改当前项是否可能需要重启。
+    pub restart_required: bool,
+    /// Whether this declaration is deprecated.
+    /// 当前声明是否已弃用。
+    pub deprecated: bool,
+    /// Optional deprecation guidance.
+    /// 可选弃用说明。
+    pub deprecation_message: Option<String>,
+    /// Unambiguous runtime item state.
+    /// 无歧义的运行时配置项状态。
+    pub state: String,
+    /// Whether this item satisfies package completeness.
+    /// 当前配置项是否满足技能包完整性。
+    pub satisfied: bool,
+    /// Optional validation issue for an invalid persisted value.
+    /// 非法持久化值对应的可选校验问题。
+    pub validation_error: Option<LuaSkillConfigIssue>,
+    /// Optional effective value disclosed only for non-sensitive items.
+    /// 仅为非敏感项披露的可选有效值。
+    pub value: Option<String>,
+}
+
+/// Full host-safe package configuration descriptor for the WebUI.
+/// 面向 WebUI 的完整宿主安全技能包配置描述。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillConfigDescriptor {
+    /// Stable skill package identifier.
+    /// 稳定技能包标识。
+    pub skill_id: String,
+    /// Semantic package version owning the declaration.
+    /// 拥有当前声明的语义化技能包版本。
+    pub skill_version: String,
+    /// Whether the package configuration is complete and valid.
+    /// 当前技能包配置是否完整且合法。
+    pub complete: bool,
+    /// Revision of the immutable configuration snapshot.
+    /// 不可变配置快照的修订号。
+    pub revision: String,
+    /// Persisted store scope selected by the effective package root.
+    /// 生效技能包根选择的持久化存储作用域。
+    pub store_scope: String,
+    /// Number of missing required declarations.
+    /// 缺失的必填声明数量。
+    pub missing_count: usize,
+    /// Number of invalid persisted declared values.
+    /// 非法的已持久化声明值数量。
+    pub invalid_count: usize,
+    /// Number of cross-field business issues.
+    /// 跨字段业务问题数量。
+    pub business_issue_count: usize,
+    /// Number of persisted keys no longer declared by the package.
+    /// 技能包不再声明的持久化键数量。
+    pub orphaned_count: usize,
+    /// Persisted keys no longer declared by the package.
+    /// 技能包不再声明的持久化键。
+    pub orphaned: Vec<String>,
+    /// Declared package configuration items.
+    /// 已声明的技能包配置项。
+    pub items: Vec<LuaSkillConfigItem>,
+}
+
+/// Full package configuration completeness and validity result.
+/// 完整的技能包配置完整性与合法性结果。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillConfigValidation {
+    /// Stable skill package identifier.
+    /// 稳定技能包标识。
+    pub skill_id: String,
+    /// Whether every required and configured item is valid.
+    /// 所有必填项与已配置项是否均合法。
+    pub complete: bool,
+    /// Revision of the validated immutable snapshot.
+    /// 已校验不可变快照的修订号。
+    pub revision: String,
+    /// Persisted store scope selected by the effective package root.
+    /// 生效技能包根选择的持久化存储作用域。
+    pub store_scope: String,
+    /// Missing required declaration issues.
+    /// 缺失必填声明问题。
+    pub missing: Vec<LuaSkillConfigIssue>,
+    /// Invalid persisted declared-value issues.
+    /// 非法已持久化声明值问题。
+    pub invalid: Vec<LuaSkillConfigIssue>,
+    /// Cross-field business validation issues.
+    /// 跨字段业务校验问题。
+    pub business_issues: Vec<LuaSkillConfigIssue>,
+    /// Persisted keys no longer declared by the package.
+    /// 技能包不再声明的持久化键。
+    pub orphaned: Vec<String>,
+    /// Number of persisted keys no longer declared by the package.
+    /// 技能包不再声明的持久化键数量。
+    pub orphaned_count: usize,
+}
+
+/// Typed non-empty batch request for updating package configuration.
+/// 更新技能包配置使用的类型化非空批量请求。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LuaSkillConfigSetRequest {
+    /// Stable skill package identifier.
+    /// 稳定技能包标识。
+    pub skill_id: String,
+    /// Revision observed when the editor was opened.
+    /// 打开编辑器时观察到的修订号。
+    pub expected_revision: String,
+    /// Typed scalar values keyed by declared configuration key.
+    /// 按已声明配置键索引的类型化标量值。
+    pub values: BTreeMap<String, serde_json::Value>,
+}
+
+/// Host-safe result of one atomic package configuration update.
+/// 单次原子技能包配置更新的宿主安全结果。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillConfigSetResult {
+    /// Fresh host-safe descriptor after the transaction.
+    /// 事务完成后的最新宿主安全描述。
+    pub descriptor: LuaSkillConfigDescriptor,
+    /// Revision visible after the transaction.
+    /// 事务完成后可见的修订号。
+    pub revision: String,
+    /// Whether persisted data changed.
+    /// 持久化数据是否发生变化。
+    pub changed: bool,
+    /// Canonical submitted values retained only for non-sensitive declarations.
+    /// 仅为非敏感声明保留的规范提交值。
+    pub values: BTreeMap<String, String>,
+    /// Stable keys whose persisted values changed.
+    /// 持久化值发生变化的稳定键。
+    pub changed_keys: Vec<String>,
+    /// Changed keys whose declarations recommend a restart.
+    /// 声明建议重启的已变更键。
+    pub restart_required_keys: Vec<String>,
+}
+
+/// CAS-protected request for deleting one explicit or orphaned value.
+/// 删除单个显式值或遗留值使用的 CAS 保护请求。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LuaSkillConfigDeleteRequest {
+    /// Stable skill package identifier.
+    /// 稳定技能包标识。
+    pub skill_id: String,
+    /// Stable declared or orphaned configuration key.
+    /// 稳定的已声明或遗留配置键。
+    pub key: String,
+    /// Revision observed when the editor was opened.
+    /// 打开编辑器时观察到的修订号。
+    pub expected_revision: String,
+}
+
+/// Host-safe result of one CAS-protected package configuration deletion.
+/// 单次 CAS 保护技能包配置删除的宿主安全结果。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillConfigDeleteResult {
+    /// Fresh host-safe descriptor after the deletion.
+    /// 删除完成后的最新宿主安全描述。
+    pub descriptor: LuaSkillConfigDescriptor,
+    /// Revision visible after the deletion.
+    /// 删除完成后可见的修订号。
+    pub revision: String,
+    /// Whether one persisted value was removed.
+    /// 是否移除了一个持久化值。
+    pub deleted: bool,
+    /// Exact declared or orphaned key targeted by the request.
+    /// 请求定位的精确已声明或遗留键。
+    pub key: String,
+}
+
+/// Strict host request for explicitly refreshing one or both package configuration stores.
+/// 显式刷新一个或两个技能包配置存储的严格宿主请求。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LuaSkillConfigRefreshRequest {
+    /// Optional exact store scope; omission refreshes both configured stores.
+    /// 可选的精确存储作用域；省略时刷新两个已配置存储。
+    pub store_scope: Option<String>,
+}
+
+/// Result of explicitly refreshing one package configuration store.
+/// 显式刷新单个技能包配置存储的结果。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillConfigStoreRefresh {
+    /// Refreshed store scope.
+    /// 已刷新的存储作用域。
+    pub store_scope: String,
+    /// Revision visible after refresh.
+    /// 刷新后可见的修订号。
+    pub revision: String,
+    /// Whether a newer immutable snapshot was installed.
+    /// 是否安装了更新的不可变快照。
+    pub changed: bool,
+}
+
+/// One ordered LuaSkills package configuration event.
+/// 单个有序 LuaSkills 技能包配置事件。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillConfigEvent {
+    /// Monotonic engine-local event sequence.
+    /// 引擎内单调事件序号。
+    pub sequence: String,
+    /// Stable event type.
+    /// 稳定事件类型。
+    #[serde(rename = "type")]
+    pub event_type: String,
+    /// Persisted store scope.
+    /// 持久化存储作用域。
+    pub store_scope: String,
+    /// Optional changed skill package identifier.
+    /// 可选的已变更技能包标识。
+    pub skill_id: Option<String>,
+    /// Last known valid store revision.
+    /// 最后一个已知合法存储修订号。
+    pub revision: String,
+    /// Stable changed configuration keys.
+    /// 稳定的已变更配置键。
+    pub changed_keys: Vec<String>,
+    /// Event source.
+    /// 事件来源。
+    pub source: String,
+    /// Changed keys whose declarations recommend a restart.
+    /// 声明建议重启的已变更键。
+    pub restart_required_keys: Vec<String>,
+    /// Optional package completeness after the event.
+    /// 事件后的可选技能包完整性。
+    pub complete: Option<bool>,
+    /// Optional structured reload or watcher failure.
+    /// 可选的结构化重载或监听失败。
+    pub error: Option<LuaSkillConfigIssue>,
+}
+
+/// Bounded ordered LuaSkills package configuration event batch.
+/// 有界有序的 LuaSkills 技能包配置事件批次。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillConfigEventBatch {
+    /// Events newer than the requested cursor.
+    /// 比请求游标更新的事件。
+    pub events: Vec<LuaSkillConfigEvent>,
+    /// Highest sequence observed while producing this batch.
+    /// 生成当前批次时观察到的最高序号。
+    pub next_sequence: String,
 }
 
 /// One Lua Skill runtime tool row with registration state.
@@ -1085,5 +1453,59 @@ mod tests {
             request.vibe,
             OptionalTextPatch::Set(String::from("focused"))
         );
+    }
+
+    /// Verifies the LuaSkills configuration wire contract uses camel-case host fields.
+    /// 验证 LuaSkills 配置线协议使用 camelCase 宿主字段。
+    #[test]
+    fn luaskill_config_descriptor_serializes_host_field_names() {
+        let descriptor = LuaSkillConfigDescriptor {
+            skill_id: String::from("fixture"),
+            skill_version: String::from("1.0.0"),
+            complete: false,
+            revision: String::from("3"),
+            store_scope: String::from("skills"),
+            missing_count: 1,
+            items: vec![LuaSkillConfigItem {
+                key: String::from("api_token"),
+                value_type: String::from("string"),
+                sensitive: true,
+                ..LuaSkillConfigItem::default()
+            }],
+            ..LuaSkillConfigDescriptor::default()
+        };
+        let value = serde_json::to_value(descriptor).expect("serialize descriptor");
+
+        assert_eq!(value["skillId"], json!("fixture"));
+        assert_eq!(value["storeScope"], json!("skills"));
+        assert_eq!(value["missingCount"], json!(1));
+        assert_eq!(value["items"][0]["type"], json!("string"));
+        assert!(value["items"][0]["value"].is_null());
+    }
+
+    /// Verifies package configuration mutations reject fields outside the explicit RPC contract.
+    /// 验证技能包配置变更会拒绝显式 RPC 契约之外的字段。
+    #[test]
+    fn luaskill_config_mutations_reject_unknown_fields() {
+        let set_request = serde_json::from_value::<LuaSkillConfigSetRequest>(json!({
+            "skillId": "fixture",
+            "expectedRevision": "3",
+            "values": { "endpoint": "https://example.com" },
+            "includeValues": true
+        }));
+        let delete_request = serde_json::from_value::<LuaSkillConfigDeleteRequest>(json!({
+            "skillId": "fixture",
+            "key": "endpoint",
+            "expectedRevision": "3",
+            "deleteAll": true
+        }));
+        let refresh_request = serde_json::from_value::<LuaSkillConfigRefreshRequest>(json!({
+            "storeScope": "skills",
+            "includeValues": true
+        }));
+
+        assert!(set_request.is_err());
+        assert!(delete_request.is_err());
+        assert!(refresh_request.is_err());
     }
 }

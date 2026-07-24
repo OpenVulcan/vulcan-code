@@ -153,6 +153,326 @@ export interface LuaSkillSummary {
   // Tool rows exposed by this skill.
   // 该技能暴露的工具行。
   tools: LuaSkillToolSummary[];
+  // Optional package configuration declaration and status.
+  // 可选的技能包配置声明与状态。
+  config?: LuaSkillConfigSummary | null;
+}
+
+// LuaSkillConfigSummary describes compact package configuration status.
+// LuaSkillConfigSummary 描述精简技能包配置状态。
+export interface LuaSkillConfigSummary {
+  // Whether every required and configured item is valid.
+  // 所有必填项与已配置项是否均合法。
+  complete: boolean;
+  // Revision of the immutable configuration snapshot.
+  // 不可变配置快照的修订号。
+  revision: string;
+  // Persisted store scope.
+  // 持久化存储作用域。
+  storeScope: string;
+  // Number of declared configuration items.
+  // 已声明配置项数量。
+  itemCount: number;
+  // Number of missing required items.
+  // 缺失必填项数量。
+  missingCount: number;
+  // Number of invalid persisted values.
+  // 非法持久化值数量。
+  invalidCount: number;
+  // Number of cross-field business issues.
+  // 跨字段业务问题数量。
+  businessIssueCount: number;
+  // Number of orphaned persisted keys.
+  // 遗留持久化键数量。
+  orphanedCount: number;
+}
+
+// LuaSkillConfigEnumOption describes one declared enumeration option.
+// LuaSkillConfigEnumOption 描述单个已声明枚举选项。
+export interface LuaSkillConfigEnumOption {
+  // Stable persisted value.
+  // 稳定持久化值。
+  value: string;
+  // Human-readable label.
+  // 人类可读名称。
+  label: string;
+  // Human-readable description.
+  // 人类可读说明。
+  description: string;
+}
+
+// LuaSkillConfigIssue describes one structured configuration issue.
+// LuaSkillConfigIssue 描述单个结构化配置问题。
+export interface LuaSkillConfigIssue {
+  // Optional associated configuration key.
+  // 可选关联配置键。
+  key?: string | null;
+  // Stable machine-readable code.
+  // 稳定机器可读代码。
+  code: string;
+  // Human-readable message without secret values.
+  // 不包含秘密值的人类可读消息。
+  message: string;
+}
+
+// LuaSkillConfigItem describes one host-safe package configuration declaration.
+// LuaSkillConfigItem 描述单个宿主安全技能包配置声明。
+export interface LuaSkillConfigItem {
+  // Stable package-level key.
+  // 稳定包级配置键。
+  key: string;
+  // Declared scalar type.
+  // 声明的标量类型。
+  type: "integer" | "string" | "float" | "enum" | "boolean";
+  // Whether one effective value is required.
+  // 是否要求存在有效值。
+  required: boolean;
+  // Whether the host must treat the value as sensitive.
+  // 宿主是否必须把当前值视为敏感值。
+  sensitive: boolean;
+  // Human-readable description.
+  // 人类可读说明。
+  description: string;
+  // Type-specific constraints.
+  // 类型专属约束。
+  constraints: {
+    minimum?: number;
+    maximum?: number;
+    min_length?: number;
+    max_length?: number;
+  };
+  // Enumeration options.
+  // 枚举选项。
+  options: LuaSkillConfigEnumOption[];
+  // Optional typed declaration default.
+  // 可选类型化声明默认值。
+  default?: string | number | boolean | null;
+  // Optional display title.
+  // 可选显示标题。
+  title?: string | null;
+  // Optional group label.
+  // 可选分组名称。
+  group?: string | null;
+  // Optional display order.
+  // 可选显示顺序。
+  order?: number | null;
+  // Whether the item belongs in the advanced section.
+  // 当前项是否属于高级区域。
+  advanced: boolean;
+  // Optional input placeholder.
+  // 可选输入占位文本。
+  placeholder?: string | null;
+  // Optional typed example.
+  // 可选类型化示例。
+  example?: string | number | boolean | null;
+  // Optional host rendering format.
+  // 可选宿主渲染格式。
+  format?: "text" | "password" | "uri" | "path" | "file" | "directory" | "multiline" | null;
+  // Whether a change may require restart.
+  // 修改是否可能需要重启。
+  restartRequired: boolean;
+  // Whether the declaration is deprecated.
+  // 声明是否已弃用。
+  deprecated: boolean;
+  // Optional deprecation guidance.
+  // 可选弃用说明。
+  deprecationMessage?: string | null;
+  // Unambiguous runtime state.
+  // 无歧义运行时状态。
+  state: "unset" | "missing" | "default" | "configured" | "invalid";
+  // Whether the item satisfies package completeness.
+  // 当前项是否满足技能包完整性。
+  satisfied: boolean;
+  // Optional validation issue.
+  // 可选校验问题。
+  validationError?: LuaSkillConfigIssue | null;
+  // Optional effective value disclosed only for non-sensitive items.
+  // 仅为非敏感项披露的可选有效值。
+  value?: string | null;
+}
+
+// LuaSkillConfigDescriptor describes one complete host-safe package configuration.
+// LuaSkillConfigDescriptor 描述一份完整宿主安全技能包配置。
+export interface LuaSkillConfigDescriptor {
+  // Stable skill package identifier.
+  // 稳定技能包标识。
+  skillId: string;
+  // Semantic package version.
+  // 语义化技能包版本。
+  skillVersion: string;
+  // Whether the package configuration is complete and valid.
+  // 技能包配置是否完整且合法。
+  complete: boolean;
+  // Immutable snapshot revision.
+  // 不可变快照修订号。
+  revision: string;
+  // Persisted store scope.
+  // 持久化存储作用域。
+  storeScope: string;
+  // Number of missing required declarations.
+  // 缺失必填声明数量。
+  missingCount: number;
+  // Number of invalid persisted values.
+  // 非法持久化值数量。
+  invalidCount: number;
+  // Number of business validation issues.
+  // 业务校验问题数量。
+  businessIssueCount: number;
+  // Number of orphaned persisted keys.
+  // 遗留持久化键数量。
+  orphanedCount: number;
+  // Orphaned persisted keys.
+  // 遗留持久化键。
+  orphaned: string[];
+  // Declared configuration items.
+  // 已声明配置项。
+  items: LuaSkillConfigItem[];
+}
+
+// LuaSkillConfigValidation describes package completeness and validity.
+// LuaSkillConfigValidation 描述技能包配置完整性与合法性。
+export interface LuaSkillConfigValidation {
+  // Stable skill package identifier.
+  // 稳定技能包标识。
+  skillId: string;
+  // Whether every required and configured item is valid.
+  // 所有必填项与已配置项是否均合法。
+  complete: boolean;
+  // Validated snapshot revision.
+  // 已校验快照修订号。
+  revision: string;
+  // Persisted store scope.
+  // 持久化存储作用域。
+  storeScope: string;
+  // Missing required issues.
+  // 缺失必填问题。
+  missing: LuaSkillConfigIssue[];
+  // Invalid persisted-value issues.
+  // 非法持久化值问题。
+  invalid: LuaSkillConfigIssue[];
+  // Cross-field business issues.
+  // 跨字段业务问题。
+  businessIssues: LuaSkillConfigIssue[];
+  // Orphaned persisted keys.
+  // 遗留持久化键。
+  orphaned: string[];
+  // Number of orphaned persisted keys.
+  // 遗留持久化键数量。
+  orphanedCount: number;
+}
+
+// LuaSkillConfigSetRequest describes one CAS-protected typed batch update.
+// LuaSkillConfigSetRequest 描述单次 CAS 保护的类型化批量更新。
+export interface LuaSkillConfigSetRequest {
+  // Stable skill package identifier.
+  // 稳定技能包标识。
+  skillId: string;
+  // Revision observed by the editor.
+  // 编辑器观察到的修订号。
+  expectedRevision: string;
+  // Typed changed values keyed by declaration key.
+  // 按声明键索引的类型化变更值。
+  values: Record<string, string | number | boolean>;
+}
+
+// LuaSkillConfigSetResult describes one host-safe atomic update result.
+// LuaSkillConfigSetResult 描述单次宿主安全原子更新结果。
+export interface LuaSkillConfigSetResult {
+  // Fresh host-safe descriptor after the transaction.
+  // 事务完成后的最新宿主安全描述。
+  descriptor: LuaSkillConfigDescriptor;
+  // Revision visible after the transaction.
+  // 事务完成后可见的修订号。
+  revision: string;
+  // Whether persisted data changed.
+  // 持久化数据是否发生变化。
+  changed: boolean;
+  // Canonical submitted values retained only for non-sensitive declarations.
+  // 仅为非敏感声明保留的规范提交值。
+  values: Record<string, string>;
+  // Stable keys whose persisted values changed.
+  // 持久化值发生变化的稳定键。
+  changedKeys: string[];
+  // Changed keys whose declarations recommend a restart.
+  // 声明建议重启的已变更键。
+  restartRequiredKeys: string[];
+}
+
+// LuaSkillConfigDeleteRequest describes one CAS-protected value deletion.
+// LuaSkillConfigDeleteRequest 描述单次 CAS 保护的值删除。
+export interface LuaSkillConfigDeleteRequest {
+  // Stable skill package identifier.
+  // 稳定技能包标识。
+  skillId: string;
+  // Exact declared or orphaned key.
+  // 精确的已声明或遗留键。
+  key: string;
+  // Revision observed by the editor.
+  // 编辑器观察到的修订号。
+  expectedRevision: string;
+}
+
+// LuaSkillConfigDeleteResult describes one host-safe explicit deletion result.
+// LuaSkillConfigDeleteResult 描述单次宿主安全明确删除结果。
+export interface LuaSkillConfigDeleteResult {
+  // Fresh host-safe descriptor after the deletion.
+  // 删除完成后的最新宿主安全描述。
+  descriptor: LuaSkillConfigDescriptor;
+  // Revision visible after the deletion.
+  // 删除完成后可见的修订号。
+  revision: string;
+  // Whether one persisted value was removed.
+  // 是否移除了一个持久化值。
+  deleted: boolean;
+  // Exact declared or orphaned key targeted by the request.
+  // 请求定位的精确已声明或遗留键。
+  key: string;
+}
+
+// LuaSkillConfigEvent describes one ordered configuration change or reload failure.
+// LuaSkillConfigEvent 描述单个有序配置变更或重载失败。
+export interface LuaSkillConfigEvent {
+  // Monotonic engine-local sequence.
+  // 引擎内单调序号。
+  sequence: string;
+  // Stable event type.
+  // 稳定事件类型。
+  type: string;
+  // Persisted store scope.
+  // 持久化存储作用域。
+  storeScope: string;
+  // Optional changed skill package identifier.
+  // 可选已变更技能包标识。
+  skillId?: string | null;
+  // Last known valid revision.
+  // 最后一个已知合法修订号。
+  revision: string;
+  // Stable changed keys.
+  // 稳定已变更键。
+  changedKeys: string[];
+  // Event source.
+  // 事件来源。
+  source: string;
+  // Changed keys requiring restart.
+  // 需要重启的已变更键。
+  restartRequiredKeys: string[];
+  // Optional package completeness.
+  // 可选技能包完整性。
+  complete?: boolean | null;
+  // Optional reload or watcher failure.
+  // 可选重载或监听失败。
+  error?: LuaSkillConfigIssue | null;
+}
+
+// LuaSkillConfigEventBatch describes a bounded ordered event poll result.
+// LuaSkillConfigEventBatch 描述有界有序事件轮询结果。
+export interface LuaSkillConfigEventBatch {
+  // Events newer than the requested cursor.
+  // 比请求游标更新的事件。
+  events: LuaSkillConfigEvent[];
+  // Highest observed event sequence.
+  // 观察到的最高事件序号。
+  nextSequence: string;
 }
 
 // LuaVmPoolSettings describes one LuaSkills VM pool startup policy.

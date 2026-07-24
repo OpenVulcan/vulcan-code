@@ -2060,6 +2060,193 @@
   white-space: pre-wrap;
 }
 
+.lua-skill-config-dialog {
+  width: min(840px, calc(100vw - 32px));
+  max-width: min(840px, calc(100vw - 32px)) !important;
+}
+
+.lua-skill-config-body {
+  min-width: 0;
+  max-height: min(650px, calc(100vh - 210px));
+  display: grid;
+  gap: 12px;
+  overflow: auto;
+  padding-right: 3px;
+  scrollbar-gutter: stable;
+}
+
+.lua-skill-config-summary,
+.lua-skill-config-field-heading,
+.lua-skill-config-field-footer,
+.lua-skill-config-orphaned > div {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lua-skill-config-summary > span {
+  min-width: 0;
+  flex: 1;
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.lua-skill-config-fields {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.lua-skill-config-group {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.lua-skill-config-group > h3 {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.lua-skill-config-field {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  padding: 11px;
+}
+
+.lua-skill-config-field-heading {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.lua-skill-config-field-heading > label {
+  min-width: 0;
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.lua-skill-config-field-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.lua-skill-config-field > p,
+.lua-skill-config-issues p,
+.lua-skill-config-warning,
+.lua-skill-config-error {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.lua-skill-config-field > p {
+  color: var(--muted-foreground);
+}
+
+.lua-skill-config-field input,
+.lua-skill-config-field select,
+.lua-skill-config-field textarea {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  outline: none;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 7px 9px;
+  font: inherit;
+}
+
+.lua-skill-config-field textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.lua-skill-config-field input:focus,
+.lua-skill-config-field select:focus,
+.lua-skill-config-field textarea:focus {
+  border-color: color-mix(in srgb, var(--primary) 62%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 15%, transparent);
+}
+
+.lua-skill-config-field-footer {
+  justify-content: space-between;
+}
+
+.lua-skill-config-field-footer > span,
+.lua-skill-config-secret-status {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.lua-skill-config-warning {
+  color: var(--warning-foreground, #b7791f);
+}
+
+.lua-skill-config-error,
+.lua-skill-config-issues {
+  color: var(--destructive);
+}
+
+.lua-skill-config-issues {
+  display: grid;
+  gap: 4px;
+  border: 1px solid color-mix(in srgb, var(--destructive) 34%, var(--border));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--destructive) 7%, transparent);
+  padding: 9px;
+}
+
+.lua-skill-config-advanced {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.lua-skill-config-advanced > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.lua-skill-config-advanced[open] > summary {
+  margin-bottom: 10px;
+}
+
+.lua-skill-config-orphaned {
+  display: grid;
+  gap: 7px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.lua-skill-config-orphaned > div {
+  justify-content: space-between;
+}
+
+.lua-skill-config-orphaned code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 760px) {
   .skill-list-filter-row,
   .skill-list-filter-row.plugin-skill-filter-row {
