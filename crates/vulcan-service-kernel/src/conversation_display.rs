@@ -541,23 +541,6 @@ pub(crate) fn filter_legacy_goal_internal_user_messages(
         .collect()
 }
 
-/// Rewrites one runtime state after removing legacy Goal internal user messages.
-/// 移除历史 Goal 内部用户消息后重写单个运行态。
-pub(crate) fn sanitize_runtime_state_legacy_goal_internal_messages(
-    runtime_state: &mut SessionRuntimeStateEntry,
-) -> Result<(), String> {
-    let messages = conversation_state_to_session_messages(&runtime_state.conversation_state);
-    if messages
-        .iter()
-        .any(session_message_is_legacy_goal_internal_user_prompt)
-    {
-        runtime_state.conversation_state = conversation_state_from_session_messages(
-            &filter_legacy_goal_internal_user_messages(messages),
-        )?;
-    }
-    Ok(())
-}
-
 /// Returns whether one message is a known legacy Goal internal prompt persisted before the hidden fix.
 /// 返回单条消息是否为隐藏修复前已知被持久化的历史 Goal 内部提示词。
 pub(crate) fn session_message_is_legacy_goal_internal_user_prompt(
@@ -567,7 +550,8 @@ pub(crate) fn session_message_is_legacy_goal_internal_user_prompt(
         return false;
     }
     let body = message.body.trim_start();
-    body.starts_with("Continue working toward the active thread goal.")
+    body.starts_with("<thread_goal_context>")
+        || body.starts_with("Continue working toward the active thread goal.")
         || body.starts_with("The active thread goal has reached its token budget.")
         || body.starts_with("The active thread goal objective was edited by the user.")
 }

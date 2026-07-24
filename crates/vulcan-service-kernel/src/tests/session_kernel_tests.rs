@@ -499,6 +499,56 @@ async fn active_stream_task_retains_launch_goal_identity() {
     assert_eq!(task.session_goal_id(), Some("goal-bound-to-stream"));
 }
 
+/// Verifies an exact active stream can bind a Goal created after execution launch.
+/// 验证精确活动流可以绑定执行启动后创建的目标。
+#[tokio::test]
+async fn active_stream_task_binds_goal_created_during_execution() {
+    // session_id identifies the active stream registry slot.
+    // session_id 标识活动流注册槽位。
+    let session_id = SessionId::new_v4();
+    // task_id identifies the exact execution allowed to update its Goal binding.
+    // task_id 标识获准更新目标绑定的精确执行。
+    let task_id = Uuid::new_v4();
+    // stale_task_id proves a superseded execution cannot modify the retained owner.
+    // stale_task_id 证明已被替代的执行不能修改保留所有者。
+    let stale_task_id = Uuid::new_v4();
+    // state starts with an execution that had no Goal at launch.
+    // state 初始包含一个启动时尚无目标的执行。
+    let mut state = test_service_state_with_parent_session(session_id);
+    state.active_stream_tasks.insert(
+        session_id,
+        ActiveStreamTask::new(task_id, spawn_service_task(async {}), None),
+    );
+
+    assert!(!bind_active_stream_task_goal_if_id(
+        &mut state,
+        session_id,
+        stale_task_id,
+        String::from("goal-stale"),
+    ));
+    assert!(bind_active_stream_task_goal_if_id(
+        &mut state,
+        session_id,
+        task_id,
+        String::from("goal-created-during-run"),
+    ));
+    assert_eq!(
+        state
+            .active_stream_tasks
+            .get(&session_id)
+            .and_then(ActiveStreamTask::session_goal_id),
+        Some("goal-created-during-run")
+    );
+    // removedTask proves terminal handling can recover the binding before another Provider request starts.
+    // removedTask 证明终态处理可在下一次 Provider 请求开始前恢复该绑定。
+    let removed_task = remove_active_stream_task_if_id(&mut state, session_id, task_id)
+        .expect("exact active task should be removable");
+    assert_eq!(
+        removed_task.session_goal_id(),
+        Some("goal-created-during-run")
+    );
+}
+
 /// Verifies stale stream cleanup cannot remove a newer task in the same session slot.
 /// 验证过期流清理无法删除同一会话槽位中的新任务。
 #[tokio::test]

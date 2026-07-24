@@ -28,6 +28,8 @@ use uuid::Uuid;
 #[cfg(test)]
 use vulcan_agent_runtime::conversation_protocol::SessionConversationState;
 #[cfg(test)]
+use vulcan_agent_runtime::conversation_protocol::conversation_state_from_session_messages;
+#[cfg(test)]
 use vulcan_agent_runtime::session_event_runtime::{
     STREAMING_RECORD_STATE_ACTIVE, STREAMING_RECORD_STATE_METADATA_KEY,
     STREAMING_RECORD_STATE_SEALED,
@@ -49,13 +51,14 @@ use vulcan_agent_runtime::{
             invalidate_runtime_prompt_luaskill_catalog_cache,
             invalidate_runtime_prompt_tool_visibility_cache,
         },
+        provider_request_telemetry::ProviderRequestTelemetryEventKind,
         question_runtime::{PendingQuestionChangeCallback, QuestionRuntime},
         task_runtime::{DetachedTaskRuntimeEvent, TaskRuntime},
         token_budget_runtime::TokenBudgetRuntime,
         vmm_hooks::VmmHookRuntimeHandle,
     },
     conversation_protocol::{
-        conversation_state_from_session_messages, conversation_state_to_session_messages,
+        conversation_state_to_session_messages,
         merge_session_messages_with_conversation_state_records,
     },
     luaskills_runtime::LuaSkillsRuntimeHandle,
@@ -348,21 +351,23 @@ use service_diagnostics_paths::*;
 use service_state_access::*;
 use session_ai_capabilities::*;
 use session_goal_lifecycle::{
-    account_session_goal_from_report, advance_session_goal_dispatch_version,
-    cache_session_goal_live_usage_from_checkpoint, cache_session_goal_summary,
+    account_session_goal_from_report, account_session_goal_provider_usage,
+    advance_session_goal_dispatch_version, append_goal_turn_usage_context,
+    attach_goal_context_to_provider_visible_agent_messages, cache_session_goal_summary,
     clear_session_goal_stage_runtime_state, enqueue_session_goal_objective_updated_guidance,
     ensure_regular_session_exists, ensure_session_can_enter_plan_mode,
     ensure_session_not_in_plan_mode_for_goal, goal_summary_from_tool_finished_event,
-    normalize_session_goal_objective, session_goal_context_for_prompt_from_state,
-    session_goal_dispatch_version, session_goal_request_session_id,
-    session_goal_summary_from_thread_goal, sync_selected_session_goal_summary_from_store,
-    validate_session_goal_budget,
+    normalize_session_goal_objective, prepend_goal_context_to_current_prompt,
+    replace_canonical_current_user_prompt, session_goal_dispatch_version,
+    session_goal_id_for_provider_request, session_goal_prompt_parts_from_state,
+    session_goal_request_session_id, session_goal_summary_from_thread_goal,
+    sync_selected_session_goal_summary_from_store, validate_session_goal_budget,
 };
 #[cfg(test)]
 use session_goal_lifecycle::{
-    goal_token_delta_for_turn_stats, latest_session_turn_stats_from_state,
     render_goal_budget_limited_context, render_goal_continuation_context,
-    render_goal_objective_updated_context, render_session_goal_context_for_prompt,
+    render_goal_objective_updated_context, render_goal_turn_usage_context,
+    render_session_goal_context_for_prompt,
 };
 use session_goals::*;
 use session_hydration::{

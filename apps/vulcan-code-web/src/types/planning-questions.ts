@@ -210,17 +210,20 @@ export interface SessionGoalSummary {
   // Tool call count observed for the current goal turn.
   // 当前目标轮次观测到的工具调用次数。
   toolCallCount: number;
-  // Input tokens observed for the current goal turn.
-  // 当前目标轮次观测到的输入 Token 数。
+  // Cumulative uncached input tokens observed for the current goal.
+  // 当前目标累计观测到的新增输入 Token 数。
   inputTokens: number;
-  // Cache-hit input tokens observed for the current goal turn.
-  // 当前目标轮次观测到的缓存命中输入 Token 数。
+  // Cumulative cache-hit input tokens observed for the current goal.
+  // 当前目标累计观测到的缓存命中输入 Token 数。
   cachedInputTokens: number;
-  // Output tokens observed for the current goal turn.
-  // 当前目标轮次观测到的输出 Token 数。
+  // Cumulative output tokens observed for the current goal.
+  // 当前目标累计观测到的输出 Token 数。
   outputTokens: number;
-  // Total provider tokens observed for the current goal turn.
-  // 当前目标轮次观测到的 Provider 总 Token 数。
+  // Cumulative reasoning tokens observed inside the current goal output.
+  // 当前目标输出中累计观测到的思考 Token 数。
+  reasoningTokens: number;
+  // Cumulative provider tokens observed for the current goal.
+  // 当前目标累计观测到的 Provider 总 Token 数。
   totalTokens: number;
   // Accounted wall-clock time in seconds.
   // 当前目标已记账的墙钟时间秒数。

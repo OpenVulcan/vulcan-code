@@ -456,8 +456,8 @@ pub(crate) struct ActiveStreamTask {
     /// Abortable asynchronous task handle.
     /// 可中止的异步任务句柄。
     handle: ServiceTaskHandle<()>,
-    /// Goal identifier captured when the provider execution started.
-    /// Provider 执行启动时捕获的目标标识。
+    /// Goal identifier currently bound to this provider execution.
+    /// 当前绑定到该 Provider 执行的目标标识。
     session_goal_id: Option<String>,
 }
 
@@ -471,8 +471,8 @@ impl ActiveStreamTask {
     /// `task_id` 是保留条目与其清理路径共享的唯一身份。
     /// `handle` is the abortable task spawned for the session.
     /// `handle` 是为会话启动的可中止任务。
-    /// `session_goal_id` binds normal provider work to its launch-time Goal; compaction uses `None`.
-    /// `session_goal_id` 将普通 Provider 工作绑定到启动期目标；压缩任务使用 `None`。
+    /// `session_goal_id` binds normal provider work to its initial Goal; compaction uses `None`.
+    /// `session_goal_id` 将普通 Provider 工作绑定到初始目标；压缩任务使用 `None`。
     ///
     /// # Returns
     /// 返回值
@@ -490,8 +490,8 @@ impl ActiveStreamTask {
         }
     }
 
-    /// Returns the launch-time Goal identifier bound to this task.
-    /// 返回绑定到此任务的启动期目标标识。
+    /// Returns the current Goal identifier bound to this task.
+    /// 返回绑定到此任务的当前目标标识。
     ///
     /// # Returns
     /// 返回值
@@ -499,6 +499,22 @@ impl ActiveStreamTask {
     /// 返回借用的目标标识；与 Goal 无关的工作返回 `None`。
     pub(crate) fn session_goal_id(&self) -> Option<&str> {
         self.session_goal_id.as_deref()
+    }
+
+    /// Rebinds this execution to the Goal that owns its next physical Provider request.
+    /// 将当前执行重新绑定到拥有其下一次物理 Provider 请求的目标。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_goal_id` is the durable Goal identity resolved at a Provider boundary.
+    /// `session_goal_id` 是在 Provider 边界解析得到的持久目标身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// This method returns no value after replacing the execution binding.
+    /// 替换执行绑定后此方法不返回值。
+    fn bind_session_goal(&mut self, session_goal_id: String) {
+        self.session_goal_id = Some(session_goal_id);
     }
 
     /// Aborts the retained asynchronous task.
@@ -538,6 +554,40 @@ pub(crate) fn active_stream_task_matches_id(
         .active_stream_tasks
         .get(&session_id)
         .is_some_and(|entry| entry.task_id == task_id)
+}
+
+/// Rebinds an active stream task only when the caller still owns the retained session entry.
+/// 仅当调用方仍拥有保留的会话条目时重新绑定活动流任务。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the active stream task map.
+/// `state` 持有活动流任务映射。
+/// `session_id` identifies the session slot being updated.
+/// `session_id` 标识正在更新的会话槽位。
+/// `task_id` is the unique identity captured by the active task.
+/// `task_id` 是活动任务捕获的唯一身份。
+/// `session_goal_id` is the Goal that owns the next physical Provider request.
+/// `session_goal_id` 是拥有下一次物理 Provider 请求的目标。
+///
+/// # Returns
+/// 返回值
+/// `true` when the exact task was rebound, otherwise `false` without changing a replacement.
+/// 精确任务被重新绑定时返回 `true`，否则返回 `false` 且不修改替代任务。
+pub(crate) fn bind_active_stream_task_goal_if_id(
+    state: &mut ServiceBridgeState,
+    session_id: SessionId,
+    task_id: Uuid,
+    session_goal_id: String,
+) -> bool {
+    let Some(entry) = state.active_stream_tasks.get_mut(&session_id) else {
+        return false;
+    };
+    if entry.task_id != task_id {
+        return false;
+    }
+    entry.bind_session_goal(session_goal_id);
+    true
 }
 
 /// Removes an active stream task only when the caller still owns the retained entry.

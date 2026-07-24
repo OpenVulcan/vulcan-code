@@ -29,7 +29,7 @@ static APP_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Shared schema version stored in the application metadata table.
 /// 存储在应用元数据表中的共享结构版本号。
-pub const APP_SCHEMA_VERSION: i64 = 13;
+pub const APP_SCHEMA_VERSION: i64 = 14;
 
 /// Long-lived controller handle kept by the host runtime after startup succeeds.
 /// 启动成功后由宿主运行时持有的长生命周期控制器句柄。
@@ -352,6 +352,11 @@ CREATE TABLE IF NOT EXISTS thread_goals (
     status TEXT NOT NULL,
     token_budget INTEGER,
     tokens_used INTEGER NOT NULL DEFAULT 0,
+    uncached_input_tokens INTEGER NOT NULL DEFAULT 0,
+    cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER NOT NULL DEFAULT 0,
     time_used_seconds INTEGER NOT NULL DEFAULT 0,
     created_at_ms INTEGER NOT NULL,
     updated_at_ms INTEGER NOT NULL
@@ -359,6 +364,17 @@ CREATE TABLE IF NOT EXISTS thread_goals (
 "#,
     )
     .await?;
+    // goalUsageColumns are additive cumulative counters introduced for per-request goal accounting.
+    // goalUsageColumns 是为逐请求目标记账引入的可累加累计计数列。
+    for statement in [
+        "ALTER TABLE thread_goals ADD COLUMN uncached_input_tokens INTEGER NOT NULL DEFAULT 0;",
+        "ALTER TABLE thread_goals ADD COLUMN cached_input_tokens INTEGER NOT NULL DEFAULT 0;",
+        "ALTER TABLE thread_goals ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0;",
+        "ALTER TABLE thread_goals ADD COLUMN reasoning_tokens INTEGER NOT NULL DEFAULT 0;",
+        "ALTER TABLE thread_goals ADD COLUMN total_tokens INTEGER NOT NULL DEFAULT 0;",
+    ] {
+        ensure_optional_schema_column(client, sqlite_binding_id, statement).await?;
+    }
     ensure_optional_schema_statement(
         client,
         sqlite_binding_id,
@@ -636,6 +652,11 @@ CREATE TABLE IF NOT EXISTS thread_goals (
     status TEXT NOT NULL,
     token_budget INTEGER,
     tokens_used INTEGER NOT NULL DEFAULT 0,
+    uncached_input_tokens INTEGER NOT NULL DEFAULT 0,
+    cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER NOT NULL DEFAULT 0,
     time_used_seconds INTEGER NOT NULL DEFAULT 0,
     created_at_ms INTEGER NOT NULL,
     updated_at_ms INTEGER NOT NULL
@@ -703,6 +724,23 @@ mod tests {
         assert!(!schema.contains("CREATE TABLE IF NOT EXISTS session_runtime_state"));
         assert!(!schema.contains("conversation_state_json"));
         assert!(!schema.contains("vmm_writeback_outbox_json"));
+    }
+
+    /// Verifies new databases persist cumulative per-request goal usage counters.
+    /// 验证新数据库会持久化逐请求累计目标用量计数。
+    #[test]
+    fn base_schema_includes_goal_provider_usage_counters() {
+        let schema = build_application_schema_script();
+
+        for column in [
+            "uncached_input_tokens INTEGER NOT NULL DEFAULT 0",
+            "cached_input_tokens INTEGER NOT NULL DEFAULT 0",
+            "output_tokens INTEGER NOT NULL DEFAULT 0",
+            "reasoning_tokens INTEGER NOT NULL DEFAULT 0",
+            "total_tokens INTEGER NOT NULL DEFAULT 0",
+        ] {
+            assert!(schema.contains(column));
+        }
     }
 
     /// Verifies that each bootstrap receives one distinct SQLite binding id while preserving the stable diagnostic tag prefix.

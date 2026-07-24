@@ -200,17 +200,21 @@ pub struct SessionGoalSummary {
     /// Tool calls observed for the current goal turn.
     /// 当前目标轮次观测到的工具调用次数。
     pub tool_call_count: usize,
-    /// Input tokens observed for the current goal turn.
-    /// 当前目标轮次观测到的输入 Token 数。
+    /// Cumulative uncached input tokens observed for the current goal.
+    /// 当前目标累计观测到的新增输入 Token 数。
     pub input_tokens: i64,
-    /// Cache-hit input tokens observed for the current goal turn.
-    /// 当前目标轮次观测到的缓存命中输入 Token 数。
+    /// Cumulative cache-hit input tokens observed for the current goal.
+    /// 当前目标累计观测到的缓存命中输入 Token 数。
     pub cached_input_tokens: i64,
-    /// Output tokens observed for the current goal turn.
-    /// 当前目标轮次观测到的输出 Token 数。
+    /// Cumulative output tokens observed for the current goal.
+    /// 当前目标累计观测到的输出 Token 数。
     pub output_tokens: i64,
-    /// Total provider tokens observed for the current goal turn.
-    /// 当前目标轮次观测到的 Provider 总 Token 数。
+    /// Cumulative reasoning tokens observed inside the current goal output.
+    /// 当前目标输出中累计观测到的思考 Token 数。
+    #[serde(default)]
+    pub reasoning_tokens: i64,
+    /// Cumulative provider tokens observed for the current goal.
+    /// 当前目标累计观测到的 Provider 总 Token 数。
     pub total_tokens: i64,
     /// Accounted wall-clock usage in seconds.
     /// 已记账墙钟用量秒数。

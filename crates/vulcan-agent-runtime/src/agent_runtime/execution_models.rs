@@ -158,8 +158,8 @@ pub struct ExecutionSessionGoalContext {
     /// Stable goal identifier that owns usage and lifecycle results from this execution.
     /// 拥有本次执行用量与生命周期结果的稳定目标标识。
     pub goal_id: String,
-    /// Rendered goal context injected through the task-goal prompt node.
-    /// 通过任务目标提示词节点注入的已渲染目标上下文。
+    /// Stable goal guidance delivered through an append-only provider-visible turn.
+    /// 通过追加式 Provider 可见回合投递的稳定目标引导。
     pub prompt_context: String,
 }
 

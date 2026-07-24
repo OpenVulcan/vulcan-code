@@ -364,7 +364,6 @@ pub(crate) fn apply_selected_session_runtime_hydration(
         ..
     } = hydration;
     if let Some(runtime_state) = runtime_state.as_mut() {
-        sanitize_runtime_state_legacy_goal_internal_messages(runtime_state)?;
         // Runtime-only hydration is performed before a new live owner is installed for this session.
         // 仅运行态水合发生在为该会话安装新的实时所有者之前。
         let now = current_unix_millis_value().to_string();
@@ -428,7 +427,6 @@ pub(crate) fn apply_submission_session_hydration(
         .session_messages
         .insert(session_id, messages);
     if let Some(mut runtime_state) = runtime_state {
-        sanitize_runtime_state_legacy_goal_internal_messages(&mut runtime_state)?;
         // Disk hydration is reached only when no retained live dialogue context owns this session.
         // 仅当没有保留的实时对话上下文拥有该会话时才会进入磁盘水合。
         let now = current_unix_millis_value().to_string();

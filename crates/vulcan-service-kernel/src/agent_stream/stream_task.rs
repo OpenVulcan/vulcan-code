@@ -151,6 +151,15 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
         // providerTelemetryGuard closes an active physical request even when this task future is aborted.
         // providerTelemetryGuard 即使当前任务 Future 被中止，也会关闭活动真实请求。
         let mut provider_telemetry_guard = ProviderTelemetryHookGuard::new(task_state.clone());
+        // executionProviderGoalId preserves goal ownership across tool-result requests after a goal reaches a stopped state.
+        // executionProviderGoalId 在目标进入停止状态后，跨工具结果请求保留目标归属。
+        let mut execution_provider_goal_id = request
+            .session_goal_context
+            .as_ref()
+            .map(|goal_context| goal_context.goal_id.clone());
+        // activeProviderGoalId binds exactly one physical request to its resolved goal owner.
+        // activeProviderGoalId 将恰好一次物理请求绑定到其解析后的目标所有者。
+        let mut active_provider_goal_id: Option<String> = None;
         let intervention_started_at = current_unix_millis_value();
         let prompt_ai_tool_configuration = request.ai_tool_configuration.clone();
         let prompt_intervention = build_webui_prompt_intervention(
@@ -279,6 +288,83 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     }
                 }
                 ExecutionStreamEvent::ProviderRequestTelemetry(event) => {
+                    match event.kind {
+                        ProviderRequestTelemetryEventKind::Started => {
+                            active_provider_goal_id = match session_goal_id_for_provider_request(
+                                &task_state,
+                                event.session_id,
+                                execution_provider_goal_id.as_deref(),
+                            ) {
+                                Ok(goal_id) => {
+                                    if let Some(goal_id) = goal_id.as_ref() {
+                                        execution_provider_goal_id = Some(goal_id.clone());
+                                        // The retained task binding lets an immediate user stop pause a Goal created during this execution.
+                                        // 保留任务绑定使用户立即停止时也能暂停当前执行期间创建的目标。
+                                        match task_state.lock() {
+                                            Ok(mut guard) => {
+                                                let _ = bind_active_stream_task_goal_if_id(
+                                                    &mut guard,
+                                                    event.session_id,
+                                                    active_stream_task_id,
+                                                    goal_id.clone(),
+                                                );
+                                            }
+                                            Err(error) => {
+                                                eprintln!(
+                                                    "[webui-service] provider request goal task binding failed: {error}"
+                                                );
+                                            }
+                                        }
+                                    }
+                                    goal_id
+                                }
+                                Err(error) => {
+                                    eprintln!(
+                                        "[webui-service] provider request goal binding failed: {error}"
+                                    );
+                                    None
+                                }
+                            };
+                        }
+                        ProviderRequestTelemetryEventKind::Completed => {
+                            // completedGoalId is consumed exactly once with the physical request terminal event.
+                            // completedGoalId 随物理请求终态事件恰好消费一次。
+                            let completed_goal_id = active_provider_goal_id.take();
+                            if let (Some(goal_id), Some(usage)) =
+                                (completed_goal_id.as_deref(), event.completed_usage.as_ref())
+                            {
+                                match account_session_goal_provider_usage(
+                                    &task_state,
+                                    &controller_runtime,
+                                    event.session_id,
+                                    goal_id,
+                                    usage,
+                                )
+                                .await
+                                {
+                                    Ok(true) => {
+                                        if let Err(error) = emit_session_addons_changed_delta(
+                                            &app,
+                                            &task_state,
+                                            event.session_id,
+                                        ) {
+                                            eprintln!(
+                                                "[webui-service] provider goal usage delta emit failed: {error}"
+                                            );
+                                        }
+                                    }
+                                    Ok(false) => {}
+                                    Err(error) => {
+                                        eprintln!(
+                                            "[webui-service] provider goal usage accounting failed: {error}"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        ProviderRequestTelemetryEventKind::FirstToken
+                        | ProviderRequestTelemetryEventKind::Retrying => {}
+                    }
                     provider_telemetry_guard.forward(event);
                 }
                 ExecutionStreamEvent::ProviderLoweringRepair { session_id, event } => {
@@ -383,10 +469,6 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     conversation_state,
                     last_successful_provider_usage,
                     provider_request_count,
-                    request
-                        .session_goal_context
-                        .as_ref()
-                        .map(|goal_context| goal_context.goal_id.as_str()),
                 ),
                 ExecutionStreamEvent::Finished(report) => {
                     // finished_session_id keeps the exact owner available before the report moves into terminal handling.
@@ -407,6 +489,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                         &agent_runtime,
                         active_stream_task_id,
                         stream_task_started_at,
+                        execution_provider_goal_id.as_deref(),
                         report,
                     )
                     .await

@@ -148,6 +148,7 @@ fn goal_summary_from_value(value: &Value) -> Result<SessionGoalSummary, GoalSumm
         input_tokens: optional_nonnegative_goal_i64(value, "inputTokens")?,
         cached_input_tokens: optional_nonnegative_goal_i64(value, "cachedInputTokens")?,
         output_tokens: optional_nonnegative_goal_i64(value, "outputTokens")?,
+        reasoning_tokens: optional_nonnegative_goal_i64(value, "reasoningTokens")?,
         total_tokens: optional_nonnegative_goal_i64(value, "totalTokens")?,
         time_used_seconds: required_nonnegative_goal_i64(value, "timeUsedSeconds")?,
         created_at_ms: required_nonnegative_goal_i64(value, "createdAtMs")?,

@@ -229,6 +229,9 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
         .and_then(|runtime_state| runtime_state.active_reasoning_effort);
     let session_title_for_context = start.session_title.clone();
     let visible_user_prompt_record_id = start.visible_user_prompt_record_id.clone();
+    // canonicalUserMessageId identifies the exact provider-history row that must receive post-precheck Goal text.
+    // canonicalUserMessageId 标识必须接收预检后目标文本的精确 Provider 历史行。
+    let canonical_user_message_id = start.canonical_user_message_id.clone();
     let prompt_turn_id = start.precheck_request.turn_id().to_string();
     let shared_continue_started_at = current_unix_millis_value();
     let continuation = continue_shared_prompt_turn_after_precheck(
@@ -298,7 +301,44 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
     let mut request = continuation.request;
     request.controller_runtime = Some(controller_runtime.clone());
     let goal_context_started_at = current_unix_millis_value();
-    request.session_goal_context = session_goal_context_for_prompt_from_state(state, session_id)?;
+    let (session_goal_context, goal_turn_usage_context) =
+        session_goal_prompt_parts_from_state(state, session_id)?;
+    request.session_goal_context = session_goal_context;
+    if request.provider_visible_agent_messages.is_empty() {
+        request.prompt = prepend_goal_context_to_current_prompt(
+            request.prompt,
+            &request.conversation_state,
+            request.session_goal_context.as_ref(),
+        );
+        request.prompt =
+            append_goal_turn_usage_context(request.prompt, goal_turn_usage_context.as_deref());
+        if let Some(canonical_user_message_id) = canonical_user_message_id.as_deref() {
+            // runtimeState remains the persistence owner while request history receives an identical immutable snapshot.
+            // runtimeState 继续作为持久化所有者，请求历史取得完全相同的不可变快照。
+            let runtime_state = workspace_snapshot
+                .session_runtime_state
+                .get_mut(&session_id)
+                .ok_or_else(|| {
+                    format!("会话 `{session_id}` 缺少运行态，无法绑定目标提示词到规范消息。")
+                })?;
+            replace_canonical_current_user_prompt(
+                &mut runtime_state.conversation_state,
+                canonical_user_message_id,
+                &request.prompt,
+            )?;
+            // updatedAt makes the provider-history mutation visible to runtime-state persistence.
+            // updatedAt 使 Provider 历史变更对运行态持久化可见。
+            runtime_state.updated_at = current_unix_millis_text();
+            request.conversation_state = runtime_state.conversation_state.clone();
+        }
+    } else {
+        attach_goal_context_to_provider_visible_agent_messages(
+            &mut request.provider_visible_agent_messages,
+            &request.conversation_state,
+            request.session_goal_context.as_ref(),
+            goal_turn_usage_context.as_deref(),
+        );
+    }
     webui_after_precheck_trace(
         "after_precheck_09_goal_context_ready",
         format!(

@@ -665,6 +665,119 @@ fn terminal_report_attaches_usage_to_existing_assistant_message() {
     assert_eq!(turn_stats.total_tokens, 18);
 }
 
+/// Verifies one multi-call run does not append a cumulative assistant duplicate or count its usage twice.
+/// 验证一次多调用执行不会追加累计助手副本，也不会重复统计其用量。
+#[test]
+fn terminal_report_does_not_duplicate_multi_message_assistant_output_usage() {
+    // sessionId provides one stable identity for the complete multi-call run.
+    // sessionId 为完整多调用执行提供一个稳定身份。
+    let session_id = test_session_id();
+    // runtimeState owns the canonical user turn and both real Provider assistant messages.
+    // runtimeState 持有规范用户轮次和两条真实 Provider 助手消息。
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    append_user_prompt_record(&mut runtime_state, session_id, "2250", "连续调用工具后总结")
+        .expect("valid user prompt identity");
+    // firstUsage is the authoritative usage reported by the first Provider response.
+    // firstUsage 是第一次 Provider 响应报告的权威用量。
+    let first_usage = ProviderUsageSnapshot {
+        input_tokens: Some(100),
+        output_tokens: Some(10),
+        reasoning_tokens: Some(3),
+        total_tokens: Some(110),
+        cached_input_tokens: Some(80),
+        cache_creation_input_tokens: None,
+    };
+    // finalUsage is the authoritative usage reported by the final Provider response.
+    // finalUsage 是最后一次 Provider 响应报告的权威用量。
+    let final_usage = ProviderUsageSnapshot {
+        input_tokens: Some(120),
+        output_tokens: Some(12),
+        reasoning_tokens: Some(4),
+        total_tokens: Some(132),
+        cached_input_tokens: Some(100),
+        cache_creation_input_tokens: None,
+    };
+    runtime_state.conversation_state.messages.extend([
+        SessionConversationMessage {
+            id: String::from("multi-call-first-assistant"),
+            payload: SessionConversationPayload::Assistant {
+                text: String::from("先执行工具。"),
+                reasoning: String::new(),
+                provider_message_id: None,
+                provider_message_state: None,
+                usage: Some(first_usage),
+                tool_calls: Vec::new(),
+            },
+        },
+        SessionConversationMessage {
+            id: String::from("multi-call-final-assistant"),
+            payload: SessionConversationPayload::Assistant {
+                text: String::from("工具执行完成。"),
+                reasoning: String::new(),
+                provider_message_id: None,
+                provider_message_state: None,
+                usage: Some(final_usage.clone()),
+                tool_calls: Vec::new(),
+            },
+        },
+    ]);
+    // cumulativeUsage is the exact sum of both physical Provider responses.
+    // cumulativeUsage 是两次真实 Provider 响应的准确合计。
+    let cumulative_usage = ProviderUsageSnapshot {
+        input_tokens: Some(220),
+        output_tokens: Some(22),
+        reasoning_tokens: Some(7),
+        total_tokens: Some(242),
+        cached_input_tokens: Some(180),
+        cache_creation_input_tokens: None,
+    };
+    // report carries the cumulative visible output while retaining physical per-message usage.
+    // report 携带累计可见输出，同时保留每条真实消息的逐次用量。
+    let report = ExecutionRunReport {
+        session_id,
+        preparation: None,
+        assistant_output: Some(String::from("先执行工具。工具执行完成。")),
+        thinking_output: None,
+        conversation_state: None,
+        provider_request_count: 2,
+        last_successful_provider_usage: Some(final_usage),
+        cumulative_successful_provider_usage: Some(cumulative_usage),
+        embedded_turn_usage_segments: Vec::new(),
+        mcp_discovery_rows: Vec::new(),
+        mcp_discovery_errors: Vec::new(),
+        warnings: Vec::new(),
+        error: None,
+        controller_events: Vec::new(),
+    };
+
+    apply_terminal_execution_report_to_state(&mut runtime_state, session_id, "2251", &report)
+        .expect("valid terminal report identities");
+
+    // assistantTexts exposes every canonical assistant text retained for future Provider context.
+    // assistantTexts 暴露为后续 Provider 上下文保留的每条规范助手文本。
+    let assistant_texts = runtime_state
+        .conversation_state
+        .messages
+        .iter()
+        .filter_map(|message| match &message.payload {
+            SessionConversationPayload::Assistant { text, .. } => Some(text.as_str()),
+            SessionConversationPayload::UserText { .. }
+            | SessionConversationPayload::ToolResult { .. }
+            | SessionConversationPayload::AgentMessage { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(assistant_texts, vec!["先执行工具。", "工具执行完成。"]);
+    // turnStats must equal the two physical Provider responses without a synthetic third usage.
+    // turnStats 必须等于两次真实 Provider 响应，不得包含合成的第三份用量。
+    let turn_stats = latest_turn_stats(&runtime_state);
+    assert_eq!(turn_stats.provider_call_count, 2);
+    assert_eq!(turn_stats.input_tokens, 220);
+    assert_eq!(turn_stats.output_tokens, 22);
+    assert_eq!(turn_stats.reasoning_tokens, 7);
+    assert_eq!(turn_stats.total_tokens, 242);
+    assert_eq!(turn_stats.cached_input_tokens, Some(180));
+}
+
 /// Verifies terminal reports still project provider usage when canonical messages lost per-message usage.
 /// 验证规范消息丢失逐消息用量时，终态报告仍会投影 Provider 用量。
 #[test]

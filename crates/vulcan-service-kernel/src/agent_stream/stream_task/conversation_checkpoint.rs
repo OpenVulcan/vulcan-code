@@ -40,7 +40,6 @@ pub(super) fn handle_conversation_checkpoint_stream_event(
     conversation_state: SessionConversationState,
     last_successful_provider_usage: Option<ProviderUsageSnapshot>,
     provider_request_count: usize,
-    expected_goal_id: Option<&str>,
 ) {
     // Live context budget usage is an optional projection; its failure must not block goal accounting or the canonical checkpoint.
     // 实时上下文预算用量是可选投影；其失败不得阻塞目标计量或规范检查点。
@@ -48,21 +47,6 @@ pub(super) fn handle_conversation_checkpoint_stream_event(
         && let Err(error) = cache_live_context_budget_observed_usage(task_state, session_id, usage)
     {
         eprintln!("[webui-service] live context budget usage update failed: {error}");
-    }
-
-    // The goal id comes exclusively from the request launch context, preventing a checkpoint from being charged to a later goal.
-    // 目标标识仅来自请求启动上下文，防止检查点被计入后续切换的新目标。
-    if let Some(goal_id) = expected_goal_id
-        && let Err(error) = cache_session_goal_live_usage_from_checkpoint(
-            task_state,
-            session_id,
-            &conversation_state,
-            provider_request_count,
-            true,
-            goal_id,
-        )
-    {
-        eprintln!("[webui-service] session goal live usage update failed: {error}");
     }
 
     // Canonical checkpoint state is authoritative and must be attempted after all optional projections regardless of their outcomes.

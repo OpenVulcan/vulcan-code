@@ -12,36 +12,36 @@ use super::*;
 /// `state` 持有持久记账后更新的实时目标投影。
 /// `controller_runtime` provides the durable goal store connection.
 /// `controller_runtime` 提供持久目标存储连接。
-/// `report` carries the request-bound goal identity and final usage.
-/// `report` 携带请求绑定的目标身份与最终用量。
+/// `report` carries the request-bound goal identity and terminal execution facts.
+/// `report` 携带请求绑定的目标身份与终态执行事实。
+/// `expected_goal_id` is the latest Goal identity bound during this execution.
+/// `expected_goal_id` 是当前执行期间绑定的最新目标身份。
 /// `elapsed_seconds` is the elapsed wall-clock duration attributed to the run.
 /// `elapsed_seconds` 是归属于本次运行的墙钟耗时。
 ///
 /// # Returns
 /// 返回值
-/// Success after applying or safely skipping accounting, or a durable/cache update error.
-/// 成功应用或安全跳过记账后返回成功，否则返回持久化或缓存更新错误。
+/// Whether the visible goal projection changed, or a durable/cache update error.
+/// 返回可见目标投影是否发生变化，否则返回持久化或缓存更新错误。
 pub(crate) async fn account_session_goal_from_report(
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     report: &ExecutionRunReport,
+    expected_goal_id: Option<&str>,
     elapsed_seconds: i64,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     if report
         .preparation
         .as_ref()
         .is_some_and(|preparation| preparation.prompt_purpose != ExecutionPromptPurpose::UserTurn)
     {
-        return Ok(());
+        return Ok(false);
     }
-    let Some(expected_goal_id) = report
-        .preparation
-        .as_ref()
-        .and_then(|preparation| preparation.session_goal_context.as_ref())
-        .map(|context| context.goal_id.as_str())
-    else {
-        return Ok(());
+    let Some(expected_goal_id) = expected_goal_id else {
+        return Ok(false);
     };
+    // isRegularSession prevents detached task reports from changing the root session goal.
+    // isRegularSession 防止分离任务报告修改根会话目标。
     let is_regular_session = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?
@@ -50,87 +50,28 @@ pub(crate) async fn account_session_goal_from_report(
         .is_some_and(|workspace_snapshot| {
             workspace_snapshot_contains_regular_session(workspace_snapshot, report.session_id)
         });
-    if !is_regular_session {
-        return Ok(());
+    if !is_regular_session || (elapsed_seconds <= 0 && report.error.is_none()) {
+        return Ok(false);
     }
-    let turn_stats = report
-        .conversation_state
-        .as_ref()
-        .and_then(|conversation_state| {
-            latest_session_turn_stats_from_state(
-                conversation_state,
-                Some(report.provider_request_count),
-                report.embedded_turn_usage_segments.clone(),
-            )
-        });
-    let token_delta = turn_stats
-        .as_ref()
-        .and_then(goal_token_delta_for_turn_stats)
-        .or_else(|| {
-            goal_token_delta_for_provider_usage(report.last_successful_provider_usage.as_ref())
-        })
-        .unwrap_or_default();
-    if token_delta <= 0 && elapsed_seconds <= 0 && report.error.is_none() {
-        return Ok(());
-    }
+    // projectionChanged records whether terminal time or error accounting changed the visible goal.
+    // projectionChanged 记录终态耗时或错误记账是否改变了可见目标。
+    let mut projection_changed = false;
+    // goalStore owns durable goal accounting; token usage is already persisted per Provider request.
+    // goalStore 负责持久目标记账；Token 用量已按每次 Provider 请求持久化。
     let goal_store = VulcanGoalStore::new(controller_runtime.clone());
-    if token_delta > 0 || elapsed_seconds > 0 {
+    if elapsed_seconds > 0 {
         let outcome = goal_store
-            .account_thread_goal_usage(
-                report.session_id,
-                token_delta,
-                elapsed_seconds,
-                expected_goal_id,
-            )
+            .account_thread_goal_usage(report.session_id, 0, elapsed_seconds, expected_goal_id)
             .await?;
-        match outcome {
-            GoalAccountingOutcome::Updated(goal) => {
-                advance_session_goal_dispatch_version(state, report.session_id)?;
-                let summary = session_goal_summary_from_thread_goal(&goal);
-                if goal.status == ThreadGoalStatus::BudgetLimited
-                    && let Err(error) = enqueue_session_goal_budget_limited_guidance(
-                        state,
-                        report.session_id,
-                        &summary,
-                    )
-                {
-                    eprintln!(
-                        "[webui-service] enqueue goal budget-limited guidance failed: {error}"
-                    );
-                }
-                cache_session_goal_summary(state, report.session_id, Some(goal))?;
-            }
-            GoalAccountingOutcome::Unchanged(goal) => {
-                if let Some(goal) = goal {
-                    let summary = session_goal_summary_from_thread_goal(&goal);
-                    if goal.status == ThreadGoalStatus::BudgetLimited
-                        && let Err(error) = enqueue_session_goal_budget_limited_guidance(
-                            state,
-                            report.session_id,
-                            &summary,
-                        )
-                    {
-                        eprintln!(
-                            "[webui-service] enqueue unchanged goal budget-limited guidance failed: {error}"
-                        );
-                    }
-                    cache_session_goal_summary(state, report.session_id, Some(goal))?;
-                }
-            }
-        }
-        if let Some(conversation_state) = report.conversation_state.as_ref() {
-            cache_session_goal_live_usage_from_checkpoint(
-                state,
-                report.session_id,
-                conversation_state,
-                report.provider_request_count,
-                false,
-                expected_goal_id,
-            )?;
+        if let GoalAccountingOutcome::Updated(goal) = outcome {
+            advance_session_goal_dispatch_version(state, report.session_id)?;
+            projection_changed |=
+                merge_session_goal_accounting_projection(state, report.session_id, &goal)?
+                    .is_some();
         }
     }
     if let Some(error) = report.error.as_deref() {
-        apply_session_goal_error_status(
+        projection_changed |= apply_session_goal_error_status(
             state,
             &goal_store,
             report.session_id,
@@ -139,175 +80,105 @@ pub(crate) async fn account_session_goal_from_report(
         )
         .await?;
     }
-    Ok(())
+    Ok(projection_changed)
 }
 
-/// Updates the in-memory goal summary with live turn usage from one checkpoint.
-/// 使用单个检查点中的当前轮次用量更新内存目标摘要。
+/// Resolves the exact goal identity that owns a newly started physical provider request.
+/// 解析拥有新启动物理 Provider 请求的精确目标身份。
 ///
 /// # Parameters
 /// 参数
-/// `state` owns the live session-goal projection.
-/// `state` 持有实时会话目标投影。
-/// `session_id` identifies the checkpoint session.
-/// `session_id` 标识检查点所属会话。
-/// `conversation_state` supplies canonical turn usage counters.
-/// `conversation_state` 提供规范回合用量计数。
-/// `provider_request_count` overrides the live Provider request count.
-/// `provider_request_count` 覆盖实时 Provider 请求次数。
-/// `add_turn_usage_to_accounted_total` controls whether current-turn tokens are shown provisionally.
-/// `add_turn_usage_to_accounted_total` 控制是否临时显示当前回合 Token。
-/// `expected_goal_id` binds the checkpoint to the goal captured at launch.
-/// `expected_goal_id` 将检查点绑定到启动时捕获的目标。
+/// `state` owns the authoritative in-process goal projection.
+/// `state` 持有权威的进程内目标投影。
+/// `session_id` identifies the regular session starting the request.
+/// `session_id` 标识正在启动请求的常规会话。
+/// `previously_bound_goal_id` preserves ownership across tool-result requests after the goal stops.
+/// `previously_bound_goal_id` 在目标停止后跨工具结果请求保留归属关系。
 ///
 /// # Returns
 /// 返回值
-/// Success after updating or safely skipping the cache, or a state-lock error.
-/// 更新或安全跳过缓存后返回成功，否则返回状态锁错误。
-pub(crate) fn cache_session_goal_live_usage_from_checkpoint(
+/// The exact active or execution-bound goal id, no goal when none can own the request, or a lock error.
+/// 返回精确的活动或执行绑定目标标识；没有目标可拥有请求时为空；锁失败时返回错误。
+pub(crate) fn session_goal_id_for_provider_request(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
-    conversation_state: &SessionConversationState,
-    provider_request_count: usize,
-    add_turn_usage_to_accounted_total: bool,
-    expected_goal_id: &str,
-) -> Result<(), String> {
-    let Some(turn_stats) = latest_session_turn_stats_from_state(
-        conversation_state,
-        Some(provider_request_count),
-        Vec::new(),
-    ) else {
-        return Ok(());
-    };
-    let mut guard = state
+    previously_bound_goal_id: Option<&str>,
+) -> Result<Option<String>, String> {
+    let guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
-    let Some(summary) = guard.session_goal_summaries.get_mut(&session_id) else {
-        return Ok(());
+    let Some(goal) = guard.session_goal_summaries.get(&session_id) else {
+        // A request-bound goal remains safe to return because durable accounting verifies the exact id.
+        // 请求绑定目标可安全返回，因为持久化记账还会校验精确标识。
+        return Ok(previously_bound_goal_id.map(str::to_owned));
     };
-    update_session_goal_live_usage(
-        summary,
-        &turn_stats,
-        add_turn_usage_to_accounted_total,
-        expected_goal_id,
-    );
-    Ok(())
+    if goal.status == SessionGoalStatus::Active
+        || previously_bound_goal_id.is_some_and(|goal_id| goal_id == goal.goal_id)
+    {
+        return Ok(Some(goal.goal_id.clone()));
+    }
+    Ok(None)
 }
 
-/// Applies one live turn-statistics snapshot to its exact Goal projection.
-/// 将实时回合统计快照应用到其精确 Goal 投影。
+/// Persists one successful physical provider request and refreshes its goal projection.
+/// 持久化一次成功的物理 Provider 请求并刷新其目标投影。
 ///
 /// # Parameters
 /// 参数
-/// `summary` is the mutable cached Goal projection.
-/// `summary` 是可变的缓存 Goal 投影。
-/// `turn_stats` contains cumulative statistics for the bound in-flight turn.
-/// `turn_stats` 包含绑定进行中回合的累计统计。
-/// `add_turn_usage_to_accounted_total` controls provisional usage display before durable accounting.
-/// `add_turn_usage_to_accounted_total` 控制持久记账前的临时用量显示。
-/// `expected_goal_id` is the budget-stage identity captured when the turn started.
-/// `expected_goal_id` 是回合启动时捕获的预算阶段身份。
+/// `state` owns the visible goal cache and dispatch version.
+/// `state` 持有可见目标缓存与分发版本。
+/// `controller_runtime` provides the durable goal store connection.
+/// `controller_runtime` 提供持久目标存储连接。
+/// `session_id` identifies the session that owns the provider request.
+/// `session_id` 标识拥有 Provider 请求的会话。
+/// `expected_goal_id` is the goal bound when the physical request started.
+/// `expected_goal_id` 是物理请求启动时绑定的目标。
+/// `usage` carries exact normalized Provider usage for the completed request.
+/// `usage` 携带已完成请求的精确标准化 Provider 用量。
 ///
 /// # Returns
 /// 返回值
-/// `true` when the bound projection was updated, otherwise `false` for a replacement stage.
-/// 绑定投影已更新时返回 `true`，替换阶段则返回 `false`。
-pub(crate) fn update_session_goal_live_usage(
-    summary: &mut SessionGoalSummary,
-    turn_stats: &SessionTurnStats,
-    add_turn_usage_to_accounted_total: bool,
+/// Whether the bound goal changed, or a durable/cache update error.
+/// 返回绑定目标是否变化，否则返回持久化或缓存更新错误。
+pub(crate) async fn account_session_goal_provider_usage(
+    state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    session_id: SessionId,
     expected_goal_id: &str,
-) -> bool {
-    if summary.goal_id != expected_goal_id {
-        return false;
-    }
-    let turn_usage = goal_token_delta_for_turn_stats(turn_stats).unwrap_or_default();
-    summary.usage_tokens = if add_turn_usage_to_accounted_total {
-        summary.tokens_used.saturating_add(turn_usage)
-    } else {
-        summary.tokens_used
+    usage: &ProviderRequestCompletedUsage,
+) -> Result<bool, String> {
+    // persistedUsage converts platform-sized counters into the store's saturating integer contract.
+    // persistedUsage 将平台大小计数转换为存储层的饱和整数契约。
+    let persisted_usage = ThreadGoalProviderUsage {
+        uncached_input_tokens: i64::try_from(usage.uncached_input_tokens).unwrap_or(i64::MAX),
+        cached_input_tokens: i64::try_from(usage.cached_input_tokens).unwrap_or(i64::MAX),
+        output_tokens: i64::try_from(usage.output_tokens).unwrap_or(i64::MAX),
+        reasoning_tokens: i64::try_from(usage.reasoning_tokens).unwrap_or(i64::MAX),
+        total_tokens: i64::try_from(usage.total_tokens).unwrap_or(i64::MAX),
     };
-    summary.api_call_count = turn_stats.provider_call_count;
-    summary.tool_call_count = turn_stats.tool_call_count;
-    summary.input_tokens = i64::try_from(turn_stats.input_tokens).unwrap_or(i64::MAX);
-    summary.cached_input_tokens =
-        i64::try_from(turn_stats.cached_input_tokens.unwrap_or_default()).unwrap_or(i64::MAX);
-    summary.output_tokens = i64::try_from(turn_stats.output_tokens).unwrap_or(i64::MAX);
-    summary.total_tokens = i64::try_from(turn_stats.total_tokens).unwrap_or(i64::MAX);
-    true
-}
-
-/// Builds live turn statistics from the latest conversation record.
-/// 从最新会话记录构建实时轮次统计。
-pub(crate) fn latest_session_turn_stats_from_state(
-    conversation_state: &SessionConversationState,
-    provider_request_count_override: Option<usize>,
-    usage_segments: Vec<SessionTurnUsageSegment>,
-) -> Option<SessionTurnStats> {
-    let closing_record_id = conversation_state.records.last()?.id.as_str();
-    build_session_turn_stats_from_state_with_segments(
-        conversation_state,
-        closing_record_id,
-        SessionTurnStatsStatus::Completed,
-        provider_request_count_override,
-        SessionTurnStatsKind::UserTurn,
-        usage_segments,
-    )
-}
-
-/// Converts one turn-statistics snapshot into Codex-compatible goal usage tokens.
-/// 将一份轮次统计转换为 Codex 兼容的目标用量 Token。
-pub(crate) fn goal_token_delta_for_turn_stats(stats: &SessionTurnStats) -> Option<i64> {
-    if stats.turn_kind == SessionTurnStatsKind::SubagentFeedback {
-        return None;
+    // goalStore applies request usage atomically against the request-bound goal identity.
+    // goalStore 针对请求绑定的目标身份原子应用请求用量。
+    let goal_store = VulcanGoalStore::new(controller_runtime.clone());
+    let outcome = goal_store
+        .account_thread_goal_provider_usage(session_id, persisted_usage, expected_goal_id)
+        .await?;
+    let GoalAccountingOutcome::Updated(goal) = outcome else {
+        return Ok(false);
+    };
+    advance_session_goal_dispatch_version(state, session_id)?;
+    // visibleSummary is present only when the same goal remains visible and accounting changed it.
+    // visibleSummary 仅在同一目标仍然可见且记账改变了它时存在。
+    let Some(visible_summary) = merge_session_goal_accounting_projection(state, session_id, &goal)?
+    else {
+        return Ok(false);
+    };
+    if visible_summary.status == SessionGoalStatus::BudgetLimited
+        && let Err(error) =
+            enqueue_session_goal_budget_limited_guidance(state, session_id, &visible_summary)
+    {
+        eprintln!("[webui-service] enqueue goal budget-limited guidance failed: {error}");
     }
-    if !stats.usage_groups.is_empty() {
-        return goal_token_delta_for_turn_usage_groups(stats);
-    }
-    let input_tokens = stats.input_tokens;
-    let cached_input_tokens = stats.cached_input_tokens.unwrap_or_default();
-    let output_tokens = stats.output_tokens.saturating_add(stats.reasoning_tokens);
-    let delta = input_tokens
-        .saturating_sub(cached_input_tokens)
-        .saturating_add(output_tokens);
-    if delta > 0 {
-        return Some(i64::try_from(delta).unwrap_or(i64::MAX));
-    }
-    (stats.total_tokens > 0).then(|| i64::try_from(stats.total_tokens).unwrap_or(i64::MAX))
-}
-
-/// Calculates goal tokens from first-class usage groups while excluding child-agent work.
-/// 从一等用量分组计算目标预算 Token，同时排除智能体工作。
-fn goal_token_delta_for_turn_usage_groups(stats: &SessionTurnStats) -> Option<i64> {
-    let mut input_tokens = 0usize;
-    let mut cached_input_tokens = 0usize;
-    let mut output_tokens = 0usize;
-    let mut reasoning_tokens = 0usize;
-    let mut total_tokens = 0usize;
-    let mut has_goal_accounted_group = false;
-    for group in &stats.usage_groups {
-        if group.kind == SessionTurnUsageGroupKind::Subagent {
-            continue;
-        }
-        has_goal_accounted_group = true;
-        input_tokens = input_tokens.saturating_add(group.input_tokens);
-        cached_input_tokens =
-            cached_input_tokens.saturating_add(group.cached_input_tokens.unwrap_or_default());
-        output_tokens = output_tokens.saturating_add(group.output_tokens);
-        reasoning_tokens = reasoning_tokens.saturating_add(group.reasoning_tokens);
-        total_tokens = total_tokens.saturating_add(group.total_tokens);
-    }
-    if !has_goal_accounted_group {
-        return None;
-    }
-    let delta = input_tokens
-        .saturating_sub(cached_input_tokens)
-        .saturating_add(output_tokens)
-        .saturating_add(reasoning_tokens);
-    if delta > 0 {
-        return Some(i64::try_from(delta).unwrap_or(i64::MAX));
-    }
-    (total_tokens > 0).then(|| i64::try_from(total_tokens).unwrap_or(i64::MAX))
+    Ok(true)
 }
 
 /// Marks an active goal with the terminal status implied by a failed run.
@@ -328,24 +199,24 @@ fn goal_token_delta_for_turn_usage_groups(stats: &SessionTurnStats) -> Option<i6
 ///
 /// # Returns
 /// 返回值
-/// Success after applying or safely skipping the transition, or a store/cache error.
-/// 应用或安全跳过转换后返回成功，否则返回存储或缓存错误。
+/// Whether the visible goal changed, or a store/cache error.
+/// 返回可见目标是否发生变化，否则返回存储或缓存错误。
 pub(crate) async fn apply_session_goal_error_status(
     state: &SharedServiceBridgeState,
     goal_store: &VulcanGoalStore,
     session_id: SessionId,
     expected_goal_id: &str,
     error: &str,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let Some(goal) = goal_store.get_thread_goal(session_id).await? else {
-        return Ok(());
+        return Ok(false);
     };
     if goal.goal_id != expected_goal_id {
-        return Ok(());
+        return Ok(false);
     }
     if goal.status != ThreadGoalStatus::Active {
         cache_session_goal_summary(state, session_id, Some(goal))?;
-        return Ok(());
+        return Ok(false);
     }
     let status = session_goal_error_status(error);
     let updated_goal = goal_store
@@ -363,8 +234,9 @@ pub(crate) async fn apply_session_goal_error_status(
     if let Some(updated_goal) = updated_goal {
         advance_session_goal_dispatch_version(state, session_id)?;
         cache_session_goal_summary(state, session_id, Some(updated_goal))?;
+        return Ok(true);
     }
-    Ok(())
+    Ok(false)
 }
 
 /// Classifies a failed run into a Codex-compatible goal stop status.
@@ -380,25 +252,4 @@ pub(crate) fn session_goal_error_status(error: &str) -> ThreadGoalStatus {
     } else {
         ThreadGoalStatus::Blocked
     }
-}
-
-/// Calculates the Codex-compatible token delta for goal accounting.
-/// 计算与 Codex 兼容的目标记账 token 增量。
-pub(crate) fn goal_token_delta_for_provider_usage(
-    usage: Option<&ProviderUsageSnapshot>,
-) -> Option<i64> {
-    let usage = usage?;
-    let input_tokens = usage.input_tokens.unwrap_or_default();
-    let cached_input_tokens = usage.cached_input_tokens.unwrap_or_default();
-    let output_tokens = usage.output_tokens.unwrap_or_default();
-    let delta = input_tokens
-        .saturating_sub(cached_input_tokens)
-        .saturating_add(output_tokens);
-    if delta > 0 {
-        return Some(i64::try_from(delta).unwrap_or(i64::MAX));
-    }
-    usage
-        .total_tokens
-        .map(|total| i64::try_from(total).unwrap_or(i64::MAX))
-        .filter(|total| *total > 0)
 }

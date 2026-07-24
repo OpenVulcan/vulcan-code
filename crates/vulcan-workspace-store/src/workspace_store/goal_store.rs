@@ -200,6 +200,21 @@ pub struct ThreadGoal {
     /// Accounted token usage for this goal.
     /// 当前目标已记账的 token 用量。
     pub tokens_used: i64,
+    /// Accounted input tokens that were not served from cache.
+    /// 当前目标已记账的非缓存输入 Token 数。
+    pub uncached_input_tokens: i64,
+    /// Accounted input tokens served from cache.
+    /// 当前目标已记账的缓存输入 Token 数。
+    pub cached_input_tokens: i64,
+    /// Accounted complete output tokens.
+    /// 当前目标已记账的完整输出 Token 数。
+    pub output_tokens: i64,
+    /// Accounted reasoning tokens reported as an output detail.
+    /// 当前目标已记账的思考 Token 输出明细。
+    pub reasoning_tokens: i64,
+    /// Accounted provider-reported total tokens.
+    /// 当前目标已记账的 Provider 总 Token 数。
+    pub total_tokens: i64,
     /// Accounted wall-clock time in seconds.
     /// 当前目标已记账的墙钟时间秒数。
     pub time_used_seconds: i64,
@@ -262,6 +277,36 @@ pub enum GoalAccountingOutcome {
     Updated(ThreadGoal),
 }
 
+/// Exact additive usage reported by one successful physical provider request.
+/// 单次成功物理 Provider 请求报告的精确累加用量。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThreadGoalProviderUsage {
+    /// Input tokens that were not served from cache.
+    /// 未由缓存提供的输入 Token 数。
+    pub uncached_input_tokens: i64,
+    /// Input tokens served from cache.
+    /// 由缓存提供的输入 Token 数。
+    pub cached_input_tokens: i64,
+    /// Complete output tokens.
+    /// 完整输出 Token 数。
+    pub output_tokens: i64,
+    /// Reasoning tokens reported as an output detail.
+    /// 作为输出明细报告的思考 Token 数。
+    pub reasoning_tokens: i64,
+    /// Provider-reported total tokens.
+    /// Provider 报告的总 Token 数。
+    pub total_tokens: i64,
+}
+
+impl ThreadGoalProviderUsage {
+    /// Returns the budgeted sum of uncached input and complete output.
+    /// 返回由非缓存输入与完整输出组成的预算记账总量。
+    pub fn budget_tokens(self) -> i64 {
+        self.uncached_input_tokens
+            .saturating_add(self.output_tokens)
+    }
+}
+
 /// Controller-backed implementation of the Codex-compatible goal store API.
 /// Codex 兼容目标存储 API 的控制器承载实现。
 #[derive(Debug, Clone)]
@@ -291,6 +336,21 @@ struct ThreadGoalRow {
     /// Persisted token usage.
     /// 持久化 token 用量。
     tokens_used: i64,
+    /// Persisted non-cached input usage.
+    /// 持久化非缓存输入用量。
+    uncached_input_tokens: i64,
+    /// Persisted cached input usage.
+    /// 持久化缓存输入用量。
+    cached_input_tokens: i64,
+    /// Persisted complete output usage.
+    /// 持久化完整输出用量。
+    output_tokens: i64,
+    /// Persisted reasoning output detail.
+    /// 持久化思考输出明细。
+    reasoning_tokens: i64,
+    /// Persisted provider total usage.
+    /// 持久化 Provider 总用量。
+    total_tokens: i64,
     /// Persisted wall-clock usage in seconds.
     /// 持久化墙钟用量秒数。
     time_used_seconds: i64,
@@ -325,6 +385,11 @@ SELECT
     status,
     token_budget,
     tokens_used,
+    uncached_input_tokens,
+    cached_input_tokens,
+    output_tokens,
+    reasoning_tokens,
+    total_tokens,
     time_used_seconds,
     created_at_ms,
     updated_at_ms
@@ -365,16 +430,26 @@ INSERT INTO thread_goals (
     status,
     token_budget,
     tokens_used,
+    uncached_input_tokens,
+    cached_input_tokens,
+    output_tokens,
+    reasoning_tokens,
+    total_tokens,
     time_used_seconds,
     created_at_ms,
     updated_at_ms
-) VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, ?6, ?7)
+) VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, 0, 0, 0, 0, 0, ?6, ?7)
 ON CONFLICT(thread_id) DO UPDATE SET
     goal_id = excluded.goal_id,
     objective = excluded.objective,
     status = excluded.status,
     token_budget = excluded.token_budget,
     tokens_used = 0,
+    uncached_input_tokens = 0,
+    cached_input_tokens = 0,
+    output_tokens = 0,
+    reasoning_tokens = 0,
+    total_tokens = 0,
     time_used_seconds = 0,
     created_at_ms = excluded.created_at_ms,
     updated_at_ms = excluded.updated_at_ms
@@ -385,6 +460,11 @@ RETURNING
     status,
     token_budget,
     tokens_used,
+    uncached_input_tokens,
+    cached_input_tokens,
+    output_tokens,
+    reasoning_tokens,
+    total_tokens,
     time_used_seconds,
     created_at_ms,
     updated_at_ms;
@@ -428,16 +508,26 @@ INSERT INTO thread_goals (
     status,
     token_budget,
     tokens_used,
+    uncached_input_tokens,
+    cached_input_tokens,
+    output_tokens,
+    reasoning_tokens,
+    total_tokens,
     time_used_seconds,
     created_at_ms,
     updated_at_ms
-) VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, ?6, ?7)
+) VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, 0, 0, 0, 0, 0, ?6, ?7)
 ON CONFLICT(thread_id) DO UPDATE SET
     goal_id = excluded.goal_id,
     objective = excluded.objective,
     status = excluded.status,
     token_budget = excluded.token_budget,
     tokens_used = 0,
+    uncached_input_tokens = 0,
+    cached_input_tokens = 0,
+    output_tokens = 0,
+    reasoning_tokens = 0,
+    total_tokens = 0,
     time_used_seconds = 0,
     created_at_ms = excluded.created_at_ms,
     updated_at_ms = excluded.updated_at_ms
@@ -449,6 +539,11 @@ RETURNING
     status,
     token_budget,
     tokens_used,
+    uncached_input_tokens,
+    cached_input_tokens,
+    output_tokens,
+    reasoning_tokens,
+    total_tokens,
     time_used_seconds,
     created_at_ms,
     updated_at_ms;
@@ -520,6 +615,11 @@ RETURNING
     status,
     token_budget,
     tokens_used,
+    uncached_input_tokens,
+    cached_input_tokens,
+    output_tokens,
+    reasoning_tokens,
+    total_tokens,
     time_used_seconds,
     created_at_ms,
     updated_at_ms;
@@ -597,6 +697,11 @@ SET
     status = 'active',
     token_budget = ?3,
     tokens_used = 0,
+    uncached_input_tokens = 0,
+    cached_input_tokens = 0,
+    output_tokens = 0,
+    reasoning_tokens = 0,
+    total_tokens = 0,
     time_used_seconds = 0,
     created_at_ms = ?4,
     updated_at_ms = ?4
@@ -611,6 +716,11 @@ RETURNING
     status,
     token_budget,
     tokens_used,
+    uncached_input_tokens,
+    cached_input_tokens,
+    output_tokens,
+    reasoning_tokens,
+    total_tokens,
     time_used_seconds,
     created_at_ms,
     updated_at_ms;
@@ -668,6 +778,11 @@ RETURNING
     status,
     token_budget,
     tokens_used,
+    uncached_input_tokens,
+    cached_input_tokens,
+    output_tokens,
+    reasoning_tokens,
+    total_tokens,
     time_used_seconds,
     created_at_ms,
     updated_at_ms;
@@ -717,6 +832,11 @@ RETURNING
     status,
     token_budget,
     tokens_used,
+    uncached_input_tokens,
+    cached_input_tokens,
+    output_tokens,
+    reasoning_tokens,
+    total_tokens,
     time_used_seconds,
     created_at_ms,
     updated_at_ms;
@@ -731,6 +851,117 @@ RETURNING
             .next()
             .map(thread_goal_from_row)
             .transpose()
+    }
+
+    /// Accounts one successful physical provider request for an exact request-bound goal.
+    /// 为精确请求绑定目标记账一次成功的物理 Provider 请求。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `thread_id` identifies the session that owns the goal.
+    /// `thread_id` 标识拥有目标的会话。
+    /// `usage` carries the exact normalized additive token facts.
+    /// `usage` 携带精确标准化的可累加 Token 事实。
+    /// `expected_goal_id` binds the request to the goal that was active when it started.
+    /// `expected_goal_id` 将请求绑定到其启动时处于活动状态的目标。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The atomically updated goal without reviving stopped states, or the latest unchanged goal when the binding no longer matches.
+    /// 返回原子更新且不复活停止状态的目标；绑定不再匹配时返回最新的未变更目标。
+    pub async fn account_thread_goal_provider_usage(
+        &self,
+        thread_id: SessionId,
+        usage: ThreadGoalProviderUsage,
+        expected_goal_id: &str,
+    ) -> Result<GoalAccountingOutcome, String> {
+        let usage = ThreadGoalProviderUsage {
+            uncached_input_tokens: usage.uncached_input_tokens.max(0),
+            cached_input_tokens: usage.cached_input_tokens.max(0),
+            output_tokens: usage.output_tokens.max(0),
+            reasoning_tokens: usage.reasoning_tokens.max(0),
+            total_tokens: usage.total_tokens.max(0),
+        };
+        let budget_tokens = usage.budget_tokens();
+        let now_ms = current_unix_millis();
+        let rows = self
+            .query_goal_rows(
+                r#"
+UPDATE thread_goals
+SET
+    tokens_used = CASE
+        WHEN tokens_used > 9223372036854775807 - ?1 THEN 9223372036854775807
+        ELSE tokens_used + ?1
+    END,
+    uncached_input_tokens = CASE
+        WHEN uncached_input_tokens > 9223372036854775807 - ?2 THEN 9223372036854775807
+        ELSE uncached_input_tokens + ?2
+    END,
+    cached_input_tokens = CASE
+        WHEN cached_input_tokens > 9223372036854775807 - ?3 THEN 9223372036854775807
+        ELSE cached_input_tokens + ?3
+    END,
+    output_tokens = CASE
+        WHEN output_tokens > 9223372036854775807 - ?4 THEN 9223372036854775807
+        ELSE output_tokens + ?4
+    END,
+    reasoning_tokens = CASE
+        WHEN reasoning_tokens > 9223372036854775807 - ?5 THEN 9223372036854775807
+        ELSE reasoning_tokens + ?5
+    END,
+    total_tokens = CASE
+        WHEN total_tokens > 9223372036854775807 - ?6 THEN 9223372036854775807
+        ELSE total_tokens + ?6
+    END,
+    status = CASE
+        WHEN status = 'active'
+         AND token_budget IS NOT NULL
+         AND CASE
+                WHEN tokens_used > 9223372036854775807 - ?1
+                    THEN 9223372036854775807
+                ELSE tokens_used + ?1
+             END >= token_budget
+            THEN 'budget_limited'
+        ELSE status
+    END,
+    updated_at_ms = ?7
+WHERE thread_id = ?8
+  AND goal_id = ?9
+RETURNING
+    thread_id,
+    goal_id,
+    objective,
+    status,
+    token_budget,
+    tokens_used,
+    uncached_input_tokens,
+    cached_input_tokens,
+    output_tokens,
+    reasoning_tokens,
+    total_tokens,
+    time_used_seconds,
+    created_at_ms,
+    updated_at_ms;
+"#,
+                vec![
+                    ControllerSqliteValue::Int64(budget_tokens),
+                    ControllerSqliteValue::Int64(usage.uncached_input_tokens),
+                    ControllerSqliteValue::Int64(usage.cached_input_tokens),
+                    ControllerSqliteValue::Int64(usage.output_tokens),
+                    ControllerSqliteValue::Int64(usage.reasoning_tokens),
+                    ControllerSqliteValue::Int64(usage.total_tokens),
+                    ControllerSqliteValue::Int64(now_ms),
+                    ControllerSqliteValue::String(thread_id.to_string()),
+                    ControllerSqliteValue::String(expected_goal_id.to_string()),
+                ],
+            )
+            .await?;
+        let Some(row) = rows.into_iter().next() else {
+            return Ok(GoalAccountingOutcome::Unchanged(
+                self.get_thread_goal(thread_id).await?,
+            ));
+        };
+        Ok(GoalAccountingOutcome::Updated(thread_goal_from_row(row)?))
     }
 
     /// Accounts token and time usage for one exact budget stage without changing stopped states.
@@ -801,6 +1032,11 @@ RETURNING
         status,
         token_budget,
         tokens_used,
+        uncached_input_tokens,
+        cached_input_tokens,
+        output_tokens,
+        reasoning_tokens,
+        total_tokens,
         time_used_seconds,
         created_at_ms,
         updated_at_ms;
@@ -855,6 +1091,11 @@ fn thread_goal_from_row(row: ThreadGoalRow) -> Result<ThreadGoal, String> {
         status: ThreadGoalStatus::try_from(row.status.as_str())?,
         token_budget: row.token_budget,
         tokens_used: row.tokens_used,
+        uncached_input_tokens: row.uncached_input_tokens,
+        cached_input_tokens: row.cached_input_tokens,
+        output_tokens: row.output_tokens,
+        reasoning_tokens: row.reasoning_tokens,
+        total_tokens: row.total_tokens,
         time_used_seconds: row.time_used_seconds,
         created_at_ms: row.created_at_ms,
         updated_at_ms: row.updated_at_ms,
@@ -970,5 +1211,20 @@ mod tests {
             status_after_budget_limit(ThreadGoalStatus::Paused, 10, Some(10)),
             ThreadGoalStatus::Paused
         );
+    }
+
+    /// Verifies goal budgets include uncached input and complete output without adding cache or reasoning twice.
+    /// 验证目标预算包含非缓存输入与完整输出，且不会重复加入缓存或思考。
+    #[test]
+    fn provider_usage_budget_counts_uncached_input_plus_complete_output() {
+        let usage = ThreadGoalProviderUsage {
+            uncached_input_tokens: 17_593,
+            cached_input_tokens: 27_904,
+            output_tokens: 176,
+            reasoning_tokens: 118,
+            total_tokens: 45_673,
+        };
+
+        assert_eq!(usage.budget_tokens(), 17_769);
     }
 }

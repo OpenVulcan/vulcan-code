@@ -1,6 +1,6 @@
 use super::*;
 use crate::tooling::native::NativeToolRuntimeSnapshot;
-use crate::tooling::native::goal_status_allows_terminal_update;
+use crate::tooling::native::{goal_created_response_value, goal_status_allows_terminal_update};
 
 /// Verifies model-owned terminal transitions reject incompatible lifecycle states.
 /// 验证模型拥有的终态转换会拒绝不兼容的生命周期状态。
@@ -246,6 +246,11 @@ fn completed_goal_response_reports_structured_usage_instruction() {
         status: ThreadGoalStatus::Complete,
         token_budget: Some(10_000),
         tokens_used: 1_234,
+        uncached_input_tokens: 900,
+        cached_input_tokens: 300,
+        output_tokens: 334,
+        reasoning_tokens: 100,
+        total_tokens: 1_534,
         time_used_seconds: 56,
         created_at_ms: 1_000,
         updated_at_ms: 2_000,
@@ -262,6 +267,36 @@ fn completed_goal_response_reports_structured_usage_instruction() {
     assert_eq!(response["goal"]["tokensUsed"], json!(1_234));
     assert_eq!(response["goal"]["tokenBudget"], json!(10_000));
     assert_eq!(response["goal"]["timeUsedSeconds"], json!(56));
+}
+
+/// Verifies AI-created goals return their stable guidance directly in the create tool result.
+/// 验证 AI 创建的目标会直接在创建工具结果中返回稳定引导。
+#[test]
+fn created_goal_response_includes_immediate_active_context() {
+    let goal = ThreadGoal {
+        thread_id: Uuid::new_v4(),
+        goal_id: String::from("goal-created-by-ai"),
+        objective: String::from("连续执行并保持缓存"),
+        status: ThreadGoalStatus::Active,
+        token_budget: Some(20_000),
+        tokens_used: 0,
+        uncached_input_tokens: 0,
+        cached_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_tokens: 0,
+        total_tokens: 0,
+        time_used_seconds: 0,
+        created_at_ms: 1_000,
+        updated_at_ms: 1_000,
+    };
+
+    let response = goal_created_response_value(&goal);
+    let active_context = response["activeGoalContext"]
+        .as_str()
+        .expect("create response should include active goal context");
+
+    assert!(active_context.contains("<goal_version>goal-created-by-ai</goal_version>"));
+    assert!(active_context.contains("<objective>\n连续执行并保持缓存\n</objective>"));
 }
 
 /// Verifies that the agent registry tool exposes extended runtime fields for diagnostics and future delegate orchestration.

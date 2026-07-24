@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use vulcan_provider_config::config::{
     AiToolKind, PersistedAiToolConfiguration, ReasoningEffortLevel,
 };
-use vulcan_workbench_model::{SessionId, SessionRuntimeStateEntry};
+use vulcan_workbench_model::{PendingSessionPromptSource, SessionId, SessionRuntimeStateEntry};
 use vulcan_workspace_store::{
     data_plane::ControllerRuntimeHandle, workspace_store::WorkspaceSnapshot,
 };
@@ -153,15 +153,10 @@ fn resolve_submission_runtime_options(
         disabled_ai_capability_target_selectors,
         ai_capability_target_order_overrides,
     } = input;
-    // Session configuration supplies persistent defaults only for semantic capability disables.
-    // 会话配置仅为语义能力禁用项提供持久默认值。
-    let session_ai_tool_configuration = session_ai_tool_configuration_or_default(
+    let disabled_ai_capability_kinds = effective_session_disabled_ai_capability_kinds(
         workspace_snapshot,
         session_id,
         default_ai_tool_configuration,
-    );
-    let disabled_ai_capability_kinds = effective_workbench_disabled_ai_capability_kinds(
-        session_ai_tool_configuration,
         disabled_ai_capability_kinds.as_deref(),
     )?;
 
@@ -176,6 +171,113 @@ fn resolve_submission_runtime_options(
             ai_capability_target_order_overrides,
         )?,
     })
+}
+
+/// Resolves effective semantic capability disables from one session and an optional prompt override.
+/// 根据单个会话及可选提示词覆盖解析生效的语义能力禁用集合。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` provides the authoritative session-scoped AI tool configuration.
+/// `workspace_snapshot` 提供权威的会话级 AI 工具配置。
+/// `session_id` selects the configuration owner.
+/// `session_id` 选择配置所有者。
+/// `default_ai_tool_configuration` is used only when the session has no configuration snapshot.
+/// `default_ai_tool_configuration` 仅在会话没有配置快照时使用。
+/// `prompt_disabled_ai_capability_kinds` replaces session defaults when explicitly present.
+/// `prompt_disabled_ai_capability_kinds` 显式存在时替换会话默认值。
+///
+/// # Returns
+/// 返回值
+/// The exact disabled capability kinds that must be forwarded into one provider-visible turn.
+/// 返回必须转发到单个 Provider 可见回合的精确禁用能力集合。
+pub(crate) fn effective_session_disabled_ai_capability_kinds(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+    default_ai_tool_configuration: &PersistedAiToolConfiguration,
+    prompt_disabled_ai_capability_kinds: Option<&[String]>,
+) -> Result<BTreeSet<AiToolKind>, String> {
+    // Session configuration is the persistent source shared by user submissions and every automatic continuation.
+    // 会话配置是用户提交与所有自动续轮共享的持久化来源。
+    let session_ai_tool_configuration = session_ai_tool_configuration_or_default(
+        workspace_snapshot,
+        session_id,
+        default_ai_tool_configuration,
+    );
+    effective_workbench_disabled_ai_capability_kinds(
+        session_ai_tool_configuration,
+        prompt_disabled_ai_capability_kinds,
+    )
+}
+
+/// Resolves semantic capability disables for a queued prompt at its actual dispatch boundary.
+/// 在排队提示词的实际分发边界解析语义能力禁用集合。
+///
+/// # Parameters
+/// 参数
+/// `source` identifies whether runtime controls were authored by the user or synthesized by the host.
+/// `source` 标识运行控制项由用户编写还是由宿主合成。
+/// `captured_disabled_ai_capability_kinds` contains the immutable controls captured for a user-authored queue entry.
+/// `captured_disabled_ai_capability_kinds` 包含为用户编写队列项捕获的不可变控制项。
+/// `workspace_snapshot` provides the authoritative session-scoped AI tool configuration.
+/// `workspace_snapshot` 提供权威的会话级 AI 工具配置。
+/// `session_id` selects the configuration owner.
+/// `session_id` 选择配置所有者。
+/// `default_ai_tool_configuration` is used only when the session has no configuration snapshot.
+/// `default_ai_tool_configuration` 仅在会话没有配置快照时使用。
+///
+/// # Returns
+/// 返回值
+/// The exact disabled capability kinds for this queued provider-visible turn.
+/// 返回当前排队 Provider 可见回合的精确禁用能力集合。
+pub(crate) fn effective_pending_prompt_disabled_ai_capability_kinds(
+    source: PendingSessionPromptSource,
+    captured_disabled_ai_capability_kinds: &BTreeSet<AiToolKind>,
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+    default_ai_tool_configuration: &PersistedAiToolConfiguration,
+) -> Result<BTreeSet<AiToolKind>, String> {
+    if source == PendingSessionPromptSource::GoalContinuation {
+        // Host-created goal guidance must share the persistent session catalog instead of using its neutral queue placeholder.
+        // 宿主创建的目标引导必须共享持久化会话工具目录，而不能使用其中性的队列占位配置。
+        return effective_session_disabled_ai_capability_kinds(
+            workspace_snapshot,
+            session_id,
+            default_ai_tool_configuration,
+            None,
+        );
+    }
+    Ok(captured_disabled_ai_capability_kinds.clone())
+}
+
+/// Resolves reasoning effort for a queued prompt at its actual dispatch boundary.
+/// 在排队提示词的实际分发边界解析推理强度。
+///
+/// # Parameters
+/// 参数
+/// `source` identifies whether the queue entry is user-authored or host-created.
+/// `source` 标识队列项由用户编写还是由宿主创建。
+/// `captured_reasoning_effort` is the immutable control captured for a user-authored queue entry.
+/// `captured_reasoning_effort` 是为用户编写队列项捕获的不可变控制项。
+/// `active_reasoning_effort` is the current session/provider reasoning selection.
+/// `active_reasoning_effort` 是当前会话与 Provider 的推理强度选择。
+///
+/// # Returns
+/// 返回值
+/// The reasoning effort that must be forwarded into the queued turn.
+/// 返回必须转发到排队回合的推理强度。
+pub(crate) fn effective_pending_prompt_reasoning_effort(
+    source: PendingSessionPromptSource,
+    captured_reasoning_effort: ReasoningEffortLevel,
+    active_reasoning_effort: Option<ReasoningEffortLevel>,
+) -> Option<ReasoningEffortLevel> {
+    if source == PendingSessionPromptSource::GoalContinuation {
+        // Goal guidance is generated without user controls, so it inherits the same live selection as ordinary automatic continuation.
+        // 目标引导生成时不含用户控制项，因此继承与普通自动续轮相同的实时选择。
+        active_reasoning_effort
+    } else {
+        Some(captured_reasoning_effort)
+    }
 }
 
 /// Commits Plan mode after the caller has completed the goal mutual-exclusion check.
@@ -299,6 +401,80 @@ mod tests {
         );
         assert!(options.disabled_ai_capability_target_selectors.is_empty());
         assert!(options.ai_capability_target_order_overrides.is_empty());
+    }
+
+    /// Verifies host-created goal queue entries inherit live session controls while user entries keep captured controls.
+    /// 验证宿主创建的目标队列项继承实时会话控制，而用户队列项保留已捕获控制。
+    ///
+    /// # Parameters
+    /// 参数
+    /// This test has no parameters.
+    /// 此测试没有参数。
+    ///
+    /// # Returns
+    /// 返回值
+    /// This test returns no value and fails when an internal goal turn mutates the provider request configuration.
+    /// 此测试无返回值；若内部目标回合改变 Provider 请求配置则失败。
+    #[test]
+    fn goal_pending_prompt_inherits_live_session_runtime_controls() {
+        // session_id identifies the session whose persistent tool catalog must remain stable.
+        // session_id 标识持久化工具目录必须保持稳定的会话。
+        let session_id = SessionId::new_v4();
+        // workspace_snapshot carries the authoritative disabled capability selected for the session.
+        // workspace_snapshot 携带为该会话选择的权威禁用能力。
+        let mut workspace_snapshot = empty_workspace_snapshot(session_id);
+        workspace_snapshot.session_runtime_state.insert(
+            session_id,
+            SessionRuntimeStateEntry {
+                ai_tool_configuration: Some(PersistedAiToolConfiguration {
+                    disabled_capability_kinds: BTreeSet::from([AiToolKind::WebSearch]),
+                    ..PersistedAiToolConfiguration::default()
+                }),
+                ..SessionRuntimeStateEntry::default()
+            },
+        );
+        // captured_user_controls model an independently authored queued prompt.
+        // captured_user_controls 模拟一条独立编写的用户排队提示词。
+        let captured_user_controls = BTreeSet::from([AiToolKind::UnderstandImage]);
+
+        assert_eq!(
+            effective_pending_prompt_disabled_ai_capability_kinds(
+                PendingSessionPromptSource::GoalContinuation,
+                &captured_user_controls,
+                &workspace_snapshot,
+                session_id,
+                &PersistedAiToolConfiguration::default(),
+            )
+            .expect("goal continuation controls should resolve"),
+            BTreeSet::from([AiToolKind::WebSearch])
+        );
+        assert_eq!(
+            effective_pending_prompt_disabled_ai_capability_kinds(
+                PendingSessionPromptSource::UserFollowup,
+                &captured_user_controls,
+                &workspace_snapshot,
+                session_id,
+                &PersistedAiToolConfiguration::default(),
+            )
+            .expect("user queue controls should resolve"),
+            captured_user_controls
+        );
+        assert_eq!(
+            effective_pending_prompt_reasoning_effort(
+                PendingSessionPromptSource::GoalContinuation,
+                ReasoningEffortLevel::Medium,
+                Some(ReasoningEffortLevel::High),
+            ),
+            Some(ReasoningEffortLevel::High)
+        );
+        assert_eq!(
+            effective_pending_prompt_reasoning_effort(
+                PendingSessionPromptSource::UserFollowup,
+                ReasoningEffortLevel::Medium,
+                Some(ReasoningEffortLevel::High),
+            ),
+            Some(ReasoningEffortLevel::Medium)
+        );
     }
 
     /// Verifies explicit prompt controls replace session disables and normalize target selectors.

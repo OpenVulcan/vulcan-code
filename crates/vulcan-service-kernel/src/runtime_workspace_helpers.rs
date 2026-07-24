@@ -421,7 +421,6 @@ pub(crate) fn ensure_webui_session_runtime_state(
     }
     let runtime_state_snapshot = if runtime_state_has_concrete_conversation_context(&runtime_state)
     {
-        sanitize_runtime_state_legacy_goal_internal_messages(&mut runtime_state)?;
         Some(runtime_state.clone())
     } else {
         None

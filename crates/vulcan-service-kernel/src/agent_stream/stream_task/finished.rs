@@ -34,6 +34,8 @@ pub(super) enum FinishedStreamEventOutcome {
 /// `active_stream_task_id` 标识获准提交终态副作用的精确任务。
 /// `stream_task_started_at` is the task-entry timestamp used for goal elapsed accounting.
 /// `stream_task_started_at` 是用于目标耗时计量的任务入口时间戳。
+/// `execution_goal_id` is the latest Goal identity bound at a physical Provider boundary.
+/// `execution_goal_id` 是在物理 Provider 边界绑定的最新目标身份。
 /// `report` is the authoritative terminal report emitted by the Agent runtime.
 /// `report` 是 Agent 运行时发送的权威终态报告。
 ///
@@ -48,6 +50,7 @@ pub(super) async fn handle_finished_stream_event(
     agent_runtime: &AgentRuntimeBridge,
     active_stream_task_id: Uuid,
     stream_task_started_at: i128,
+    execution_goal_id: Option<&str>,
     report: ExecutionRunReport,
 ) -> FinishedStreamEventOutcome {
     // The report session is the sole owner key for all terminal mutations.
@@ -69,24 +72,23 @@ pub(super) async fn handle_finished_stream_event(
 
     // Removing the exact active task is the mandatory gate before every terminal side effect.
     // 移除精确活动任务是执行任何终态副作用前的强制闸门。
-    let owns_active_stream_entry = match task_state.lock() {
+    let removed_active_stream_task = match task_state.lock() {
         Ok(mut guard) => {
             // Identity equality prevents a replaced task from terminalizing the replacement.
             // 身份相等校验防止已被替换的任务终结替代任务。
-            let owns_entry = remove_active_stream_task_if_id(
+            let removed_entry = remove_active_stream_task_if_id(
                 &mut guard,
                 finished_session_id,
                 active_stream_task_id,
-            )
-            .is_some();
-            if owns_entry {
+            );
+            if removed_entry.is_some() {
                 finish_webui_session_kernel_turn(
                     &mut guard,
                     finished_session_id,
                     finished_turn_terminal_status(report.error.is_some()),
                 );
             }
-            owns_entry
+            removed_entry
         }
         Err(error) => {
             eprintln!("[webui-service] finish stream ownership check failed: {error}");
@@ -97,13 +99,21 @@ pub(super) async fn handle_finished_stream_event(
             return FinishedStreamEventOutcome::OwnershipUnavailable;
         }
     };
-    if !owns_active_stream_entry {
+    let Some(removed_active_stream_task) = removed_active_stream_task else {
         webui_trace(
             "stream_finished_skipped_stale_owner",
             format!("session={finished_session_id} task_id={active_stream_task_id}"),
         );
         return FinishedStreamEventOutcome::StaleOwner;
-    }
+    };
+    // retainedGoalId closes the interval between an AI-created Goal tool result and the next Provider boundary.
+    // retainedGoalId 闭合 AI 创建目标工具结果与下一次 Provider 边界之间的时间窗口。
+    let retained_goal_id = removed_active_stream_task
+        .session_goal_id()
+        .map(str::to_owned);
+    // terminalGoalId prefers the stream-local physical-request binding and falls back to the atomically retained task binding.
+    // terminalGoalId 优先使用流内物理请求绑定，并回退到原子保留的任务绑定。
+    let terminal_goal_id = execution_goal_id.or(retained_goal_id.as_deref());
 
     if let Err(error) = record_webui_provider_response_checkpoint(controller_runtime, &report) {
         eprintln!("[webui-service] provider response checkpoint write failed: {error}");
@@ -115,15 +125,26 @@ pub(super) async fn handle_finished_stream_event(
         .checked_div(1_000)
         .and_then(|value| i64::try_from(value).ok())
         .unwrap_or_default();
-    if let Err(error) = account_session_goal_from_report(
+    match account_session_goal_from_report(
         task_state,
         controller_runtime,
         &report,
+        terminal_goal_id,
         goal_elapsed_seconds,
     )
     .await
     {
-        eprintln!("[webui-service] session goal accounting failed: {error}");
+        Ok(true) => {
+            if let Err(error) =
+                emit_session_addons_changed_delta(app, task_state, finished_session_id)
+            {
+                eprintln!("[webui-service] terminal session goal delta emit failed: {error}");
+            }
+        }
+        Ok(false) => {}
+        Err(error) => {
+            eprintln!("[webui-service] session goal accounting failed: {error}");
+        }
     }
 
     // Boundary events are captured before report ownership moves into the in-memory projection.

@@ -147,6 +147,30 @@ pub struct ProviderRequestTelemetryEvent {
     /// Versioned JSON payload without prompts, outputs, headers, or credentials.
     /// 不含提示词、输出、请求头或凭据的版本化 JSON 载荷。
     pub payload: Value,
+    /// Exact normalized usage carried only by a successful completed request.
+    /// 仅由成功完成的请求携带的精确标准化用量。
+    pub completed_usage: Option<ProviderRequestCompletedUsage>,
+}
+
+/// Exact normalized token usage for one successful physical provider request.
+/// 单次成功物理 Provider 请求的精确标准化 Token 用量。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderRequestCompletedUsage {
+    /// Input tokens that were not served from cache.
+    /// 未由缓存提供的输入 Token 数。
+    pub uncached_input_tokens: usize,
+    /// Input tokens served from cache.
+    /// 由缓存提供的输入 Token 数。
+    pub cached_input_tokens: usize,
+    /// Complete output tokens, including reasoning when reported as an output subset.
+    /// 完整输出 Token 数；当思考作为输出子集报告时已包含思考。
+    pub output_tokens: usize,
+    /// Reasoning tokens reported as an output detail.
+    /// 作为输出明细报告的思考 Token 数。
+    pub reasoning_tokens: usize,
+    /// Provider-reported total tokens.
+    /// Provider 报告的总 Token 数。
+    pub total_tokens: usize,
 }
 
 /// Service-edge tracker that closes an in-flight request when its consumer stream is dropped.
@@ -302,6 +326,7 @@ impl ProviderRequestTelemetryCancellationTracker {
             kind: ProviderRequestTelemetryEventKind::Completed,
             session_id,
             payload,
+            completed_usage: None,
         })
     }
 }
@@ -671,6 +696,7 @@ fn build_started_event(
             calendar_date: &request.calendar_date,
             timezone_offset_minutes: request.timezone_offset_minutes,
         }),
+        completed_usage: None,
     }
 }
 
@@ -690,6 +716,7 @@ fn build_first_token_event(
             first_token_at_ms,
             time_to_first_token_ms: elapsed_millis(request.started_at_ms, first_token_at_ms),
         }),
+        completed_usage: None,
     }
 }
 
@@ -712,6 +739,18 @@ fn build_completed_event(
     // uncachedInputTokens converts protocol-specific input semantics into the statistics contract once at the telemetry boundary.
     // uncachedInputTokens 在遥测边界一次性把协议专属输入语义转换为统计契约。
     let uncached_input_tokens = uncached_input_tokens(context.api_family, &normalized_usage);
+    // outputTokens converts protocol-specific reasoning semantics into one complete output count.
+    // outputTokens 将协议专属的思考语义转换为一个完整输出计数。
+    let output_tokens = complete_output_tokens(context.api_family, &normalized_usage);
+    let completed_usage = (matches!(status, ProviderRequestTerminalStatus::Succeeded)
+        && usage.is_some())
+    .then_some(ProviderRequestCompletedUsage {
+        uncached_input_tokens,
+        cached_input_tokens: normalized_usage.cached_input_tokens.unwrap_or(0),
+        output_tokens,
+        reasoning_tokens: normalized_usage.reasoning_tokens.unwrap_or(0),
+        total_tokens: normalized_usage.total_tokens.unwrap_or(0),
+    });
     ProviderRequestTelemetryEvent {
         kind: ProviderRequestTelemetryEventKind::Completed,
         session_id: context.session_id,
@@ -742,6 +781,7 @@ fn build_completed_event(
             calendar_date: &request.calendar_date,
             timezone_offset_minutes: request.timezone_offset_minutes,
         }),
+        completed_usage,
     }
 }
 
@@ -764,9 +804,39 @@ fn uncached_input_tokens(api_family: ProviderApiFamily, usage: &ProviderUsageSna
         | ProviderApiFamily::GoogleGeminiGenerateContent => {
             input_tokens.saturating_sub(usage.cached_input_tokens.unwrap_or_default())
         }
-        ProviderApiFamily::AnthropicMessages
+        ProviderApiFamily::AnthropicMessages => {
+            // Anthropic reports cache writes separately from both uncached input and cache reads.
+            // Anthropic 将缓存写入与非缓存输入、缓存读取分别报告。
+            input_tokens.saturating_add(usage.cache_creation_input_tokens.unwrap_or_default())
+        }
+        ProviderApiFamily::CohereChat | ProviderApiFamily::BedrockConverse => input_tokens,
+    }
+}
+
+/// Converts Provider-specific reasoning semantics into a complete output count.
+/// 将 Provider 专属的思考语义转换为完整输出计数。
+///
+/// `api_family` identifies whether reasoning is already included in the reported output.
+/// `api_family` 标识报告的输出中是否已经包含思考。
+/// `usage` contains the final normalized Provider usage snapshot.
+/// `usage` 包含最终规范化 Provider 用量快照。
+/// Returns complete output without counting a Provider-reported reasoning subset twice.
+/// 返回完整输出，并避免重复计算 Provider 报告的思考子集。
+fn complete_output_tokens(api_family: ProviderApiFamily, usage: &ProviderUsageSnapshot) -> usize {
+    // outputTokens preserves the Provider-reported output value before protocol normalization.
+    // outputTokens 在协议归一化前保留 Provider 报告的输出值。
+    let output_tokens = usage.output_tokens.unwrap_or_default();
+    match api_family {
+        ProviderApiFamily::GoogleGeminiGenerateContent => {
+            // Gemini reports visible candidates and hidden thoughts as disjoint output counters.
+            // Gemini 将可见候选输出与隐藏思考报告为互不重叠的输出计数。
+            output_tokens.saturating_add(usage.reasoning_tokens.unwrap_or_default())
+        }
+        ProviderApiFamily::OpenAiResponses
+        | ProviderApiFamily::OpenAiChatCompatible
+        | ProviderApiFamily::AnthropicMessages
         | ProviderApiFamily::CohereChat
-        | ProviderApiFamily::BedrockConverse => input_tokens,
+        | ProviderApiFamily::BedrockConverse => output_tokens,
     }
 }
 
@@ -794,6 +864,7 @@ fn build_retrying_event(
             error_category,
             retrying_at_ms: current_unix_millis(),
         }),
+        completed_usage: None,
     }
 }
 
@@ -1053,20 +1124,30 @@ mod tests {
                 input_tokens: Some(10),
                 output_tokens: Some(5),
                 reasoning_tokens: Some(2),
-                total_tokens: Some(17),
+                total_tokens: Some(18),
                 cached_input_tokens: Some(3),
                 cache_creation_input_tokens: None,
             }))
             .expect("active request should complete");
         assert_eq!(completed.kind, ProviderRequestTelemetryEventKind::Completed);
         assert_eq!(completed.payload["status"], "succeeded");
-        assert_eq!(completed.payload["total_tokens"], 17);
+        assert_eq!(completed.payload["total_tokens"], 18);
         assert_eq!(completed.payload["uncached_input_tokens"], 10);
+        assert_eq!(
+            completed.completed_usage,
+            Some(ProviderRequestCompletedUsage {
+                uncached_input_tokens: 10,
+                cached_input_tokens: 3,
+                output_tokens: 5,
+                reasoning_tokens: 2,
+                total_tokens: 18,
+            })
+        );
         assert!(tracker.complete_success(None).is_none());
     }
 
-    /// Verifies Anthropic already-separated input remains non-cached while OpenAI total prompt input subtracts cache hits.
-    /// 验证 Anthropic 已分离输入保持为非缓存输入，而 OpenAI 提示词总输入会扣除缓存命中。
+    /// Verifies cache reads are excluded while Anthropic cache writes remain new input.
+    /// 验证缓存读取被排除，而 Anthropic 缓存写入仍属于新增输入。
     #[test]
     fn normalizes_uncached_input_by_provider_api_family() {
         // anthropicUsage models Kimi's Anthropic-compatible separated cache accounting.
@@ -1075,9 +1156,9 @@ mod tests {
             input_tokens: Some(2_509),
             output_tokens: Some(330),
             reasoning_tokens: None,
-            total_tokens: Some(66_839),
+            total_tokens: Some(66_870),
             cached_input_tokens: Some(64_000),
-            cache_creation_input_tokens: Some(0),
+            cache_creation_input_tokens: Some(31),
         };
         // openaiUsage models an OpenAI-compatible prompt total that includes cached tokens.
         // openaiUsage 模拟包含缓存 Token 的 OpenAI 兼容提示词总量。
@@ -1088,11 +1169,36 @@ mod tests {
 
         assert_eq!(
             uncached_input_tokens(ProviderApiFamily::AnthropicMessages, &anthropic_usage),
-            2_509
+            2_540
         );
         assert_eq!(
             uncached_input_tokens(ProviderApiFamily::OpenAiChatCompatible, &openai_usage),
             2_509
+        );
+    }
+
+    /// Verifies Gemini adds disjoint thoughts to output while OpenAI-compatible output already includes reasoning.
+    /// 验证 Gemini 将独立思考加入输出，而 OpenAI 兼容输出已经包含思考。
+    #[test]
+    fn normalizes_complete_output_by_provider_api_family() {
+        // usage models the same reported visible output and reasoning detail under two protocol contracts.
+        // usage 模拟两种协议契约下相同的可见输出与思考明细报告。
+        let usage = ProviderUsageSnapshot {
+            input_tokens: Some(1_000),
+            output_tokens: Some(200),
+            reasoning_tokens: Some(50),
+            total_tokens: Some(1_250),
+            cached_input_tokens: None,
+            cache_creation_input_tokens: None,
+        };
+
+        assert_eq!(
+            complete_output_tokens(ProviderApiFamily::GoogleGeminiGenerateContent, &usage),
+            250
+        );
+        assert_eq!(
+            complete_output_tokens(ProviderApiFamily::OpenAiChatCompatible, &usage),
+            200
         );
     }
 

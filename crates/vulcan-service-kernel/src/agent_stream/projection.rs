@@ -1745,6 +1745,16 @@ fn append_runtime_event_projection_with_authority(
             );
             match goal_update {
                 Some(summary) => {
+                    // An AI-created Goal becomes the active stream's stop/accounting owner in the same atomic projection.
+                    // AI 创建的目标会在同一原子投影中成为活动流的停止与记账所有者。
+                    if let RuntimeEventProjectionAuthority::ActiveStreamTask(task_id) = authority {
+                        let _ = bind_active_stream_task_goal_if_id(
+                            guard,
+                            session_id,
+                            task_id,
+                            summary.goal_id.clone(),
+                        );
+                    }
                     guard.session_goal_summaries.insert(session_id, summary);
                     changed_addon_session_id = Some(session_id);
                 }

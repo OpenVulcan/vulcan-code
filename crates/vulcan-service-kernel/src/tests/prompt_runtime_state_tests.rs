@@ -2,7 +2,7 @@
 //! prompt runtime state tests。
 
 use super::*;
-use crate::session_goal_lifecycle::update_session_goal_live_usage;
+use vulcan_agent_runtime::turn_stats::build_session_turn_stats_from_state_with_segments;
 
 /// Verifies the initial WebUI prompt snapshot keeps memory recall visible instead of downgrading to a generic request cue.
 /// 验证 WebUI 提示词初始快照会保留记忆召回显示，而不是降级成通用请求提示。
@@ -107,6 +107,100 @@ fn ensure_webui_session_runtime_state_keeps_display_rows_out_of_dialogue_context
             .map(Vec::len),
         Some(1)
     );
+}
+
+/// Verifies runtime-state refresh preserves Goal-bound canonical tool messages byte-for-byte.
+/// 验证运行态刷新会逐字节保留绑定目标的规范工具消息。
+#[test]
+fn ensure_webui_session_runtime_state_preserves_goal_bound_canonical_tool_history() {
+    use vulcan_agent_runtime::conversation_protocol::{
+        SessionConversationMessage, SessionConversationPayload, SessionConversationToolCall,
+    };
+
+    // session_id identifies the runtime state that passes through the WebUI refresh boundary.
+    // session_id 标识穿过 WebUI 刷新边界的运行态。
+    let session_id = SessionId::new_v4();
+    // goal_prompt models the concrete provider-visible prompt used by an automatic Goal continuation.
+    // goal_prompt 模拟目标自动续轮使用的具体 Provider 可见提示词。
+    let goal_prompt = String::from(
+        "<thread_goal_context>\n<goal_version>goal-1</goal_version>\n</thread_goal_context>\n\nContinue working toward the active thread goal.",
+    );
+    // canonical_messages contains an exact assistant tool call and its matching result after the Goal prompt.
+    // canonical_messages 包含目标提示词之后精确的助手工具调用及其匹配结果。
+    let canonical_messages = vec![
+        SessionConversationMessage {
+            id: String::from("goal-prompt"),
+            payload: SessionConversationPayload::UserText {
+                text: goal_prompt,
+                attachments: Vec::new(),
+            },
+        },
+        SessionConversationMessage {
+            id: String::from("assistant-tool-call"),
+            payload: SessionConversationPayload::Assistant {
+                text: String::new(),
+                reasoning: String::from("继续执行"),
+                provider_message_id: Some(String::from("provider-message-1")),
+                provider_message_state: Some(json!({"opaque": "state"})),
+                usage: None,
+                tool_calls: vec![SessionConversationToolCall {
+                    id: String::from("tool-item-1"),
+                    tool_call_id: Some(String::from("provider-tool-call-1")),
+                    tool_name: String::from("shell_command"),
+                    arguments: json!({"command": "sleep 10"}),
+                }],
+            },
+        },
+        SessionConversationMessage {
+            id: String::from("tool-result"),
+            payload: SessionConversationPayload::ToolResult {
+                tool_call_id: Some(String::from("provider-tool-call-1")),
+                text: String::from("completed"),
+            },
+        },
+    ];
+    // expected_messages captures the canonical provider history before any display projection runs.
+    // expected_messages 捕获任何显示投影运行前的规范 Provider 历史。
+    let expected_messages =
+        serde_json::to_value(&canonical_messages).expect("canonical messages should serialize");
+    // runtime_state owns the canonical history that must never be rebuilt from display rows.
+    // runtime_state 持有绝不能从显示行重建的规范历史。
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    runtime_state.conversation_state.messages = canonical_messages;
+    // workspace_snapshot supplies the exact retained-state shape used by the production refresh helper.
+    // workspace_snapshot 提供生产刷新辅助函数使用的精确保留状态形态。
+    let mut workspace_snapshot = WorkspaceSnapshot {
+        task_projects: Vec::new(),
+        archived_task_projects: Vec::new(),
+        sessions: Vec::new(),
+        archived_sessions: Vec::new(),
+        session_messages: BTreeMap::new(),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::from([(session_id, runtime_state)]),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::new(),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: session_id,
+        hydrated_session_ids: BTreeSet::new(),
+    };
+
+    ensure_webui_session_runtime_state(&mut workspace_snapshot, session_id, None)
+        .expect("runtime-state refresh should preserve canonical history");
+
+    // refreshed_messages is compared structurally so every tool identifier and provider state remains exact.
+    // refreshed_messages 通过结构化比较确保每个工具标识与 Provider 状态保持精确。
+    let refreshed_messages = serde_json::to_value(
+        &workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .expect("refreshed runtime state")
+            .conversation_state
+            .messages,
+    )
+    .expect("refreshed canonical messages should serialize");
+    assert_eq!(refreshed_messages, expected_messages);
 }
 
 /// Verifies display transcript rows alone never satisfy prompt-submission dialogue context.
@@ -528,9 +622,12 @@ fn latest_session_turn_stats_includes_embedded_compaction_usage_segments() {
     );
     compaction_segment.trigger = Some(String::from("auto_budget"));
 
-    let stats = latest_session_turn_stats_from_state(
+    let stats = build_session_turn_stats_from_state_with_segments(
         &conversation_state,
+        "record-summary-2002",
+        SessionTurnStatsStatus::Completed,
         Some(1),
+        SessionTurnStatsKind::UserTurn,
         vec![compaction_segment],
     )
     .expect("latest turn stats should be built");
@@ -540,7 +637,6 @@ fn latest_session_turn_stats_includes_embedded_compaction_usage_segments() {
     assert_eq!(stats.output_tokens, 16);
     assert_eq!(stats.total_tokens, 76);
     assert_eq!(stats.cached_input_tokens, Some(21));
-    assert_eq!(goal_token_delta_for_turn_stats(&stats), Some(55));
     assert_eq!(stats.usage_segments.len(), 2);
     assert_eq!(
         stats.usage_segments[0].kind,
@@ -552,129 +648,37 @@ fn latest_session_turn_stats_includes_embedded_compaction_usage_segments() {
     );
 }
 
-/// Verifies display-only child-agent feedback never contributes to parent goal accounting.
-/// 验证仅展示的智能体反馈不会计入父会话目标预算。
+/// Verifies persisted provider counters project as cumulative goal details without double-counting reasoning.
+/// 验证持久化 Provider 计数会投影为目标累计明细，且不会重复计算思考。
 #[test]
-fn goal_token_delta_ignores_subagent_feedback_stats() {
-    let stats = SessionTurnStats {
-        turn_kind: SessionTurnStatsKind::SubagentFeedback,
-        input_tokens: 100,
-        output_tokens: 25,
-        reasoning_tokens: 5,
-        total_tokens: 130,
-        cached_input_tokens: Some(40),
-        ..SessionTurnStats::default()
-    };
-
-    assert_eq!(goal_token_delta_for_turn_stats(&stats), None);
-}
-
-/// Verifies mixed usage groups charge only regular work to the parent session goal.
-/// 验证混合用量分组只把常规工作计入父会话目标预算。
-#[test]
-fn goal_token_delta_ignores_subagent_usage_groups_inside_regular_stats() {
-    let mut stats = SessionTurnStats {
-        turn_kind: SessionTurnStatsKind::UserTurn,
-        provider_call_count: 2,
-        input_tokens: 330,
-        output_tokens: 34,
-        total_tokens: 364,
-        cached_input_tokens: Some(140),
-        ..SessionTurnStats::default()
-    };
-    stats.merge_usage_segment_group(&SessionTurnUsageSegment {
-        kind: SessionTurnUsageSegmentKind::AssistantResponse,
-        trigger: None,
-        execution_profile: None,
-        provider_id: None,
-        model_id: None,
-        provider_call_count: 1,
-        tool_call_count: 0,
-        input_tokens: 30,
-        output_tokens: 4,
-        reasoning_tokens: 0,
-        total_tokens: 34,
-        cached_input_tokens: Some(10),
-        cache_creation_input_tokens: None,
-    });
-    stats.merge_usage_segment_group(&SessionTurnUsageSegment {
-        kind: SessionTurnUsageSegmentKind::SubagentTask,
-        trigger: None,
-        execution_profile: None,
-        provider_id: None,
-        model_id: None,
-        provider_call_count: 1,
-        tool_call_count: 0,
-        input_tokens: 300,
-        output_tokens: 30,
-        reasoning_tokens: 0,
-        total_tokens: 330,
-        cached_input_tokens: Some(130),
-        cache_creation_input_tokens: None,
-    });
-
-    assert_eq!(goal_token_delta_for_turn_stats(&stats), Some(24));
-}
-
-/// Verifies live Goal usage follows the bound budget stage across terminal lifecycle states.
-/// 验证实时 Goal 用量会在终态生命周期状态下继续跟随绑定预算阶段。
-#[test]
-fn live_goal_usage_updates_bound_paused_and_complete_stages() {
-    let stats = SessionTurnStats {
-        turn_kind: SessionTurnStatsKind::UserTurn,
-        provider_call_count: 2,
-        tool_call_count: 3,
-        input_tokens: 30,
-        cached_input_tokens: Some(10),
-        output_tokens: 4,
-        reasoning_tokens: 1,
-        total_tokens: 35,
-        ..SessionTurnStats::default()
-    };
-    let mut goal = SessionGoalSummary {
-        session_id: SessionId::new_v4().to_string(),
+fn persisted_goal_provider_usage_projects_cumulative_details() {
+    // goal mirrors one request with 24 new input, 16 cached input, and 12 complete output tokens.
+    // goal 模拟一次包含 24 个新增输入、16 个缓存输入和 12 个完整输出 Token 的请求。
+    let goal = ThreadGoal {
+        thread_id: SessionId::new_v4(),
         goal_id: String::from("goal-stage-current"),
-        objective: String::from("验证实时用量"),
-        status: SessionGoalStatus::Paused,
+        objective: String::from("验证逐请求累计用量"),
+        status: ThreadGoalStatus::Active,
         token_budget: Some(1_000),
-        tokens_used: 100,
-        usage_tokens: 100,
-        api_call_count: 0,
-        tool_call_count: 0,
-        input_tokens: 0,
-        cached_input_tokens: 0,
-        output_tokens: 0,
-        total_tokens: 0,
+        tokens_used: 36,
+        uncached_input_tokens: 24,
+        cached_input_tokens: 16,
+        output_tokens: 12,
+        reasoning_tokens: 4,
+        total_tokens: 52,
         time_used_seconds: 0,
         created_at_ms: 1,
-        updated_at_ms: 1,
+        updated_at_ms: 2,
     };
 
-    assert!(update_session_goal_live_usage(
-        &mut goal,
-        &stats,
-        true,
-        "goal-stage-current"
-    ));
-    assert_eq!(goal.usage_tokens, 125);
-    assert_eq!(goal.api_call_count, 2);
-    assert_eq!(goal.tool_call_count, 3);
+    let summary = session_goal_summary_from_thread_goal(&goal);
 
-    goal.status = SessionGoalStatus::Complete;
-    assert!(update_session_goal_live_usage(
-        &mut goal,
-        &stats,
-        false,
-        "goal-stage-current"
-    ));
-    assert_eq!(goal.usage_tokens, 100);
-    assert!(!update_session_goal_live_usage(
-        &mut goal,
-        &stats,
-        true,
-        "goal-stage-replacement"
-    ));
-    assert_eq!(goal.usage_tokens, 100);
+    assert_eq!(summary.usage_tokens, 36);
+    assert_eq!(summary.input_tokens, 24);
+    assert_eq!(summary.cached_input_tokens, 16);
+    assert_eq!(summary.output_tokens, 12);
+    assert_eq!(summary.reasoning_tokens, 4);
+    assert_eq!(summary.total_tokens, 52);
 }
 
 /// Verifies runtime-only compaction sources do not become display fallback rows.

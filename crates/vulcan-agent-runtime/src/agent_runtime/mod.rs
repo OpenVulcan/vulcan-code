@@ -99,6 +99,7 @@ pub mod runtime_stream_preparation;
 pub mod runtime_stream_preparation_failure;
 pub mod runtime_stream_preparation_resources;
 pub mod runtime_stream_setup;
+pub mod session_goal_prompt;
 pub mod task_runtime;
 pub mod token_budget_runtime;
 pub(crate) mod tool_request_argument_assembler;

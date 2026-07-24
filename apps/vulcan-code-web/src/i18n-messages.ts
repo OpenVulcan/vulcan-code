@@ -512,12 +512,10 @@ export type TranslationKey =
   | "composer.goal.status.usageLimited"
   | "composer.goal.status.budgetLimited"
   | "composer.goal.status.completed"
-  | "composer.goal.tooltip.apiCalls"
-  | "composer.goal.tooltip.toolCalls"
-  | "composer.goal.tooltip.usage"
   | "composer.goal.tooltip.input"
   | "composer.goal.tooltip.cache"
   | "composer.goal.tooltip.output"
+  | "composer.goal.tooltip.reasoning"
   | "composer.goal.tooltip.total"
   | "composer.goal.action.edit"
   | "composer.goal.action.resumeTask"
@@ -2004,13 +2002,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.goal.status.usageLimited": "受限的目标",
     "composer.goal.status.budgetLimited": "预算用尽",
     "composer.goal.status.completed": "已完成的目标",
-    "composer.goal.tooltip.apiCalls": "API 次数：{count}",
-    "composer.goal.tooltip.toolCalls": "工具调用：{count}",
-    "composer.goal.tooltip.usage": "用量：{tokens} tokens",
-    "composer.goal.tooltip.input": "输入：{tokens}",
-    "composer.goal.tooltip.cache": "缓存：{tokens}",
-    "composer.goal.tooltip.output": "输出：{tokens}",
-    "composer.goal.tooltip.total": "总量：{tokens}",
+    "composer.goal.tooltip.input": "输入（新增）",
+    "composer.goal.tooltip.cache": "输入（缓存）",
+    "composer.goal.tooltip.output": "输出",
+    "composer.goal.tooltip.reasoning": "思考",
+    "composer.goal.tooltip.total": "总量",
     "composer.goal.action.edit": "编辑目标",
     "composer.goal.action.resumeTask": "继续任务",
     "composer.goal.action.resume": "恢复目标",
@@ -3493,13 +3489,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.goal.status.usageLimited": "Usage-limited goal",
     "composer.goal.status.budgetLimited": "Budget exhausted",
     "composer.goal.status.completed": "Completed goal",
-    "composer.goal.tooltip.apiCalls": "API calls: {count}",
-    "composer.goal.tooltip.toolCalls": "Tool calls: {count}",
-    "composer.goal.tooltip.usage": "Usage: {tokens} tokens",
-    "composer.goal.tooltip.input": "Input: {tokens}",
-    "composer.goal.tooltip.cache": "Cache: {tokens}",
-    "composer.goal.tooltip.output": "Output: {tokens}",
-    "composer.goal.tooltip.total": "Total: {tokens}",
+    "composer.goal.tooltip.input": "Input (new)",
+    "composer.goal.tooltip.cache": "Input (cached)",
+    "composer.goal.tooltip.output": "Output",
+    "composer.goal.tooltip.reasoning": "Reasoning",
+    "composer.goal.tooltip.total": "Total",
     "composer.goal.action.edit": "Edit goal",
     "composer.goal.action.resumeTask": "Resume task",
     "composer.goal.action.resume": "Resume goal",

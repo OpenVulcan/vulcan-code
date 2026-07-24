@@ -2,6 +2,7 @@
 //! 目标原生工具实现。
 
 use super::*;
+use crate::agent_runtime::session_goal_prompt::render_active_session_goal_context;
 
 /// Parsed argument payload accepted by the `create_goal` tool.
 /// `create_goal` 工具接受的已解析参数载荷。
@@ -275,7 +276,7 @@ async fn execute_create_goal_tool(
                 "cannot create a new goal because this thread has an unfinished goal; complete the existing goal first",
             )
         })?;
-    Ok(goal_tool_result_with_host(Some(goal), false))
+    Ok(goal_tool_result_with_host(Some(goal), false, true))
 }
 
 /// Executes one `update_goal` request.
@@ -343,6 +344,7 @@ async fn execute_update_goal_tool(
     Ok(goal_tool_result_with_host(
         Some(goal),
         args.status == UpdateGoalStatusArg::Complete,
+        false,
     ))
 }
 
@@ -504,6 +506,8 @@ fn goal_tool_result(
 /// `goal` 是可选的持久化目标。
 /// `include_completion_report` controls final budget report visibility.
 /// `include_completion_report` 控制最终预算报告是否可见。
+/// `include_active_context` controls immediate append-only guidance after goal creation.
+/// `include_active_context` 控制目标创建后是否立即返回追加式活动目标引导。
 ///
 /// # Returns
 /// 返回值
@@ -512,8 +516,15 @@ fn goal_tool_result(
 fn goal_tool_result_with_host(
     goal: Option<ThreadGoal>,
     include_completion_report: bool,
+    include_active_context: bool,
 ) -> VulcanToolInvocationResult {
-    let response = goal_response_value(goal.as_ref(), include_completion_report);
+    let response = if include_active_context {
+        goal.as_ref()
+            .map(goal_created_response_value)
+            .unwrap_or_else(|| goal_response_value(None, include_completion_report))
+    } else {
+        goal_response_value(goal.as_ref(), include_completion_report)
+    };
     let host_payload = json!({
         "goal": goal.as_ref().map(goal_host_projection),
     });
@@ -521,6 +532,33 @@ fn goal_tool_result_with_host(
         kind: String::from("session_goal"),
         payload: host_payload,
     })
+}
+
+/// Builds the model-facing creation response with immediate append-only goal guidance.
+/// 构建包含即时追加式目标引导的模型可见创建响应。
+///
+/// # Parameters
+/// 参数
+/// `goal` is the newly persisted active goal.
+/// `goal` 是刚持久化的活动目标。
+///
+/// # Returns
+/// 返回值
+/// The ordinary goal response plus guidance consumed directly after the tool call.
+/// 返回普通目标响应以及紧随工具调用后消费的目标引导。
+pub(crate) fn goal_created_response_value(goal: &ThreadGoal) -> Value {
+    let mut response = goal_response_value(Some(goal), false);
+    if let Some(response_object) = response.as_object_mut() {
+        response_object.insert(
+            String::from("activeGoalContext"),
+            Value::String(render_active_session_goal_context(
+                &goal.goal_id,
+                &goal.objective,
+                goal.token_budget,
+            )),
+        );
+    }
+    response
 }
 
 /// Builds the model-facing goal response value.
@@ -600,8 +638,53 @@ fn goal_host_projection(goal: &ThreadGoal) -> Value {
         "status": goal.status,
         "tokenBudget": goal.token_budget,
         "tokensUsed": goal.tokens_used,
+        "usageTokens": goal.tokens_used,
+        "inputTokens": goal.uncached_input_tokens,
+        "cachedInputTokens": goal.cached_input_tokens,
+        "outputTokens": goal.output_tokens,
+        "reasoningTokens": goal.reasoning_tokens,
+        "totalTokens": goal.total_tokens,
         "timeUsedSeconds": goal.time_used_seconds,
         "createdAtMs": goal.created_at_ms,
         "updatedAtMs": goal.updated_at_ms,
     })
+}
+
+#[cfg(test)]
+mod goal_projection_tests {
+    use super::*;
+
+    /// Verifies host Goal projections preserve every persisted token counter during tool-result refresh.
+    /// 验证宿主目标投影在工具结果刷新期间保留全部持久化 Token 计数。
+    #[test]
+    fn host_goal_projection_preserves_token_breakdown() {
+        // goal carries distinct values so every projection field is independently observable.
+        // goal 使用互不相同的数值，使每个投影字段均可独立观察。
+        let goal = ThreadGoal {
+            thread_id: SessionId::new_v4(),
+            goal_id: String::from("goal-token-projection"),
+            objective: String::from("keep token details"),
+            status: ThreadGoalStatus::Active,
+            token_budget: Some(50_000),
+            tokens_used: 13_579,
+            uncached_input_tokens: 12_345,
+            cached_input_tokens: 23_456,
+            output_tokens: 1_234,
+            reasoning_tokens: 789,
+            total_tokens: 37_035,
+            time_used_seconds: 42,
+            created_at_ms: 1_000,
+            updated_at_ms: 2_000,
+        };
+
+        let projection = goal_host_projection(&goal);
+
+        assert_eq!(projection["tokensUsed"], 13_579);
+        assert_eq!(projection["usageTokens"], 13_579);
+        assert_eq!(projection["inputTokens"], 12_345);
+        assert_eq!(projection["cachedInputTokens"], 23_456);
+        assert_eq!(projection["outputTokens"], 1_234);
+        assert_eq!(projection["reasoningTokens"], 789);
+        assert_eq!(projection["totalTokens"], 37_035);
+    }
 }

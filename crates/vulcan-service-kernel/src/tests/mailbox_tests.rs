@@ -1876,7 +1876,15 @@ fn mailbox_intervention_keeps_subagent_usage_out_of_parent_turn_stats() {
             ],
             continuation: Default::default(),
         };
-    let stats = latest_session_turn_stats_from_state(&conversation_state, Some(1), Vec::new())
+    let stats =
+        vulcan_agent_runtime::turn_stats::build_session_turn_stats_from_state_with_segments(
+            &conversation_state,
+            "record-summary-1",
+            SessionTurnStatsStatus::Completed,
+            Some(1),
+            SessionTurnStatsKind::UserTurn,
+            Vec::new(),
+        )
         .expect("parent turn stats should ignore child-agent mailbox usage");
 
     assert_eq!(stats.provider_call_count, 1);

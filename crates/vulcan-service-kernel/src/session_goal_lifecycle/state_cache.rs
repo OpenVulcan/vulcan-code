@@ -24,6 +24,55 @@ pub(crate) fn cache_session_goal_summary(
     Ok(())
 }
 
+/// Merges durable accounting fields into the matching in-memory goal without overwriting user mutations.
+/// 将持久记账字段合并到匹配的内存目标，同时不覆盖用户变更。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the in-process goal projection.
+/// `state` 持有进程内目标投影。
+/// `session_id` identifies the session whose accounting changed.
+/// `session_id` 标识记账发生变化的会话。
+/// `goal` is the durable row returned by one accounting mutation.
+/// `goal` 是一次记账变更返回的持久行。
+///
+/// # Returns
+/// 返回值
+/// The changed matching visible projection, no value when unchanged or replaced, or a state-lock error.
+/// 返回变化后的匹配可见投影；未变化或已替换时无值；锁失败时返回错误。
+pub(crate) fn merge_session_goal_accounting_projection(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    goal: &ThreadGoal,
+) -> Result<Option<SessionGoalSummary>, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let Some(summary) = guard.session_goal_summaries.get_mut(&session_id) else {
+        return Ok(None);
+    };
+    if summary.goal_id != goal.goal_id {
+        return Ok(None);
+    }
+    // previousSummary preserves an exact change detector for lightweight delta emission.
+    // previousSummary 为轻量增量发送保留精确的变化检测基线。
+    let previous_summary = summary.clone();
+    summary.tokens_used = goal.tokens_used;
+    summary.usage_tokens = goal.tokens_used;
+    summary.input_tokens = goal.uncached_input_tokens;
+    summary.cached_input_tokens = goal.cached_input_tokens;
+    summary.output_tokens = goal.output_tokens;
+    summary.reasoning_tokens = goal.reasoning_tokens;
+    summary.total_tokens = goal.total_tokens;
+    summary.time_used_seconds = goal.time_used_seconds;
+    summary.updated_at_ms = summary.updated_at_ms.max(goal.updated_at_ms);
+    if summary.status == SessionGoalStatus::Active && goal.status == ThreadGoalStatus::BudgetLimited
+    {
+        summary.status = SessionGoalStatus::BudgetLimited;
+    }
+    Ok((*summary != previous_summary).then(|| summary.clone()))
+}
+
 /// Reads the current in-process Goal dispatch-authority version for one session.
 /// 读取单个会话当前进程内的 Goal 分发权威版本。
 ///
@@ -126,10 +175,11 @@ pub(crate) fn session_goal_summary_from_thread_goal(goal: &ThreadGoal) -> Sessio
         usage_tokens: goal.tokens_used,
         api_call_count: 0,
         tool_call_count: 0,
-        input_tokens: 0,
-        cached_input_tokens: 0,
-        output_tokens: 0,
-        total_tokens: 0,
+        input_tokens: goal.uncached_input_tokens,
+        cached_input_tokens: goal.cached_input_tokens,
+        output_tokens: goal.output_tokens,
+        reasoning_tokens: goal.reasoning_tokens,
+        total_tokens: goal.total_tokens,
         time_used_seconds: goal.time_used_seconds,
         created_at_ms: goal.created_at_ms,
         updated_at_ms: goal.updated_at_ms,

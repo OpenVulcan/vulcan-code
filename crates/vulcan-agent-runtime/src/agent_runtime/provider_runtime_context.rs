@@ -25,8 +25,8 @@ use vulcan_prompt_composer::{
     AgentPromptSnapshot, DEFAULT_PROJECT_RULES_FILE_NAME, EnvironmentContextSnapshot,
     ModelDescriptor, ProjectPromptFileCache, ProjectPromptSnapshot, ProjectRulesFileCache,
     ProjectRulesSnapshot, PromptAssemblyInput, PromptAssemblyMode, PromptAssemblyOutput,
-    ProviderPromptSnapshot, SubagentSnapshot, TaskGoalSnapshot, ToolCatalogSnapshot,
-    ToolDescriptor, build_context_compaction_developer_segment,
+    ProviderPromptSnapshot, SubagentSnapshot, ToolCatalogSnapshot, ToolDescriptor,
+    build_context_compaction_developer_segment,
 };
 
 /// Process-wide project-rules source cache shared by provider runtime requests.
@@ -200,7 +200,9 @@ fn build_runtime_prompt_assembly_input(
         ),
         project_rules: load_workspace_project_rules_snapshot(&preparation.workspace_path)?,
         environment_context: Some(environment_context),
-        task_goal: build_session_goal_snapshot(preparation),
+        // Session goals are delivered through append-only user turns so goal creation never rewrites the provider prefix.
+        // 会话目标通过追加式用户回合投递，确保目标创建不会改写 Provider 前缀。
+        task_goal: None,
         tool_catalog: ToolCatalogSnapshot::new(
             preparation
                 .tool_descriptors
@@ -265,20 +267,6 @@ fn build_git_commit_summary_developer_segment() -> String {
     String::from(
         "You generate Git commit messages for a local desktop client. Do not call tools. Use only the repository change data in the user message. Output only the final commit message text.",
     )
-}
-
-/// Builds the optional session-goal prompt snapshot for the current request.
-/// 为当前请求构建可选的会话目标提示词快照。
-fn build_session_goal_snapshot(preparation: &ExecutionPreparation) -> Option<TaskGoalSnapshot> {
-    let text = preparation
-        .session_goal_context
-        .as_ref()?
-        .prompt_context
-        .trim();
-    if text.is_empty() {
-        return None;
-    }
-    Some(TaskGoalSnapshot::new(text.to_string()))
 }
 
 /// Builds an agent prompt snapshot with a useful runtime source label.
@@ -1081,6 +1069,37 @@ mod tests {
             layers
                 .fallback_text
                 .contains("Task-specific reviewer instructions.")
+        );
+    }
+
+    /// Verifies active session goals never enter the global provider prompt layers.
+    /// 验证活动会话目标绝不会进入 Provider 全局提示词层。
+    #[test]
+    fn runtime_prompt_layers_exclude_session_goal_context() {
+        let mut preparation = build_test_preparation(
+            String::from("D:/missing"),
+            PersistedPromptConfiguration::default(),
+        );
+        preparation.session_goal_context = Some(
+            crate::agent_runtime::execution_models::ExecutionSessionGoalContext {
+                goal_id: String::from("goal-cache-stable"),
+                prompt_context: String::from("GOAL_CONTEXT_MUST_STAY_OUT_OF_PREFIX"),
+            },
+        );
+
+        let layers = build_runtime_prompt_layers_for_agent(&preparation, None)
+            .expect("runtime prompt layers should build");
+
+        assert!(
+            !layers
+                .fallback_text
+                .contains("GOAL_CONTEXT_MUST_STAY_OUT_OF_PREFIX")
+        );
+        assert!(
+            !layers
+                .provider_layers
+                .runtime_context
+                .contains("GOAL_CONTEXT_MUST_STAY_OUT_OF_PREFIX")
         );
     }
 

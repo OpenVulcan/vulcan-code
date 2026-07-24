@@ -228,6 +228,7 @@ fn goal_summary_from_tool_finished_event_preserves_three_states() {
                     "inputTokens": 100,
                     "cachedInputTokens": 10,
                     "outputTokens": 24,
+                    "reasoningTokens": 8,
                     "totalTokens": 124,
                     "timeUsedSeconds": 7,
                     "createdAtMs": 1000,
@@ -276,6 +277,7 @@ fn goal_summary_from_tool_finished_event_preserves_three_states() {
     assert_eq!(summary.token_budget, Some(1200));
     assert_eq!(summary.tokens_used, 34);
     assert_eq!(summary.usage_tokens, 35);
+    assert_eq!(summary.reasoning_tokens, 8);
     assert_eq!(
         goal_summary_from_tool_finished_event(&cleared_event),
         Ok(Some(None))
@@ -537,6 +539,7 @@ fn goal_continuation_prompt_keeps_codex_audit_details() {
         input_tokens: 0,
         cached_input_tokens: 0,
         output_tokens: 0,
+        reasoning_tokens: 0,
         total_tokens: 0,
         time_used_seconds: 56,
         created_at_ms: 1_000,
@@ -544,7 +547,9 @@ fn goal_continuation_prompt_keeps_codex_audit_details() {
     });
 
     assert!(prompt.contains("<objective>\n完成目标模式\n</objective>"));
-    assert!(prompt.contains("Tokens remaining: 8766"));
+    assert!(prompt.contains("Token budget: 10000"));
+    assert!(!prompt.contains("Tokens used:"));
+    assert!(!prompt.contains("Tokens remaining:"));
     assert!(prompt.contains("Derive concrete requirements"));
     assert!(prompt.contains("The audit must prove completion"));
     assert!(prompt.contains("same blocking condition"));
@@ -570,6 +575,7 @@ fn goal_execution_context_binds_prompt_to_goal_identity() {
         input_tokens: 0,
         cached_input_tokens: 0,
         output_tokens: 0,
+        reasoning_tokens: 0,
         total_tokens: 0,
         time_used_seconds: 0,
         created_at_ms: 1_000,
@@ -580,6 +586,318 @@ fn goal_execution_context_binds_prompt_to_goal_identity() {
 
     assert_eq!(context.goal_id, goal.goal_id);
     assert!(context.prompt_context.contains("验证目标身份绑定"));
+}
+
+/// Verifies a stopped goal keeps owning later physical requests from the same execution only.
+/// 验证停止目标仅继续拥有同一次执行中的后续物理请求。
+#[test]
+fn provider_request_goal_binding_survives_same_execution_stop() {
+    // sessionId identifies the regular session whose live goal projection owns request binding.
+    // sessionId 标识其实时目标投影拥有请求绑定的常规会话。
+    let session_id = SessionId::new_v4();
+    // serviceState supplies the exact stopped goal observed after update_goal completes.
+    // serviceState 提供 update_goal 完成后观测到的精确停止目标。
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    service_state.session_goal_summaries.insert(
+        session_id,
+        SessionGoalSummary {
+            session_id: session_id.to_string(),
+            goal_id: String::from("goal-bound-to-execution"),
+            objective: String::from("验证停止后的最终答复仍记账"),
+            status: SessionGoalStatus::Complete,
+            token_budget: Some(10_000),
+            tokens_used: 500,
+            usage_tokens: 500,
+            api_call_count: 0,
+            tool_call_count: 0,
+            input_tokens: 400,
+            cached_input_tokens: 3_000,
+            output_tokens: 100,
+            reasoning_tokens: 60,
+            total_tokens: 3_500,
+            time_used_seconds: 1,
+            created_at_ms: 1_000,
+            updated_at_ms: 2_000,
+        },
+    );
+    // state provides synchronized access matching the production stream path.
+    // state 提供与生产流路径一致的同步访问。
+    let state = Arc::new(Mutex::new(service_state));
+
+    assert_eq!(
+        session_goal_id_for_provider_request(&state, session_id, Some("goal-bound-to-execution"),)
+            .expect("same execution binding"),
+        Some(String::from("goal-bound-to-execution"))
+    );
+    assert_eq!(
+        session_goal_id_for_provider_request(&state, session_id, Some("older-goal"))
+            .expect("stale execution binding"),
+        None
+    );
+    {
+        // guard replaces the stopped projection with a newly created active goal in the same execution.
+        // guard 在同一次执行中用新创建的活动目标替换停止投影。
+        let mut guard = state.lock().expect("service state lock");
+        let goal = guard
+            .session_goal_summaries
+            .get_mut(&session_id)
+            .expect("goal summary");
+        goal.goal_id = String::from("new-active-goal");
+        goal.status = SessionGoalStatus::Active;
+    }
+    assert_eq!(
+        session_goal_id_for_provider_request(&state, session_id, Some("goal-bound-to-execution"),)
+            .expect("new active goal binding"),
+        Some(String::from("new-active-goal"))
+    );
+}
+
+/// Verifies pre-existing goals prefix the current prompt while AI-created tool results prevent reinsertion.
+/// 验证预先存在的目标会前置当前提示词，而 AI 创建工具结果会阻止重复插入。
+#[test]
+fn goal_context_attaches_only_to_the_exact_creation_boundary() {
+    let goal = SessionGoalSummary {
+        session_id: SessionId::new_v4().to_string(),
+        goal_id: String::from("goal-delivery-boundary"),
+        objective: String::from("验证目标投递边界"),
+        status: SessionGoalStatus::Active,
+        token_budget: None,
+        tokens_used: 0,
+        usage_tokens: 0,
+        api_call_count: 0,
+        tool_call_count: 0,
+        input_tokens: 0,
+        cached_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_tokens: 0,
+        total_tokens: 0,
+        time_used_seconds: 0,
+        created_at_ms: 1_000,
+        updated_at_ms: 1_000,
+    };
+    let goal_context = session_goal_execution_context(&goal).expect("active goal context");
+    let empty_history =
+        vulcan_agent_runtime::conversation_protocol::SessionConversationState::default();
+
+    let user_created_prompt = prepend_goal_context_to_current_prompt(
+        String::from("当前用户提示词"),
+        &empty_history,
+        Some(&goal_context),
+    );
+
+    assert!(user_created_prompt.starts_with("<thread_goal_context>"));
+    assert!(user_created_prompt.ends_with("当前用户提示词"));
+
+    let mut ai_created_history =
+        vulcan_agent_runtime::conversation_protocol::SessionConversationState::default();
+    ai_created_history
+        .messages
+        .push(SessionConversationMessage {
+            id: String::from("create-goal-result"),
+            payload: SessionConversationPayload::ToolResult {
+                tool_call_id: Some(String::from("create-goal-call")),
+                text: goal_context.prompt_context.clone(),
+            },
+        });
+    let next_prompt = prepend_goal_context_to_current_prompt(
+        String::from("下一轮提示词"),
+        &ai_created_history,
+        Some(&goal_context),
+    );
+
+    assert_eq!(next_prompt, "下一轮提示词");
+}
+
+/// Verifies Goal delivery rewrites the exact canonical current user message instead of appending a duplicate.
+/// 验证目标投递会改写精确的当前规范用户消息，而不是追加重复消息。
+#[test]
+fn goal_context_replaces_the_exact_canonical_current_user_prompt() {
+    // conversationState models the canonical row already created by the shared prompt reducer.
+    // conversationState 模拟共享提示词归约器已经创建的规范行。
+    let mut conversation_state =
+        vulcan_agent_runtime::conversation_protocol::SessionConversationState::default();
+    conversation_state
+        .messages
+        .push(SessionConversationMessage {
+            id: String::from("current-user-message"),
+            payload: SessionConversationPayload::UserText {
+                text: String::from("原始用户输入"),
+                attachments: Vec::new(),
+            },
+        });
+    // providerPrompt is the exact append-only text that the Provider must observe.
+    // providerPrompt 是 Provider 必须观察到的精确追加式文本。
+    let provider_prompt = String::from(
+        "<thread_goal_context>\n<goal_version>goal-current</goal_version>\n\
+         </thread_goal_context>\n\n原始用户输入\n\n\
+         <goal_usage_snapshot>\n- Tokens used: 1234\n</goal_usage_snapshot>",
+    );
+
+    replace_canonical_current_user_prompt(
+        &mut conversation_state,
+        "current-user-message",
+        &provider_prompt,
+    )
+    .expect("exact canonical user prompt should be replaceable");
+
+    assert_eq!(conversation_state.messages.len(), 1);
+    let SessionConversationPayload::UserText { text, .. } = &conversation_state.messages[0].payload
+    else {
+        panic!("current canonical message should remain user text");
+    };
+    assert_eq!(text, &provider_prompt);
+}
+
+/// Verifies mailbox turns bind Goal guidance and changing usage to concrete agent-message payloads.
+/// 验证 mailbox 回合会把目标引导与变化用量绑定到具体代理消息载荷。
+#[test]
+fn mailbox_goal_context_attaches_to_concrete_agent_message_payloads() {
+    // goal provides one active version whose marker is initially absent from history.
+    // goal 提供一个其标记最初不在历史中的活动版本。
+    let goal = SessionGoalSummary {
+        session_id: SessionId::new_v4().to_string(),
+        goal_id: String::from("goal-mailbox-delivery"),
+        objective: String::from("验证 mailbox 目标投递"),
+        status: SessionGoalStatus::Active,
+        token_budget: Some(20_000),
+        tokens_used: 1_234,
+        usage_tokens: 1_234,
+        api_call_count: 2,
+        tool_call_count: 1,
+        input_tokens: 1_000,
+        cached_input_tokens: 8_000,
+        output_tokens: 234,
+        reasoning_tokens: 100,
+        total_tokens: 9_234,
+        time_used_seconds: 10,
+        created_at_ms: 1_000,
+        updated_at_ms: 2_000,
+    };
+    // goalContext and usageContext are captured from the same immutable summary.
+    // goalContext 与 usageContext 从同一份不可变摘要中捕获。
+    let goal_context = session_goal_execution_context(&goal).expect("active goal context");
+    let usage_context = render_goal_turn_usage_context(&goal).expect("non-zero goal usage");
+    // messages models the concrete child result that starts the mailbox turn.
+    // messages 模拟启动 mailbox 回合的具体子任务结果。
+    let mut messages = vec![
+        vulcan_agent_runtime::agent_runtime::execution_models::ExecutionProviderVisibleAgentMessage {
+            delivery_id: String::from("delivery-1"),
+            message_type: String::from("completed"),
+            task_name: String::from("reviewer"),
+            sender: String::from("reviewer"),
+            recipient: String::from("parent"),
+            payload: String::from("子任务结果"),
+            trigger_turn: true,
+            timestamp_ms: 1_000,
+            metadata: None,
+        },
+    ];
+    let empty_history =
+        vulcan_agent_runtime::conversation_protocol::SessionConversationState::default();
+
+    attach_goal_context_to_provider_visible_agent_messages(
+        &mut messages,
+        &empty_history,
+        Some(&goal_context),
+        Some(&usage_context),
+    );
+
+    assert!(messages[0].payload.starts_with("<thread_goal_context>"));
+    assert!(messages[0].payload.contains("子任务结果"));
+    assert!(messages[0].payload.ends_with("</goal_usage_snapshot>"));
+
+    // deliveredHistory proves later mailbox batches do not duplicate stable guidance.
+    // deliveredHistory 证明后续 mailbox 批次不会重复稳定引导。
+    let delivered_history = vulcan_agent_runtime::conversation_protocol::SessionConversationState {
+        messages: vec![SessionConversationMessage {
+            id: String::from("delivered-mailbox-message"),
+            payload: SessionConversationPayload::AgentMessage {
+                message_type: String::from("completed"),
+                task_name: String::from("reviewer"),
+                sender: String::from("reviewer"),
+                recipient: String::from("parent"),
+                payload: messages[0].payload.clone(),
+                trigger_turn: true,
+                metadata: None,
+            },
+        }],
+        ..Default::default()
+    };
+    let mut later_messages = vec![
+        vulcan_agent_runtime::agent_runtime::execution_models::ExecutionProviderVisibleAgentMessage {
+            delivery_id: String::from("delivery-2"),
+            message_type: String::from("completed"),
+            task_name: String::from("reviewer-2"),
+            sender: String::from("reviewer-2"),
+            recipient: String::from("parent"),
+            payload: String::from("后续结果"),
+            trigger_turn: true,
+            timestamp_ms: 2_000,
+            metadata: None,
+        },
+    ];
+
+    attach_goal_context_to_provider_visible_agent_messages(
+        &mut later_messages,
+        &delivered_history,
+        Some(&goal_context),
+        Some(&usage_context),
+    );
+
+    assert!(!later_messages[0].payload.contains("<thread_goal_context>"));
+    assert!(later_messages[0].payload.starts_with("后续结果"));
+    assert!(
+        later_messages[0]
+            .payload
+            .ends_with("</goal_usage_snapshot>")
+    );
+}
+
+/// Verifies cumulative usage is appended per turn and omitted before any usage exists.
+/// 验证累计用量按回合追加，并在尚无用量时完全省略。
+#[test]
+fn goal_turn_usage_is_append_only_and_omits_zero_usage() {
+    let mut goal = SessionGoalSummary {
+        session_id: SessionId::new_v4().to_string(),
+        goal_id: String::from("goal-usage"),
+        objective: String::from("验证追加式用量"),
+        status: SessionGoalStatus::Active,
+        token_budget: Some(10_000),
+        tokens_used: 0,
+        usage_tokens: 0,
+        api_call_count: 0,
+        tool_call_count: 0,
+        input_tokens: 0,
+        cached_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_tokens: 0,
+        total_tokens: 0,
+        time_used_seconds: 0,
+        created_at_ms: 1_000,
+        updated_at_ms: 1_000,
+    };
+    let stable_context_before_usage =
+        render_session_goal_context_for_prompt(&goal).expect("active goal context");
+
+    assert!(render_goal_turn_usage_context(&goal).is_none());
+    assert_eq!(
+        append_goal_turn_usage_context(String::from("用户输入"), None),
+        "用户输入"
+    );
+
+    goal.tokens_used = 1_234;
+    goal.usage_tokens = 1_234;
+    let stable_context_after_usage =
+        render_session_goal_context_for_prompt(&goal).expect("active goal context");
+    let usage_context = render_goal_turn_usage_context(&goal).expect("goal usage context");
+    let request_prompt =
+        append_goal_turn_usage_context(String::from("继续执行"), Some(&usage_context));
+
+    assert_eq!(stable_context_before_usage, stable_context_after_usage);
+    assert!(usage_context.contains("Tokens used: 1234"));
+    assert!(usage_context.contains("Tokens remaining: 8766"));
+    assert!(request_prompt.starts_with("继续执行"));
+    assert!(request_prompt.ends_with("</goal_usage_snapshot>"));
 }
 
 /// Verifies retiring one Goal stage removes live and crash-restored guidance owned by that stage.
@@ -717,6 +1035,7 @@ fn goal_objective_updated_prompt_supersedes_previous_goal() {
         input_tokens: 0,
         cached_input_tokens: 0,
         output_tokens: 0,
+        reasoning_tokens: 0,
         total_tokens: 0,
         time_used_seconds: 56,
         created_at_ms: 1_000,
@@ -749,6 +1068,7 @@ fn goal_budget_limited_prompt_waits_for_user_resume() {
         input_tokens: 1_000,
         cached_input_tokens: 100,
         output_tokens: 1_445,
+        reasoning_tokens: 0,
         total_tokens: 2_445,
         time_used_seconds: 60,
         created_at_ms: 1_000,
@@ -778,6 +1098,7 @@ fn budget_limited_goal_is_not_regular_prompt_context() {
         input_tokens: 0,
         cached_input_tokens: 0,
         output_tokens: 0,
+        reasoning_tokens: 0,
         total_tokens: 0,
         time_used_seconds: 60,
         created_at_ms: 1_000,
@@ -799,7 +1120,14 @@ fn filters_legacy_goal_internal_user_prompts_from_session_messages() {
         SessionMessageEntry::new(
             SessionMessageKind::User,
             "用户指令",
-            "Continue working toward the active thread goal.",
+            "Continue working toward the active thread goal.\n\n\
+             <goal_usage_snapshot>\n- Tokens used: 1234\n</goal_usage_snapshot>",
+        ),
+        SessionMessageEntry::new(
+            SessionMessageKind::User,
+            "用户指令",
+            "<thread_goal_context>\n<goal_version>goal-user-created</goal_version>\n\
+             </thread_goal_context>\n\n真实用户消息的 Provider 副本",
         ),
         SessionMessageEntry::new(
             SessionMessageKind::User,

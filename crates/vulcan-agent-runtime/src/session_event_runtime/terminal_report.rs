@@ -252,25 +252,23 @@ fn ensure_terminal_success_assistant_message(
     else {
         return Ok(());
     };
-    if runtime_state
-        .conversation_state
-        .messages
-        .iter_mut()
-        .rev()
-        .any(|message| terminal_assistant_message_accepts_usage(message, assistant_output, report))
-    {
+    if terminal_assistant_messages_accept_usage(
+        &mut runtime_state.conversation_state.messages,
+        assistant_output,
+        report,
+    ) {
         return Ok(());
     }
     append_terminal_assistant_text_message(runtime_state, session_id, now, assistant_output, report)
 }
 
-/// Returns whether the message is the terminal assistant output and attaches missing usage.
-/// 判断消息是否为终态助手输出，并在缺失时补入用量信息。
+/// Returns whether a suffix of canonical assistant messages preserves the terminal output and attaches missing final usage.
+/// 判断规范助手消息后缀是否已保存终态输出，并在缺失时补入最终用量。
 ///
 /// # Parameters
 /// 参数
-/// `message` is one mutable canonical conversation message from the current session.
-/// `message` 是当前会话中的一条可变规范会话消息。
+/// `messages` is the mutable canonical conversation history for the current session.
+/// `messages` 是当前会话的可变规范会话历史。
 /// `assistant_output` is the terminal assistant text reported by the runtime.
 /// `assistant_output` 是运行时报告的终态助手文本。
 /// `report` carries the authoritative latest successful provider usage for this run.
@@ -278,19 +276,67 @@ fn ensure_terminal_success_assistant_message(
 ///
 /// # Returns
 /// 返回值
-/// Returns `true` when this message is the terminal assistant output.
-/// 当该消息就是终态助手输出时返回 `true`。
-fn terminal_assistant_message_accepts_usage(
-    message: &mut SessionConversationMessage,
+/// Returns `true` when the complete terminal output already exists in the canonical assistant-message suffix.
+/// 当完整终态输出已存在于规范助手消息后缀中时返回 `true`。
+fn terminal_assistant_messages_accept_usage(
+    messages: &mut [SessionConversationMessage],
     assistant_output: &str,
     report: &ExecutionRunReport,
 ) -> bool {
-    let SessionConversationPayload::Assistant { text, usage, .. } = &mut message.payload else {
+    // terminalAssistantIndex identifies the real final Provider response that owns last-success usage.
+    // terminalAssistantIndex 标识拥有最近一次成功用量的真实最终 Provider 响应。
+    let Some(terminal_assistant_index) = messages.iter().rposition(|message| {
+        matches!(
+            &message.payload,
+            SessionConversationPayload::Assistant { .. }
+        )
+    }) else {
         return false;
     };
-    if text.trim() != assistant_output {
+    // canonicalOutput reconstructs the shortest assistant-message suffix that can equal the cumulative stream output.
+    // canonicalOutput 重建可能等于累计流式输出的最短助手消息后缀。
+    let mut canonical_output = String::new();
+    // outputMatched records whether physical canonical messages already preserve the complete terminal output.
+    // outputMatched 记录真实规范消息是否已经完整保存终态输出。
+    let mut output_matched = false;
+    // assistantMessageCount bounds suffix reconstruction to Provider responses dispatched by this run.
+    // assistantMessageCount 将后缀重建限制在本次运行发出的 Provider 响应范围内。
+    let mut assistant_message_count = 0usize;
+    // message walks physical assistant responses from newest to oldest until their output covers the terminal text.
+    // message 从新到旧遍历真实助手响应，直到其输出覆盖终态文本。
+    for message in messages[..=terminal_assistant_index].iter().rev() {
+        let SessionConversationPayload::Assistant { text, .. } = &message.payload else {
+            continue;
+        };
+        assistant_message_count = assistant_message_count.saturating_add(1);
+        if report.provider_request_count > 0
+            && assistant_message_count > report.provider_request_count
+        {
+            return false;
+        }
+        if text.trim().is_empty() {
+            continue;
+        }
+        canonical_output.insert_str(0, text);
+        // normalizedCanonicalOutput removes only outer stream whitespace before comparing cumulative text.
+        // normalizedCanonicalOutput 仅移除流式累计文本外侧空白后再进行比较。
+        let normalized_canonical_output = canonical_output.trim();
+        if normalized_canonical_output == assistant_output {
+            output_matched = true;
+            break;
+        }
+        if normalized_canonical_output.len() >= assistant_output.len() {
+            return false;
+        }
+    }
+    if !output_matched {
         return false;
     }
+    let SessionConversationPayload::Assistant { usage, .. } =
+        &mut messages[terminal_assistant_index].payload
+    else {
+        return false;
+    };
     if usage.is_none() {
         *usage = report.last_successful_provider_usage.clone();
     }
