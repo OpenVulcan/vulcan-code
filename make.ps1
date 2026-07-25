@@ -2,8 +2,8 @@
 # make.ps1 用于提供本地构建与运行工作流的 PowerShell 原生入口。
 # CommandMode selects the top-level command such as build, run, release, or deps.
 # CommandMode 用于选择顶层命令，例如 build、run、release 或 deps。
-# CommandVariant carries the optional secondary mode such as release after run or host/lua after deps.
-# CommandVariant 用于承接可选的二级模式，例如 run 后面的 release，或 deps 后面的 host/lua。
+# CommandVariant carries the optional secondary mode such as release after run or host/lua/cbm after deps.
+# CommandVariant 用于承接可选的二级模式，例如 run 后面的 release，或 deps 后面的 host/lua/cbm。
 param(
     [Parameter(Position = 0)]
     [string]$CommandMode = "",
@@ -58,6 +58,10 @@ $HostDepsScriptPath = Join-Path $ScriptDir "scripts\install_host_deps.ps1"
 # LuaDepsScriptPath points at the dedicated PowerShell Lua dependency bootstrap script.
 # LuaDepsScriptPath 用于指向专用的 PowerShell Lua 依赖初始化脚本。
 $LuaDepsScriptPath = Join-Path $ScriptDir "scripts\install_lua_deps.ps1"
+
+# CodebaseMemoryDepsScriptPath points at the pinned native CBM runtime installer.
+# CodebaseMemoryDepsScriptPath 用于指向固定版本的原生 CBM 运行时安装器。
+$CodebaseMemoryDepsScriptPath = Join-Path $ScriptDir "scripts\install_codebase_memory_runtime.ps1"
 
 # RustNoticesScriptPath points at the dedicated PowerShell notice-generation script for the About page.
 # RustNoticesScriptPath 用于指向关于页面专用的 Rust 许可证声明生成脚本。
@@ -147,7 +151,7 @@ function Invoke-TauriBuildAndRun {
 # DependencyKind 用于选择要初始化的依赖域。
 function Invoke-DependencyInstall {
     param(
-        [ValidateSet("host", "vldb", "rtk", "lua")]
+        [ValidateSet("host", "vldb", "rtk", "lua", "cbm")]
         [string]$DependencyKind
     )
 
@@ -156,6 +160,7 @@ function Invoke-DependencyInstall {
         "vldb" { $HostDepsScriptPath }
         "rtk"  { $HostDepsScriptPath }
         "lua"  { $LuaDepsScriptPath }
+        "cbm"  { $CodebaseMemoryDepsScriptPath }
         default { throw "Unsupported dependency kind: $DependencyKind" }
     }
 
@@ -205,11 +210,12 @@ function Show-Usage {
     Write-Host "  ./make licenses    # generate Rust third-party notices for the About page"
     Write-Host "  ./make run         # run Tauri/WebUI debug build"
     Write-Host "  ./make run release # run Tauri/WebUI release build"
-    Write-Host "  ./make deps        # install host + official LuaSkills runtime dependencies"
+    Write-Host "  ./make deps        # install host + LuaSkills + Codebase Memory runtime dependencies"
     Write-Host "  ./make deps host   # install host native dependencies only"
     Write-Host "  ./make deps vldb   # install vldb-controller host dependency only"
     Write-Host "  ./make deps rtk    # install RTK host dependency only"
     Write-Host "  ./make deps lua    # install official LuaSkills runtime dependencies only"
+    Write-Host "  ./make deps cbm    # install the pinned native Codebase Memory runtime only"
 }
 
 # NormalizedMode stores the canonical top-level command token used by the dispatcher below.
@@ -276,10 +282,12 @@ switch ($NormalizedMode) {
             "" {
                 Invoke-DependencyInstall -DependencyKind "host"
                 Invoke-DependencyInstall -DependencyKind "lua"
+                Invoke-DependencyInstall -DependencyKind "cbm"
             }
             "all" {
                 Invoke-DependencyInstall -DependencyKind "host"
                 Invoke-DependencyInstall -DependencyKind "lua"
+                Invoke-DependencyInstall -DependencyKind "cbm"
             }
             "host" {
                 Invoke-DependencyInstall -DependencyKind "host"
@@ -292,6 +300,9 @@ switch ($NormalizedMode) {
             }
             "lua" {
                 Invoke-DependencyInstall -DependencyKind "lua"
+            }
+            "cbm" {
+                Invoke-DependencyInstall -DependencyKind "cbm"
             }
             default {
                 Write-Error "Unsupported deps command: '$CommandVariant'"

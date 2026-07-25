@@ -68,18 +68,17 @@ output/dependencies/runtimes/codebase-memory/manifest.json
 
 CBM 源码只允许在 CBM 仓库或其发布 CI 中编译。Vulcan Code 的 `make build`、`make br` 与 `make release` 只构建宿主，不检出、不调用也不编译 CBM 源码。
 
-当前联调阶段由开发者直接复制已编译的原生专版产物，或调用下列仅负责身份校验、复制和生成清单的本地打包脚本：
+Vulcan Code 固定使用正式发布的 `v0.1.0` 原生资产。依赖安装命令为：
 
 ```powershell
-pwsh -File scripts/package_codebase_memory_runtime.ps1 `
-  -BinaryPath <专用二进制> `
-  -Version <固定版本> `
-  -Platform windows-x86_64
+./make.ps1 deps cbm
 ```
 
-`-Platform` 必须与 Rust 的 `std::env::consts::OS-ARCH` 一致；脚本拒绝非原生平台、非上述五个平台和非专版文件名。Windows x64 当前应使用 `windows-x86_64`。脚本会先执行 `--version` 校验产物身份与版本，再复制二进制，并根据复制后的字节生成清单和 SHA-256。
+默认 `./make.ps1 deps` 和 `./make.ps1 deps all` 也包含 CBM。安装器只下载当前原生平台资产，先校验仓库固定的 `checksums.txt` SHA-256，再从该清单解析并校验平台压缩包摘要；解压后继续校验专版文件名、`--version` 输出，并根据最终二进制字节生成宿主 manifest。验证后的依赖保存在 `third_party/codebase_memory_runtime`，不直接修改运行中的 output。
 
-CBM 正式发布并具备线上原生资产后，版本、平台映射、下载地址与 SHA-256 校验应统一接入 `make deps` 的宿主依赖安装流程。该流程只下载并验证发布资产，不从源码编译 CBM；在正式资产元数据可用前不预设仓库地址、标签或资产文件名。
+`make build`、`make br` 与 `make release` 只把已经安装的依赖同步到 `output/dependencies/runtimes/codebase-memory`，不会访问网络或编译 CBM。同步器把可执行文件与 manifest 作为一致性文件对事务化切换；若运行中的 CBM 锁定目标 EXE，则整组保留旧的已验证版本，绝不单独更新 manifest。版本升级只修改安装器中固定的 Release 标签与 `checksums.txt` 摘要。
+
+`scripts/package_codebase_memory_runtime.ps1` 保留为开发者对本地原生专版产物执行身份校验、复制和 manifest 生成的底层工具，不是正式依赖下载入口。
 
 ## 故障语义
 

@@ -61,6 +61,10 @@ $SourceSystemPromptSkillsDir = Join-Path $ProjectDir "crates\vulcan-prompt-skill
 # SourceLuaRuntimeDir 指向 make deps-lua 安装的官方 LuaSkills 运行时载荷。
 $SourceLuaRuntimeDir = Join-Path $ProjectDir "third_party\luaskills_runtime"
 
+# CodebaseMemoryRuntimeSyncScriptPath points at the verified dependency-to-output synchronizer.
+# CodebaseMemoryRuntimeSyncScriptPath 指向经过校验的依赖到输出目录同步器。
+$CodebaseMemoryRuntimeSyncScriptPath = Join-Path $ProjectDir "scripts\sync_codebase_memory_runtime.ps1"
+
 # SourceVulcanPluginsDir contains every manifest-driven plugin bundled with Vulcan Code.
 # SourceVulcanPluginsDir 包含随 Vulcan Code 打包的所有清单驱动插件。
 $SourceVulcanPluginsDir = Join-Path $ProjectDir "plugins"
@@ -342,6 +346,12 @@ Copy-DirectoryContents -SourceDirectory $SourceSystemPromptSkillsDir -Destinatio
 
 Write-Host "==> Syncing LuaSkills runtime payload..."
 Copy-DirectoryContents -SourceDirectory $SourceLuaRuntimeDir -DestinationDirectory $OutputLuaRuntimeDir
+
+if (-not (Test-Path -LiteralPath $CodebaseMemoryRuntimeSyncScriptPath -PathType Leaf)) {
+    throw "Missing Codebase Memory runtime synchronization script: $CodebaseMemoryRuntimeSyncScriptPath"
+}
+Write-Host "==> Syncing Codebase Memory runtime dependency..."
+& $CodebaseMemoryRuntimeSyncScriptPath
 
 if (Test-Path -LiteralPath $LegacyManagedRuntimeDistributionDir) {
     Write-Host "==> Removing obsolete LuaSkills-private managed runtimes..."
