@@ -1,4 +1,4 @@
-import { Bot, BrainCircuit, Calendar, Database, FolderCog, Save, Trash2 } from "lucide-react";
+import { Bot, BrainCircuit, Calendar, Database, FolderCog, Network, RefreshCw, Save, Trash2 } from "lucide-react";
 import { StatusPill } from "@/components/shared/status";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,6 +8,7 @@ import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type {
   ProjectSummary,
+  CodebaseMemoryProjectSettingsSummary,
   VmmConfigDraftSummary,
   WorkbenchSnapshot,
 } from "@/types";
@@ -23,6 +24,85 @@ import {
   projectAgentSkillStateLabel,
   projectAttachmentKindLabel,
 } from "./project-settings-utils";
+
+// ProjectCodebaseMemorySection renders project-owned managed MCP enablement and diagnostics.
+// ProjectCodebaseMemorySection 渲染项目自有的托管 MCP 启用状态与诊断。
+export function ProjectCodebaseMemorySection(props: {
+  // Current authoritative project settings, or null while loading.
+  // 当前权威项目设置；加载期间为 null。
+  settings: CodebaseMemoryProjectSettingsSummary | null;
+  // Whether a load, save, or reindex request is running.
+  // 是否正在执行加载、保存或重建请求。
+  busy: boolean;
+  // Persists the selected project enablement state.
+  // 持久化所选项目启用状态。
+  onSetEnabled: (enabled: boolean) => void;
+  // Requests a non-destructive project reindex.
+  // 请求非破坏性项目重建索引。
+  onReindex: () => void;
+}) {
+  const { t } = useI18n();
+  if (!props.settings) {
+    return <p className="project-settings-muted">{t("projectSettings.codebaseMemory.loading")}</p>;
+  }
+  return (
+    <div className="project-settings-section">
+      <header className="project-settings-heading">
+        <Network size={18} />
+        <div>
+          <strong>{t("projectSettings.codebaseMemory.title")}</strong>
+          <span>{t("projectSettings.codebaseMemory.description")}</span>
+        </div>
+      </header>
+      <label className="project-settings-toggle-row">
+        <input
+          checked={props.settings.enabled}
+          disabled={props.busy}
+          onChange={(event) => props.onSetEnabled(event.target.checked)}
+          type="checkbox"
+        />
+        <span>
+          <strong>{t("projectSettings.codebaseMemory.enable")}</strong>
+          <small>{props.settings.enabled
+            ? t("projectSettings.codebaseMemory.enableHint")
+            : t("projectSettings.codebaseMemory.disableHint")}</small>
+        </span>
+      </label>
+      <div className="project-settings-grid">
+        <div className="project-settings-panel">
+          <strong>{t("projectSettings.codebaseMemory.serviceStatus")}</strong>
+          <p>{props.settings.serviceStatus}</p>
+        </div>
+        <div className="project-settings-panel">
+          <strong>{t("projectSettings.codebaseMemory.indexStatus")}</strong>
+          <p>{props.settings.indexStatus ?? t("projectSettings.codebaseMemory.unavailable")}</p>
+        </div>
+        <div className="project-settings-panel">
+          <strong>{t("projectSettings.codebaseMemory.lastIndexed")}</strong>
+          <p>{props.settings.lastSuccessfulIndexAt ?? t("projectSettings.codebaseMemory.unavailable")}</p>
+        </div>
+        <div className="project-settings-panel">
+          <strong>{t("projectSettings.codebaseMemory.revision")}</strong>
+          <p>{props.settings.indexRevision ?? t("projectSettings.codebaseMemory.unavailable")}</p>
+        </div>
+      </div>
+      {props.settings.lastError ? (
+        <p className="project-settings-muted">{props.settings.lastError}</p>
+      ) : null}
+      <div className="project-settings-actions">
+        <Button
+          disabled={props.busy || !props.settings.enabled}
+          onClick={props.onReindex}
+          type="button"
+          variant="outline"
+        >
+          <RefreshCw size={15} />
+          {t("projectSettings.codebaseMemory.reindex")}
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 // ProjectOverviewSection renders static project metadata and inherited setting summaries.
 // ProjectOverviewSection 渲染静态项目元信息与继承设置摘要。

@@ -694,6 +694,7 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
     let session_id = Uuid::nil();
     ExecutionPreparationRequest {
         session_id,
+        managed_codebase_memory: None,
         execution_scope: ExecutionScope::MainSession {
             session_id: SessionNodeId::from(session_id),
         },

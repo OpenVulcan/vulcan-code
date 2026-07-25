@@ -198,6 +198,7 @@ mod agent_skills_watcher;
 mod agent_stream;
 mod ai_capabilities;
 mod attachments;
+mod codebase_memory_controller;
 mod command_sessions;
 mod context_compaction;
 mod conversation_actions;
@@ -273,6 +274,7 @@ use attachments::{
     service_preview_project_attachment_cleanup, service_stage_composer_attachment_bytes,
     service_stage_composer_attachment_paths, validate_composer_attachment_summary,
 };
+use codebase_memory_controller::*;
 use command_sessions::*;
 use context_compaction::{
     MANUAL_CONTEXT_COMPACTION_TRIGGER, append_webui_context_compaction_status_message_to_workspace,
@@ -470,6 +472,7 @@ pub fn create_service_bridge_state(
         workspace_snapshot: None,
         hydrated_conversation_windows: BTreeMap::new(),
         agent_runtime: None,
+        codebase_memory_controller: Default::default(),
         service_runtime: None,
         webui_service_discovery: None,
         controller_runtime: None,

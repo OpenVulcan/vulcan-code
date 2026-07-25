@@ -359,6 +359,38 @@ pub struct ProjectSummary {
     /// 用于渲染项目的可选图标键。
     #[serde(default)]
     pub icon_key: Option<String>,
+    /// Whether host-managed Codebase Memory is enabled for this project.
+    /// 此项目是否启用了宿主管理的 Codebase Memory。
+    #[serde(default)]
+    pub codebase_memory_enabled: bool,
+}
+
+/// Project-scoped settings and diagnostics for host-managed Codebase Memory.
+/// 宿主管理 Codebase Memory 的项目级设置与诊断信息。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodebaseMemoryProjectSettingsSummary {
+    /// Stable project identifier.
+    /// 稳定项目标识。
+    pub project_id: String,
+    /// Persisted project-owned enablement state.
+    /// 项目持有的持久化启用状态。
+    pub enabled: bool,
+    /// Current managed sidecar lifecycle status.
+    /// 当前托管 Sidecar 生命周期状态。
+    pub service_status: String,
+    /// Current project indexing status when known.
+    /// 已知时的当前项目索引状态。
+    pub index_status: Option<String>,
+    /// Last successful index timestamp reported by the sidecar.
+    /// Sidecar 报告的最近成功索引时间。
+    pub last_successful_index_at: Option<String>,
+    /// Current project index revision reported by the sidecar.
+    /// Sidecar 报告的当前项目索引修订号。
+    pub index_revision: Option<String>,
+    /// Latest non-sensitive project or sidecar error.
+    /// 最近一次不含敏感信息的项目或 Sidecar 错误。
+    pub last_error: Option<String>,
 }
 
 /// Summarizes one filesystem directory row returned to WebUI folder pickers.

@@ -872,6 +872,7 @@ mod tests {
             workspace_snapshot: Some(workspace_snapshot),
             hydrated_conversation_windows: BTreeMap::new(),
             agent_runtime: None,
+            codebase_memory_controller: Default::default(),
             service_runtime: None,
             webui_service_discovery: None,
             controller_runtime: None,

@@ -40,15 +40,17 @@ INSERT INTO projects (
     sort_order,
     icon_pack,
     icon_key,
+    codebase_memory_enabled,
     created_at,
     updated_at
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
 ON CONFLICT(id) DO UPDATE SET
     name = excluded.name,
     root_path = excluded.root_path,
     pinned = excluded.pinned,
     archived = excluded.archived,
     sort_order = excluded.sort_order,
+    codebase_memory_enabled = excluded.codebase_memory_enabled,
     updated_at = excluded.updated_at;
 "#,
             vec![vec![
@@ -60,6 +62,7 @@ ON CONFLICT(id) DO UPDATE SET
                 ControllerSqliteValue::Int64(sort_order),
                 optional_sqlite_string(&project.icon_pack),
                 optional_sqlite_string(&project.icon_key),
+                ControllerSqliteValue::Int64(i64::from(project.codebase_memory_enabled)),
                 ControllerSqliteValue::String(now.clone()),
                 ControllerSqliteValue::String(now),
             ]],

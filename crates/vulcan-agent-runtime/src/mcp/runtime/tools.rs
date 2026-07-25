@@ -174,6 +174,9 @@ pub struct McpRuntimeToolBinding {
     /// Live runtime handle used to resolve the owning transport at invocation time.
     /// 在调用时用于解析所属传输的实时运行时句柄。
     runtime: Arc<McpRuntimePartitionLease>,
+    /// Stable partition identity that prevents same-server-id source confusion.
+    /// 防止同服务器标识来源混淆的稳定分区身份。
+    partition_key: String,
 }
 
 /// Reference-counted ownership boundary for one independently replaceable MCP runtime partition.
@@ -288,6 +291,51 @@ impl McpRuntimeAccess {
         )
     }
 
+    /// Builds a new access generation by replacing only the host-managed Codebase Memory partition.
+    /// 仅替换宿主管理的 Codebase Memory 分区并构建新的访问代次。
+    pub(super) fn with_replaced_managed_codebase_memory_partition(
+        &self,
+        managed_overview: McpRuntimeOverview,
+        managed_runtime: McpRuntimeHandle,
+    ) -> Self {
+        let partition_key = crate::mcp::config::HOST_MANAGED_CODEBASE_MEMORY_PARTITION_KEY;
+        let mut live_partitions = self.live_partitions.clone();
+        live_partitions.insert(
+            String::from(partition_key),
+            Arc::new(McpRuntimePartitionLease::new(managed_runtime)),
+        );
+        let configured_overview = merge_mcp_runtime_overviews(
+            std::iter::once(managed_overview).chain(
+                live_partitions
+                    .iter()
+                    .filter(|(key, _)| key.as_str() != partition_key)
+                    .map(|(_, lease)| lease.runtime.overview()),
+            ),
+        );
+        Self::from_shared_partitions(
+            configured_overview,
+            live_partitions,
+            Arc::clone(&self.retired_plugin_partitions),
+        )
+    }
+
+    /// Builds a new access generation without the host-managed Codebase Memory partition.
+    /// 构建不包含宿主管理 Codebase Memory 分区的新访问代次。
+    pub fn without_managed_codebase_memory_partition(&self) -> Self {
+        let mut live_partitions = self.live_partitions.clone();
+        live_partitions.remove(crate::mcp::config::HOST_MANAGED_CODEBASE_MEMORY_PARTITION_KEY);
+        let configured_overview = merge_mcp_runtime_overviews(
+            live_partitions
+                .values()
+                .map(|lease| lease.runtime.overview()),
+        );
+        Self::from_shared_partitions(
+            configured_overview,
+            live_partitions,
+            Arc::clone(&self.retired_plugin_partitions),
+        )
+    }
+
     /// Builds a new access generation by replacing every prior generation of one plugin partition.
     /// 通过替换单个插件分区的全部旧代次来构建新的访问代次。
     pub(super) fn with_replaced_plugin_partition(
@@ -367,13 +415,17 @@ impl McpRuntimeAccess {
     ) -> Vec<McpRuntimeToolBinding> {
         let mut occupied_public_names = BTreeSet::new();
         let mut bindings = Vec::new();
-        for lease in self.live_partitions.values() {
+        for (partition_key, lease) in &self.live_partitions {
             for mut view in lease.runtime.available_tool_views_filtered(allowlist) {
                 let public_name =
                     allocate_unique_public_tool_name(view.id(), &mut occupied_public_names);
                 view.id = public_name.clone();
                 view.name = public_name;
-                bindings.push(McpRuntimeToolBinding::new(view, Arc::clone(lease)));
+                bindings.push(McpRuntimeToolBinding::new(
+                    view,
+                    Arc::clone(lease),
+                    partition_key.clone(),
+                ));
             }
         }
         bindings
@@ -391,6 +443,17 @@ impl McpRuntimeAccess {
     /// 仅请求稳定的用户配置运行时分区停止。
     pub fn shutdown_user_partition(&self) {
         if let Some(lease) = self.live_partitions.get("user") {
+            lease.runtime.shutdown();
+        }
+    }
+
+    /// Requests only the host-managed Codebase Memory runtime partition to stop.
+    /// 仅请求宿主管理的 Codebase Memory 运行时分区停止。
+    pub fn shutdown_managed_codebase_memory_partition(&self) {
+        if let Some(lease) = self
+            .live_partitions
+            .get(crate::mcp::config::HOST_MANAGED_CODEBASE_MEMORY_PARTITION_KEY)
+        {
             lease.runtime.shutdown();
         }
     }
@@ -600,8 +663,22 @@ fn merge_mcp_runtime_overviews(
 impl McpRuntimeToolBinding {
     /// Builds one MCP runtime tool binding from one host-facing tool view and one live runtime handle.
     /// 根据一份宿主侧工具视图与一份实时运行时句柄构建单个 MCP 运行时工具绑定。
-    fn new(view: McpRuntimeToolView, runtime: Arc<McpRuntimePartitionLease>) -> Self {
-        Self { view, runtime }
+    fn new(
+        view: McpRuntimeToolView,
+        runtime: Arc<McpRuntimePartitionLease>,
+        partition_key: String,
+    ) -> Self {
+        Self {
+            view,
+            runtime,
+            partition_key,
+        }
+    }
+
+    /// Returns the stable source partition that owns this binding.
+    /// 返回拥有当前绑定的稳定来源分区。
+    pub fn partition_key(&self) -> &str {
+        &self.partition_key
     }
 
     /// Returns the stable host-facing tool identifier.

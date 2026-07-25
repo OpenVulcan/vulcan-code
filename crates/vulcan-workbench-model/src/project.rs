@@ -29,6 +29,9 @@ pub struct TaskProjectSummary {
     /// Optional project icon key selected by the user.
     /// 用户选择的可选项目图标键。
     pub icon_key: Option<String>,
+    /// Whether the host-managed Codebase Memory integration is enabled for this project.
+    /// 此项目是否启用了宿主管理的 Codebase Memory 集成。
+    pub codebase_memory_enabled: bool,
     /// Session identifiers nested under the project node.
     /// 挂载在项目节点下的会话标识集合。
     pub session_ids: Vec<SessionId>,
@@ -59,8 +62,26 @@ impl TaskProjectSummary {
             order,
             icon_pack,
             icon_key,
+            codebase_memory_enabled: false,
             session_ids,
         }
+    }
+
+    /// Applies the persisted host-managed Codebase Memory enablement state.
+    /// 应用持久化的宿主管理 Codebase Memory 启用状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `enabled` is the exact project-owned persisted enablement flag.
+    /// `enabled` 是项目实体持有的精确持久化启用标记。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the updated project summary for deterministic projection construction.
+    /// 返回更新后的项目摘要，以便确定性构建投影。
+    pub fn with_codebase_memory_enabled(mut self, enabled: bool) -> Self {
+        self.codebase_memory_enabled = enabled;
+        self
     }
 
     /// Builds seed project-tree data for the workbench task drawer prototype.

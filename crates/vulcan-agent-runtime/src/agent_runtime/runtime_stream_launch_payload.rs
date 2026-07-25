@@ -328,6 +328,7 @@ mod tests {
     fn build_test_request() -> ExecutionPreparationRequest {
         ExecutionPreparationRequest {
             session_id: Uuid::nil(),
+            managed_codebase_memory: None,
             execution_scope: vulcan_session_core::ExecutionScope::MainSession {
                 session_id: vulcan_session_core::SessionNodeId::from(Uuid::nil()),
             },

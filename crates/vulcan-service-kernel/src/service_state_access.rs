@@ -696,6 +696,7 @@ mod tests {
             pinned: false,
             icon_pack: None,
             icon_key: None,
+            codebase_memory_enabled: false,
         }];
         guard.workspace_snapshot = Some(WorkspaceSnapshot {
             task_projects: vec![TaskProjectSummary::new(

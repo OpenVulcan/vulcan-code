@@ -17,6 +17,35 @@ export interface ProjectSummary {
   // Optional icon key selected for the project.
   // 项目选择的可选图标键。
   iconKey?: string | null;
+  // Whether host-managed Codebase Memory is enabled for this project.
+  // 此项目是否启用了宿主管理的 Codebase Memory。
+  codebaseMemoryEnabled?: boolean;
+}
+
+// CodebaseMemoryProjectSettingsSummary describes project-owned enablement and managed runtime diagnostics.
+// CodebaseMemoryProjectSettingsSummary 描述项目自有启用状态与托管运行时诊断。
+export interface CodebaseMemoryProjectSettingsSummary {
+  // Stable project identifier.
+  // 稳定项目标识。
+  projectId: string;
+  // Persisted project-owned enablement state.
+  // 项目持有的持久化启用状态。
+  enabled: boolean;
+  // Current managed sidecar lifecycle status.
+  // 当前托管 Sidecar 生命周期状态。
+  serviceStatus: string;
+  // Current project indexing status when known.
+  // 已知时的当前项目索引状态。
+  indexStatus?: string | null;
+  // Last successful index timestamp reported by the sidecar.
+  // Sidecar 报告的最近成功索引时间。
+  lastSuccessfulIndexAt?: string | null;
+  // Current project index revision reported by the sidecar.
+  // Sidecar 报告的当前项目索引修订号。
+  indexRevision?: string | null;
+  // Latest non-sensitive project or sidecar error.
+  // 最近一次不含敏感信息的项目或 Sidecar 错误。
+  lastError?: string | null;
 }
 
 // ProjectDirectoryEntrySummary describes one child directory returned by the service.

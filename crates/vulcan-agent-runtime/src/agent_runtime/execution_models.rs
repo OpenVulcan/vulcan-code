@@ -182,6 +182,9 @@ pub struct ExecutionPreparationRequest {
     /// Target session identifier.
     /// 目标会话标识。
     pub session_id: SessionId,
+    /// Optional live authorization context for host-managed Codebase Memory tools.
+    /// 宿主管理 Codebase Memory 工具使用的可选实时授权上下文。
+    pub managed_codebase_memory: Option<crate::mcp::ManagedCodebaseMemoryExecutionContext>,
     /// Shared execution scope used by main-session and task-session routers.
     /// 主会话与子代理会话路由共用的执行范围。
     pub execution_scope: ExecutionScope,

@@ -16,7 +16,7 @@ use tokio::process::ChildStderr;
 use tokio::process::Command;
 use tokio::sync::{Mutex as AsyncMutex, broadcast};
 use vulcan_host_tools::{
-    output_decode::decode_shell_output_bytes, process_creation::apply_windows_release_no_window,
+    output_decode::decode_shell_output_bytes, process_creation::apply_windows_no_window,
 };
 
 use crate::error::McpRuntimeError;
@@ -24,7 +24,7 @@ use crate::rmcp_support::{
     EventingClientHandler, call_rmcp_tool, get_rmcp_prompt, list_rmcp_prompts, list_rmcp_resources,
     list_rmcp_tools, read_rmcp_resource, spawn_rmcp_disconnect_watch,
 };
-use crate::transport::{McpToolSchema, McpTransport, McpTransportEvent};
+use crate::transport::{McpServerIdentity, McpToolSchema, McpTransport, McpTransportEvent};
 
 /// Maximum number of sanitized stderr chunks retained per stdio transport.
 /// 每个 stdio 传输保留的最大脱敏 stderr 分片数量。
@@ -320,7 +320,7 @@ fn build_child_command(
         command.env_clear();
     }
     command.envs(env);
-    apply_windows_release_no_window(&mut command);
+    apply_windows_no_window(&mut command);
     command
 }
 
@@ -341,6 +341,16 @@ impl McpTransport for StdioTransport {
             .iter()
             .cloned()
             .collect()
+    }
+
+    /// Returns the exact server identity negotiated by rmcp during initialize.
+    /// 返回 rmcp 在 initialize 阶段协商得到的精确服务器身份。
+    fn server_identity(&self) -> Option<McpServerIdentity> {
+        self.peer.peer_info().map(|info| McpServerIdentity {
+            protocol_version: info.protocol_version.to_string(),
+            product: info.server_info.name.clone(),
+            version: info.server_info.version.clone(),
+        })
     }
 
     /// Gracefully closes rmcp, waits for child exit, and lets rmcp force-kill after its bounded grace period.

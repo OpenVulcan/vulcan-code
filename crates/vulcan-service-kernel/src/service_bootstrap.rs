@@ -855,6 +855,16 @@ fn run_service_bootstrap(
         guard.mcp_runtime = Some(mcp_runtime);
         guard.cached_mcp_catalog = Some(mcp_catalog);
     }
+    // Managed Codebase Memory enablement survives restart; unavailable packaged assets degrade only that integration.
+    // 托管 Codebase Memory 启用意图会跨重启保留；打包资产不可用时仅降级该集成。
+    if let Err(error) = runtime.block_on(crate::reconcile_codebase_memory_runtime(state)) {
+        if let Ok(guard) = state.lock() {
+            guard
+                .codebase_memory_controller
+                .mark_runtime_unsynchronized(&error);
+        }
+        eprintln!("[webui-service] managed Codebase Memory bootstrap degraded: {error}");
+    }
     // prompt_skill_config resolves the exact roots watched by the independent Agent Skills domain.
     // prompt_skill_config 解析独立 Agent Skills 领域监听的精确根目录。
     let prompt_skill_config = vulcan_agent_runtime::skills::prompt::global_config_from_persisted(
@@ -863,6 +873,7 @@ fn run_service_bootstrap(
     // runtime_guard makes the retained service runtime current while the notify loop is spawned.
     // runtime_guard 在生成 notify 循环期间使保留的服务运行时成为当前运行时。
     let _runtime_guard = runtime.enter();
+    crate::start_codebase_memory_recovery_monitor(state.clone(), event_emitter.clone());
     crate::agent_skills_watcher::start_agent_skills_catalog_watcher(
         state.clone(),
         event_emitter.clone(),

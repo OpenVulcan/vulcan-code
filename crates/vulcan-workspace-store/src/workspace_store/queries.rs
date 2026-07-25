@@ -15,7 +15,8 @@ pub(super) async fn query_project_rows(
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
             r#"
-SELECT id, name, root_path, pinned, sort_order, icon_pack, icon_key, archived
+SELECT id, name, root_path, pinned, sort_order, icon_pack, icon_key,
+       codebase_memory_enabled, archived
 FROM projects
 ORDER BY pinned DESC, sort_order ASC, updated_at DESC;
 "#,

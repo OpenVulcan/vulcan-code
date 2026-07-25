@@ -7,6 +7,10 @@ use crate::provider_config::{
 };
 use std::collections::BTreeMap;
 use std::fmt;
+
+/// Stable partition key reserved for the host-managed Codebase Memory sidecar.
+/// 为宿主管理的 Codebase Memory Sidecar 保留的稳定分区键。
+pub const HOST_MANAGED_CODEBASE_MEMORY_PARTITION_KEY: &str = "managed:codebase-memory";
 use std::path::PathBuf;
 use vulcan_mcp_runtime::{McpTransportLaunchSpec, McpTransportOAuthSpec};
 
@@ -110,6 +114,9 @@ pub enum McpServerSource {
         /// 所属插件代次。
         generation: u64,
     },
+    /// Server owned exclusively by the host-managed Codebase Memory controller.
+    /// 仅由宿主管理的 Codebase Memory 控制器持有的服务器。
+    HostManagedCodebaseMemory,
 }
 
 impl fmt::Debug for McpServerOAuthConfig {
@@ -146,6 +153,9 @@ impl McpServerSource {
                 plugin_id,
                 generation,
             } => format!("plugin:{plugin_id}:{generation}"),
+            Self::HostManagedCodebaseMemory => {
+                String::from(HOST_MANAGED_CODEBASE_MEMORY_PARTITION_KEY)
+            }
         }
     }
 }
@@ -687,8 +697,8 @@ fn runtime_mcp_server_from_persisted(
 #[cfg(test)]
 mod tests {
     use super::{
-        McpServerConfig, McpServerOAuthConfig, McpServerSource, McpServerTransportConfig,
-        McpTransportKind, runtime_mcp_server_configs,
+        HOST_MANAGED_CODEBASE_MEMORY_PARTITION_KEY, McpServerConfig, McpServerOAuthConfig,
+        McpServerSource, McpServerTransportConfig, McpTransportKind, runtime_mcp_server_configs,
     };
     use crate::provider_config::{
         PersistedMcpConfiguration, PersistedMcpServerEntry, PersistedMcpTransportKind,
@@ -751,6 +761,20 @@ mod tests {
             enabled: true,
             transport,
         }
+    }
+
+    /// Verifies the host-managed source cannot collide with user or plugin partitions.
+    /// 验证宿主管理来源不会与用户或插件分区冲突。
+    #[test]
+    fn managed_codebase_memory_uses_its_reserved_partition() {
+        assert_eq!(
+            McpServerSource::HostManagedCodebaseMemory.partition_key(),
+            HOST_MANAGED_CODEBASE_MEMORY_PARTITION_KEY
+        );
+        assert_ne!(
+            McpServerSource::HostManagedCodebaseMemory.partition_key(),
+            McpServerSource::UserConfigured.partition_key()
+        );
     }
 
     #[test]

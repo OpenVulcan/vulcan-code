@@ -57,6 +57,7 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
             pinned: false,
             icon_pack: None,
             icon_key: None,
+            codebase_memory_enabled: false,
         }],
         expanded_project_ids: vec![String::from("current-workspace")],
         project_settings_revisions: vulcan_service_api::ProjectSettingsRevisionSnapshot::default(),

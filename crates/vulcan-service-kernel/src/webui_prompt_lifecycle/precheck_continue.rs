@@ -313,6 +313,23 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
     }
     let mut request = continuation.request;
     request.controller_runtime = Some(controller_runtime.clone());
+    // managedCodebaseMemory is resolved from the live controller authorization table without any workspace-path fallback.
+    // managedCodebaseMemory 从实时控制器授权表解析，绝不使用工作区路径回退。
+    request.managed_codebase_memory = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        if let Some(workspace) = guard.workspace_snapshot.as_ref() {
+            // Session mutations refresh authorization only; watcher synchronization remains project-lifecycle owned.
+            // 会话变更只刷新授权；Watcher 同步仍由项目生命周期持有。
+            guard
+                .codebase_memory_controller
+                .refresh_workspace(workspace)?;
+        }
+        guard
+            .codebase_memory_controller
+            .execution_context(session_id)
+    };
     let goal_context_started_at = current_unix_millis_value();
     let (session_goal_context, goal_turn_usage_context) =
         session_goal_prompt_parts_from_state(state, session_id)?;

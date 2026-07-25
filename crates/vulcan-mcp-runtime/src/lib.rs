@@ -32,4 +32,4 @@ pub use launch::McpTransportLaunchSpec;
 pub use rmcp::model::{GetPromptResult, Prompt, PromptArgument, ReadResourceResult, Resource};
 pub use sse::SseTransport;
 pub use stdio::StdioTransport;
-pub use transport::{McpToolSchema, McpTransport, McpTransportEvent};
+pub use transport::{McpServerIdentity, McpToolSchema, McpTransport, McpTransportEvent};

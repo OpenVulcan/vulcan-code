@@ -12,6 +12,9 @@ pub struct ProjectSettingsDomainRevisions {
     /// Latest Agent Skill override invalidation revision.
     /// 最新 Agent Skill 覆盖失效版本。
     pub agent_skills: u64,
+    /// Latest host-managed Codebase Memory settings invalidation revision.
+    /// 最新宿主管理 Codebase Memory 设置失效版本。
+    pub codebase_memory: u64,
 }
 
 /// Stores authoritative global and project-owned settings revisions in a full workbench snapshot.

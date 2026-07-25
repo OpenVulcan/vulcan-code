@@ -296,6 +296,11 @@ async fn cleanup_failed_controller_bootstrap(
     })
 }
 
+/// Additive migration that keeps every existing project disabled by default.
+/// 使所有既有项目保持默认关闭的追加式迁移。
+const ADD_CODEBASE_MEMORY_ENABLED_COLUMN_SQL: &str =
+    "ALTER TABLE projects ADD COLUMN codebase_memory_enabled INTEGER NOT NULL DEFAULT 0;";
+
 /// Applies additive schema migrations required by newer application builds.
 /// 应用较新应用版本所需的追加式结构迁移。
 pub(crate) async fn ensure_application_schema_migrations(
@@ -312,6 +317,12 @@ pub(crate) async fn ensure_application_schema_migrations(
         client,
         sqlite_binding_id,
         "ALTER TABLE projects ADD COLUMN icon_key TEXT;",
+    )
+    .await?;
+    ensure_optional_project_column(
+        client,
+        sqlite_binding_id,
+        ADD_CODEBASE_MEMORY_ENABLED_COLUMN_SQL,
     )
     .await?;
     ensure_optional_schema_statement(
@@ -623,6 +634,7 @@ CREATE TABLE IF NOT EXISTS projects (
     sort_order INTEGER NOT NULL DEFAULT 0,
     icon_pack TEXT,
     icon_key TEXT,
+    codebase_memory_enabled INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -741,6 +753,19 @@ mod tests {
         ] {
             assert!(schema.contains(column));
         }
+    }
+
+    /// Verifies both new and upgraded databases default Codebase Memory to disabled.
+    /// 验证新建与升级数据库都会把 Codebase Memory 默认设为关闭。
+    #[test]
+    fn project_schema_and_migration_default_codebase_memory_to_disabled() {
+        let schema = build_application_schema_script();
+
+        assert!(schema.contains("codebase_memory_enabled INTEGER NOT NULL DEFAULT 0"));
+        assert_eq!(
+            ADD_CODEBASE_MEMORY_ENABLED_COLUMN_SQL,
+            "ALTER TABLE projects ADD COLUMN codebase_memory_enabled INTEGER NOT NULL DEFAULT 0;"
+        );
     }
 
     /// Verifies that each bootstrap receives one distinct SQLite binding id while preserving the stable diagnostic tag prefix.

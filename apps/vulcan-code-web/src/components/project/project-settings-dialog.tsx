@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import type {
+  CodebaseMemoryProjectSettingsSummary,
   VmmConfigDraftSummary,
   WorkbenchSnapshot,
 } from "@/types";
@@ -16,6 +17,7 @@ import { useI18n } from "@/i18n";
 import {
   ProjectAgentSkillsSection,
   ProjectAttachmentCleanupSection,
+  ProjectCodebaseMemorySection,
   ProjectOverviewSection,
   ProjectVmmSection,
 } from "./project-settings-sections";
@@ -52,6 +54,11 @@ export {
   projectAttachmentPreviewFallback,
   projectConversationCount,
 } from "./project-settings-utils";
+import {
+  loadProjectCodebaseMemorySettings,
+  reindexProjectCodebaseMemory,
+  setProjectCodebaseMemoryEnabled,
+} from "@/service/codebase-memory-service";
 
 // PROJECT_SETTINGS_RETRY_BASE_DELAY_MS is the first reconnect recovery delay.
 // PROJECT_SETTINGS_RETRY_BASE_DELAY_MS 是首次连接恢复重试的等待时间。
@@ -171,6 +178,15 @@ export function ProjectSettingsDialog(props: {
   // cleanupReport stores the latest successful cleanup execution report.
   // cleanupReport 保存最近一次成功的清理执行报告。
   const [cleanupReport, setCleanupReport] = React.useState<ProjectAttachmentCleanupReportSummary | null>(null);
+  // codebaseMemorySettings stores the authoritative managed MCP state for this project.
+  // codebaseMemorySettings 保存当前项目的权威托管 MCP 状态。
+  const [codebaseMemorySettings, setCodebaseMemorySettings] = React.useState<CodebaseMemoryProjectSettingsSummary | null>(null);
+  // codebaseMemoryLoading tracks the latest authoritative settings read.
+  // codebaseMemoryLoading 跟踪最近一次权威设置读取。
+  const [codebaseMemoryLoading, setCodebaseMemoryLoading] = React.useState(false);
+  // codebaseMemoryMutationBusy tracks one user-initiated save or reindex request.
+  // codebaseMemoryMutationBusy 跟踪一次用户发起的保存或重建请求。
+  const [codebaseMemoryMutationBusy, setCodebaseMemoryMutationBusy] = React.useState(false);
   // loadedVmmRevisionByProjectRef advances only after one VMM read succeeds.
   // loadedVmmRevisionByProjectRef 仅在一次 VMM 读取成功后推进。
   const loadedVmmRevisionByProjectRef = React.useRef<Map<string, number>>(new Map());
@@ -216,6 +232,12 @@ export function ProjectSettingsDialog(props: {
   // cleanupOperationInFlightRef synchronously rejects duplicate preview or execute requests.
   // cleanupOperationInFlightRef 同步拒绝重复的预览或执行请求。
   const cleanupOperationInFlightRef = React.useRef(false);
+  // codebaseMemoryRequestSequenceRef prevents an older project response from overwriting a newer read.
+  // codebaseMemoryRequestSequenceRef 防止较旧项目响应覆盖较新的读取。
+  const codebaseMemoryRequestSequenceRef = React.useRef(0);
+  // codebaseMemoryMutationInFlightRef synchronously rejects duplicate save or reindex actions.
+  // codebaseMemoryMutationInFlightRef 同步拒绝重复的保存或重建操作。
+  const codebaseMemoryMutationInFlightRef = React.useRef(false);
 
   React.useLayoutEffect(() => {
     // A fresh object distinguishes closing and reopening the same project from the previous dialog lifetime.
@@ -227,6 +249,8 @@ export function ProjectSettingsDialog(props: {
     agentSaveInFlightRef.current = false;
     cleanupOperationSequenceRef.current += 1;
     cleanupOperationInFlightRef.current = false;
+    codebaseMemoryRequestSequenceRef.current += 1;
+    codebaseMemoryMutationInFlightRef.current = false;
   }, [projectId]);
 
   React.useLayoutEffect(() => {
@@ -259,7 +283,56 @@ export function ProjectSettingsDialog(props: {
     setCleanupBusy("idle");
     setCleanupPreview(null);
     setCleanupReport(null);
+    setCodebaseMemorySettings(null);
+    setCodebaseMemoryLoading(false);
+    setCodebaseMemoryMutationBusy(false);
   }, [projectId]);
+
+  React.useEffect(() => {
+    if (projectId === null) {
+      return;
+    }
+    const targetProjectId = projectId;
+    const requestOwner = projectActionOwnerRef.current;
+    const requestSequence = codebaseMemoryRequestSequenceRef.current + 1;
+    codebaseMemoryRequestSequenceRef.current = requestSequence;
+    let cancelled = false;
+    setCodebaseMemoryLoading(true);
+    void loadProjectCodebaseMemorySettings(targetProjectId)
+      .then((settings) => {
+        if (settings.projectId !== targetProjectId) {
+          throw new Error("Codebase Memory settings returned a mismatched project identity.");
+        }
+        if (
+          !cancelled
+          && projectActionOwnerRef.current === requestOwner
+          && codebaseMemoryRequestSequenceRef.current === requestSequence
+        ) {
+          setCodebaseMemorySettings(settings);
+        }
+      })
+      .catch((error) => {
+        if (
+          !cancelled
+          && projectActionOwnerRef.current === requestOwner
+          && codebaseMemoryRequestSequenceRef.current === requestSequence
+        ) {
+          toast.error(error instanceof Error ? error.message : String(error));
+        }
+      })
+      .finally(() => {
+        if (
+          !cancelled
+          && projectActionOwnerRef.current === requestOwner
+          && codebaseMemoryRequestSequenceRef.current === requestSequence
+        ) {
+          setCodebaseMemoryLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, props.settingsRevision.codebaseMemory]);
 
   React.useEffect(() => {
     if (projectId === null || vmmDirty || vmmSaveInFlight) {
@@ -380,7 +453,14 @@ export function ProjectSettingsDialog(props: {
     return null;
   }
 
-  const sections = projectSettingsSections(project, props.workbench, t);
+  // effectiveProject mirrors the just-saved setting before the next workbench projection arrives.
+  // effectiveProject 在下一份工作台投影到达前镜像刚保存的设置。
+  const effectiveProject = {
+    ...project,
+    codebaseMemoryEnabled:
+      codebaseMemorySettings?.enabled ?? project.codebaseMemoryEnabled,
+  };
+  const sections = projectSettingsSections(effectiveProject, props.workbench, t);
   const attachmentRoot = projectAttachmentRoot(project);
   const conversationCount = projectConversationCount(props.workbench, project.id);
 
@@ -583,6 +663,87 @@ export function ProjectSettingsDialog(props: {
   const cleanupPreviewMatchesCurrent = cleanupPreview
     && cleanupPreview.cutoffDate === cleanupCutoffDate
     && cleanupPreview.matchedAssetCount > 0;
+  // codebaseMemoryBusy disables actions while either the authoritative read or one mutation is active.
+  // codebaseMemoryBusy 在权威读取或一次变更进行期间禁用操作。
+  const codebaseMemoryBusy = codebaseMemoryLoading || codebaseMemoryMutationBusy;
+
+  // updateCodebaseMemoryEnabled persists one exact project setting and keeps returned diagnostics authoritative.
+  // updateCodebaseMemoryEnabled 持久化一个精确项目设置，并以返回诊断为权威。
+  const updateCodebaseMemoryEnabled = async (enabled: boolean) => {
+    if (!projectId || codebaseMemoryBusy || codebaseMemoryMutationInFlightRef.current) {
+      return;
+    }
+    const targetProjectId = projectId;
+    const requestOwner = projectActionOwnerRef.current;
+    const requestSequence = codebaseMemoryRequestSequenceRef.current + 1;
+    codebaseMemoryRequestSequenceRef.current = requestSequence;
+    codebaseMemoryMutationInFlightRef.current = true;
+    setCodebaseMemoryMutationBusy(true);
+    try {
+      const settings = await setProjectCodebaseMemoryEnabled(targetProjectId, enabled);
+      if (settings.projectId !== targetProjectId) {
+        throw new Error("Codebase Memory settings returned a mismatched project identity.");
+      }
+      if (
+        projectActionOwnerRef.current === requestOwner
+        && codebaseMemoryRequestSequenceRef.current === requestSequence
+      ) {
+        setCodebaseMemorySettings(settings);
+      }
+      if (projectActionOwnerRef.current === requestOwner) {
+        toast.success(enabled
+          ? t("projectSettings.codebaseMemory.enabledSaved")
+          : t("projectSettings.codebaseMemory.disabledSaved"));
+      }
+    } catch (error) {
+      if (projectActionOwnerRef.current === requestOwner) {
+        toast.error(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      if (projectActionOwnerRef.current === requestOwner) {
+        codebaseMemoryMutationInFlightRef.current = false;
+        setCodebaseMemoryMutationBusy(false);
+      }
+    }
+  };
+
+  // reindexCodebaseMemory requests a non-destructive rebuild and keeps returned diagnostics authoritative.
+  // reindexCodebaseMemory 请求非破坏性重建，并以返回诊断为权威。
+  const reindexCodebaseMemory = async () => {
+    if (!projectId || codebaseMemoryBusy || codebaseMemoryMutationInFlightRef.current) {
+      return;
+    }
+    const targetProjectId = projectId;
+    const requestOwner = projectActionOwnerRef.current;
+    const requestSequence = codebaseMemoryRequestSequenceRef.current + 1;
+    codebaseMemoryRequestSequenceRef.current = requestSequence;
+    codebaseMemoryMutationInFlightRef.current = true;
+    setCodebaseMemoryMutationBusy(true);
+    try {
+      const settings = await reindexProjectCodebaseMemory(targetProjectId);
+      if (settings.projectId !== targetProjectId) {
+        throw new Error("Codebase Memory settings returned a mismatched project identity.");
+      }
+      if (
+        projectActionOwnerRef.current === requestOwner
+        && codebaseMemoryRequestSequenceRef.current === requestSequence
+      ) {
+        setCodebaseMemorySettings(settings);
+      }
+      if (projectActionOwnerRef.current === requestOwner) {
+        toast.success(t("projectSettings.codebaseMemory.reindexAccepted"));
+      }
+    } catch (error) {
+      if (projectActionOwnerRef.current === requestOwner) {
+        toast.error(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      if (projectActionOwnerRef.current === requestOwner) {
+        codebaseMemoryMutationInFlightRef.current = false;
+        setCodebaseMemoryMutationBusy(false);
+      }
+    }
+  };
 
   return (
     <Dialog open={Boolean(project)} onOpenChange={(open) => !open && props.onCancel()}>
@@ -635,6 +796,15 @@ export function ProjectSettingsDialog(props: {
                 agentOverrides={agentOverrides}
                 onSetProjectAgentSkill={(name, stateKey) => void setProjectAgentSkill(name, stateKey)}
                 workbench={props.workbench}
+              />
+            ) : null}
+
+            {activeSection === "codebase-memory" ? (
+              <ProjectCodebaseMemorySection
+                busy={codebaseMemoryBusy}
+                onReindex={() => void reindexCodebaseMemory()}
+                onSetEnabled={(enabled) => void updateCodebaseMemoryEnabled(enabled)}
+                settings={codebaseMemorySettings}
               />
             ) : null}
 

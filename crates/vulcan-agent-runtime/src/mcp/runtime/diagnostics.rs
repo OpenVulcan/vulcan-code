@@ -108,6 +108,15 @@ pub struct McpRuntimeServerState {
     /// Consecutive automatic retry count for the current unstable period.
     /// 当前不稳定周期内的连续自动重试次数。
     pub retry_count: u8,
+    /// MCP protocol version negotiated during initialize.
+    /// initialize 阶段协商得到的 MCP 协议版本。
+    pub protocol_version: Option<String>,
+    /// Server implementation product name negotiated during initialize.
+    /// initialize 阶段协商得到的服务器实现产品名称。
+    pub server_product: Option<String>,
+    /// Server implementation binary version negotiated during initialize.
+    /// initialize 阶段协商得到的服务器实现二进制版本。
+    pub server_version: Option<String>,
     /// Number of currently visible tools from the complete last valid snapshot.
     /// 当前完整且最近有效快照中可见工具的数量。
     pub tool_count: usize,

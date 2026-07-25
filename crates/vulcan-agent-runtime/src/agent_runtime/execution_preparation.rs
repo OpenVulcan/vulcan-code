@@ -170,6 +170,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         tool_exposure.luaskills_tools.clone(),
         implicit_luaskills,
         tool_exposure.mcp_tools.clone(),
+        request.managed_codebase_memory.clone(),
         tool_exposure.ai_tool_configuration.clone(),
         ai_tool_fallback_aliases.clone(),
         enabled_prompt_skill_names,

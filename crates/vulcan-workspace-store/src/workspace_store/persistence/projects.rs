@@ -693,6 +693,55 @@ RETURNING id;
     validate_project_mutation_identity_rows(project_id, &rows, "重命名项目")
 }
 
+/// Persists the host-managed Codebase Memory enablement for one exact active project.
+/// 为一个精确活动项目持久化宿主管理的 Codebase Memory 启用状态。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the authoritative SQLite binding.
+/// `controller` 持有权威 SQLite 绑定。
+/// `project_id` is the exact active project identity to update.
+/// `project_id` 是需要更新的精确活动项目身份。
+/// `enabled` is the resulting project-owned enablement state.
+/// `enabled` 是项目实体最终持有的启用状态。
+///
+/// # Returns
+/// 返回值
+/// Returns success only after the guarded update returns the exact active project identity.
+/// 仅在受保护更新返回精确活动项目身份后成功。
+pub async fn persist_project_codebase_memory_enabled(
+    controller: ControllerRuntimeHandle,
+    project_id: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    validate_project_mutation_id(project_id, "更新 Codebase Memory 启用状态")?;
+    // result proves that the setting belongs to an existing active project, never to a path alias.
+    // result 证明该设置属于现有活动项目，而不是某个路径别名。
+    let result = controller
+        .client
+        .query_sqlite_json_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(&controller),
+            r#"
+UPDATE projects
+SET codebase_memory_enabled = ?1, updated_at = ?2
+WHERE id = ?3 AND archived = 0
+RETURNING id;
+"#,
+            vec![
+                ControllerSqliteValue::Int64(i64::from(enabled)),
+                ControllerSqliteValue::String(current_unix_millis_text()),
+                ControllerSqliteValue::String(project_id.to_string()),
+            ],
+        )
+        .await
+        .map_err(|error| format!("更新 Codebase Memory 启用状态失败：{error}"))?;
+    // rows must contain the one active project whose project-owned setting changed.
+    // rows 必须包含项目自有设置发生变化的唯一活动项目。
+    let rows = decode_query_rows::<ProjectMutationIdentityRow>(&result.json_data)?;
+    validate_project_mutation_identity_rows(project_id, &rows, "更新 Codebase Memory 启用状态")
+}
+
 /// Persists one active project's complete icon override pair.
 /// 持久化单个活动项目的完整图标覆盖对。
 ///

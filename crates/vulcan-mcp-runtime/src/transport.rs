@@ -8,6 +8,21 @@ use rmcp::model::{GetPromptResult, Prompt, ReadResourceResult, Resource};
 use serde_json::Value;
 use tokio::sync::broadcast;
 
+/// Negotiated MCP server identity returned by the initialize handshake.
+/// MCP initialize 握手返回的已协商服务器身份。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpServerIdentity {
+    /// Negotiated MCP protocol version.
+    /// 已协商的 MCP 协议版本。
+    pub protocol_version: String,
+    /// Server implementation product name.
+    /// 服务器实现的产品名称。
+    pub product: String,
+    /// Server implementation binary version.
+    /// 服务器实现的二进制版本。
+    pub version: String,
+}
+
 /// Stable MCP tool schema exposed by one remote endpoint.
 /// 单个远端端点暴露出的稳定 MCP 工具 Schema。
 #[derive(Debug, Clone)]
@@ -102,6 +117,12 @@ pub trait McpTransport: Send + Sync {
     /// 返回当前传输持有的有界脱敏诊断日志快照。
     fn recent_logs(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    /// Returns the identity negotiated during initialize when the transport exposes it.
+    /// 当传输能够提供时，返回 initialize 阶段协商得到的服务器身份。
+    fn server_identity(&self) -> Option<McpServerIdentity> {
+        None
     }
 
     /// Gracefully closes this exact transport and waits for owned resources to be released.

@@ -259,6 +259,7 @@ pub(crate) fn commit_and_emit_project_settings_changed_delta(
         match domain {
             ProjectSettingsDomain::Vmm => revisions.vmm = generation,
             ProjectSettingsDomain::AgentSkills => revisions.agent_skills = generation,
+            ProjectSettingsDomain::CodebaseMemory => revisions.codebase_memory = generation,
         }
         generation
     };

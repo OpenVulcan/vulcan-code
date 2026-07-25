@@ -22,6 +22,7 @@ fn test_resolved_config(
 fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationRequest {
     ExecutionPreparationRequest {
         session_id,
+        managed_codebase_memory: None,
         execution_scope: ExecutionScope::MainSession {
             session_id: SessionNodeId::from(session_id),
         },

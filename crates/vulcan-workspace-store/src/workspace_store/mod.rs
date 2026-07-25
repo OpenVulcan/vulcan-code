@@ -55,11 +55,12 @@ pub use persistence::{
     PersistedSessionForkResult, PersistedUserPromptEditDraft, PersistedUserPromptRollbackResult,
     archive_project_sessions, archive_single_session, fork_persisted_session,
     load_persisted_user_prompt_edit_draft, persist_collapsed_task_project_ids, persist_new_project,
-    persist_project_icon_update, persist_project_order_update,
-    persist_project_pinned_and_order_update, persist_single_session_addon_state_update,
-    persist_single_session_runtime_state_update, persist_single_session_transcript_messages,
-    persist_single_session_update, remove_project_after_archiving_sessions, rename_project,
-    rename_single_session, restore_project, rollback_persisted_session_before_user_prompt,
+    persist_project_codebase_memory_enabled, persist_project_icon_update,
+    persist_project_order_update, persist_project_pinned_and_order_update,
+    persist_single_session_addon_state_update, persist_single_session_runtime_state_update,
+    persist_single_session_transcript_messages, persist_single_session_update,
+    remove_project_after_archiving_sessions, rename_project, rename_single_session,
+    restore_project, rollback_persisted_session_before_user_prompt,
 };
 pub use session_load::{
     load_session_display_hydration_snapshot_for_project_created_at,

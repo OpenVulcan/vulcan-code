@@ -160,6 +160,9 @@ pub(super) struct StoredProjectRow {
     /// Optional project icon key stored in SQLite.
     /// 存储在 SQLite 中的可选项目图标键。
     pub(super) icon_key: Option<String>,
+    /// SQLite numeric host-managed Codebase Memory enablement flag.
+    /// SQLite 数值型宿主管理 Codebase Memory 启用标记。
+    pub(super) codebase_memory_enabled: i64,
     /// SQLite numeric archived flag.
     /// SQLite 数值型归档标记。
     pub(super) archived: i64,

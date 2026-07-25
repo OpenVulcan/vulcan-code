@@ -8,6 +8,24 @@ use tokio::process::Command as TokioCommand;
 /// 防止子进程控制台窗口显示的 Windows 进程创建标志。
 pub const WINDOWS_CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// Hides one background Tokio child process window in every Windows build profile.
+/// 在所有 Windows 构建配置中隐藏单个后台 Tokio 子进程窗口。
+///
+/// # Parameters
+/// 参数
+/// `command` is the non-interactive Tokio command being prepared before spawn.
+/// `command` 是启动前正在配置的非交互 Tokio 命令。
+pub fn apply_windows_no_window(command: &mut TokioCommand) {
+    #[cfg(windows)]
+    {
+        command.creation_flags(WINDOWS_CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = command;
+    }
+}
+
 /// Hides one Tokio child process window only in Windows release builds.
 /// 仅在 Windows release 构建中隐藏单个 Tokio 子进程窗口。
 ///

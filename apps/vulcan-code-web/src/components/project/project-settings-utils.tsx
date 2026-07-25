@@ -1,4 +1,4 @@
-import { BookMarked, Bot, BrainCircuit, Database, FolderCog } from "lucide-react";
+import { BookMarked, Bot, BrainCircuit, Database, FolderCog, Network } from "lucide-react";
 import type { TranslationKey } from "@/i18n";
 import type { ProjectSummary, WorkbenchSnapshot } from "@/types";
 import type {
@@ -24,6 +24,14 @@ export function projectSettingsSections(project: ProjectSummary, workbench: Work
       icon: <BrainCircuit size={16} />,
       label: t("projectSettings.vmmMemory"),
       detail: workbench.vmmMemory.projectDraft.hasOverride ? t("projectSettings.projectOverride") : t("projectSettings.inheritGlobal"),
+    },
+    {
+      id: "codebase-memory",
+      icon: <Network size={16} />,
+      label: "Codebase Memory",
+      detail: project.codebaseMemoryEnabled
+        ? t("projectSettings.codebaseMemory.enabled")
+        : t("projectSettings.codebaseMemory.disabled"),
     },
     {
       id: "knowledge-bases",

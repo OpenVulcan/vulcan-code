@@ -61,6 +61,9 @@ struct ValidatedProjectRow {
     /// Exact pinned state decoded from the numeric protocol flag.
     /// 从数值协议标记解码出的精确置顶状态。
     pinned: bool,
+    /// Exact Codebase Memory enablement decoded from the numeric protocol flag.
+    /// 从数值协议标记解码出的精确 Codebase Memory 启用状态。
+    codebase_memory_enabled: bool,
     /// Exact archive state decoded from the numeric protocol flag.
     /// 从数值协议标记解码出的精确归档状态。
     archived: bool,
@@ -109,6 +112,18 @@ fn validate_project_row(row: StoredProjectRow) -> Result<ValidatedProjectRow, St
             ));
         }
     };
+    // codebase_memory_enabled accepts only values produced by the project persistence protocol.
+    // codebase_memory_enabled 只接受项目持久化协议产生的值。
+    let codebase_memory_enabled = match row.codebase_memory_enabled {
+        0 => false,
+        1 => true,
+        value => {
+            return Err(format!(
+                "项目索引 `{}` 包含无效 Codebase Memory 启用标记 `{value}`。",
+                row.id
+            ));
+        }
+    };
     // archived must be exact before it can decide whether default-project seeding writes data.
     // archived 在决定默认项目播种是否写入数据前必须保持精确。
     let archived = match row.archived {
@@ -132,6 +147,7 @@ fn validate_project_row(row: StoredProjectRow) -> Result<ValidatedProjectRow, St
     Ok(ValidatedProjectRow {
         stored: row,
         pinned,
+        codebase_memory_enabled,
         archived,
         sort_order,
     })
@@ -426,7 +442,8 @@ async fn load_workspace_snapshot_with_runtime_state(
             row.icon_pack.clone(),
             row.icon_key.clone(),
             Vec::new(),
-        );
+        )
+        .with_codebase_memory_enabled(validated_row.codebase_memory_enabled);
 
         if validated_row.archived {
             archived_task_projects.push(project);
@@ -881,6 +898,7 @@ mod tests {
             sort_order: 0,
             icon_pack: None,
             icon_key: None,
+            codebase_memory_enabled: 0,
             archived: 0,
         }
     }
@@ -914,6 +932,10 @@ mod tests {
         // invalid_pinned 提供 0/1 协议之外的布尔标记。
         let mut invalid_pinned = valid_row.clone();
         invalid_pinned.pinned = 2;
+        // invalid_codebase_memory supplies an enablement flag outside the strict 0/1 protocol.
+        // invalid_codebase_memory 提供严格 0/1 协议之外的启用标记。
+        let mut invalid_codebase_memory = valid_row.clone();
+        invalid_codebase_memory.codebase_memory_enabled = 2;
         // invalid_archived supplies a lifecycle flag outside the 0/1 protocol.
         // invalid_archived 提供 0/1 协议之外的生命周期标记。
         let mut invalid_archived = valid_row.clone();
@@ -947,6 +969,11 @@ mod tests {
             validate_project_row(invalid_pinned)
                 .expect_err("invalid pinned flag should fail")
                 .contains("无效置顶标记")
+        );
+        assert!(
+            validate_project_row(invalid_codebase_memory)
+                .expect_err("invalid Codebase Memory flag should fail")
+                .contains("Codebase Memory 启用标记")
         );
         assert!(
             validate_project_row(invalid_archived)

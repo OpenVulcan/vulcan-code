@@ -644,6 +644,7 @@ fn build_prompt_compaction_launch_request(
     };
     ExecutionPreparationRequest {
         session_id,
+        managed_codebase_memory: None,
         execution_scope: vulcan_session_core::ExecutionScope::ContextCompaction {
             node_id: vulcan_session_core::SessionNodeId::from(session_id),
         },

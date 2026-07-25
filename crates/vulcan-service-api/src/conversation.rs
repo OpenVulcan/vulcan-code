@@ -319,6 +319,9 @@ pub enum ProjectSettingsDomain {
     /// Project-scoped Agent Skill overrides.
     /// 项目级 Agent Skill 覆盖。
     AgentSkills,
+    /// Project-scoped host-managed Codebase Memory settings.
+    /// 项目级宿主管理 Codebase Memory 设置。
+    CodebaseMemory,
 }
 
 /// Invalidates one independently loaded settings domain for one exact project.

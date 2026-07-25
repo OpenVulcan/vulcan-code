@@ -14,7 +14,12 @@ use crate::luaskills_runtime::{
     call_luaskills_tool_entry, luaskills_entry_args_schema,
     render_luaskills_invocation_result_text,
 };
-use crate::mcp::McpRuntimeToolBinding;
+use crate::mcp::{
+    HOST_MANAGED_CODEBASE_MEMORY_PARTITION_KEY, MANAGED_CODEBASE_MEMORY_SERVER_ID,
+    ManagedCodebaseMemoryExecutionContext, McpRuntimeToolBinding,
+    inject_managed_codebase_memory_context, is_managed_codebase_memory_read_only_tool,
+    model_visible_managed_codebase_memory_schema,
+};
 use crate::media_generation_compat::{
     configured_image_generation_parameters_schema, configured_music_cover_parameters_schema,
     configured_music_generation_parameters_schema, configured_speech_synthesis_parameters_schema,
@@ -136,6 +141,7 @@ pub fn build_vulcan_tools_manager(
     candidate_luaskills_tools: Vec<RuntimeEntryDescriptor>,
     candidate_luaskills_dispatch_tools: Vec<RuntimeEntryDescriptor>,
     candidate_mcp_tools: Vec<McpRuntimeToolBinding>,
+    managed_codebase_memory: Option<ManagedCodebaseMemoryExecutionContext>,
     ai_tool_configuration: PersistedAiToolConfiguration,
     ai_tool_fallback_aliases: Vec<AiToolFallbackAlias>,
     enabled_prompt_skill_names: Vec<String>,
@@ -419,19 +425,74 @@ pub fn build_vulcan_tools_manager(
     candidate_mcp_tools.sort_by(|left, right| left.id().cmp(right.id()));
 
     for tool in candidate_mcp_tools {
+        let is_managed_codebase_memory =
+            tool.partition_key() == HOST_MANAGED_CODEBASE_MEMORY_PARTITION_KEY;
+        if is_managed_codebase_memory {
+            let Some(context) = managed_codebase_memory.as_ref() else {
+                continue;
+            };
+            if tool.server_id() != Some(MANAGED_CODEBASE_MEMORY_SERVER_ID)
+                || context.authorization.resolve(context.session_id).is_err()
+                || !tool
+                    .origin_tool_name()
+                    .is_some_and(is_managed_codebase_memory_read_only_tool)
+            {
+                continue;
+            }
+        }
         let descriptor = mcp_tool_binding_to_vulcan(&tool);
         occupied_public_tool_ids.insert(descriptor.id.clone());
-        let parameters_schema = tool.args_schema().clone();
+        let parameters_schema = if is_managed_codebase_memory {
+            model_visible_managed_codebase_memory_schema(tool.args_schema().clone())
+        } else {
+            tool.args_schema().clone()
+        };
         let tool_name = tool.name().to_string();
+        let managed_context = managed_codebase_memory.clone();
         candidates.push(VulcanToolCandidate {
             descriptor,
             parameters_schema,
             ai_visible: true,
             plan_policy: VulcanPlanToolPolicy::HeuristicText(tool_name.clone()),
             request_streaming: None,
-            invoke: std::sync::Arc::new(move |args, _session_id| {
+            invoke: std::sync::Arc::new(move |args, session_id| {
                 let tool = tool.clone();
+                let managed_context = managed_context.clone();
                 Box::pin(async move {
+                    let args = if is_managed_codebase_memory {
+                        let context = managed_context.ok_or_else(|| {
+                            String::from(
+                                "Codebase Memory authorization is unavailable for this execution.",
+                            )
+                        })?;
+                        let session_id = session_id
+                            .as_deref()
+                            .ok_or_else(|| {
+                                String::from(
+                                    "Codebase Memory requires a host execution session identifier.",
+                                )
+                            })?
+                            .parse()
+                            .map_err(|error| {
+                                format!(
+                                    "Codebase Memory received an invalid host execution session identifier: {error}"
+                                )
+                            })?;
+                        // The root-session route is re-resolved on every invocation so disablement, removal, or reassignment invalidates old bindings.
+                        // 每次调用都会重新解析根会话路由，使停用、移除或重新归属立即使旧绑定失效。
+                        let root_route = context.authorization.resolve(context.session_id)?;
+                        if root_route.project_id != context.project_id {
+                            return Err(String::from(
+                                "Codebase Memory rejected the call because the session project route changed.",
+                            ));
+                        }
+                        let route = context
+                            .authorization
+                            .resolve_project(&context.project_id)?;
+                        inject_managed_codebase_memory_context(args, &route, session_id)?
+                    } else {
+                        args
+                    };
                     tool.invoke(args)
                         .await
                         .map(VulcanToolInvocationResult::from_model_output)

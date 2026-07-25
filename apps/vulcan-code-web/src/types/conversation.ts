@@ -524,7 +524,7 @@ export interface ProjectSettingsChangedDelta {
   projectId: string | null;
   // Exact independently loaded settings domain that changed.
   // 发生变化的准确独立加载设置领域。
-  domain: "vmm" | "agentSkills";
+  domain: "vmm" | "agentSkills" | "codebaseMemory";
 }
 
 // LuaSkillsManagedRuntimeProgressChangedDelta replaces only the active managed-runtime progress.

@@ -97,7 +97,15 @@ impl McpRuntimeHandle {
                         Some(plugin_id.clone()),
                         Some(*generation),
                     ),
+                    crate::mcp::config::McpServerSource::HostManagedCodebaseMemory => {
+                        (String::from("managed-codebase-memory"), None, None)
+                    }
                 };
+                // identity is read from the live transport so reconnects cannot retain stale initialize metadata.
+                // identity 从实时传输读取，避免重连后继续保留过期的 initialize 元数据。
+                let identity = transports
+                    .get(server_id)
+                    .and_then(|transport| transport.server_identity());
                 Some(McpRuntimeServerState {
                     id: server_id.clone(),
                     name: server.name.clone(),
@@ -108,6 +116,11 @@ impl McpRuntimeHandle {
                     endpoint: server.endpoint_summary.clone(),
                     status: server.status,
                     retry_count: retry_counts.get(server_id).copied().unwrap_or(0),
+                    protocol_version: identity
+                        .as_ref()
+                        .map(|value| value.protocol_version.clone()),
+                    server_product: identity.as_ref().map(|value| value.product.clone()),
+                    server_version: identity.as_ref().map(|value| value.version.clone()),
                     tool_count: server.visible_tool_descriptors().len(),
                     prompt_count: server.prompt_count,
                     resource_count: server.resource_count,
@@ -454,7 +467,9 @@ pub async fn bootstrap_mcp_runtime_access(
     for (partition_key, partition_servers) in grouped {
         match bootstrap_mcp_runtime(partition_servers).await {
             Ok(runtime) => {
-                if partition_key.starts_with("plugin:")
+                if (partition_key.starts_with("plugin:")
+                    || partition_key
+                        == crate::mcp::config::HOST_MANAGED_CODEBASE_MEMORY_PARTITION_KEY)
                     && let Err(error) = runtime.wait_until_ready(Duration::from_secs(15)).await
                 {
                     runtime.shutdown();
@@ -503,6 +518,40 @@ pub async fn replace_user_mcp_runtime_partition(
     let overview = configured_mcp_registry_overview(servers.clone());
     let runtime = bootstrap_mcp_runtime(servers).await?;
     Ok(current.with_replaced_user_partition(overview, runtime))
+}
+
+/// Prepares and atomically projects the host-managed Codebase Memory MCP partition.
+/// 准备并原子投影宿主管理的 Codebase Memory MCP 分区。
+///
+/// # Parameters
+/// 参数
+/// `current` owns retained user and plugin partitions, while `servers` must contain exactly one host-managed definition.
+/// `current` 持有保留的用户与插件分区，`servers` 必须包含且仅包含一个宿主管理定义。
+///
+/// # Returns
+/// 返回值
+/// Returns a new access generation only after initialize and complete tool discovery succeed.
+/// 仅在初始化与完整工具发现成功后返回新的访问代次。
+pub async fn replace_managed_codebase_memory_mcp_runtime_partition(
+    current: &McpRuntimeAccess,
+    servers: Vec<McpServerConfig>,
+) -> Result<McpRuntimeAccess, String> {
+    if servers.len() != 1
+        || servers.iter().any(|server| {
+            server.source != crate::mcp::config::McpServerSource::HostManagedCodebaseMemory
+        })
+    {
+        return Err(String::from(
+            "The managed Codebase Memory MCP partition requires exactly one host-managed server definition.",
+        ));
+    }
+    let overview = configured_mcp_registry_overview(servers.clone());
+    let runtime = bootstrap_mcp_runtime(servers).await?;
+    if let Err(error) = runtime.wait_until_ready(Duration::from_secs(15)).await {
+        runtime.shutdown();
+        return Err(error);
+    }
+    Ok(current.with_replaced_managed_codebase_memory_partition(overview, runtime))
 }
 
 /// Prepares and atomically projects one plugin MCP partition while retaining user and unrelated plugin partitions.

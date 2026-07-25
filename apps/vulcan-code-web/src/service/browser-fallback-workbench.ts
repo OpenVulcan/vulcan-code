@@ -81,7 +81,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     { id: "vulcan-workmem", name: "vulcan-workmem", path: "D:/openvulcan/vulcan-workmem", pinned: false },
   ],
   expandedProjectIds: ["preview", "calc", "test-project", "luaskills-packages", "vulcan-workmem"],
-  projectSettingsRevisions: { global: { vmm: 0, agentSkills: 0 }, byProject: {} },
+  projectSettingsRevisions: { global: { vmm: 0, agentSkills: 0, codebaseMemory: 0 }, byProject: {} },
   conversations: [
     { id: "preview", title: "Tauri WebUI migration preview", status: "Completed", lastUpdatedLabel: "now", projectId: "preview" },
     { id: "preview-intro", title: "Introduce yourself", status: "Completed", lastUpdatedLabel: "now", projectId: "preview" },

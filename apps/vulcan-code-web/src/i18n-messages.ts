@@ -668,6 +668,23 @@ export type TranslationKey =
   | "projectSettings.agentOverrideCount"
   | "projectSettings.agentInheritsGlobal"
   | "projectSettings.vmmTitle"
+  | "projectSettings.codebaseMemory.title"
+  | "projectSettings.codebaseMemory.description"
+  | "projectSettings.codebaseMemory.enabled"
+  | "projectSettings.codebaseMemory.disabled"
+  | "projectSettings.codebaseMemory.loading"
+  | "projectSettings.codebaseMemory.enable"
+  | "projectSettings.codebaseMemory.enableHint"
+  | "projectSettings.codebaseMemory.disableHint"
+  | "projectSettings.codebaseMemory.serviceStatus"
+  | "projectSettings.codebaseMemory.indexStatus"
+  | "projectSettings.codebaseMemory.lastIndexed"
+  | "projectSettings.codebaseMemory.revision"
+  | "projectSettings.codebaseMemory.unavailable"
+  | "projectSettings.codebaseMemory.reindex"
+  | "projectSettings.codebaseMemory.enabledSaved"
+  | "projectSettings.codebaseMemory.disabledSaved"
+  | "projectSettings.codebaseMemory.reindexAccepted"
   | "projectSettings.vmmDescription"
   | "projectSettings.vmmLoading"
   | "projectSettings.enableProjectOverride"
@@ -2158,6 +2175,23 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "projectSettings.agentOverrideCount": "当前项目有 {count} 条覆盖。",
     "projectSettings.agentInheritsGlobal": "未设置项目级覆盖，继承全局规则。",
     "projectSettings.vmmTitle": "项目级 VMM 记忆",
+    "projectSettings.codebaseMemory.title": "代码库记忆",
+    "projectSettings.codebaseMemory.description": "为当前项目启用宿主管理的多项目代码图谱、检索与变更感知能力。",
+    "projectSettings.codebaseMemory.enabled": "已启用托管服务",
+    "projectSettings.codebaseMemory.disabled": "默认关闭",
+    "projectSettings.codebaseMemory.loading": "正在加载 Codebase Memory 状态...",
+    "projectSettings.codebaseMemory.enable": "为此项目启用 Codebase Memory",
+    "projectSettings.codebaseMemory.enableHint": "项目会加入共享托管服务；会话只获得本项目的只读工具。",
+    "projectSettings.codebaseMemory.disableHint": "不会注册 AI 工具，也不会删除已有索引。",
+    "projectSettings.codebaseMemory.serviceStatus": "托管服务状态",
+    "projectSettings.codebaseMemory.indexStatus": "项目索引状态",
+    "projectSettings.codebaseMemory.lastIndexed": "最近成功索引",
+    "projectSettings.codebaseMemory.revision": "索引修订",
+    "projectSettings.codebaseMemory.unavailable": "暂不可用",
+    "projectSettings.codebaseMemory.reindex": "重建项目索引",
+    "projectSettings.codebaseMemory.enabledSaved": "已启用项目 Codebase Memory。",
+    "projectSettings.codebaseMemory.disabledSaved": "已停用项目 Codebase Memory，已有索引仍保留。",
+    "projectSettings.codebaseMemory.reindexAccepted": "项目索引重建请求已提交。",
     "projectSettings.vmmDescription": "覆盖当前项目的记忆开关、用户/项目映射与召回注入参数。",
     "projectSettings.vmmLoading": "正在加载项目 VMM 设置...",
     "projectSettings.enableProjectOverride": "启用项目覆盖",
@@ -3645,6 +3679,23 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "projectSettings.agentOverrideCount": "This project has {count} overrides.",
     "projectSettings.agentInheritsGlobal": "No project-level override is set; global rules are inherited.",
     "projectSettings.vmmTitle": "Project VMM memory",
+    "projectSettings.codebaseMemory.title": "Codebase Memory",
+    "projectSettings.codebaseMemory.description": "Enable host-managed multi-project code graph, search, and change awareness for this project.",
+    "projectSettings.codebaseMemory.enabled": "Managed service enabled",
+    "projectSettings.codebaseMemory.disabled": "Disabled by default",
+    "projectSettings.codebaseMemory.loading": "Loading Codebase Memory status...",
+    "projectSettings.codebaseMemory.enable": "Enable Codebase Memory for this project",
+    "projectSettings.codebaseMemory.enableHint": "The project joins the shared managed service; sessions receive read-only tools scoped to this project.",
+    "projectSettings.codebaseMemory.disableHint": "AI tools are not registered and existing indexes are retained.",
+    "projectSettings.codebaseMemory.serviceStatus": "Managed service status",
+    "projectSettings.codebaseMemory.indexStatus": "Project index status",
+    "projectSettings.codebaseMemory.lastIndexed": "Last successful index",
+    "projectSettings.codebaseMemory.revision": "Index revision",
+    "projectSettings.codebaseMemory.unavailable": "Unavailable",
+    "projectSettings.codebaseMemory.reindex": "Reindex project",
+    "projectSettings.codebaseMemory.enabledSaved": "Project Codebase Memory enabled.",
+    "projectSettings.codebaseMemory.disabledSaved": "Project Codebase Memory disabled; existing indexes were retained.",
+    "projectSettings.codebaseMemory.reindexAccepted": "Project reindex request submitted.",
     "projectSettings.vmmDescription": "Override memory enablement, user/project mapping, and recall injection parameters for this project.",
     "projectSettings.vmmLoading": "Loading project VMM settings...",
     "projectSettings.enableProjectOverride": "Enable project override",

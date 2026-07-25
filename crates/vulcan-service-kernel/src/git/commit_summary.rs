@@ -529,6 +529,7 @@ async fn run_git_commit_summary_model(
 ) -> Result<ExecutionRunReport, String> {
     let request = ExecutionPreparationRequest {
         session_id,
+        managed_codebase_memory: None,
         execution_scope: ExecutionScope::ContextCompaction {
             node_id: SessionNodeId::from(session_id),
         },
