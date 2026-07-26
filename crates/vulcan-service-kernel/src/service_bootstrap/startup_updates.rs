@@ -151,6 +151,7 @@ pub(crate) fn update_service_failure(
         startup_failure_steps(OffsetDateTime::now_utc(), &error),
         &logs,
     );
+    startup.recovery = error.recovery.clone();
     let mut workbench = fallback_workbench_snapshot(&logs);
     if let Ok(mut guard) = state.lock() {
         startup.ui_locale = guard.startup.ui_locale.clone();
@@ -160,6 +161,11 @@ pub(crate) fn update_service_failure(
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         workbench.revision = guard.workbench_generation;
         guard.workbench = workbench.clone();
+        if error.recovery.is_some() {
+            // agent_runtime is cleared only for the classified retry path that would otherwise retain a partial bootstrap runtime.
+            // agent_runtime 仅在已分类重试路径清除，避免保留部分引导运行时。
+            guard.agent_runtime = None;
+        }
     }
     mark_webui_service_discovery_failed(state);
     emit_service_snapshots(event_emitter, &startup, &workbench);

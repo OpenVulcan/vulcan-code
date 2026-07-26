@@ -3,6 +3,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt,
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
     sync::{Arc, Mutex},
@@ -24,6 +25,74 @@ pub(crate) struct SessionVmmCommandCommit {
     /// Authoritative state after the command completed.
     /// 命令完成后的权威状态。
     pub(crate) state: VmmSessionMemoryState,
+}
+
+/// Classifies controller-open failures without weakening strict VMM state validation.
+/// 在不削弱严格 VMM 状态校验的前提下分类控制器打开失败。
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) enum SessionVmmControllerOpenError {
+    /// A classified historical or damaged VMM attachment can be replaced only after explicit user authorization.
+    /// 已分类的历史或损坏 VMM 附件仅可在用户明确授权后替换。
+    RebuildRequired(String),
+    /// Every non-recoverable registry, storage, ownership, or validation failure.
+    /// 其他所有不可恢复的注册表、存储、所有权或校验失败。
+    Other(String),
+}
+
+impl SessionVmmControllerOpenError {
+    /// Returns whether this failure permits the isolated VMM rebuild startup action.
+    /// 返回该失败是否允许执行独立 VMM 重建启动操作。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` only for a storage-classified historical or damaged VMM attachment.
+    /// 仅对存储层已分类的历史或损坏 VMM 附件返回 `true`。
+    pub(crate) fn requires_rebuild(&self) -> bool {
+        matches!(self, Self::RebuildRequired(_))
+    }
+
+    /// Searches the stable human-readable diagnostic retained by this error.
+    /// 搜索该错误保留的稳定人类可读诊断。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `needle` is the exact diagnostic fragment to search for.
+    /// `needle` 是要搜索的精确诊断片段。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Whether the retained message contains the requested fragment.
+    /// 返回保留消息是否包含所请求片段。
+    #[cfg(test)]
+    pub(crate) fn contains(&self, needle: &str) -> bool {
+        self.to_string().contains(needle)
+    }
+}
+
+impl fmt::Display for SessionVmmControllerOpenError {
+    /// Formats the original strict-open diagnostic without adding a fallback path.
+    /// 原样格式化严格打开诊断，不添加回退路径。
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RebuildRequired(message) | Self::Other(message) => formatter.write_str(message),
+        }
+    }
+}
+
+impl From<String> for SessionVmmControllerOpenError {
+    /// Converts an ordinary controller-open failure into the non-recoverable variant.
+    /// 将普通控制器打开失败转换为不可恢复变体。
+    fn from(message: String) -> Self {
+        Self::Other(message)
+    }
+}
+
+impl From<SessionVmmControllerOpenError> for String {
+    /// Preserves existing string-error boundaries outside startup recovery classification.
+    /// 在启动恢复分类之外保留既有字符串错误边界。
+    fn from(error: SessionVmmControllerOpenError) -> Self {
+        error.to_string()
+    }
 }
 
 /// Single serialized VMM state owner for one exact host session.
@@ -61,12 +130,29 @@ impl SessionVmmController {
     /// 返回值
     /// A ready controller or an explicit strict-load error.
     /// 返回就绪控制器或明确的严格加载错误。
-    fn open(data_root: &Path, session_id: Uuid, updated_at: &str) -> Result<Self, String> {
+    fn open(
+        data_root: &Path,
+        session_id: Uuid,
+        updated_at: &str,
+    ) -> Result<Self, SessionVmmControllerOpenError> {
+        // rebuild_reason is produced only by the storage adapter's exact historical-or-damaged classifier.
+        // rebuild_reason 仅由存储适配器的精确历史或损坏分类器产生。
+        if let Some(rebuild_reason) =
+            vulcan_workspace_store::workspace_store::core_session_vmm_rebuild_reason(
+                data_root, session_id,
+            )
+            .map_err(SessionVmmControllerOpenError::Other)?
+        {
+            return Err(SessionVmmControllerOpenError::RebuildRequired(
+                rebuild_reason,
+            ));
+        }
         // loaded_state is accepted only from the new Core controller document format.
         // loaded_state 仅接受新的 Core 控制器文档格式。
         let loaded_state = vulcan_workspace_store::workspace_store::load_core_session_vmm_state(
             data_root, session_id,
-        )?;
+        )
+        .map_err(SessionVmmControllerOpenError::Other)?;
         // state becomes the controller's sole mutable copy.
         // state 成为控制器唯一的可变副本。
         let state = match loaded_state {
@@ -293,7 +379,7 @@ impl SessionVmmControllerRegistry {
         data_root: &Path,
         session_id: Uuid,
         updated_at: &str,
-    ) -> Result<Arc<SessionVmmController>, String> {
+    ) -> Result<Arc<SessionVmmController>, SessionVmmControllerOpenError> {
         // guard makes the existence check and insertion one atomic registry operation.
         // guard 使存在性检查与插入成为一次原子注册表操作。
         let mut guard = self
@@ -303,7 +389,8 @@ impl SessionVmmControllerRegistry {
         if guard.lifecycle_fences.contains(&session_id) {
             return Err(format!(
                 "Core VMM controller for session `{session_id}` cannot open during a lifecycle transition."
-            ));
+            )
+            .into());
         }
         if let Some(controller) = guard.controllers.get(&session_id) {
             if controller.data_root != data_root {
@@ -311,7 +398,8 @@ impl SessionVmmControllerRegistry {
                     "Core VMM controller data root mismatch for session `{session_id}`: registered `{}` but requested `{}`.",
                     controller.data_root.display(),
                     data_root.display()
-                ));
+                )
+                .into());
             }
             return Ok(controller.clone());
         }
@@ -569,6 +657,110 @@ mod tests {
             .get_or_open(controller_root.data_root(), session_id, "3")
             .expect("reopen controller");
         assert!(!Arc::ptr_eq(&first, &reopened));
+    }
+
+    /// Verifies a historical flat VMM document is classified for explicit startup recovery.
+    /// 验证历史扁平 VMM 文档会被分类为可明确执行的启动恢复。
+    #[test]
+    fn historical_flat_state_requires_explicit_rebuild() {
+        // session_id identifies the exact historical controller owner.
+        // session_id 标识精确的历史控制器所有者。
+        let session_id = Uuid::new_v4();
+        // controller_root owns the production-shaped isolated session directory.
+        // controller_root 持有生产结构的隔离会话目录。
+        let controller_root = TestControllerRuntimeRoot::new(session_id);
+        // session_dir is the exact directory created by the shared test fixture.
+        // session_dir 是共享测试夹具创建的精确目录。
+        let session_dir = controller_root
+            .data_root()
+            .join("sessions")
+            .join("project-a")
+            .join(format!("1970-01-01-{session_id}"));
+        // historical_state is the removed flat VMM document written before controller opening.
+        // historical_state 是控制器打开前写入的已移除扁平 VMM 文档。
+        let historical_state =
+            VmmSessionMemoryState::new(session_id.to_string(), "1").expect("create flat VMM state");
+        std::fs::write(
+            session_dir.join("vmm.json"),
+            serde_json::to_vec_pretty(&historical_state).expect("encode flat VMM state"),
+        )
+        .expect("write flat VMM state");
+        // registry must not publish a partial controller for the classified historical state.
+        // registry 不得为已分类历史状态发布部分控制器。
+        let registry = SessionVmmControllerRegistry::default();
+
+        let error = registry
+            .get_or_open(controller_root.data_root(), session_id, "2")
+            .expect_err("historical VMM state must require rebuild");
+
+        assert!(error.requires_rebuild());
+        assert!(error.contains("Unsupported historical VMM state format"));
+        assert!(!registry.contains(session_id).expect("inspect registry"));
+    }
+
+    /// Verifies a damaged attachment is rebuilt only after classification and accepts later memory commands.
+    /// 验证损坏附件仅在分类后重建，并且能够接受后续记忆命令。
+    #[test]
+    fn damaged_state_rebuild_accepts_later_memory_commands() {
+        // session_id identifies the exact damaged VMM attachment owner.
+        // session_id 标识精确的损坏 VMM 附件所有者。
+        let session_id = Uuid::new_v4();
+        // controller_root owns the production-shaped isolated conversation directory.
+        // controller_root 持有生产结构的隔离会话目录。
+        let controller_root = TestControllerRuntimeRoot::new(session_id);
+        // session_dir is the exact conversation directory whose transcript stays independent.
+        // session_dir 是转录保持独立的精确会话目录。
+        let session_dir = controller_root
+            .data_root()
+            .join("sessions")
+            .join("project-a")
+            .join(format!("1970-01-01-{session_id}"));
+        std::fs::write(
+            session_dir.join("vmm.json"),
+            b"{\"schema_version\":2,\"controller_kind\":",
+        )
+        .expect("write damaged VMM attachment");
+        // registry must reject the damaged attachment without publishing a controller.
+        // registry 必须拒绝损坏附件且不得发布控制器。
+        let registry = SessionVmmControllerRegistry::default();
+        // open_error proves storage classification reaches the controller boundary.
+        // open_error 证明存储分类能够到达控制器边界。
+        let open_error = registry
+            .get_or_open(controller_root.data_root(), session_id, "2")
+            .expect_err("damaged VMM attachment must require rebuild");
+
+        assert!(open_error.requires_rebuild());
+        assert!(open_error.contains("Damaged Core VMM attachment"));
+        assert!(!registry.contains(session_id).expect("inspect registry"));
+        assert!(
+            vulcan_workspace_store::workspace_store::rebuild_damaged_core_session_vmm_state(
+                controller_root.data_root(),
+                session_id,
+                "3",
+            )
+            .expect("rebuild damaged VMM attachment")
+        );
+        // controller opens only after the explicit rebuild publishes a clean current document.
+        // controller 仅在明确重建发布干净当前文档后打开。
+        let controller = registry
+            .get_or_open(controller_root.data_root(), session_id, "4")
+            .expect("open rebuilt VMM controller");
+        // commit is the first durable memory command after the damaged attachment was discarded.
+        // commit 是损坏附件被丢弃后的首个持久化记忆命令。
+        let commit = controller
+            .execute_command("post-rebuild-memory-command", "5", |_| Ok(()))
+            .expect("commit post-rebuild memory command");
+        // durable_state proves the rebuilt attachment remains writable through the normal controller path.
+        // durable_state 证明重建附件仍可通过正常控制器路径写入。
+        let durable_state = vulcan_workspace_store::workspace_store::load_core_session_vmm_state(
+            controller_root.data_root(),
+            session_id,
+        )
+        .expect("load post-rebuild VMM state")
+        .expect("post-rebuild VMM state must exist");
+
+        assert!(commit.applied);
+        assert_eq!(durable_state, commit.state);
     }
 
     /// Verifies one registered session identity cannot be rebound to another durable data root.

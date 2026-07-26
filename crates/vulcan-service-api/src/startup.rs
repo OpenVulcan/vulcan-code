@@ -60,6 +60,29 @@ pub enum StartupStepStatus {
     Error,
 }
 
+/// Describes one explicit user-authorized recovery available for a failed startup.
+/// 描述启动失败后可由用户明确授权执行的一项恢复操作。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StartupRecoverySnapshot {
+    /// Stable recovery kind used by clients to select the correct action and warning text.
+    /// 客户端用于选择正确操作与警告文案的稳定恢复类型。
+    pub kind: StartupRecoveryKind,
+    /// Exact session whose isolated VMM state can be discarded and rebuilt.
+    /// 可丢弃并重建独立 VMM 状态的精确会话标识。
+    pub session_id: String,
+}
+
+/// Identifies the destructive scope of one startup recovery action.
+/// 标识单项启动恢复操作的破坏范围。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum StartupRecoveryKind {
+    /// Discard only one session's VMM-owned artifacts and rebuild clean controller state.
+    /// 仅丢弃一个会话的 VMM 所有工件并重建干净的控制器状态。
+    RebuildSessionVmm,
+}
+
 /// Provides a complete startup snapshot for the WebUI.
 /// 为 WebUI 提供完整启动快照。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -78,6 +101,10 @@ pub struct StartupSnapshot {
     /// Ordered startup steps displayed by clients.
     /// 客户端展示的有序启动步骤。
     pub steps: Vec<StartupStepSnapshot>,
+    /// Optional explicit recovery offered only for a classified startup failure.
+    /// 仅针对已分类启动失败提供的可选明确恢复操作。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<StartupRecoverySnapshot>,
     /// Recent startup log lines.
     /// 最近启动日志行。
     pub recent_logs: Vec<String>,

@@ -5,7 +5,10 @@ import {
   hasServiceRuntime,
   serviceBootstrapErrorIsRetryable,
 } from "@/service/webui-service-runtime";
-import { loadStartupSnapshot } from "@/service/workbench-snapshot-service";
+import {
+  loadStartupSnapshot,
+  rebuildStartupSessionVmm,
+} from "@/service/workbench-snapshot-service";
 
 // LazyWorkbenchApp loads the full workbench only after the startup gate reports readiness.
 // LazyWorkbenchApp 仅在启动门报告就绪后加载完整工作台。
@@ -50,6 +53,12 @@ function BootGate(props: {
   // error stores a terminal boot error.
   // error 保存终态启动错误。
   const [error, setError] = React.useState<string | null>(null);
+  // recoveryPending disables duplicate destructive recovery requests.
+  // recoveryPending 禁用重复的破坏性恢复请求。
+  const [recoveryPending, setRecoveryPending] = React.useState(false);
+  // recoveryError stores the latest explicit recovery request failure.
+  // recoveryError 保存最近一次明确恢复请求的失败信息。
+  const [recoveryError, setRecoveryError] = React.useState<string | null>(null);
   // onReadyRef keeps the latest callback without restarting the boot probe effect.
   // onReadyRef 保存最新回调，同时避免重启动启动探测 effect。
   const onReadyRef = React.useRef(props.onReady);
@@ -87,6 +96,9 @@ function BootGate(props: {
         }
         setStartup(nextStartup);
         setError(null);
+        if (nextStartup.phase !== "failed") {
+          setRecoveryError(null);
+        }
         if (nextStartup.ready) {
           onReadyRef.current({ startup: nextStartup });
           return;
@@ -115,10 +127,50 @@ function BootGate(props: {
     };
   }, []);
 
+  // recoverHistoricalVmmState invokes only the recovery already classified and retained by the service.
+  // recoverHistoricalVmmState 仅调用服务端已分类并保留的恢复操作。
+  async function recoverHistoricalVmmState() {
+    if (recoveryPending || startup?.recovery?.kind !== "rebuildSessionVmm") {
+      return;
+    }
+    setRecoveryPending(true);
+    setRecoveryError(null);
+    try {
+      const nextStartup = await rebuildStartupSessionVmm();
+      setStartup(nextStartup);
+      setError(null);
+    } catch (nextError) {
+      setRecoveryError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setRecoveryPending(false);
+    }
+  }
+
   if (error) {
     return <BootErrorScreen error={error} uiLocale={startup?.uiLocale} />;
   }
 
+  if (startup?.phase === "failed") {
+    return (
+      <BootErrorScreen
+        error={startupFailureMessage(startup)}
+        onRecover={() => { void recoverHistoricalVmmState(); }}
+        recovering={recoveryPending}
+        recovery={startup.recovery}
+        recoveryError={recoveryError}
+        uiLocale={startup.uiLocale}
+      />
+    );
+  }
+
   return <BootLoadingScreen startup={startup} />;
+}
+
+// startupFailureMessage resolves the failed startup step before falling back to retained service logs.
+// startupFailureMessage 优先解析失败启动步骤，随后回退到服务端保留日志。
+function startupFailureMessage(startup: StartupSnapshot): string {
+  return startup.steps.find((step) => step.status === "error")?.message
+    ?? startup.recentLogs[0]
+    ?? "Unknown startup failure";
 }
 

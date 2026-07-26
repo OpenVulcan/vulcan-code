@@ -54,7 +54,7 @@ async fn dispatch_known_service_rpc(
 ) -> Result<ServiceRpcDispatch, String> {
     // outcome is reused because each router either claims exact ownership or leaves it untouched.
     // outcome 被复用，因为每个路由要么声明精确所有权，要么保持未处理。
-    let outcome = workspace_io::dispatch(state.clone(), method, params).await?;
+    let outcome = workspace_io::dispatch(app.clone(), state.clone(), method, params).await?;
     if outcome.is_handled() {
         return Ok(outcome);
     }

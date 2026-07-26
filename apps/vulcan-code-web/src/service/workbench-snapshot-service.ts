@@ -62,6 +62,12 @@ export async function loadStartupSnapshot(): Promise<StartupSnapshot> {
   return serviceClient.request<StartupSnapshot>("startup.snapshot");
 }
 
+// rebuildStartupSessionVmm discards only the service-classified session VMM artifacts and retries startup.
+// rebuildStartupSessionVmm 仅丢弃服务端已分类的会话 VMM 工件并重试启动。
+export async function rebuildStartupSessionVmm(): Promise<StartupSnapshot> {
+  return serviceClient.request<StartupSnapshot>("startup.rebuildSessionVmm");
+}
+
 // loadWorkbenchSnapshot loads workbench state from the local service or fallback data.
 // loadWorkbenchSnapshot 从本地服务或回退数据加载工作台状态。
 export async function loadWorkbenchSnapshot(): Promise<WorkbenchSnapshot> {

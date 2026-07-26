@@ -2,6 +2,7 @@
 //! 工作区输入输出 RPC 路由。
 
 use super::*;
+use crate::service_bootstrap::service_rebuild_startup_session_vmm;
 
 /// Exact public RPC wire names owned by this domain router.
 /// 本领域路由持有的精确公开 RPC 线协议名称。
@@ -9,6 +10,8 @@ use super::*;
 pub(super) const RPC_METHODS: &[&str] = &[
     "startup.snapshot",
     "service_startup_snapshot",
+    "startup.rebuildSessionVmm",
+    "service_rebuild_startup_session_vmm",
     "workbench.snapshot",
     "service_workbench_snapshot",
     "workspace.diff.snapshot",
@@ -30,6 +33,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
 ///
 /// # Parameters
 /// 参数
+/// `app` emits startup recovery snapshots and retry progress.
+/// `app` 发出启动恢复快照与重试进度。
 /// `state` owns service data, `method` is the exact wire name, and `params` is the normalized object.
 /// `state` 持有服务数据，`method` 是精确线协议名称，`params` 是归一化对象。
 ///
@@ -38,6 +43,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
 /// Returns `Handled` with the service result, `Unknown` for another domain, or a parameter parsing error.
 /// 返回携带服务结果的 `Handled`、表示其他领域的 `Unknown`，或参数解析错误。
 pub(super) async fn dispatch(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     method: &str,
     params: &Value,
@@ -47,6 +53,9 @@ pub(super) async fn dispatch(
     let result = match method {
         "startup.snapshot" | "service_startup_snapshot" => {
             rpc_json_result(service_startup_snapshot(state))
+        }
+        "startup.rebuildSessionVmm" | "service_rebuild_startup_session_vmm" => {
+            rpc_json_result(service_rebuild_startup_session_vmm(state, app))
         }
         "workbench.snapshot" | "service_workbench_snapshot" => {
             rpc_json_result(service_workbench_snapshot(state))

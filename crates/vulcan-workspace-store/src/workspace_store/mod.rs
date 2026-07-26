@@ -34,14 +34,14 @@ pub use self::segmented_session_store::find_segmented_session_directory_for_task
 use self::segmented_session_store::{
     SegmentPolicy, SegmentedSessionCreateRequest, SegmentedSessionEventInput,
     SegmentedSessionEventKind, append_segmented_boundary_events, append_segmented_session_events,
-    backup_runtime_log_before_compaction, create_segmented_session_in_location,
-    find_segmented_session_directory, find_segmented_session_directory_by_id,
-    load_core_vmm_controller_state, load_session_boundary_state, read_runtime_log_lines,
-    read_segmented_session_event_window, read_state, record_runtime_audit_event,
-    record_runtime_injection_applied, replace_session_boundary_state,
-    reset_vmm_state_for_history_rewrite, segmented_session_directory,
-    segmented_session_directory_exists, state_document_from_runtime_state,
-    write_core_vmm_controller_state, write_state,
+    backup_runtime_log_before_compaction, core_vmm_rebuild_reason,
+    create_segmented_session_in_location, find_segmented_session_directory,
+    find_segmented_session_directory_by_id, load_core_vmm_controller_state,
+    load_session_boundary_state, read_runtime_log_lines, read_segmented_session_event_window,
+    read_state, record_runtime_audit_event, record_runtime_injection_applied,
+    replace_session_boundary_state, reset_vmm_state_for_history_rewrite,
+    segmented_session_directory, segmented_session_directory_exists,
+    state_document_from_runtime_state, write_core_vmm_controller_state, write_state,
 };
 use self::session_addon_store::read_session_addon_state;
 pub use goal_store::{
@@ -117,6 +117,36 @@ pub fn load_core_session_vmm_state(
     load_core_vmm_controller_state(&session_dir, &session_id_text)
 }
 
+/// Returns the exact rebuild reason when one session contains a rejected historical or damaged VMM attachment.
+/// 当单个会话包含已拒绝的历史或损坏 VMM 附件时返回精确重建原因。
+///
+/// # Parameters
+/// 参数
+/// `data_root` is the controller-managed Vulcan data root.
+/// `data_root` 是控制器管理的 Vulcan 数据根目录。
+/// `session_id` is the exact session inspected before controller creation.
+/// `session_id` 是控制器创建前接受检查的精确会话。
+///
+/// # Returns
+/// 返回值
+/// A user-recoverable reason only for classified historical or damaged VMM artifacts; clean or current state returns `None`.
+/// 仅对已分类的历史或损坏 VMM 工件返回用户可恢复原因；干净或当前状态返回 `None`。
+pub fn core_session_vmm_rebuild_reason(
+    data_root: &Path,
+    session_id: SessionId,
+) -> Result<Option<String>, String> {
+    // session_id_text is the canonical owner used by both lookup and diagnostics.
+    // session_id_text 是查找与诊断共同使用的规范所有者。
+    let session_id_text = session_id.to_string();
+    // session_dir resolves only an already indexed active or archived session.
+    // session_dir 仅解析已建立索引的活动或归档会话。
+    let Some(session_dir) = find_segmented_session_directory_by_id(data_root, &session_id_text)?
+    else {
+        return Ok(None);
+    };
+    core_vmm_rebuild_reason(&session_dir, &session_id_text)
+}
+
 /// Persists one candidate state through the strict Core VMM storage adapter.
 /// 通过严格的 Core VMM 存储适配器持久化一份候选状态。
 ///
@@ -178,6 +208,52 @@ pub fn delete_core_session_vmm_state(
         return Ok(false);
     };
     reset_vmm_state_for_history_rewrite(&session_dir)?;
+    Ok(true)
+}
+
+/// Replaces one classified damaged VMM attachment with an empty current-format document.
+/// 使用空的当前格式文档替换一个已分类的损坏 VMM 附件。
+///
+/// # Parameters
+/// 参数
+/// `data_root` is the controller-managed Vulcan data root.
+/// `data_root` 是控制器管理的 Vulcan 数据根目录。
+/// `session_id` is the exact session whose derived VMM memory is being rebuilt.
+/// `session_id` 是正在重建派生 VMM 记忆的精确会话。
+/// `updated_at` is the timestamp assigned to the new empty memory state.
+/// `updated_at` 是分配给新空记忆状态的时间戳。
+///
+/// # Returns
+/// 返回值
+/// `true` only after a classified damaged attachment is replaced without changing the session transcript.
+/// 仅在已分类损坏附件被替换且会话转录未改变后返回 `true`。
+pub fn rebuild_damaged_core_session_vmm_state(
+    data_root: &Path,
+    session_id: SessionId,
+    updated_at: &str,
+) -> Result<bool, String> {
+    // session_id_text is the canonical key shared by classification, reset, and the new document.
+    // session_id_text 是分类、重置与新文档共同使用的规范键。
+    let session_id_text = session_id.to_string();
+    // session_dir resolves only an existing active or archived conversation.
+    // session_dir 仅解析一个已存在的活动或归档会话。
+    let Some(session_dir) = find_segmented_session_directory_by_id(data_root, &session_id_text)?
+    else {
+        return Ok(false);
+    };
+    // rebuild_reason gates destructive VMM reset to a storage-classified damaged attachment.
+    // rebuild_reason 将破坏性 VMM 重置限制为存储层已分类的损坏附件。
+    let Some(_rebuild_reason) = core_vmm_rebuild_reason(&session_dir, &session_id_text)? else {
+        return Err(format!(
+            "Session `{session_id}` VMM attachment is healthy or absent and cannot be rebuilt."
+        ));
+    };
+    // replacement_state contains no recalled memory and uses only the current strict document schema.
+    // replacement_state 不包含任何召回记忆，并且仅使用当前严格文档结构。
+    let replacement_state =
+        vulcan_vmm::VmmSessionMemoryState::new(session_id_text.clone(), updated_at)?;
+    reset_vmm_state_for_history_rewrite(&session_dir)?;
+    write_core_vmm_controller_state(&session_dir, &session_id_text, &replacement_state)?;
     Ok(true)
 }
 

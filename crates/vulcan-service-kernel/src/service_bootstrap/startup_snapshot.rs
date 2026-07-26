@@ -32,6 +32,7 @@ pub(crate) fn startup_snapshot_with_phase(
         } else {
             steps
         },
+        recovery: None,
         recent_logs: logs.to_vec(),
     }
 }

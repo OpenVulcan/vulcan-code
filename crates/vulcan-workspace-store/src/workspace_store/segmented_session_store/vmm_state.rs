@@ -90,6 +90,84 @@ pub(super) fn vmm_state_path(session_dir: &Path) -> PathBuf {
     session_dir.join(SEGMENTED_VMM_STATE_FILE)
 }
 
+/// Classifies only known historical or damaged VMM artifacts that an explicit clean rebuild can remove.
+/// 仅分类可由明确干净重建移除的已知历史或损坏 VMM 工件。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the exact segmented session directory.
+/// `session_dir` 是精确的分段会话目录。
+/// `session_id` is the exact owner included in the recovery diagnostic.
+/// `session_id` 是恢复诊断中包含的精确所有者。
+///
+/// # Returns
+/// 返回值
+/// A precise rebuild reason for a known historical or damaged format, `None` for current or absent state, or an I/O inspection error.
+/// 对已知历史或损坏格式返回精确重建原因；当前或缺失状态返回 `None`；I/O 检查失败时返回错误。
+pub(in crate::workspace_store) fn core_vmm_rebuild_reason(
+    session_dir: &Path,
+    session_id: &str,
+) -> Result<Option<String>, String> {
+    if let Some(reason) = historical_vmm_marker_rebuild_reason(session_dir, session_id)? {
+        return Ok(Some(reason));
+    }
+    // path is the sole current VMM document location inspected for the removed flat schema.
+    // path 是用于检查已移除扁平结构的唯一当前 VMM 文档位置。
+    let path = vmm_state_path(session_dir);
+    // guard serializes classification with atomic document publication.
+    // guard 将分类过程与文档原子发布串行化。
+    let _guard = segmented_state_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
+    match fs::metadata(&path) {
+        Ok(metadata) if metadata.len() > VMM_SESSION_MEMORY_MAX_BYTES as u64 => {
+            return Ok(Some(damaged_vmm_rebuild_reason(
+                &path,
+                &format!(
+                    "document size {} exceeds the {} byte limit",
+                    metadata.len(),
+                    VMM_SESSION_MEMORY_MAX_BYTES
+                ),
+            )));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(to_store_error(error)),
+    }
+    // encoded preserves the distinction between filesystem errors and recoverable document corruption.
+    // encoded 保留文件系统错误与可恢复文档损坏之间的区别。
+    let encoded = fs::read(&path).map_err(to_store_error)?;
+    // raw_value is decoded only after a successful physical read so malformed JSON is recoverable without masking I/O failures.
+    // raw_value 仅在物理读取成功后解码，使损坏 JSON 可恢复且不会掩盖 I/O 故障。
+    let raw_value = match serde_json::from_slice::<Value>(&encoded) {
+        Ok(raw_value) => raw_value,
+        Err(error) => {
+            return Ok(Some(damaged_vmm_rebuild_reason(
+                &path,
+                &format!("JSON parsing failed: {error}"),
+            )));
+        }
+    };
+    if let Some(reason) = historical_flat_vmm_rebuild_reason(&path, &raw_value) {
+        return Ok(Some(reason));
+    }
+    // document proves the current envelope has every required field and no unsupported compatibility data.
+    // document 用于证明当前信封包含全部必填字段且没有不受支持的兼容数据。
+    let document = match serde_json::from_value::<CoreVmmControllerDocument>(raw_value) {
+        Ok(document) => document,
+        Err(error) => {
+            return Ok(Some(damaged_vmm_rebuild_reason(
+                &path,
+                &format!("strict document decoding failed: {error}"),
+            )));
+        }
+    };
+    if let Err(error) = validate_core_vmm_controller_document(&document, session_id) {
+        return Ok(Some(damaged_vmm_rebuild_reason(&path, &error)));
+    }
+    Ok(None)
+}
+
 /// Strictly loads the Core-owned VMM controller state for one session directory.
 /// 严格加载单个会话目录中由 Core 所有的 VMM 控制器状态。
 ///
@@ -146,13 +224,8 @@ pub(in crate::workspace_store) fn load_core_vmm_controller_state(
                 path.display()
             )
         })?;
-    if raw_value.get("controller_kind").is_none()
-        && (raw_value.get("revision").is_some() || raw_value.get("active_leases").is_some())
-    {
-        return Err(format!(
-            "Unsupported historical VMM state format in `{}`; automatic migration is disabled.",
-            path.display()
-        ));
+    if let Some(reason) = historical_flat_vmm_rebuild_reason(&path, &raw_value) {
+        return Err(reason);
     }
     // document is decoded only after the historical format check so the diagnostic is intentional.
     // document 仅在历史格式检查后解码，使诊断具有明确含义。
@@ -305,6 +378,30 @@ fn validate_core_vmm_controller_document(
 /// Success only when no historical marker exists.
 /// 仅在不存在历史标记时返回成功。
 fn reject_historical_vmm_markers(session_dir: &Path, session_id: &str) -> Result<(), String> {
+    if let Some(reason) = historical_vmm_marker_rebuild_reason(session_dir, session_id)? {
+        return Err(reason);
+    }
+    Ok(())
+}
+
+/// Returns the exact historical marker diagnostic without mutating any session artifact.
+/// 在不修改任何会话工件的情况下返回精确历史标记诊断。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the exact owning session directory.
+/// `session_dir` 是精确的所属会话目录。
+/// `session_id` is the owner included in the diagnostic.
+/// `session_id` 是诊断中包含的所有者。
+///
+/// # Returns
+/// 返回值
+/// The first deterministic historical marker reason, or `None` when no marker exists.
+/// 返回首个确定的历史标记原因；不存在标记时返回 `None`。
+fn historical_vmm_marker_rebuild_reason(
+    session_dir: &Path,
+    session_id: &str,
+) -> Result<Option<String>, String> {
     // marker_names are the removed formats that Core intentionally never replays.
     // marker_names 是 Core 明确不再重放的已移除格式。
     let marker_names = [
@@ -317,13 +414,60 @@ fn reject_historical_vmm_markers(session_dir: &Path, session_id: &str) -> Result
         // marker_path 独立检查，以报告精确的违规工件。
         let marker_path = session_dir.join(marker_name);
         if marker_path.try_exists().map_err(to_store_error)? {
-            return Err(format!(
+            return Ok(Some(format!(
                 "Session `{session_id}` contains unsupported historical VMM artifact `{}`; automatic migration and replay are disabled.",
                 marker_path.display()
-            ));
+            )));
         }
     }
-    Ok(())
+    Ok(None)
+}
+
+/// Returns the rebuild diagnostic for the removed flat VMM document schema.
+/// 返回已移除扁平 VMM 文档结构对应的重建诊断。
+///
+/// # Parameters
+/// 参数
+/// `path` is the exact `vmm.json` path used in the diagnostic.
+/// `path` 是诊断中使用的精确 `vmm.json` 路径。
+/// `raw_value` is the already decoded root JSON value.
+/// `raw_value` 是已解码的根 JSON 值。
+///
+/// # Returns
+/// 返回值
+/// A rebuild reason only when the removed flat-schema markers are present.
+/// 仅在已移除扁平结构标记存在时返回重建原因。
+fn historical_flat_vmm_rebuild_reason(path: &Path, raw_value: &Value) -> Option<String> {
+    if raw_value.get("controller_kind").is_none()
+        && (raw_value.get("revision").is_some() || raw_value.get("active_leases").is_some())
+    {
+        return Some(format!(
+            "Unsupported historical VMM state format in `{}`; automatic migration is disabled.",
+            path.display()
+        ));
+    }
+    None
+}
+
+/// Builds the recovery diagnostic for one readable but invalid VMM attachment.
+/// 为一个可读取但无效的 VMM 附件构建恢复诊断。
+///
+/// # Parameters
+/// 参数
+/// `path` is the exact damaged `vmm.json` attachment.
+/// `path` 是精确的损坏 `vmm.json` 附件。
+/// `detail` is the validated format failure that distinguishes corruption from I/O failure.
+/// `detail` 是用于区分数据损坏与 I/O 故障的已验证格式失败信息。
+///
+/// # Returns
+/// 返回值
+/// A diagnostic authorizing explicit memory-only rebuild while preserving the session transcript.
+/// 返回允许明确执行仅记忆重建且保留会话转录的诊断。
+fn damaged_vmm_rebuild_reason(path: &Path, detail: &str) -> String {
+    format!(
+        "Damaged Core VMM attachment `{}` can be discarded and rebuilt without removing the session transcript: {detail}.",
+        path.display()
+    )
 }
 
 /// Removes VMM-owned artifacts after an explicit destructive history rewrite.
@@ -476,8 +620,11 @@ mod tests {
         let loaded = load_core_vmm_controller_state(directory.path(), "session-a")
             .expect("load Core VMM document")
             .expect("Core VMM document should exist");
+        let rebuild_reason = core_vmm_rebuild_reason(directory.path(), "session-a")
+            .expect("classify current Core VMM document");
 
         assert_eq!(loaded, state);
+        assert_eq!(rebuild_reason, None);
     }
 
     /// Verifies the historical flat document is rejected without migration or quarantine.
@@ -495,8 +642,12 @@ mod tests {
 
         let error = load_core_vmm_controller_state(directory.path(), "session-a")
             .expect_err("historical state must be rejected");
+        let rebuild_reason = core_vmm_rebuild_reason(directory.path(), "session-a")
+            .expect("classify historical state")
+            .expect("historical state must expose a rebuild reason");
 
         assert!(error.contains("Unsupported historical VMM state format"));
+        assert_eq!(rebuild_reason, error);
         assert!(vmm_state_path(directory.path()).exists());
     }
 
@@ -609,8 +760,8 @@ mod tests {
         assert!(error.contains("found `session-a`"));
     }
 
-    /// Verifies malformed JSON is rejected without replacement, quarantine, or migration.
-    /// 验证格式损坏的 JSON 会被拒绝，且不会被替换、隔离或迁移。
+    /// Verifies malformed JSON is classified for explicit rebuild without automatic mutation.
+    /// 验证格式损坏的 JSON 会被分类为可明确重建，但不会被自动修改。
     #[test]
     fn corrupted_core_vmm_controller_document_is_rejected_unchanged() {
         // directory owns the isolated malformed controller document.
@@ -624,8 +775,14 @@ mod tests {
 
         let error = load_core_vmm_controller_state(directory.path(), "session-a")
             .expect_err("malformed document must be rejected");
+        // rebuild_reason exposes only the user-authorized memory attachment recovery path.
+        // rebuild_reason 仅暴露需要用户授权的记忆附件恢复路径。
+        let rebuild_reason = core_vmm_rebuild_reason(directory.path(), "session-a")
+            .expect("inspect malformed VMM document")
+            .expect("malformed VMM document must be rebuildable");
 
         assert!(error.contains("Failed to parse Core VMM controller document"));
+        assert!(rebuild_reason.contains("Damaged Core VMM attachment"));
         assert_eq!(
             fs::read(vmm_state_path(directory.path())).expect("read unchanged malformed document"),
             malformed_bytes

@@ -37,10 +37,10 @@ fn create_session_writes_metadata_state_and_first_segment() {
     assert_eq!(lines[0].kind, SegmentedSessionEventKind::SessionMeta);
 }
 
-/// Verifies explicit Core VMM deletion clears current and obsolete root artifacts idempotently.
-/// 验证明确定义的 Core VMM 删除会幂等清除当前及废弃根工件。
+/// Verifies explicit Core VMM deletion clears only VMM artifacts and preserves the session transcript.
+/// 验证明确定义的 Core VMM 删除仅清除 VMM 工件并保留会话转录。
 #[test]
-fn delete_core_session_vmm_state_clears_exact_session_artifacts() {
+fn delete_core_session_vmm_state_clears_only_vmm_artifacts() {
     // root owns the isolated segmented-session catalog.
     // root 拥有隔离的分段会话目录。
     let root = test_root("delete_core_session_vmm_state_clears_exact_session_artifacts");
@@ -72,10 +72,125 @@ fn delete_core_session_vmm_state_clears_exact_session_artifacts() {
     );
     assert!(!vmm_state_path(&session_dir).exists());
     assert!(!obsolete_marker.exists());
+    // Persisted conversation metadata, runtime state, and transcript segments are outside VMM ownership.
+    // 持久化会话元数据、运行状态与转录分段不属于 VMM 所有权。
+    assert!(session_dir.join(SEGMENTED_METADATA_FILE).exists());
+    assert!(session_dir.join(SEGMENTED_STATE_FILE).exists());
+    assert!(session_dir.join("s001.jsonl").exists());
     assert!(
         crate::workspace_store::delete_core_session_vmm_state(&root, session_id)
             .expect("repeat idempotent Core VMM deletion")
     );
+    // absent_rebuild_error proves clean absence cannot be mistaken for attachment damage.
+    // absent_rebuild_error 证明干净缺失不能被误判为附件损坏。
+    let absent_rebuild_error =
+        crate::workspace_store::rebuild_damaged_core_session_vmm_state(&root, session_id, "2")
+            .expect_err("absent VMM attachment must not be rebuilt");
+    assert!(absent_rebuild_error.contains("healthy or absent"));
+}
+
+/// Verifies only a classified damaged VMM attachment can be rebuilt and later memory writes remain durable.
+/// 验证仅已分类的损坏 VMM 附件可以重建，且后续记忆写入仍可持久化。
+#[test]
+fn rebuild_damaged_core_session_vmm_state_preserves_conversation() {
+    // root owns the isolated segmented-session catalog.
+    // root 拥有隔离的分段会话目录。
+    let root = test_root("rebuild_damaged_core_session_vmm_state_preserves_conversation");
+    // request provides the exact session identity used by classification and replacement.
+    // request 提供分类与替换使用的精确会话身份。
+    let mut request = test_session_request(SegmentPolicy::default());
+    request.session_id = String::from("55982edc-e92c-4187-84ad-621624451e81");
+    // session_id is the canonical typed identity for public storage adapters.
+    // session_id 是公共存储适配器使用的规范强类型身份。
+    let session_id = Uuid::parse_str(&request.session_id).expect("parse test session id");
+    // session_dir contains the independent transcript and VMM attachment.
+    // session_dir 包含相互独立的会话转录与 VMM 附件。
+    let session_dir = create_segmented_session_in_location(&root, false, request)
+        .expect("create segmented session");
+    // metadata_path identifies conversation metadata that VMM recovery must not change.
+    // metadata_path 标识 VMM 恢复不得改变的会话元数据。
+    let metadata_path = session_dir.join(SEGMENTED_METADATA_FILE);
+    // state_path identifies ordinary conversation runtime state outside VMM ownership.
+    // state_path 标识 VMM 所有权之外的普通会话运行状态。
+    let state_path = session_dir.join(SEGMENTED_STATE_FILE);
+    // transcript_path identifies the first durable conversation segment.
+    // transcript_path 标识首个持久化会话分段。
+    let transcript_path = session_dir.join("s001.jsonl");
+    // metadata_before is the byte-exact conversation metadata baseline.
+    // metadata_before 是字节级精确的会话元数据基线。
+    let metadata_before = fs::read(&metadata_path).expect("read metadata baseline");
+    // state_before is the byte-exact ordinary runtime-state baseline.
+    // state_before 是字节级精确的普通运行状态基线。
+    let state_before = fs::read(&state_path).expect("read state baseline");
+    // transcript_before is the byte-exact conversation transcript baseline.
+    // transcript_before 是字节级精确的会话转录基线。
+    let transcript_before = fs::read(&transcript_path).expect("read transcript baseline");
+    // malformed_bytes represent a damaged derived-memory attachment and no conversation data.
+    // malformed_bytes 表示损坏的派生记忆附件，不包含任何会话数据。
+    let malformed_bytes = b"{\"schema_version\":2,\"controller_kind\":";
+    fs::write(vmm_state_path(&session_dir), malformed_bytes).expect("write damaged VMM attachment");
+
+    assert!(
+        crate::workspace_store::rebuild_damaged_core_session_vmm_state(&root, session_id, "2")
+            .expect("rebuild damaged VMM attachment")
+    );
+    // rebuilt_state is the clean current-format attachment loaded through the strict adapter.
+    // rebuilt_state 是通过严格适配器加载的干净当前格式附件。
+    let rebuilt_state = crate::workspace_store::load_core_session_vmm_state(&root, session_id)
+        .expect("load rebuilt VMM attachment")
+        .expect("rebuilt VMM attachment must exist");
+    // expected_state contains no recalled memory from the discarded damaged attachment.
+    // expected_state 不包含来自已丢弃损坏附件的任何召回记忆。
+    let expected_state = vulcan_vmm::VmmSessionMemoryState::new(session_id.to_string(), "2")
+        .expect("create expected clean VMM state");
+
+    assert_eq!(rebuilt_state, expected_state);
+    assert_eq!(
+        fs::read(&metadata_path).expect("read preserved metadata"),
+        metadata_before
+    );
+    assert_eq!(
+        fs::read(&state_path).expect("read preserved state"),
+        state_before
+    );
+    assert_eq!(
+        fs::read(&transcript_path).expect("read preserved transcript"),
+        transcript_before
+    );
+    assert_eq!(
+        crate::workspace_store::core_session_vmm_rebuild_reason(&root, session_id)
+            .expect("inspect rebuilt VMM attachment"),
+        None
+    );
+    // healthy_rebuild_error proves a healthy attachment cannot enter the destructive recovery path.
+    // healthy_rebuild_error 证明健康附件不能进入破坏性恢复路径。
+    let healthy_rebuild_error =
+        crate::workspace_store::rebuild_damaged_core_session_vmm_state(&root, session_id, "3")
+            .expect_err("healthy VMM attachment must not be rebuilt");
+    assert!(healthy_rebuild_error.contains("healthy or absent"));
+
+    // next_state represents the first new VMM command committed after recovery.
+    // next_state 表示恢复后提交的首个新 VMM 命令。
+    let mut next_state = rebuilt_state;
+    // revision_before_command binds the recovery successor command to the clean baseline.
+    // revision_before_command 将恢复后的后继命令绑定到干净基线。
+    let revision_before_command = next_state.revision;
+    next_state
+        .record_committed_controller_command(
+            "post-recovery-memory-command",
+            revision_before_command,
+            "4",
+        )
+        .expect("record post-recovery VMM command");
+    crate::workspace_store::persist_core_session_vmm_state(&root, session_id, &next_state)
+        .expect("persist post-recovery VMM command");
+    // persisted_next_state proves later VMM state advances from the rebuilt document.
+    // persisted_next_state 证明后续 VMM 状态从重建文档继续推进。
+    let persisted_next_state =
+        crate::workspace_store::load_core_session_vmm_state(&root, session_id)
+            .expect("reload post-recovery VMM state")
+            .expect("post-recovery VMM state must exist");
+    assert_eq!(persisted_next_state, next_state);
 }
 
 /// Verifies deterministic task-store directory lookup derives the date from raw creation time.

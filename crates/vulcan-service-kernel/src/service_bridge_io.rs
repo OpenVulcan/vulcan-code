@@ -324,6 +324,12 @@ pub(crate) fn mark_webui_service_discovery_ready(state: &SharedServiceBridgeStat
     mark_webui_service_discovery_status(state, WEBUI_SERVICE_DISCOVERY_STATUS_READY);
 }
 
+/// Marks the browser-facing service discovery snapshot as starting before a bootstrap retry.
+/// 在引导重试前将浏览器侧服务发现快照标记为 starting。
+pub(crate) fn mark_webui_service_discovery_starting(state: &SharedServiceBridgeState) {
+    mark_webui_service_discovery_status(state, WEBUI_SERVICE_DISCOVERY_STATUS_STARTING);
+}
+
 /// Marks the browser-facing service discovery snapshot as failed after bootstrap fails.
 /// 在引导失败后将浏览器侧服务发现快照标记为 failed。
 pub(crate) fn mark_webui_service_discovery_failed(state: &SharedServiceBridgeState) {

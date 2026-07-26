@@ -27,8 +27,8 @@ use vulcan_agent_runtime::{
 };
 use vulcan_provider_config::config::ProviderConfigurationFile;
 use vulcan_service_api::{
-    ServiceEvent, ServiceEventEmitter, StartupSnapshot, StartupStepSnapshot, StartupStepStatus,
-    WorkbenchSnapshot,
+    ServiceEvent, ServiceEventEmitter, StartupRecoveryKind, StartupRecoverySnapshot,
+    StartupSnapshot, StartupStepSnapshot, StartupStepStatus, WorkbenchSnapshot,
 };
 use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
 
@@ -38,18 +38,21 @@ use super::{
     current_unix_millis_text, emit_service_event_with_trace, fallback_workbench_snapshot,
     hydrated_conversation_window_summaries, install_webui_question_runtime_event_bridge,
     mark_webui_service_discovery_failed, mark_webui_service_discovery_ready,
-    native_tool_summaries_from_agent_runtime, normalized_workspace_path_text_from_path,
-    pending_question_snapshots_from_agent_runtime, subagent_navigation_snapshot_from_cached_state,
-    token_budget_status, workbench_from_runtime, workspace_root,
+    mark_webui_service_discovery_starting, native_tool_summaries_from_agent_runtime,
+    normalized_workspace_path_text_from_path, pending_question_snapshots_from_agent_runtime,
+    subagent_navigation_snapshot_from_cached_state, token_budget_status, workbench_from_runtime,
+    workspace_root,
 };
 
 mod ai_tool_config;
 mod error;
+mod recovery;
 mod startup_snapshot;
 mod startup_updates;
 
 pub(super) use ai_tool_config::*;
 pub(super) use error::*;
+pub(crate) use recovery::service_rebuild_startup_session_vmm;
 pub(super) use startup_snapshot::*;
 pub(super) use startup_updates::*;
 
@@ -760,7 +763,7 @@ fn run_service_bootstrap(
         selected_session_id
     ));
 
-    let startup = startup_snapshot_with_phase(
+    let mut startup = startup_snapshot_with_phase(
         "ready",
         startup_steps_with_status(
             OffsetDateTime::now_utc(),
@@ -800,9 +803,17 @@ fn run_service_bootstrap(
         ),
         &logs,
     );
-    let mut emitted_workbench = fallback_workbench_snapshot(&logs);
-    if let Ok(mut guard) = state.lock() {
-        guard.startup = startup.clone();
+    startup.ui_locale = provider_configuration.ui_locale.clone();
+    let emitted_workbench = {
+        // guard retains runtime and workbench state without publishing startup readiness before every fallible validation finishes.
+        // guard 保留运行时与工作台状态，但不会在全部可失败校验完成前发布启动就绪。
+        let mut guard = state.lock().map_err(|error| {
+            ServiceBootstrapError::new(
+                "workspace",
+                "Workspace",
+                format!("failed to lock service state during workspace bootstrap: {error}"),
+            )
+        })?;
         guard.agent_runtime = Some(agent_runtime.clone());
         let surface_messages =
             active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot)
@@ -821,14 +832,27 @@ fn run_service_bootstrap(
         if selected_session_id != uuid::Uuid::nil() {
             // selected_vmm_controller eagerly validates and opens the selected session before its first UI projection.
             // selected_vmm_controller 在首次 UI 投影前主动校验并打开选中会话。
-            let _selected_vmm_controller = guard
-                .vmm_controller_registry
-                .get_or_open(
-                    &controller_runtime.data_root,
-                    selected_session_id,
-                    &current_unix_millis_text(),
-                )
-                .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
+            let selected_vmm_controller = guard.vmm_controller_registry.get_or_open(
+                &controller_runtime.data_root,
+                selected_session_id,
+                &current_unix_millis_text(),
+            );
+            if let Err(error) = selected_vmm_controller {
+                // bootstrap_error preserves the strict diagnostic and adds recovery only for a storage-classified historical or damaged VMM attachment.
+                // bootstrap_error 保留严格诊断，并且仅对存储层已分类的历史或损坏 VMM 附件附加恢复操作。
+                let mut bootstrap_error =
+                    ServiceBootstrapError::new("workspace", "Workspace", error.to_string());
+                if error.requires_rebuild() {
+                    // controller_runtime is retained only for the exact recovery action exposed by this failure.
+                    // controller_runtime 仅为该失败暴露的精确恢复操作保留。
+                    guard.controller_runtime = Some(controller_runtime.clone());
+                    bootstrap_error = bootstrap_error.with_recovery(StartupRecoverySnapshot {
+                        kind: StartupRecoveryKind::RebuildSessionVmm,
+                        session_id: selected_session_id.to_string(),
+                    });
+                }
+                return Err(bootstrap_error);
+            }
         }
         // vmm_session_states are immutable projections from the controllers opened during bootstrap.
         // vmm_session_states 是引导期间已打开控制器产生的不可变投影。
@@ -862,7 +886,6 @@ fn run_service_bootstrap(
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         workbench.revision = guard.workbench_generation;
         guard.workbench = workbench.clone();
-        emitted_workbench = workbench;
         guard.workspace_snapshot = Some(workspace_snapshot);
         guard.agent_runtime = Some(agent_runtime);
         guard.service_runtime = Some(runtime.clone());
@@ -873,7 +896,8 @@ fn run_service_bootstrap(
         guard.token_budget_runtime = Some(token_budget_runtime);
         guard.mcp_runtime = Some(mcp_runtime);
         guard.cached_mcp_catalog = Some(mcp_catalog);
-    }
+        workbench
+    };
     // Managed Codebase Memory enablement survives restart; unavailable packaged assets degrade only that integration.
     // 托管 Codebase Memory 启用意图会跨重启保留；打包资产不可用时仅降级该集成。
     if let Err(error) = runtime.block_on(crate::reconcile_codebase_memory_runtime(state)) {
@@ -900,6 +924,18 @@ fn run_service_bootstrap(
         vulcan_prompt_skills::configured_user_skill_root(&prompt_skill_config),
     )
     .map_err(|error| ServiceBootstrapError::new("workspace", "Agent Skills", error))?;
+    {
+        // guard publishes ready only after VMM opening, workbench projection, and watcher startup all succeed.
+        // guard 仅在 VMM 打开、工作台投影与监听器启动全部成功后发布 ready。
+        let mut guard = state.lock().map_err(|error| {
+            ServiceBootstrapError::new(
+                "workspace",
+                "Workspace",
+                format!("failed to lock service state while publishing startup readiness: {error}"),
+            )
+        })?;
+        guard.startup = startup.clone();
+    }
     mark_webui_service_discovery_ready(state);
     emit_service_snapshots(event_emitter, &startup, &emitted_workbench);
     Ok(())

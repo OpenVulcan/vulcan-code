@@ -133,9 +133,10 @@ use vulcan_service_api::{
     SubagentNavigationSnapshot, SubagentPanelRouteResponse, ToolCallSummary,
     UpdateConversationRunPhaseDelta, UserPromptEditDraftSummary, VmmMemorySnapshot,
     WEBUI_SERVICE_DISCOVERY_STATUS_FAILED, WEBUI_SERVICE_DISCOVERY_STATUS_READY,
-    WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV, WorkbenchDelta, WorkbenchDeltaEnvelope,
-    WorkbenchSnapshot, webui_service_discovery_snapshot_with_status,
-    webui_service_starting_discovery_snapshot, webui_static_root_from_candidates,
+    WEBUI_SERVICE_DISCOVERY_STATUS_STARTING, WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV,
+    WorkbenchDelta, WorkbenchDeltaEnvelope, WorkbenchSnapshot,
+    webui_service_discovery_snapshot_with_status, webui_service_starting_discovery_snapshot,
+    webui_static_root_from_candidates,
 };
 use vulcan_service_host::{
     SharedWebuiServiceDiscoverySnapshot, WebuiServiceHttpConfig, WebuiServiceRpcDispatcher,
