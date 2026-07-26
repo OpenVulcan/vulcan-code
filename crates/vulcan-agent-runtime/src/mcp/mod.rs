@@ -17,7 +17,7 @@ pub use managed_codebase_memory::{
     MANAGED_CODEBASE_MEMORY_SERVER_ID, ManagedCodebaseMemoryAuthorization,
     ManagedCodebaseMemoryExecutionContext, ManagedCodebaseMemoryProjectRoute,
     inject_managed_codebase_memory_context, is_managed_codebase_memory_read_only_tool,
-    model_visible_managed_codebase_memory_schema,
+    managed_codebase_memory_public_tool_id, model_visible_managed_codebase_memory_schema,
 };
 pub use plugin::{
     PluginMcpSecretStore, plugin_mcp_server_configs, plugin_mcp_server_configs_for_descriptors,

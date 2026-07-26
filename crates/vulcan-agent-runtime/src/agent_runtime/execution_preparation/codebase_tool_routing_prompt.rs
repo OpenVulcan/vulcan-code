@@ -8,16 +8,16 @@ use vulcan_tools_manager::{VulcanToolDescriptor, VulcanToolSourceKind};
 /// Complete host-visible read-only Codebase Memory tool contract required by the routing prompt.
 /// 路由提示词要求完整可见的宿主侧 Codebase Memory 只读工具契约。
 const CODEBASE_MEMORY_TOOL_IDS: [&str; 10] = [
-    "mcp_vulcan_codebase_memory_get_graph_schema",
-    "mcp_vulcan_codebase_memory_search_graph",
-    "mcp_vulcan_codebase_memory_query_graph",
-    "mcp_vulcan_codebase_memory_index_status",
-    "mcp_vulcan_codebase_memory_check_index_coverage",
-    "mcp_vulcan_codebase_memory_trace_path",
-    "mcp_vulcan_codebase_memory_get_architecture",
-    "mcp_vulcan_codebase_memory_get_code_snippet",
-    "mcp_vulcan_codebase_memory_search_code",
-    "mcp_vulcan_codebase_memory_detect_changes",
+    "vulcan_codebase_memory_get_graph_schema",
+    "vulcan_codebase_memory_search_graph",
+    "vulcan_codebase_memory_query_graph",
+    "vulcan_codebase_memory_index_status",
+    "vulcan_codebase_memory_check_index_coverage",
+    "vulcan_codebase_memory_trace_path",
+    "vulcan_codebase_memory_get_architecture",
+    "vulcan_codebase_memory_get_code_snippet",
+    "vulcan_codebase_memory_search_code",
+    "vulcan_codebase_memory_detect_changes",
 ];
 
 /// Host-visible CodeKit discovery tools required by the cross-family routing prompt.
@@ -35,22 +35,22 @@ const CODEBASE_MEMORY_ROUTING_PROMPT: &str = r#"## Codebase Memory Tool Selectio
 Use the registered Codebase Memory tools for graph-backed code intelligence:
 
 ### Discovery and Source
-- Natural-language or conceptual symbol discovery → `mcp_vulcan_codebase_memory_search_graph`
-- Literal text enriched into containing indexed symbols and structural ranking → `mcp_vulcan_codebase_memory_search_code`
-- Exact indexed symbol source by qualified name → `mcp_vulcan_codebase_memory_get_code_snippet`
-- Complex multi-hop, aggregation, or cross-service analysis → `mcp_vulcan_codebase_memory_query_graph`
+- Natural-language or conceptual symbol discovery → `vulcan_codebase_memory_search_graph`
+- Literal text enriched into containing indexed symbols and structural ranking → `vulcan_codebase_memory_search_code`
+- Exact indexed symbol source by qualified name → `vulcan_codebase_memory_get_code_snippet`
+- Complex multi-hop, aggregation, or cross-service analysis → `vulcan_codebase_memory_query_graph`
 
 ### Relationships, Impact, and Architecture
-- Callers, callees, data flow, or cross-service paths → `mcp_vulcan_codebase_memory_trace_path`
-- Git diff blast radius → `mcp_vulcan_codebase_memory_detect_changes`
-- Project architecture, dependencies, clusters, hotspots, layers, or broad file tree → `mcp_vulcan_codebase_memory_get_architecture`
-- Graph labels and edge types needed for Cypher → `mcp_vulcan_codebase_memory_get_graph_schema`
+- Callers, callees, data flow, or cross-service paths → `vulcan_codebase_memory_trace_path`
+- Git diff blast radius → `vulcan_codebase_memory_detect_changes`
+- Project architecture, dependencies, clusters, hotspots, layers, or broad file tree → `vulcan_codebase_memory_get_architecture`
+- Graph labels and edge types needed for Cypher → `vulcan_codebase_memory_get_graph_schema`
 
 ### Index Ground Truth
-- Index readiness and project-wide diagnostics → `mcp_vulcan_codebase_memory_index_status`
-- Exact file or bounded-scope coverage verification → `mcp_vulcan_codebase_memory_check_index_coverage`
+- Index readiness and project-wide diagnostics → `vulcan_codebase_memory_index_status`
+- Exact file or bounded-scope coverage verification → `vulcan_codebase_memory_check_index_coverage`
 - Treat exact source as ground truth. Before exhaustive or negative claims, or when graph results are unexpectedly empty, check index coverage and fall back to direct source inspection for uncovered paths.
-- Do not reconstruct callers or blast radius with repeated text searches when `mcp_vulcan_codebase_memory_trace_path` or `mcp_vulcan_codebase_memory_detect_changes` is available."#;
+- Do not reconstruct callers or blast radius with repeated text searches when `vulcan_codebase_memory_trace_path` or `vulcan_codebase_memory_detect_changes` is available."#;
 
 /// Cross-family routing guidance used when both Codebase Memory and CodeKit are visible.
 /// Codebase Memory 与 CodeKit 同时可见时使用的跨工具家族路由说明。
@@ -60,29 +60,29 @@ Select tools by the information required:
 
 ### Search and Discovery
 - Literal text plus its owning function or class → `vulcan_codekit_rg`
-- Natural-language or conceptual symbol discovery → `mcp_vulcan_codebase_memory_search_graph`
-- Literal text enriched into containing indexed symbols and structural ranking → `mcp_vulcan_codebase_memory_search_code`
-- Complex multi-hop, aggregation, or cross-service analysis → `mcp_vulcan_codebase_memory_query_graph`
+- Natural-language or conceptual symbol discovery → `vulcan_codebase_memory_search_graph`
+- Literal text enriched into containing indexed symbols and structural ranking → `vulcan_codebase_memory_search_code`
+- Complex multi-hop, aggregation, or cross-service analysis → `vulcan_codebase_memory_query_graph`
 
 ### Trace and Impact
-- Callers, callees, data flow, or cross-service paths → `mcp_vulcan_codebase_memory_trace_path`
-- Git diff blast radius → `mcp_vulcan_codebase_memory_detect_changes`
+- Callers, callees, data flow, or cross-service paths → `vulcan_codebase_memory_trace_path`
+- Git diff blast radius → `vulcan_codebase_memory_detect_changes`
 
 ### Architecture and Structure
-- Project architecture, dependencies, clusters, hotspots, layers, or broad file tree → `mcp_vulcan_codebase_memory_get_architecture`
+- Project architecture, dependencies, clusters, hotspots, layers, or broad file tree → `vulcan_codebase_memory_get_architecture`
 - Directory-level symbol inventory → `vulcan_codekit_ast_tree`
 - Detailed structure of exact files → `vulcan_codekit_ast_detail`
-- Graph labels and edge types needed for Cypher → `mcp_vulcan_codebase_memory_get_graph_schema`
+- Graph labels and edge types needed for Cypher → `vulcan_codebase_memory_get_graph_schema`
 
 ### Source and Coverage
-- Exact indexed symbol source by qualified name → `mcp_vulcan_codebase_memory_get_code_snippet`
-- Index readiness and project-wide diagnostics → `mcp_vulcan_codebase_memory_index_status`
-- Exact file or bounded-scope coverage verification → `mcp_vulcan_codebase_memory_check_index_coverage`
+- Exact indexed symbol source by qualified name → `vulcan_codebase_memory_get_code_snippet`
+- Index readiness and project-wide diagnostics → `vulcan_codebase_memory_index_status`
+- Exact file or bounded-scope coverage verification → `vulcan_codebase_memory_check_index_coverage`
 - Treat exact source as ground truth. Before exhaustive or negative claims, or when graph results are unexpectedly empty, check index coverage and use CodeKit or direct source inspection for uncovered paths.
 
 ### Anti-patterns
-- Do not reconstruct callers or blast radius with repeated text searches when `mcp_vulcan_codebase_memory_trace_path` or `mcp_vulcan_codebase_memory_detect_changes` is available.
-- Do not use sequential text searches to explore related concepts when `mcp_vulcan_codebase_memory_search_graph` is available.
+- Do not reconstruct callers or blast radius with repeated text searches when `vulcan_codebase_memory_trace_path` or `vulcan_codebase_memory_detect_changes` is available.
+- Do not use sequential text searches to explore related concepts when `vulcan_codebase_memory_search_graph` is available.
 - Do not use AST directory trees as a substitute for project architecture analysis."#;
 
 /// Appends request-scoped codebase tool-selection guidance only for a complete visible CBM contract.
@@ -98,16 +98,16 @@ pub(super) fn append_codebase_tool_routing_prompt(
     developer_segment: &mut Option<String>,
     visible_tools: &[VulcanToolDescriptor],
 ) {
-    // visibleMcpIds is the exact post-filter MCP public tool-name set sent to the provider.
-    // visibleMcpIds 是发送给 Provider 的精确过滤后 MCP 公开工具名集合。
-    let visible_mcp_ids = visible_tools
+    // visibleManagedIds is the exact post-filter Vulcan-managed public tool-name set sent to the provider.
+    // visibleManagedIds 是发送给 Provider 的精确过滤后 Vulcan 托管公开工具名集合。
+    let visible_managed_ids = visible_tools
         .iter()
-        .filter(|descriptor| descriptor.source == VulcanToolSourceKind::Mcp)
+        .filter(|descriptor| descriptor.source == VulcanToolSourceKind::VulcanManaged)
         .map(|descriptor| descriptor.id.as_str())
         .collect::<BTreeSet<_>>();
     if !CODEBASE_MEMORY_TOOL_IDS
         .iter()
-        .all(|tool_id| visible_mcp_ids.contains(tool_id))
+        .all(|tool_id| visible_managed_ids.contains(tool_id))
     {
         return;
     }
@@ -143,6 +143,9 @@ pub(super) fn append_codebase_tool_routing_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp::{
+        MANAGED_CODEBASE_MEMORY_READ_ONLY_TOOLS, managed_codebase_memory_public_tool_id,
+    };
 
     /// Builds one minimal visible tool descriptor for routing-prompt tests.
     /// 为路由提示词测试构建一条最小可见工具描述。
@@ -162,8 +165,8 @@ mod tests {
             name: id.to_string(),
             description: String::from("test tool"),
             help_text: None,
-            source: if id.starts_with("mcp_") {
-                VulcanToolSourceKind::Mcp
+            source: if id.starts_with("vulcan_codebase_memory_") {
+                VulcanToolSourceKind::VulcanManaged
             } else {
                 VulcanToolSourceKind::LuaSkills
             },
@@ -182,6 +185,25 @@ mod tests {
             .iter()
             .map(|tool_id| test_tool_descriptor(tool_id))
             .collect()
+    }
+
+    /// Verifies the routing contract stays synchronized with the managed read-only tool allowlist.
+    /// 验证路由契约始终与托管只读工具白名单保持同步。
+    #[test]
+    fn codebase_memory_routing_contract_matches_managed_allowlist() {
+        let managed_contract = MANAGED_CODEBASE_MEMORY_READ_ONLY_TOOLS
+            .iter()
+            .map(|tool_name| {
+                managed_codebase_memory_public_tool_id(tool_name)
+                    .expect("managed read-only tools must have public identifiers")
+            })
+            .collect::<BTreeSet<_>>();
+        let routing_contract = CODEBASE_MEMORY_TOOL_IDS
+            .iter()
+            .map(|tool_id| (*tool_id).to_string())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(routing_contract, managed_contract);
     }
 
     /// Verifies the cross-family prompt is selected when CBM and CodeKit are both complete.
@@ -207,7 +229,7 @@ mod tests {
         let prompt = developer_segment.expect("routing prompt should be appended");
         assert!(prompt.contains("## Codebase Tool Selection"));
         assert!(prompt.contains("`vulcan_codekit_rg`"));
-        assert!(prompt.contains("`mcp_vulcan_codebase_memory_search_graph`"));
+        assert!(prompt.contains("`vulcan_codebase_memory_search_graph`"));
     }
 
     /// Verifies the graph-only prompt never references absent CodeKit tools.
@@ -237,7 +259,7 @@ mod tests {
         // visibleTools intentionally omits detect_changes from the required CBM contract.
         // visibleTools 故意从必需 CBM 契约中省略 detect_changes。
         let mut visible_tools = codebase_memory_tool_descriptors();
-        visible_tools.retain(|tool| tool.id != "mcp_vulcan_codebase_memory_detect_changes");
+        visible_tools.retain(|tool| tool.id != "vulcan_codebase_memory_detect_changes");
         // developerSegment remains absent when the contract is incomplete.
         // developerSegment 在契约不完整时保持缺失。
         let mut developer_segment = None;
@@ -256,8 +278,8 @@ mod tests {
         let visible_tools = CODEBASE_MEMORY_TOOL_IDS
             .iter()
             .map(|tool_id| {
-                // descriptor intentionally carries a non-MCP source for collision-hardening coverage.
-                // descriptor 故意携带非 MCP 来源，用于覆盖名称冲突加固逻辑。
+                // descriptor intentionally carries a non-managed source for collision-hardening coverage.
+                // descriptor 故意携带非托管来源，用于覆盖名称冲突加固逻辑。
                 let mut descriptor = test_tool_descriptor(tool_id);
                 descriptor.source = VulcanToolSourceKind::LuaSkills;
                 descriptor

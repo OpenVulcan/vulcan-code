@@ -738,6 +738,15 @@ impl ExecutionPreparation {
             rows.push(format!("原生工具：{} 个", native_tool_count));
         }
 
+        let vulcan_managed_tool_count = self
+            .tool_descriptors
+            .iter()
+            .filter(|descriptor| descriptor.source == VulcanToolSourceKind::VulcanManaged)
+            .count();
+        if vulcan_managed_tool_count > 0 {
+            rows.push(format!("Vulcan 托管工具：{} 个", vulcan_managed_tool_count));
+        }
+
         let vulcan_plugin_tool_count = self
             .tool_descriptors
             .iter()

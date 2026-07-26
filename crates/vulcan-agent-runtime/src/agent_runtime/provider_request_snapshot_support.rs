@@ -26,6 +26,7 @@ pub(crate) fn serialize_provider_request_headers(headers: &HeaderMap) -> Option<
 pub(crate) fn tool_source_label(source: VulcanToolSourceKind) -> &'static str {
     match source {
         VulcanToolSourceKind::Native => "原生工具",
+        VulcanToolSourceKind::VulcanManaged => "Vulcan 托管工具",
         VulcanToolSourceKind::VulcanPlugin => "Vulcan 插件",
         VulcanToolSourceKind::LuaSkills => "LuaSkills",
         VulcanToolSourceKind::Mcp => "MCP",

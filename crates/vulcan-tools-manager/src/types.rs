@@ -35,6 +35,9 @@ pub enum VulcanToolSourceKind {
     /// Host-owned native Rust tool.
     /// 宿主自有的 Rust 原生工具。
     Native,
+    /// Host-managed Vulcan tool backed by an internal runtime or protocol.
+    /// 由内部运行时或协议承载的 Vulcan 宿主托管工具。
+    VulcanManaged,
     /// Manifest-driven bundled Vulcan Plugin tool.
     /// 清单驱动的 Vulcan 插件工具。
     VulcanPlugin,

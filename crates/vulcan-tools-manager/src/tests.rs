@@ -99,6 +99,22 @@ fn manager_allocates_mcp_names_with_prefix_and_suffixes() {
     );
 }
 
+/// Verifies Vulcan-managed tools preserve their direct public identity without an MCP prefix.
+/// 验证 Vulcan 托管工具保留直接公开身份且不会增加 MCP 前缀。
+#[test]
+fn manager_preserves_vulcan_managed_public_name() {
+    let manager = VulcanToolsManager::new(vec![test_candidate(
+        "vulcan_codebase_memory_search_graph",
+        VulcanToolSourceKind::VulcanManaged,
+        VulcanPlanToolPolicy::Visible,
+    )]);
+
+    assert_eq!(
+        resolved_names(manager.resolve_for_execution_mode("Build")),
+        vec!["vulcan_codebase_memory_search_graph"]
+    );
+}
+
 /// Verifies Plan mode keeps the provider-visible tool surface stable after public-name normalization.
 /// 验证 Plan 模式会在公开名称归一化后保持 Provider 可见工具面稳定。
 #[test]

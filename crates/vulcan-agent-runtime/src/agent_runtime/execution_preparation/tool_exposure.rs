@@ -3,7 +3,10 @@
 
 use crate::agent_runtime::execution_models::ExecutionPreparationRequest;
 use crate::agent_runtime::runtime::RuntimeFoundation;
-use crate::mcp::McpRuntimeToolBinding;
+use crate::mcp::{
+    HOST_MANAGED_CODEBASE_MEMORY_PARTITION_KEY, McpRuntimeToolBinding,
+    managed_codebase_memory_public_tool_id,
+};
 use crate::provider_config::{AiToolKind, PersistedAiToolConfiguration};
 use crate::tooling::native::{
     CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, TODOLIST_TOOL_ID, UPDATE_GOAL_TOOL_ID,
@@ -487,6 +490,16 @@ fn filter_mcp_tool_bindings(
     tools
         .into_iter()
         .filter(|tool| {
+            if tool.partition_key() == HOST_MANAGED_CODEBASE_MEMORY_PARTITION_KEY {
+                let Some(tool_name) = tool.origin_tool_name() else {
+                    return false;
+                };
+                return managed_codebase_memory_tool_is_visible(
+                    tool_name,
+                    tool.description(),
+                    selectors,
+                );
+            }
             if mcp_tool_binding_matches_any(tool, &selectors.global_disabled)
                 || mcp_tool_binding_matches_any(tool, &selectors.mcp_tool_disabled)
                 || tool.server_id().is_some_and(|server_id| {
@@ -588,6 +601,37 @@ fn mcp_tool_binding_matches_any(
     )
 }
 
+/// Returns whether one managed Codebase Memory tool is visible under global public-tool selectors.
+/// 返回单个托管 Codebase Memory 工具在全局公开工具选择器下是否可见。
+///
+/// # Parameters
+/// 参数
+/// `tool_name` is the original unprefixed MCP tool name.
+/// `tool_name` 是原始未加前缀的 MCP 工具名称。
+/// `description` is the discovered tool description.
+/// `description` 是发现得到的工具描述。
+/// `selectors` is the normalized request selector state.
+/// `selectors` 是规范化后的请求选择器状态。
+///
+/// # Returns
+/// 返回值
+/// Returns `true` unless a global selector excludes the validated managed public tool.
+/// 除非全局选择器排除已校验的托管公开工具，否则返回 `true`。
+pub(crate) fn managed_codebase_memory_tool_is_visible(
+    tool_name: &str,
+    description: &str,
+    selectors: &ToolExposureSelectorState,
+) -> bool {
+    let Some(public_tool_id) = managed_codebase_memory_public_tool_id(tool_name) else {
+        return false;
+    };
+    let fields = [public_tool_id.as_str(), tool_name, description];
+    if tool_selector_matches(&selectors.global_disabled, &fields) {
+        return false;
+    }
+    !selectors.has_global_allow() || tool_selector_matches(&selectors.global_allowed, &fields)
+}
+
 /// Returns whether a final resolved public tool remains visible after request selectors.
 /// 返回最终解析出的公开工具在请求选择器之后是否仍然可见。
 fn resolved_tool_definition_is_visible(
@@ -627,6 +671,7 @@ pub(crate) fn vulcan_tool_descriptor_is_visible(
     }
     match source {
         VulcanToolSourceKind::AiHostBinding => true,
+        VulcanToolSourceKind::VulcanManaged => false,
         VulcanToolSourceKind::VulcanPlugin => false,
         VulcanToolSourceKind::LuaSkills => selectors.has_luaskills_allow(),
         VulcanToolSourceKind::Mcp => selectors.has_mcp_allow(),

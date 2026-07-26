@@ -17,7 +17,7 @@ use crate::luaskills_runtime::{
 use crate::mcp::{
     HOST_MANAGED_CODEBASE_MEMORY_PARTITION_KEY, MANAGED_CODEBASE_MEMORY_SERVER_ID,
     ManagedCodebaseMemoryExecutionContext, McpRuntimeToolBinding,
-    inject_managed_codebase_memory_context, is_managed_codebase_memory_read_only_tool,
+    inject_managed_codebase_memory_context, managed_codebase_memory_public_tool_id,
     model_visible_managed_codebase_memory_schema,
 };
 use crate::media_generation_compat::{
@@ -78,8 +78,9 @@ use ai_host_binding::{
 };
 use descriptors::{
     entry_declares_luaskill_sid, entry_declares_pwd, luaskills_descriptor_to_vulcan,
-    mcp_tool_binding_to_vulcan, native_descriptor_to_vulcan, native_plan_policy,
-    native_tool_id_is_knowledge_tool, native_tool_id_is_vmm_memory_tool,
+    managed_codebase_memory_tool_descriptor, mcp_tool_binding_to_vulcan,
+    native_descriptor_to_vulcan, native_plan_policy, native_tool_id_is_knowledge_tool,
+    native_tool_id_is_vmm_memory_tool,
 };
 #[cfg(test)]
 use luaskills_dispatch::luaskills_entry_to_call_view;
@@ -430,20 +431,30 @@ pub fn build_vulcan_tools_manager(
     for tool in candidate_mcp_tools {
         let is_managed_codebase_memory =
             tool.partition_key() == HOST_MANAGED_CODEBASE_MEMORY_PARTITION_KEY;
-        if is_managed_codebase_memory {
+        let managed_public_tool_id = if is_managed_codebase_memory {
             let Some(context) = managed_codebase_memory.as_ref() else {
                 continue;
             };
             if tool.server_id() != Some(MANAGED_CODEBASE_MEMORY_SERVER_ID)
                 || context.authorization.resolve(context.session_id).is_err()
-                || !tool
-                    .origin_tool_name()
-                    .is_some_and(is_managed_codebase_memory_read_only_tool)
             {
                 continue;
             }
-        }
-        let descriptor = mcp_tool_binding_to_vulcan(&tool);
+            let Some(public_tool_id) = tool
+                .origin_tool_name()
+                .and_then(managed_codebase_memory_public_tool_id)
+            else {
+                continue;
+            };
+            Some(public_tool_id)
+        } else {
+            None
+        };
+        let descriptor = if let Some(public_tool_id) = managed_public_tool_id {
+            managed_codebase_memory_tool_descriptor(public_tool_id, tool.description())
+        } else {
+            mcp_tool_binding_to_vulcan(&tool)
+        };
         occupied_public_tool_ids.insert(descriptor.id.clone());
         let parameters_schema = if is_managed_codebase_memory {
             model_visible_managed_codebase_memory_schema(tool.args_schema().clone())

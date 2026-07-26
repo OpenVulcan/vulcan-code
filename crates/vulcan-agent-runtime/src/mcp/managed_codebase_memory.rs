@@ -36,6 +36,10 @@ pub const MANAGED_CODEBASE_MEMORY_READ_ONLY_TOOLS: [&str; 10] = [
     "detect_changes",
 ];
 
+/// Stable public namespace for host-managed Codebase Memory tools.
+/// 宿主托管 Codebase Memory 工具使用的稳定公开命名空间。
+const MANAGED_CODEBASE_MEMORY_PUBLIC_TOOL_PREFIX: &str = "vulcan_codebase_memory";
+
 /// Exact enabled-project route injected into one managed MCP call.
 /// 注入一次托管 MCP 调用的精确启用项目路由。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -232,6 +236,23 @@ pub fn is_managed_codebase_memory_read_only_tool(tool_name: &str) -> bool {
     MANAGED_CODEBASE_MEMORY_READ_ONLY_TOOLS.contains(&tool_name)
 }
 
+/// Builds the model-visible Vulcan tool identifier for an allowed managed Codebase Memory tool.
+/// 为允许的托管 Codebase Memory 工具构建模型可见的 Vulcan 工具标识。
+///
+/// # Parameters
+/// 参数
+/// `tool_name` is the original unprefixed MCP tool name.
+/// `tool_name` 是原始未加前缀的 MCP 工具名称。
+///
+/// # Returns
+/// 返回值
+/// Returns the stable Vulcan public identifier only when the tool belongs to the managed allowlist.
+/// 仅当工具属于托管白名单时返回稳定的 Vulcan 公开标识。
+pub fn managed_codebase_memory_public_tool_id(tool_name: &str) -> Option<String> {
+    is_managed_codebase_memory_read_only_tool(tool_name)
+        .then(|| format!("{MANAGED_CODEBASE_MEMORY_PUBLIC_TOOL_PREFIX}_{tool_name}"))
+}
+
 /// Removes host-owned routing fields from one model-visible MCP argument schema.
 /// 从模型可见的 MCP 参数 Schema 中移除宿主持有的路由字段。
 ///
@@ -358,6 +379,17 @@ fn reject_reserved_arguments(object: &Map<String, Value>) -> Result<(), String> 
 mod tests {
     use super::*;
     use uuid::Uuid;
+
+    /// Verifies managed public identifiers are available only for the fixed read-only contract.
+    /// 验证托管公开标识仅对固定只读契约可用。
+    #[test]
+    fn managed_public_tool_id_requires_read_only_contract_membership() {
+        assert_eq!(
+            managed_codebase_memory_public_tool_id("search_graph").as_deref(),
+            Some("vulcan_codebase_memory_search_graph")
+        );
+        assert_eq!(managed_codebase_memory_public_tool_id("file_edit"), None);
+    }
 
     /// Verifies that model-visible schemas cannot advertise host routing fields.
     /// 验证模型可见 Schema 不会公开宿主路由字段。
