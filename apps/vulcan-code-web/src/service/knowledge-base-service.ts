@@ -51,7 +51,7 @@ export function subscribeKnowledgeProjectBindingsChanged(listener: (projectId: s
 }
 
 // listKnowledgeLibraries loads all libraries or one project's authorized subset.
-// listKnowledgeLibraries 加载全部资料库或单个项目的授权子集。
+// listKnowledgeLibraries 加载全部知识库或单个项目的授权子集。
 export async function listKnowledgeLibraries(projectId?: string): Promise<KnowledgeLibrarySummary[]> {
   if (!hasServiceRuntime()) {
     return [];
@@ -60,7 +60,7 @@ export async function listKnowledgeLibraries(projectId?: string): Promise<Knowle
 }
 
 // createKnowledgeLibrary creates one host-owned isolated library.
-// createKnowledgeLibrary 创建一个宿主持有的隔离资料库。
+// createKnowledgeLibrary 创建一个宿主持有的隔离知识库。
 export async function createKnowledgeLibrary(name: string, description: string, projectIds: string[]): Promise<KnowledgeLibrarySummary> {
   return serviceClient.request<KnowledgeLibrarySummary>("service_create_knowledge_library", {
     request: { name, description, projectIds },
@@ -76,27 +76,27 @@ export async function renameKnowledgeLibrary(libraryId: string, name: string, de
 }
 
 // deleteKnowledgeLibrary permanently removes one isolated library.
-// deleteKnowledgeLibrary 永久删除一个隔离资料库。
+// deleteKnowledgeLibrary 永久删除一个隔离知识库。
 export async function deleteKnowledgeLibrary(libraryId: string): Promise<void> {
   await serviceClient.request("service_delete_knowledge_library", { libraryId });
 }
 
 // listKnowledgeProjectBindings loads the exact authorization rows for one library.
-// listKnowledgeProjectBindings 加载一个资料库的精确授权记录。
+// listKnowledgeProjectBindings 加载一个知识库的精确授权记录。
 export async function listKnowledgeProjectBindings(libraryId: string): Promise<KnowledgeProjectBinding[]> {
   return serviceClient.request<KnowledgeProjectBinding[]>("service_list_knowledge_project_bindings", { libraryId });
 }
 
 // listProjectKnowledgeBindings loads all active-library bindings for one exact project.
-// listProjectKnowledgeBindings 加载一个精确项目的全部活动资料库绑定。
+// listProjectKnowledgeBindings 加载一个精确项目的全部活动知识库绑定。
 export async function listProjectKnowledgeBindings(projectId: string): Promise<KnowledgeProjectBinding[]> {
   return serviceClient.request<KnowledgeProjectBinding[]>("service_list_project_knowledge_bindings", { projectId });
 }
 
 // listKnowledgeSources loads all durable Markdown roots attached to one library.
-// listKnowledgeSources 加载关联到一个资料库的全部持久化 Markdown 根目录。
+// listKnowledgeSources 加载关联到一个知识库的全部持久化 Markdown 根目录。
 // Parameters: libraryId is the exact physical library identity. Returns: ordered source summaries.
-// 参数：libraryId 是精确物理资料库身份。返回值：有序来源摘要。
+// 参数：libraryId 是精确物理知识库身份。返回值：有序来源摘要。
 export async function listKnowledgeSources(libraryId: string): Promise<KnowledgeSourceSummary[]> {
   return serviceClient.request<KnowledgeSourceSummary[]>("service_list_knowledge_sources", { libraryId });
 }
@@ -118,7 +118,7 @@ export async function importKnowledgeDirectory(libraryId: string, sourceRoot: st
 }
 
 // cancelKnowledgeImport requests cancellation only for the exact active knowledge operation.
-// cancelKnowledgeImport 仅请求取消精确匹配的活动资料库操作。
+// cancelKnowledgeImport 仅请求取消精确匹配的活动知识库操作。
 export async function cancelKnowledgeImport(libraryId: string, jobId: string): Promise<boolean> {
   const result = await serviceClient.request<{ cancelRequested: boolean }>("service_cancel_knowledge_import", { libraryId, jobId });
   return result.cancelRequested;
@@ -149,25 +149,25 @@ export async function getKnowledgeIndexIntegrity(libraryId: string): Promise<Kno
 }
 
 // listKnowledgeCustomWords loads one library-local Jieba dictionary.
-// listKnowledgeCustomWords 加载一个资料库局部 Jieba 词典。
+// listKnowledgeCustomWords 加载一个知识库局部 Jieba 词典。
 export async function listKnowledgeCustomWords(libraryId: string): Promise<KnowledgeCustomWord[]> {
   return serviceClient.request<KnowledgeCustomWord[]>("service_list_knowledge_custom_words", { libraryId });
 }
 
 // upsertKnowledgeCustomWord writes one library-local Jieba dictionary entry.
-// upsertKnowledgeCustomWord 写入一个资料库局部 Jieba 词典条目。
+// upsertKnowledgeCustomWord 写入一个知识库局部 Jieba 词典条目。
 export async function upsertKnowledgeCustomWord(libraryId: string, word: string, weight: number): Promise<void> {
   await serviceClient.request("service_upsert_knowledge_custom_word", { request: { libraryId, word, weight } });
 }
 
 // removeKnowledgeCustomWord deletes one library-local Jieba dictionary entry.
-// removeKnowledgeCustomWord 删除一个资料库局部 Jieba 词典条目。
+// removeKnowledgeCustomWord 删除一个知识库局部 Jieba 词典条目。
 export async function removeKnowledgeCustomWord(libraryId: string, word: string): Promise<void> {
   await serviceClient.request("service_remove_knowledge_custom_word", { libraryId, word });
 }
 
 // listManagedKnowledgeDocuments loads one library page without applying project or session ACLs.
-// listManagedKnowledgeDocuments 加载一个资料库分页，不应用项目或会话 ACL。
+// listManagedKnowledgeDocuments 加载一个知识库分页，不应用项目或会话 ACL。
 export async function listManagedKnowledgeDocuments(
   libraryId: string,
   folderPath: string | null = null,
@@ -186,13 +186,13 @@ export async function listManagedKnowledgeDocumentFolders(libraryId: string): Pr
 }
 
 // readManagedKnowledgeDocument reads one library document without applying project or session ACLs.
-// readManagedKnowledgeDocument 读取一个资料库文档，不应用项目或会话 ACL。
+// readManagedKnowledgeDocument 读取一个知识库文档，不应用项目或会话 ACL。
 export async function readManagedKnowledgeDocument(libraryId: string, documentId: string): Promise<KnowledgeDocumentContent> {
   return serviceClient.request<KnowledgeDocumentContent>("service_read_knowledge_library_document", { libraryId, documentId });
 }
 
 // searchManagedKnowledgeLibrary searches only the library selected in the management surface.
-// searchManagedKnowledgeLibrary 仅检索管理界面中选中的资料库。
+// searchManagedKnowledgeLibrary 仅检索管理界面中选中的知识库。
 export async function searchManagedKnowledgeLibrary(libraryId: string, query: string): Promise<KnowledgeSearchResult> {
   return serviceClient.request<KnowledgeSearchResult>("service_search_knowledge_library", {
     request: { libraryId, query, limit: 20 },
@@ -200,7 +200,7 @@ export async function searchManagedKnowledgeLibrary(libraryId: string, query: st
 }
 
 // exportKnowledgePackage writes one complete ready library into a timestamped .vkb archive.
-// exportKnowledgePackage 将一个完整且就绪的资料库写入带时间戳的 .vkb 归档。
+// exportKnowledgePackage 将一个完整且就绪的知识库写入带时间戳的 .vkb 归档。
 export async function exportKnowledgePackage(libraryId: string, destinationDirectory: string): Promise<KnowledgePackageExportResult> {
   return serviceClient.request<KnowledgePackageExportResult>("service_export_knowledge_package", {
     request: { libraryId, destinationDirectory },
@@ -208,7 +208,7 @@ export async function exportKnowledgePackage(libraryId: string, destinationDirec
 }
 
 // inspectKnowledgePackage validates one selected .vkb archive without mutating library state.
-// inspectKnowledgePackage 校验一个选中的 .vkb 归档且不改变资料库状态。
+// inspectKnowledgePackage 校验一个选中的 .vkb 归档且不改变知识库状态。
 export async function inspectKnowledgePackage(archivePath: string): Promise<KnowledgePackageInspection> {
   return serviceClient.request<KnowledgePackageInspection>("service_inspect_knowledge_package", {
     request: { archivePath },
@@ -216,7 +216,7 @@ export async function inspectKnowledgePackage(archivePath: string): Promise<Know
 }
 
 // importKnowledgePackage creates or explicitly replaces one library from a validated package.
-// importKnowledgePackage 从已校验包新建或显式替换一个资料库。
+// importKnowledgePackage 从已校验包新建或显式替换一个知识库。
 export async function importKnowledgePackage(
   archivePath: string,
   name: string,
@@ -269,7 +269,7 @@ export function browseKnowledgeSourceDirectories(path: string | null): Promise<P
 }
 
 // getSessionKnowledgeLibraries loads one conversation's persisted and effective selection.
-// getSessionKnowledgeLibraries 加载一个会话持久化且生效的资料库选择。
+// getSessionKnowledgeLibraries 加载一个会话持久化且生效的知识库选择。
 export async function getSessionKnowledgeLibraries(conversationId: string): Promise<SessionKnowledgeLibrarySelectionSummary> {
   return serviceClient.request<SessionKnowledgeLibrarySelectionSummary>("service_get_session_knowledge_libraries", { conversationId });
 }

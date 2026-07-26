@@ -250,7 +250,7 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
         reasoning_effort,
         disabled_ai_capability_kinds,
         disabled_ai_capability_target_selectors: BTreeSet::new(),
-        ai_capability_target_order_overrides: BTreeMap::new(),
+        ai_capability_target_bindings: BTreeMap::new(),
     };
     let precheck_start = if let Some(expected_goal_dispatch_version) = goal_dispatch_version {
         let mut hook_runtime = entry_agent_runtime

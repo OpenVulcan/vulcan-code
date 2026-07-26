@@ -99,7 +99,7 @@ pub(super) async fn dispatch(
                 rpc_optional_param(params, "attachments")?,
                 rpc_optional_param(params, "disabledAiCapabilityKinds")?,
                 rpc_optional_param(params, "disabledAiCapabilityTargetSelectors")?,
-                rpc_optional_param(params, "aiCapabilityTargetOrderOverrides")?,
+                rpc_optional_param(params, "aiCapabilityTargetBindings")?,
                 ExistingSessionHydrationPolicy::HydrateIfEmpty,
             )
             .await,

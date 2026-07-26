@@ -80,8 +80,8 @@ impl PersistedAiCapabilityTargetBinding {
         }
     }
 
-    /// Returns the canonical binding key used by deduplication and route-order bookkeeping.
-    /// 返回供去重与路由顺序记账使用的规范绑定键。
+    /// Returns the canonical binding key used by deduplication and explicit selection.
+    /// 返回供去重与显式选择使用的规范绑定键。
     pub fn binding_key(&self) -> String {
         format!("{}::{}", self.capability_kind.key(), self.target_alias())
     }
@@ -123,8 +123,8 @@ pub struct PersistedAiCapabilityVendorEntry {
     /// User-facing vendor instance name.
     /// 面向用户展示的供应商实例名称。
     pub name: String,
-    /// Whether the current vendor instance participates in runtime routing.
-    /// 当前供应商实例是否参与运行时路由。
+    /// Whether the current vendor instance remains available for explicit selection.
+    /// 当前供应商实例是否仍可供显式选择。
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub enabled: bool,
     /// Shared API key or `{env:NAME}` placeholder reused by all enabled targets beneath the vendor.

@@ -58,7 +58,6 @@ import { useComposerSlashCommands } from "@/components/composer/composer-panel/u
 import { useComposerAiCapabilities } from "@/components/composer/composer-panel/use-composer-ai-capabilities";
 import { useComposerSendController } from "@/components/composer/composer-panel/use-composer-send-controller";
 import { useComposerPlanMode } from "@/components/composer/composer-panel/use-composer-plan-mode";
-import { ComposerKnowledgeControl } from "@/components/composer/composer-knowledge-control";
 export { ComposerSessionProgressCapsule } from "@/components/composer/composer-panel/progress-capsule";
 // ComposerPanel renders the first-version message input surface.
 // ComposerPanel 渲染第一版消息输入区域。
@@ -133,6 +132,9 @@ export function ComposerPanel(props: {
   // Routes one projected slash command through the workbench shell.
   // 通过工作台外壳路由单个投影 slash 指令。
   onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;
+  // Opens the project knowledge-library management surface.
+  // 打开项目知识库管理界面。
+  onOpenKnowledge: () => void;
   // Sends one validated composer submission through the caller runtime.
   // 通过调用方运行时发送一条已校验输入区提交。
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
@@ -250,11 +252,12 @@ export function ComposerPanel(props: {
     onSetSessionPlanMode: props.onSetSessionPlanMode,
   });
   // AI capability controller synchronizes session routes and produces the shared submission protocol.
-  // AI 能力控制器同步会话路由并生成共享提交协议。
+  // The AI capability controller synchronizes exact session bindings and builds the shared submission contract.
+  // AI 能力控制器同步会话精确绑定并生成共享提交协议。
   const {
     disabledKinds: disabledAiCapabilityKinds,
     disabledTargetSelectors: disabledAiCapabilityTargetSelectors,
-    targetOrder: aiCapabilityTargetOrder,
+    targetBindings: aiCapabilityTargetBindings,
     submissionConfiguration: aiCapabilitySubmissionConfiguration,
     saveConfiguration: handleAiCapabilityConfigurationSave,
   } = useComposerAiCapabilities({
@@ -470,18 +473,17 @@ export function ComposerPanel(props: {
           <div className="composer-toolbar-left">
             <ComposerAttachmentMenu
               capabilities={enabledAttachmentCapabilities}
+              conversationId={props.conversationId}
+              projectId={props.projectId}
               thinkingDisplayMode={props.thinkingDisplayMode}
               planModeEnabled={planModeEnabled}
               sessionVmmPolicy={props.sessionVmmPolicy}
+              onOpenKnowledge={props.onOpenKnowledge}
               onPick={openAttachmentPicker}
               onThinkingDisplayModeChange={props.onThinkingDisplayModeChange}
               onOpenGoal={() => void openGoalDialog()}
               onPlanModeChange={(enabled) => void handlePlanModeChange(enabled)}
               onVmmPolicyChange={(policy, mode) => void props.onSetSessionVmmPolicy(policy, mode)}
-            />
-            <ComposerKnowledgeControl
-              conversationId={props.conversationId}
-              projectId={props.projectId}
             />
             {planModeEnabled ? (
               <ComposerPlanModeChip
@@ -514,7 +516,7 @@ export function ComposerPanel(props: {
               defaultCapabilities={props.defaultAiCapabilities}
               disabledKinds={disabledAiCapabilityKinds}
               disabledTargetSelectors={disabledAiCapabilityTargetSelectors}
-              targetOrder={aiCapabilityTargetOrder}
+              targetBindings={aiCapabilityTargetBindings}
               locale={locale}
               onSaveConfiguration={handleAiCapabilityConfigurationSave}
               scopeKey={draftSlotKey}

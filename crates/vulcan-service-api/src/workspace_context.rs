@@ -233,6 +233,9 @@ pub struct AiCapabilityTargetSummary {
     /// Whether this target is globally enabled.
     /// 当前目标是否全局启用。
     pub enabled: bool,
+    /// Whether this target is the single explicitly bound target for the capability.
+    /// 当前目标是否为该能力唯一显式绑定的目标。
+    pub selected: bool,
 }
 
 /// Summarizes one shared AI capability vendor configuration.
@@ -249,8 +252,8 @@ pub struct AiCapabilityVendorSummary {
     /// User-facing vendor name.
     /// 面向用户显示的供应商名称。
     pub name: String,
-    /// Whether the vendor participates in runtime routing.
-    /// 该供应商是否参与运行时路由。
+    /// Whether the vendor remains available for explicit selection.
+    /// 该供应商是否仍可供显式选择。
     pub enabled: bool,
     /// Stored API key or environment placeholder.
     /// 已保存的 API Key 或环境变量占位符。

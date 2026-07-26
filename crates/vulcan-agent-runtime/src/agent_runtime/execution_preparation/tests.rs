@@ -328,7 +328,7 @@ fn execution_tool_exposure_applies_ai_capability_allow_and_deny() {
 /// Verifies legacy global tool allow-lists do not hide configured AI fallback tools.
 /// 验证旧版全局工具白名单不会隐藏已配置的 AI 回退工具。
 #[test]
-fn ai_fallback_visibility_ignores_legacy_global_tool_allow_list() {
+fn ai_host_binding_visibility_ignores_legacy_global_tool_allow_list() {
     let snapshot = ToolExposureSnapshot {
         allowed_tools: vec![String::from("shell_command")],
         ..ToolExposureSnapshot::default()
@@ -340,7 +340,7 @@ fn ai_fallback_visibility_ignores_legacy_global_tool_allow_list() {
         "understand_image",
         "understand_image",
         "Read image attachments",
-        VulcanToolSourceKind::AiFallback,
+        VulcanToolSourceKind::AiHostBinding,
         &exposure,
     ));
     assert!(!vulcan_tool_descriptor_is_visible(
@@ -450,7 +450,7 @@ fn prepare_execution_captures_matching_tool_descriptor_and_definition_snapshot()
 }
 
 /// Verifies the provider schema hides knowledge tools when the turn has no effective library.
-/// 验证回合没有生效资料库时 Provider Schema 会隐藏资料库工具。
+/// 验证回合没有生效知识库时 Provider Schema 会隐藏知识库工具。
 #[test]
 fn prepare_execution_hides_knowledge_tools_without_effective_access() {
     let config = test_provider_config();
@@ -477,7 +477,7 @@ fn prepare_execution_hides_knowledge_tools_without_effective_access() {
 }
 
 /// Verifies all three read-only tools become visible for one non-empty immutable access snapshot.
-/// 验证非空不可变访问快照会让三个只读资料库工具全部可见。
+/// 验证非空不可变访问快照会让三个只读知识库工具全部可见。
 #[test]
 fn prepare_execution_exposes_knowledge_tools_for_effective_access() {
     let config = test_provider_config();

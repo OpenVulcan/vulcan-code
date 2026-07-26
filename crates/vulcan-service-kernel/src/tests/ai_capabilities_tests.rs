@@ -25,10 +25,10 @@ fn ai_capabilities_marks_understand_image_native_for_vision_model() {
     assert!(image_capability.targets.is_empty());
 }
 
-/// Verifies configured bridge targets do not mark image understanding as bridged when native image input is active.
-/// 验证原生图片输入启用时，已配置桥接目标不会让图片理解被标记为桥接态。
+/// Verifies an exact host binding remains visible beside native image capability evidence.
+/// 验证精确宿主绑定会与原生图片能力证据同时可见。
 #[test]
-fn ai_capabilities_marks_understand_image_native_not_bridged_for_vision_model() {
+fn ai_capabilities_marks_exact_host_binding_for_vision_model() {
     let configuration = test_understand_image_ai_tool_configuration();
     let model_capabilities = ResolvedModelCapabilities {
         input_modalities: vec![String::from("text"), String::from("image")],
@@ -43,14 +43,15 @@ fn ai_capabilities_marks_understand_image_native_not_bridged_for_vision_model() 
     assert!(image_capability.available);
     assert!(image_capability.enabled);
     assert!(image_capability.native);
-    assert!(!image_capability.bridged);
+    assert!(image_capability.bridged);
     assert_eq!(image_capability.targets.len(), 1);
+    assert!(image_capability.targets[0].selected);
 }
 
-/// Verifies disabling the bridge does not disable native image-understanding capability summaries.
-/// 验证关闭桥接不会禁用原生图片理解能力摘要。
+/// Verifies disabling a capability also disables its native path for the session.
+/// 验证禁用一项能力也会在当前会话中禁用其原生路径。
 #[test]
-fn ai_capabilities_keeps_understand_image_enabled_when_native_bridge_disabled() {
+fn ai_capabilities_disables_native_understand_image_when_explicitly_disabled() {
     let mut configuration = test_understand_image_ai_tool_configuration();
     configuration
         .disabled_capability_kinds
@@ -66,9 +67,9 @@ fn ai_capabilities_keeps_understand_image_enabled_when_native_bridge_disabled() 
         .expect("image-understanding capability summary should exist");
 
     assert!(image_capability.available);
-    assert!(image_capability.enabled);
+    assert!(!image_capability.enabled);
     assert!(image_capability.native);
-    assert!(!image_capability.bridged);
+    assert!(image_capability.bridged);
 }
 
 /// Verifies image understanding reports the host bridge path when a configured target exists for a text-only model.
@@ -93,20 +94,12 @@ fn ai_capabilities_marks_understand_image_bridged_for_text_model() {
     assert_eq!(image_capability.targets.len(), 1);
 }
 
-/// Verifies reordering non-default targets does not create a model-facing runtime notice.
-/// 验证仅重排非默认目标时不会创建面向模型的运行时通知。
+/// Verifies retaining the same exact target binding does not create a model-facing notice.
+/// 验证保持相同精确目标绑定时不会创建面向模型的通知。
 #[test]
-fn ai_capability_update_injection_ignores_non_default_route_reorder() {
-    let previous_configuration = test_web_search_ai_tool_configuration(&[
-        "search/minimax",
-        "search/ollama",
-        "search/tavily",
-    ]);
-    let next_configuration = test_web_search_ai_tool_configuration(&[
-        "search/minimax",
-        "search/tavily",
-        "search/ollama",
-    ]);
+fn ai_capability_update_injection_ignores_unchanged_exact_binding() {
+    let previous_configuration = test_web_search_ai_tool_configuration("search/minimax");
+    let next_configuration = test_web_search_ai_tool_configuration("search/minimax");
 
     let injection = session_ai_capability_configuration_update_injection(
         &previous_configuration,
@@ -116,14 +109,14 @@ fn ai_capability_update_injection_ignores_non_default_route_reorder() {
 
     assert!(
         injection.is_none(),
-        "non-default route swaps should not affect model-facing tool guidance"
+        "an unchanged exact binding should not affect model-facing tool guidance"
     );
 }
 
-/// Verifies bridge setting changes do not create notices when the active model has native image input.
-/// 验证当前模型具备原生图片输入时，桥接设置变化不会创建通知。
+/// Verifies disabling an explicitly selected image capability remains model-visible for native models.
+/// 验证对原生模型禁用显式选择的图片能力时，变化仍对模型可见。
 #[test]
-fn ai_capability_update_injection_ignores_image_bridge_changes_for_native_model() {
+fn ai_capability_update_injection_reports_image_disable_for_native_model() {
     let previous_configuration = test_understand_image_ai_tool_configuration();
     let mut next_configuration = previous_configuration.clone();
     next_configuration
@@ -140,20 +133,20 @@ fn ai_capability_update_injection_ignores_image_bridge_changes_for_native_model(
         Some(&model_capabilities),
     );
 
+    let injection = injection.expect("explicit disable should create a model-facing notice");
     assert!(
-        injection.is_none(),
-        "native image input should make bridge toggles model-invisible"
+        injection.items[0]
+            .content
+            .contains("state changed: DISABLED")
     );
 }
 
-/// Verifies default-route changes do not create notices when the active model has native web search.
-/// 验证当前模型具备原生联网搜索时，默认路由变化不会创建通知。
+/// Verifies exact host binding changes remain visible when the model also has native web search.
+/// 验证模型同时具备原生联网搜索时，精确宿主绑定变化仍保持可见。
 #[test]
-fn ai_capability_update_injection_ignores_web_search_route_changes_for_native_model() {
-    let previous_configuration =
-        test_web_search_ai_tool_configuration(&["search/minimax", "search/ollama"]);
-    let next_configuration =
-        test_web_search_ai_tool_configuration(&["search/ollama", "search/minimax"]);
+fn ai_capability_update_injection_reports_web_search_binding_change_for_native_model() {
+    let previous_configuration = test_web_search_ai_tool_configuration("search/minimax");
+    let next_configuration = test_web_search_ai_tool_configuration("search/ollama");
     let model_capabilities = ResolvedModelCapabilities {
         ai_tools: vec![ResolvedAiToolCapability {
             kind: AiToolKind::WebSearch,
@@ -161,7 +154,7 @@ fn ai_capability_update_injection_ignores_web_search_route_changes_for_native_mo
             native_provider_tool: true,
             native_tool_type: Some(String::from("web_search_preview")),
             native_request_patch: None,
-            fallback_tool_id: None,
+            host_tool_id: None,
             requires_approval: false,
             result_modalities: Vec::new(),
             citation_support: true,
@@ -176,20 +169,16 @@ fn ai_capability_update_injection_ignores_web_search_route_changes_for_native_mo
         Some(&model_capabilities),
     );
 
-    assert!(
-        injection.is_none(),
-        "native web search should make bridge route changes model-invisible"
-    );
+    let injection = injection.expect("explicit host binding change should create a notice");
+    assert!(injection.items[0].content.contains("default route changed"));
 }
 
-/// Verifies changing the first enabled target creates one default-route notice.
-/// 验证首个已启用目标变化时会创建一条默认路由通知。
+/// Verifies changing the exact bound target creates one target-binding notice.
+/// 验证变更精确绑定目标时会创建一条目标绑定通知。
 #[test]
 fn ai_capability_update_injection_reports_default_route_change() {
-    let previous_configuration =
-        test_web_search_ai_tool_configuration(&["search/minimax", "search/ollama"]);
-    let next_configuration =
-        test_web_search_ai_tool_configuration(&["search/ollama", "search/minimax"]);
+    let previous_configuration = test_web_search_ai_tool_configuration("search/minimax");
+    let next_configuration = test_web_search_ai_tool_configuration("search/ollama");
 
     let injection = session_ai_capability_configuration_update_injection(
         &previous_configuration,
@@ -214,10 +203,8 @@ fn ai_capability_update_injection_reports_default_route_change() {
 /// 验证同一能力会将开关与默认路由变化合并进一条压缩作用域持久注入。
 #[test]
 fn ai_capability_update_injection_combines_state_and_default_route_changes_until_compaction() {
-    let previous_configuration =
-        test_web_search_ai_tool_configuration(&["search/minimax", "search/ollama"]);
-    let mut next_configuration =
-        test_web_search_ai_tool_configuration(&["search/ollama", "search/minimax"]);
+    let previous_configuration = test_web_search_ai_tool_configuration("search/minimax");
+    let mut next_configuration = test_web_search_ai_tool_configuration("search/ollama");
     next_configuration
         .disabled_capability_kinds
         .insert(AiToolKind::WebSearch);
@@ -309,16 +296,16 @@ fn test_understand_image_ai_tool_configuration() -> PersistedAiToolConfiguration
             )],
         }],
         understand_image: vulcan_provider_config::config::PersistedUnderstandImageConfiguration {
-            target_order: vec![String::from("minimax/minimax")],
+            selected_target: Some(String::from("minimax/minimax")),
             ..vulcan_provider_config::config::PersistedUnderstandImageConfiguration::default()
         },
         ..PersistedAiToolConfiguration::default()
     }
 }
 
-/// Builds a web-search configuration with ordered enabled host targets.
-/// 构建一份带有有序启用宿主目标的网页搜索配置。
-fn test_web_search_ai_tool_configuration(target_order: &[&str]) -> PersistedAiToolConfiguration {
+/// Builds a web-search configuration with one explicitly selected host target.
+/// 构建一份带有单个显式选择宿主目标的网页搜索配置。
+fn test_web_search_ai_tool_configuration(selected_target: &str) -> PersistedAiToolConfiguration {
     PersistedAiToolConfiguration {
         vendors: vec![PersistedAiCapabilityVendorEntry {
             id: String::from("search"),
@@ -348,10 +335,7 @@ fn test_web_search_ai_tool_configuration(target_order: &[&str]) -> PersistedAiTo
             ],
         }],
         web_search: vulcan_provider_config::config::PersistedWebSearchConfiguration {
-            target_order: target_order
-                .iter()
-                .map(|target| target.to_string())
-                .collect(),
+            selected_target: Some(selected_target.to_string()),
             ..vulcan_provider_config::config::PersistedWebSearchConfiguration::default()
         },
         ..PersistedAiToolConfiguration::default()

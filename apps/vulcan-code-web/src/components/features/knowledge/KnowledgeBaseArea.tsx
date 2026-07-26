@@ -72,28 +72,28 @@ export function knowledgeImportHasCommittedContent(job: KnowledgeImportJobSummar
 }
 
 // KnowledgeBaseArea renders host-owned library content management and portable operations.
-// KnowledgeBaseArea 渲染宿主持有的资料库内容管理与可移植操作。
+// KnowledgeBaseArea 渲染宿主持有的知识库内容管理与可移植操作。
 export function KnowledgeBaseArea() {
   // t resolves all user-visible knowledge-area copy in the active WebUI language.
-  // t 使用当前 WebUI 语言解析资料库区域的全部用户可见文案。
+  // t 使用当前 WebUI 语言解析知识库区域的全部用户可见文案。
   const { t } = useI18n();
   // libraries stores the authoritative registry rows loaded from the service.
   // libraries 保存从服务加载的权威注册记录。
   const [libraries, setLibraries] = React.useState<KnowledgeLibrarySummary[]>([]);
   // sources stores the durable Markdown roots attached to the selected library.
-  // sources 保存关联到选中资料库的持久化 Markdown 根目录。
+  // sources 保存关联到选中知识库的持久化 Markdown 根目录。
   const [sources, setSources] = React.useState<KnowledgeSourceSummary[]>([]);
   // sourcesLoading distinguishes an empty source list from an in-flight management query.
   // sourcesLoading 区分空来源列表与正在进行的管理查询。
   const [sourcesLoading, setSourcesLoading] = React.useState(false);
   // indexIntegrity stores exact revision and physical-row diagnostics for the selected library.
-  // indexIntegrity 保存选中资料库的精确版本与物理记录诊断。
+  // indexIntegrity 保存选中知识库的精确版本与物理记录诊断。
   const [indexIntegrity, setIndexIntegrity] = React.useState<KnowledgeIndexIntegritySummary | null>(null);
   // indexIntegrityLoading distinguishes an unavailable snapshot from an in-flight inspection.
   // indexIntegrityLoading 区分不可用快照与正在进行的检查。
   const [indexIntegrityLoading, setIndexIntegrityLoading] = React.useState(false);
   // sourceRequestSequence rejects stale source-list responses after rapid library selection changes.
-  // sourceRequestSequence 在快速切换资料库后拒绝过期来源列表响应。
+  // sourceRequestSequence 在快速切换知识库后拒绝过期来源列表响应。
   const sourceRequestSequence = React.useRef(0);
   // integrityRequestSequence rejects stale integrity responses after rapid selection changes.
   // integrityRequestSequence 在快速切换选择后拒绝过期完整性响应。
@@ -102,16 +102,16 @@ export function KnowledgeBaseArea() {
   // selectedLibraryId 标识详情面板目标。
   const [selectedLibraryId, setSelectedLibraryId] = React.useState<string | null>(null);
   // createName stores the new-library name field.
-  // createName 保存新资料库名称字段。
+  // createName 保存新知识库名称字段。
   const [createName, setCreateName] = React.useState("");
   // searchText filters the local library summaries.
-  // searchText 筛选本地资料库摘要。
+  // searchText 筛选本地知识库摘要。
   const [searchText, setSearchText] = React.useState("");
   // viewerLibraryId identifies the exact library opened in the dedicated reader dialog.
-  // viewerLibraryId 标识在独立阅读弹窗中打开的精确资料库。
+  // viewerLibraryId 标识在独立阅读弹窗中打开的精确知识库。
   const [viewerLibraryId, setViewerLibraryId] = React.useState<string | null>(null);
   // renameDraft stores editable metadata for the selected library.
-  // renameDraft 保存选中资料库的可编辑元数据。
+  // renameDraft 保存选中知识库的可编辑元数据。
   const [renameDraft, setRenameDraft] = React.useState("");
   // busy stores the exact locale-independent active operation.
   // busy 保存精确且与语言无关的活动操作。
@@ -123,7 +123,7 @@ export function KnowledgeBaseArea() {
   // importJob 保存长时间运行导入期间的专用进度。
   const [importJob, setImportJob] = React.useState<KnowledgeImportJobSummary | null>(null);
   // importLibraryId keeps progress and cancellation bound to the library that started the job.
-  // importLibraryId 将进度和取消操作绑定到启动任务的资料库。
+  // importLibraryId 将进度和取消操作绑定到启动任务的知识库。
   const [importLibraryId, setImportLibraryId] = React.useState<string | null>(null);
   // importProgressOpen controls the dedicated non-blocking import progress dialog.
   // importProgressOpen 控制独立的非阻塞导入进度对话框。
@@ -159,19 +159,19 @@ export function KnowledgeBaseArea() {
   // packagePickerOpen 控制宿主侧 .vkb 文件浏览器。
   const [packagePickerOpen, setPackagePickerOpen] = React.useState(false);
   // packageInspection stores the validated package awaiting an import decision.
-  // packageInspection 保存等待导入决策的已校验资料库包。
+  // packageInspection 保存等待导入决策的已校验知识库包。
   const [packageInspection, setPackageInspection] = React.useState<KnowledgePackageInspection | null>(null);
   // exportPickerOpen controls the destination-directory picker.
   // exportPickerOpen 控制导出目标目录选择器。
   const [exportPickerOpen, setExportPickerOpen] = React.useState(false);
   // exportLibraryId identifies the exact row being exported.
-  // exportLibraryId 标识正在导出的精确资料库行。
+  // exportLibraryId 标识正在导出的精确知识库行。
   const [exportLibraryId, setExportLibraryId] = React.useState<string | null>(null);
   // selectedLibrary resolves the immutable current row from the registry.
   // selectedLibrary 从注册表解析不可变当前记录。
   const selectedLibrary = libraries.find((library) => library.id === selectedLibraryId) ?? null;
   // viewerLibrary resolves the immutable library row owned by the open reader.
-  // viewerLibrary 解析打开的阅读器所持有的不可变资料库记录。
+  // viewerLibrary 解析打开的阅读器所持有的不可变知识库记录。
   const viewerLibrary = libraries.find((library) => library.id === viewerLibraryId) ?? null;
   // exportLibrary resolves the immutable export target selected before directory browsing.
   // exportLibrary 解析在目录浏览前选中的不可变导出目标。
@@ -228,15 +228,15 @@ export function KnowledgeBaseArea() {
   }, []);
 
   // refreshSources reloads one library's source roots and ignores any superseded response.
-  // refreshSources 重新加载一个资料库的来源根目录，并忽略任何已被替代的响应。
+  // refreshSources 重新加载一个知识库的来源根目录，并忽略任何已被替代的响应。
   // Parameters: libraryId is the exact selected library. Returns: a promise completed after projection.
-  // 参数：libraryId 是精确选中的资料库。返回值：投影完成后结束的 Promise。
+  // 参数：libraryId 是精确选中的知识库。返回值：投影完成后结束的 Promise。
   const refreshSources = React.useCallback(async (libraryId: string): Promise<void> => {
     // requestSequence is the monotonic identity for this exact request.
     // requestSequence 是本次精确请求的单调身份。
     const requestSequence = ++sourceRequestSequence.current;
     // Clearing the prior projection prevents a failed request from exposing another library's roots.
-    // 清空上一份投影，避免请求失败后暴露另一个资料库的根目录。
+    // 清空上一份投影，避免请求失败后暴露另一个知识库的根目录。
     setSources([]);
     setSourcesLoading(true);
     try {
@@ -250,9 +250,9 @@ export function KnowledgeBaseArea() {
   }, []);
 
   // refreshIndexIntegrity reloads exact metadata and physical FTS counts for one library.
-  // refreshIndexIntegrity 重新加载一个资料库的精确元数据与物理 FTS 数量。
+  // refreshIndexIntegrity 重新加载一个知识库的精确元数据与物理 FTS 数量。
   // Parameters: libraryId is the exact selected library. Returns: a promise completed after projection.
-  // 参数：libraryId 是精确选中的资料库。返回值：投影完成后结束的 Promise。
+  // 参数：libraryId 是精确选中的知识库。返回值：投影完成后结束的 Promise。
   const refreshIndexIntegrity = React.useCallback(async (libraryId: string): Promise<void> => {
     // requestSequence is the monotonic identity for this exact inspection.
     // requestSequence 是本次精确检查的单调身份。
@@ -290,7 +290,7 @@ export function KnowledgeBaseArea() {
   React.useEffect(() => {
     if (!selectedLibraryId) return;
     // disposed prevents an obsolete selection from projecting job state into the current library.
-    // disposed 防止过期选择将任务状态投影到当前资料库。
+    // disposed 防止过期选择将任务状态投影到当前知识库。
     let disposed = false;
     // timer owns recursive polling only while the exact persisted operation remains active.
     // timer 仅在精确持久化操作保持活动时持有递归轮询。
@@ -300,7 +300,7 @@ export function KnowledgeBaseArea() {
     const poll = async (): Promise<void> => {
       try {
         // job is the latest durable operation row for the exact selected library.
-        // job 是精确选中资料库最近的持久化操作记录。
+        // job 是精确选中知识库最近的持久化操作记录。
         const job = await getKnowledgeImportJob(selectedLibraryId);
         if (disposed) return;
         // active identifies both the persisted queue window and actual execution.
@@ -491,7 +491,7 @@ export function KnowledgeBaseArea() {
   }, [acquireBusy, refreshLibraries, releaseBusy]);
 
   // createLibrary validates and submits one named library.
-  // createLibrary 校验并提交一个命名资料库。
+  // createLibrary 校验并提交一个命名知识库。
   const createLibrary = React.useCallback(async () => {
     const name = createName.trim();
     if (!name) {
@@ -506,7 +506,7 @@ export function KnowledgeBaseArea() {
   }, [createName, runMutation, t]);
 
   // exportPackage writes one consistent package to the selected host directory.
-  // exportPackage 将一个一致性资料库包写入选中的宿主目录。
+  // exportPackage 将一个一致性知识库包写入选中的宿主目录。
   const exportPackage = React.useCallback(async (path: string) => {
     if (!exportLibrary || !acquireBusy("package-export")) return;
     try {
@@ -518,14 +518,14 @@ export function KnowledgeBaseArea() {
   }, [acquireBusy, exportLibrary, releaseBusy, t]);
 
   // inspectPackage validates one selected archive without mutating any library.
-  // inspectPackage 校验一个选中归档且不修改任何资料库。
+  // inspectPackage 校验一个选中归档且不修改任何知识库。
   const inspectPackage = React.useCallback(async (path: string) => {
     const inspection = await inspectKnowledgePackage(path);
     setPackageInspection(inspection);
   }, []);
 
   // executePackageImport creates or explicitly replaces one library from the validated archive.
-  // executePackageImport 从已校验归档新建或显式替换一个资料库。
+  // executePackageImport 从已校验归档新建或显式替换一个知识库。
   const executePackageImport = React.useCallback(async (name: string, strategy: "create" | "replace", targetLibraryId: string | null) => {
     if (!packageInspection) return;
     // operation distinguishes destructive replacement from a new independent import.
@@ -825,7 +825,7 @@ function KnowledgeImportProgress(props: {
 }
 
 // KnowledgeTranslator is the exact localized text resolver used by knowledge progress helpers.
-// KnowledgeTranslator 是资料库进度辅助函数使用的准确本地化文本解析器。
+// KnowledgeTranslator 是知识库进度辅助函数使用的准确本地化文本解析器。
 type KnowledgeTranslator = ReturnType<typeof useI18n>["t"];
 
 // importPhaseStatus returns a truthful headline for non-scan, non-index phases.

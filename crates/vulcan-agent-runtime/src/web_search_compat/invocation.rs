@@ -11,12 +11,6 @@ pub(super) fn parse_web_search_invocation(args: Value) -> Result<WebSearchInvoca
     let object = args
         .as_object()
         .ok_or_else(|| String::from("web_search 参数必须是 JSON 对象。"))?;
-    let target = object
-        .get("target")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
     let query = object
         .get("query")
         .and_then(Value::as_str)
@@ -31,9 +25,5 @@ pub(super) fn parse_web_search_invocation(args: Value) -> Result<WebSearchInvoca
         .filter(|value| *value > 0)
         .map(|value| value.clamp(1, 20));
 
-    Ok(WebSearchInvocation {
-        target,
-        query,
-        max_results,
-    })
+    Ok(WebSearchInvocation { query, max_results })
 }

@@ -1,20 +1,14 @@
 import React from "react";
-import { BookMarked, CheckCircle2 } from "lucide-react";
+import { BookMarked, Settings2 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import {
-  DropdownMenu,
   DropdownMenuCheckboxItem,
-  DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import {
   getSessionKnowledgeLibraries,
   listKnowledgeLibraries,
@@ -25,11 +19,10 @@ import type {
   KnowledgeLibrarySummary,
   SessionKnowledgeLibrarySelectionSummary,
 } from "@/types";
-import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
 
 // ComposerKnowledgeControlProps identifies the session and project whose knowledge selection is edited.
-// ComposerKnowledgeControlProps 标识要编辑资料库选择的会话与项目。
+// ComposerKnowledgeControlProps 标识要编辑知识库选择的会话与项目。
 export interface ComposerKnowledgeControlProps {
   // Owning project identifier; null disables the selector.
   // 所属项目标识符；为空时禁用选择器。
@@ -37,6 +30,9 @@ export interface ComposerKnowledgeControlProps {
   // Owning conversation identifier; null disables persistence.
   // 所属会话标识符；为空时禁用持久化。
   conversationId: string | null;
+  // Opens the project knowledge-library management surface.
+  // 打开项目知识库管理界面。
+  onOpenKnowledge: () => void;
 }
 
 // nextExplicitKnowledgeLibraryIds derives a deduplicated explicit selection from one checkbox change.
@@ -46,20 +42,20 @@ export function nextExplicitKnowledgeLibraryIds(
   libraryId: string,
   checked: boolean,
 ): string[] {
-  const currentIds = selection?.mode === "explicit" ? selection.libraryIds : [];
+  const currentIds = selection?.effectiveLibraryIds ?? [];
   return checked
     ? [...new Set([...currentIds, libraryId])]
     : currentIds.filter((candidateId) => candidateId !== libraryId);
 }
 
-// ComposerKnowledgeControl renders the session-scoped knowledge selector beside the prompt controls.
-// ComposerKnowledgeControl 在提示词控件旁渲染会话级资料库选择器。
+// ComposerKnowledgeControl renders the session-scoped knowledge selector inside the composer plus menu.
+// ComposerKnowledgeControl 在输入区加号菜单内渲染会话级知识库选择器。
 export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
   // t resolves session knowledge-control copy in the active WebUI language.
-  // t 使用当前 WebUI 语言解析会话资料库控件文案。
+  // t 使用当前 WebUI 语言解析会话知识库控件文案。
   const { t } = useI18n();
   // libraries contains only libraries authorized for the active project.
-  // libraries 仅包含当前项目已授权的资料库。
+  // libraries 仅包含当前项目已授权的知识库。
   const [libraries, setLibraries] = React.useState<KnowledgeLibrarySummary[]>([]);
   // selection mirrors the persisted and authorization-filtered session choice.
   // selection 对齐已持久化且经过授权过滤的会话选择。
@@ -84,7 +80,7 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
   const latestRefresh = React.useRef<() => Promise<void>>(async () => {});
 
   // refresh reloads the authoritative authorized libraries and persisted session projection.
-  // refresh 重新加载权威授权资料库与持久会话投影。
+  // refresh 重新加载权威授权知识库与持久会话投影。
   // Parameters: none. Returns: a promise completed after the newest response is applied or discarded.
   // 参数：无。返回值：最新响应应用或丢弃后完成的 Promise。
   const refresh = React.useCallback(async (): Promise<void> => {
@@ -162,65 +158,60 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
     }
   }, [props.conversationId, props.projectId]);
 
-  // effectiveCount is the compact enabled-library count shown on the trigger.
-  // effectiveCount 是触发器显示的紧凑已启用资料库数量。
+  // effectiveCount is the enabled-library count shown on the knowledge submenu trigger.
+  // effectiveCount 是知识库子菜单入口显示的已启用知识库数量。
   const effectiveCount = selection?.effectiveLibraryIds.length ?? 0;
-  // disabled explains that draft conversations or unauthorized projects cannot persist a choice.
-  // disabled 表示草稿会话或无授权项目无法持久化选择。
-  const disabled = !props.projectId || !props.conversationId;
+  // selectionDisabled prevents persistence before a project conversation exists.
+  // selectionDisabled 在项目会话存在前阻止持久化选择。
+  const selectionDisabled = !props.projectId || !props.conversationId;
   return (
-    <DropdownMenu onOpenChange={(open) => {
+    <DropdownMenuSub onOpenChange={(open) => {
       if (open) void refresh();
     }}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <DropdownMenuTrigger asChild>
-            <Button
-              aria-label={t("knowledge.composer.aria")}
-              aria-busy={loading}
-              className={cn("composer-knowledge-trigger", effectiveCount > 0 && "enabled")}
-              disabled={disabled}
-              size="sm"
-              type="button"
-              variant="secondary"
-            >
-              <BookMarked size={15} />
-              <span>{effectiveCount > 0 ? `${t("knowledge.composer.label")} ${effectiveCount}` : t("knowledge.composer.label")}</span>
-            </Button>
-          </DropdownMenuTrigger>
-        </TooltipTrigger>
-        <TooltipContent className="composer-control-tooltip" side="top">
-          <strong>{error ?? (libraries.length === 0 ? t("knowledge.composer.noneAuthorized") : t("knowledge.composer.description"))}</strong>
-        </TooltipContent>
-      </Tooltip>
-      <DropdownMenuContent align="start" className="composer-knowledge-menu" side="top" sideOffset={8}>
-        <DropdownMenuItem disabled={loading} onSelect={() => void persist("inherit", [])}>
-          <span>{t("knowledge.inheritProjectDefault")}</span>
-          {selection?.mode === "inherit" ? <CheckCircle2 size={14} /> : null}
+      <DropdownMenuSubTrigger aria-label={t("knowledge.composer.aria")}>
+        <BookMarked size={15} />
+        <span>
+          {effectiveCount > 0
+            ? `${t("knowledge.composer.label")} ${effectiveCount}`
+            : t("knowledge.composer.label")}
+        </span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="composer-knowledge-menu">
+        <DropdownMenuItem onSelect={props.onOpenKnowledge}>
+          <Settings2 size={15} />
+          <span>{t("knowledge.composer.manage")}</span>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        {libraries.map((library) => {
-          const checked = selection?.mode === "explicit" && selection.libraryIds.includes(library.id);
-          return (
-            <DropdownMenuCheckboxItem
-              checked={checked}
-              disabled={loading}
-              key={library.id}
-              onCheckedChange={(nextChecked) => {
-                const nextIds = nextExplicitKnowledgeLibraryIds(
-                  selection,
-                  library.id,
-                  Boolean(nextChecked),
-                );
-                void persist("explicit", nextIds);
-              }}
-              onSelect={(event) => event.preventDefault()}
-            >
-              <span>{library.name}</span>
-            </DropdownMenuCheckboxItem>
-          );
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
+        {error ? (
+          <DropdownMenuItem disabled>{error}</DropdownMenuItem>
+        ) : libraries.length === 0 ? (
+          <DropdownMenuItem disabled>{t("knowledge.composer.noneAuthorized")}</DropdownMenuItem>
+        ) : (
+          libraries.map((library) => {
+            // checked reflects the service-authoritative effective state in both inherited and explicit modes.
+            // checked 在继承与显式模式下都反映服务端权威的实际生效状态。
+            const checked = selection?.effectiveLibraryIds.includes(library.id) ?? false;
+            return (
+              <DropdownMenuCheckboxItem
+                checked={checked}
+                disabled={loading || selectionDisabled}
+                key={library.id}
+                onCheckedChange={(nextChecked) => {
+                  const nextIds = nextExplicitKnowledgeLibraryIds(
+                    selection,
+                    library.id,
+                    Boolean(nextChecked),
+                  );
+                  void persist("explicit", nextIds);
+                }}
+                onSelect={(event) => event.preventDefault()}
+              >
+                <span>{library.name}</span>
+              </DropdownMenuCheckboxItem>
+            );
+          })
+        )}
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   );
 }

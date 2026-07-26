@@ -1,5 +1,5 @@
 //! Knowledge-base lifecycle, import, authorization, and BM25 runtime.
-//! 资料库生命周期、导入、授权与 BM25 运行时。
+//! 知识库生命周期、导入、授权与 BM25 运行时。
 
 use super::markdown::{
     chunk_markdown, extract_document_title, normalize_markdown_newlines, sha256_hex,
@@ -63,7 +63,7 @@ const MAX_DOCUMENT_PAGE_SIZE: u32 = 500;
 /// 联合检索结果的最大数量。
 const MAX_SEARCH_LIMIT: u32 = 200;
 /// Reciprocal-rank-fusion constant used across physical libraries.
-/// 跨物理资料库使用的倒数排名融合常量。
+/// 跨物理知识库使用的倒数排名融合常量。
 const RRF_K: f64 = 60.0;
 /// Exact internal marker used to distinguish cancellation from failures.
 /// 用于区分取消与失败的精确内部标记。
@@ -78,11 +78,11 @@ const KNOWLEDGE_PACKAGE_LIBRARY_MANIFEST_ENTRY: &str = "library/manifest.json";
 /// 可移植包 SQLite 的精确条目名称。
 const KNOWLEDGE_PACKAGE_DATABASE_ENTRY: &str = "library/content.sqlite3";
 /// Prefix reserved for host-owned package extraction directories removed during startup recovery.
-/// 宿主持有的资料库包解压目录保留前缀，启动恢复期间会清理这些目录。
+/// 宿主持有的知识库包解压目录保留前缀，启动恢复期间会清理这些目录。
 const KNOWLEDGE_PACKAGE_INSPECTION_TEMP_PREFIX: &str = ".package-inspect-";
 
 /// Version of the crash-recovery journal used by explicit package replacement.
-/// 显式资料库包覆盖使用的崩溃恢复日志版本。
+/// 显式知识库包覆盖使用的崩溃恢复日志版本。
 const KNOWLEDGE_REPLACEMENT_JOURNAL_VERSION: u32 = 1;
 /// Journal phase written before either replacement directory rename.
 /// 在任一覆盖目录改名前写入的日志阶段。
@@ -95,20 +95,20 @@ const KNOWLEDGE_REPLACEMENT_PHASE_COMMITTED: &str = "committed";
 const MAX_KNOWLEDGE_PACKAGE_JSON_BYTES: u64 = 1024 * 1024;
 
 /// Host-native knowledge runtime sharing the controller connection and application registry.
-/// 共享控制器连接与应用注册表的宿主原生资料库运行时。
+/// 共享控制器连接与应用注册表的宿主原生知识库运行时。
 #[derive(Clone)]
 pub struct KnowledgeBaseRuntime {
     /// Long-lived controller data-plane handle.
     /// 长生命周期控制器数据面句柄。
     controller: ControllerRuntimeHandle,
     /// Per-library exclusive mutation locks.
-    /// 每资料库独占变更锁。
+    /// 每知识库独占变更锁。
     mutation_locks: Arc<Mutex<BTreeMap<String, Arc<Mutex<()>>>>>,
     /// Serializes first-time binding activation and protects the active-binding cache.
     /// 串行化首次绑定激活并保护活动绑定缓存。
     binding_activation_lock: Arc<Mutex<()>>,
     /// Library identifiers whose controller SQLite binding is already active.
-    /// 控制器 SQLite 绑定已经激活的资料库标识符。
+    /// 控制器 SQLite 绑定已经激活的知识库标识符。
     active_bindings: Arc<Mutex<BTreeSet<String>>>,
     /// Exact active import or index-maintenance operations with cooperative cancellation.
     /// 支持协作取消的精确活动导入或索引维护操作。
@@ -116,17 +116,17 @@ pub struct KnowledgeBaseRuntime {
 }
 
 /// Process-local knowledge runtime state shared by every wrapper over one controller handle.
-/// 由同一控制器句柄的所有包装运行时共享的进程内资料库状态。
+/// 由同一控制器句柄的所有包装运行时共享的进程内知识库状态。
 #[derive(Default)]
 pub(crate) struct KnowledgeBaseRuntimeSharedState {
     /// Per-library exclusive mutation locks.
-    /// 每资料库独占变更锁。
+    /// 每知识库独占变更锁。
     mutation_locks: Arc<Mutex<BTreeMap<String, Arc<Mutex<()>>>>>,
     /// Serializes first-time binding activation and protects the active-binding cache.
     /// 串行化首次绑定激活并保护活动绑定缓存。
     binding_activation_lock: Arc<Mutex<()>>,
     /// Library identifiers whose controller SQLite binding is already active.
-    /// 控制器 SQLite 绑定已经激活的资料库标识符。
+    /// 控制器 SQLite 绑定已经激活的知识库标识符。
     active_bindings: Arc<Mutex<BTreeSet<String>>>,
     /// Exact active import or index-maintenance operations with cooperative cancellation.
     /// 支持协作取消的精确活动导入或索引维护操作。
@@ -153,7 +153,7 @@ struct PreparedKnowledgeOperation {
     /// 不可变操作任务标识符。
     job_id: String,
     /// Immutable target library identifier.
-    /// 不可变目标资料库标识符。
+    /// 不可变目标知识库标识符。
     library_id: String,
     /// Stable operation kind persisted before execution starts.
     /// 执行开始前持久化的稳定操作类型。
@@ -187,18 +187,18 @@ fn signal_matching_operation_cancellation(
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct KnowledgeManifest {
     /// Immutable library identifier.
-    /// 不可变资料库标识符。
+    /// 不可变知识库标识符。
     library_id: String,
     /// User-visible name copied for diagnostics and exportability.
     /// 为诊断和可导出性复制的用户可见名称。
     name: String,
     /// Per-library schema version.
-    /// 单资料库结构版本。
+    /// 单知识库结构版本。
     schema_version: i64,
 }
 
 /// Validated package extracted into one host-controlled temporary directory.
-/// 已解压到宿主受控临时目录中的已校验资料库包。
+/// 已解压到宿主受控临时目录中的已校验知识库包。
 struct PreparedKnowledgePackage {
     /// Temporary directory retaining extracted files for the operation lifetime.
     /// 在操作生命周期内保留解压文件的临时目录。
@@ -220,7 +220,7 @@ struct KnowledgeReplacementJournal {
     /// 日志协议版本。
     version: u32,
     /// Exact retained target library identity.
-    /// 精确保留的目标资料库身份。
+    /// 精确保留的目标知识库身份。
     target_library_id: String,
     /// Exact sibling backup directory name derived by the host.
     /// 由宿主派生的精确同级备份目录名称。
@@ -266,7 +266,7 @@ impl KnowledgeReplacementJournalGuard {
         self.retain = true;
         fs::remove_file(&self.path).map_err(|error| {
             format!(
-                "删除资料库覆盖恢复日志失败（{}）：{error}",
+                "删除知识库覆盖恢复日志失败（{}）：{error}",
                 self.path.display()
             )
         })
@@ -292,11 +292,11 @@ impl PreparedKnowledgePackage {
 }
 
 /// One registry row decoded from the application database.
-/// 从应用数据库解码的一条资料库注册记录。
+/// 从应用数据库解码的一条知识库注册记录。
 #[derive(Debug, Deserialize)]
 struct LibraryRow {
     /// Immutable library identifier.
-    /// 不可变资料库标识符。
+    /// 不可变知识库标识符。
     id: String,
     /// User-visible name.
     /// 用户可见名称。
@@ -332,7 +332,7 @@ struct LibraryRow {
 #[derive(Debug, Deserialize)]
 struct ProjectBindingRow {
     /// Immutable library identifier.
-    /// 不可变资料库标识符。
+    /// 不可变知识库标识符。
     library_id: String,
     /// Immutable project identifier.
     /// 不可变项目标识符。
@@ -491,7 +491,7 @@ struct DocumentSummaryRow {
 #[derive(Debug, Deserialize)]
 struct DocumentFolderRow {
     /// Slash-normalized folder path; an empty value identifies the library root.
-    /// 使用斜杠规范化的目录路径；空值表示资料库根目录。
+    /// 使用斜杠规范化的目录路径；空值表示知识库根目录。
     folder_path: String,
 }
 
@@ -563,7 +563,7 @@ struct ImportJobRow {
     /// 持久化任务标识符。
     id: String,
     /// Target library identifier.
-    /// 目标资料库标识符。
+    /// 目标知识库标识符。
     library_id: String,
     /// Stable persisted import or index-maintenance operation kind.
     /// 稳定持久化的导入或索引维护操作类型。
@@ -604,7 +604,7 @@ struct ImportJobRow {
 }
 
 /// Whether the derived FTS virtual table exists in one isolated library database.
-/// 派生 FTS 虚拟表是否存在于一个隔离资料库数据库中。
+/// 派生 FTS 虚拟表是否存在于一个隔离知识库数据库中。
 #[derive(Debug, Deserialize)]
 struct IndexTablePresenceRow {
     /// SQLite integer boolean indicating exact table-name presence.
@@ -703,7 +703,7 @@ enum ImportIndexSyncOutcome {
 
 impl KnowledgeBaseRuntime {
     /// Creates a knowledge runtime from the established application data plane.
-    /// 从已建立的应用数据面创建资料库运行时。
+    /// 从已建立的应用数据面创建知识库运行时。
     pub fn new(controller: ControllerRuntimeHandle) -> Self {
         // sharedState ensures independently reconstructed AI and WebUI runtimes coordinate the same bindings and operations.
         // sharedState 确保独立重建的 AI 与 WebUI 运行时协调同一组绑定和操作。
@@ -718,7 +718,7 @@ impl KnowledgeBaseRuntime {
     }
 
     /// Marks abandoned queued or running knowledge operations as interrupted during service startup.
-    /// 服务启动时将遗留的排队或运行中资料库操作标记为已中断。
+    /// 服务启动时将遗留的排队或运行中知识库操作标记为已中断。
     pub async fn recover_interrupted_jobs(&self) -> Result<(), String> {
         self.controller
             .client
@@ -729,19 +729,19 @@ impl KnowledgeBaseRuntime {
                 vec![int(unix_epoch_millis()?)],
             )
             .await
-            .map_err(|error| format!("恢复资料库操作状态失败：{error}"))?;
+            .map_err(|error| format!("恢复知识库操作状态失败：{error}"))?;
         self.recover_interrupted_replacements().await?;
         self.cleanup_orphan_package_directories().await?;
         Ok(())
     }
 
     /// Recovers every durable replacement journal before the knowledge runtime becomes available.
-    /// 在资料库运行时可用前恢复每一份持久化覆盖日志。
+    /// 在知识库运行时可用前恢复每一份持久化覆盖日志。
     async fn recover_interrupted_replacements(&self) -> Result<(), String> {
         let knowledge_root = self.knowledge_root();
         fs::create_dir_all(&knowledge_root).map_err(|error| {
             format!(
-                "创建资料库根目录用于覆盖恢复失败（{}）：{error}",
+                "创建知识库根目录用于覆盖恢复失败（{}）：{error}",
                 knowledge_root.display()
             )
         })?;
@@ -749,20 +749,20 @@ impl KnowledgeBaseRuntime {
         // journalPaths 经过排序，使重复恢复保持确定性。
         let mut journal_paths = Vec::new();
         for entry in fs::read_dir(&knowledge_root)
-            .map_err(|error| format!("扫描资料库覆盖恢复日志失败：{error}"))?
+            .map_err(|error| format!("扫描知识库覆盖恢复日志失败：{error}"))?
         {
-            let entry = entry.map_err(|error| format!("读取资料库覆盖恢复目录项失败：{error}"))?;
+            let entry = entry.map_err(|error| format!("读取知识库覆盖恢复目录项失败：{error}"))?;
             let name = entry.file_name().to_string_lossy().into_owned();
             if !name.starts_with(".replacement-") || !name.ends_with(".json") {
                 continue;
             }
             let metadata = fs::symlink_metadata(entry.path())
-                .map_err(|error| format!("读取资料库覆盖恢复日志类型失败：{error}"))?;
+                .map_err(|error| format!("读取知识库覆盖恢复日志类型失败：{error}"))?;
             if !metadata.is_file() || metadata_is_link_or_reparse(&metadata) {
-                return Err(format!("资料库覆盖恢复日志不是可信普通文件：{name}"));
+                return Err(format!("知识库覆盖恢复日志不是可信普通文件：{name}"));
             }
             if metadata.len() > MAX_KNOWLEDGE_PACKAGE_JSON_BYTES {
-                return Err(format!("资料库覆盖恢复日志超过大小上限：{name}"));
+                return Err(format!("知识库覆盖恢复日志超过大小上限：{name}"));
             }
             journal_paths.push(entry.path());
         }
@@ -772,9 +772,9 @@ impl KnowledgeBaseRuntime {
             // journal 会在使用任何派生路径前完成校验。
             let journal: KnowledgeReplacementJournal = serde_json::from_slice(
                 &fs::read(&journal_path)
-                    .map_err(|error| format!("读取资料库覆盖恢复日志失败：{error}"))?,
+                    .map_err(|error| format!("读取知识库覆盖恢复日志失败：{error}"))?,
             )
-            .map_err(|error| format!("解析资料库覆盖恢复日志失败：{error}"))?;
+            .map_err(|error| format!("解析知识库覆盖恢复日志失败：{error}"))?;
             let operation_id = validate_replacement_journal(&journal)?;
             let expected_journal_name = format!(
                 ".replacement-{}-{operation_id}.json",
@@ -784,7 +784,7 @@ impl KnowledgeBaseRuntime {
                 != Some(expected_journal_name.as_str())
             {
                 return Err(format!(
-                    "资料库覆盖恢复日志文件名与日志身份不匹配：{}",
+                    "知识库覆盖恢复日志文件名与日志身份不匹配：{}",
                     journal_path.display()
                 ));
             }
@@ -792,13 +792,13 @@ impl KnowledgeBaseRuntime {
             let backup_root = knowledge_root.join(&journal.backup_directory_name);
             let backup_exists = backup_root
                 .try_exists()
-                .map_err(|error| format!("检查资料库覆盖备份失败：{error}"))?;
+                .map_err(|error| format!("检查知识库覆盖备份失败：{error}"))?;
             if backup_exists {
                 let metadata = fs::symlink_metadata(&backup_root)
-                    .map_err(|error| format!("读取资料库覆盖备份类型失败：{error}"))?;
+                    .map_err(|error| format!("读取知识库覆盖备份类型失败：{error}"))?;
                 if !metadata.is_dir() || metadata_is_link_or_reparse(&metadata) {
                     return Err(format!(
-                        "资料库覆盖备份不是可信普通目录：{}",
+                        "知识库覆盖备份不是可信普通目录：{}",
                         backup_root.display()
                     ));
                 }
@@ -852,7 +852,7 @@ impl KnowledgeBaseRuntime {
                             != current.chunk_count
                     {
                         return Err(String::from(
-                            "已提交资料库覆盖的注册计数与 SQLite 内容不一致。",
+                            "已提交知识库覆盖的注册计数与 SQLite 内容不一致。",
                         ));
                     }
                     if backup_exists {
@@ -866,7 +866,7 @@ impl KnowledgeBaseRuntime {
             }
             fs::remove_file(&journal_path).map_err(|error| {
                 format!(
-                    "完成恢复后删除资料库覆盖日志失败（{}）：{error}",
+                    "完成恢复后删除知识库覆盖日志失败（{}）：{error}",
                     journal_path.display()
                 )
             })?;
@@ -875,7 +875,7 @@ impl KnowledgeBaseRuntime {
     }
 
     /// Removes abandoned package extraction directories and UUID staging directories without registry rows.
-    /// 移除遗留的资料库包解压目录以及没有注册记录的 UUID 暂存目录。
+    /// 移除遗留的知识库包解压目录以及没有注册记录的 UUID 暂存目录。
     async fn cleanup_orphan_package_directories(&self) -> Result<(), String> {
         // registeredIds includes every lifecycle state so recovery never deletes registered data.
         // registeredIds 包含所有生命周期状态，确保恢复不会删除已注册数据。
@@ -887,12 +887,12 @@ impl KnowledgeBaseRuntime {
             .collect();
         let knowledge_root = self.knowledge_root();
         for entry in fs::read_dir(&knowledge_root)
-            .map_err(|error| format!("扫描资料库包孤立暂存目录失败：{error}"))?
+            .map_err(|error| format!("扫描知识库包孤立暂存目录失败：{error}"))?
         {
-            let entry = entry.map_err(|error| format!("读取资料库包孤立目录项失败：{error}"))?;
+            let entry = entry.map_err(|error| format!("读取知识库包孤立目录项失败：{error}"))?;
             let name = entry.file_name().to_string_lossy().into_owned();
             // orphanLibrary identifies an unregistered UUID directory created by package installation.
-            // orphanLibrary 标识资料库包安装创建但未注册的 UUID 目录。
+            // orphanLibrary 标识知识库包安装创建但未注册的 UUID 目录。
             let orphan_library =
                 validate_library_id(&name).is_ok() && !registered_ids.contains(&name);
             // abandonedExtraction identifies a TempDir that survived process termination before Drop cleanup.
@@ -902,9 +902,9 @@ impl KnowledgeBaseRuntime {
                 continue;
             }
             let metadata = fs::symlink_metadata(entry.path())
-                .map_err(|error| format!("读取资料库包孤立目录类型失败：{error}"))?;
+                .map_err(|error| format!("读取知识库包孤立目录类型失败：{error}"))?;
             if !metadata.is_dir() || metadata_is_link_or_reparse(&metadata) {
-                return Err(format!("资料库包孤立暂存项不是可信普通目录：{name}"));
+                return Err(format!("知识库包孤立暂存项不是可信普通目录：{name}"));
             }
             if orphan_library {
                 self.release_library_binding(&name).await?;
@@ -915,16 +915,16 @@ impl KnowledgeBaseRuntime {
     }
 
     /// Requests cancellation only when both the library and active operation identities match.
-    /// 仅在资料库与活动操作身份都匹配时请求取消。
+    /// 仅在知识库与活动操作身份都匹配时请求取消。
     ///
     /// Parameters: `library_id` selects the exact library and `job_id` rejects stale requests.
     /// Returns: whether the matching live operation accepted the cancellation signal.
-    /// 参数：`library_id` 选择精确资料库，`job_id` 用于拒绝过期请求。返回值：匹配活动操作是否接受取消信号。
+    /// 参数：`library_id` 选择精确知识库，`job_id` 用于拒绝过期请求。返回值：匹配活动操作是否接受取消信号。
     pub async fn cancel_operation(&self, library_id: &str, job_id: &str) -> Result<bool, String> {
         validate_library_id(library_id)?;
-        Uuid::parse_str(job_id).map_err(|error| format!("资料库操作任务标识符无效：{error}"))?;
+        Uuid::parse_str(job_id).map_err(|error| format!("知识库操作任务标识符无效：{error}"))?;
         // Operations contains the only runtime-owned cancellation identity for each library.
-        // Operations 包含每个资料库唯一由运行时持有的取消身份。
+        // Operations 包含每个知识库唯一由运行时持有的取消身份。
         let operations = self.active_operations.lock().await;
         Ok(signal_matching_operation_cancellation(
             operations.get(library_id),
@@ -942,7 +942,7 @@ impl KnowledgeBaseRuntime {
     }
 
     /// Returns the latest durable import job for one library.
-    /// 返回一个资料库最近的持久化导入任务。
+    /// 返回一个知识库最近的持久化导入任务。
     pub async fn latest_import_job(
         &self,
         library_id: &str,
@@ -974,7 +974,7 @@ impl KnowledgeBaseRuntime {
                     current_file: row.current_file,
                     processed_bytes: nonnegative_u64(row.processed_bytes, "processed_bytes")?,
                     warnings: serde_json::from_str(&row.warnings_json)
-                        .map_err(|error| format!("解析资料库导入告警失败：{error}"))?,
+                        .map_err(|error| format!("解析知识库导入告警失败：{error}"))?,
                     error_message: row.error_message,
                 })
             })
@@ -982,7 +982,7 @@ impl KnowledgeBaseRuntime {
     }
 
     /// Creates one isolated knowledge library and optional initial project bindings.
-    /// 创建一个隔离资料库以及可选的初始项目绑定。
+    /// 创建一个隔离知识库以及可选的初始项目绑定。
     pub async fn create_library(
         &self,
         name: &str,
@@ -1012,7 +1012,7 @@ impl KnowledgeBaseRuntime {
                 ]],
             )
             .await
-            .map_err(|error| format!("创建资料库注册记录失败：{error}"))?;
+            .map_err(|error| format!("创建知识库注册记录失败：{error}"))?;
 
         let initialize_result = async {
             self.initialize_library_storage(&library_id, &normalized_name)
@@ -1046,7 +1046,7 @@ impl KnowledgeBaseRuntime {
     }
 
     /// Renames one active library without moving its physical directory or rebuilding FTS.
-    /// 重命名一个活动资料库，但不移动物理目录或重建 FTS。
+    /// 重命名一个活动知识库，但不移动物理目录或重建 FTS。
     pub async fn rename_library(
         &self,
         library_id: &str,
@@ -1072,7 +1072,7 @@ impl KnowledgeBaseRuntime {
                 ],
             )
             .await
-            .map_err(|error| format!("重命名资料库失败：{error}"))?;
+            .map_err(|error| format!("重命名知识库失败：{error}"))?;
 
         let manifest = KnowledgeManifest {
             library_id: library_id.to_string(),
@@ -1102,7 +1102,7 @@ impl KnowledgeBaseRuntime {
     }
 
     /// Exports one complete ready library into a portable .vkb archive.
-    /// 将一个完整且就绪的资料库导出为可移植 .vkb 归档。
+    /// 将一个完整且就绪的知识库导出为可移植 .vkb 归档。
     pub async fn export_package(
         &self,
         library_id: &str,
@@ -1112,7 +1112,7 @@ impl KnowledgeBaseRuntime {
         let library = self.require_active_library(library_id).await?;
         if library.index_status != "ready" {
             return Err(format!(
-                "资料库索引状态不是 ready，不能导出免重建包：{}",
+                "知识库索引状态不是 ready，不能导出免重建包：{}",
                 library.index_status
             ));
         }
@@ -1122,7 +1122,7 @@ impl KnowledgeBaseRuntime {
             .await?;
         self.verify_index_integrity(&space_id, &binding_id).await?;
         // authoritativeCounts prevents exporting a package whose public manifest cannot validate on reimport.
-        // authoritativeCounts 防止导出公开清单在重新导入时无法通过校验的资料库包。
+        // authoritativeCounts 防止导出公开清单在重新导入时无法通过校验的知识库包。
         let authoritative_counts = self.authoritative_counts(&space_id, &binding_id).await?;
         if nonnegative_u64(authoritative_counts.document_count, "document_count")?
             != library.document_count
@@ -1130,7 +1130,7 @@ impl KnowledgeBaseRuntime {
                 != library.chunk_count
         {
             return Err(String::from(
-                "资料库注册计数与 SQLite 权威内容不一致，拒绝导出。",
+                "知识库注册计数与 SQLite 权威内容不一致，拒绝导出。",
             ));
         }
         self.controller
@@ -1142,7 +1142,7 @@ impl KnowledgeBaseRuntime {
                 Vec::new(),
             )
             .await
-            .map_err(|error| format!("导出前收口资料库 SQLite 日志失败：{error}"))?;
+            .map_err(|error| format!("导出前收口知识库 SQLite 日志失败：{error}"))?;
         self.release_library_binding(library_id).await?;
         let export_result = export_knowledge_package_files(
             &library,
@@ -1159,7 +1159,7 @@ impl KnowledgeBaseRuntime {
             (Ok(result), Ok(())) => Ok(result),
             (Err(error), Ok(())) => Err(error),
             (Ok(_), Err(restore_error)) => Err(format!(
-                "资料库包已经写出，但恢复 SQLite 绑定失败：{restore_error}"
+                "知识库包已经写出，但恢复 SQLite 绑定失败：{restore_error}"
             )),
             (Err(error), Err(restore_error)) => Err(format!(
                 "{error}；同时恢复 SQLite 绑定失败：{restore_error}"
@@ -1168,7 +1168,7 @@ impl KnowledgeBaseRuntime {
     }
 
     /// Inspects one package without changing registry or physical library state.
-    /// 检查一个资料库包且不改变注册表或物理资料库状态。
+    /// 检查一个知识库包且不改变注册表或物理知识库状态。
     pub async fn inspect_package(
         &self,
         archive_path: &Path,
@@ -1176,7 +1176,7 @@ impl KnowledgeBaseRuntime {
         let canonical_archive = canonical_knowledge_package_path(archive_path)?;
         let prepared = prepare_knowledge_package(&canonical_archive, &self.knowledge_root())?;
         // validationLibraryId isolates transient full-database checks from every registered library.
-        // validationLibraryId 将临时完整数据库检查与全部已注册资料库隔离。
+        // validationLibraryId 将临时完整数据库检查与全部已注册知识库隔离。
         let validation_library_id = Uuid::new_v4().to_string();
         // validationResult opens the copied SQLite and validates metadata, counts, and FTS readiness.
         // validationResult 打开复制的 SQLite，并校验元数据、计数和 FTS 就绪状态。
@@ -1188,7 +1188,7 @@ impl KnowledgeBaseRuntime {
             )
             .await;
         // cleanupResult guarantees the read-only inspection leaves no temporary library behind.
-        // cleanupResult 保证只读检查不会遗留临时资料库。
+        // cleanupResult 保证只读检查不会遗留临时知识库。
         let cleanup_result = self
             .cleanup_failed_package_install(&validation_library_id)
             .await;
@@ -1198,7 +1198,7 @@ impl KnowledgeBaseRuntime {
             (Ok(()), Err(cleanup_error)) => return Err(cleanup_error),
             (Err(error), Err(cleanup_error)) => {
                 return Err(format!(
-                    "{error}；同时清理包检查暂存资料库失败：{cleanup_error}"
+                    "{error}；同时清理包检查暂存知识库失败：{cleanup_error}"
                 ));
             }
         }
@@ -1213,7 +1213,7 @@ impl KnowledgeBaseRuntime {
     }
 
     /// Imports one package as a new independent library without rebuilding its index.
-    /// 将一个资料库包作为新的独立资料库导入且不重建索引。
+    /// 将一个知识库包作为新的独立知识库导入且不重建索引。
     pub async fn import_package_as_new(
         &self,
         archive_path: &Path,
@@ -1224,7 +1224,7 @@ impl KnowledgeBaseRuntime {
             .find_library_by_normalized_name(&normalized_name, None)
             .await?
         {
-            return Err(format!("资料库名称已存在：{}", conflict.name));
+            return Err(format!("知识库名称已存在：{}", conflict.name));
         }
         let canonical_archive = canonical_knowledge_package_path(archive_path)?;
         let prepared = prepare_knowledge_package(&canonical_archive, &self.knowledge_root())?;
@@ -1237,7 +1237,7 @@ impl KnowledgeBaseRuntime {
             return match self.cleanup_failed_package_install(&library_id).await {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(format!(
-                    "{error}；同时清理失败的资料库包安装失败：{cleanup_error}"
+                    "{error}；同时清理失败的知识库包安装失败：{cleanup_error}"
                 )),
             };
         }
@@ -1248,7 +1248,7 @@ impl KnowledgeBaseRuntime {
             return match self.cleanup_failed_package_install(&library_id).await {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(format!(
-                    "{error}；同时清理未注册的资料库包失败：{cleanup_error}"
+                    "{error}；同时清理未注册的知识库包失败：{cleanup_error}"
                 )),
             };
         }
@@ -1274,7 +1274,7 @@ impl KnowledgeBaseRuntime {
     }
 
     /// Explicitly replaces one library while retaining its identity, bindings, and session references.
-    /// 显式替换一个资料库，同时保留其标识、绑定和会话引用。
+    /// 显式替换一个知识库，同时保留其标识、绑定和会话引用。
     pub async fn replace_library_from_package(
         &self,
         archive_path: &Path,
@@ -1288,7 +1288,7 @@ impl KnowledgeBaseRuntime {
             .find_library_by_normalized_name(&normalized_name, Some(target_library_id))
             .await?
         {
-            return Err(format!("资料库名称已被其他资料库使用：{}", conflict.name));
+            return Err(format!("知识库名称已被其他知识库使用：{}", conflict.name));
         }
         let canonical_archive = canonical_knowledge_package_path(archive_path)?;
         let prepared = prepare_knowledge_package(&canonical_archive, &self.knowledge_root())?;
@@ -1302,7 +1302,7 @@ impl KnowledgeBaseRuntime {
                 Vec::new(),
             )
             .await
-            .map_err(|error| format!("覆盖前收口资料库 SQLite 日志失败：{error}"))?;
+            .map_err(|error| format!("覆盖前收口知识库 SQLite 日志失败：{error}"))?;
         // stagingLibraryId owns a fully copied and validated sibling directory before the old target moves.
         // stagingLibraryId 在旧目标移动前持有一个已完整复制并校验的同级暂存目录。
         let staging_library_id = Uuid::new_v4().to_string();
@@ -1316,7 +1316,7 @@ impl KnowledgeBaseRuntime {
             {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(format!(
-                    "{error}；同时清理覆盖暂存资料库失败：{cleanup_error}"
+                    "{error}；同时清理覆盖暂存知识库失败：{cleanup_error}"
                 )),
             };
         }
@@ -1327,7 +1327,7 @@ impl KnowledgeBaseRuntime {
             {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(format!(
-                    "{error}；同时清理覆盖暂存资料库失败：{cleanup_error}"
+                    "{error}；同时清理覆盖暂存知识库失败：{cleanup_error}"
                 )),
             };
         }
@@ -1356,7 +1356,7 @@ impl KnowledgeBaseRuntime {
             {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(format!(
-                    "{error}；同时清理覆盖暂存资料库失败：{cleanup_error}"
+                    "{error}；同时清理覆盖暂存知识库失败：{cleanup_error}"
                 )),
             };
         }
@@ -1370,13 +1370,13 @@ impl KnowledgeBaseRuntime {
             return match cleanup_result {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(format!(
-                    "{error}；同时清理覆盖暂存资料库失败：{cleanup_error}"
+                    "{error}；同时清理覆盖暂存知识库失败：{cleanup_error}"
                 )),
             };
         }
         if let Err(error) = fs::rename(&root, &backup_root) {
             // restoreResult reopens the untouched original after the backup rename itself fails.
-            // restoreResult 在备份改名本身失败后重新打开未变更的原资料库。
+            // restoreResult 在备份改名本身失败后重新打开未变更的原知识库。
             let restore_result = async {
                 let identities = self
                     .activate_library_binding(target_library_id, false)
@@ -1397,20 +1397,20 @@ impl KnowledgeBaseRuntime {
             }
             return match (restore_result, cleanup_result) {
                 (Ok(()), Ok(())) => Err(format!(
-                    "暂存待覆盖资料库目录失败（{}）：{error}",
+                    "暂存待覆盖知识库目录失败（{}）：{error}",
                     root.display()
                 )),
                 (Ok(()), Err(cleanup_error)) => Err(format!(
-                    "暂存待覆盖资料库目录失败（{}）：{error}；同时清理新库暂存目录失败：{}",
+                    "暂存待覆盖知识库目录失败（{}）：{error}；同时清理新库暂存目录失败：{}",
                     root.display(),
                     cleanup_error
                 )),
                 (Err(restore_error), Ok(())) => Err(format!(
-                    "暂存待覆盖资料库目录失败（{}）：{error}；同时恢复原 SQLite 绑定失败：{restore_error}",
+                    "暂存待覆盖知识库目录失败（{}）：{error}；同时恢复原 SQLite 绑定失败：{restore_error}",
                     root.display()
                 )),
                 (Err(restore_error), Err(cleanup_error)) => Err(format!(
-                    "暂存待覆盖资料库目录失败（{}）：{error}；同时恢复原 SQLite 绑定失败：{restore_error}；清理新库暂存目录失败：{}",
+                    "暂存待覆盖知识库目录失败（{}）：{error}；同时恢复原 SQLite 绑定失败：{restore_error}；清理新库暂存目录失败：{}",
                     root.display(),
                     cleanup_error
                 )),
@@ -1427,15 +1427,15 @@ impl KnowledgeBaseRuntime {
                 journal_guard.retain();
             }
             return match (rollback, cleanup) {
-                (Ok(()), Ok(())) => Err(format!("切换已校验资料库暂存目录失败：{error}")),
+                (Ok(()), Ok(())) => Err(format!("切换已校验知识库暂存目录失败：{error}")),
                 (Err(rollback_error), Ok(())) => Err(format!(
-                    "切换已校验资料库暂存目录失败：{error}；同时恢复原资料库失败：{rollback_error}"
+                    "切换已校验知识库暂存目录失败：{error}；同时恢复原知识库失败：{rollback_error}"
                 )),
                 (Ok(()), Err(cleanup_error)) => Err(format!(
-                    "切换已校验资料库暂存目录失败：{error}；同时清理新库暂存目录失败：{cleanup_error}"
+                    "切换已校验知识库暂存目录失败：{error}；同时清理新库暂存目录失败：{cleanup_error}"
                 )),
                 (Err(rollback_error), Err(cleanup_error)) => Err(format!(
-                    "切换已校验资料库暂存目录失败：{error}；同时恢复原资料库失败：{rollback_error}；清理新库暂存目录失败：{cleanup_error}"
+                    "切换已校验知识库暂存目录失败：{error}；同时恢复原知识库失败：{rollback_error}；清理新库暂存目录失败：{cleanup_error}"
                 )),
             };
         }
@@ -1473,7 +1473,7 @@ impl KnowledgeBaseRuntime {
                     return match rollback {
                         Ok(()) => Err(journal_error),
                         Err(rollback_error) => Err(format!(
-                            "{journal_error}；同时恢复原资料库失败：{rollback_error}"
+                            "{journal_error}；同时恢复原知识库失败：{rollback_error}"
                         )),
                     };
                 }
@@ -1486,12 +1486,12 @@ impl KnowledgeBaseRuntime {
                 ) {
                     journal_guard.retain();
                     warnings.push(format!(
-                        "资料库覆盖成功，但清理旧备份目录失败（{}）：{error}；服务重启时将自动重试",
+                        "知识库覆盖成功，但清理旧备份目录失败（{}）：{error}；服务重启时将自动重试",
                         backup_root.display()
                     ));
                 } else if let Err(error) = journal_guard.remove_now() {
                     warnings.push(format!(
-                        "资料库覆盖成功，但清理恢复日志失败：{error}；服务重启时将自动重试"
+                        "知识库覆盖成功，但清理恢复日志失败：{error}；服务重启时将自动重试"
                     ));
                 }
                 Ok(KnowledgePackageImportResult {
@@ -1510,7 +1510,7 @@ impl KnowledgeBaseRuntime {
                 match rollback {
                     Ok(()) => Err(error),
                     Err(rollback_error) => {
-                        Err(format!("{error}；同时恢复原资料库失败：{rollback_error}"))
+                        Err(format!("{error}；同时恢复原知识库失败：{rollback_error}"))
                     }
                 }
             }
@@ -1518,7 +1518,7 @@ impl KnowledgeBaseRuntime {
     }
 
     /// Lists all libraries or only libraries authorized for one project.
-    /// 列出全部资料库，或仅列出授权给某个项目的资料库。
+    /// 列出全部知识库，或仅列出授权给某个项目的知识库。
     pub async fn list_libraries(
         &self,
         project_id: Option<&str>,
@@ -1547,7 +1547,7 @@ impl KnowledgeBaseRuntime {
     }
 
     /// Returns one library by immutable identifier.
-    /// 根据不可变标识符返回一个资料库。
+    /// 根据不可变标识符返回一个知识库。
     pub async fn get_library(&self, library_id: &str) -> Result<KnowledgeLibrarySummary, String> {
         validate_library_id(library_id)?;
         let rows: Vec<LibraryRow> = self
@@ -1560,7 +1560,7 @@ impl KnowledgeBaseRuntime {
             .await?;
         rows.into_iter()
             .next()
-            .ok_or_else(|| format!("资料库不存在：{library_id}"))
+            .ok_or_else(|| format!("知识库不存在：{library_id}"))
             .and_then(library_summary_from_row)
     }
 
@@ -1597,7 +1597,7 @@ impl KnowledgeBaseRuntime {
                     ],
                 )
                 .await
-                .map_err(|error| format!("保存资料库项目授权失败：{error}"))?;
+                .map_err(|error| format!("保存知识库项目授权失败：{error}"))?;
         } else {
             self.controller
                 .client
@@ -1608,13 +1608,13 @@ impl KnowledgeBaseRuntime {
                     vec![text(library_id), text(project_id)],
                 )
                 .await
-                .map_err(|error| format!("移除资料库项目授权失败：{error}"))?;
+                .map_err(|error| format!("移除知识库项目授权失败：{error}"))?;
         }
         Ok(())
     }
 
     /// Lists explicit project bindings for one active library.
-    /// 列出一个活动资料库的显式项目绑定。
+    /// 列出一个活动知识库的显式项目绑定。
     pub async fn list_project_bindings(
         &self,
         library_id: &str,
@@ -1637,7 +1637,7 @@ impl KnowledgeBaseRuntime {
     }
 
     /// Lists every active-library authorization row owned by one exact project.
-    /// 列出一个精确项目拥有的全部活动资料库授权记录。
+    /// 列出一个精确项目拥有的全部活动知识库授权记录。
     pub async fn list_bindings_for_project(
         &self,
         project_id: &str,
@@ -1663,7 +1663,7 @@ impl KnowledgeBaseRuntime {
     }
 
     /// Resolves the authorized library set for one project, optionally limiting it to defaults.
-    /// 解析一个项目的授权资料库集合，并可选择仅保留默认启用项。
+    /// 解析一个项目的授权知识库集合，并可选择仅保留默认启用项。
     pub async fn authorized_library_ids(
         &self,
         project_id: &str,
@@ -1683,7 +1683,7 @@ impl KnowledgeBaseRuntime {
     }
 
     /// Lists custom Jieba words stored in one active library database.
-    /// 列出一个活动资料库数据库中存储的 Jieba 自定义词。
+    /// 列出一个活动知识库数据库中存储的 Jieba 自定义词。
     pub async fn list_custom_words(
         &self,
         library_id: &str,
@@ -1695,7 +1695,7 @@ impl KnowledgeBaseRuntime {
             .client
             .list_sqlite_custom_words(&space_id, &binding_id)
             .await
-            .map_err(|error| format!("读取资料库 Jieba 自定义词失败：{error}"))?;
+            .map_err(|error| format!("读取知识库 Jieba 自定义词失败：{error}"))?;
         result
             .words
             .into_iter()
@@ -1725,7 +1725,7 @@ impl KnowledgeBaseRuntime {
             .client
             .upsert_sqlite_custom_word(&space_id, &binding_id, word, weight.max(1))
             .await
-            .map_err(|error| format!("保存资料库 Jieba 自定义词失败：{error}"))?;
+            .map_err(|error| format!("保存知识库 Jieba 自定义词失败：{error}"))?;
         self.mark_dictionary_dirty(library_id, &space_id, &binding_id)
             .await
     }
@@ -1741,7 +1741,7 @@ impl KnowledgeBaseRuntime {
             .client
             .remove_sqlite_custom_word(&space_id, &binding_id, word)
             .await
-            .map_err(|error| format!("删除资料库 Jieba 自定义词失败：{error}"))?;
+            .map_err(|error| format!("删除知识库 Jieba 自定义词失败：{error}"))?;
         self.mark_dictionary_dirty(library_id, &space_id, &binding_id)
             .await
     }
@@ -1763,7 +1763,7 @@ impl KnowledgeBaseRuntime {
     /// Parameters: `library_id` selects the target library, `source_id` retains an existing source
     /// identity when present, and `source_root` is the new canonical directory to scan.
     /// Returns: the complete incremental import report after authoritative content and FTS converge.
-    /// 参数：`library_id` 选择目标资料库，`source_id` 在存在时保留现有来源身份，`source_root`
+    /// 参数：`library_id` 选择目标知识库，`source_id` 在存在时保留现有来源身份，`source_root`
     /// 是要扫描的新规范目录。返回值：权威内容与 FTS 收敛后的完整增量导入报告。
     pub async fn import_markdown_directory_for_source(
         &self,
@@ -1776,7 +1776,7 @@ impl KnowledgeBaseRuntime {
         let canonical_root = canonical_import_root(source_root)?;
         self.require_active_library(library_id).await?;
         // Operation reserves the library before the synchronous execution begins.
-        // Operation 在同步执行开始前预留该资料库。
+        // Operation 在同步执行开始前预留该知识库。
         let operation = self
             .prepare_operation(
                 library_id,
@@ -1794,7 +1794,7 @@ impl KnowledgeBaseRuntime {
     /// Parameters: `library_id` selects the target library, `source_id` optionally retains a durable
     /// source identity, and `source_root` is the native directory to canonicalize and scan.
     /// Returns: the durable queued operation snapshot immediately after the executor is spawned.
-    /// 参数：`library_id` 选择目标资料库，`source_id` 可选择保留持久来源身份，`source_root` 是要规范化
+    /// 参数：`library_id` 选择目标知识库，`source_id` 可选择保留持久来源身份，`source_root` 是要规范化
     /// 并扫描的原生目录。返回值：执行器启动后立即返回的持久化排队操作快照。
     pub async fn start_import_markdown_directory_for_source(
         &self,
@@ -1853,12 +1853,12 @@ impl KnowledgeBaseRuntime {
         // Result 包含锁获取与绑定激活，使每个失败都进入终态处理。
         let result = async {
             // Guard serializes all authoritative and derived mutations for this library.
-            // Guard 串行化该资料库的全部权威与派生变更。
+            // Guard 串行化该知识库的全部权威与派生变更。
             let _guard = self.library_mutation_guard(&operation.library_id).await?;
             require_operation_not_cancelled(&operation.cancellation)?;
             self.require_active_library(&operation.library_id).await?;
             // BindingIdentity is the only controller route for the isolated library database.
-            // BindingIdentity 是隔离资料库数据库的唯一控制器路由。
+            // BindingIdentity 是隔离知识库数据库的唯一控制器路由。
             let (space_id, binding_id) = self.ensure_library_binding(&operation.library_id).await?;
             self.update_operation_phase(&operation.job_id, "running", "scanning")
                 .await?;
@@ -1895,11 +1895,11 @@ impl KnowledgeBaseRuntime {
     }
 
     /// Lists every durable source directory attached to one active library.
-    /// 列出关联到一个活动资料库的全部持久化来源目录。
+    /// 列出关联到一个活动知识库的全部持久化来源目录。
     ///
     /// Parameters: `library_id` is the immutable target library identifier.
     /// Returns: source summaries ordered by creation time and stable identity.
-    /// 参数：`library_id` 是不可变目标资料库标识符。返回值：按创建时间与稳定身份排序的来源摘要。
+    /// 参数：`library_id` 是不可变目标知识库标识符。返回值：按创建时间与稳定身份排序的来源摘要。
     pub async fn list_sources(
         &self,
         library_id: &str,
@@ -1926,7 +1926,7 @@ impl KnowledgeBaseRuntime {
     }
 
     /// Lists documents from one active library with bounded pagination.
-    /// 使用有界分页列出一个活动资料库中的文档。
+    /// 使用有界分页列出一个活动知识库中的文档。
     pub async fn list_documents(
         &self,
         library_id: &str,
@@ -2039,7 +2039,7 @@ impl KnowledgeBaseRuntime {
     }
 
     /// Searches one or more authorized physical libraries using Jieba FTS5 and BM25.
-    /// 使用 Jieba FTS5 与 BM25 检索一个或多个已授权物理资料库。
+    /// 使用 Jieba FTS5 与 BM25 检索一个或多个已授权物理知识库。
     pub async fn search(
         &self,
         library_ids: &[String],
@@ -2048,7 +2048,7 @@ impl KnowledgeBaseRuntime {
     ) -> Result<KnowledgeSearchResult, String> {
         let query = query.trim();
         if query.is_empty() {
-            return Err(String::from("资料库搜索词不能为空。"));
+            return Err(String::from("知识库搜索词不能为空。"));
         }
         let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
         let mut failures = Vec::new();
@@ -2112,7 +2112,7 @@ impl KnowledgeBaseRuntime {
     pub async fn rebuild_index(&self, library_id: &str) -> Result<u64, String> {
         self.require_active_library(library_id).await?;
         // Operation reserves the library before synchronous maintenance starts.
-        // Operation 在同步维护开始前预留该资料库。
+        // Operation 在同步维护开始前预留该知识库。
         let operation = self
             .prepare_operation(library_id, KnowledgeOperationKind::Rebuild, None)
             .await?;
@@ -2124,7 +2124,7 @@ impl KnowledgeBaseRuntime {
     ///
     /// Parameters: `library_id` selects the exact active library.
     /// Returns: the queued rebuild snapshot after its executor has been spawned.
-    /// 参数：`library_id` 选择精确活动资料库。返回值：执行器启动后的排队重建快照。
+    /// 参数：`library_id` 选择精确活动知识库。返回值：执行器启动后的排队重建快照。
     pub async fn start_rebuild_index(
         &self,
         library_id: &str,
@@ -2138,11 +2138,11 @@ impl KnowledgeBaseRuntime {
     ///
     /// Parameters: `library_id` selects the exact active library.
     /// Returns: the authoritative chunk count inspected during repair.
-    /// 参数：`library_id` 选择精确活动资料库。返回值：补全过程检查的权威切片数量。
+    /// 参数：`library_id` 选择精确活动知识库。返回值：补全过程检查的权威切片数量。
     pub async fn repair_index(&self, library_id: &str) -> Result<u64, String> {
         self.require_active_library(library_id).await?;
         // Operation reserves the library before synchronous maintenance starts.
-        // Operation 在同步维护开始前预留该资料库。
+        // Operation 在同步维护开始前预留该知识库。
         let operation = self
             .prepare_operation(library_id, KnowledgeOperationKind::Repair, None)
             .await?;
@@ -2154,7 +2154,7 @@ impl KnowledgeBaseRuntime {
     ///
     /// Parameters: `library_id` selects the exact active library.
     /// Returns: the queued repair snapshot after its executor has been spawned.
-    /// 参数：`library_id` 选择精确活动资料库。返回值：执行器启动后的排队补全快照。
+    /// 参数：`library_id` 选择精确活动知识库。返回值：执行器启动后的排队补全快照。
     pub async fn start_repair_index(
         &self,
         library_id: &str,
@@ -2168,7 +2168,7 @@ impl KnowledgeBaseRuntime {
     ///
     /// Parameters: `library_id` selects the library and `operation_kind` must be repair or rebuild.
     /// Returns: the durable queued snapshot.
-    /// 参数：`library_id` 选择资料库，`operation_kind` 必须是补全或重建。返回值：持久化排队快照。
+    /// 参数：`library_id` 选择知识库，`operation_kind` 必须是补全或重建。返回值：持久化排队快照。
     async fn start_index_operation(
         &self,
         library_id: &str,
@@ -2202,7 +2202,7 @@ impl KnowledgeBaseRuntime {
     ///
     /// Parameters: `operation` contains the exact library, kind, job identity, and cancellation signal.
     /// Returns: the authoritative chunk count processed by the maintenance operation.
-    /// 参数：`operation` 包含精确资料库、类型、任务身份与取消信号。返回值：维护操作处理的权威切片数量。
+    /// 参数：`operation` 包含精确知识库、类型、任务身份与取消信号。返回值：维护操作处理的权威切片数量。
     async fn execute_prepared_index_operation(
         &self,
         operation: PreparedKnowledgeOperation,
@@ -2214,7 +2214,7 @@ impl KnowledgeBaseRuntime {
         // Result 包含每个锁、状态和物理索引变更失败。
         let result = async {
             // Guard serializes this maintenance operation with all library mutations.
-            // Guard 将本维护操作与全部资料库变更串行化。
+            // Guard 将本维护操作与全部知识库变更串行化。
             let _guard = self.library_mutation_guard(&operation.library_id).await?;
             require_operation_not_cancelled(&operation.cancellation)?;
             self.require_active_library(&operation.library_id).await?;
@@ -2313,7 +2313,7 @@ impl KnowledgeBaseRuntime {
     }
 
     /// Deletes one isolated library after revoking access and validating its canonical path.
-    /// 在撤销访问并验证规范路径后删除一个隔离资料库。
+    /// 在撤销访问并验证规范路径后删除一个隔离知识库。
     pub async fn delete_library(&self, library_id: &str) -> Result<(), String> {
         let _guard = self.library_mutation_guard(library_id).await?;
         self.require_active_library(library_id).await?;
@@ -2326,7 +2326,7 @@ impl KnowledgeBaseRuntime {
                 vec![int(unix_epoch_millis()?), text(library_id)],
             )
             .await
-            .map_err(|error| format!("撤销资料库访问失败：{error}"))?;
+            .map_err(|error| format!("撤销知识库访问失败：{error}"))?;
 
         let (space_id, binding_id) = self.library_binding_identity(library_id)?;
         let _ = self
@@ -2345,12 +2345,12 @@ impl KnowledgeBaseRuntime {
         let knowledge_root = self.knowledge_root();
         let canonical_knowledge_root = fs::canonicalize(&knowledge_root).map_err(|error| {
             format!(
-                "规范化资料库根目录失败（{}）：{error}",
+                "规范化知识库根目录失败（{}）：{error}",
                 knowledge_root.display()
             )
         })?;
         let canonical_library_root = fs::canonicalize(&root).map_err(|error| {
-            format!("规范化待删除资料库目录失败（{}）：{error}", root.display())
+            format!("规范化待删除知识库目录失败（{}）：{error}", root.display())
         })?;
         if canonical_library_root.parent() != Some(canonical_knowledge_root.as_path())
             || canonical_library_root
@@ -2359,13 +2359,13 @@ impl KnowledgeBaseRuntime {
                 != Some(library_id)
         {
             return Err(format!(
-                "拒绝删除资料库根目录之外的路径：{}",
+                "拒绝删除知识库根目录之外的路径：{}",
                 canonical_library_root.display()
             ));
         }
         fs::remove_dir_all(&canonical_library_root).map_err(|error| {
             format!(
-                "删除资料库目录失败（{}）：{error}",
+                "删除知识库目录失败（{}）：{error}",
                 canonical_library_root.display()
             )
         })?;
@@ -2378,7 +2378,7 @@ impl KnowledgeBaseRuntime {
                 vec![text(library_id)],
             )
             .await
-            .map_err(|error| format!("删除资料库注册记录失败：{error}"))?;
+            .map_err(|error| format!("删除知识库注册记录失败：{error}"))?;
         Ok(())
     }
 
@@ -2444,7 +2444,7 @@ impl KnowledgeBaseRuntime {
                 vec![text(job_id), text(&source_id), int(now)],
             )
             .await
-            .map_err(|error| format!("初始化资料库导入暂存上下文失败：{error}"))?;
+            .map_err(|error| format!("初始化知识库导入暂存上下文失败：{error}"))?;
 
         let mut warnings = Vec::new();
         let mut staged_paths = Vec::with_capacity(candidates.len());
@@ -2682,7 +2682,7 @@ impl KnowledgeBaseRuntime {
     async fn initialize_library_storage(&self, library_id: &str, name: &str) -> Result<(), String> {
         let root = self.library_root(library_id)?;
         fs::create_dir_all(&root)
-            .map_err(|error| format!("创建资料库目录失败（{}）：{error}", root.display()))?;
+            .map_err(|error| format!("创建知识库目录失败（{}）：{error}", root.display()))?;
         self.write_manifest_atomic(&KnowledgeManifest {
             library_id: library_id.to_string(),
             name: name.to_string(),
@@ -2698,7 +2698,7 @@ impl KnowledgeBaseRuntime {
                 Vec::new(),
             )
             .await
-            .map_err(|error| format!("初始化资料库 SQLite 结构失败：{error}"))?;
+            .map_err(|error| format!("初始化知识库 SQLite 结构失败：{error}"))?;
         self.validate_bound_library_metadata(library_id, &space_id, &binding_id)
             .await?;
         Ok(())
@@ -2722,7 +2722,7 @@ impl KnowledgeBaseRuntime {
         if let Some(requested_source_id) = requested_source_id {
             let requested_source_id = requested_source_id.trim();
             if requested_source_id.is_empty() {
-                return Err(String::from("资料库来源标识符不能为空。"));
+                return Err(String::from("知识库来源标识符不能为空。"));
             }
             let target_rows: Vec<SourceRow> = self
                 .query_library_rows(
@@ -2733,7 +2733,7 @@ impl KnowledgeBaseRuntime {
                 )
                 .await?;
             if target_rows.is_empty() {
-                return Err(format!("资料库来源不存在：{requested_source_id}"));
+                return Err(format!("知识库来源不存在：{requested_source_id}"));
             }
             let root_rows: Vec<SourceRow> = self
                 .query_library_rows(
@@ -2748,7 +2748,7 @@ impl KnowledgeBaseRuntime {
                 .find(|source| source.id != requested_source_id)
             {
                 return Err(format!(
-                    "所选目录已属于另一个资料库来源：{}",
+                    "所选目录已属于另一个知识库来源：{}",
                     conflicting_source.id
                 ));
             }
@@ -2774,7 +2774,7 @@ impl KnowledgeBaseRuntime {
     ///
     /// Parameters: database identities select the library, source fields describe the canonical
     /// root, and `now` records the completed scan time. Returns: success after the row is durable.
-    /// 参数：数据库身份选择资料库，来源字段描述规范根目录，`now` 记录已完成扫描时间。
+    /// 参数：数据库身份选择知识库，来源字段描述规范根目录，`now` 记录已完成扫描时间。
     /// 返回值：来源记录持久化后的成功结果。
     #[allow(clippy::too_many_arguments)]
     async fn persist_source(
@@ -2810,12 +2810,12 @@ impl KnowledgeBaseRuntime {
                 ],
             )
             .await
-            .map_err(|error| format!("保存资料库来源目录失败：{error}"))?;
+            .map_err(|error| format!("保存知识库来源目录失败：{error}"))?;
         Ok(())
     }
 
     /// Clears all per-library staging rows outside an authoritative transaction.
-    /// 在权威事务之外清理全部单资料库暂存记录。
+    /// 在权威事务之外清理全部单知识库暂存记录。
     async fn clear_staging(&self, space_id: &str, binding_id: &str) -> Result<(), String> {
         self.controller
             .client
@@ -2826,7 +2826,7 @@ impl KnowledgeBaseRuntime {
                 Vec::new(),
             )
             .await
-            .map_err(|error| format!("清理资料库导入暂存区失败：{error}"))?;
+            .map_err(|error| format!("清理知识库导入暂存区失败：{error}"))?;
         Ok(())
     }
 
@@ -2933,7 +2933,7 @@ COMMIT;
                 Vec::new(),
             )
             .await
-            .map_err(|error| format!("提交资料库权威内容失败：{error}"))?;
+            .map_err(|error| format!("提交知识库权威内容失败：{error}"))?;
         Ok(())
     }
 
@@ -3408,7 +3408,7 @@ COMMIT;
     }
 
     /// Searches one physical library and materializes each hit from authoritative rows.
-    /// 检索一个物理资料库，并从权威记录物化每条命中。
+    /// 检索一个物理知识库，并从权威记录物化每条命中。
     async fn search_one_library(
         &self,
         library_id: &str,
@@ -3550,25 +3550,25 @@ COMMIT;
     }
 
     /// Returns a complete metadata and physical-row integrity snapshot for one active library.
-    /// 返回一个活动资料库的完整元数据与物理记录完整性快照。
+    /// 返回一个活动知识库的完整元数据与物理记录完整性快照。
     ///
     /// Parameters: `library_id` selects the exact library to inspect.
     /// Returns: a diagnostic snapshot even when the index is dirty, failed, or physically absent.
-    /// 参数：`library_id` 选择要检查的精确资料库。返回值：即使索引为脏、失败或物理缺失也返回诊断快照。
+    /// 参数：`library_id` 选择要检查的精确知识库。返回值：即使索引为脏、失败或物理缺失也返回诊断快照。
     pub async fn inspect_index_integrity(
         &self,
         library_id: &str,
     ) -> Result<KnowledgeIndexIntegritySummary, String> {
         self.require_active_library(library_id).await?;
         // BindingIdentity selects the only isolated SQLite database owned by this library.
-        // BindingIdentity 选择该资料库拥有的唯一隔离 SQLite 数据库。
+        // BindingIdentity 选择该知识库拥有的唯一隔离 SQLite 数据库。
         let (space_id, binding_id) = self.ensure_library_binding(library_id).await?;
         self.inspect_index_integrity_for_binding(library_id, &space_id, &binding_id)
             .await
     }
 
     /// Builds one complete integrity snapshot using an already resolved library binding.
-    /// 使用已解析的资料库绑定构建一份完整完整性快照。
+    /// 使用已解析的知识库绑定构建一份完整完整性快照。
     async fn inspect_index_integrity_for_binding(
         &self,
         library_id: &str,
@@ -3593,7 +3593,7 @@ COMMIT;
         let index_exists = presence_rows
             .into_iter()
             .next()
-            .ok_or_else(|| String::from("资料库索引结构检查未返回结果。"))?
+            .ok_or_else(|| String::from("知识库索引结构检查未返回结果。"))?
             .index_exists
             == 1;
         // Counts uses exact source-field comparison when the FTS table exists.
@@ -3623,7 +3623,7 @@ COMMIT;
         let indexed_content_revision =
             parse_revision(&gate.indexed_content_revision, "indexed_content_revision")?;
         // DictionaryRevision is the current library-local Jieba dictionary version.
-        // DictionaryRevision 是当前资料库局部 Jieba 词典版本。
+        // DictionaryRevision 是当前知识库局部 Jieba 词典版本。
         let dictionary_revision = parse_revision(&gate.dictionary_revision, "dictionary_revision")?;
         // IndexedDictionaryRevision is the dictionary version used to tokenize existing rows.
         // IndexedDictionaryRevision 是现有记录分词时使用的词典版本。
@@ -3678,7 +3678,7 @@ COMMIT;
     }
 
     /// Loads the exact persisted metadata gate from one isolated library.
-    /// 从一个隔离资料库加载精确持久化元数据门禁。
+    /// 从一个隔离知识库加载精确持久化元数据门禁。
     async fn load_index_gate(
         &self,
         space_id: &str,
@@ -3703,7 +3703,7 @@ COMMIT;
             .await?;
         rows.into_iter()
             .next()
-            .ok_or_else(|| String::from("资料库索引元数据缺失。"))
+            .ok_or_else(|| String::from("知识库索引元数据缺失。"))
     }
 
     /// Verifies all index revisions and the tokenizer before allowing search.
@@ -3718,7 +3718,7 @@ COMMIT;
             || gate.tokenizer != "jieba"
         {
             return Err(format!(
-                "资料库索引当前不可检索：status={}, content={}/{}, dictionary={}/{}, tokenizer={}",
+                "知识库索引当前不可检索：status={}, content={}/{}, dictionary={}/{}, tokenizer={}",
                 gate.index_status,
                 gate.indexed_content_revision,
                 gate.content_revision,
@@ -3768,7 +3768,7 @@ COMMIT;
             || row.orphan_or_mismatched_count != 0
         {
             return Err(format!(
-                "资料库 FTS 与权威切片不一致：authoritative={}, indexed={}, missing_or_mismatched={}, orphan_or_mismatched={}",
+                "知识库 FTS 与权威切片不一致：authoritative={}, indexed={}, missing_or_mismatched={}, orphan_or_mismatched={}",
                 row.authoritative_count,
                 row.indexed_count,
                 row.missing_or_mismatched_count,
@@ -3826,7 +3826,7 @@ COMMIT;
             .await?;
         rows.into_iter()
             .next()
-            .ok_or_else(|| String::from("资料库 FTS 完整性检查未返回结果。"))
+            .ok_or_else(|| String::from("知识库 FTS 完整性检查未返回结果。"))
     }
 
     /// Marks FTS revisions equal to authoritative revisions after successful replay.
@@ -3845,7 +3845,7 @@ COMMIT;
                 Vec::new(),
             )
             .await
-            .map_err(|error| format!("提交资料库索引版本失败：{error}"))?;
+            .map_err(|error| format!("提交知识库索引版本失败：{error}"))?;
         Ok(())
     }
 
@@ -3866,7 +3866,7 @@ COMMIT;
                 Vec::new(),
             )
             .await
-            .map_err(|error| format!("更新资料库词典版本失败：{error}"))?;
+            .map_err(|error| format!("更新知识库词典版本失败：{error}"))?;
         self.set_registry_index_status(library_id, "dirty").await
     }
 
@@ -3944,7 +3944,7 @@ COMMIT;
             .await?;
         rows.into_iter()
             .next()
-            .ok_or_else(|| String::from("读取资料库权威计数失败。"))
+            .ok_or_else(|| String::from("读取知识库权威计数失败。"))
     }
 
     /// Counts committed chunks whose document identities are present in the current staging set.
@@ -3952,7 +3952,7 @@ COMMIT;
     ///
     /// Parameters: `space_id` and `binding_id` select the exact isolated library database.
     /// Returns: a validated non-negative changed-chunk count.
-    /// 参数：`space_id` 与 `binding_id` 选择精确隔离资料库数据库。返回值：已校验的非负变更切片数。
+    /// 参数：`space_id` 与 `binding_id` 选择精确隔离知识库数据库。返回值：已校验的非负变更切片数。
     async fn staged_chunk_count(&self, space_id: &str, binding_id: &str) -> Result<u64, String> {
         // Rows performs one aggregate over the authoritative/staging identity join.
         // Rows 对权威记录与暂存身份联结执行一次聚合。
@@ -3971,7 +3971,7 @@ COMMIT;
         let row = rows
             .into_iter()
             .next()
-            .ok_or_else(|| String::from("读取资料库变更切片计数失败。"))?;
+            .ok_or_else(|| String::from("读取知识库变更切片计数失败。"))?;
         nonnegative_u64(row.chunk_count, "chunk_count")
     }
 
@@ -4005,7 +4005,7 @@ COMMIT;
                 ],
             )
             .await
-            .map_err(|error| format!("更新资料库权威摘要失败：{error}"))?;
+            .map_err(|error| format!("更新知识库权威摘要失败：{error}"))?;
         Ok(())
     }
 
@@ -4034,7 +4034,7 @@ COMMIT;
                 ],
             )
             .await
-            .map_err(|error| format!("更新资料库中央摘要失败：{error}"))?;
+            .map_err(|error| format!("更新知识库中央摘要失败：{error}"))?;
         Ok(())
     }
 
@@ -4057,7 +4057,7 @@ COMMIT;
                 vec![text(state), text(error)],
             )
             .await
-            .map_err(|failure| format!("更新资料库索引状态失败：{failure}"))?;
+            .map_err(|failure| format!("更新知识库索引状态失败：{failure}"))?;
         self.set_registry_index_status(library_id, state).await
     }
 
@@ -4073,7 +4073,7 @@ COMMIT;
                 vec![text(state), int(unix_epoch_millis()?), text(library_id)],
             )
             .await
-            .map_err(|error| format!("更新资料库中央索引状态失败：{error}"))?;
+            .map_err(|error| format!("更新知识库中央索引状态失败：{error}"))?;
         Ok(())
     }
 
@@ -4115,14 +4115,14 @@ COMMIT;
         validate_library_id(target_library_id)?;
         let root = self.library_root(target_library_id)?;
         if root.exists() {
-            return Err(format!("资料库目标目录已经存在：{}", root.display()));
+            return Err(format!("知识库目标目录已经存在：{}", root.display()));
         }
         fs::create_dir(&root)
-            .map_err(|error| format!("创建资料库目标目录失败（{}）：{error}", root.display()))?;
+            .map_err(|error| format!("创建知识库目标目录失败（{}）：{error}", root.display()))?;
         let target_database = root.join("content.sqlite3");
         fs::copy(prepared.database_path(), &target_database).map_err(|error| {
             format!(
-                "复制资料库 SQLite 失败（{}）：{error}",
+                "复制知识库 SQLite 失败（{}）：{error}",
                 target_database.display()
             )
         })?;
@@ -4148,7 +4148,7 @@ COMMIT;
                 ],
             )
             .await
-            .map_err(|error| format!("重写导入资料库内部标识失败：{error}"))?;
+            .map_err(|error| format!("重写导入知识库内部标识失败：{error}"))?;
         self.validate_bound_library_metadata(target_library_id, &space_id, &binding_id)
             .await?;
         self.verify_index_integrity(&space_id, &binding_id).await?;
@@ -4157,7 +4157,7 @@ COMMIT;
             != prepared.package.document_count
             || nonnegative_u64(counts.chunk_count, "chunk_count")? != prepared.package.chunk_count
         {
-            return Err(String::from("资料库包权威计数与 SQLite 内容不一致。"));
+            return Err(String::from("知识库包权威计数与 SQLite 内容不一致。"));
         }
         Ok(())
     }
@@ -4188,20 +4188,20 @@ COMMIT;
                 vec![text(target_library_id), text(staging_library_id)],
             )
             .await
-            .map_err(|error| format!("提交覆盖资料库内部标识失败：{error}"))?;
+            .map_err(|error| format!("提交覆盖知识库内部标识失败：{error}"))?;
         self.verify_sqlite_quick_check(&space_id, &binding_id)
             .await?;
         self.validate_bound_library_metadata(target_library_id, &space_id, &binding_id)
             .await?;
         self.verify_index_integrity(&space_id, &binding_id).await?;
         // counts proves the switched database still matches the inspected package before registry commit.
-        // counts 证明切换后的数据库在注册表提交前仍与已检查资料库包匹配。
+        // counts 证明切换后的数据库在注册表提交前仍与已检查知识库包匹配。
         let counts = self.authoritative_counts(&space_id, &binding_id).await?;
         if nonnegative_u64(counts.document_count, "document_count")?
             != prepared.package.document_count
             || nonnegative_u64(counts.chunk_count, "chunk_count")? != prepared.package.chunk_count
         {
-            return Err(String::from("覆盖资料库权威计数与已检查包不一致。"));
+            return Err(String::from("覆盖知识库权威计数与已检查包不一致。"));
         }
         Ok(())
     }
@@ -4215,7 +4215,7 @@ COMMIT;
     }
 
     /// Inserts one imported library into the central registry after physical validation succeeds.
-    /// 在物理校验成功后将一个导入资料库写入中央注册表。
+    /// 在物理校验成功后将一个导入知识库写入中央注册表。
     async fn insert_imported_library_registry(
         &self,
         library_id: &str,
@@ -4247,7 +4247,7 @@ COMMIT;
                 ]],
             )
             .await
-            .map_err(|error| format!("注册导入资料库失败：{error}"))?;
+            .map_err(|error| format!("注册导入知识库失败：{error}"))?;
         Ok(())
     }
 
@@ -4283,7 +4283,7 @@ COMMIT;
                 ],
             )
             .await
-            .map_err(|error| format!("更新被覆盖资料库注册记录失败：{error}"))?;
+            .map_err(|error| format!("更新被覆盖知识库注册记录失败：{error}"))?;
         Ok(())
     }
 
@@ -4299,7 +4299,7 @@ COMMIT;
         self.release_library_binding(library_id).await?;
         self.remove_host_owned_child_directory_if_exists(root, library_id)?;
         fs::rename(backup_root, root).map_err(|error| {
-            format!("恢复原资料库目录失败（{}）：{error}", backup_root.display())
+            format!("恢复原知识库目录失败（{}）：{error}", backup_root.display())
         })?;
         let identities = self.activate_library_binding(library_id, false).await?;
         self.validate_bound_library_metadata(library_id, &identities.0, &identities.1)
@@ -4353,10 +4353,10 @@ COMMIT;
                 ],
             )
             .await
-            .map_err(|error| format!("恢复原资料库注册记录失败：{error}"))?;
+            .map_err(|error| format!("恢复原知识库注册记录失败：{error}"))?;
         let restored = self.get_library(&previous.id).await?;
         if restored != *previous {
-            return Err(String::from("恢复后的资料库注册记录与旧记录不一致。"));
+            return Err(String::from("恢复后的知识库注册记录与旧记录不一致。"));
         }
         Ok(())
     }
@@ -4370,7 +4370,7 @@ COMMIT;
         let library = self.get_library(library_id).await?;
         if library.lifecycle_state != "active" {
             return Err(format!(
-                "资料库当前不可访问：{} ({})",
+                "知识库当前不可访问：{} ({})",
                 library.id, library.lifecycle_state
             ));
         }
@@ -4420,7 +4420,7 @@ COMMIT;
             .client
             .disable_sqlite(&space_id, &binding_id)
             .await
-            .map_err(|error| format!("停用资料库 SQLite 绑定失败：{error}"))?;
+            .map_err(|error| format!("停用知识库 SQLite 绑定失败：{error}"))?;
         self.active_bindings.lock().await.remove(library_id);
         Ok(())
     }
@@ -4450,7 +4450,7 @@ COMMIT;
                 space_root: runtime_assets::native_host_path_text_from_path(&root),
             })
             .await
-            .map_err(|error| format!("附着资料库控制器空间失败：{error}"))?;
+            .map_err(|error| format!("附着知识库控制器空间失败：{error}"))?;
         self.controller
             .client
             .enable_sqlite(ControllerSqliteEnableRequest {
@@ -4461,12 +4461,12 @@ COMMIT;
                 ..ControllerSqliteEnableRequest::default()
             })
             .await
-            .map_err(|error| format!("启用资料库 SQLite 失败：{error}"))?;
+            .map_err(|error| format!("启用知识库 SQLite 失败：{error}"))?;
         Ok((space_id, binding_id))
     }
 
     /// Verifies that an enabled database belongs to the requested library and schema version.
-    /// 验证已启用数据库属于请求的资料库且结构版本一致。
+    /// 验证已启用数据库属于请求的知识库且结构版本一致。
     async fn validate_bound_library_metadata(
         &self,
         library_id: &str,
@@ -4476,7 +4476,7 @@ COMMIT;
         #[derive(Deserialize)]
         struct BoundMetadataRow {
             /// Stored immutable library identifier.
-            /// 已存储的不可变资料库标识符。
+            /// 已存储的不可变知识库标识符。
             library_id: String,
             /// Stored authoritative schema version.
             /// 已存储的权威结构版本。
@@ -4496,12 +4496,12 @@ COMMIT;
         let row = rows
             .into_iter()
             .next()
-            .ok_or_else(|| String::from("资料库数据库元数据缺失。"))?;
+            .ok_or_else(|| String::from("知识库数据库元数据缺失。"))?;
         if row.library_id != library_id
             || row.schema_version != KNOWLEDGE_SCHEMA_VERSION.to_string()
         {
             return Err(format!(
-                "资料库数据库身份或结构版本不匹配：library={}, schema={}",
+                "知识库数据库身份或结构版本不匹配：library={}, schema={}",
                 row.library_id, row.schema_version
             ));
         }
@@ -4509,7 +4509,7 @@ COMMIT;
     }
 
     /// Runs SQLite quick_check and rejects packages containing structural database corruption.
-    /// 运行 SQLite quick_check，并拒绝包含结构性数据库损坏的资料库包。
+    /// 运行 SQLite quick_check，并拒绝包含结构性数据库损坏的知识库包。
     async fn verify_sqlite_quick_check(
         &self,
         space_id: &str,
@@ -4538,7 +4538,7 @@ COMMIT;
                 .collect::<Vec<_>>()
                 .join("；");
             return Err(format!(
-                "资料库包 SQLite quick_check 未通过：{}",
+                "知识库包 SQLite quick_check 未通过：{}",
                 if diagnostics.is_empty() {
                     "未返回诊断"
                 } else {
@@ -4559,39 +4559,39 @@ COMMIT;
         allow_database_creation: bool,
     ) -> Result<(), String> {
         let root_metadata = fs::symlink_metadata(root)
-            .map_err(|error| format!("读取资料库目录失败（{}）：{error}", root.display()))?;
+            .map_err(|error| format!("读取知识库目录失败（{}）：{error}", root.display()))?;
         if !root_metadata.is_dir() || metadata_is_link_or_reparse(&root_metadata) {
-            return Err(format!("资料库目录不是可信普通目录：{}", root.display()));
+            return Err(format!("知识库目录不是可信普通目录：{}", root.display()));
         }
         let canonical_knowledge_root = fs::canonicalize(self.knowledge_root())
-            .map_err(|error| format!("规范化资料库根目录失败：{error}"))?;
+            .map_err(|error| format!("规范化知识库根目录失败：{error}"))?;
         let canonical_root = fs::canonicalize(root)
-            .map_err(|error| format!("规范化资料库目录失败（{}）：{error}", root.display()))?;
+            .map_err(|error| format!("规范化知识库目录失败（{}）：{error}", root.display()))?;
         if canonical_root.parent() != Some(canonical_knowledge_root.as_path())
             || canonical_root.file_name().and_then(|value| value.to_str()) != Some(library_id)
         {
             return Err(format!(
-                "资料库目录超出宿主派生边界：{}",
+                "知识库目录超出宿主派生边界：{}",
                 canonical_root.display()
             ));
         }
         let manifest_path = root.join("manifest.json");
         let manifest_metadata = fs::symlink_metadata(&manifest_path).map_err(|error| {
-            format!("读取资料库清单失败（{}）：{error}", manifest_path.display())
+            format!("读取知识库清单失败（{}）：{error}", manifest_path.display())
         })?;
         if !manifest_metadata.is_file() || metadata_is_link_or_reparse(&manifest_metadata) {
             return Err(format!(
-                "资料库清单不是可信普通文件：{}",
+                "知识库清单不是可信普通文件：{}",
                 manifest_path.display()
             ));
         }
         let manifest: KnowledgeManifest = serde_json::from_slice(
-            &fs::read(&manifest_path).map_err(|error| format!("读取资料库清单失败：{error}"))?,
+            &fs::read(&manifest_path).map_err(|error| format!("读取知识库清单失败：{error}"))?,
         )
-        .map_err(|error| format!("解析资料库清单失败：{error}"))?;
+        .map_err(|error| format!("解析知识库清单失败：{error}"))?;
         if manifest.library_id != library_id || manifest.schema_version != KNOWLEDGE_SCHEMA_VERSION
         {
-            return Err(String::from("资料库清单身份或结构版本不匹配。"));
+            return Err(String::from("知识库清单身份或结构版本不匹配。"));
         }
         match fs::symlink_metadata(database_path) {
             Ok(database_metadata)
@@ -4599,7 +4599,7 @@ COMMIT;
                     && !metadata_is_link_or_reparse(&database_metadata) => {}
             Ok(_) => {
                 return Err(format!(
-                    "资料库数据库不是可信普通文件：{}",
+                    "知识库数据库不是可信普通文件：{}",
                     database_path.display()
                 ));
             }
@@ -4607,7 +4607,7 @@ COMMIT;
                 if allow_database_creation && error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
                 return Err(format!(
-                    "读取资料库数据库失败（{}）：{error}",
+                    "读取知识库数据库失败（{}）：{error}",
                     database_path.display()
                 ));
             }
@@ -4616,7 +4616,7 @@ COMMIT;
     }
 
     /// Returns validated controller identities derived only from the library UUID.
-    /// 返回仅从资料库 UUID 派生的已验证控制器身份。
+    /// 返回仅从知识库 UUID 派生的已验证控制器身份。
     fn library_binding_identity(&self, library_id: &str) -> Result<(String, String), String> {
         validate_library_id(library_id)?;
         Ok((
@@ -4629,13 +4629,13 @@ COMMIT;
     }
 
     /// Returns the immutable knowledge root under the established application data root.
-    /// 返回已建立应用数据根目录下的不可变资料库根目录。
+    /// 返回已建立应用数据根目录下的不可变知识库根目录。
     fn knowledge_root(&self) -> PathBuf {
         self.controller.data_root.join("knowledge-bases")
     }
 
     /// Derives and validates one physical library root.
-    /// 派生并验证一个物理资料库根目录。
+    /// 派生并验证一个物理知识库根目录。
     fn library_root(&self, library_id: &str) -> Result<PathBuf, String> {
         validate_library_id(library_id)?;
         let root = self.knowledge_root().join(library_id);
@@ -4643,7 +4643,7 @@ COMMIT;
             .components()
             .any(|component| matches!(component, Component::ParentDir))
         {
-            return Err(String::from("资料库路径包含非法父目录组件。"));
+            return Err(String::from("知识库路径包含非法父目录组件。"));
         }
         Ok(root)
     }
@@ -4692,14 +4692,14 @@ COMMIT;
             return Err(format!("拒绝删除非普通宿主目录：{}", path.display()));
         }
         let canonical_knowledge_root = fs::canonicalize(&knowledge_root)
-            .map_err(|error| format!("规范化资料库根目录失败：{error}"))?;
+            .map_err(|error| format!("规范化知识库根目录失败：{error}"))?;
         let canonical_path =
             fs::canonicalize(path).map_err(|error| format!("规范化待删除宿主目录失败：{error}"))?;
         if canonical_path.parent() != Some(canonical_knowledge_root.as_path())
             || canonical_path.file_name().and_then(|value| value.to_str()) != Some(expected_name)
         {
             return Err(format!(
-                "待删除宿主目录超出资料库根边界：{}",
+                "待删除宿主目录超出知识库根边界：{}",
                 canonical_path.display()
             ));
         }
@@ -4748,7 +4748,7 @@ COMMIT;
     /// # Parameters
     /// 参数
     /// `path` is the exact host-derived journal destination in the knowledge root.
-    /// `path` 是资料库根目录中由宿主精确派生的日志目标路径。
+    /// `path` 是知识库根目录中由宿主精确派生的日志目标路径。
     /// `journal` contains the prior registry row and current durable phase.
     /// `journal` 包含旧注册记录与当前持久化阶段。
     ///
@@ -4765,12 +4765,12 @@ COMMIT;
         let (_, expected_path, _) =
             self.replacement_operation_artifacts(&journal.target_library_id, &operation_id)?;
         if path != expected_path {
-            return Err(String::from("资料库覆盖恢复日志路径与日志身份不匹配。"));
+            return Err(String::from("知识库覆盖恢复日志路径与日志身份不匹配。"));
         }
         let knowledge_root = self.knowledge_root();
         fs::create_dir_all(&knowledge_root).map_err(|error| {
             format!(
-                "创建资料库根目录用于覆盖日志失败（{}）：{error}",
+                "创建知识库根目录用于覆盖日志失败（{}）：{error}",
                 knowledge_root.display()
             )
         })?;
@@ -4778,32 +4778,32 @@ COMMIT;
             && (!metadata.is_file() || metadata_is_link_or_reparse(&metadata))
         {
             return Err(format!(
-                "拒绝替换非普通资料库覆盖恢复日志：{}",
+                "拒绝替换非普通知识库覆盖恢复日志：{}",
                 path.display()
             ));
         }
         let bytes = serde_json::to_vec_pretty(journal)
-            .map_err(|error| format!("序列化资料库覆盖恢复日志失败：{error}"))?;
+            .map_err(|error| format!("序列化知识库覆盖恢复日志失败：{error}"))?;
         if bytes.len() as u64 > MAX_KNOWLEDGE_PACKAGE_JSON_BYTES {
-            return Err(String::from("资料库覆盖恢复日志超过大小上限。"));
+            return Err(String::from("知识库覆盖恢复日志超过大小上限。"));
         }
         let mut temporary = tempfile::Builder::new()
             .prefix("replacement-journal.")
             .suffix(".tmp")
             .tempfile_in(&knowledge_root)
-            .map_err(|error| format!("创建资料库覆盖临时恢复日志失败：{error}"))?;
+            .map_err(|error| format!("创建知识库覆盖临时恢复日志失败：{error}"))?;
         temporary
             .write_all(&bytes)
             .and_then(|_| temporary.as_file().sync_all())
-            .map_err(|error| format!("写入并同步资料库覆盖临时恢复日志失败：{error}"))?;
+            .map_err(|error| format!("写入并同步知识库覆盖临时恢复日志失败：{error}"))?;
         persist_tempfile_atomically(temporary, path)
-            .map_err(|error| format!("提交资料库覆盖恢复日志失败：{error}"))?;
+            .map_err(|error| format!("提交知识库覆盖恢复日志失败：{error}"))?;
         File::options()
             .read(true)
             .write(true)
             .open(path)
             .and_then(|file| file.sync_all())
-            .map_err(|error| format!("同步资料库覆盖恢复日志失败：{error}"))
+            .map_err(|error| format!("同步知识库覆盖恢复日志失败：{error}"))
     }
 
     /// Writes one manifest through a same-directory atomic replacement.
@@ -4811,30 +4811,30 @@ COMMIT;
     fn write_manifest_atomic(&self, manifest: &KnowledgeManifest) -> Result<(), String> {
         let root = self.library_root(&manifest.library_id)?;
         fs::create_dir_all(&root)
-            .map_err(|error| format!("创建资料库目录失败（{}）：{error}", root.display()))?;
+            .map_err(|error| format!("创建知识库目录失败（{}）：{error}", root.display()))?;
         let path = root.join("manifest.json");
         let bytes = serde_json::to_vec_pretty(manifest)
-            .map_err(|error| format!("序列化资料库清单失败：{error}"))?;
+            .map_err(|error| format!("序列化知识库清单失败：{error}"))?;
         if let Ok(metadata) = fs::symlink_metadata(&path)
             && (!metadata.is_file() || metadata_is_link_or_reparse(&metadata))
         {
-            return Err(format!("拒绝替换非普通资料库清单：{}", path.display()));
+            return Err(format!("拒绝替换非普通知识库清单：{}", path.display()));
         }
         let mut temporary = tempfile::Builder::new()
             .prefix("manifest.")
             .suffix(".tmp")
             .tempfile_in(&root)
-            .map_err(|error| format!("创建资料库临时清单失败：{error}"))?;
+            .map_err(|error| format!("创建知识库临时清单失败：{error}"))?;
         temporary
             .write_all(&bytes)
             .and_then(|_| temporary.as_file().sync_all())
-            .map_err(|error| format!("写入并同步资料库临时清单失败：{error}"))?;
+            .map_err(|error| format!("写入并同步知识库临时清单失败：{error}"))?;
         persist_tempfile_atomically(temporary, &path)
-            .map_err(|error| format!("提交资料库清单失败：{error}"))
+            .map_err(|error| format!("提交知识库清单失败：{error}"))
     }
 
     /// Returns the per-library mutation guard after validating its UUID.
-    /// 在验证 UUID 后返回每资料库变更锁守卫。
+    /// 在验证 UUID 后返回每知识库变更锁守卫。
     async fn library_mutation_guard(
         &self,
         library_id: &str,
@@ -4867,12 +4867,12 @@ COMMIT;
                 params,
             )
             .await
-            .map_err(|error| format!("查询资料库中央注册表失败：{error}"))?;
+            .map_err(|error| format!("查询知识库中央注册表失败：{error}"))?;
         decode_rows(&result.json_data)
     }
 
     /// Queries typed rows from one isolated library database.
-    /// 从一个隔离资料库数据库查询类型化记录。
+    /// 从一个隔离知识库数据库查询类型化记录。
     async fn query_library_rows<T: DeserializeOwned>(
         &self,
         space_id: &str,
@@ -4885,12 +4885,12 @@ COMMIT;
             .client
             .query_sqlite_json_typed(space_id, binding_id, sql, params)
             .await
-            .map_err(|error| format!("查询资料库 SQLite 失败：{error}"))?;
+            .map_err(|error| format!("查询知识库 SQLite 失败：{error}"))?;
         decode_rows(&result.json_data)
     }
 
     /// Executes one repeated typed statement against a library database.
-    /// 对资料库数据库执行一条重复的类型化语句。
+    /// 对知识库数据库执行一条重复的类型化语句。
     async fn execute_library_batch(
         &self,
         space_id: &str,
@@ -4908,12 +4908,12 @@ COMMIT;
     }
 
     /// Reserves one library operation in memory and persists its queued durable row.
-    /// 在内存中预留一个资料库操作，并持久化其排队记录。
+    /// 在内存中预留一个知识库操作，并持久化其排队记录。
     ///
     /// Parameters: `library_id` selects the exact library, `operation_kind` defines execution
     /// semantics, and `source_root` is present only for Markdown imports.
     /// Returns: the prepared identity consumed by either a synchronous or detached executor.
-    /// 参数：`library_id` 选择精确资料库，`operation_kind` 定义执行语义，`source_root` 仅在 Markdown
+    /// 参数：`library_id` 选择精确知识库，`operation_kind` 定义执行语义，`source_root` 仅在 Markdown
     /// 导入时存在。返回值：由同步或分离执行器消费的预留身份。
     async fn prepare_operation(
         &self,
@@ -4942,7 +4942,7 @@ COMMIT;
             // Operations 在持久化插入等待 I/O 前关闭重复启动竞态。
             let mut operations = self.active_operations.lock().await;
             if let Some(active) = operations.get(library_id) {
-                return Err(format!("资料库已有运行中的操作：job_id={}", active.job_id));
+                return Err(format!("知识库已有运行中的操作：job_id={}", active.job_id));
             }
             operations.insert(
                 library_id.to_string(),
@@ -4993,7 +4993,7 @@ COMMIT;
                 ],
             )
             .await
-            .map_err(|error| format!("创建资料库操作任务失败：{error}"))?;
+            .map_err(|error| format!("创建知识库操作任务失败：{error}"))?;
         Ok(())
     }
 
@@ -5046,7 +5046,7 @@ COMMIT;
             tokio::select! {
                 scan_result = &mut scan_task => {
                     return scan_result
-                        .map_err(|error| format!("资料库目录扫描工作器失败：{error}"))?;
+                        .map_err(|error| format!("知识库目录扫描工作器失败：{error}"))?;
                 }
                 progress = progress_receiver.recv(), if progress_channel_open => {
                     match progress {
@@ -5082,7 +5082,7 @@ COMMIT;
                 vec![int(discovered_files as i64), text(current_path), text(job_id)],
             )
             .await
-            .map_err(|error| format!("更新资料库扫描进度失败：{error}"))?;
+            .map_err(|error| format!("更新知识库扫描进度失败：{error}"))?;
         Ok(())
     }
 
@@ -5102,7 +5102,7 @@ COMMIT;
                 vec![int(total_files as i64), int(total_files as i64), text(job_id)],
             )
             .await
-            .map_err(|error| format!("发布资料库文件总数失败：{error}"))?;
+            .map_err(|error| format!("发布知识库文件总数失败：{error}"))?;
         Ok(())
     }
 
@@ -5129,7 +5129,7 @@ COMMIT;
                 ],
             )
             .await
-            .map_err(|error| format!("更新资料库操作阶段失败：{error}"))?;
+            .map_err(|error| format!("更新知识库操作阶段失败：{error}"))?;
         Ok(())
     }
 
@@ -5144,7 +5144,7 @@ COMMIT;
         warnings: &[String],
     ) -> Result<(), String> {
         let warnings_json = serde_json::to_string(warnings)
-            .map_err(|error| format!("序列化资料库导入进度告警失败：{error}"))?;
+            .map_err(|error| format!("序列化知识库导入进度告警失败：{error}"))?;
         self.controller
             .client
             .execute_sqlite_script_typed(
@@ -5160,7 +5160,7 @@ COMMIT;
                 ],
             )
             .await
-            .map_err(|error| format!("更新资料库导入进度失败：{error}"))?;
+            .map_err(|error| format!("更新知识库导入进度失败：{error}"))?;
         Ok(())
     }
 
@@ -5187,7 +5187,7 @@ COMMIT;
                 ],
             )
             .await
-            .map_err(|error| format!("更新资料库索引进度失败：{error}"))?;
+            .map_err(|error| format!("更新知识库索引进度失败：{error}"))?;
         Ok(())
     }
 
@@ -5200,7 +5200,7 @@ COMMIT;
     ) -> Result<(), String> {
         let now = unix_epoch_millis()?;
         let warnings_json = serde_json::to_string(&report.warnings)
-            .map_err(|failure| format!("序列化资料库导入告警失败：{failure}"))?;
+            .map_err(|failure| format!("序列化知识库导入告警失败：{failure}"))?;
         self.controller
             .client
             .execute_sqlite_script_typed(
@@ -5226,7 +5226,7 @@ COMMIT;
                 ],
             )
             .await
-            .map_err(|failure| format!("完成资料库导入任务失败：{failure}"))?;
+            .map_err(|failure| format!("完成知识库导入任务失败：{failure}"))?;
         Ok(())
     }
 
@@ -5255,7 +5255,7 @@ COMMIT;
                 ],
             )
             .await
-            .map_err(|failure| format!("完成资料库索引操作失败：{failure}"))?;
+            .map_err(|failure| format!("完成知识库索引操作失败：{failure}"))?;
         Ok(())
     }
 
@@ -5272,7 +5272,7 @@ COMMIT;
                 vec![text(bounded), int(unix_epoch_millis()?), text(job_id)],
             )
             .await
-            .map_err(|failure| format!("记录资料库操作失败状态失败：{failure}"))?;
+            .map_err(|failure| format!("记录知识库操作失败状态失败：{failure}"))?;
         Ok(())
     }
 
@@ -5288,7 +5288,7 @@ COMMIT;
                 vec![int(unix_epoch_millis()?), text(job_id)],
             )
             .await
-            .map_err(|failure| format!("记录资料库操作取消状态失败：{failure}"))?;
+            .map_err(|failure| format!("记录知识库操作取消状态失败：{failure}"))?;
         Ok(())
     }
 }
@@ -5529,14 +5529,14 @@ fn slash_path(path: &Path) -> Result<String, String> {
 }
 
 /// Validates and normalizes a user-visible library name.
-/// 验证并规范化用户可见资料库名称。
+/// 验证并规范化用户可见知识库名称。
 fn validate_library_name(name: &str) -> Result<String, String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
-        return Err(String::from("资料库名称不能为空。"));
+        return Err(String::from("知识库名称不能为空。"));
     }
     if trimmed.chars().count() > 120 {
-        return Err(String::from("资料库名称不能超过 120 个字符。"));
+        return Err(String::from("知识库名称不能超过 120 个字符。"));
     }
     Ok(trimmed.to_string())
 }
@@ -5555,23 +5555,23 @@ fn validate_custom_word(word: &str) -> Result<&str, String> {
 }
 
 /// Validates that a library identifier is one canonical lowercase UUID.
-/// 验证资料库标识符是一个规范小写 UUID。
+/// 验证知识库标识符是一个规范小写 UUID。
 fn validate_library_id(library_id: &str) -> Result<(), String> {
     let parsed = Uuid::parse_str(library_id)
-        .map_err(|error| format!("资料库标识符不是有效 UUID：{error}"))?;
+        .map_err(|error| format!("知识库标识符不是有效 UUID：{error}"))?;
     if parsed.to_string() != library_id {
-        return Err(String::from("资料库标识符必须使用规范小写 UUID 格式。"));
+        return Err(String::from("知识库标识符必须使用规范小写 UUID 格式。"));
     }
     Ok(())
 }
 
 /// Returns whether one direct child name is reserved for package extraction cleanup.
-/// 返回一个直属子项名称是否保留用于资料库包解压清理。
+/// 返回一个直属子项名称是否保留用于知识库包解压清理。
 ///
 /// # Parameters
 /// 参数
 /// `name` is an exact file name obtained from the knowledge-root directory iterator.
-/// `name` 是从资料库根目录迭代器取得的精确文件名。
+/// `name` 是从知识库根目录迭代器取得的精确文件名。
 ///
 /// # Returns
 /// 返回值
@@ -5597,38 +5597,38 @@ fn is_package_inspection_temp_directory_name(name: &str) -> bool {
 fn validate_replacement_journal(journal: &KnowledgeReplacementJournal) -> Result<String, String> {
     if journal.version != KNOWLEDGE_REPLACEMENT_JOURNAL_VERSION {
         return Err(format!(
-            "资料库覆盖恢复日志版本不受支持：{}",
+            "知识库覆盖恢复日志版本不受支持：{}",
             journal.version
         ));
     }
     validate_library_id(&journal.target_library_id)?;
     if journal.previous.id != journal.target_library_id {
-        return Err(String::from("资料库覆盖恢复日志的旧注册身份不匹配。"));
+        return Err(String::from("知识库覆盖恢复日志的旧注册身份不匹配。"));
     }
     if journal.previous.lifecycle_state != "active" {
-        return Err(String::from("资料库覆盖恢复日志的旧资料库状态无效。"));
+        return Err(String::from("知识库覆盖恢复日志的旧知识库状态无效。"));
     }
     validate_library_name(&journal.previous.name)?;
     if !matches!(
         journal.phase.as_str(),
         KNOWLEDGE_REPLACEMENT_PHASE_PREPARED | KNOWLEDGE_REPLACEMENT_PHASE_COMMITTED
     ) {
-        return Err(format!("资料库覆盖恢复日志阶段无效：{}", journal.phase));
+        return Err(format!("知识库覆盖恢复日志阶段无效：{}", journal.phase));
     }
     let backup_prefix = format!(".replace-{}-", journal.target_library_id);
     let operation_id = journal
         .backup_directory_name
         .strip_prefix(&backup_prefix)
-        .ok_or_else(|| String::from("资料库覆盖恢复日志的备份目录名称无效。"))?;
+        .ok_or_else(|| String::from("知识库覆盖恢复日志的备份目录名称无效。"))?;
     validate_library_id(operation_id)?;
     if journal.backup_directory_name != format!("{backup_prefix}{operation_id}") {
-        return Err(String::from("资料库覆盖恢复日志的备份目录名称不规范。"));
+        return Err(String::from("知识库覆盖恢复日志的备份目录名称不规范。"));
     }
     Ok(operation_id.to_string())
 }
 
 /// Produces the unique comparison key for a library name.
-/// 生成资料库名称的唯一比较键。
+/// 生成知识库名称的唯一比较键。
 fn library_name_key(name: &str) -> String {
     name.trim().to_lowercase()
 }
@@ -5636,7 +5636,7 @@ fn library_name_key(name: &str) -> String {
 /// Converts one public package count to the signed SQLite representation.
 /// 将一个公开包计数转换为 SQLite 有符号表示。
 fn checked_package_count(value: u64, field: &str) -> Result<i64, String> {
-    i64::try_from(value).map_err(|_| format!("资料库包字段超出 SQLite 范围：{field}"))
+    i64::try_from(value).map_err(|_| format!("知识库包字段超出 SQLite 范围：{field}"))
 }
 
 /// Canonicalizes one existing ordinary destination directory.
@@ -5655,13 +5655,13 @@ fn canonical_existing_directory(path: &Path) -> Result<PathBuf, String> {
 /// 规范化并限制一个用户选择的 .vkb 归档。
 fn canonical_knowledge_package_path(path: &Path) -> Result<PathBuf, String> {
     let metadata = fs::symlink_metadata(path)
-        .map_err(|error| format!("读取资料库包失败（{}）：{error}", path.display()))?;
+        .map_err(|error| format!("读取知识库包失败（{}）：{error}", path.display()))?;
     if !metadata.is_file() || metadata_is_link_or_reparse(&metadata) {
-        return Err(format!("资料库包不是可信普通文件：{}", path.display()));
+        return Err(format!("知识库包不是可信普通文件：{}", path.display()));
     }
     if metadata.len() > MAX_KNOWLEDGE_PACKAGE_BYTES {
         return Err(format!(
-            "资料库包超过大小上限 {} 字节。",
+            "知识库包超过大小上限 {} 字节。",
             MAX_KNOWLEDGE_PACKAGE_BYTES
         ));
     }
@@ -5670,35 +5670,35 @@ fn canonical_knowledge_package_path(path: &Path) -> Result<PathBuf, String> {
         .and_then(|extension| extension.to_str())
         .is_none_or(|extension| !extension.eq_ignore_ascii_case("vkb"))
     {
-        return Err(String::from("资料库包扩展名必须为 .vkb。"));
+        return Err(String::from("知识库包扩展名必须为 .vkb。"));
     }
     fs::canonicalize(path)
-        .map_err(|error| format!("规范化资料库包失败（{}）：{error}", path.display()))
+        .map_err(|error| format!("规范化知识库包失败（{}）：{error}", path.display()))
 }
 
 /// Extracts and validates one package into a host-controlled temporary directory.
-/// 将一个资料库包解压并校验到宿主受控临时目录。
+/// 将一个知识库包解压并校验到宿主受控临时目录。
 fn prepare_knowledge_package(
     archive_path: &Path,
     temporary_parent: &Path,
 ) -> Result<PreparedKnowledgePackage, String> {
     fs::create_dir_all(temporary_parent).map_err(|error| {
         format!(
-            "创建资料库临时目录父级失败（{}）：{error}",
+            "创建知识库临时目录父级失败（{}）：{error}",
             temporary_parent.display()
         )
     })?;
     let temporary = tempfile::Builder::new()
         .prefix(KNOWLEDGE_PACKAGE_INSPECTION_TEMP_PREFIX)
         .tempdir_in(temporary_parent)
-        .map_err(|error| format!("创建资料库包检查临时目录失败：{error}"))?;
+        .map_err(|error| format!("创建知识库包检查临时目录失败：{error}"))?;
     let input = File::open(archive_path)
-        .map_err(|error| format!("打开资料库包失败（{}）：{error}", archive_path.display()))?;
+        .map_err(|error| format!("打开知识库包失败（{}）：{error}", archive_path.display()))?;
     let mut archive =
-        ZipArchive::new(input).map_err(|error| format!("解析资料库 ZIP 包失败：{error}"))?;
+        ZipArchive::new(input).map_err(|error| format!("解析知识库 ZIP 包失败：{error}"))?;
     if archive.len() != 3 {
         return Err(format!(
-            "资料库包条目数量无效：{}，预期为 3。",
+            "知识库包条目数量无效：{}，预期为 3。",
             archive.len()
         ));
     }
@@ -5710,19 +5710,19 @@ fn prepare_knowledge_package(
     for index in 0..archive.len() {
         let mut entry = archive
             .by_index(index)
-            .map_err(|error| format!("读取资料库包条目 {index} 失败：{error}"))?;
+            .map_err(|error| format!("读取知识库包条目 {index} 失败：{error}"))?;
         let name = entry.name().to_string();
         if entry.is_dir() || entry.enclosed_name().is_none() {
-            return Err(format!("资料库包包含非法条目：{name}"));
+            return Err(format!("知识库包包含非法条目：{name}"));
         }
         if entry
             .unix_mode()
             .is_some_and(|mode| mode & 0o170000 == 0o120000)
         {
-            return Err(format!("资料库包不允许符号链接条目：{name}"));
+            return Err(format!("知识库包不允许符号链接条目：{name}"));
         }
         if !seen.insert(name.clone()) {
-            return Err(format!("资料库包包含重复条目：{name}"));
+            return Err(format!("知识库包包含重复条目：{name}"));
         }
         match name.as_str() {
             KNOWLEDGE_PACKAGE_METADATA_ENTRY => {
@@ -5744,41 +5744,41 @@ fn prepare_knowledge_package(
                 // expectedBytes 是中央目录声明大小，仅在有界流式解压后用于一致性校验。
                 let expected_bytes = entry.size();
                 if expected_bytes > MAX_KNOWLEDGE_PACKAGE_BYTES {
-                    return Err(String::from("资料库包 SQLite 条目超过大小上限。"));
+                    return Err(String::from("知识库包 SQLite 条目超过大小上限。"));
                 }
                 let mut output = File::create(&database_path)
-                    .map_err(|error| format!("创建资料库包临时 SQLite 失败：{error}"))?;
+                    .map_err(|error| format!("创建知识库包临时 SQLite 失败：{error}"))?;
                 // copied is bounded independently from untrusted ZIP size metadata to prevent expansion bombs.
                 // copied 独立于不可信 ZIP 大小元数据进行限制，以防止解压膨胀攻击。
                 let copied = std::io::copy(
                     &mut entry.by_ref().take(MAX_KNOWLEDGE_PACKAGE_BYTES + 1),
                     &mut output,
                 )
-                .map_err(|error| format!("解压资料库 SQLite 失败：{error}"))?;
+                .map_err(|error| format!("解压知识库 SQLite 失败：{error}"))?;
                 if copied > MAX_KNOWLEDGE_PACKAGE_BYTES {
-                    return Err(String::from("资料库包 SQLite 解压内容超过大小上限。"));
+                    return Err(String::from("知识库包 SQLite 解压内容超过大小上限。"));
                 }
                 output
                     .sync_all()
-                    .map_err(|error| format!("同步资料库临时 SQLite 失败：{error}"))?;
+                    .map_err(|error| format!("同步知识库临时 SQLite 失败：{error}"))?;
                 if copied != expected_bytes {
-                    return Err(String::from("资料库 SQLite 解压字节数不一致。"));
+                    return Err(String::from("知识库 SQLite 解压字节数不一致。"));
                 }
                 database_seen = true;
             }
-            _ => return Err(format!("资料库包包含未知条目：{name}")),
+            _ => return Err(format!("知识库包包含未知条目：{name}")),
         }
     }
     let package: KnowledgePackageManifest = serde_json::from_slice(
-        &package_bytes.ok_or_else(|| String::from("资料库包缺少 package.json。"))?,
+        &package_bytes.ok_or_else(|| String::from("知识库包缺少 package.json。"))?,
     )
-    .map_err(|error| format!("解析资料库 package.json 失败：{error}"))?;
+    .map_err(|error| format!("解析知识库 package.json 失败：{error}"))?;
     let source_manifest: KnowledgeManifest = serde_json::from_slice(
-        &manifest_bytes.ok_or_else(|| String::from("资料库包缺少内部 manifest.json。"))?,
+        &manifest_bytes.ok_or_else(|| String::from("知识库包缺少内部 manifest.json。"))?,
     )
-    .map_err(|error| format!("解析资料库内部 manifest.json 失败：{error}"))?;
+    .map_err(|error| format!("解析知识库内部 manifest.json 失败：{error}"))?;
     if !database_seen {
-        return Err(String::from("资料库包缺少 content.sqlite3。"));
+        return Err(String::from("知识库包缺少 content.sqlite3。"));
     }
     validate_knowledge_package_metadata(&package, &source_manifest, &database_path)?;
     Ok(PreparedKnowledgePackage {
@@ -5799,9 +5799,9 @@ fn read_bounded_zip_entry<R: Read>(
     entry
         .take(limit + 1)
         .read_to_end(&mut bytes)
-        .map_err(|error| format!("读取资料库包条目 {name} 失败：{error}"))?;
+        .map_err(|error| format!("读取知识库包条目 {name} 失败：{error}"))?;
     if bytes.len() as u64 > limit {
-        return Err(format!("资料库包条目超过大小上限：{name}"));
+        return Err(format!("知识库包条目超过大小上限：{name}"));
     }
     Ok(bytes)
 }
@@ -5816,27 +5816,27 @@ fn validate_knowledge_package_metadata(
     if package.format != KNOWLEDGE_PACKAGE_FORMAT
         || package.package_version != KNOWLEDGE_PACKAGE_VERSION
     {
-        return Err(String::from("资料库包格式或包版本不受支持。"));
+        return Err(String::from("知识库包格式或包版本不受支持。"));
     }
     validate_library_id(&package.source_library_id)?;
     if validate_library_name(&package.name)? != package.name {
-        return Err(String::from("资料库包名称不是规范化名称。"));
+        return Err(String::from("知识库包名称不是规范化名称。"));
     }
     if package.schema_version != KNOWLEDGE_SCHEMA_VERSION
         || source_manifest.schema_version != KNOWLEDGE_SCHEMA_VERSION
     {
         return Err(format!(
-            "资料库包 Schema 版本不兼容：package={}, manifest={}, current={}",
+            "知识库包 Schema 版本不兼容：package={}, manifest={}, current={}",
             package.schema_version, source_manifest.schema_version, KNOWLEDGE_SCHEMA_VERSION
         ));
     }
     if source_manifest.library_id != package.source_library_id
         || source_manifest.name != package.name
     {
-        return Err(String::from("资料库包来源清单与 package.json 不一致。"));
+        return Err(String::from("知识库包来源清单与 package.json 不一致。"));
     }
     if package.index_status != "ready" {
-        return Err(String::from("资料库包不包含 ready 状态的可直接使用索引。"));
+        return Err(String::from("知识库包不包含 ready 状态的可直接使用索引。"));
     }
     if package.content_sha256.len() != 64
         || !package
@@ -5844,23 +5844,23 @@ fn validate_knowledge_package_metadata(
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit())
     {
-        return Err(String::from("资料库包 SQLite SHA-256 字段格式无效。"));
+        return Err(String::from("知识库包 SQLite SHA-256 字段格式无效。"));
     }
     let content_bytes = fs::metadata(database_path)
-        .map_err(|error| format!("读取资料库包 SQLite 元数据失败：{error}"))?
+        .map_err(|error| format!("读取知识库包 SQLite 元数据失败：{error}"))?
         .len();
     if content_bytes != package.content_bytes {
-        return Err(String::from("资料库包 SQLite 大小与 package.json 不一致。"));
+        return Err(String::from("知识库包 SQLite 大小与 package.json 不一致。"));
     }
     let digest = sha256_file_hex(database_path)?;
     if digest != package.content_sha256.to_ascii_lowercase() {
-        return Err(String::from("资料库包 SQLite SHA-256 校验失败。"));
+        return Err(String::from("知识库包 SQLite SHA-256 校验失败。"));
     }
     Ok(())
 }
 
 /// Writes one complete package after the owning SQLite binding has been stopped.
-/// 在所属 SQLite 绑定停止后写出一个完整资料库包。
+/// 在所属 SQLite 绑定停止后写出一个完整知识库包。
 fn export_knowledge_package_files(
     library: &KnowledgeLibrarySummary,
     library_root: &Path,
@@ -5877,11 +5877,11 @@ fn export_knowledge_package_files(
         || !manifest_metadata.is_file()
         || metadata_is_link_or_reparse(&manifest_metadata)
     {
-        return Err(String::from("资料库导出来源包含非普通文件。"));
+        return Err(String::from("知识库导出来源包含非普通文件。"));
     }
     if database_metadata.len() > MAX_KNOWLEDGE_PACKAGE_BYTES {
         return Err(format!(
-            "资料库 SQLite 超过可移植包大小上限 {} 字节。",
+            "知识库 SQLite 超过可移植包大小上限 {} 字节。",
             MAX_KNOWLEDGE_PACKAGE_BYTES
         ));
     }
@@ -5895,10 +5895,10 @@ fn export_knowledge_package_files(
         let transient_path = library_root.join(transient_name);
         if transient_path
             .try_exists()
-            .map_err(|error| format!("检查资料库 SQLite 临时日志失败：{error}"))?
+            .map_err(|error| format!("检查知识库 SQLite 临时日志失败：{error}"))?
         {
             return Err(format!(
-                "资料库 SQLite 日志尚未完全收口，拒绝导出：{}",
+                "知识库 SQLite 日志尚未完全收口，拒绝导出：{}",
                 transient_path.display()
             ));
         }
@@ -5911,7 +5911,7 @@ fn export_knowledge_package_files(
         || source_manifest.name != library.name
         || source_manifest.schema_version != KNOWLEDGE_SCHEMA_VERSION
     {
-        return Err(String::from("待导出资料库清单与注册记录不一致。"));
+        return Err(String::from("待导出知识库清单与注册记录不一致。"));
     }
     let exported_at_ms = unix_epoch_millis()?;
     let package = KnowledgePackageManifest {
@@ -5929,7 +5929,7 @@ fn export_knowledge_package_files(
         content_bytes: database_metadata.len(),
     };
     // exportId prevents same-millisecond or sanitized-name collisions from overwriting another package.
-    // exportId 防止同毫秒或名称清理冲突覆盖另一份资料库包。
+    // exportId 防止同毫秒或名称清理冲突覆盖另一份知识库包。
     let export_id = Uuid::new_v4().to_string();
     let archive_name = portable_knowledge_archive_name(&library.name, exported_at_ms, &export_id);
     let archive_path = destination_directory.join(archive_name);
@@ -5937,7 +5937,7 @@ fn export_knowledge_package_files(
         .prefix(".knowledge-export-")
         .suffix(".vkb.tmp")
         .tempfile_in(destination_directory)
-        .map_err(|error| format!("创建资料库导出临时文件失败：{error}"))?;
+        .map_err(|error| format!("创建知识库导出临时文件失败：{error}"))?;
     {
         let mut writer = ZipWriter::new(temporary.as_file_mut());
         let options = SimpleFileOptions::default()
@@ -5945,52 +5945,52 @@ fn export_knowledge_package_files(
             .unix_permissions(0o600);
         writer
             .start_file(KNOWLEDGE_PACKAGE_METADATA_ENTRY, options)
-            .map_err(|error| format!("创建资料库 package.json 条目失败：{error}"))?;
+            .map_err(|error| format!("创建知识库 package.json 条目失败：{error}"))?;
         writer
             .write_all(
                 &serde_json::to_vec_pretty(&package)
-                    .map_err(|error| format!("序列化资料库包元数据失败：{error}"))?,
+                    .map_err(|error| format!("序列化知识库包元数据失败：{error}"))?,
             )
-            .map_err(|error| format!("写入资料库 package.json 失败：{error}"))?;
+            .map_err(|error| format!("写入知识库 package.json 失败：{error}"))?;
         writer
             .start_file(KNOWLEDGE_PACKAGE_LIBRARY_MANIFEST_ENTRY, options)
-            .map_err(|error| format!("创建资料库内部清单条目失败：{error}"))?;
+            .map_err(|error| format!("创建知识库内部清单条目失败：{error}"))?;
         writer
             .write_all(
                 &serde_json::to_vec_pretty(&source_manifest)
-                    .map_err(|error| format!("序列化资料库内部清单失败：{error}"))?,
+                    .map_err(|error| format!("序列化知识库内部清单失败：{error}"))?,
             )
-            .map_err(|error| format!("写入资料库内部清单失败：{error}"))?;
+            .map_err(|error| format!("写入知识库内部清单失败：{error}"))?;
         writer
             .start_file(KNOWLEDGE_PACKAGE_DATABASE_ENTRY, options)
-            .map_err(|error| format!("创建资料库 SQLite 条目失败：{error}"))?;
+            .map_err(|error| format!("创建知识库 SQLite 条目失败：{error}"))?;
         let mut database = File::open(&database_path)
             .map_err(|error| format!("打开待导出 SQLite 失败：{error}"))?;
         std::io::copy(&mut database, &mut writer)
-            .map_err(|error| format!("写入资料库 SQLite 条目失败：{error}"))?;
+            .map_err(|error| format!("写入知识库 SQLite 条目失败：{error}"))?;
         writer
             .finish()
-            .map_err(|error| format!("完成资料库 ZIP 包失败：{error}"))?;
+            .map_err(|error| format!("完成知识库 ZIP 包失败：{error}"))?;
     }
     temporary
         .as_file()
         .sync_all()
-        .map_err(|error| format!("同步资料库导出临时文件失败：{error}"))?;
+        .map_err(|error| format!("同步知识库导出临时文件失败：{error}"))?;
     // archiveBytes enforces that an exported package can pass the same size gate during import.
     // archiveBytes 确保导出包能够通过导入时相同的大小门禁。
     let archive_bytes = temporary
         .as_file()
         .metadata()
-        .map_err(|error| format!("读取资料库导出包大小失败：{error}"))?
+        .map_err(|error| format!("读取知识库导出包大小失败：{error}"))?
         .len();
     if archive_bytes > MAX_KNOWLEDGE_PACKAGE_BYTES {
         return Err(format!(
-            "资料库导出包超过大小上限 {} 字节。",
+            "知识库导出包超过大小上限 {} 字节。",
             MAX_KNOWLEDGE_PACKAGE_BYTES
         ));
     }
     persist_tempfile_atomically(temporary, &archive_path)
-        .map_err(|error| format!("提交资料库导出文件失败：{error}"))?;
+        .map_err(|error| format!("提交知识库导出文件失败：{error}"))?;
     Ok(KnowledgePackageExportResult {
         archive_path: runtime_assets::native_host_path_text_from_path(&archive_path),
         package,
@@ -6022,9 +6022,9 @@ fn sha256_file_hex(path: &Path) -> Result<String, String> {
 /// # Parameters
 /// 参数
 /// `name` is the user-visible library name whose safe prefix is retained.
-/// `name` 是保留安全前缀的用户可见资料库名称。
+/// `name` 是保留安全前缀的用户可见知识库名称。
 /// `timestamp_ms` is the package export timestamp used for chronological recognition.
-/// `timestamp_ms` 是用于按时间识别的资料库包导出时间戳。
+/// `timestamp_ms` 是用于按时间识别的知识库包导出时间戳。
 /// `export_id` is the canonical host-generated UUID preventing destination collisions.
 /// `export_id` 是防止目标冲突的宿主生成规范 UUID。
 ///
@@ -6068,7 +6068,7 @@ fn path_key(path: &Path) -> String {
 /// Decodes one controller JSON row set into typed rows.
 /// 将一份控制器 JSON 行集解码为类型化记录。
 fn decode_rows<T: DeserializeOwned>(json: &str) -> Result<Vec<T>, String> {
-    serde_json::from_str(json).map_err(|error| format!("解码资料库查询结果失败：{error}"))
+    serde_json::from_str(json).map_err(|error| format!("解码知识库查询结果失败：{error}"))
 }
 
 /// Maps one registry row into the checked public summary.
@@ -6140,7 +6140,7 @@ fn chunk_from_joined_row(row: &JoinedChunkRow) -> Result<KnowledgeChunk, String>
 /// Converts a non-negative SQLite integer into a public unsigned value.
 /// 将非负 SQLite 整数转换为公共无符号值。
 fn nonnegative_u64(value: i64, field: &str) -> Result<u64, String> {
-    u64::try_from(value).map_err(|_| format!("资料库字段 {field} 包含非法负值：{value}"))
+    u64::try_from(value).map_err(|_| format!("知识库字段 {field} 包含非法负值：{value}"))
 }
 
 /// Parses one non-negative decimal metadata revision into its public unsigned representation.
@@ -6152,7 +6152,7 @@ fn nonnegative_u64(value: i64, field: &str) -> Result<u64, String> {
 fn parse_revision(value: &str, field: &str) -> Result<u64, String> {
     value
         .parse::<u64>()
-        .map_err(|error| format!("资料库元数据 {field} 不是有效非负版本（{value}）：{error}"))
+        .map_err(|error| format!("知识库元数据 {field} 不是有效非负版本（{value}）：{error}"))
 }
 
 /// Returns a typed SQLite text value.
@@ -6218,7 +6218,7 @@ mod tests {
     };
 
     /// Writes one compact package fixture with caller-controlled metadata entry and optional extra entry.
-    /// 写入一个紧凑资料库包夹具，允许调用方控制元数据条目及可选额外条目。
+    /// 写入一个紧凑知识库包夹具，允许调用方控制元数据条目及可选额外条目。
     fn write_package_fixture(
         path: &Path,
         package: &KnowledgePackageManifest,
@@ -6258,14 +6258,14 @@ mod tests {
     }
 
     /// Builds matching metadata for one compact package fixture.
-    /// 为一个紧凑资料库包夹具构建相互匹配的元数据。
+    /// 为一个紧凑知识库包夹具构建相互匹配的元数据。
     fn package_fixture_metadata(database: &[u8]) -> (KnowledgePackageManifest, KnowledgeManifest) {
         let source_library_id = String::from("550e8400-e29b-41d4-a716-446655440000");
         let package = KnowledgePackageManifest {
             format: String::from(KNOWLEDGE_PACKAGE_FORMAT),
             package_version: KNOWLEDGE_PACKAGE_VERSION,
             source_library_id: source_library_id.clone(),
-            name: String::from("测试资料库"),
+            name: String::from("测试知识库"),
             description: String::from("fixture"),
             schema_version: KNOWLEDGE_SCHEMA_VERSION,
             document_count: 0,
@@ -6299,7 +6299,7 @@ mod tests {
             serde_json::from_reader(&mut entry).expect("decode source package metadata")
         };
         // manifest mirrors the forged identity so the outer package checks still pass.
-        // manifest 镜像伪造身份，使资料库包外层检查仍能通过。
+        // manifest 镜像伪造身份，使知识库包外层检查仍能通过。
         let mut manifest: KnowledgeManifest = {
             let mut entry = archive
                 .by_name(KNOWLEDGE_PACKAGE_LIBRARY_MANIFEST_ENTRY)
@@ -6330,7 +6330,7 @@ mod tests {
     }
 
     /// Verifies library IDs reject non-canonical and path-like input.
-    /// 验证资料库标识符拒绝非规范格式与路径式输入。
+    /// 验证知识库标识符拒绝非规范格式与路径式输入。
     #[test]
     fn library_id_requires_canonical_uuid() {
         assert!(validate_library_id("../../escape").is_err());
@@ -6365,7 +6365,7 @@ mod tests {
         // previous 捕获 prepared 恢复必须还原的精确活动注册记录。
         let previous = KnowledgeLibrarySummary {
             id: target_id.clone(),
-            name: String::from("恢复测试资料库"),
+            name: String::from("恢复测试知识库"),
             description: String::from("fixture"),
             lifecycle_state: String::from("active"),
             document_count: 2,
@@ -6403,7 +6403,7 @@ mod tests {
     }
 
     /// Verifies a stale cancellation request cannot stop a newer knowledge operation.
-    /// 验证过期取消请求不能停止更新的资料库操作。
+    /// 验证过期取消请求不能停止更新的知识库操作。
     #[test]
     fn cancellation_requires_exact_active_job_identity() {
         let signal = Arc::new(AtomicBool::new(false));
@@ -6469,7 +6469,7 @@ mod tests {
     }
 
     /// Verifies package extraction accepts only the exact three-entry format and matching digest.
-    /// 验证资料库包解压仅接受精确的三条目格式与匹配摘要。
+    /// 验证知识库包解压仅接受精确的三条目格式与匹配摘要。
     #[test]
     fn package_preparation_enforces_exact_entries_and_digest() {
         let temporary = tempdir().expect("create package fixture root");
@@ -6614,7 +6614,7 @@ mod tests {
         fs::create_dir_all(source_root.join("guide")).expect("create source tree");
         fs::write(
             source_root.join("guide").join("search.md"),
-            "# 检索设计\n\n火山资料库使用结巴分词和 BM25 检索。\n\ngetskilllevelup(actor, 10)\n",
+            "# 检索设计\n\n火山知识库使用结巴分词和 BM25 检索。\n\ngetskilllevelup(actor, 10)\n",
         )
         .expect("write Chinese Markdown fixture");
         fs::write(source_root.join("ignored.txt"), "must not import")
@@ -6699,7 +6699,7 @@ mod tests {
         ));
 
         // abandonedExtraction simulates a package TempDir left behind by process termination.
-        // abandonedExtraction 模拟进程终止后遗留的资料库包临时解压目录。
+        // abandonedExtraction 模拟进程终止后遗留的知识库包临时解压目录。
         let abandoned_extraction = runtime
             .knowledge_root()
             .join(".package-inspect-crash-fixture");
@@ -6714,14 +6714,14 @@ mod tests {
         assert!(!abandoned_extraction.exists());
 
         let library = runtime
-            .create_library("端到端资料库", "", &[])
+            .create_library("端到端知识库", "", &[])
             .await
             .expect("create isolated library");
         let library = runtime
-            .rename_library(&library.id, "端到端资料库已重命名", "")
+            .rename_library(&library.id, "端到端知识库已重命名", "")
             .await
             .expect("replace existing manifest during rename");
-        assert_eq!(library.name, "端到端资料库已重命名");
+        assert_eq!(library.name, "端到端知识库已重命名");
         let first_import = runtime
             .import_markdown_directory(&library.id, &source_root)
             .await
@@ -6770,7 +6770,7 @@ mod tests {
             first_import.chunk_count
         );
         let search = runtime
-            .search(std::slice::from_ref(&library.id), "火山资料库", 10)
+            .search(std::slice::from_ref(&library.id), "火山知识库", 10)
             .await
             .expect("search Chinese content");
         assert!(!search.hits.is_empty());
@@ -6781,7 +6781,7 @@ mod tests {
         // independentSearch must reuse the controller binding instead of reopening the locked SQLite file.
         // independentSearch 必须复用控制器绑定，而不是重新打开已经锁定的 SQLite 文件。
         let independent_search = independent_runtime
-            .search(std::slice::from_ref(&library.id), "火山资料库", 10)
+            .search(std::slice::from_ref(&library.id), "火山知识库", 10)
             .await
             .expect("search Chinese content through independent runtime");
         assert!(!independent_search.hits.is_empty());
@@ -6791,7 +6791,7 @@ mod tests {
         // thirdSearch must remain idempotent even after the binding has already been enabled twice.
         // thirdSearch 必须在绑定已经启用两次后仍保持幂等。
         let third_search = third_runtime
-            .search(std::slice::from_ref(&library.id), "火山资料库", 10)
+            .search(std::slice::from_ref(&library.id), "火山知识库", 10)
             .await
             .expect("search Chinese content through third runtime");
         assert!(
@@ -6820,7 +6820,7 @@ mod tests {
         )
         .expect("write GBK Markdown fixture");
         let legacy_encoding_library = runtime
-            .create_library("GBK 资料库", "", &[])
+            .create_library("GBK 知识库", "", &[])
             .await
             .expect("create GBK library");
         let legacy_encoding_import = runtime
@@ -6902,7 +6902,7 @@ mod tests {
         );
         assert!(
             !runtime
-                .search(std::slice::from_ref(&library.id), "火山资料库", 10)
+                .search(std::slice::from_ref(&library.id), "火山知识库", 10)
                 .await
                 .expect("search recovered index")
                 .hits
@@ -7047,7 +7047,7 @@ mod tests {
         );
 
         let imported = runtime
-            .import_package_as_new(Path::new(&export.archive_path), "端到端资料库包副本")
+            .import_package_as_new(Path::new(&export.archive_path), "端到端知识库包副本")
             .await
             .expect("import package under a unique name");
         assert_ne!(imported.library.id, library.id);
@@ -7057,14 +7057,14 @@ mod tests {
         );
         assert!(
             !runtime
-                .search(std::slice::from_ref(&imported.library.id), "火山资料库", 10)
+                .search(std::slice::from_ref(&imported.library.id), "火山知识库", 10)
                 .await
                 .expect("search imported package without rebuilding")
                 .hits
                 .is_empty()
         );
         let replacement_target = runtime
-            .create_library("覆盖目标资料库", "", &[])
+            .create_library("覆盖目标知识库", "", &[])
             .await
             .expect("create replacement target");
         client
@@ -7104,7 +7104,7 @@ mod tests {
             .replace_library_from_package(
                 Path::new(&export.archive_path),
                 &replacement_target.id,
-                "覆盖目标资料库",
+                "覆盖目标知识库",
             )
             .await
             .expect("explicitly replace target from package");
@@ -7121,7 +7121,7 @@ mod tests {
             !runtime
                 .search(
                     std::slice::from_ref(&replacement_target.id),
-                    "火山资料库",
+                    "火山知识库",
                     10,
                 )
                 .await
@@ -7176,7 +7176,7 @@ mod tests {
             !prepared_recovery
                 .search(
                     std::slice::from_ref(&replacement_target.id),
-                    "火山资料库",
+                    "火山知识库",
                     10,
                 )
                 .await
@@ -7270,7 +7270,7 @@ mod tests {
             .replace_library_from_package(
                 &identity_mismatch_path,
                 &replacement_target.id,
-                "覆盖目标资料库",
+                "覆盖目标知识库",
             )
             .await;
         assert!(failed_replacement.is_err());
@@ -7278,7 +7278,7 @@ mod tests {
             !runtime
                 .search(
                     std::slice::from_ref(&replacement_target.id),
-                    "火山资料库",
+                    "火山知识库",
                     10,
                 )
                 .await
@@ -7301,7 +7301,7 @@ mod tests {
             // PerformanceLibrary remains isolated from deterministic fixtures and is deleted before teardown.
             // PerformanceLibrary 与确定性夹具隔离，并在清理前删除。
             let performance_library = runtime
-                .create_library("资料库集合式索引性能测试", "", &[])
+                .create_library("知识库集合式索引性能测试", "", &[])
                 .await
                 .expect("create performance library");
             let performance_started_at = Instant::now();
@@ -7380,7 +7380,7 @@ mod tests {
         assert_eq!(second_import.deleted_files, 1);
         assert!(
             runtime
-                .search(std::slice::from_ref(&library.id), "火山资料库", 10)
+                .search(std::slice::from_ref(&library.id), "火山知识库", 10)
                 .await
                 .expect("search rebuilt empty index")
                 .hits
@@ -7392,9 +7392,9 @@ mod tests {
             .expect("delete isolated library");
 
         // multiSourceLibrary isolates multi-root and source-remapping assertions from package fixtures.
-        // multiSourceLibrary 将多根目录与来源重新映射断言和资料库包夹具隔离。
+        // multiSourceLibrary 将多根目录与来源重新映射断言和知识库包夹具隔离。
         let multi_source_library = runtime
-            .create_library("多来源增量资料库", "", &[])
+            .create_library("多来源增量知识库", "", &[])
             .await
             .expect("create multi-source library");
         // sourceARoot is the first independently tracked Markdown root.

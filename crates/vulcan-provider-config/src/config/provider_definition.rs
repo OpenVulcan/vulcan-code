@@ -275,8 +275,8 @@ pub struct ModelInterleavedField {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SupportedProviderDefinition {
-    /// Stable provider identifier used in config and runtime routing.
-    /// 用于配置与运行时路由的稳定供应商标识。
+    /// Stable provider identifier used in configuration and explicit execution binding.
+    /// 用于配置与显式执行绑定的稳定供应商标识。
     pub id: String,
     /// Display name shown to the user.
     /// 展示给用户的显示名称。

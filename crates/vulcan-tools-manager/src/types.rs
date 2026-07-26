@@ -46,7 +46,7 @@ pub enum VulcanToolSourceKind {
     Mcp,
     /// AI-specialized semantic fallback alias backed by another host tool.
     /// 由另一个宿主工具承载的 AI 专用语义回退别名。
-    AiFallback,
+    AiHostBinding,
 }
 
 /// One unified tool descriptor emitted by the host tool manager.

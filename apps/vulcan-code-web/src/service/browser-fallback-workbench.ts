@@ -449,6 +449,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
           targetName: "Web Search",
           modelId: "native",
           enabled: true,
+          selected: true,
         },
       ],
     },

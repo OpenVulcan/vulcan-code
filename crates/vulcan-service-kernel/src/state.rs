@@ -317,7 +317,7 @@ pub struct ServiceBridgeState {
     /// 长生命周期控制器运行时句柄。
     pub(crate) controller_runtime: Option<ControllerRuntimeHandle>,
     /// Long-lived host-native knowledge-base runtime.
-    /// 长生命周期宿主原生资料库运行时。
+    /// 长生命周期宿主原生知识库运行时。
     pub(crate) knowledge_runtime:
         Option<vulcan_workspace_store::knowledge_base::KnowledgeBaseRuntime>,
     /// Long-lived LuaSkills runtime handle.

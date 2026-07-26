@@ -28,7 +28,7 @@ export async function submitConversationPrompt(
   reasoningEffort: string | null,
   disabledAiCapabilityKinds: AiCapabilityKind[],
   disabledAiCapabilityTargetSelectors: string[],
-  aiCapabilityTargetOrderOverrides: Record<string, string[]>,
+  aiCapabilityTargetBindings: Record<string, string>,
 ): Promise<SubmitConversationPromptAck | null> {
   if (!hasServiceRuntime()) {
     return null;
@@ -43,7 +43,7 @@ export async function submitConversationPrompt(
     reasoningEffort,
     disabledAiCapabilityKinds,
     disabledAiCapabilityTargetSelectors,
-    aiCapabilityTargetOrderOverrides,
+    aiCapabilityTargetBindings,
   });
 }
 
@@ -54,7 +54,7 @@ export async function saveSessionAiCapabilityConfiguration(
   conversationId: string | null,
   disabledAiCapabilityKinds: AiCapabilityKind[],
   disabledAiCapabilityTargetSelectors: string[],
-  aiCapabilityTargetOrderOverrides: Record<string, string[]>,
+  aiCapabilityTargetBindings: Record<string, string>,
 ): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
     return null;
@@ -65,7 +65,7 @@ export async function saveSessionAiCapabilityConfiguration(
       conversationId,
       disabledAiCapabilityKinds,
       disabledAiCapabilityTargetSelectors,
-      aiCapabilityTargetOrderOverrides,
+      aiCapabilityTargetBindings,
     },
   });
 }

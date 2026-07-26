@@ -21,9 +21,9 @@ pub(super) struct SessionAiCapabilityConfigurationSaveRequest {
     /// Complete disabled target selector list from the dialog draft.
     /// 弹窗草稿中的完整禁用目标选择器列表。
     disabled_ai_capability_target_selectors: Vec<String>,
-    /// Complete target order overrides grouped by capability kind.
-    /// 按能力类型分组的完整目标顺序覆盖。
-    ai_capability_target_order_overrides: BTreeMap<String, Vec<String>>,
+    /// Complete exact target bindings grouped by capability kind.
+    /// 按能力类型分组的完整精确目标绑定。
+    ai_capability_target_bindings: BTreeMap<String, String>,
 }
 
 /// Loaded state required to save one session-scoped AI capability draft.
@@ -64,9 +64,8 @@ pub(super) async fn service_save_session_ai_capability_configuration(
         parse_session_ai_capability_disabled_kinds(request.disabled_ai_capability_kinds)?;
     let disabled_target_selectors =
         parse_ai_capability_target_selectors(Some(request.disabled_ai_capability_target_selectors));
-    let target_order_overrides = parse_ai_capability_target_order_overrides(Some(
-        request.ai_capability_target_order_overrides,
-    ))?;
+    let target_bindings =
+        parse_ai_capability_target_bindings(Some(request.ai_capability_target_bindings))?;
     let SessionAiCapabilitySaveContext {
         controller_runtime,
         workspace_snapshot,
@@ -78,7 +77,7 @@ pub(super) async fn service_save_session_ai_capability_configuration(
         &mut next_configuration,
         &disabled_kinds,
         &disabled_target_selectors,
-        &target_order_overrides,
+        &target_bindings,
     )?;
     let model_capabilities = workspace_snapshot
         .session_runtime_state
@@ -238,9 +237,6 @@ pub(super) fn session_ai_capability_configuration_update_injection(
         let Some(next) = ai_capability_summary_for_kind(&next_capabilities, kind) else {
             continue;
         };
-        if ai_capability_has_native_path(kind, model_capabilities) {
-            continue;
-        }
         if let Some(change) = session_ai_capability_change_line(
             kind,
             previous,
@@ -415,7 +411,7 @@ pub(super) fn apply_session_ai_capability_dialog_draft(
     configuration: &mut PersistedAiToolConfiguration,
     disabled_kinds: &BTreeSet<AiToolKind>,
     disabled_target_selectors: &BTreeSet<String>,
-    target_order_overrides: &BTreeMap<AiToolKind, Vec<String>>,
+    target_bindings: &BTreeMap<AiToolKind, String>,
 ) -> Result<(), String> {
     configuration.disabled_capability_kinds = disabled_kinds.clone();
     for vendor in &mut configuration.vendors {
@@ -427,11 +423,14 @@ pub(super) fn apply_session_ai_capability_dialog_draft(
             );
         }
     }
-    for (capability_kind, target_order) in target_order_overrides {
-        set_ai_capability_target_order_for_kind(
+    for capability_kind in WORKBENCH_QUICK_TOGGLE_AI_TOOL_KINDS {
+        set_ai_capability_selected_target_for_kind(configuration, capability_kind, None)?;
+    }
+    for (capability_kind, selected_target) in target_bindings {
+        set_ai_capability_selected_target_for_kind(
             configuration,
             *capability_kind,
-            target_order.clone(),
+            Some(selected_target.clone()),
         )?;
     }
     configuration.normalize();

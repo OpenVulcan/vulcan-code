@@ -56,7 +56,7 @@ export function useChatAreaPlanActions(options: UseChatAreaPlanActionsOptions) {
       reasoningEffort: options.reasoningEffort,
       disabledAiCapabilityKinds: [],
       disabledAiCapabilityTargetSelectors: [],
-      aiCapabilityTargetOrderOverrides: {},
+      aiCapabilityTargetBindings: {},
     });
   }, [options]);
 
@@ -77,7 +77,7 @@ export function useChatAreaPlanActions(options: UseChatAreaPlanActionsOptions) {
       reasoningEffort: options.reasoningEffort,
       disabledAiCapabilityKinds: [],
       disabledAiCapabilityTargetSelectors: [],
-      aiCapabilityTargetOrderOverrides: {},
+      aiCapabilityTargetBindings: {},
     });
   }, [options]);
 

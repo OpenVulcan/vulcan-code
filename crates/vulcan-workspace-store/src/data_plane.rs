@@ -54,7 +54,7 @@ pub struct ControllerRuntimeHandle {
     /// 当前控制器运行时句柄使用的单次引导作用域 SQLite 绑定标识符。
     pub sqlite_binding_id: String,
     /// Process-local knowledge state shared by every runtime reconstructed from this handle.
-    /// 由基于当前句柄重建的所有运行时共享的进程内资料库状态。
+    /// 由基于当前句柄重建的所有运行时共享的进程内知识库状态。
     pub(crate) knowledge_runtime_state: Arc<KnowledgeBaseRuntimeSharedState>,
 }
 
@@ -75,7 +75,7 @@ impl fmt::Debug for ControllerRuntimeHandle {
 
 impl ControllerRuntimeHandle {
     /// Builds one long-lived controller handle and initializes its shared knowledge runtime state.
-    /// 构建一个长生命周期控制器句柄，并初始化其共享资料库运行时状态。
+    /// 构建一个长生命周期控制器句柄，并初始化其共享知识库运行时状态。
     ///
     /// `client` is the connected controller proxy, `endpoint` is its normalized URL,
     /// `executable` identifies the controller process, `data_root` owns application data,
@@ -84,7 +84,7 @@ impl ControllerRuntimeHandle {
     /// activation and mutation state across every clone.
     /// `client` 是已连接的控制器代理，`endpoint` 是其标准化 URL，`executable` 标识控制器进程，
     /// `data_root` 保存应用数据，`sqlite_path` 指向应用数据库，`sqlite_binding_id` 标识单次引导作用域的
-    /// 应用绑定。返回的句柄会在所有克隆之间共享同一份资料库激活与变更状态。
+    /// 应用绑定。返回的句柄会在所有克隆之间共享同一份知识库激活与变更状态。
     pub fn new(
         client: ControllerClient,
         endpoint: String,

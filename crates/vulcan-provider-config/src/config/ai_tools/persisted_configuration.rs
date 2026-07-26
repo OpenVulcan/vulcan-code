@@ -2,9 +2,16 @@ use super::*;
 
 /// Root persisted API-native tool configuration.
 /// 根级持久化 API 原生工具配置。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedAiToolConfiguration {
+    /// Deterministic Vulcan Router connection and exact credential-bound tool snapshots.
+    /// 确定性的 Vulcan Router 连接与精确账号绑定工具快照。
+    #[serde(
+        default,
+        skip_serializing_if = "PersistedRouterToolConfiguration::is_default"
+    )]
+    pub router: PersistedRouterToolConfiguration,
     /// Shared AI capability vendor instances configured once and reused across multiple semantic capabilities.
     /// 单次配置并可在多个语义能力之间复用的共享 AI 能力供应商实例集合。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -87,7 +94,8 @@ impl PersistedAiToolConfiguration {
         let music_cover_changed = self.music_cover.normalize();
         let migration_changed = self.migrate_legacy_capability_entries_into_vendors();
         let vendor_changed = normalize_ai_capability_vendors(&mut self.vendors);
-        let route_changed = self.normalize_capability_route_orders();
+        let route_changed = self.normalize_capability_target_bindings();
+        let router_changed = self.router.normalize();
         let disabled_capability_changed =
             self.disabled_capability_kinds != original_disabled_capability_kinds;
         web_search_changed
@@ -101,12 +109,13 @@ impl PersistedAiToolConfiguration {
             || migration_changed
             || vendor_changed
             || route_changed
+            || router_changed
     }
 
     /// Returns the ordered web-search provider entries projected from the vendor-centric configuration.
     /// 返回从供应商中心配置投影出的有序网页搜索供应商条目。
     pub fn projected_web_search_providers(&self) -> Vec<PersistedWebSearchProviderEntry> {
-        self.projected_target_order_for_kind(AiToolKind::WebSearch)
+        self.projected_selected_target_for_kind(AiToolKind::WebSearch)
             .into_iter()
             .filter_map(|target| self.projected_web_search_provider_for_target(&target))
             .collect()
@@ -117,7 +126,7 @@ impl PersistedAiToolConfiguration {
     pub fn projected_understand_image_providers(
         &self,
     ) -> Vec<PersistedUnderstandImageProviderEntry> {
-        self.projected_target_order_for_kind(AiToolKind::UnderstandImage)
+        self.projected_selected_target_for_kind(AiToolKind::UnderstandImage)
             .into_iter()
             .filter_map(|target| self.projected_understand_image_provider_for_target(&target))
             .collect()
@@ -126,9 +135,8 @@ impl PersistedAiToolConfiguration {
     /// Returns whether at least one enabled vendor target currently exists for the requested semantic capability.
     /// 返回所请求语义能力当前是否至少存在一条已启用供应商目标。
     pub fn has_usable_targets_for_kind(&self, capability_kind: AiToolKind) -> bool {
-        !self
-            .projected_target_order_for_kind(capability_kind)
-            .is_empty()
+        self.projected_selected_target_for_kind(capability_kind)
+            .is_some()
     }
 
     /// Returns the total count of currently usable enabled targets for one semantic capability.
@@ -150,72 +158,24 @@ impl PersistedAiToolConfiguration {
     /// Returns the ordered list of enabled fully qualified `vendor/target` selectors for one semantic capability.
     /// 返回单个语义能力当前启用的完整 `供应商/目标` 选择器有序列表。
     pub fn usable_targets_for_kind(&self, capability_kind: AiToolKind) -> Vec<String> {
-        self.projected_target_order_for_kind(capability_kind)
+        self.projected_selected_target_for_kind(capability_kind)
+            .into_iter()
+            .collect()
     }
 
-    /// Returns the persisted route-order slice configured for one semantic capability before enabled targets are reconciled.
-    /// 返回在对齐启用目标前为某个语义能力配置的持久化路由顺序切片。
-    pub fn configured_target_order_for_kind(&self, capability_kind: AiToolKind) -> &[String] {
+    /// Returns the exact persisted target binding for one semantic capability.
+    /// 返回某项语义能力持久化的精确目标绑定。
+    pub fn configured_selected_target_for_kind(&self, capability_kind: AiToolKind) -> Option<&str> {
         match capability_kind {
-            AiToolKind::WebSearch => &self.web_search.target_order,
-            AiToolKind::UnderstandImage => &self.understand_image.target_order,
-            AiToolKind::ImageGeneration => &self.image_generation.target_order,
-            AiToolKind::VideoGeneration => &self.video_generation.target_order,
-            AiToolKind::SpeechSynthesis => &self.speech_synthesis.target_order,
-            AiToolKind::MusicGeneration => &self.music_generation.target_order,
-            AiToolKind::MusicCover => &self.music_cover.target_order,
-            _ => &EMPTY_TARGET_ORDER,
+            AiToolKind::WebSearch => self.web_search.selected_target.as_deref(),
+            AiToolKind::UnderstandImage => self.understand_image.selected_target.as_deref(),
+            AiToolKind::ImageGeneration => self.image_generation.selected_target.as_deref(),
+            AiToolKind::VideoGeneration => self.video_generation.selected_target.as_deref(),
+            AiToolKind::SpeechSynthesis => self.speech_synthesis.selected_target.as_deref(),
+            AiToolKind::MusicGeneration => self.music_generation.selected_target.as_deref(),
+            AiToolKind::MusicCover => self.music_cover.selected_target.as_deref(),
+            _ => None,
         }
-    }
-
-    /// Reorders one fully qualified capability target before another target or to the tail inside the persisted route preference list.
-    /// 将单条完整能力目标重排到另一目标之前，或重排到持久化路由偏好列表尾部。
-    pub fn reorder_target_for_kind(
-        &mut self,
-        capability_kind: AiToolKind,
-        dragged_target: &str,
-        before_target: Option<&str>,
-    ) -> bool {
-        let route_order = match capability_kind {
-            AiToolKind::WebSearch => &mut self.web_search.target_order,
-            AiToolKind::UnderstandImage => &mut self.understand_image.target_order,
-            AiToolKind::ImageGeneration => &mut self.image_generation.target_order,
-            AiToolKind::VideoGeneration => &mut self.video_generation.target_order,
-            AiToolKind::SpeechSynthesis => &mut self.speech_synthesis.target_order,
-            AiToolKind::MusicGeneration => &mut self.music_generation.target_order,
-            AiToolKind::MusicCover => &mut self.music_cover.target_order,
-            _ => return false,
-        };
-        let normalized_dragged_target = dragged_target.trim().to_ascii_lowercase();
-        let Some(current_index) = route_order
-            .iter()
-            .position(|existing| existing.eq_ignore_ascii_case(&normalized_dragged_target))
-        else {
-            return false;
-        };
-        let mut target_index = if let Some(before_target) = before_target {
-            let normalized_before_target = before_target.trim().to_ascii_lowercase();
-            let Some(index) = route_order
-                .iter()
-                .position(|existing| existing.eq_ignore_ascii_case(&normalized_before_target))
-            else {
-                return false;
-            };
-            index
-        } else {
-            route_order.len()
-        };
-        let entry = route_order.remove(current_index);
-        if current_index < target_index {
-            target_index = target_index.saturating_sub(1);
-        }
-        if target_index == current_index {
-            route_order.insert(current_index, entry);
-            return false;
-        }
-        let bounded_target_index = target_index.min(route_order.len());
-        route_order.insert(bounded_target_index, entry);
-        true
     }
 
     /// Returns the ordered route entries rendered in capability settings pages for one semantic capability.
@@ -224,7 +184,7 @@ impl PersistedAiToolConfiguration {
         &self,
         capability_kind: AiToolKind,
     ) -> Vec<ResolvedAiCapabilityRouteTarget> {
-        self.projected_target_order_for_kind(capability_kind)
+        self.projected_selected_target_for_kind(capability_kind)
             .into_iter()
             .filter_map(|target| self.resolve_route_target_for_kind(capability_kind, &target))
             .collect()
@@ -236,14 +196,10 @@ impl PersistedAiToolConfiguration {
         &self,
         capability_kind: AiToolKind,
     ) -> Vec<ResolvedAiCapabilityRouteTarget> {
-        build_stable_route_target_order(
-            self.configured_target_order_for_kind(capability_kind),
-            &self.vendors,
-            capability_kind,
-        )
-        .into_iter()
-        .filter_map(|target| self.resolve_route_target_for_kind(capability_kind, &target))
-        .collect()
+        build_configured_target_list(&self.vendors, capability_kind)
+            .into_iter()
+            .filter_map(|target| self.resolve_route_target_for_kind(capability_kind, &target))
+            .collect()
     }
 
     /// Returns the vendor instance matching the provided identifier when one exists.
@@ -288,60 +244,60 @@ impl PersistedAiToolConfiguration {
         self != &original
     }
 
-    /// Ensures route-order arrays stay aligned with the currently enabled vendor targets.
-    /// 确保路由顺序数组始终与当前已启用的供应商目标保持对齐。
-    fn normalize_capability_route_orders(&mut self) -> bool {
+    /// Ensures every capability stores at most one exact configured target binding.
+    /// 确保每项能力最多保存一个精确配置目标绑定。
+    fn normalize_capability_target_bindings(&mut self) -> bool {
         let original = (
-            self.web_search.target_order.clone(),
-            self.understand_image.target_order.clone(),
-            self.image_generation.target_order.clone(),
-            self.video_generation.target_order.clone(),
-            self.speech_synthesis.target_order.clone(),
-            self.music_generation.target_order.clone(),
-            self.music_cover.target_order.clone(),
+            self.web_search.selected_target.clone(),
+            self.understand_image.selected_target.clone(),
+            self.image_generation.selected_target.clone(),
+            self.video_generation.selected_target.clone(),
+            self.speech_synthesis.selected_target.clone(),
+            self.music_generation.selected_target.clone(),
+            self.music_cover.selected_target.clone(),
         );
-        self.web_search.target_order = build_stable_route_target_order(
-            &self.web_search.target_order,
+        self.web_search.selected_target = normalize_exact_target_binding(
+            self.web_search.selected_target.as_deref(),
             &self.vendors,
             AiToolKind::WebSearch,
         );
-        self.understand_image.target_order = build_stable_route_target_order(
-            &self.understand_image.target_order,
+        self.understand_image.selected_target = normalize_exact_target_binding(
+            self.understand_image.selected_target.as_deref(),
             &self.vendors,
             AiToolKind::UnderstandImage,
         );
-        self.image_generation.target_order = build_stable_route_target_order(
-            &self.image_generation.target_order,
+        self.image_generation.selected_target = normalize_exact_target_binding(
+            self.image_generation.selected_target.as_deref(),
             &self.vendors,
             AiToolKind::ImageGeneration,
         );
-        self.video_generation.target_order = build_stable_route_target_order(
-            &self.video_generation.target_order,
+        self.video_generation.selected_target = normalize_exact_target_binding(
+            self.video_generation.selected_target.as_deref(),
             &self.vendors,
             AiToolKind::VideoGeneration,
         );
-        self.speech_synthesis.target_order = build_stable_route_target_order(
-            &self.speech_synthesis.target_order,
+        self.speech_synthesis.selected_target = normalize_exact_target_binding(
+            self.speech_synthesis.selected_target.as_deref(),
             &self.vendors,
             AiToolKind::SpeechSynthesis,
         );
-        self.music_generation.target_order = build_stable_route_target_order(
-            &self.music_generation.target_order,
+        self.music_generation.selected_target = normalize_exact_target_binding(
+            self.music_generation.selected_target.as_deref(),
             &self.vendors,
             AiToolKind::MusicGeneration,
         );
-        self.music_cover.target_order = build_stable_route_target_order(
-            &self.music_cover.target_order,
+        self.music_cover.selected_target = normalize_exact_target_binding(
+            self.music_cover.selected_target.as_deref(),
             &self.vendors,
             AiToolKind::MusicCover,
         );
-        original.0 != self.web_search.target_order
-            || original.1 != self.understand_image.target_order
-            || original.2 != self.image_generation.target_order
-            || original.3 != self.video_generation.target_order
-            || original.4 != self.speech_synthesis.target_order
-            || original.5 != self.music_generation.target_order
-            || original.6 != self.music_cover.target_order
+        original.0 != self.web_search.selected_target
+            || original.1 != self.understand_image.selected_target
+            || original.2 != self.image_generation.selected_target
+            || original.3 != self.video_generation.selected_target
+            || original.4 != self.speech_synthesis.selected_target
+            || original.5 != self.music_generation.selected_target
+            || original.6 != self.music_cover.selected_target
     }
 
     /// Projects one fully qualified web-search target into the legacy provider-entry shape reused by the runtime adapter.
@@ -392,20 +348,14 @@ impl PersistedAiToolConfiguration {
         })
     }
 
-    /// Returns the effective target order for the requested capability by honoring configured route preference and then appending any newly enabled targets.
-    /// 返回请求能力的生效目标顺序：先尊重已配置路由顺序，再补上新启用目标。
-    fn projected_target_order_for_kind(&self, capability_kind: AiToolKind) -> Vec<String> {
-        let route_order = match capability_kind {
-            AiToolKind::WebSearch => &self.web_search.target_order,
-            AiToolKind::UnderstandImage => &self.understand_image.target_order,
-            AiToolKind::ImageGeneration => &self.image_generation.target_order,
-            AiToolKind::VideoGeneration => &self.video_generation.target_order,
-            AiToolKind::SpeechSynthesis => &self.speech_synthesis.target_order,
-            AiToolKind::MusicGeneration => &self.music_generation.target_order,
-            AiToolKind::MusicCover => &self.music_cover.target_order,
-            _ => &EMPTY_TARGET_ORDER,
-        };
-        build_effective_route_target_order(route_order, &self.vendors, capability_kind)
+    /// Returns the exact configured target binding when it still resolves to one enabled target.
+    /// 当已配置目标仍能解析为一个启用目标时返回该精确绑定。
+    fn projected_selected_target_for_kind(&self, capability_kind: AiToolKind) -> Option<String> {
+        resolve_exact_target_binding(
+            self.configured_selected_target_for_kind(capability_kind),
+            &self.vendors,
+            capability_kind,
+        )
     }
 
     /// Resolves one fully qualified target into the settings-facing route entry rendered in capability pages.
@@ -450,7 +400,6 @@ impl PersistedAiToolConfiguration {
         }
         let vendor_id = provider.kind.key();
         let target_alias = provider.target_alias().to_string();
-        let target_selector = format!("{vendor_id}/{target_alias}");
         let vendor = ensure_ai_capability_vendor_entry(&mut self.vendors, vendor_id);
         merge_vendor_credentials_from_legacy_provider(
             vendor,
@@ -468,11 +417,6 @@ impl PersistedAiToolConfiguration {
             ),
             provider.enabled,
         );
-        if self.web_search.target_order.is_empty()
-            || !self.web_search.target_order.contains(&target_selector)
-        {
-            self.web_search.target_order.push(target_selector);
-        }
     }
 
     /// Upserts one legacy image-understanding provider into the shared vendor list.
@@ -486,7 +430,6 @@ impl PersistedAiToolConfiguration {
         }
         let vendor_id = provider.kind.key();
         let target_alias = provider.target_alias().to_string();
-        let target_selector = format!("{vendor_id}/{target_alias}");
         let vendor = ensure_ai_capability_vendor_entry(&mut self.vendors, vendor_id);
         merge_vendor_credentials_from_legacy_provider(
             vendor,
@@ -504,17 +447,5 @@ impl PersistedAiToolConfiguration {
             ),
             provider.enabled,
         );
-        if self.understand_image.target_order.is_empty()
-            || !self
-                .understand_image
-                .target_order
-                .contains(&target_selector)
-        {
-            self.understand_image.target_order.push(target_selector);
-        }
     }
 }
-
-/// Shared empty route-order slice reused by capability kinds that do not yet persist explicit route state.
-/// 供尚未持久化显式路由状态的能力类型复用的共享空顺序切片。
-static EMPTY_TARGET_ORDER: Vec<String> = Vec::new();

@@ -643,7 +643,7 @@ mod tests {
                 reasoning_effort: None,
                 disabled_ai_capability_kinds: Default::default(),
                 disabled_ai_capability_target_selectors: Default::default(),
-                ai_capability_target_order_overrides: Default::default(),
+                ai_capability_target_bindings: Default::default(),
                 owning_project_id: None,
                 prior_session_messages: None,
             },

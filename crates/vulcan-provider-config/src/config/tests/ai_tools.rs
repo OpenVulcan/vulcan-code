@@ -1,9 +1,8 @@
 use super::super::{
-    AiCapabilityVendorConnectionMode, AiToolKind, MAX_ENABLED_AI_CAPABILITY_TARGETS_PER_KIND,
-    PersistedAiCapabilityRouteConfiguration, PersistedAiCapabilityTargetBinding,
-    PersistedAiCapabilityVendorEntry, PersistedAiToolConfiguration,
-    PersistedWebSearchConfiguration, PersistedWebSearchProviderEntry, WebSearchProviderKind,
-    ai_capability_vendor_target_choices,
+    AiCapabilityVendorConnectionMode, AiToolKind, PersistedAiCapabilityRouteConfiguration,
+    PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
+    PersistedAiToolConfiguration, PersistedWebSearchConfiguration, PersistedWebSearchProviderEntry,
+    WebSearchProviderKind, ai_capability_vendor_target_choices,
 };
 use std::collections::BTreeSet;
 
@@ -171,15 +170,11 @@ fn ai_tool_configuration_normalize_removes_unsupported_vendors_targets_and_route
             },
         ],
         web_search: PersistedWebSearchConfiguration {
-            target_order: vec![
-                String::from("duckduckgo/duckduckgo"),
-                String::from("minimax/minimax"),
-                String::from("ghost/missing"),
-            ],
+            selected_target: Some(String::from("ghost/missing")),
             ..PersistedWebSearchConfiguration::default()
         },
         image_generation: PersistedAiCapabilityRouteConfiguration {
-            target_order: vec![String::from("minimax/unsupported-target")],
+            selected_target: Some(String::from("minimax/unsupported-target")),
         },
         ..PersistedAiToolConfiguration::default()
     };
@@ -192,11 +187,8 @@ fn ai_tool_configuration_normalize_removes_unsupported_vendors_targets_and_route
         configuration.vendors[0].targets[0].target_alias(),
         "minimax"
     );
-    assert_eq!(
-        configuration.web_search.target_order,
-        vec![String::from("minimax/minimax")]
-    );
-    assert!(configuration.image_generation.target_order.is_empty());
+    assert!(configuration.web_search.selected_target.is_none());
+    assert!(configuration.image_generation.selected_target.is_none());
 }
 
 /// Verifies the shared MiniMax vendor exposes generation-capability targets through the unified target-choice catalog.
@@ -273,7 +265,7 @@ fn normalize_filters_legacy_kimi_single_target_binding() {
             )],
         }],
         web_search: PersistedWebSearchConfiguration {
-            target_order: vec![String::from("kimi/kimi")],
+            selected_target: Some(String::from("kimi/kimi")),
             ..PersistedWebSearchConfiguration::default()
         },
         ..PersistedAiToolConfiguration::default()
@@ -282,13 +274,13 @@ fn normalize_filters_legacy_kimi_single_target_binding() {
     assert!(configuration.normalize());
     assert_eq!(configuration.vendors.len(), 1);
     assert!(configuration.vendors[0].targets.is_empty());
-    assert!(configuration.web_search.target_order.is_empty());
+    assert!(configuration.web_search.selected_target.is_none());
 }
 
-/// Verifies one semantic capability never exposes more than twenty enabled route targets to the runtime order.
-/// 验证单个语义能力对运行时暴露的已启用途径目标永远不会超过二十条。
+/// Verifies unbound configured targets are never projected into an implicit execution binding.
+/// 验证未绑定的已配置目标绝不会被投影成隐式执行绑定。
 #[test]
-fn usable_targets_for_kind_is_capped_at_twenty() {
+fn usable_targets_for_kind_requires_one_explicit_binding() {
     let mut vendor = PersistedAiCapabilityVendorEntry::new(String::from("limit-test"));
     vendor.enabled = true;
     for index in 0..25usize {
@@ -304,18 +296,7 @@ fn usable_targets_for_kind_is_capped_at_twenty() {
     };
 
     let usable_targets = configuration.usable_targets_for_kind(AiToolKind::WebSearch);
-    assert_eq!(
-        usable_targets.len(),
-        MAX_ENABLED_AI_CAPABILITY_TARGETS_PER_KIND
-    );
-    assert_eq!(
-        usable_targets.first().map(String::as_str),
-        Some("limit_test/target-00")
-    );
-    assert_eq!(
-        usable_targets.last().map(String::as_str),
-        Some("limit_test/target-19")
-    );
+    assert!(usable_targets.is_empty());
 }
 
 /// Verifies only workbench quick-toggle kinds are filtered while explicit supported disables are preserved.

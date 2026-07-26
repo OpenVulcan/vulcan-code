@@ -12,9 +12,7 @@ use vulcan_workspace_store::{
 };
 
 use crate::{
-    ai_capabilities::{
-        parse_ai_capability_target_order_overrides, parse_ai_capability_target_selectors,
-    },
+    ai_capabilities::{parse_ai_capability_target_bindings, parse_ai_capability_target_selectors},
     current_unix_millis_text,
     session_goal_lifecycle::ensure_session_can_enter_plan_mode,
     settings_runtime_projection::session_ai_tool_configuration_or_default,
@@ -37,9 +35,9 @@ pub(crate) struct SubmissionRuntimeOptionsInput {
     /// Optional prompt-level disabled capability target selectors.
     /// 可选提示词级禁用能力目标选择器。
     pub(crate) disabled_ai_capability_target_selectors: Option<Vec<String>>,
-    /// Optional prompt-level target order overrides keyed by capability wire value.
-    /// 可选提示词级目标顺序覆盖，按能力传输值分组。
-    pub(crate) ai_capability_target_order_overrides: Option<BTreeMap<String, Vec<String>>>,
+    /// Optional prompt-level exact target bindings keyed by capability wire value.
+    /// 可选提示词级精确目标绑定，按能力传输值分组。
+    pub(crate) ai_capability_target_bindings: Option<BTreeMap<String, String>>,
 }
 
 /// Strongly typed runtime controls consumed by one shared prompt turn.
@@ -58,9 +56,9 @@ pub(crate) struct SubmissionRuntimeOptions {
     /// Cleaned capability target selectors disabled for this turn.
     /// 本回合禁用的已清洗能力目标选择器。
     pub(crate) disabled_ai_capability_target_selectors: BTreeSet<String>,
-    /// Cleaned capability target order overrides for this turn.
-    /// 本回合已清洗的能力目标顺序覆盖。
-    pub(crate) ai_capability_target_order_overrides: BTreeMap<AiToolKind, Vec<String>>,
+    /// Cleaned exact capability target bindings for this turn.
+    /// 本回合已清洗的能力精确目标绑定。
+    pub(crate) ai_capability_target_bindings: BTreeMap<AiToolKind, String>,
 }
 
 impl SubmissionRuntimeOptions {
@@ -151,7 +149,7 @@ fn resolve_submission_runtime_options(
         reasoning_effort,
         disabled_ai_capability_kinds,
         disabled_ai_capability_target_selectors,
-        ai_capability_target_order_overrides,
+        ai_capability_target_bindings,
     } = input;
     let disabled_ai_capability_kinds = effective_session_disabled_ai_capability_kinds(
         workspace_snapshot,
@@ -167,8 +165,8 @@ fn resolve_submission_runtime_options(
         disabled_ai_capability_target_selectors: parse_ai_capability_target_selectors(
             disabled_ai_capability_target_selectors,
         ),
-        ai_capability_target_order_overrides: parse_ai_capability_target_order_overrides(
-            ai_capability_target_order_overrides,
+        ai_capability_target_bindings: parse_ai_capability_target_bindings(
+            ai_capability_target_bindings,
         )?,
     })
 }
@@ -388,7 +386,7 @@ mod tests {
                 reasoning_effort: Some(String::from("unsupported")),
                 disabled_ai_capability_kinds: None,
                 disabled_ai_capability_target_selectors: None,
-                ai_capability_target_order_overrides: None,
+                ai_capability_target_bindings: None,
             },
         )
         .expect("session defaults should resolve");
@@ -400,7 +398,7 @@ mod tests {
             BTreeSet::from([AiToolKind::WebSearch])
         );
         assert!(options.disabled_ai_capability_target_selectors.is_empty());
-        assert!(options.ai_capability_target_order_overrides.is_empty());
+        assert!(options.ai_capability_target_bindings.is_empty());
     }
 
     /// Verifies host-created goal queue entries inherit live session controls while user entries keep captured controls.
@@ -520,9 +518,9 @@ mod tests {
                     String::from("  vendor-a/vision  "),
                     String::from("  "),
                 ]),
-                ai_capability_target_order_overrides: Some(BTreeMap::from([(
+                ai_capability_target_bindings: Some(BTreeMap::from([(
                     String::from("understand_image"),
-                    vec![String::from(" vendor-b/vision ")],
+                    String::from(" vendor-b/vision "),
                 )])),
             },
         )
@@ -536,11 +534,8 @@ mod tests {
             BTreeSet::from([String::from("vendor-a/vision")])
         );
         assert_eq!(
-            options.ai_capability_target_order_overrides,
-            BTreeMap::from([(
-                AiToolKind::UnderstandImage,
-                vec![String::from("vendor-b/vision")],
-            )])
+            options.ai_capability_target_bindings,
+            BTreeMap::from([(AiToolKind::UnderstandImage, String::from("vendor-b/vision"),)])
         );
         assert_eq!(
             workspace_snapshot
@@ -581,9 +576,9 @@ mod tests {
                 reasoning_effort: None,
                 disabled_ai_capability_kinds: None,
                 disabled_ai_capability_target_selectors: None,
-                ai_capability_target_order_overrides: Some(BTreeMap::from([(
+                ai_capability_target_bindings: Some(BTreeMap::from([(
                     String::from("not_a_capability"),
-                    vec![String::from("vendor/target")],
+                    String::from("vendor/target"),
                 )])),
             },
         )

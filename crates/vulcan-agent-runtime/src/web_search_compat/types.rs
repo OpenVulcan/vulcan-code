@@ -5,9 +5,6 @@
 /// 语义 `web_search` 工具接受的已解析调用参数。
 #[derive(Debug, Clone)]
 pub(super) struct WebSearchInvocation {
-    /// Optional semantic target selector such as `auto` or `instance/target`.
-    /// 可选的语义目标选择器，例如 `auto` 或 `实例/目标`。
-    pub(super) target: Option<String>,
     /// Search query text.
     /// 搜索查询文本。
     pub(super) query: String,

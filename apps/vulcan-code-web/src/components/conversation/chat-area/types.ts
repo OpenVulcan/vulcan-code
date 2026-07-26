@@ -83,6 +83,9 @@ export interface ChatAreaProps {
   // Selects the active reasoning effort.
   // 选择当前推理强度。
   onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
+  // Opens the project knowledge-library management surface.
+  // 打开项目知识库管理界面。
+  onOpenKnowledge: () => void;
   // Persists the active thinking display mode.
   // 持久化当前思考展示模式。
   onSelectWorkbenchThinkingDisplayMode: (mode: ThinkingDisplayMode) => Promise<boolean>;

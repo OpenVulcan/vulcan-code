@@ -16,7 +16,7 @@
 }
 
 /* Knowledge-base management workspace. */
-/* 资料库管理工作区。 */
+/* 知识库管理工作区。 */
 .knowledge-page {
   height: 100%;
   min-height: 0;
@@ -408,7 +408,7 @@
 }
 
 /* Portable knowledge package browser and confirmation. */
-/* 可移植资料库包浏览器与确认界面。 */
+/* 可移植知识库包浏览器与确认界面。 */
 .knowledge-package-picker-dialog {
   width: min(860px, calc(100vw - 32px));
   max-width: calc(100vw - 32px);
@@ -493,7 +493,7 @@
 }
 
 /* Complete knowledge-library document viewer. */
-/* 完整资料库文档阅读器。 */
+/* 完整知识库文档阅读器。 */
 .knowledge-viewer-dialog {
   width: min(1180px, calc(100vw - 32px));
   min-width: 0;
@@ -892,21 +892,6 @@ textarea {
   stroke: currentColor;
   transition: stroke-dashoffset 180ms ease;
 }
-.composer-knowledge-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-  height: 30px;
-  padding-inline: 9px;
-  color: var(--muted-foreground);
-}
-
-.composer-knowledge-trigger.enabled {
-  color: var(--foreground);
-  background: color-mix(in srgb, var(--primary) 13%, var(--secondary));
-}
-
 .composer-knowledge-menu {
   min-width: 220px;
   max-width: min(360px, calc(100vw - 24px));

@@ -552,19 +552,19 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
 }
 
 /// Resolves the non-widening knowledge access snapshot for one provider turn.
-/// 为一个 Provider 回合解析不可扩大的资料库访问快照。
+/// 为一个 Provider 回合解析不可扩大的知识库访问快照。
 ///
 /// # Parameters
 /// 参数
 /// `state` owns the current workspace, runtime state, and retained knowledge runtime.
-/// `state` 持有当前工作区、运行态与保留的资料库运行时。
+/// `state` 持有当前工作区、运行态与保留的知识库运行时。
 /// `session_id` identifies the conversation whose selection must be applied.
 /// `session_id` 标识必须应用其选择的会话。
 ///
 /// # Returns
 /// 返回值
 /// A project-bound access snapshot, possibly with an empty library list, or `None` without a project.
-/// 绑定项目且资料库列表可能为空的访问快照；无所属项目时返回 `None`。
+/// 绑定项目且知识库列表可能为空的访问快照；无所属项目时返回 `None`。
 async fn resolve_turn_knowledge_access(
     state: &SharedServiceBridgeState,
     session_id: SessionId,

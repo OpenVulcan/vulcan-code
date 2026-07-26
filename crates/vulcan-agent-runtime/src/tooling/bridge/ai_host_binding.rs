@@ -1,5 +1,5 @@
-//! AI-tool fallback backing candidate registration helpers.
-//! AI 工具回退后端候选注册辅助逻辑。
+//! Explicit AI-tool host-binding candidate registration helpers.
+//! 显式 AI 工具宿主绑定候选注册辅助逻辑。
 
 use super::*;
 
@@ -51,12 +51,19 @@ pub(super) fn append_configured_ai_tool_backing_candidates(
     }
 }
 
-/// Builds one AI-facing description for a generated-media host tool so semantic aliases can clearly understand export controls and follow-up path reuse.
-/// 构建一条面向 AI 的生成媒体宿主工具描述，使语义别名能够清楚理解导出控制项与后续路径复用方式。
-fn generated_media_tool_description(base_description: &str, target_summary: &str) -> String {
-    format!(
-        "{base_description} Available `target` values: {target_summary}.{GENERATED_MEDIA_OUTPUT_DESCRIPTION_SUFFIX}"
-    )
+/// Builds one AI-facing description for a generated-media host tool without exposing its frozen provider target.
+/// 构建一条不暴露已冻结供应商目标的生成媒体宿主工具 AI 描述。
+fn generated_media_tool_description(base_description: &str) -> String {
+    format!("{base_description}{GENERATED_MEDIA_OUTPUT_DESCRIPTION_SUFFIX}")
+}
+
+/// Returns whether one capability has exactly one host-bound target and is safe to register.
+/// 返回某项能力是否恰好绑定一个宿主目标并可安全注册。
+fn has_exact_bound_target(
+    configuration: &PersistedAiToolConfiguration,
+    capability_kind: AiToolKind,
+) -> bool {
+    configuration.usable_targets_for_kind(capability_kind).len() == 1
 }
 
 /// Builds the hidden backing tool used by the semantic `web_search` fallback alias.
@@ -64,22 +71,16 @@ fn generated_media_tool_description(base_description: &str, target_summary: &str
 fn configured_web_search_candidate(
     configuration: PersistedAiToolConfiguration,
 ) -> Option<VulcanToolCandidate> {
-    if !configuration.has_usable_targets_for_kind(AiToolKind::WebSearch) {
+    if !has_exact_bound_target(&configuration, AiToolKind::WebSearch) {
         return None;
     }
 
-    let target_summary = std::iter::once(String::from("auto"))
-        .chain(configuration.usable_targets_for_kind(AiToolKind::WebSearch))
-        .collect::<Vec<_>>()
-        .join(", ");
-
     Some(VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
-            id: WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID.to_string(),
-            name: WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID.to_string(),
-            description: format!(
-                "Execute web search through the user-configured external search target chain. Available `target` values: {}. When `auto` is provided, targets are tried in the current default order.",
-                target_summary
+            id: WEB_SEARCH_HOST_BINDING_TOOL_ID.to_string(),
+            name: WEB_SEARCH_HOST_BINDING_TOOL_ID.to_string(),
+            description: String::from(
+                "Execute web search through the one external search provider selected in the host configuration.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -107,7 +108,7 @@ pub(super) fn configured_understand_image_candidate(
     configuration: PersistedAiToolConfiguration,
     conversation_attachments: Vec<ConversationAttachment>,
 ) -> Option<VulcanToolCandidate> {
-    if !configuration.has_usable_targets_for_kind(AiToolKind::UnderstandImage) {
+    if !has_exact_bound_target(&configuration, AiToolKind::UnderstandImage) {
         return None;
     }
 
@@ -116,17 +117,12 @@ pub(super) fn configured_understand_image_candidate(
         .filter(|attachment| attachment.kind == ConversationAttachmentKind::Image)
         .collect::<Vec<_>>();
 
-    let target_summary = std::iter::once(String::from("auto"))
-        .chain(configuration.usable_targets_for_kind(AiToolKind::UnderstandImage))
-        .collect::<Vec<_>>()
-        .join(", ");
     Some(VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
-            id: UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID.to_string(),
-            name: UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID.to_string(),
-            description: format!(
-                "Read image attachments from the current session through the user-configured image-understanding target chain. Available `target` values: {}. Use a resource id for pasted or uploaded attachments, or a full local path for path-based images.",
-                target_summary
+            id: UNDERSTAND_IMAGE_HOST_BINDING_TOOL_ID.to_string(),
+            name: UNDERSTAND_IMAGE_HOST_BINDING_TOOL_ID.to_string(),
+            description: String::from(
+                "Read image attachments from the current session through the one image-understanding provider selected in the host configuration. Use a resource id for pasted or uploaded attachments, or a full local path for path-based images.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -159,22 +155,17 @@ fn configured_image_generation_candidate(
     workspace_root: Option<PathBuf>,
     conversation_attachments: Vec<ConversationAttachment>,
 ) -> Option<VulcanToolCandidate> {
-    if !configuration.has_usable_targets_for_kind(AiToolKind::ImageGeneration) {
+    if !has_exact_bound_target(&configuration, AiToolKind::ImageGeneration) {
         return None;
     }
     let workspace_path = vulcan_runtime_assets::native_host_path_text_from_path(&workspace_root?);
-    let target_summary = std::iter::once(String::from("auto"))
-        .chain(configuration.usable_targets_for_kind(AiToolKind::ImageGeneration))
-        .collect::<Vec<_>>()
-        .join(", ");
 
     Some(VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
-            id: IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
-            name: IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
+            id: IMAGE_GENERATION_HOST_BINDING_TOOL_ID.to_string(),
+            name: IMAGE_GENERATION_HOST_BINDING_TOOL_ID.to_string(),
             description: generated_media_tool_description(
-                "Generate images through the user-configured image-generation target chain.",
-                &target_summary,
+                "Generate images through the one image-generation provider selected in the host configuration.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -212,22 +203,17 @@ fn configured_video_generation_candidate(
     workspace_root: Option<PathBuf>,
     conversation_attachments: Vec<ConversationAttachment>,
 ) -> Option<VulcanToolCandidate> {
-    if !configuration.has_usable_targets_for_kind(AiToolKind::VideoGeneration) {
+    if !has_exact_bound_target(&configuration, AiToolKind::VideoGeneration) {
         return None;
     }
     let workspace_path = vulcan_runtime_assets::native_host_path_text_from_path(&workspace_root?);
-    let target_summary = std::iter::once(String::from("auto"))
-        .chain(configuration.usable_targets_for_kind(AiToolKind::VideoGeneration))
-        .collect::<Vec<_>>()
-        .join(", ");
 
     Some(VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
-            id: VIDEO_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
-            name: VIDEO_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
+            id: VIDEO_GENERATION_HOST_BINDING_TOOL_ID.to_string(),
+            name: VIDEO_GENERATION_HOST_BINDING_TOOL_ID.to_string(),
             description: generated_media_tool_description(
-                "Generate videos through the user-configured video-generation target chain.",
-                &target_summary,
+                "Generate videos through the one video-generation provider selected in the host configuration.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -264,22 +250,17 @@ fn configured_speech_synthesis_candidate(
     configuration: PersistedAiToolConfiguration,
     workspace_root: Option<PathBuf>,
 ) -> Option<VulcanToolCandidate> {
-    if !configuration.has_usable_targets_for_kind(AiToolKind::SpeechSynthesis) {
+    if !has_exact_bound_target(&configuration, AiToolKind::SpeechSynthesis) {
         return None;
     }
     let workspace_path = vulcan_runtime_assets::native_host_path_text_from_path(&workspace_root?);
-    let target_summary = std::iter::once(String::from("auto"))
-        .chain(configuration.usable_targets_for_kind(AiToolKind::SpeechSynthesis))
-        .collect::<Vec<_>>()
-        .join(", ");
 
     Some(VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
-            id: SPEECH_SYNTHESIS_PROVIDER_CHAIN_TOOL_ID.to_string(),
-            name: SPEECH_SYNTHESIS_PROVIDER_CHAIN_TOOL_ID.to_string(),
+            id: SPEECH_SYNTHESIS_HOST_BINDING_TOOL_ID.to_string(),
+            name: SPEECH_SYNTHESIS_HOST_BINDING_TOOL_ID.to_string(),
             description: generated_media_tool_description(
-                "Synthesize speech through the user-configured text-to-speech target chain.",
-                &target_summary,
+                "Synthesize speech through the one text-to-speech provider selected in the host configuration.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -306,22 +287,17 @@ fn configured_music_generation_candidate(
     configuration: PersistedAiToolConfiguration,
     workspace_root: Option<PathBuf>,
 ) -> Option<VulcanToolCandidate> {
-    if !configuration.has_usable_targets_for_kind(AiToolKind::MusicGeneration) {
+    if !has_exact_bound_target(&configuration, AiToolKind::MusicGeneration) {
         return None;
     }
     let workspace_path = vulcan_runtime_assets::native_host_path_text_from_path(&workspace_root?);
-    let target_summary = std::iter::once(String::from("auto"))
-        .chain(configuration.usable_targets_for_kind(AiToolKind::MusicGeneration))
-        .collect::<Vec<_>>()
-        .join(", ");
 
     Some(VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
-            id: MUSIC_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
-            name: MUSIC_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
+            id: MUSIC_GENERATION_HOST_BINDING_TOOL_ID.to_string(),
+            name: MUSIC_GENERATION_HOST_BINDING_TOOL_ID.to_string(),
             description: generated_media_tool_description(
-                "Generate songs or instrumental music through the user-configured music-generation target chain.",
-                &target_summary,
+                "Generate songs or instrumental music through the one music-generation provider selected in the host configuration.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -349,7 +325,7 @@ fn configured_music_cover_candidate(
     workspace_root: Option<PathBuf>,
     conversation_attachments: Vec<ConversationAttachment>,
 ) -> Option<VulcanToolCandidate> {
-    if !configuration.has_usable_targets_for_kind(AiToolKind::MusicCover) {
+    if !has_exact_bound_target(&configuration, AiToolKind::MusicCover) {
         return None;
     }
     let workspace_path = vulcan_runtime_assets::native_host_path_text_from_path(&workspace_root?);
@@ -357,18 +333,12 @@ fn configured_music_cover_candidate(
         .into_iter()
         .filter(|attachment| attachment.kind == ConversationAttachmentKind::Audio)
         .collect::<Vec<_>>();
-    let target_summary = std::iter::once(String::from("auto"))
-        .chain(configuration.usable_targets_for_kind(AiToolKind::MusicCover))
-        .collect::<Vec<_>>()
-        .join(", ");
-
     Some(VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
-            id: MUSIC_COVER_PROVIDER_CHAIN_TOOL_ID.to_string(),
-            name: MUSIC_COVER_PROVIDER_CHAIN_TOOL_ID.to_string(),
+            id: MUSIC_COVER_HOST_BINDING_TOOL_ID.to_string(),
+            name: MUSIC_COVER_HOST_BINDING_TOOL_ID.to_string(),
             description: generated_media_tool_description(
-                "Create a music cover from reference audio through the user-configured music-cover target chain.",
-                &target_summary,
+                "Create a music cover from reference audio through the one music-cover provider selected in the host configuration.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -399,32 +369,32 @@ fn configured_music_cover_candidate(
     })
 }
 
-/// Appends semantic AI fallback aliases and removes their concrete backing tool from direct model exposure.
-/// 追加语义 AI 回退别名，并移除其具体承载工具的直接暴露，避免模型同时看到两套等价工具。
-pub(super) fn append_ai_tool_fallback_aliases(
+/// Appends semantic AI host bindings and removes their concrete backing tool from direct model exposure.
+/// 追加语义 AI 宿主绑定，并移除其具体承载工具的直接暴露，避免模型同时看到两套等价工具。
+pub(super) fn append_ai_tool_host_binding_aliases(
     candidates: &mut Vec<VulcanToolCandidate>,
-    aliases: Vec<AiToolFallbackAlias>,
+    aliases: Vec<AiToolHostBindingAlias>,
 ) {
     for alias in aliases {
-        let fallback_tool_id = alias.fallback_tool_id.trim();
-        if fallback_tool_id.is_empty() {
+        let host_tool_id = alias.host_tool_id.trim();
+        if host_tool_id.is_empty() {
             continue;
         }
 
         let Some(target_index) = candidates
             .iter()
-            .position(|candidate| candidate_matches_ai_fallback_id(candidate, fallback_tool_id))
+            .position(|candidate| candidate_matches_ai_host_binding_id(candidate, host_tool_id))
         else {
             continue;
         };
         let target = candidates.remove(target_index);
-        candidates.push(build_ai_tool_fallback_candidate(alias.kind, target));
+        candidates.push(build_ai_tool_host_binding_candidate(alias.kind, target));
     }
 }
 
-/// Builds one semantic AI fallback candidate backed by an already registered host tool candidate.
-/// 根据一条已注册宿主工具候选项构建一条语义 AI 回退候选项。
-fn build_ai_tool_fallback_candidate(
+/// Builds one semantic AI candidate bound to an already registered host tool candidate.
+/// 根据一条已注册宿主工具候选项构建一条语义 AI 绑定候选项。
+fn build_ai_tool_host_binding_candidate(
     kind: AiToolKind,
     target: VulcanToolCandidate,
 ) -> VulcanToolCandidate {
@@ -432,7 +402,7 @@ fn build_ai_tool_fallback_candidate(
     let backing_tool_name = target.descriptor.name.clone();
     let semantic_description = if target.descriptor.description.trim().is_empty() {
         format!(
-            "Semantic tool `{}` falls back to host tool `{}`.",
+            "Semantic tool `{}` is explicitly bound to host tool `{}`.",
             kind.key(),
             backing_tool_name
         )
@@ -445,7 +415,7 @@ fn build_ai_tool_fallback_candidate(
             name: semantic_tool_name.clone(),
             description: semantic_description.clone(),
             help_text: target.descriptor.help_text,
-            source: VulcanToolSourceKind::AiFallback,
+            source: VulcanToolSourceKind::AiHostBinding,
         },
         parameters_schema: target.parameters_schema,
         ai_visible: true,
@@ -458,26 +428,26 @@ fn build_ai_tool_fallback_candidate(
     }
 }
 
-/// Returns whether one host candidate can satisfy the configured fallback tool identifier.
-/// 返回单条宿主候选工具是否可以匹配配置中的回退工具标识。
-fn candidate_matches_ai_fallback_id(
+/// Returns whether one host candidate matches the explicitly configured host-tool identifier.
+/// 返回单条宿主候选工具是否匹配显式配置的宿主工具标识。
+fn candidate_matches_ai_host_binding_id(
     candidate: &VulcanToolCandidate,
-    fallback_tool_id: &str,
+    host_tool_id: &str,
 ) -> bool {
-    let fallback_public_id = build_direct_public_tool_name(fallback_tool_id);
+    let host_binding_public_id = build_direct_public_tool_name(host_tool_id);
     let direct_id = build_direct_public_tool_name(&candidate.descriptor.id);
     let direct_name = build_direct_public_tool_name(&candidate.descriptor.name);
     let mcp_id = build_prefixed_public_tool_name("mcp", &[&candidate.descriptor.id]);
     let mcp_name = build_prefixed_public_tool_name("mcp", &[&candidate.descriptor.name]);
 
-    fallback_tool_id == candidate.descriptor.id
-        || fallback_tool_id == candidate.descriptor.name
-        || fallback_tool_id == direct_id
-        || fallback_tool_id == direct_name
-        || fallback_public_id == direct_id
-        || fallback_public_id == direct_name
-        || fallback_tool_id == mcp_id
-        || fallback_tool_id == mcp_name
-        || fallback_public_id == mcp_id
-        || fallback_public_id == mcp_name
+    host_tool_id == candidate.descriptor.id
+        || host_tool_id == candidate.descriptor.name
+        || host_tool_id == direct_id
+        || host_tool_id == direct_name
+        || host_binding_public_id == direct_id
+        || host_binding_public_id == direct_name
+        || host_tool_id == mcp_id
+        || host_tool_id == mcp_name
+        || host_binding_public_id == mcp_id
+        || host_binding_public_id == mcp_name
 }

@@ -1,15 +1,15 @@
 //! SQLite schema definitions for one physically isolated knowledge library.
-//! 单个物理隔离资料库使用的 SQLite 结构定义。
+//! 单个物理隔离知识库使用的 SQLite 结构定义。
 
 /// Current per-library authoritative schema version.
-/// 当前单资料库权威结构版本。
+/// 当前单知识库权威结构版本。
 pub const KNOWLEDGE_SCHEMA_VERSION: i64 = 1;
 /// Fixed vldb-managed FTS5 index name.
 /// 由 vldb 管理的固定 FTS5 索引名称。
 pub const KNOWLEDGE_FTS_INDEX: &str = "knowledge_chunks_fts";
 
 /// Builds the complete idempotent schema for one library database.
-/// 构建单个资料库数据库的完整幂等结构。
+/// 构建单个知识库数据库的完整幂等结构。
 pub fn library_schema_script(library_id: &str) -> String {
     format!(
         r#"

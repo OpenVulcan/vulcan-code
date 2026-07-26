@@ -1,33 +1,33 @@
 //! Browser-facing knowledge-base request and selection contracts.
-//! 面向浏览器的资料库请求与选择契约。
+//! 面向浏览器的知识库请求与选择契约。
 
 use serde::{Deserialize, Serialize};
 
 /// Creates one named knowledge library and optionally binds initial projects.
-/// 创建一个命名资料库并可选绑定初始项目。
+/// 创建一个命名知识库并可选绑定初始项目。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeLibraryCreateRequest {
     /// User-visible non-empty library name.
-    /// 用户可见的非空资料库名称。
+    /// 用户可见的非空知识库名称。
     pub name: String,
     /// Optional user-visible description.
     /// 可选的用户可见说明。
     #[serde(default)]
     pub description: String,
     /// Initial project identifiers authorized for the library.
-    /// 初始授权给该资料库的项目标识符。
+    /// 初始授权给该知识库的项目标识符。
     #[serde(default)]
     pub project_ids: Vec<String>,
 }
 
 /// Renames one library without changing its immutable identity.
-/// 在不改变不可变身份的前提下重命名一个资料库。
+/// 在不改变不可变身份的前提下重命名一个知识库。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeLibraryRenameRequest {
     /// Immutable library identifier.
-    /// 不可变资料库标识符。
+    /// 不可变知识库标识符。
     pub library_id: String,
     /// New user-visible name.
     /// 新的用户可见名称。
@@ -44,7 +44,7 @@ pub struct KnowledgeLibraryRenameRequest {
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeProjectBindingRequest {
     /// Immutable library identifier.
-    /// 不可变资料库标识符。
+    /// 不可变知识库标识符。
     pub library_id: String,
     /// Immutable project identifier.
     /// 不可变项目标识符。
@@ -53,7 +53,7 @@ pub struct KnowledgeProjectBindingRequest {
     /// 项目是否继续获得授权。
     pub authorized: bool,
     /// Whether inherited sessions enable the library by default.
-    /// 继承型会话是否默认启用资料库。
+    /// 继承型会话是否默认启用知识库。
     #[serde(default)]
     pub default_enabled: bool,
 }
@@ -64,7 +64,7 @@ pub struct KnowledgeProjectBindingRequest {
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeImportRequest {
     /// Immutable target library identifier.
-    /// 不可变目标资料库标识符。
+    /// 不可变目标知识库标识符。
     pub library_id: String,
     /// Host directory selected by the user.
     /// 用户选择的宿主目录。
@@ -76,12 +76,12 @@ pub struct KnowledgeImportRequest {
 }
 
 /// Creates or updates one library-local Jieba custom word.
-/// 创建或更新一个资料库局部 Jieba 自定义词。
+/// 创建或更新一个知识库局部 Jieba 自定义词。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeCustomWordRequest {
     /// Immutable target library identifier.
-    /// 不可变目标资料库标识符。
+    /// 不可变目标知识库标识符。
     pub library_id: String,
     /// Exact custom word text.
     /// 精确的自定义词文本。
@@ -100,7 +100,7 @@ pub struct KnowledgeDocumentListRequest {
     /// 用于授权校验的当前项目标识符。
     pub project_id: String,
     /// Immutable library identifier.
-    /// 不可变资料库标识符。
+    /// 不可变知识库标识符。
     pub library_id: String,
     /// Optional exact folder classification.
     /// 可选的精确文件夹分类。
@@ -117,12 +117,12 @@ pub struct KnowledgeDocumentListRequest {
 }
 
 /// Requests a bounded document page from the selected library management surface.
-/// 从选中资料库的管理界面请求一个有界文档分页。
+/// 从选中知识库的管理界面请求一个有界文档分页。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeLibraryDocumentListRequest {
     /// Immutable library identifier selected in the management surface.
-    /// 管理界面中选中的不可变资料库标识符。
+    /// 管理界面中选中的不可变知识库标识符。
     pub library_id: String,
     /// Optional exact folder classification.
     /// 可选的精确文件夹分类。
@@ -139,12 +139,12 @@ pub struct KnowledgeLibraryDocumentListRequest {
 }
 
 /// Requests one complete portable knowledge-library export.
-/// 请求一次完整的可移植资料库导出。
+/// 请求一次完整的可移植知识库导出。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgePackageExportRequest {
     /// Immutable source library identifier.
-    /// 不可变的来源资料库标识符。
+    /// 不可变的来源知识库标识符。
     pub library_id: String,
     /// Existing destination directory selected by the user.
     /// 用户选择的现有目标目录。
@@ -162,20 +162,20 @@ pub struct KnowledgePackageInspectRequest {
 }
 
 /// Explicit package-import strategy chosen after inspection.
-/// 检查后选择的显式资料库包导入策略。
+/// 检查后选择的显式知识库包导入策略。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum KnowledgePackageImportStrategy {
     /// Creates one independent library with a new immutable identity.
-    /// 使用新的不可变标识创建一个独立资料库。
+    /// 使用新的不可变标识创建一个独立知识库。
     Create,
     /// Replaces one exact existing library while retaining its identity and bindings.
-    /// 替换一个精确现有资料库，同时保留其标识和绑定。
+    /// 替换一个精确现有知识库，同时保留其标识和绑定。
     Replace,
 }
 
 /// Executes one previously inspected package import.
-/// 执行一次已经检查的资料库包导入。
+/// 执行一次已经检查的知识库包导入。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgePackageImportRequest {
@@ -183,7 +183,7 @@ pub struct KnowledgePackageImportRequest {
     /// 用户选择的原生归档路径。
     pub archive_path: String,
     /// Final user-visible library name.
-    /// 最终用户可见资料库名称。
+    /// 最终用户可见知识库名称。
     pub name: String,
     /// Explicit create-or-replace strategy.
     /// 显式的新建或替换策略。
@@ -195,7 +195,7 @@ pub struct KnowledgePackageImportRequest {
 }
 
 /// One selectable .vkb file shown by the service-backed package picker.
-/// 服务支持的资料库包选择器中显示的一个可选 .vkb 文件。
+/// 服务支持的知识库包选择器中显示的一个可选 .vkb 文件。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgePackageFileSummary {
@@ -224,7 +224,7 @@ pub struct KnowledgePackageFileListing {
 }
 
 /// Performs one bounded BM25 search across explicitly authorized libraries.
-/// 在显式授权资料库中执行一次有界 BM25 检索。
+/// 在显式授权知识库中执行一次有界 BM25 检索。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeSearchRequest {
@@ -232,7 +232,7 @@ pub struct KnowledgeSearchRequest {
     /// 用于授权校验的当前项目标识符。
     pub project_id: String,
     /// Library identifiers selected by the caller.
-    /// 调用方选择的资料库标识符。
+    /// 调用方选择的知识库标识符。
     pub library_ids: Vec<String>,
     /// Non-empty search query.
     /// 非空搜索词。
@@ -244,12 +244,12 @@ pub struct KnowledgeSearchRequest {
 }
 
 /// Performs a bounded BM25 search inside one selected management library.
-/// 在管理界面选中的单个资料库内执行有界 BM25 检索。
+/// 在管理界面选中的单个知识库内执行有界 BM25 检索。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeLibrarySearchRequest {
     /// Immutable library identifier selected in the management surface.
-    /// 管理界面中选中的不可变资料库标识符。
+    /// 管理界面中选中的不可变知识库标识符。
     pub library_id: String,
     /// Non-empty search query.
     /// 非空搜索词。
@@ -261,7 +261,7 @@ pub struct KnowledgeLibrarySearchRequest {
 }
 
 /// Persists one session's knowledge-library selection.
-/// 持久化一个会话的资料库选择。
+/// 持久化一个会话的知识库选择。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionKnowledgeLibrarySelectionRequest {
@@ -275,13 +275,13 @@ pub struct SessionKnowledgeLibrarySelectionRequest {
     /// 选择模式，只能是 inherit 或 explicit。
     pub mode: String,
     /// Explicit library identifiers when mode is explicit.
-    /// explicit 模式下的显式资料库标识符。
+    /// explicit 模式下的显式知识库标识符。
     #[serde(default)]
     pub library_ids: Vec<String>,
 }
 
 /// Current session selection together with its effective authorized library identifiers.
-/// 当前会话选择及其生效的已授权资料库标识符。
+/// 当前会话选择及其生效的已授权知识库标识符。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionKnowledgeLibrarySelectionSummary {

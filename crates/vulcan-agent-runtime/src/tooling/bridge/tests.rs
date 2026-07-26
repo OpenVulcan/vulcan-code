@@ -2,8 +2,8 @@
 //! 面向语义 AI 回退别名的宿主桥接层测试。
 
 use super::{
-    AiToolFallbackAlias, append_ai_tool_fallback_aliases, build_luaskills_dispatch_candidate,
-    build_luaskills_help_candidate, build_vulcan_tools_manager,
+    AiToolHostBindingAlias, append_ai_tool_host_binding_aliases,
+    build_luaskills_dispatch_candidate, build_luaskills_help_candidate, build_vulcan_tools_manager,
     configured_understand_image_candidate, inject_host_managed_pwd_if_needed,
     luaskills_entry_to_call_view,
 };
@@ -11,7 +11,7 @@ use crate::luaskills_runtime::PWD_PARAMETER_NAME;
 use crate::provider_config::{
     AiToolKind, PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
     PersistedAiToolConfiguration, PersistedUnderstandImageConfiguration,
-    UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID,
+    UNDERSTAND_IMAGE_HOST_BINDING_TOOL_ID,
 };
 use crate::tooling::build_native_tool_catalog;
 use luaskills::RuntimeEntryDescriptor;
@@ -46,7 +46,7 @@ fn test_understand_image_configuration() -> PersistedAiToolConfiguration {
             )],
         }],
         understand_image: PersistedUnderstandImageConfiguration {
-            target_order: vec![String::from("minimax/minimax")],
+            selected_target: Some(String::from("minimax/minimax")),
             ..PersistedUnderstandImageConfiguration::default()
         },
         ..PersistedAiToolConfiguration::default()
@@ -86,11 +86,11 @@ fn test_candidate(id: &str, source: VulcanToolSourceKind) -> VulcanToolCandidate
 fn ai_tool_fallback_alias_exposes_semantic_name_without_backing_duplicate() {
     let mut candidates = vec![test_candidate("brave-search", VulcanToolSourceKind::Mcp)];
 
-    append_ai_tool_fallback_aliases(
+    append_ai_tool_host_binding_aliases(
         &mut candidates,
-        vec![AiToolFallbackAlias {
+        vec![AiToolHostBindingAlias {
             kind: AiToolKind::WebSearch,
-            fallback_tool_id: String::from("mcp_brave_search"),
+            host_tool_id: String::from("mcp_brave_search"),
         }],
     );
 
@@ -100,7 +100,7 @@ fn ai_tool_fallback_alias_exposes_semantic_name_without_backing_duplicate() {
     assert_eq!(resolved.descriptors[0].description, "Search the web");
     assert_eq!(
         resolved.descriptors[0].source,
-        VulcanToolSourceKind::AiFallback
+        VulcanToolSourceKind::AiHostBinding
     );
     assert_eq!(
         resolved.definitions[0].parameters_schema["properties"]["query"]["type"],
@@ -117,11 +117,11 @@ fn understand_image_fallback_alias_is_registered_without_image_attachments() {
             .expect("configured image understanding should produce a backing tool");
     let mut candidates = vec![candidate];
 
-    append_ai_tool_fallback_aliases(
+    append_ai_tool_host_binding_aliases(
         &mut candidates,
-        vec![AiToolFallbackAlias {
+        vec![AiToolHostBindingAlias {
             kind: AiToolKind::UnderstandImage,
-            fallback_tool_id: String::from(UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID),
+            host_tool_id: String::from(UNDERSTAND_IMAGE_HOST_BINDING_TOOL_ID),
         }],
     );
 
@@ -131,7 +131,7 @@ fn understand_image_fallback_alias_is_registered_without_image_attachments() {
     assert_eq!(resolved.descriptors[0].id, "understand_image");
     assert_eq!(
         resolved.descriptors[0].source,
-        VulcanToolSourceKind::AiFallback
+        VulcanToolSourceKind::AiHostBinding
     );
     assert!(
         resolved.definitions[0].parameters_schema["properties"]["image"]

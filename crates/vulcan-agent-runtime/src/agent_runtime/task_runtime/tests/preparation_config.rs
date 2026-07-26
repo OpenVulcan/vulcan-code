@@ -1180,7 +1180,7 @@ fn task_runtime_preparation_request_clears_parent_transient_runtime_state() {
 }
 
 /// Verifies a child request inherits the immutable knowledge snapshot without losing its storage handle.
-/// 验证子请求继承不可变资料库快照且不会丢失其存储句柄。
+/// 验证子请求继承不可变知识库快照且不会丢失其存储句柄。
 #[test]
 fn task_runtime_preparation_request_preserves_enabled_knowledge_access() {
     let parent_session_id = Uuid::new_v4();

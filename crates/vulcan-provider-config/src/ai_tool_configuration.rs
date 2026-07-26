@@ -110,8 +110,8 @@ fn resolve_fallback_ai_tool_configuration(
 mod tests {
     use super::{AiToolConfigurationLoadSource, resolve_fallback_ai_tool_configuration};
     use crate::provider_config::{
+        AiToolKind, PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
         PersistedAiToolConfiguration, PersistedWebSearchConfiguration, ProviderConfigurationFile,
-        WebSearchRoutingMode,
     };
 
     /// Prefers the legacy embedded AI tool configuration only when it actually carries user data.
@@ -120,8 +120,23 @@ mod tests {
     fn fallback_loader_uses_legacy_embedded_ai_tool_configuration() {
         let provider_configuration = ProviderConfigurationFile {
             ai_tools: PersistedAiToolConfiguration {
+                vendors: vec![PersistedAiCapabilityVendorEntry {
+                    id: String::from("brave"),
+                    vendor_id: String::from("brave"),
+                    name: String::from("Brave"),
+                    enabled: true,
+                    api_key: String::from("token"),
+                    connection_mode: None,
+                    base_url: String::new(),
+                    region: String::new(),
+                    targets: vec![PersistedAiCapabilityTargetBinding::new(
+                        AiToolKind::WebSearch,
+                        "brave",
+                        "brave",
+                    )],
+                }],
                 web_search: PersistedWebSearchConfiguration {
-                    mode: WebSearchRoutingMode::ThirdPartyOnly,
+                    selected_target: Some(String::from("brave/brave")),
                     ..PersistedWebSearchConfiguration::default()
                 },
                 ..PersistedAiToolConfiguration::default()

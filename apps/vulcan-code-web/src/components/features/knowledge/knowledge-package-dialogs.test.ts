@@ -4,7 +4,7 @@ import { findKnowledgePackageNameConflict } from "./KnowledgePackageDialogs";
 import type { KnowledgeLibrarySummary } from "@/types";
 
 // libraryFixture builds one minimal authoritative library summary for conflict tests.
-// libraryFixture 为冲突测试构建一个最小权威资料库摘要。
+// libraryFixture 为冲突测试构建一个最小权威知识库摘要。
 function libraryFixture(id: string, name: string): KnowledgeLibrarySummary {
   return {
     id,

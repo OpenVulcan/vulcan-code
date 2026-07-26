@@ -42,7 +42,7 @@ define route-command
 endef
 endif
 
-.PHONY: help build build-release release run run-release br br-release licenses deps deps-all deps-host deps-vldb deps-rtk deps-lua host vldb rtk lua all
+.PHONY: help build build-release release run run-release br br-release licenses deps deps-all deps-host deps-vldb deps-rtk deps-lua deps-cbm host vldb rtk lua cbm all
 
 # DEPS_COMPANION_GOALS captures optional secondary dependency goals such as `make deps rtk`.
 # DEPS_COMPANION_GOALS 捕获 `make deps rtk` 这类可选的依赖二级目标。
@@ -69,6 +69,7 @@ help:
 	@echo "  make deps-vldb     # install vldb-controller host dependency"
 	@echo "  make deps-rtk      # install RTK host dependency"
 	@echo "  make deps-lua      # install Lua dependencies"
+	@echo "  make deps-cbm      # install the pinned native Codebase Memory runtime"
 
 # build routes debug by default, or release when the release companion goal is present.
 # build 默认路由 debug，存在 release 伴随目标时路由 release。
@@ -144,6 +145,11 @@ deps-rtk:
 deps-lua:
 	$(call route-command,deps lua)
 
+# deps-cbm routes native Codebase Memory runtime installation.
+# deps-cbm 路由原生 Codebase Memory 运行时安装步骤。
+deps-cbm:
+	$(call route-command,deps cbm)
+
 # all is a deps companion no-op when used as `make deps all`.
 # all 在 `make deps all` 形式中作为 deps 的伴随空目标。
 all:
@@ -187,4 +193,13 @@ ifneq ($(filter deps,$(MAKECMDGOALS)),)
 	@:
 else
 	$(call route-command,deps lua)
+endif
+
+# cbm is a deps companion no-op when used as `make deps cbm`.
+# cbm 在 `make deps cbm` 形式中作为 deps 的伴随空目标。
+cbm:
+ifneq ($(filter deps,$(MAKECMDGOALS)),)
+	@:
+else
+	$(call route-command,deps cbm)
 endif

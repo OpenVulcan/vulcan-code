@@ -25,7 +25,7 @@ function formatKnowledgePackageBytes(bytes: number): string {
 }
 
 // findKnowledgePackageNameConflict resolves the exact existing row matching one normalized candidate name.
-// findKnowledgePackageNameConflict 解析与规范化候选名称精确匹配的现有资料库行。
+// findKnowledgePackageNameConflict 解析与规范化候选名称精确匹配的现有知识库行。
 export function findKnowledgePackageNameConflict(
   libraries: KnowledgeLibrarySummary[],
   name: string,
@@ -41,35 +41,35 @@ export function findKnowledgePackageNameConflict(
 // KnowledgePackagePickerDialog 允许用户浏览宿主目录并选择一个普通 .vkb 文件。
 export function KnowledgePackagePickerDialog(props: {
   // Whether the package picker is visible.
-  // 资料库包选择器是否可见。
+  // 知识库包选择器是否可见。
   open: boolean;
   // Handles picker visibility changes.
   // 处理选择器可见性变化。
   onOpenChange: (open: boolean) => void;
   // Inspects the exact package selected by the user.
-  // 检查用户选择的精确资料库包。
+  // 检查用户选择的精确知识库包。
   onSelect: (path: string) => Promise<void>;
 }) {
   // t resolves user-visible package-picker copy.
-  // t 解析用户可见的资料库包选择器文案。
+  // t 解析用户可见的知识库包选择器文案。
   const { t } = useI18n();
   // listing stores the current host directory and its selectable packages.
-  // listing 保存当前宿主目录及其可选资料库包。
+  // listing 保存当前宿主目录及其可选知识库包。
   const [listing, setListing] = React.useState<KnowledgePackageFileListing | null>(null);
   // pathInput stores the editable native directory path.
   // pathInput 保存可编辑的原生目录路径。
   const [pathInput, setPathInput] = React.useState("");
   // selectedPath identifies the exact package selected in the current directory.
-  // selectedPath 标识当前目录中精确选中的资料库包。
+  // selectedPath 标识当前目录中精确选中的知识库包。
   const [selectedPath, setSelectedPath] = React.useState<string | null>(null);
   // loading tracks directory navigation requests.
   // loading 跟踪目录导航请求。
   const [loading, setLoading] = React.useState(false);
   // submitting tracks package inspection and prevents duplicate confirmation.
-  // submitting 跟踪资料库包检查并防止重复确认。
+  // submitting 跟踪知识库包检查并防止重复确认。
   const [submitting, setSubmitting] = React.useState(false);
   // submittingRef synchronously prevents duplicate package inspection before React rerenders.
-  // submittingRef 在 React 重新渲染前同步阻止重复资料库包检查。
+  // submittingRef 在 React 重新渲染前同步阻止重复知识库包检查。
   const submittingRef = React.useRef(false);
   // error stores the latest local navigation or inspection failure.
   // error 保存最近一次本地导航或检查失败。
@@ -198,10 +198,10 @@ export function KnowledgePackagePickerDialog(props: {
 // KnowledgePackageImportDialog 确认唯一名称导入或一个显式覆盖目标。
 export function KnowledgePackageImportDialog(props: {
   // Validated package inspection currently awaiting confirmation.
-  // 当前等待确认的已校验资料库包检查结果。
+  // 当前等待确认的已校验知识库包检查结果。
   inspection: KnowledgePackageInspection | null;
   // Authoritative existing libraries used for live name-conflict detection.
-  // 用于实时名称冲突检测的权威现有资料库列表。
+  // 用于实时名称冲突检测的权威现有知识库列表。
   libraries: KnowledgeLibrarySummary[];
   // Whether an import mutation is active.
   // 是否存在活动导入变更。
@@ -217,7 +217,7 @@ export function KnowledgePackageImportDialog(props: {
   // t 解析用户可见的导入决策文案。
   const { t } = useI18n();
   // name stores the proposed target library name.
-  // name 保存建议使用的目标资料库名称。
+  // name 保存建议使用的目标知识库名称。
   const [name, setName] = React.useState("");
   // strategy stores the explicit non-overwriting or replacement decision.
   // strategy 保存显式的不覆盖新建或覆盖决策。
@@ -229,7 +229,7 @@ export function KnowledgePackageImportDialog(props: {
   // submitting 在父级忙碌投影重新渲染前提供即时视觉反馈。
   const [submitting, setSubmitting] = React.useState(false);
   // submittingRef synchronously serializes destructive confirmation and package import.
-  // submittingRef 同步串行化破坏性确认与资料库包导入。
+  // submittingRef 同步串行化破坏性确认与知识库包导入。
   const submittingRef = React.useRef(false);
 
   React.useEffect(() => {

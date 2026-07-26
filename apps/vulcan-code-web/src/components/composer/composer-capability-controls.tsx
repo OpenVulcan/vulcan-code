@@ -1,20 +1,6 @@
 import React from "react";
 import {
-  closestCenter,
-  DndContext,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import {
-  arrayMove,
-  SortableContext,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
-import {
   Check,
-  GripVertical,
   Loader2,
   Save,
   SlidersHorizontal,
@@ -56,7 +42,6 @@ import {
   type ComposerSelectOption,
 } from "@/components/composer/composer-model";
 
-import { useVerticalSortableItem } from "./composer-sortable";
 import { useComposerCapabilityDraft } from "./use-composer-capability-draft";
 
 // ContextUsageOrb renders a compact context budget indicator beside the composer.
@@ -149,9 +134,9 @@ export function ComposerAiCapabilityControl(props: {
   // Session-synchronized disabled target selectors.
   // 与会话同步的禁用目标选择器。
   disabledTargetSelectors: Set<string>;
-  // Session-synchronized target order grouped by capability kind.
-  // 按能力类型分组、与会话同步的目标顺序。
-  targetOrder: Map<AiCapabilityKind, string[]>;
+  // Session-synchronized exact target binding grouped by capability kind.
+  // 按能力类型分组、与会话同步的精确目标绑定。
+  targetBindings: Map<AiCapabilityKind, string>;
   // Persists one session-scoped capability configuration draft.
   // 持久化单个会话级能力配置草稿。
   onSaveConfiguration: (request: ComposerAiCapabilityConfigurationSave) => Promise<boolean>;
@@ -169,7 +154,7 @@ export function ComposerAiCapabilityControl(props: {
     confirmCloseOpen,
     draftDisabledKinds,
     draftDisabledTargetSelectors,
-    draftTargetOrder,
+    draftTargetBindings,
     activeDisabledKinds,
     hasUnsavedChanges,
     isSaving,
@@ -183,12 +168,11 @@ export function ComposerAiCapabilityControl(props: {
     useDefaultConfiguration: handleUseDefaultConfiguration,
     setCapabilityEnabled: handleCapabilityToggle,
     setTargetEnabled: handleTargetToggle,
-    reorderTargets: handleTargetReorder,
   } = useComposerCapabilityDraft({
     scopeKey: props.scopeKey,
     disabledKinds: props.disabledKinds,
     disabledTargetSelectors: props.disabledTargetSelectors,
-    targetOrder: props.targetOrder,
+    targetBindings: props.targetBindings,
     defaultCapabilities: props.defaultCapabilities,
     onSaveConfiguration: props.onSaveConfiguration,
   });
@@ -211,43 +195,19 @@ export function ComposerAiCapabilityControl(props: {
   });
   const selectedEntry = visibleCapabilities.find(({ option }) => option.value === selectedKind) ?? visibleCapabilities[0];
   const selectedCapability = selectedEntry?.capability;
-  const selectedTargets = orderedAiCapabilityTargets(selectedCapability, draftTargetOrder);
+  const selectedTargets = orderedAiCapabilityTargets(selectedCapability, draftTargetBindings);
   const selectedEnabled = Boolean(selectedCapability?.available) && !draftDisabledKinds.has(selectedEntry.option.value);
-  const targetDragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
-  const targetSortableIds = React.useMemo(
-    () => selectedTargets.map((target) => target.targetSelector),
-    [selectedTargets],
-  );
   const capabilityTooltipRows = React.useMemo(
     () => composerCapabilityTooltipRows(
       visibleCapabilities,
       activeDisabledKinds,
       props.disabledTargetSelectors,
-      props.targetOrder,
+      props.targetBindings,
       props.locale,
       t,
     ),
-    [activeDisabledKinds, props.disabledTargetSelectors, props.locale, props.targetOrder, t, visibleCapabilities],
+    [activeDisabledKinds, props.disabledTargetSelectors, props.locale, props.targetBindings, t, visibleCapabilities],
   );
-  // handleTargetDragEnd applies the dnd-kit order to the dialog-local route draft.
-  // handleTargetDragEnd 将 dnd-kit 顺序应用到弹窗本地路由草稿。
-  const handleTargetDragEnd = React.useCallback((event: DragEndEvent) => {
-    if (isSaving) {
-      return;
-    }
-    const activeId = String(event.active.id);
-    const overId = event.over ? String(event.over.id) : null;
-    if (!overId || activeId === overId) {
-      return;
-    }
-    const oldIndex = targetSortableIds.indexOf(activeId);
-    const newIndex = targetSortableIds.indexOf(overId);
-    if (oldIndex < 0 || newIndex < 0) {
-      return;
-    }
-    handleTargetReorder(selectedEntry.option.value, arrayMove(targetSortableIds, oldIndex, newIndex));
-  }, [handleTargetReorder, isSaving, selectedEntry.option.value, targetSortableIds]);
-
   React.useEffect(() => {
     if (visibleCapabilities.some(({ option }) => option.value === selectedKind)) {
       return;
@@ -358,26 +318,27 @@ export function ComposerAiCapabilityControl(props: {
           </aside>
           <section className="composer-capability-dialog-right">
             {selectedTargets.length > 0 ? (
-              <DndContext sensors={targetDragSensors} collisionDetection={closestCenter} onDragEnd={handleTargetDragEnd}>
-                <SortableContext items={targetSortableIds} strategy={verticalListSortingStrategy}>
-                  <div className="composer-capability-target-table">
-                    {selectedTargets.map((target) => {
-                      const targetEnabled = selectedEnabled && target.enabled && !draftDisabledTargetSelectors.has(target.targetSelector);
-                      return (
-                        <ComposerCapabilityTargetRow
-                          disabled={!target.enabled}
-                          enabled={targetEnabled}
-                          key={target.targetSelector}
-                          locked={isSaving}
-                          selectedEnabled={selectedEnabled}
-                          target={target}
-                          onToggle={handleTargetToggle}
-                        />
-                      );
-                    })}
-                  </div>
-                </SortableContext>
-              </DndContext>
+              <div className="composer-capability-target-table">
+                {selectedTargets.map((target) => {
+                  const exactBinding = draftTargetBindings.get(selectedEntry.option.value);
+                  const targetEnabled = selectedEnabled
+                    && target.enabled
+                    && exactBinding === target.targetSelector
+                    && !draftDisabledTargetSelectors.has(target.targetSelector);
+                  return (
+                    <ComposerCapabilityTargetRow
+                      capabilityKind={selectedEntry.option.value}
+                      disabled={!target.enabled}
+                      enabled={targetEnabled}
+                      key={target.targetSelector}
+                      locked={isSaving}
+                      selectedEnabled={selectedEnabled}
+                      target={target}
+                      onToggle={handleTargetToggle}
+                    />
+                  );
+                })}
+              </div>
             ) : (
               <div className="composer-capability-dialog-empty">
                 {selectedCapability?.native
@@ -458,6 +419,9 @@ export function ComposerAiCapabilityControl(props: {
 // ComposerCapabilityTargetRow renders one globally draggable capability target route row.
 // ComposerCapabilityTargetRow 渲染单条整行可拖动的能力目标路由。
 function ComposerCapabilityTargetRow(props: {
+  // Semantic capability kind owning this exact binding.
+  // 拥有该精确绑定的语义能力类型。
+  capabilityKind: AiCapabilityKind;
   // Whether the target route is globally disabled.
   // 当前目标路由是否全局不可用。
   disabled: boolean;
@@ -473,26 +437,23 @@ function ComposerCapabilityTargetRow(props: {
   // Target route summary displayed by the row.
   // 当前行展示的目标路由摘要。
   target: AiCapabilityTargetSummary;
-  // Toggles the target route in the session dialog draft.
-  // 开关会话弹窗草稿中的目标路由。
-  onToggle: (targetSelector: string, enabled: boolean) => void;
+  // Selects or clears the exact target binding in the session dialog draft.
+  // 选择或清除会话弹窗草稿中的精确目标绑定。
+  onToggle: (kind: AiCapabilityKind, targetSelector: string, enabled: boolean) => void;
 }) {
-  const sortable = useVerticalSortableItem(props.target.targetSelector, props.locked);
   return (
     <div
-      className={cn("composer-capability-target-row", props.disabled && "disabled", sortable.isDragging && "dragging")}
-      ref={sortable.setNodeRef}
-      style={sortable.sortableStyle}
-      {...sortable.attributes}
-      {...sortable.listeners}
+      className={cn("composer-capability-target-row", props.disabled && "disabled")}
     >
-      <GripVertical className="composer-capability-target-handle" size={14} />
       <input
         checked={props.enabled}
         disabled={props.locked || !props.selectedEnabled || !props.target.enabled}
-        onChange={(event) => props.onToggle(props.target.targetSelector, event.currentTarget.checked)}
-        onPointerDown={(event) => event.stopPropagation()}
-        type="checkbox"
+        onChange={(event) => props.onToggle(
+          props.capabilityKind,
+          props.target.targetSelector,
+          event.currentTarget.checked,
+        )}
+        type="radio"
       />
       <span className="composer-capability-target-copy">
         <span>{props.target.targetName || props.target.targetAlias}</span>
@@ -508,7 +469,7 @@ function composerCapabilityTooltipRows(
   entries: Array<{ option: ComposerAiCapabilityOption; capability: AiCapabilitySummary | undefined }>,
   disabledKinds: Set<AiCapabilityKind>,
   disabledTargetSelectors: Set<string>,
-  targetOrder: Map<AiCapabilityKind, string[]>,
+  targetBindings: Map<AiCapabilityKind, string>,
   locale: LocaleCode,
   t: (key: TranslationKey) => string,
 ): string[] {
@@ -517,7 +478,9 @@ function composerCapabilityTooltipRows(
       return [];
     }
     const sourceLabels = capability.native ? [t("composer.capability.source.native")] : [];
-    const targetLabels = orderedAiCapabilityTargets(capability, targetOrder)
+    const selectedTarget = targetBindings.get(option.value);
+    const targetLabels = capability.targets
+      .filter((target) => target.targetSelector === selectedTarget)
       .filter((target) => target.enabled && !disabledTargetSelectors.has(target.targetSelector))
       .map(composerCapabilityTargetTooltipLabel);
     const routeLabels = sourceLabels.concat(targetLabels);

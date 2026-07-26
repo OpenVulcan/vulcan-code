@@ -33,9 +33,9 @@ export interface ComposerSubmission {
   // Runtime-disabled AI capability route selectors for the current prompt.
   // 当前提示词运行时禁用的 AI 能力路由选择器。
   disabledAiCapabilityTargetSelectors: string[];
-  // Runtime target order overrides grouped by AI capability key.
-  // 按 AI 能力键分组的运行时目标顺序覆盖。
-  aiCapabilityTargetOrderOverrides: Record<string, string[]>;
+  // Runtime exact target bindings grouped by AI capability key.
+  // 按 AI 能力键分组的运行时精确目标绑定。
+  aiCapabilityTargetBindings: Record<string, string>;
 }
 
 // ComposerAiCapabilityConfigurationSave describes one session-scoped capability dialog save.
@@ -47,9 +47,9 @@ export interface ComposerAiCapabilityConfigurationSave {
   // Complete disabled target selector list.
   // 完整禁用目标选择器列表。
   disabledAiCapabilityTargetSelectors: string[];
-  // Complete target order overrides grouped by capability kind.
-  // 按能力类型分组的完整目标顺序覆盖。
-  aiCapabilityTargetOrderOverrides: Record<string, string[]>;
+  // Complete exact target bindings grouped by capability kind.
+  // 按能力类型分组的完整精确目标绑定。
+  aiCapabilityTargetBindings: Record<string, string>;
 }
 
 // ComposerSlashCommandOpenTarget names existing composer popups opened by slash commands.
@@ -219,38 +219,38 @@ export function defaultDisabledAiCapabilityTargetSelectors(capabilities: AiCapab
   return disabled;
 }
 
-// defaultAiCapabilityTargetOrder derives prompt-level target order from the service snapshot.
-// defaultAiCapabilityTargetOrder 从服务快照推导提示词级目标顺序。
-export function defaultAiCapabilityTargetOrder(capabilities: AiCapabilitySummary[]): Map<AiCapabilityKind, string[]> {
-  const order = new Map<AiCapabilityKind, string[]>();
+// defaultAiCapabilityTargetBindings derives one prompt-level exact binding from the service snapshot.
+// defaultAiCapabilityTargetBindings 从服务快照推导一个提示词级精确绑定。
+export function defaultAiCapabilityTargetBindings(capabilities: AiCapabilitySummary[]): Map<AiCapabilityKind, string> {
+  const bindings = new Map<AiCapabilityKind, string>();
   for (const capability of capabilities) {
     if (isComposerAiCapabilityKind(capability.kind)) {
-      order.set(capability.kind, capability.targets.map((target) => target.targetSelector));
+      const selectedTarget = capability.targets.find((target) => target.selected && target.enabled);
+      if (selectedTarget) {
+        bindings.set(capability.kind, selectedTarget.targetSelector);
+      }
     }
   }
-  return order;
+  return bindings;
 }
 
-// serializeAiCapabilityTargetOrder converts local target order into the service payload shape.
-// serializeAiCapabilityTargetOrder 将本地目标顺序转换为服务载荷形态。
-export function serializeAiCapabilityTargetOrder(order: Map<AiCapabilityKind, string[]>): Record<string, string[]> {
-  return Object.fromEntries(Array.from(order.entries()).map(([kind, selectors]) => [kind, selectors]));
+// serializeAiCapabilityTargetBindings converts local exact bindings into the service payload shape.
+// serializeAiCapabilityTargetBindings 将本地精确绑定转换为服务载荷形态。
+export function serializeAiCapabilityTargetBindings(bindings: Map<AiCapabilityKind, string>): Record<string, string> {
+  return Object.fromEntries(bindings.entries());
 }
 
-// orderedAiCapabilityTargets returns targets in the current prompt-level display order.
-// orderedAiCapabilityTargets 按当前提示词级显示顺序返回目标列表。
+// orderedAiCapabilityTargets returns the selected target first and preserves declaration order for the remaining choices.
+// orderedAiCapabilityTargets 将已选目标置于首位，并为其余选项保留声明顺序。
 export function orderedAiCapabilityTargets(
   capability: AiCapabilitySummary | undefined,
-  order: Map<AiCapabilityKind, string[]>,
+  bindings: Map<AiCapabilityKind, string>,
 ): AiCapabilityTargetSummary[] {
   if (!capability || !isComposerAiCapabilityKind(capability.kind)) {
     return [];
   }
-  const currentOrder = order.get(capability.kind) ?? [];
-  const bySelector = new Map(capability.targets.map((target) => [target.targetSelector, target]));
-  const ordered = currentOrder
-    .map((selector) => bySelector.get(selector))
-    .filter((target): target is AiCapabilityTargetSummary => Boolean(target));
+  const selectedSelector = bindings.get(capability.kind);
+  const ordered = capability.targets.filter((target) => target.targetSelector === selectedSelector);
   for (const target of capability.targets) {
     if (!ordered.some((existing) => existing.targetSelector === target.targetSelector)) {
       ordered.push(target);

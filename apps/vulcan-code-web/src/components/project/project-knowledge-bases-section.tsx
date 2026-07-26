@@ -11,7 +11,7 @@ import {
 import type { KnowledgeLibrarySummary, KnowledgeProjectBinding } from "@/types";
 
 // ProjectKnowledgeBasesSection renders durable library authorization and inheritance defaults for one project.
-// ProjectKnowledgeBasesSection 渲染单个项目的持久化资料库授权与继承默认值。
+// ProjectKnowledgeBasesSection 渲染单个项目的持久化知识库授权与继承默认值。
 export function ProjectKnowledgeBasesSection(props: {
   // Exact project identifier whose bindings are edited.
   // 当前编辑绑定的精确项目标识符。
@@ -21,16 +21,16 @@ export function ProjectKnowledgeBasesSection(props: {
   // t 解析用户可见的项目授权文案。
   const { t } = useI18n();
   // libraries stores every active library available for authorization.
-  // libraries 保存可供授权的全部活动资料库。
+  // libraries 保存可供授权的全部活动知识库。
   const [libraries, setLibraries] = React.useState<KnowledgeLibrarySummary[]>([]);
   // bindings maps authorized library IDs to this project's durable binding rows.
-  // bindings 将已授权资料库标识映射到当前项目的持久化绑定记录。
+  // bindings 将已授权知识库标识映射到当前项目的持久化绑定记录。
   const [bindings, setBindings] = React.useState<Record<string, KnowledgeProjectBinding>>({});
   // loading tracks authoritative list refreshes.
   // loading 跟踪权威列表刷新。
   const [loading, setLoading] = React.useState(true);
   // savingLibraryId identifies the exact row whose binding mutation is active.
-  // savingLibraryId 标识绑定变更正在执行的精确资料库行。
+  // savingLibraryId 标识绑定变更正在执行的精确知识库行。
   const [savingLibraryId, setSavingLibraryId] = React.useState<string | null>(null);
   // loadSequenceRef rejects obsolete responses when the settings target changes.
   // loadSequenceRef 在设置目标变化时丢弃过期响应。
@@ -44,7 +44,7 @@ export function ProjectKnowledgeBasesSection(props: {
   const saveInFlightRef = React.useRef(false);
 
   // loadBindings reloads authoritative library and project-binding records from the host.
-  // loadBindings 从宿主重新加载权威资料库与项目绑定记录。
+  // loadBindings 从宿主重新加载权威知识库与项目绑定记录。
   const loadBindings = React.useCallback(async () => {
     // sequence marks the exact refresh allowed to publish UI state.
     // sequence 标记允许发布界面状态的精确刷新请求。
@@ -144,7 +144,7 @@ export function ProjectKnowledgeBasesSection(props: {
         <div className="knowledge-binding-grid">
           {libraries.map((library) => {
             // binding is the exact durable authorization row for this library, when present.
-            // binding 是当前资料库对应的精确持久化授权记录（若存在）。
+            // binding 是当前知识库对应的精确持久化授权记录（若存在）。
             const binding = bindings[library.id];
             // authorized derives solely from an existing backend binding row.
             // authorized 仅由后端绑定记录是否存在派生。

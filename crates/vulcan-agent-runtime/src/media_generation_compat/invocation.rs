@@ -22,7 +22,6 @@ pub(super) fn parse_image_generation_invocation(
     )?;
     Ok(ImageGenerationInvocation {
         prompt,
-        target: optional_trimmed_string(object.get("target")),
         count: object
             .get("count")
             .and_then(Value::as_u64)
@@ -52,7 +51,6 @@ pub(super) fn parse_video_generation_invocation(
             object.get("prompt"),
             "The `video_generation` tool is missing the required `prompt` argument.",
         )?,
-        target: optional_trimmed_string(object.get("target")),
         first_image: optional_trimmed_string(object.get("first_image")),
         last_image: optional_trimmed_string(object.get("last_image")),
         subject_image: optional_trimmed_string(object.get("subject_image")),
@@ -73,7 +71,6 @@ pub(super) fn parse_speech_synthesis_invocation(
             object.get("text"),
             "The `speech_synthesis` tool is missing the required `text` argument.",
         )?,
-        target: optional_trimmed_string(object.get("target")),
         voice: optional_trimmed_string(object.get("voice")),
         language: optional_trimmed_string(object.get("language")),
         format: optional_trimmed_string(object.get("format"))
@@ -93,7 +90,6 @@ pub(super) fn parse_music_generation_invocation(
     Ok(MusicGenerationInvocation {
         prompt: optional_trimmed_string(object.get("prompt")),
         lyrics: optional_trimmed_string(object.get("lyrics")),
-        target: optional_trimmed_string(object.get("target")),
         instrumental: object
             .get("instrumental")
             .and_then(Value::as_bool)
@@ -124,7 +120,6 @@ pub(super) fn parse_music_cover_invocation(args: Value) -> Result<MusicCoverInvo
             "The `music_cover` tool is missing the required `audio` argument.",
         )?,
         lyrics: optional_trimmed_string(object.get("lyrics")),
-        target: optional_trimmed_string(object.get("target")),
         format: optional_trimmed_string(object.get("format"))
             .unwrap_or_else(|| String::from("mp3")),
         output: parse_generated_asset_output_options(object),

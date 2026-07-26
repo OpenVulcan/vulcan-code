@@ -626,7 +626,7 @@ pub(crate) fn vulcan_tool_descriptor_is_visible(
         return true;
     }
     match source {
-        VulcanToolSourceKind::AiFallback => true,
+        VulcanToolSourceKind::AiHostBinding => true,
         VulcanToolSourceKind::VulcanPlugin => false,
         VulcanToolSourceKind::LuaSkills => selectors.has_luaskills_allow(),
         VulcanToolSourceKind::Mcp => selectors.has_mcp_allow(),

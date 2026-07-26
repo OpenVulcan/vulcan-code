@@ -4,8 +4,7 @@ use super::super::{
     PersistedLuaSkillsConfiguration, PersistedPromptSkillState, PersistedPromptSkillsConfiguration,
     PersistedProviderRateLimitRetryConfiguration, PersistedWebSearchConfiguration,
     PersistedWebSearchProviderEntry, ProviderConfigurationFile, ReasoningEffortLevel,
-    WebSearchProviderDispatchMode, WebSearchProviderKind, WebSearchRoutingMode,
-    WorkbenchThinkingDisplayMode,
+    WebSearchProviderKind, WorkbenchThinkingDisplayMode,
 };
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
@@ -168,7 +167,7 @@ fn provider_configuration_round_trips_vmm_configuration() {
 /// Verifies API-native tool configuration keeps the stable root `aiTools.webSearch` shape through serialization.
 /// 验证 API 原生工具配置在序列化过程中保持稳定的根级 `aiTools.webSearch` 形状。
 #[test]
-fn provider_configuration_round_trips_web_search_routing_configuration() {
+fn provider_configuration_round_trips_exact_web_search_binding() {
     let config = ProviderConfigurationFile {
         ai_tools: PersistedAiToolConfiguration {
             vendors: vec![PersistedAiCapabilityVendorEntry {
@@ -187,8 +186,7 @@ fn provider_configuration_round_trips_web_search_routing_configuration() {
                 )],
             }],
             web_search: PersistedWebSearchConfiguration {
-                mode: WebSearchRoutingMode::ThirdPartyFirst,
-                target_order: vec![String::from("brave/brave")],
+                selected_target: Some(String::from("brave/brave")),
                 providers: vec![PersistedWebSearchProviderEntry {
                     id: String::from("brave"),
                     name: String::from("Brave Search"),
@@ -201,7 +199,6 @@ fn provider_configuration_round_trips_web_search_routing_configuration() {
                     region: String::new(),
                     max_results: 8,
                 }],
-                dispatch_mode: WebSearchProviderDispatchMode::Balanced,
                 max_results: 8,
             },
             ..PersistedAiToolConfiguration::default()
@@ -211,13 +208,11 @@ fn provider_configuration_round_trips_web_search_routing_configuration() {
 
     let value = serde_json::to_value(&config).expect("provider configuration must serialize");
     assert_eq!(
-        value["aiTools"]["webSearch"]["mode"],
-        json!("third-party-first")
+        value["aiTools"]["webSearch"]["selectedTarget"],
+        json!("brave/brave")
     );
-    assert_eq!(
-        value["aiTools"]["webSearch"]["dispatchMode"],
-        json!("balanced")
-    );
+    assert!(value["aiTools"]["webSearch"].get("mode").is_none());
+    assert!(value["aiTools"]["webSearch"].get("dispatchMode").is_none());
     assert_eq!(
         value["aiTools"]["webSearch"]["providers"][0]["kind"],
         json!("brave")
@@ -226,12 +221,8 @@ fn provider_configuration_round_trips_web_search_routing_configuration() {
     let restored: ProviderConfigurationFile =
         serde_json::from_value(value).expect("provider configuration must deserialize");
     assert_eq!(
-        restored.ai_tools.web_search.mode,
-        WebSearchRoutingMode::ThirdPartyFirst
-    );
-    assert_eq!(
-        restored.ai_tools.web_search.dispatch_mode,
-        WebSearchProviderDispatchMode::Balanced
+        restored.ai_tools.web_search.selected_target,
+        Some(String::from("brave/brave"))
     );
     assert_eq!(restored.ai_tools.web_search.providers.len(), 1);
     assert!(restored.ai_tools.web_search.providers[0].enabled);

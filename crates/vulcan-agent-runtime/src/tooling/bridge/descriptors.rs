@@ -27,7 +27,7 @@ pub(super) fn native_tool_id_is_vmm_memory_tool(tool_id: &str) -> bool {
 }
 
 /// Returns whether a native tool belongs to the project knowledge family.
-/// 返回原生工具是否属于项目资料库工具族。
+/// 返回原生工具是否属于项目知识库工具族。
 pub(super) fn native_tool_id_is_knowledge_tool(tool_id: &str) -> bool {
     matches!(
         tool_id,

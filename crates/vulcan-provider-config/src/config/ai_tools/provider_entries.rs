@@ -1,7 +1,7 @@
 use super::*;
 
-/// One configured external web-search provider entry in the fallback chain.
-/// 回退链中的单个外部网页搜索供应商配置项。
+/// One configured external web-search provider entry available for explicit binding.
+/// 可供显式绑定的单个外部网页搜索供应商配置项。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedWebSearchProviderEntry {

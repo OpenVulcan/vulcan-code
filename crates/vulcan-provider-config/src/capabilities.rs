@@ -2,12 +2,12 @@
 //! 供运行时、诊断与后续界面防护共用的 Provider 能力解析辅助模块。
 
 use crate::provider_config::{
-    AiToolDeclaration, AiToolKind, AiToolPolicy, IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID,
-    MUSIC_COVER_PROVIDER_CHAIN_TOOL_ID, MUSIC_GENERATION_PROVIDER_CHAIN_TOOL_ID, ModelChoice,
+    AiToolDeclaration, AiToolKind, AiToolPolicy, IMAGE_GENERATION_HOST_BINDING_TOOL_ID,
+    MUSIC_COVER_HOST_BINDING_TOOL_ID, MUSIC_GENERATION_HOST_BINDING_TOOL_ID, ModelChoice,
     ModelInterleavedCapability, PersistedAiToolConfiguration, PersistedProviderOptions,
-    ProviderApiFamily, SPEECH_SYNTHESIS_PROVIDER_CHAIN_TOOL_ID, SupportedProviderDefinition,
-    UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID, VIDEO_GENERATION_PROVIDER_CHAIN_TOOL_ID,
-    WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID, WebSearchRoutingMode,
+    ProviderApiFamily, SPEECH_SYNTHESIS_HOST_BINDING_TOOL_ID, SupportedProviderDefinition,
+    UNDERSTAND_IMAGE_HOST_BINDING_TOOL_ID, VIDEO_GENERATION_HOST_BINDING_TOOL_ID,
+    WEB_SEARCH_HOST_BINDING_TOOL_ID,
 };
 use std::collections::BTreeSet;
 use vulcan_core::types::ConversationAttachmentKind;
@@ -63,8 +63,8 @@ pub struct ResolvedModelCapabilities {
     pub ai_tools: Vec<ResolvedAiToolCapability>,
 }
 
-/// Resolved AI-specialized tool capability consumed by the runtime router.
-/// 供运行时路由器消费的已解析 AI 专用工具能力。
+/// Resolved AI-specialized tool capability consumed by the exact-target runtime.
+/// 供精确目标运行时消费的已解析 AI 专用工具能力。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedAiToolCapability {
     /// Stable semantic tool kind.
@@ -84,7 +84,7 @@ pub struct ResolvedAiToolCapability {
     pub native_request_patch: Option<serde_json::Value>,
     /// Optional host fallback tool identifier.
     /// 可选宿主回退工具标识。
-    pub fallback_tool_id: Option<String>,
+    pub host_tool_id: Option<String>,
     /// Whether explicit approval is required.
     /// 是否需要显式批准。
     pub requires_approval: bool,
@@ -143,7 +143,7 @@ impl ResolvedModelCapabilities {
                 && tool.policy != AiToolPolicy::Disabled
                 && (tool.native_provider_tool
                     || tool
-                        .fallback_tool_id
+                        .host_tool_id
                         .as_deref()
                         .is_some_and(|value| !value.trim().is_empty()))
         })
@@ -229,8 +229,8 @@ pub fn resolve_effective_model_capabilities(
     capabilities
 }
 
-/// Applies user-level API-native tool routing configuration to one resolved capability snapshot.
-/// 将用户级 API 原生工具路由配置应用到一份已解析能力快照。
+/// Applies user-level exact API-native tool bindings to one resolved capability snapshot.
+/// 将用户级 API 原生工具精确绑定应用到一份已解析能力快照。
 pub fn apply_ai_tool_runtime_configuration(
     capabilities: &mut ResolvedModelCapabilities,
     configuration: &PersistedAiToolConfiguration,
@@ -242,108 +242,68 @@ pub fn apply_ai_tool_runtime_configuration(
         &mut capabilities.ai_tools,
         configuration,
     );
-    apply_generic_native_first_ai_tool_runtime_configuration(
+    apply_explicit_host_ai_tool_binding(
         &mut capabilities.ai_tools,
         configuration,
         AiToolKind::ImageGeneration,
-        IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID,
+        IMAGE_GENERATION_HOST_BINDING_TOOL_ID,
         &["image"],
     );
-    apply_generic_native_first_ai_tool_runtime_configuration(
+    apply_explicit_host_ai_tool_binding(
         &mut capabilities.ai_tools,
         configuration,
         AiToolKind::VideoGeneration,
-        VIDEO_GENERATION_PROVIDER_CHAIN_TOOL_ID,
+        VIDEO_GENERATION_HOST_BINDING_TOOL_ID,
         &["video"],
     );
-    apply_generic_native_first_ai_tool_runtime_configuration(
+    apply_explicit_host_ai_tool_binding(
         &mut capabilities.ai_tools,
         configuration,
         AiToolKind::SpeechSynthesis,
-        SPEECH_SYNTHESIS_PROVIDER_CHAIN_TOOL_ID,
+        SPEECH_SYNTHESIS_HOST_BINDING_TOOL_ID,
         &["audio"],
     );
-    apply_generic_native_first_ai_tool_runtime_configuration(
+    apply_explicit_host_ai_tool_binding(
         &mut capabilities.ai_tools,
         configuration,
         AiToolKind::MusicGeneration,
-        MUSIC_GENERATION_PROVIDER_CHAIN_TOOL_ID,
+        MUSIC_GENERATION_HOST_BINDING_TOOL_ID,
         &["audio"],
     );
-    apply_generic_native_first_ai_tool_runtime_configuration(
+    apply_explicit_host_ai_tool_binding(
         &mut capabilities.ai_tools,
         configuration,
         AiToolKind::MusicCover,
-        MUSIC_COVER_PROVIDER_CHAIN_TOOL_ID,
+        MUSIC_COVER_HOST_BINDING_TOOL_ID,
         &["audio"],
     );
     capabilities.ai_tools.sort_by_key(|tool| tool.kind);
 }
 
-/// Applies web-search routing preferences without merging unrelated MCP or LuaSkills tools.
-/// 应用网页搜索路由偏好，同时不融合无关的 MCP 或 LuaSkills 工具。
+/// Applies one explicit host web-search binding without native or provider fallback.
+/// 应用一条显式宿主网页搜索绑定，不进行原生或供应商回退。
 fn apply_web_search_runtime_configuration(
     ai_tools: &mut Vec<ResolvedAiToolCapability>,
     root_configuration: &PersistedAiToolConfiguration,
 ) {
-    let provider_chain_available =
-        root_configuration.has_usable_targets_for_kind(AiToolKind::WebSearch);
+    let host_target_bound = root_configuration
+        .usable_targets_for_kind(AiToolKind::WebSearch)
+        .len()
+        == 1;
     let existing_index = ai_tools
         .iter()
         .position(|tool| tool.kind == AiToolKind::WebSearch);
-    let mut capability = existing_index
-        .and_then(|index| ai_tools.get(index).cloned())
-        .unwrap_or_else(default_configured_web_search_capability);
-
-    match root_configuration.web_search.mode {
-        WebSearchRoutingMode::Disabled => {
-            capability.policy = AiToolPolicy::Disabled;
-            capability.fallback_tool_id = None;
-        }
-        WebSearchRoutingMode::NativeOnly => {
-            if existing_index.is_none() {
-                return;
-            }
-            capability.policy = AiToolPolicy::ForceNative;
-            capability.fallback_tool_id = None;
-        }
-        WebSearchRoutingMode::NativeFirst => {
-            if existing_index.is_none() && !provider_chain_available {
-                return;
-            }
-            capability.policy = if capability.native_provider_tool {
-                AiToolPolicy::Auto
-            } else {
-                AiToolPolicy::ForceHost
-            };
-            capability.fallback_tool_id =
-                provider_chain_available.then(|| WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID.to_string());
-        }
-        WebSearchRoutingMode::ThirdPartyFirst => {
-            if provider_chain_available {
-                capability.policy = AiToolPolicy::ForceHost;
-                capability.fallback_tool_id = Some(WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID.to_string());
-            } else if existing_index.is_some() {
-                capability.policy = AiToolPolicy::ForceNative;
-                capability.fallback_tool_id = None;
-            } else {
-                return;
-            }
-        }
-        WebSearchRoutingMode::ThirdPartyOnly => {
-            if provider_chain_available {
-                capability.policy = AiToolPolicy::ForceHost;
-                capability.fallback_tool_id = Some(WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID.to_string());
-            } else if existing_index.is_some() {
-                capability.policy = AiToolPolicy::Disabled;
-                capability.fallback_tool_id = None;
-            } else {
-                return;
-            }
-        }
+    if !host_target_bound {
+        return;
     }
 
-    capability.source_label = format!("{} · 用户策略", capability.source_label);
+    let mut capability = default_configured_web_search_capability();
+    capability.policy = AiToolPolicy::ForceHost;
+    capability.native_provider_tool = false;
+    capability.native_tool_type = None;
+    capability.native_request_patch = None;
+    capability.host_tool_id = Some(WEB_SEARCH_HOST_BINDING_TOOL_ID.to_string());
+    capability.source_label = String::from("用户绑定");
     if let Some(index) = existing_index {
         ai_tools[index] = capability;
     } else {
@@ -361,17 +321,12 @@ fn apply_understand_image_runtime_configuration(
     let existing_index = ai_tools
         .iter()
         .position(|tool| tool.kind == AiToolKind::UnderstandImage);
-    let host_targets_available =
-        root_configuration.has_usable_targets_for_kind(AiToolKind::UnderstandImage);
+    let host_target_bound = root_configuration
+        .usable_targets_for_kind(AiToolKind::UnderstandImage)
+        .len()
+        == 1;
 
-    if !host_targets_available {
-        if let Some(index) = existing_index {
-            ai_tools.remove(index);
-        }
-        return;
-    }
-
-    if model_supports_native_image {
+    if !host_target_bound {
         if let Some(index) = existing_index {
             ai_tools.remove(index);
         }
@@ -385,8 +340,12 @@ fn apply_understand_image_runtime_configuration(
     capability.native_provider_tool = false;
     capability.native_tool_type = None;
     capability.native_request_patch = None;
-    capability.fallback_tool_id = Some(UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID.to_string());
-    capability.source_label = format!("{} · 用户策略", capability.source_label);
+    capability.host_tool_id = Some(UNDERSTAND_IMAGE_HOST_BINDING_TOOL_ID.to_string());
+    capability.source_label = if model_supports_native_image {
+        String::from("用户绑定 · 替代原生图片理解")
+    } else {
+        String::from("用户绑定")
+    };
 
     if let Some(index) = existing_index {
         ai_tools[index] = capability;
@@ -395,19 +354,19 @@ fn apply_understand_image_runtime_configuration(
     }
 }
 
-/// Applies one generic native-first capability with a host fallback whenever the user has enabled at least one target for that semantic tool.
-/// 当用户至少为某个语义工具启用了一条目标时，应用一条通用原生优先、宿主兜底的能力配置。
-fn apply_generic_native_first_ai_tool_runtime_configuration(
+/// Applies one exact host capability binding and removes any native fallback path.
+/// 应用一条精确宿主能力绑定，并移除所有原生回退路径。
+fn apply_explicit_host_ai_tool_binding(
     ai_tools: &mut Vec<ResolvedAiToolCapability>,
     configuration: &PersistedAiToolConfiguration,
     capability_kind: AiToolKind,
-    fallback_tool_id: &str,
+    host_tool_id: &str,
     result_modalities: &[&str],
 ) {
     let existing_index = ai_tools
         .iter()
         .position(|tool| tool.kind == capability_kind);
-    if !configuration.has_usable_targets_for_kind(capability_kind) {
+    if configuration.usable_targets_for_kind(capability_kind).len() != 1 {
         return;
     }
 
@@ -419,36 +378,24 @@ fn apply_generic_native_first_ai_tool_runtime_configuration(
             native_provider_tool: false,
             native_tool_type: None,
             native_request_patch: None,
-            fallback_tool_id: None,
+            host_tool_id: None,
             requires_approval: false,
             result_modalities: Vec::new(),
             citation_support: false,
             source_label: String::from("用户配置"),
         });
-    let native_available = capability.native_provider_tool
-        && (capability
-            .native_tool_type
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-            || capability.native_request_patch.is_some());
-    capability.policy = if native_available {
-        AiToolPolicy::Auto
-    } else {
-        AiToolPolicy::ForceHost
-    };
-    if !native_available {
-        capability.native_provider_tool = false;
-        capability.native_tool_type = None;
-        capability.native_request_patch = None;
-    }
-    capability.fallback_tool_id = Some(fallback_tool_id.to_string());
+    capability.policy = AiToolPolicy::ForceHost;
+    capability.native_provider_tool = false;
+    capability.native_tool_type = None;
+    capability.native_request_patch = None;
+    capability.host_tool_id = Some(host_tool_id.to_string());
     if capability.result_modalities.is_empty() {
         capability.result_modalities = result_modalities
             .iter()
             .map(|value| value.to_string())
             .collect();
     }
-    capability.source_label = format!("{} · 用户策略", capability.source_label);
+    capability.source_label = String::from("用户绑定");
 
     if let Some(index) = existing_index {
         ai_tools[index] = capability;
@@ -466,7 +413,7 @@ fn default_configured_web_search_capability() -> ResolvedAiToolCapability {
         native_provider_tool: false,
         native_tool_type: None,
         native_request_patch: None,
-        fallback_tool_id: Some(WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID.to_string()),
+        host_tool_id: Some(WEB_SEARCH_HOST_BINDING_TOOL_ID.to_string()),
         requires_approval: false,
         result_modalities: vec![String::from("text")],
         citation_support: true,
@@ -483,7 +430,7 @@ fn default_configured_understand_image_capability() -> ResolvedAiToolCapability 
         native_provider_tool: false,
         native_tool_type: None,
         native_request_patch: None,
-        fallback_tool_id: Some(UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID.to_string()),
+        host_tool_id: Some(UNDERSTAND_IMAGE_HOST_BINDING_TOOL_ID.to_string()),
         requires_approval: false,
         result_modalities: vec![String::from("text")],
         citation_support: false,
@@ -604,8 +551,8 @@ fn resolved_ai_tool_capability_from_declaration(
         native_provider_tool,
         native_tool_type,
         native_request_patch: declaration.native_request_patch,
-        fallback_tool_id: declaration
-            .fallback_tool_id
+        host_tool_id: declaration
+            .host_tool_id
             .filter(|value| !value.trim().is_empty()),
         requires_approval: declaration.requires_approval,
         result_modalities: normalize_modality_list(&declaration.result_modalities),

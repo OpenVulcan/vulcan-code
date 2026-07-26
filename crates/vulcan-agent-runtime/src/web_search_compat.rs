@@ -23,7 +23,6 @@ mod tests {
     //! 宿主侧网页搜索兼容测试。
 
     use super::{
-        dispatch::build_rotated_indices,
         endpoints::resolve_minimax_endpoint,
         invocation::parse_web_search_invocation,
         parsing::{decode_duckduckgo_url, parse_duckduckgo_html},
@@ -39,13 +38,11 @@ mod tests {
     #[test]
     fn parse_web_search_invocation_accepts_schema_argument_names() {
         let invocation = parse_web_search_invocation(json!({
-            "target": "minimax/minimax",
             "query": "vulcan code",
             "max_results": 8
         }))
         .expect("arguments should parse");
 
-        assert_eq!(invocation.target.as_deref(), Some("minimax/minimax"));
         assert_eq!(invocation.query, "vulcan code");
         assert_eq!(invocation.max_results, Some(8));
     }
@@ -85,7 +82,7 @@ mod tests {
                 ],
             }],
             web_search: crate::provider_config::PersistedWebSearchConfiguration {
-                target_order: vec![String::from("duckduckgo/duckduckgo")],
+                selected_target: Some(String::from("duckduckgo/duckduckgo")),
                 ..crate::provider_config::PersistedWebSearchConfiguration::default()
             },
             ..crate::provider_config::PersistedAiToolConfiguration::default()
@@ -94,19 +91,7 @@ mod tests {
 
         assert_eq!(schema["required"][0], "query");
         assert_eq!(schema["additionalProperties"], false);
-        assert_eq!(schema["properties"]["target"]["enum"][0], "auto");
-        assert_eq!(
-            schema["properties"]["target"]["enum"][1],
-            "duckduckgo/duckduckgo"
-        );
-    }
-
-    /// Rotates provider indices from the requested start position without losing any candidate.
-    /// 从指定起点轮转供应商索引，同时不会丢失任何候选条目。
-    #[test]
-    fn build_rotated_indices_rotates_without_duplicates() {
-        assert_eq!(build_rotated_indices(4, 0), vec![0, 1, 2, 3]);
-        assert_eq!(build_rotated_indices(4, 2), vec![2, 3, 0, 1]);
+        assert!(schema["properties"].get("target").is_none());
     }
 
     /// Decodes DuckDuckGo redirect links back to the original target URL.
@@ -149,7 +134,6 @@ mod tests {
         let markdown = render_web_search_results(
             &provider,
             &WebSearchInvocation {
-                target: None,
                 query: String::from("vulcan"),
                 max_results: Some(5),
             },

@@ -1,5 +1,5 @@
 //! Read-only project knowledge tools backed by isolated Jieba FTS libraries.
-//! 基于隔离 Jieba FTS 资料库的只读项目资料工具。
+//! 基于隔离 Jieba FTS 知识库的只读项目资料工具。
 
 use super::*;
 use std::collections::BTreeSet;
@@ -33,11 +33,11 @@ struct KnowledgeSearchToolArgs {
 }
 
 /// Typed arguments for browsing one logical library folder.
-/// 浏览单个资料库逻辑目录的强类型参数。
+/// 浏览单个知识库逻辑目录的强类型参数。
 #[derive(Debug, Clone, Deserialize)]
 struct KnowledgeBrowseToolArgs {
     /// Exact enabled library identifier.
-    /// 精确的已启用资料库标识符。
+    /// 精确的已启用知识库标识符。
     #[serde(rename = "libraryId")]
     library_id: String,
     /// Optional slash-normalized logical folder.
@@ -59,7 +59,7 @@ struct KnowledgeBrowseToolArgs {
 #[derive(Debug, Clone, Deserialize)]
 struct KnowledgeReadToolArgs {
     /// Exact enabled library identifier.
-    /// 精确的已启用资料库标识符。
+    /// 精确的已启用知识库标识符。
     #[serde(rename = "libraryId")]
     library_id: String,
     /// Explicit target kind: `document` or `chunk`.
@@ -109,7 +109,7 @@ pub(crate) fn build_knowledge_search_tool() -> Arc<NativeToolDefinition> {
 }
 
 /// Builds the read-only logical library browser.
-/// 构建只读资料库逻辑目录浏览工具。
+/// 构建只读知识库逻辑目录浏览工具。
 pub(crate) fn build_knowledge_browse_tool() -> Arc<NativeToolDefinition> {
     build_native_tool_definition(
         NativeToolDescriptor {
@@ -207,7 +207,7 @@ async fn authorized_runtime(
 }
 
 /// Executes bounded independent BM25 queries over a validated library subset.
-/// 在已校验的资料库子集上执行有界独立 BM25 查询。
+/// 在已校验的知识库子集上执行有界独立 BM25 查询。
 async fn execute_knowledge_search(
     request: NativeToolExecutionRequest,
 ) -> Result<VulcanToolInvocationResult, NativeToolError> {

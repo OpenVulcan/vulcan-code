@@ -180,7 +180,7 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         session_ai_tool_configuration,
         &start.disabled_ai_capability_kinds,
         &start.disabled_ai_capability_target_selectors,
-        &start.ai_capability_target_order_overrides,
+        &start.ai_capability_target_bindings,
     );
     webui_after_precheck_trace(
         "after_precheck_04_tool_config_ready",

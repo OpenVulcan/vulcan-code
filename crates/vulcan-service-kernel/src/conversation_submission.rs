@@ -112,8 +112,8 @@ fn existing_submission_requires_hydration(
 /// `disabled_ai_capability_kinds` 禁用本回合选定 AI 能力类型。
 /// `disabled_ai_capability_target_selectors` disables selected AI capability targets for this turn.
 /// `disabled_ai_capability_target_selectors` 禁用本回合选定 AI 能力目标。
-/// `ai_capability_target_order_overrides` overrides selected AI capability target ordering.
-/// `ai_capability_target_order_overrides` 覆盖选定 AI 能力目标排序。
+/// `ai_capability_target_bindings` overrides selected AI capability target ordering.
+/// `ai_capability_target_bindings` 覆盖选定 AI 能力目标排序。
 /// `existing_session_hydration_policy` controls whether an empty retained session is rehydrated.
 /// `existing_session_hydration_policy` 控制是否重新水合空的保留会话。
 ///
@@ -133,7 +133,7 @@ pub(super) async fn service_submit_conversation_prompt(
     attachments: Option<Vec<ComposerAttachmentSummary>>,
     disabled_ai_capability_kinds: Option<Vec<String>>,
     disabled_ai_capability_target_selectors: Option<Vec<String>>,
-    ai_capability_target_order_overrides: Option<BTreeMap<String, Vec<String>>>,
+    ai_capability_target_bindings: Option<BTreeMap<String, String>>,
     existing_session_hydration_policy: ExistingSessionHydrationPolicy,
 ) -> Result<SubmitConversationPromptAck, String> {
     // Measures the whole submit RPC body from service entry to final response.
@@ -334,7 +334,7 @@ pub(super) async fn service_submit_conversation_prompt(
             reasoning_effort,
             disabled_ai_capability_kinds,
             disabled_ai_capability_target_selectors,
-            ai_capability_target_order_overrides,
+            ai_capability_target_bindings,
         },
     )
     .await?;
@@ -407,8 +407,7 @@ pub(super) async fn service_submit_conversation_prompt(
                 disabled_ai_capability_kinds: runtime_options.disabled_ai_capability_kinds,
                 disabled_ai_capability_target_selectors: runtime_options
                     .disabled_ai_capability_target_selectors,
-                ai_capability_target_order_overrides: runtime_options
-                    .ai_capability_target_order_overrides,
+                ai_capability_target_bindings: runtime_options.ai_capability_target_bindings,
             },
         )
     }?;

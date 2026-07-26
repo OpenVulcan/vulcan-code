@@ -19,7 +19,7 @@ use super::{
         execute_music_generation_against_target, execute_speech_synthesis_against_target,
         execute_video_generation_against_target,
     },
-    targets::resolve_vendor_targets,
+    targets::resolve_vendor_target,
 };
 
 /// Executes one host-configured image-generation request and stages the generated images into the managed attachment store.
@@ -31,33 +31,22 @@ pub async fn execute_configured_image_generation(
     conversation_attachments: Vec<ConversationAttachment>,
 ) -> Result<VulcanToolInvocationResult, String> {
     let invocation = parse_image_generation_invocation(args)?;
-    let targets = resolve_vendor_targets(
-        &configuration,
-        AiToolKind::ImageGeneration,
-        invocation.target.as_deref(),
-    )?;
+    let target = resolve_vendor_target(&configuration, AiToolKind::ImageGeneration)?;
     let client = build_http_client()?;
-
-    let mut errors = Vec::new();
-    for target in targets {
-        match execute_image_generation_against_target(
-            &client,
-            &workspace_path,
-            &target,
-            &invocation,
-            &conversation_attachments,
+    execute_image_generation_against_target(
+        &client,
+        &workspace_path,
+        &target,
+        &invocation,
+        &conversation_attachments,
+    )
+    .await
+    .map_err(|error| {
+        format!(
+            "The bound `image_generation` target `{}` failed: {error}",
+            target.target_selector
         )
-        .await
-        {
-            Ok(result) => return Ok(result),
-            Err(error) => errors.push(format!("{}: {error}", target.target_selector)),
-        }
-    }
-
-    Err(format!(
-        "All configured `image_generation` targets failed: {}.",
-        errors.join("; ")
-    ))
+    })
 }
 
 /// Executes one host-configured video-generation request and stages the downloaded video into the managed attachment store.
@@ -69,33 +58,22 @@ pub async fn execute_configured_video_generation(
     conversation_attachments: Vec<ConversationAttachment>,
 ) -> Result<VulcanToolInvocationResult, String> {
     let invocation = parse_video_generation_invocation(args)?;
-    let targets = resolve_vendor_targets(
-        &configuration,
-        AiToolKind::VideoGeneration,
-        invocation.target.as_deref(),
-    )?;
+    let target = resolve_vendor_target(&configuration, AiToolKind::VideoGeneration)?;
     let client = build_http_client()?;
-
-    let mut errors = Vec::new();
-    for target in targets {
-        match execute_video_generation_against_target(
-            &client,
-            &workspace_path,
-            &target,
-            &invocation,
-            &conversation_attachments,
+    execute_video_generation_against_target(
+        &client,
+        &workspace_path,
+        &target,
+        &invocation,
+        &conversation_attachments,
+    )
+    .await
+    .map_err(|error| {
+        format!(
+            "The bound `video_generation` target `{}` failed: {error}",
+            target.target_selector
         )
-        .await
-        {
-            Ok(result) => return Ok(result),
-            Err(error) => errors.push(format!("{}: {error}", target.target_selector)),
-        }
-    }
-
-    Err(format!(
-        "All configured `video_generation` targets failed: {}.",
-        errors.join("; ")
-    ))
+    })
 }
 
 /// Executes one host-configured speech-synthesis request and stages the generated audio into the managed attachment store.
@@ -106,32 +84,16 @@ pub async fn execute_configured_speech_synthesis(
     workspace_path: String,
 ) -> Result<VulcanToolInvocationResult, String> {
     let invocation = parse_speech_synthesis_invocation(args)?;
-    let targets = resolve_vendor_targets(
-        &configuration,
-        AiToolKind::SpeechSynthesis,
-        invocation.target.as_deref(),
-    )?;
+    let target = resolve_vendor_target(&configuration, AiToolKind::SpeechSynthesis)?;
     let client = build_http_client()?;
-
-    let mut errors = Vec::new();
-    for target in targets {
-        match execute_speech_synthesis_against_target(
-            &client,
-            &workspace_path,
-            &target,
-            &invocation,
-        )
+    execute_speech_synthesis_against_target(&client, &workspace_path, &target, &invocation)
         .await
-        {
-            Ok(result) => return Ok(result),
-            Err(error) => errors.push(format!("{}: {error}", target.target_selector)),
-        }
-    }
-
-    Err(format!(
-        "All configured `speech_synthesis` targets failed: {}.",
-        errors.join("; ")
-    ))
+        .map_err(|error| {
+            format!(
+                "The bound `speech_synthesis` target `{}` failed: {error}",
+                target.target_selector
+            )
+        })
 }
 
 /// Executes one host-configured music-generation request and stages the generated audio into the managed attachment store.
@@ -142,32 +104,16 @@ pub async fn execute_configured_music_generation(
     workspace_path: String,
 ) -> Result<VulcanToolInvocationResult, String> {
     let invocation = parse_music_generation_invocation(args)?;
-    let targets = resolve_vendor_targets(
-        &configuration,
-        AiToolKind::MusicGeneration,
-        invocation.target.as_deref(),
-    )?;
+    let target = resolve_vendor_target(&configuration, AiToolKind::MusicGeneration)?;
     let client = build_http_client()?;
-
-    let mut errors = Vec::new();
-    for target in targets {
-        match execute_music_generation_against_target(
-            &client,
-            &workspace_path,
-            &target,
-            &invocation,
-        )
+    execute_music_generation_against_target(&client, &workspace_path, &target, &invocation)
         .await
-        {
-            Ok(result) => return Ok(result),
-            Err(error) => errors.push(format!("{}: {error}", target.target_selector)),
-        }
-    }
-
-    Err(format!(
-        "All configured `music_generation` targets failed: {}.",
-        errors.join("; ")
-    ))
+        .map_err(|error| {
+            format!(
+                "The bound `music_generation` target `{}` failed: {error}",
+                target.target_selector
+            )
+        })
 }
 
 /// Executes one host-configured music-cover request and stages the generated audio into the managed attachment store.
@@ -179,31 +125,20 @@ pub async fn execute_configured_music_cover(
     conversation_attachments: Vec<ConversationAttachment>,
 ) -> Result<VulcanToolInvocationResult, String> {
     let invocation = parse_music_cover_invocation(args)?;
-    let targets = resolve_vendor_targets(
-        &configuration,
-        AiToolKind::MusicCover,
-        invocation.target.as_deref(),
-    )?;
+    let target = resolve_vendor_target(&configuration, AiToolKind::MusicCover)?;
     let client = build_http_client()?;
-
-    let mut errors = Vec::new();
-    for target in targets {
-        match execute_music_cover_against_target(
-            &client,
-            &workspace_path,
-            &target,
-            &invocation,
-            &conversation_attachments,
+    execute_music_cover_against_target(
+        &client,
+        &workspace_path,
+        &target,
+        &invocation,
+        &conversation_attachments,
+    )
+    .await
+    .map_err(|error| {
+        format!(
+            "The bound `music_cover` target `{}` failed: {error}",
+            target.target_selector
         )
-        .await
-        {
-            Ok(result) => return Ok(result),
-            Err(error) => errors.push(format!("{}: {error}", target.target_selector)),
-        }
-    }
-
-    Err(format!(
-        "All configured `music_cover` targets failed: {}.",
-        errors.join("; ")
-    ))
+    })
 }

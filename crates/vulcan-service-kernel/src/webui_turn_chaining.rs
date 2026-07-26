@@ -301,7 +301,7 @@ pub(super) async fn maybe_start_session_goal_continuation_if_idle(
                 ),
                 disabled_ai_capability_kinds,
                 disabled_ai_capability_target_selectors: BTreeSet::new(),
-                ai_capability_target_order_overrides: BTreeMap::new(),
+                ai_capability_target_bindings: BTreeMap::new(),
             },
         )?;
         start_webui_goal_session_kernel_turn(

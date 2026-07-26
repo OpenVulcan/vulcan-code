@@ -24,24 +24,28 @@ pub(crate) fn ai_capabilities(
     WORKBENCH_QUICK_TOGGLE_AI_TOOL_KINDS
         .into_iter()
         .map(|kind| {
+            let selected_target = configuration.configured_selected_target_for_kind(kind);
             let targets = configuration
                 .resolved_configured_targets_for_kind(kind)
                 .into_iter()
-                .map(|target| AiCapabilityTargetSummary {
-                    target_selector: target.target_selector,
-                    vendor_id: target.vendor_id,
-                    vendor_name: target.vendor_name,
-                    target_alias: target.target_alias,
-                    target_name: target.target_name,
-                    model_id: target.model_id,
-                    enabled: target.enabled,
+                .map(|target| {
+                    let selected = selected_target == Some(target.target_selector.as_str());
+                    AiCapabilityTargetSummary {
+                        target_selector: target.target_selector,
+                        vendor_id: target.vendor_id,
+                        vendor_name: target.vendor_name,
+                        target_alias: target.target_alias,
+                        target_name: target.target_name,
+                        model_id: target.model_id,
+                        enabled: target.enabled,
+                        selected,
+                    }
                 })
                 .collect::<Vec<_>>();
             let native = ai_capability_has_native_path(kind, model_capabilities);
-            let bridged = ai_capability_has_active_bridge_path(kind, configuration, native);
+            let bridged = ai_capability_has_active_bridge_path(kind, configuration);
             let available = native || bridged;
-            let enabled =
-                native || (bridged && !configuration.disabled_capability_kinds.contains(&kind));
+            let enabled = available && !configuration.disabled_capability_kinds.contains(&kind);
             AiCapabilitySummary {
                 kind: kind.key().to_string(),
                 label: kind.label().to_string(),
@@ -64,9 +68,6 @@ pub(crate) fn ai_capabilities(
 /// `kind` 是正在评估的语义 AI 能力。
 /// `configuration` contains the persisted bridge targets.
 /// `configuration` 包含持久化的桥接目标。
-/// `native_available` indicates whether the active model already provides a native path.
-/// `native_available` 表示当前模型是否已经提供原生路径。
-///
 /// # Returns
 /// 返回值
 /// `true` when a configured host bridge should be exposed for the capability.
@@ -74,9 +75,8 @@ pub(crate) fn ai_capabilities(
 fn ai_capability_has_active_bridge_path(
     kind: AiToolKind,
     configuration: &PersistedAiToolConfiguration,
-    native_available: bool,
 ) -> bool {
-    configuration.has_usable_targets_for_kind(kind) && !native_available
+    configuration.usable_targets_for_kind(kind).len() == 1
 }
 
 /// Returns whether one semantic AI capability has a provider-native path for the active model snapshot.

@@ -125,9 +125,9 @@ pub struct SharedPromptTurnStart {
     /// AI capability target selectors disabled for this prompt turn.
     /// 本次提示词回合禁用的 AI 能力目标选择器。
     pub disabled_ai_capability_target_selectors: BTreeSet<String>,
-    /// AI capability target order overrides requested by this prompt turn.
-    /// 本次提示词回合请求的 AI 能力目标顺序覆盖。
-    pub ai_capability_target_order_overrides: BTreeMap<AiToolKind, Vec<String>>,
+    /// Exact AI capability target bindings requested by this prompt turn.
+    /// 本次提示词回合请求的 AI 能力精确目标绑定。
+    pub ai_capability_target_bindings: BTreeMap<AiToolKind, String>,
     /// session-boundary boundary events produced when this prompt turn is accepted.
     /// 当前提示词回合被接受时生成的 会话边界边界事件。
     pub boundary_events: Vec<SessionBoundaryEvent>,
@@ -165,8 +165,8 @@ impl fmt::Debug for SharedPromptTurnStart {
                 &self.disabled_ai_capability_target_selectors,
             )
             .field(
-                "ai_capability_target_order_overrides",
-                &self.ai_capability_target_order_overrides,
+                "ai_capability_target_bindings",
+                &self.ai_capability_target_bindings,
             )
             .field("boundary_events", &self.boundary_events.len())
             .field(
@@ -240,9 +240,9 @@ pub struct SharedPromptTurnBeginInput<'a> {
     /// AI capability target selectors disabled for this prompt turn.
     /// 本次提示词回合禁用的 AI 能力目标选择器。
     pub disabled_ai_capability_target_selectors: BTreeSet<String>,
-    /// AI capability target order overrides requested by this prompt turn.
-    /// 本次提示词回合请求的 AI 能力目标顺序覆盖。
-    pub ai_capability_target_order_overrides: BTreeMap<AiToolKind, Vec<String>>,
+    /// Exact AI capability target bindings requested by this prompt turn.
+    /// 本次提示词回合请求的 AI 能力精确目标绑定。
+    pub ai_capability_target_bindings: BTreeMap<AiToolKind, String>,
 }
 
 /// Runtime-state scoped input required to begin one shared prompt turn.
@@ -293,9 +293,9 @@ pub struct SharedPromptTurnRuntimeBeginInput<'a> {
     /// AI capability target selectors disabled for this prompt turn.
     /// 本次提示词回合禁用的 AI 能力目标选择器。
     pub disabled_ai_capability_target_selectors: BTreeSet<String>,
-    /// AI capability target order overrides requested by this prompt turn.
-    /// 本次提示词回合请求的 AI 能力目标顺序覆盖。
-    pub ai_capability_target_order_overrides: BTreeMap<AiToolKind, Vec<String>>,
+    /// Exact AI capability target bindings requested by this prompt turn.
+    /// 本次提示词回合请求的 AI 能力精确目标绑定。
+    pub ai_capability_target_bindings: BTreeMap<AiToolKind, String>,
     /// Owning project id used by hook routing.
     /// hook 路由使用的所属项目标识。
     pub owning_project_id: Option<String>,
@@ -399,7 +399,7 @@ pub fn begin_shared_prompt_turn(
                 disabled_ai_capability_kinds: input.disabled_ai_capability_kinds,
                 disabled_ai_capability_target_selectors: input
                     .disabled_ai_capability_target_selectors,
-                ai_capability_target_order_overrides: input.ai_capability_target_order_overrides,
+                ai_capability_target_bindings: input.ai_capability_target_bindings,
                 owning_project_id,
                 prior_session_messages: prior_dialogue_messages.as_deref(),
             },
@@ -605,7 +605,7 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
         reasoning_effort: input.reasoning_effort,
         disabled_ai_capability_kinds: input.disabled_ai_capability_kinds,
         disabled_ai_capability_target_selectors: input.disabled_ai_capability_target_selectors,
-        ai_capability_target_order_overrides: input.ai_capability_target_order_overrides,
+        ai_capability_target_bindings: input.ai_capability_target_bindings,
         boundary_events,
         visible_user_prompt_record_id,
         canonical_user_message_id,

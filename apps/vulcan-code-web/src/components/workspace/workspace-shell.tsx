@@ -952,6 +952,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
         onSelectWorkbenchThinkingDisplayMode={props.onSelectWorkbenchThinkingDisplayMode}
         onSlashCommand={props.onSlashCommand}
+        onOpenKnowledge={props.onOpenKnowledge}
         onSubmitPrompt={props.onSubmitPrompt}
         onSaveAiCapabilityConfiguration={props.onSaveAiCapabilityConfiguration}
         onSaveSessionGoal={props.onSaveSessionGoal}

@@ -106,6 +106,7 @@ show_usage() {
     echo "  ./make.sh deps        # install host + official LuaSkills runtime dependencies"
     echo "  ./make.sh deps host   # install host native dependencies only"
     echo "  ./make.sh deps lua    # install official LuaSkills runtime dependencies only"
+    echo "  ./make.sh deps cbm    # install the pinned native Codebase Memory runtime only"
 }
 
 # NormalizedMode stores the canonical top-level command token used by the dispatcher below.
@@ -166,7 +167,7 @@ case "$NormalizedMode" in
         ;;
     deps)
         case "$NormalizedVariant" in
-            ""|all|host|lua)
+            ""|all|host|lua|cbm)
                 invoke_powershell_route deps "$NormalizedVariant"
                 ;;
             *)

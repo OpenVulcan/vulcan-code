@@ -1,10 +1,10 @@
 import React from "react";
 import {
   COMPOSER_AI_CAPABILITY_OPTIONS,
-  defaultAiCapabilityTargetOrder,
+  defaultAiCapabilityTargetBindings,
   defaultDisabledAiCapabilityKinds,
   defaultDisabledAiCapabilityTargetSelectors,
-  serializeAiCapabilityTargetOrder,
+  serializeAiCapabilityTargetBindings,
   type AiCapabilityKind,
   type ComposerAiCapabilityConfigurationSave,
 } from "@/components/composer/composer-model";
@@ -34,9 +34,9 @@ export interface UseComposerCapabilityDraftOptions {
   // Session-synchronized disabled target selectors.
   // 与会话同步的禁用目标选择器。
   disabledTargetSelectors: Set<string>;
-  // Session-synchronized target order grouped by capability kind.
-  // 按能力类型分组、与会话同步的目标顺序。
-  targetOrder: Map<AiCapabilityKind, string[]>;
+  // Session-synchronized exact target bindings grouped by capability kind.
+  // 按能力类型分组、与会话同步的精确目标绑定。
+  targetBindings: Map<AiCapabilityKind, string>;
   // Service-projected default capability tree used to stage reset values.
   // 用于暂存重置值的服务端默认能力树。
   defaultCapabilities: AiCapabilitySummary[];
@@ -60,9 +60,9 @@ export interface ComposerCapabilityDraftController {
   // Dialog-local disabled target selectors.
   // 弹窗本地禁用目标选择器。
   draftDisabledTargetSelectors: Set<string>;
-  // Dialog-local target order grouped by capability kind.
-  // 按能力类型分组的弹窗本地目标顺序。
-  draftTargetOrder: Map<AiCapabilityKind, string[]>;
+  // Dialog-local exact target bindings grouped by capability kind.
+  // 按能力类型分组的弹窗本地精确目标绑定。
+  draftTargetBindings: Map<AiCapabilityKind, string>;
   // Trigger-state disabled kinds selected from draft or persisted state as appropriate.
   // 根据弹窗状态从草稿或持久化状态选择的触发器禁用类型。
   activeDisabledKinds: Set<AiCapabilityKind>;
@@ -99,12 +99,9 @@ export interface ComposerCapabilityDraftController {
   // Updates one dialog-local capability enabled value.
   // 更新一个弹窗本地能力启用值。
   setCapabilityEnabled: (kind: AiCapabilityKind, enabled: boolean) => void;
-  // Updates one dialog-local target enabled value.
-  // 更新一个弹窗本地目标启用值。
-  setTargetEnabled: (targetSelector: string, enabled: boolean) => void;
-  // Replaces one dialog-local capability target order.
-  // 替换一个弹窗本地能力目标顺序。
-  reorderTargets: (kind: AiCapabilityKind, targetSelectors: string[]) => void;
+  // Selects or clears the single dialog-local target binding for one capability.
+  // 选择或清除某项能力在弹窗本地的唯一目标绑定。
+  setTargetEnabled: (kind: AiCapabilityKind, targetSelector: string, enabled: boolean) => void;
 }
 
 // useComposerCapabilityDraft owns scoped dialog state, save concurrency, external updates, and delayed close cleanup.
@@ -128,13 +125,13 @@ export function useComposerCapabilityDraft(
   // draftDisabledTargetSelectors stores dialog-local target choices.
   // draftDisabledTargetSelectors 保存弹窗本地目标选择。
   const [draftDisabledTargetSelectors, setDraftDisabledTargetSelectors] = React.useState(() => new Set(options.disabledTargetSelectors));
-  // draftTargetOrder stores dialog-local route order choices.
-  // draftTargetOrder 保存弹窗本地路由顺序选择。
-  const [draftTargetOrder, setDraftTargetOrder] = React.useState(() => cloneAiCapabilityTargetOrder(options.targetOrder));
+  // draftTargetBindings stores dialog-local exact target choices.
+  // draftTargetBindings 保存弹窗本地精确目标选择。
+  const [draftTargetBindings, setDraftTargetBindings] = React.useState(() => cloneAiCapabilityTargetBindings(options.targetBindings));
   // baselineSignature stores the persisted snapshot captured when editing starts.
   // baselineSignature 保存开始编辑时捕获的持久化快照签名。
   const [baselineSignature, setBaselineSignature] = React.useState(() => (
-    composerCapabilityDraftSignature(options.disabledKinds, options.disabledTargetSelectors, options.targetOrder)
+    composerCapabilityDraftSignature(options.disabledKinds, options.disabledTargetSelectors, options.targetBindings)
   ));
   // saveState drives visible save feedback.
   // saveState 驱动可见保存反馈。
@@ -161,14 +158,14 @@ export function useComposerCapabilityDraft(
   // draftSignature identifies the complete local configuration.
   // draftSignature 标识完整本地配置。
   const draftSignature = React.useMemo(
-    () => composerCapabilityDraftSignature(draftDisabledKinds, draftDisabledTargetSelectors, draftTargetOrder),
-    [draftDisabledKinds, draftDisabledTargetSelectors, draftTargetOrder],
+    () => composerCapabilityDraftSignature(draftDisabledKinds, draftDisabledTargetSelectors, draftTargetBindings),
+    [draftDisabledKinds, draftDisabledTargetSelectors, draftTargetBindings],
   );
   // sessionSignature identifies the complete persisted configuration.
   // sessionSignature 标识完整持久化配置。
   const sessionSignature = React.useMemo(
-    () => composerCapabilityDraftSignature(options.disabledKinds, options.disabledTargetSelectors, options.targetOrder),
-    [options.disabledKinds, options.disabledTargetSelectors, options.targetOrder],
+    () => composerCapabilityDraftSignature(options.disabledKinds, options.disabledTargetSelectors, options.targetBindings),
+    [options.disabledKinds, options.disabledTargetSelectors, options.targetBindings],
   );
   // hasUnsavedChanges compares the open draft with its captured baseline.
   // hasUnsavedChanges 比较打开的草稿与其捕获基线。
@@ -197,16 +194,16 @@ export function useComposerCapabilityDraft(
     // nextDisabledTargetSelectors isolates the mutable selector Set from persisted props.
     // nextDisabledTargetSelectors 将可变选择器 Set 与持久化 props 隔离。
     const nextDisabledTargetSelectors = new Set(options.disabledTargetSelectors);
-    // nextTargetOrder deep-clones selector arrays in the mutable order Map.
-    // nextTargetOrder 深拷贝可变顺序 Map 中的选择器数组。
-    const nextTargetOrder = cloneAiCapabilityTargetOrder(options.targetOrder);
+    // nextTargetBindings isolates the mutable exact-binding Map.
+    // nextTargetBindings 隔离可变的精确绑定 Map。
+    const nextTargetBindings = cloneAiCapabilityTargetBindings(options.targetBindings);
     setDraftDisabledKinds(nextDisabledKinds);
     setDraftDisabledTargetSelectors(nextDisabledTargetSelectors);
-    setDraftTargetOrder(nextTargetOrder);
-    setBaselineSignature(composerCapabilityDraftSignature(nextDisabledKinds, nextDisabledTargetSelectors, nextTargetOrder));
+    setDraftTargetBindings(nextTargetBindings);
+    setBaselineSignature(composerCapabilityDraftSignature(nextDisabledKinds, nextDisabledTargetSelectors, nextTargetBindings));
     setSaveState("idle");
     setExternalUpdateNotice(false);
-  }, [options.disabledKinds, options.disabledTargetSelectors, options.targetOrder]);
+  }, [options.disabledKinds, options.disabledTargetSelectors, options.targetBindings]);
 
   React.useLayoutEffect(() => {
     if (previousScopeKeyRef.current === options.scopeKey) {
@@ -269,7 +266,7 @@ export function useComposerCapabilityDraft(
     const request: ComposerAiCapabilityConfigurationSave = {
       disabledAiCapabilityKinds: Array.from(draftDisabledKinds),
       disabledAiCapabilityTargetSelectors: Array.from(draftDisabledTargetSelectors),
-      aiCapabilityTargetOrderOverrides: serializeAiCapabilityTargetOrder(draftTargetOrder),
+      aiCapabilityTargetBindings: serializeAiCapabilityTargetBindings(draftTargetBindings),
     };
     try {
       // saved records whether the owning session accepted the complete draft.
@@ -317,7 +314,7 @@ export function useComposerCapabilityDraft(
     draftDisabledKinds,
     draftDisabledTargetSelectors,
     draftSignature,
-    draftTargetOrder,
+    draftTargetBindings,
     options.onSaveConfiguration,
     options.scopeKey,
   ]);
@@ -347,7 +344,7 @@ export function useComposerCapabilityDraft(
     clearCloseTimer();
     setDraftDisabledKinds(defaultDisabledAiCapabilityKinds(options.defaultCapabilities));
     setDraftDisabledTargetSelectors(defaultDisabledAiCapabilityTargetSelectors(options.defaultCapabilities));
-    setDraftTargetOrder(defaultAiCapabilityTargetOrder(options.defaultCapabilities));
+    setDraftTargetBindings(defaultAiCapabilityTargetBindings(options.defaultCapabilities));
     setExternalUpdateNotice(false);
     setSaveState("idle");
   }, [clearCloseTimer, options.defaultCapabilities]);
@@ -371,9 +368,9 @@ export function useComposerCapabilityDraft(
     });
     setSaveState("idle");
   }, [clearCloseTimer]);
-  // setTargetEnabled updates one disabled-target membership without mutating prior state.
-  // setTargetEnabled 在不修改旧状态的情况下更新一个禁用目标成员关系。
-  const setTargetEnabled = React.useCallback((targetSelector: string, enabled: boolean) => {
+  // setTargetEnabled replaces one capability binding with exactly one selected target.
+  // setTargetEnabled 使用恰好一个已选目标替换单项能力绑定。
+  const setTargetEnabled = React.useCallback((kind: AiCapabilityKind, targetSelector: string, enabled: boolean) => {
     if (savingRef.current) {
       return;
     }
@@ -389,29 +386,19 @@ export function useComposerCapabilityDraft(
       }
       return next;
     });
-    setSaveState("idle");
-  }, [clearCloseTimer]);
-  // reorderTargets replaces one capability order only when the requested sequence changed.
-  // reorderTargets 仅在请求顺序变化时替换一个能力顺序。
-  const reorderTargets = React.useCallback((kind: AiCapabilityKind, targetSelectors: string[]) => {
-    if (savingRef.current) {
-      return;
-    }
-    clearCloseTimer();
-    setDraftTargetOrder((current) => {
-      // next isolates the mutable Map before comparing and replacing one order.
-      // next 在比较并替换一个顺序前隔离可变 Map。
+    setDraftTargetBindings((current) => {
+      // next isolates the mutable Map before replacing one exact binding.
+      // next 在替换一个精确绑定前隔离可变 Map。
       const next = new Map(current);
-      // currentOrder is the exact prior selector sequence for this capability.
-      // currentOrder 是该能力的精确旧选择器序列。
-      const currentOrder = next.get(kind) ?? [];
-      if (
-        currentOrder.length === targetSelectors.length
-        && currentOrder.every((selector, index) => selector === targetSelectors[index])
-      ) {
+      const currentBinding = next.get(kind);
+      if (enabled && currentBinding === targetSelector) {
         return current;
       }
-      next.set(kind, targetSelectors);
+      if (enabled) {
+        next.set(kind, targetSelector);
+      } else {
+        next.delete(kind);
+      }
       return next;
     });
     setSaveState("idle");
@@ -433,7 +420,7 @@ export function useComposerCapabilityDraft(
     confirmCloseOpen,
     draftDisabledKinds,
     draftDisabledTargetSelectors,
-    draftTargetOrder,
+    draftTargetBindings,
     activeDisabledKinds,
     hasUnsavedChanges,
     isSaving,
@@ -447,7 +434,6 @@ export function useComposerCapabilityDraft(
     useDefaultConfiguration,
     setCapabilityEnabled,
     setTargetEnabled,
-    reorderTargets,
   };
 }
 
@@ -461,33 +447,33 @@ function cloneAiCapabilityKindSet(value: Set<AiCapabilityKind>): Set<AiCapabilit
   return new Set(value);
 }
 
-// cloneAiCapabilityTargetOrder deep-clones one mutable target-order Map.
-// cloneAiCapabilityTargetOrder 深拷贝一个可变目标顺序 Map。
-// Parameters: value is the source order Map with selector arrays.
-// 参数：value 是包含选择器数组的源顺序 Map。
-// Returns: a new Map containing cloned selector arrays.
-// 返回值：包含克隆选择器数组的新 Map。
-function cloneAiCapabilityTargetOrder(value: Map<AiCapabilityKind, string[]>): Map<AiCapabilityKind, string[]> {
-  return new Map(Array.from(value.entries()).map(([kind, selectors]) => [kind, [...selectors]]));
+// cloneAiCapabilityTargetBindings isolates one mutable exact-binding Map.
+// cloneAiCapabilityTargetBindings 隔离一个可变的精确绑定 Map。
+// Parameters: value is the source exact-binding Map.
+// 参数：value 是源精确绑定 Map。
+// Returns: a new Map containing the same immutable selector strings.
+// 返回值：包含相同不可变选择器字符串的新 Map。
+function cloneAiCapabilityTargetBindings(value: Map<AiCapabilityKind, string>): Map<AiCapabilityKind, string> {
+  return new Map(value);
 }
 
 // composerCapabilityDraftSignature serializes all submission-relevant draft dimensions deterministically.
 // composerCapabilityDraftSignature 以确定性方式序列化全部与提交相关的草稿维度。
-// Parameters: disabledKinds, disabledTargetSelectors, and targetOrder form the complete capability draft.
-// 参数：disabledKinds、disabledTargetSelectors 与 targetOrder 组成完整能力草稿。
+// Parameters: disabledKinds, disabledTargetSelectors, and targetBindings form the complete capability draft.
+// 参数：disabledKinds、disabledTargetSelectors 与 targetBindings 组成完整能力草稿。
 // Returns: a stable JSON signature used for dirty and external-update detection.
 // 返回值：用于脏检查与外部更新检测的稳定 JSON 签名。
 function composerCapabilityDraftSignature(
   disabledKinds: Set<AiCapabilityKind>,
   disabledTargetSelectors: Set<string>,
-  targetOrder: Map<AiCapabilityKind, string[]>,
+  targetBindings: Map<AiCapabilityKind, string>,
 ): string {
   return JSON.stringify({
     disabledKinds: Array.from(disabledKinds).sort(),
     disabledTargetSelectors: Array.from(disabledTargetSelectors).sort(),
-    targetOrder: COMPOSER_AI_CAPABILITY_OPTIONS.map((option) => [
+    targetBindings: COMPOSER_AI_CAPABILITY_OPTIONS.map((option) => [
       option.value,
-      targetOrder.get(option.value) ?? [],
+      targetBindings.get(option.value) ?? "",
     ]),
   });
 }

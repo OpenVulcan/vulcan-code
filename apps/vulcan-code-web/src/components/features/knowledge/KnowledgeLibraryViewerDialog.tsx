@@ -46,10 +46,10 @@ export interface KnowledgeDocumentTreeNode {
 }
 
 // KnowledgeLibraryViewerDialog renders complete library navigation and Markdown reading in one modal.
-// KnowledgeLibraryViewerDialog 在一个弹窗内渲染完整资料库导航与 Markdown 阅读。
+// KnowledgeLibraryViewerDialog 在一个弹窗内渲染完整知识库导航与 Markdown 阅读。
 export function KnowledgeLibraryViewerDialog(props: {
   // Selected library whose documents are available to the trusted management surface.
-  // 受信任管理界面可浏览其文档的选中资料库。
+  // 受信任管理界面可浏览其文档的选中知识库。
   library: KnowledgeLibrarySummary | null;
   // Whether the centered viewer dialog is open.
   // 居中阅读弹窗是否打开。
@@ -80,7 +80,7 @@ export function KnowledgeLibraryViewerDialog(props: {
   // searchText 保存显式的 Jieba BM25 查询。
   const [searchText, setSearchText] = React.useState("");
   // searchResult stores the latest library-scoped search response.
-  // searchResult 保存最近一次资料库范围搜索响应。
+  // searchResult 保存最近一次知识库范围搜索响应。
   const [searchResult, setSearchResult] = React.useState<KnowledgeSearchResult | null>(null);
   // searching owns the independent content-search request state.
   // searching 持有独立内容搜索请求状态。
@@ -95,7 +95,7 @@ export function KnowledgeLibraryViewerDialog(props: {
   // openDirectoryPaths 保存文档目录树中已展开的文件夹。
   const [openDirectoryPaths, setOpenDirectoryPaths] = React.useState<ReadonlySet<string>>(new Set());
   // catalogRequestSequence discards stale lazy-directory responses after close or library switch.
-  // catalogRequestSequence 在关闭或切换资料库后丢弃过期的延迟目录响应。
+  // catalogRequestSequence 在关闭或切换知识库后丢弃过期的延迟目录响应。
   const catalogRequestSequence = React.useRef(0);
   // directoryRequestsInFlight prevents duplicate page reads from rapid repeated clicks.
   // directoryRequestsInFlight 防止快速重复点击产生重复分页读取。
@@ -138,7 +138,7 @@ export function KnowledgeLibraryViewerDialog(props: {
     // sequence 标识当前活动弹窗的目录代次。
     const sequence = catalogRequestSequence.current;
     // requestKey isolates one exact library generation and folder page so stale requests cannot clear current work.
-    // requestKey 隔离一个精确资料库代次与目录分页，避免过期请求清除当前任务。
+    // requestKey 隔离一个精确知识库代次与目录分页，避免过期请求清除当前任务。
     const requestKey = `${props.library.id}\u0000${sequence}\u0000${folderPath}\u0000${offset}`;
     if (directoryRequestsInFlight.current.has(requestKey)) return;
     directoryRequestsInFlight.current.add(requestKey);
@@ -264,7 +264,7 @@ export function KnowledgeLibraryViewerDialog(props: {
     setSearching(true);
     try {
       // result is the authoritative library-scoped Jieba BM25 response.
-      // result 是权威的资料库范围 Jieba BM25 响应。
+      // result 是权威的知识库范围 Jieba BM25 响应。
       const result = await searchManagedKnowledgeLibrary(props.library.id, query);
       if (searchRequestSequence.current !== sequence) return;
       setSearchResult(result);

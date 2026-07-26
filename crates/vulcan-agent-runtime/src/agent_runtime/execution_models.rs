@@ -164,14 +164,14 @@ pub struct ExecutionSessionGoalContext {
 }
 
 /// Immutable knowledge-library authorization captured for one provider execution.
-/// 为一次 Provider 执行捕获的不可变资料库授权快照。
+/// 为一次 Provider 执行捕获的不可变知识库授权快照。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionKnowledgeAccessContext {
     /// Project that owns the current conversation.
     /// 拥有当前会话的项目。
     pub project_id: String,
     /// Exact authorized and session-enabled library identifiers.
-    /// 精确的已授权且已在会话启用的资料库标识符。
+    /// 精确的已授权且已在会话启用的知识库标识符。
     pub library_ids: Vec<String>,
 }
 
@@ -289,7 +289,7 @@ pub struct ExecutionPreparationRequest {
     /// 需要持久工作区状态的宿主工具使用的可选控制器运行时。
     pub controller_runtime: Option<ControllerRuntimeHandle>,
     /// Optional project-authorized knowledge-library access snapshot for native tools.
-    /// 原生工具使用的可选项目授权资料库访问快照。
+    /// 原生工具使用的可选项目授权知识库访问快照。
     pub knowledge_access: Option<ExecutionKnowledgeAccessContext>,
     /// Optional session-goal binding captured atomically for this request.
     /// 为本次请求原子捕获的可选会话目标绑定。
@@ -670,7 +670,7 @@ impl ExecutionPreparation {
                     } else if tool.native_provider_tool {
                         "模型原生"
                     } else if tool
-                        .fallback_tool_id
+                        .host_tool_id
                         .as_deref()
                         .is_some_and(|value| !value.trim().is_empty())
                     {
@@ -765,13 +765,16 @@ impl ExecutionPreparation {
             rows.push(format!("MCP 工具：{} 个", mcp_tool_count));
         }
 
-        let ai_fallback_tool_count = self
+        let ai_host_binding_tool_count = self
             .tool_descriptors
             .iter()
-            .filter(|descriptor| descriptor.source == VulcanToolSourceKind::AiFallback)
+            .filter(|descriptor| descriptor.source == VulcanToolSourceKind::AiHostBinding)
             .count();
-        if ai_fallback_tool_count > 0 {
-            rows.push(format!("AI 专用回退工具：{} 个", ai_fallback_tool_count));
+        if ai_host_binding_tool_count > 0 {
+            rows.push(format!(
+                "AI 专用回退工具：{} 个",
+                ai_host_binding_tool_count
+            ));
         }
 
         if !self.delegate_agents.is_empty() {

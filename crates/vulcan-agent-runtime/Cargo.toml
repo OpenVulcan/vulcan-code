@@ -25,9 +25,10 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml = "0.9"
+sha2.workspace = true
 tempfile = "3.23.0"
 time = { version = "0.3.44", features = ["formatting", "local-offset", "macros", "parsing"] }
-tokio = { version = "1.52.2", features = ["rt", "sync", "time", "net", "io-util"] }
+tokio = { version = "1.52.2", features = ["rt", "sync", "time", "net", "io-util", "fs"] }
 uuid.workspace = true
 vldb-controller-client.workspace = true
 vulcan-context.workspace = true

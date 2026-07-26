@@ -337,7 +337,7 @@ mod tests {
                 native_provider_tool: false,
                 native_tool_type: None,
                 native_request_patch: None,
-                fallback_tool_id: Some(String::from("vulcan_understand_image_chain")),
+                host_tool_id: Some(String::from("vulcan_understand_image_binding")),
                 requires_approval: false,
                 result_modalities: vec![String::from("text")],
                 citation_support: false,

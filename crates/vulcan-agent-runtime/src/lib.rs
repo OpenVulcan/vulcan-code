@@ -35,6 +35,7 @@ pub mod luaskills_runtime;
 pub mod mcp;
 pub mod media_generation_compat;
 pub mod provider_input_normalizer;
+pub mod router_tool_bridge;
 pub mod session_event_runtime;
 pub mod skills;
 pub mod tooling;

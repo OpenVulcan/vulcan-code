@@ -1,14 +1,14 @@
 import React from "react";
 import {
   aiCapabilitySignature,
-  defaultAiCapabilityTargetOrder,
+  defaultAiCapabilityTargetBindings,
   defaultDisabledAiCapabilityKinds,
   defaultDisabledAiCapabilityTargetSelectors,
-  serializeAiCapabilityTargetOrder,
+  serializeAiCapabilityTargetBindings,
   type AiCapabilityKind,
   type ComposerAiCapabilityConfigurationSave,
 } from "@/components/composer/composer-model";
-import { defaultAiCapabilityTargetOrderFromRecord } from "@/components/composer/composer-panel/helpers";
+import { defaultAiCapabilityTargetBindingsFromRecord } from "@/components/composer/composer-panel/helpers";
 import type { AiCapabilitySummary } from "@/types";
 
 // UseComposerAiCapabilitiesOptions defines the authoritative snapshot and persistence boundary for quick controls.
@@ -34,9 +34,9 @@ export interface ComposerAiCapabilitiesController {
   // Capability target selectors disabled for the next prompt.
   // 下一条提示词禁用的能力目标选择器。
   disabledTargetSelectors: Set<string>;
-  // Ordered target selectors grouped by capability kind.
-  // 按能力类型分组的有序目标选择器。
-  targetOrder: Map<AiCapabilityKind, string[]>;
+  // Exact target selectors grouped by capability kind.
+  // 按能力类型分组的精确目标选择器。
+  targetBindings: Map<AiCapabilityKind, string>;
   // Complete serialized configuration included in every prompt submission.
   // 每次提示词提交包含的完整序列化配置。
   submissionConfiguration: ComposerAiCapabilityConfigurationSave;
@@ -66,10 +66,10 @@ export function useComposerAiCapabilities(options: UseComposerAiCapabilitiesOpti
   const [disabledTargetSelectors, setDisabledTargetSelectors] = React.useState<Set<string>>(() => (
     defaultDisabledAiCapabilityTargetSelectors(options.capabilities)
   ));
-  // targetOrder stores capability target ordering from the current session snapshot or latest save.
-  // targetOrder 保存当前会话快照或最近保存中的能力目标顺序。
-  const [targetOrder, setTargetOrder] = React.useState<Map<AiCapabilityKind, string[]>>(() => (
-    defaultAiCapabilityTargetOrder(options.capabilities)
+  // targetBindings stores exact capability targets from the current session snapshot or latest save.
+  // targetBindings 保存当前会话快照或最近保存中的能力精确目标。
+  const [targetBindings, setTargetBindings] = React.useState<Map<AiCapabilityKind, string>>(() => (
+    defaultAiCapabilityTargetBindings(options.capabilities)
   ));
   // capabilitySignature changes only when submission-relevant capability routing data changes.
   // capabilitySignature 仅在与提交相关的能力路由数据变化时改变。
@@ -82,13 +82,13 @@ export function useComposerAiCapabilities(options: UseComposerAiCapabilitiesOpti
   const submissionConfiguration = React.useMemo<ComposerAiCapabilityConfigurationSave>(() => ({
     disabledAiCapabilityKinds: Array.from(disabledKinds),
     disabledAiCapabilityTargetSelectors: Array.from(disabledTargetSelectors),
-    aiCapabilityTargetOrderOverrides: serializeAiCapabilityTargetOrder(targetOrder),
-  }), [disabledKinds, disabledTargetSelectors, targetOrder]);
+    aiCapabilityTargetBindings: serializeAiCapabilityTargetBindings(targetBindings),
+  }), [disabledKinds, disabledTargetSelectors, targetBindings]);
 
   React.useEffect(() => {
     setDisabledKinds(defaultDisabledAiCapabilityKinds(options.capabilities));
     setDisabledTargetSelectors(defaultDisabledAiCapabilityTargetSelectors(options.capabilities));
-    setTargetOrder(defaultAiCapabilityTargetOrder(options.capabilities));
+    setTargetBindings(defaultAiCapabilityTargetBindings(options.capabilities));
   }, [capabilitySignature, options.scopeKey]);
 
   // saveConfiguration persists a complete dialog draft before making it the local submission source.
@@ -105,14 +105,14 @@ export function useComposerAiCapabilities(options: UseComposerAiCapabilitiesOpti
     }
     setDisabledKinds(new Set(request.disabledAiCapabilityKinds));
     setDisabledTargetSelectors(new Set(request.disabledAiCapabilityTargetSelectors));
-    setTargetOrder(defaultAiCapabilityTargetOrderFromRecord(request.aiCapabilityTargetOrderOverrides));
+    setTargetBindings(defaultAiCapabilityTargetBindingsFromRecord(request.aiCapabilityTargetBindings));
     return true;
   }, [options.onSaveConfiguration, options.scopeKey]);
 
   return {
     disabledKinds,
     disabledTargetSelectors,
-    targetOrder,
+    targetBindings,
     submissionConfiguration,
     saveConfiguration,
   };

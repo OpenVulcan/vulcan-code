@@ -1,18 +1,15 @@
 use super::*;
 
-/// Routing policy used when one AI-specialized tool has both provider-native and host fallback options.
-/// 当单个 AI 专用工具同时存在 Provider 原生与宿主回退选项时使用的路由策略。
+/// Deterministic execution policy for one AI-specialized tool.
+/// 单个 AI 专用工具使用的确定性执行策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AiToolPolicy {
-    /// Prefer provider-native tools and fall back to host tools when configured.
-    /// 优先使用 Provider 原生工具，并在已配置时回退到宿主工具。
-    Auto,
     /// Require provider-native support.
     /// 强制要求 Provider 原生支持。
     ForceNative,
-    /// Require a host fallback tool.
-    /// 强制使用宿主回退工具。
+    /// Require one explicitly bound host tool.
+    /// 强制使用一个显式绑定的宿主工具。
     ForceHost,
     /// Do not expose the tool.
     /// 不暴露该工具。
@@ -20,10 +17,10 @@ pub enum AiToolPolicy {
 }
 
 impl Default for AiToolPolicy {
-    /// Returns the safe default AI-tool policy.
-    /// 返回安全的默认 AI 工具策略。
+    /// Returns the deterministic provider-native default policy.
+    /// 返回确定性的 Provider 原生默认策略。
     fn default() -> Self {
-        Self::Auto
+        Self::ForceNative
     }
 }
 
@@ -51,10 +48,10 @@ pub struct AiToolDeclaration {
     /// 启用当前 Hosted Tool 时追加到出站请求载荷中的可选 Provider 原生请求补丁。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native_request_patch: Option<Value>,
-    /// Optional host fallback tool identifier used when native support is unavailable or disabled.
-    /// 当原生支持不可用或被禁用时使用的可选宿主回退工具标识。
+    /// Optional explicitly bound host tool identifier.
+    /// 可选的显式绑定宿主工具标识。
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fallback_tool_id: Option<String>,
+    pub host_tool_id: Option<String>,
     /// Whether this tool requires explicit user approval before execution.
     /// 当前工具执行前是否需要用户显式批准。
     #[serde(default, skip_serializing_if = "is_false")]
@@ -75,11 +72,11 @@ impl AiToolDeclaration {
     pub fn provider_native(kind: AiToolKind, native_tool_type: impl Into<String>) -> Self {
         Self {
             kind,
-            policy: AiToolPolicy::Auto,
+            policy: AiToolPolicy::ForceNative,
             native_provider_tool: Some(true),
             native_tool_type: Some(native_tool_type.into()),
             native_request_patch: None,
-            fallback_tool_id: None,
+            host_tool_id: None,
             requires_approval: false,
             result_modalities: vec![String::from("text")],
             citation_support: Some(matches!(

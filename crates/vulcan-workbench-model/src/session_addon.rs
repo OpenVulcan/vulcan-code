@@ -40,7 +40,7 @@ pub enum SessionAddonNamespace {
     /// 会话级 VMM 状态与记忆设置。
     Vmm,
     /// Session-level knowledge-library selection, separate from conversational memory.
-    /// 与会话记忆分离的会话级资料库选择。
+    /// 与会话记忆分离的会话级知识库选择。
     KnowledgeBases,
     /// Session-level todolist updated by the model-facing todolist tool.
     /// 由模型可见 todolist 工具更新的会话级 todolist。
@@ -701,7 +701,7 @@ impl SessionAddonState {
     }
 
     /// Reads the session knowledge-library selection from its independent namespace.
-    /// 从独立命名空间读取会话资料库选择。
+    /// 从独立命名空间读取会话知识库选择。
     ///
     /// # Returns
     /// 返回值
@@ -713,7 +713,7 @@ impl SessionAddonState {
     }
 
     /// Writes a normalized session knowledge-library selection.
-    /// 写入一份规范化的会话资料库选择。
+    /// 写入一份规范化的会话知识库选择。
     ///
     /// # Parameters
     /// 参数
@@ -780,21 +780,21 @@ impl SessionAddonState {
 }
 
 /// Session selection strategy for project-authorized knowledge libraries.
-/// 项目已授权资料库的会话选择策略。
+/// 项目已授权知识库的会话选择策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionKnowledgeLibrarySelectionMode {
     /// Inherit libraries marked default-enabled for the current project.
-    /// 继承当前项目中标记为默认启用的资料库。
+    /// 继承当前项目中标记为默认启用的知识库。
     #[default]
     Inherit,
     /// Use only explicitly listed libraries after authorization intersection.
-    /// 与授权集合求交后，仅使用显式列出的资料库。
+    /// 与授权集合求交后，仅使用显式列出的知识库。
     Explicit,
 }
 
 /// Durable per-session knowledge-library selection.
-/// 持久化的每会话资料库选择。
+/// 持久化的每会话知识库选择。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionKnowledgeLibrarySelection {
@@ -803,7 +803,7 @@ pub struct SessionKnowledgeLibrarySelection {
     #[serde(default)]
     pub mode: SessionKnowledgeLibrarySelectionMode,
     /// Explicit library IDs, used only when mode is explicit.
-    /// 显式资料库标识符，仅在 explicit 模式下使用。
+    /// 显式知识库标识符，仅在 explicit 模式下使用。
     #[serde(default)]
     pub library_ids: Vec<String>,
 }
@@ -936,7 +936,7 @@ mod knowledge_library_selection_tests {
     use super::*;
 
     /// Verifies explicit knowledge selections are sorted, deduplicated, and round-trip safely.
-    /// 验证显式资料库选择会排序、去重并安全往返。
+    /// 验证显式知识库选择会排序、去重并安全往返。
     #[test]
     fn explicit_selection_is_normalized() {
         let session_id = SessionId::new_v4();

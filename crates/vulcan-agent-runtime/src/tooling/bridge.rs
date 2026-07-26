@@ -28,11 +28,12 @@ use crate::media_generation_compat::{
     execute_configured_speech_synthesis, execute_configured_video_generation,
 };
 use crate::provider_config::{
-    AiToolKind, IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID, MUSIC_COVER_PROVIDER_CHAIN_TOOL_ID,
-    MUSIC_GENERATION_PROVIDER_CHAIN_TOOL_ID, PersistedAiToolConfiguration,
-    SPEECH_SYNTHESIS_PROVIDER_CHAIN_TOOL_ID, UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID,
-    VIDEO_GENERATION_PROVIDER_CHAIN_TOOL_ID, WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID,
+    AiToolKind, IMAGE_GENERATION_HOST_BINDING_TOOL_ID, MUSIC_COVER_HOST_BINDING_TOOL_ID,
+    MUSIC_GENERATION_HOST_BINDING_TOOL_ID, PersistedAiToolConfiguration,
+    SPEECH_SYNTHESIS_HOST_BINDING_TOOL_ID, UNDERSTAND_IMAGE_HOST_BINDING_TOOL_ID,
+    VIDEO_GENERATION_HOST_BINDING_TOOL_ID, WEB_SEARCH_HOST_BINDING_TOOL_ID,
 };
+use crate::router_tool_bridge::append_router_contract_tool_candidates;
 use crate::tooling::{
     NativeToolCatalog, NativeToolDescriptor, NativeToolExecutionRequest,
     allocate_unique_public_tool_name, build_direct_public_tool_name,
@@ -66,13 +67,15 @@ use vulcan_tools_manager::{
 };
 use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
 
-mod ai_fallback;
+mod ai_host_binding;
 mod descriptors;
 mod luaskills_dispatch;
 
 #[cfg(test)]
-use ai_fallback::configured_understand_image_candidate;
-use ai_fallback::{append_ai_tool_fallback_aliases, append_configured_ai_tool_backing_candidates};
+use ai_host_binding::configured_understand_image_candidate;
+use ai_host_binding::{
+    append_ai_tool_host_binding_aliases, append_configured_ai_tool_backing_candidates,
+};
 use descriptors::{
     entry_declares_luaskill_sid, entry_declares_pwd, luaskills_descriptor_to_vulcan,
     mcp_tool_binding_to_vulcan, native_descriptor_to_vulcan, native_plan_policy,
@@ -92,33 +95,33 @@ mod tests;
 /// 生成媒体工具共享的描述后缀，用于向模型说明导出控制项以及可复用的后续文件路径。
 const GENERATED_MEDIA_OUTPUT_DESCRIPTION_SUFFIX: &str = " Optional `output_dir` exports a caller-chosen copy. Optional `output_file_stem` suggests the file name without extension. Generated results return `outputs[*].local_path` for follow-up tool calls.";
 
-/// One semantic AI-tool fallback alias requested by the provider/model router.
-/// Provider/Model 路由器请求的一条语义 AI 工具回退别名。
+/// One semantic AI-tool alias bound to one explicitly selected host tool.
+/// 绑定到一个显式选择宿主工具的语义 AI 工具别名。
 #[derive(Debug, Clone)]
-pub struct AiToolFallbackAlias {
+pub struct AiToolHostBindingAlias {
     /// Stable semantic AI-specialized tool kind exposed to the model.
     /// 暴露给模型的稳定 AI 专用语义工具类型。
     pub kind: AiToolKind,
     /// Concrete host tool identifier that should back the semantic alias.
     /// 承载该语义别名的具体宿主工具标识。
-    pub fallback_tool_id: String,
+    pub host_tool_id: String,
 }
 
-/// Resolves semantic fallback aliases from one provider/model blueprint.
-/// 从单个 Provider/Model 蓝图解析语义回退别名。
-pub fn resolve_ai_tool_fallback_aliases(
+/// Resolves semantic host-tool bindings from one provider/model blueprint.
+/// 从单个 Provider/Model 蓝图解析语义宿主工具绑定。
+pub fn resolve_ai_tool_host_binding_aliases(
     blueprint: &ProviderRuntimeBlueprint,
-) -> Vec<AiToolFallbackAlias> {
+) -> Vec<AiToolHostBindingAlias> {
     resolve_ai_tool_plan(blueprint)
         .decisions
         .into_iter()
-        .filter(|decision| decision.route == AiToolRouteKind::HostFallback)
+        .filter(|decision| decision.route == AiToolRouteKind::HostBinding)
         .filter_map(|decision| {
             decision
-                .fallback_tool_id
-                .map(|fallback_tool_id| AiToolFallbackAlias {
+                .host_tool_id
+                .map(|host_tool_id| AiToolHostBindingAlias {
                     kind: decision.kind,
-                    fallback_tool_id,
+                    host_tool_id,
                 })
         })
         .collect()
@@ -143,7 +146,7 @@ pub fn build_vulcan_tools_manager(
     candidate_mcp_tools: Vec<McpRuntimeToolBinding>,
     managed_codebase_memory: Option<ManagedCodebaseMemoryExecutionContext>,
     ai_tool_configuration: PersistedAiToolConfiguration,
-    ai_tool_fallback_aliases: Vec<AiToolFallbackAlias>,
+    ai_tool_host_binding_aliases: Vec<AiToolHostBindingAlias>,
     enabled_prompt_skill_names: Vec<String>,
     prepared_prompt_skills: Vec<vulcan_prompt_skills::PromptSkill>,
     prompt_skill_user_root: Option<PathBuf>,
@@ -501,13 +504,20 @@ pub fn build_vulcan_tools_manager(
         });
     }
 
+    let router_tool_configuration = ai_tool_configuration.router.clone();
+    let router_workspace_root = workspace_root.clone();
     append_configured_ai_tool_backing_candidates(
         &mut candidates,
         ai_tool_configuration,
         workspace_root,
         conversation_attachments,
     );
-    append_ai_tool_fallback_aliases(&mut candidates, ai_tool_fallback_aliases);
+    append_router_contract_tool_candidates(
+        &mut candidates,
+        &router_tool_configuration,
+        router_workspace_root,
+    );
+    append_ai_tool_host_binding_aliases(&mut candidates, ai_tool_host_binding_aliases);
 
     VulcanToolsManager::new(candidates)
 }

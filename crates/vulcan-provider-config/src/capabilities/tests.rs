@@ -11,8 +11,8 @@ use crate::provider_config::{
     PersistedProviderOptions, PersistedUnderstandImageConfiguration,
     PersistedWebSearchConfiguration, ProviderBaseUrlConfig, ProviderBaseUrlKind,
     ProviderModelDiscoveryConfig, ProviderModelDiscoveryKind, ProviderRuntimeKind,
-    SupportedProviderDefinition, UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID,
-    WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID, WebSearchRoutingMode,
+    SupportedProviderDefinition, UNDERSTAND_IMAGE_HOST_BINDING_TOOL_ID,
+    WEB_SEARCH_HOST_BINDING_TOOL_ID,
 };
 use std::collections::BTreeMap;
 
@@ -269,10 +269,10 @@ fn resolve_model_capabilities_does_not_infer_native_web_search_for_compatible_pr
     );
 }
 
-/// Configures host web-search fallback when the active model lacks provider-native search.
-/// 当激活模型缺少 Provider 原生搜索时，配置宿主侧网页搜索回退。
+/// Configures one explicitly bound host web-search provider.
+/// 配置一个显式绑定的宿主网页搜索供应商。
 #[test]
-fn ai_tool_configuration_adds_host_web_search_for_provider_chain() {
+fn ai_tool_configuration_adds_host_web_search_for_exact_binding() {
     let definition = test_provider_definition();
     let mut capabilities = resolve_model_capabilities(&definition, None);
     let configuration = PersistedAiToolConfiguration {
@@ -294,9 +294,7 @@ fn ai_tool_configuration_adds_host_web_search_for_provider_chain() {
             ],
         }],
         web_search: PersistedWebSearchConfiguration {
-            mode: WebSearchRoutingMode::ThirdPartyOnly,
-            target_order: vec![String::from("brave/brave")],
-            dispatch_mode: crate::provider_config::WebSearchProviderDispatchMode::default(),
+            selected_target: Some(String::from("brave/brave")),
             max_results: 5,
             providers: Vec::new(),
         },
@@ -309,19 +307,19 @@ fn ai_tool_configuration_adds_host_web_search_for_provider_chain() {
         .ai_tools
         .iter()
         .find(|tool| tool.kind == AiToolKind::WebSearch)
-        .expect("configured provider chain should expose host web search");
+        .expect("configured exact binding should expose host web search");
     assert_eq!(web_search.policy, AiToolPolicy::ForceHost);
     assert_eq!(
-        web_search.fallback_tool_id.as_deref(),
-        Some(WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID)
+        web_search.host_tool_id.as_deref(),
+        Some(WEB_SEARCH_HOST_BINDING_TOOL_ID)
     );
     assert!(!web_search.native_provider_tool);
 }
 
-/// Keeps provider-native search as the fallback when provider-first mode has no usable external provider.
-/// 当外部供应商链不可用时，在外部优先模式下保留 Provider 原生搜索作为兜底。
+/// Preserves provider-native search when no external provider is explicitly bound.
+/// 未显式绑定外部供应商时保留 Provider 原生搜索。
 #[test]
-fn ai_tool_configuration_uses_native_fallback_when_provider_chain_is_missing() {
+fn ai_tool_configuration_preserves_native_search_without_host_binding() {
     let mut definition = test_provider_definition();
     definition.id = String::from("openai");
     definition.runtime = ProviderRuntimeKind::OpenAi;
@@ -348,10 +346,8 @@ fn ai_tool_configuration_uses_native_fallback_when_provider_chain_is_missing() {
     let mut capabilities = resolve_model_capabilities(&definition, Some(&model));
     let configuration = PersistedAiToolConfiguration {
         web_search: PersistedWebSearchConfiguration {
-            mode: WebSearchRoutingMode::ThirdPartyFirst,
-            target_order: Vec::new(),
+            selected_target: None,
             providers: Vec::new(),
-            dispatch_mode: crate::provider_config::WebSearchProviderDispatchMode::default(),
             max_results: 5,
         },
         ..PersistedAiToolConfiguration::default()
@@ -365,13 +361,13 @@ fn ai_tool_configuration_uses_native_fallback_when_provider_chain_is_missing() {
         .find(|tool| tool.kind == AiToolKind::WebSearch)
         .expect("native web search should still be available");
     assert_eq!(web_search.policy, AiToolPolicy::ForceNative);
-    assert!(web_search.fallback_tool_id.is_none());
+    assert!(web_search.host_tool_id.is_none());
 }
 
-/// Adds host image-understanding fallback when the selected model lacks native image input but the standalone capability layer is configured.
-/// 当所选模型缺少原生图片输入且已配置独立能力层时，添加宿主侧图片理解回退。
+/// Adds an explicitly bound host image-understanding tool when the selected model lacks native image input.
+/// 当所选模型缺少原生图片输入时，添加显式绑定的宿主侧图片理解工具。
 #[test]
-fn ai_tool_configuration_adds_host_understand_image_for_provider_chain() {
+fn ai_tool_configuration_adds_host_understand_image_for_exact_binding() {
     let definition = test_provider_definition();
     let mut capabilities = resolve_model_capabilities(&definition, None);
     let configuration = PersistedAiToolConfiguration {
@@ -393,7 +389,7 @@ fn ai_tool_configuration_adds_host_understand_image_for_provider_chain() {
             ],
         }],
         understand_image: PersistedUnderstandImageConfiguration {
-            target_order: vec![String::from("minimax/minimax")],
+            selected_target: Some(String::from("minimax/minimax")),
             providers: Vec::new(),
         },
         ..PersistedAiToolConfiguration::default()
@@ -405,11 +401,11 @@ fn ai_tool_configuration_adds_host_understand_image_for_provider_chain() {
         .ai_tools
         .iter()
         .find(|tool| tool.kind == AiToolKind::UnderstandImage)
-        .expect("configured provider chain should expose host image understanding");
+        .expect("configured exact binding should expose host image understanding");
     assert_eq!(understand_image.policy, AiToolPolicy::ForceHost);
     assert_eq!(
-        understand_image.fallback_tool_id.as_deref(),
-        Some(UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID)
+        understand_image.host_tool_id.as_deref(),
+        Some(UNDERSTAND_IMAGE_HOST_BINDING_TOOL_ID)
     );
     assert!(!understand_image.native_provider_tool);
     assert!(
@@ -442,7 +438,7 @@ fn resolve_effective_model_capabilities_applies_host_ai_tool_overlays() {
             ],
         }],
         understand_image: PersistedUnderstandImageConfiguration {
-            target_order: vec![String::from("minimax/minimax")],
+            selected_target: Some(String::from("minimax/minimax")),
             providers: Vec::new(),
         },
         ..PersistedAiToolConfiguration::default()
@@ -462,10 +458,10 @@ fn resolve_effective_model_capabilities_applies_host_ai_tool_overlays() {
     );
 }
 
-/// Removes host image-understanding fallback when the active model already supports native image input.
-/// 当当前模型已经支持原生图片输入时，移除宿主侧图片理解回退。
+/// Replaces native image understanding when the user explicitly binds one host image tool.
+/// 当用户显式绑定一个宿主图片工具时，替代模型原生图片理解。
 #[test]
-fn ai_tool_configuration_omits_understand_image_for_native_vision_models() {
+fn ai_tool_configuration_replaces_native_understanding_with_explicit_host_binding() {
     let definition = test_provider_definition();
     let model = ModelChoice {
         id: String::from("vision-model"),
@@ -507,7 +503,7 @@ fn ai_tool_configuration_omits_understand_image_for_native_vision_models() {
             ],
         }],
         understand_image: PersistedUnderstandImageConfiguration {
-            target_order: vec![String::from("minimax/minimax")],
+            selected_target: Some(String::from("minimax/minimax")),
             providers: Vec::new(),
         },
         ..PersistedAiToolConfiguration::default()
@@ -515,11 +511,16 @@ fn ai_tool_configuration_omits_understand_image_for_native_vision_models() {
 
     apply_ai_tool_runtime_configuration(&mut capabilities, &configuration);
 
-    assert!(
-        capabilities
-            .ai_tools
-            .iter()
-            .all(|tool| tool.kind != AiToolKind::UnderstandImage)
+    let understand_image = capabilities
+        .ai_tools
+        .iter()
+        .find(|tool| tool.kind == AiToolKind::UnderstandImage)
+        .expect("explicit host image binding should replace native image understanding");
+    assert_eq!(understand_image.policy, AiToolPolicy::ForceHost);
+    assert!(!understand_image.native_provider_tool);
+    assert_eq!(
+        understand_image.host_tool_id.as_deref(),
+        Some(crate::provider_config::UNDERSTAND_IMAGE_HOST_BINDING_TOOL_ID)
     );
     assert!(
         capabilities
@@ -571,6 +572,21 @@ fn ai_tool_configuration_adds_host_generation_capabilities_for_configured_target
                 ),
             ],
         }],
+        image_generation: crate::provider_config::PersistedAiCapabilityRouteConfiguration {
+            selected_target: Some(String::from("minimax/image-01")),
+        },
+        video_generation: crate::provider_config::PersistedAiCapabilityRouteConfiguration {
+            selected_target: Some(String::from("minimax/MiniMax-Hailuo-2.3")),
+        },
+        speech_synthesis: crate::provider_config::PersistedAiCapabilityRouteConfiguration {
+            selected_target: Some(String::from("minimax/speech-2.8-hd")),
+        },
+        music_generation: crate::provider_config::PersistedAiCapabilityRouteConfiguration {
+            selected_target: Some(String::from("minimax/music-2.6")),
+        },
+        music_cover: crate::provider_config::PersistedAiCapabilityRouteConfiguration {
+            selected_target: Some(String::from("minimax/music-cover")),
+        },
         ..PersistedAiToolConfiguration::default()
     };
 
@@ -583,8 +599,8 @@ fn ai_tool_configuration_adds_host_generation_capabilities_for_configured_target
         .expect("configured image generation should be exposed");
     assert_eq!(image_generation.policy, AiToolPolicy::ForceHost);
     assert_eq!(
-        image_generation.fallback_tool_id.as_deref(),
-        Some(crate::provider_config::IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID)
+        image_generation.host_tool_id.as_deref(),
+        Some(crate::provider_config::IMAGE_GENERATION_HOST_BINDING_TOOL_ID)
     );
 
     let music_cover = capabilities
@@ -594,8 +610,8 @@ fn ai_tool_configuration_adds_host_generation_capabilities_for_configured_target
         .expect("configured music cover should be exposed");
     assert_eq!(music_cover.policy, AiToolPolicy::ForceHost);
     assert_eq!(
-        music_cover.fallback_tool_id.as_deref(),
-        Some(crate::provider_config::MUSIC_COVER_PROVIDER_CHAIN_TOOL_ID)
+        music_cover.host_tool_id.as_deref(),
+        Some(crate::provider_config::MUSIC_COVER_HOST_BINDING_TOOL_ID)
     );
 
     assert!(
@@ -608,10 +624,10 @@ fn ai_tool_configuration_adds_host_generation_capabilities_for_configured_target
     );
 }
 
-/// Keeps provider-native media capabilities first and only adds configured host targets as fallback routes.
-/// 保持 Provider 原生媒体能力优先，并仅把已配置宿主目标作为兜底路由加入。
+/// Replaces one provider-native media capability with the explicitly bound host target.
+/// 使用显式绑定的宿主目标替代一个 Provider 原生媒体能力。
 #[test]
-fn ai_tool_configuration_preserves_native_generation_with_host_fallback() {
+fn ai_tool_configuration_replaces_native_generation_with_explicit_host_binding() {
     let mut definition = test_provider_definition();
     definition.ai_tools.push(AiToolDeclaration::provider_native(
         AiToolKind::ImageGeneration,
@@ -636,6 +652,9 @@ fn ai_tool_configuration_preserves_native_generation_with_host_fallback() {
                 ),
             ],
         }],
+        image_generation: crate::provider_config::PersistedAiCapabilityRouteConfiguration {
+            selected_target: Some(String::from("minimax/image-01")),
+        },
         ..PersistedAiToolConfiguration::default()
     };
 
@@ -645,16 +664,13 @@ fn ai_tool_configuration_preserves_native_generation_with_host_fallback() {
         .ai_tools
         .iter()
         .find(|tool| tool.kind == AiToolKind::ImageGeneration)
-        .expect("native image generation should remain exposed");
-    assert_eq!(image_generation.policy, AiToolPolicy::Auto);
-    assert!(image_generation.native_provider_tool);
+        .expect("explicit host image generation should be exposed");
+    assert_eq!(image_generation.policy, AiToolPolicy::ForceHost);
+    assert!(!image_generation.native_provider_tool);
+    assert!(image_generation.native_tool_type.is_none());
     assert_eq!(
-        image_generation.native_tool_type.as_deref(),
-        Some("native_image_generation")
-    );
-    assert_eq!(
-        image_generation.fallback_tool_id.as_deref(),
-        Some(crate::provider_config::IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID)
+        image_generation.host_tool_id.as_deref(),
+        Some(crate::provider_config::IMAGE_GENERATION_HOST_BINDING_TOOL_ID)
     );
 }
 
@@ -679,10 +695,10 @@ fn ai_tool_configuration_keeps_native_generation_without_host_targets() {
         .iter()
         .find(|tool| tool.kind == AiToolKind::ImageGeneration)
         .expect("native image generation should remain exposed");
-    assert_eq!(image_generation.policy, AiToolPolicy::Auto);
+    assert_eq!(image_generation.policy, AiToolPolicy::ForceNative);
     assert!(image_generation.native_provider_tool);
     assert_eq!(
-        image_generation.fallback_tool_id.as_deref(),
+        image_generation.host_tool_id.as_deref(),
         None,
         "host fallback should not be invented without configured targets"
     );

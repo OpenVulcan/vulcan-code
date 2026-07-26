@@ -76,6 +76,7 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
       onSelectWorkbenchModelSecondaryRoute={chatAreaProps.onSelectWorkbenchModelSecondaryRoute}
       onSelectWorkbenchReasoningEffort={chatAreaProps.onSelectWorkbenchReasoningEffort}
       onSlashCommand={chatAreaProps.onSlashCommand}
+      onOpenKnowledge={chatAreaProps.onOpenKnowledge}
       onComposerDockHeightChange={props.onComposerDockHeightChange}
       onSubmitPrompt={chatAreaProps.onSubmitPrompt}
       onSaveAiCapabilityConfiguration={chatAreaProps.onSaveAiCapabilityConfiguration}

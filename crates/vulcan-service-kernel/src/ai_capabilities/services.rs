@@ -11,8 +11,8 @@ pub(crate) struct AiCapabilityVendorSaveRequest {
     /// Stable vendor catalog identifier.
     /// 稳定供应商目录标识。
     vendor_id: String,
-    /// Whether the vendor participates in runtime routing.
-    /// 该供应商是否参与运行时路由。
+    /// Whether the vendor remains available for explicit selection.
+    /// 该供应商是否仍可供显式选择。
     enabled: bool,
     /// Shared API key or environment placeholder.
     /// 共享 API Key 或环境变量占位符。
@@ -363,8 +363,8 @@ pub(crate) async fn service_set_ai_capability_target_enabled(
     Ok(workbench)
 }
 
-/// Saves the full ordered target list for one AI capability from the WebUI settings page.
-/// 从 WebUI 设置页保存单个 AI 能力的完整有序目标列表。
+/// Saves the configured target list for one AI capability from the WebUI settings page.
+/// 从 WebUI 设置页保存单个 AI 能力的已配置目标列表。
 ///
 /// # Parameters
 /// 参数
@@ -372,8 +372,8 @@ pub(crate) async fn service_set_ai_capability_target_enabled(
 /// `app` 用于向 WebUI 发送刷新的工作台快照。
 /// `state` owns the current service bridge runtime and settings snapshot.
 /// `state` 持有当前服务桥接运行态与设置快照。
-/// `request` contains the capability kind and ordered target bindings to persist.
-/// `request` 包含要持久化的能力类型与有序目标绑定。
+/// `request` contains the capability kind and target bindings to persist.
+/// `request` 包含要持久化的能力类型与目标绑定。
 ///
 /// # Returns
 /// 返回值
@@ -386,7 +386,6 @@ pub(crate) async fn service_save_ai_capability_targets(
 ) -> Result<WorkbenchSnapshot, String> {
     let capability_kind = parse_ai_tool_kind(&request.capability_kind)?;
     let mut target_inputs = Vec::new();
-    let mut ordered_selectors = Vec::new();
     for target in request.targets {
         let Some(target_selector) =
             NormalizedAiCapabilityTargetSelector::from_raw(&target.vendor_id, &target.target_alias)
@@ -414,13 +413,22 @@ pub(crate) async fn service_save_ai_capability_targets(
         } else {
             target.model_id.trim().to_string()
         };
-        ordered_selectors.push(target_selector.selector());
         target_inputs.push((target_selector, model_id, target.enabled));
     }
     let workbench = mutate_shared_ai_capability_configuration(
         &state,
         "保存 AI 能力目标列表失败",
         |next_ai_tool_configuration| {
+            // selected_target preserves only the user's existing exact binding when that target remains enabled.
+            // selected_target 仅在用户已有的精确绑定目标仍保持启用时予以保留。
+            let selected_target = next_ai_tool_configuration
+                .configured_selected_target_for_kind(capability_kind)
+                .filter(|selected| {
+                    target_inputs.iter().any(|(target_selector, _, enabled)| {
+                        *enabled && target_selector.selector().eq_ignore_ascii_case(selected)
+                    })
+                })
+                .map(ToString::to_string);
             for vendor in &mut next_ai_tool_configuration.vendors {
                 vendor
                     .targets
@@ -448,10 +456,10 @@ pub(crate) async fn service_save_ai_capability_targets(
                     vendor.targets.push(binding);
                 }
             }
-            set_ai_capability_target_order_for_kind(
+            set_ai_capability_selected_target_for_kind(
                 next_ai_tool_configuration,
                 capability_kind,
-                ordered_selectors,
+                selected_target,
             )?;
             Ok(())
         },

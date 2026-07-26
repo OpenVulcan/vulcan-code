@@ -29,6 +29,6 @@ pub(crate) fn tool_source_label(source: VulcanToolSourceKind) -> &'static str {
         VulcanToolSourceKind::VulcanPlugin => "Vulcan 插件",
         VulcanToolSourceKind::LuaSkills => "LuaSkills",
         VulcanToolSourceKind::Mcp => "MCP",
-        VulcanToolSourceKind::AiFallback => "AI 专用回退",
+        VulcanToolSourceKind::AiHostBinding => "AI 专用回退",
     }
 }

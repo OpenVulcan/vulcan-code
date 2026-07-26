@@ -182,7 +182,7 @@ mod tests {
                     native_request_patch: Some(json!({
                         "tools": [{ "type": "web_search" }]
                     })),
-                    fallback_tool_id: None,
+                    host_tool_id: None,
                     requires_approval: false,
                     result_modalities: vec![String::from("text")],
                     citation_support: true,
@@ -230,7 +230,7 @@ mod tests {
                     native_provider_tool: true,
                     native_tool_type: Some(String::from("google_search")),
                     native_request_patch: None,
-                    fallback_tool_id: None,
+                    host_tool_id: None,
                     requires_approval: false,
                     result_modalities: vec![String::from("text")],
                     citation_support: true,

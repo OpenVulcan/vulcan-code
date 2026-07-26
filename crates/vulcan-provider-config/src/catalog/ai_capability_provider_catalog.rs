@@ -85,8 +85,8 @@ pub struct AiCapabilityProviderDefinition {
     /// User-facing provider display name.
     /// 面向用户展示的提供方名称。
     pub name: String,
-    /// Whether the current provider definition should remain available for new configuration and runtime routing.
-    /// 当前提供方定义是否仍应对新的配置与运行时路由保持可用。
+    /// Whether the current provider definition remains available for new configuration and explicit selection.
+    /// 当前提供方定义是否仍可用于新配置与显式选择。
     #[serde(default = "default_definition_enabled")]
     pub enabled: bool,
     /// Stable semantic capability kind owned by this definition.
@@ -271,8 +271,8 @@ pub struct WebSearchProviderDefinition {
     /// User-facing provider display name.
     /// 面向用户展示的提供方名称。
     pub name: String,
-    /// Whether the current provider definition should remain available for new configuration and runtime routing.
-    /// 当前提供方定义是否仍应对新的配置与运行时路由保持可用。
+    /// Whether the current provider definition remains available for new configuration and explicit selection.
+    /// 当前提供方定义是否仍可用于新配置与显式选择。
     #[serde(default = "default_definition_enabled")]
     pub enabled: bool,
     /// Stable semantic capability kind owned by this definition.
@@ -353,8 +353,8 @@ pub struct UnderstandImageProviderDefinition {
     /// User-facing provider display name.
     /// 面向用户展示的提供方名称。
     pub name: String,
-    /// Whether the current provider definition should remain available for new configuration and runtime routing.
-    /// 当前提供方定义是否仍应对新的配置与运行时路由保持可用。
+    /// Whether the current provider definition remains available for new configuration and explicit selection.
+    /// 当前提供方定义是否仍可用于新配置与显式选择。
     #[serde(default = "default_definition_enabled")]
     pub enabled: bool,
     /// Stable semantic capability kind owned by this definition.
@@ -423,8 +423,8 @@ pub fn web_search_provider_definition_by_id(
         .find(|definition| definition.id == provider_id)
 }
 
-/// Returns whether one web-search provider definition is still enabled for new configuration and runtime routing.
-/// 返回单个网页搜索提供方定义是否仍对新的配置与运行时路由保持启用。
+/// Returns whether one web-search provider definition is enabled for new configuration and explicit selection.
+/// 返回单个网页搜索提供方定义是否仍可用于新配置与显式选择。
 pub fn web_search_provider_enabled(provider_id: &str) -> bool {
     web_search_provider_definition_by_id(provider_id)
         .map(|definition| definition.enabled)
@@ -450,8 +450,8 @@ pub fn understand_image_provider_definition_by_id(
         .find(|definition| definition.id == provider_id)
 }
 
-/// Returns whether one image-understanding provider definition is still enabled for new configuration and runtime routing.
-/// 返回单个图片理解提供方定义是否仍对新的配置与运行时路由保持启用。
+/// Returns whether one image-understanding provider definition is enabled for new configuration and explicit selection.
+/// 返回单个图片理解提供方定义是否仍可用于新配置与显式选择。
 pub fn understand_image_provider_enabled(provider_id: &str) -> bool {
     understand_image_provider_definition_by_id(provider_id)
         .map(|definition| definition.enabled)

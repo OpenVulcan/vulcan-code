@@ -243,7 +243,7 @@ pub(crate) async fn maybe_start_webui_mailbox_turn_if_ready(
                 ),
                 disabled_ai_capability_kinds,
                 disabled_ai_capability_target_selectors: BTreeSet::new(),
-                ai_capability_target_order_overrides: BTreeMap::new(),
+                ai_capability_target_bindings: BTreeMap::new(),
             },
         )
     }?;

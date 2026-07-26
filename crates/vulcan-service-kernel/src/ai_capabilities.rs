@@ -33,42 +33,42 @@ use crate::{
     refresh_settings_projection_locked,
 };
 
-/// Applies a complete selector order for one AI capability kind.
-/// 为单个 AI 能力类型应用完整目标选择器顺序。
+/// Applies one optional exact target binding for one AI capability kind.
+/// 为单个 AI 能力类型应用一个可选的精确目标绑定。
 ///
 /// # Parameters
 /// 参数
 /// `configuration` is the mutable persisted AI tool configuration.
 /// `configuration` 是可变的持久化 AI 工具配置。
-/// `capability_kind` selects which capability-specific order list should be replaced.
-/// `capability_kind` 选择要替换的能力专属排序列表。
-/// `ordered_selectors` is the complete selector order supplied by the caller.
-/// `ordered_selectors` 是调用方提供的完整选择器顺序。
+/// `capability_kind` selects which capability-specific binding should be replaced.
+/// `capability_kind` 选择要替换的能力专属绑定。
+/// `selected_target` is the exact selector supplied by the caller.
+/// `selected_target` 是调用方提供的精确选择器。
 ///
 /// # Returns
 /// 返回值
-/// `Ok(())` after the capability order is replaced, or an error for unsupported kinds.
-/// 能力顺序替换后返回 `Ok(())`；不支持的能力类型返回错误。
-pub(super) fn set_ai_capability_target_order_for_kind(
+/// `Ok(())` after the capability binding is replaced, or an error for unsupported kinds.
+/// 能力绑定替换后返回 `Ok(())`；不支持的能力类型返回错误。
+pub(super) fn set_ai_capability_selected_target_for_kind(
     configuration: &mut PersistedAiToolConfiguration,
     capability_kind: AiToolKind,
-    ordered_selectors: Vec<String>,
+    selected_target: Option<String>,
 ) -> Result<(), String> {
-    let target_order = match capability_kind {
-        AiToolKind::WebSearch => &mut configuration.web_search.target_order,
-        AiToolKind::UnderstandImage => &mut configuration.understand_image.target_order,
-        AiToolKind::ImageGeneration => &mut configuration.image_generation.target_order,
-        AiToolKind::VideoGeneration => &mut configuration.video_generation.target_order,
-        AiToolKind::SpeechSynthesis => &mut configuration.speech_synthesis.target_order,
-        AiToolKind::MusicGeneration => &mut configuration.music_generation.target_order,
-        AiToolKind::MusicCover => &mut configuration.music_cover.target_order,
+    let configured_binding = match capability_kind {
+        AiToolKind::WebSearch => &mut configuration.web_search.selected_target,
+        AiToolKind::UnderstandImage => &mut configuration.understand_image.selected_target,
+        AiToolKind::ImageGeneration => &mut configuration.image_generation.selected_target,
+        AiToolKind::VideoGeneration => &mut configuration.video_generation.selected_target,
+        AiToolKind::SpeechSynthesis => &mut configuration.speech_synthesis.selected_target,
+        AiToolKind::MusicGeneration => &mut configuration.music_generation.selected_target,
+        AiToolKind::MusicCover => &mut configuration.music_cover.selected_target,
         _ => {
             return Err(format!(
-                "AI 能力 `{}` 不支持目标排序。",
+                "AI 能力 `{}` 不支持精确目标绑定。",
                 capability_kind.key()
             ));
         }
     };
-    *target_order = ordered_selectors;
+    *configured_binding = selected_target;
     Ok(())
 }

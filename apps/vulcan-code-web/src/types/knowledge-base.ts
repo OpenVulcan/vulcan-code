@@ -1,10 +1,10 @@
 import type { ProjectDirectoryListing } from "./projects-files";
 
 // KnowledgeLibrarySummary mirrors one host-managed knowledge library.
-// KnowledgeLibrarySummary 对齐一个宿主管理资料库。
+// KnowledgeLibrarySummary 对齐一个宿主管理知识库。
 export interface KnowledgeLibrarySummary {
   // Immutable library identifier.
-  // 不可变资料库标识符。
+  // 不可变知识库标识符。
   id: string;
   // User-visible name.
   // 用户可见名称。
@@ -62,7 +62,7 @@ export interface KnowledgeSourceSummary {
 }
 
 // KnowledgeCustomWord mirrors one library-local Jieba dictionary entry.
-// KnowledgeCustomWord 对齐一个资料库局部 Jieba 词典条目。
+// KnowledgeCustomWord 对齐一个知识库局部 Jieba 词典条目。
 export interface KnowledgeCustomWord {
   // Exact custom word text.
   // 精确的自定义词文本。
@@ -76,13 +76,13 @@ export interface KnowledgeCustomWord {
 // KnowledgeProjectBinding 对齐一条项目授权记录。
 export interface KnowledgeProjectBinding {
   // Owning library identifier.
-  // 所属资料库标识符。
+  // 所属知识库标识符。
   libraryId: string;
   // Authorized project identifier.
   // 已授权项目标识符。
   projectId: string;
   // Whether inherited sessions enable the library.
-  // 继承型会话是否启用资料库。
+  // 继承型会话是否启用知识库。
   defaultEnabled: boolean;
 }
 
@@ -133,10 +133,10 @@ export interface KnowledgeDocumentContent {
 // KnowledgeSearchHit 是一条携带引用的 BM25 结果。
 export interface KnowledgeSearchHit {
   // Owning library identifier.
-  // 所属资料库标识符。
+  // 所属知识库标识符。
   libraryId: string;
   // Owning library name.
-  // 所属资料库名称。
+  // 所属知识库名称。
   libraryName: string;
   // Owning document identifier.
   // 所属文档标识符。
@@ -166,7 +166,7 @@ export interface KnowledgeSearchHit {
   // 运行时返回的稳定词法匹配策略。
   matchKind: "bm25" | "substring";
   // Per-library BM25 score.
-  // 单资料库 BM25 分数。
+  // 单知识库 BM25 分数。
   bm25Score: number;
   // Optional federated RRF score.
   // 可选联合 RRF 分数。
@@ -183,7 +183,7 @@ export interface KnowledgeSearchResult {
   // 已排序且携带引用的命中。
   hits: KnowledgeSearchHit[];
   // Explicit library failures.
-  // 显式资料库失败。
+  // 显式知识库失败。
   failures: Array<{ libraryId: string; error: string }>;
   // Exact per-library vldb FTS expressions.
   // 精确的逐库 vldb FTS 表达式。
@@ -197,7 +197,7 @@ export interface KnowledgeImportReport {
   // 持久化任务标识符。
   jobId: string;
   // Target library identifier.
-  // 目标资料库标识符。
+  // 目标知识库标识符。
   libraryId: string;
   // Scanned Markdown file count.
   // 已扫描 Markdown 文件数。
@@ -232,7 +232,7 @@ export interface KnowledgeImportJobSummary {
   // 持久化任务标识符。
   id: string;
   // Target library identifier.
-  // 目标资料库标识符。
+  // 目标知识库标识符。
   libraryId: string;
   // Exact operation category retained across page refreshes.
   // 跨页面刷新保留的精确操作类别。
@@ -276,7 +276,7 @@ export interface KnowledgeImportJobSummary {
 // KnowledgeIndexIntegritySummary 将版本门控与精确物理记录检查组合在一起。
 export interface KnowledgeIndexIntegritySummary {
   // Inspected library identifier.
-  // 被检查的资料库标识符。
+  // 被检查的知识库标识符。
   libraryId: string;
   // Whether the physical FTS table exists.
   // 物理 FTS 表是否存在。
@@ -323,7 +323,7 @@ export interface SessionKnowledgeLibrarySelectionSummary {
   // 持久化选择模式。
   mode: "inherit" | "explicit";
   // Persisted explicit library identifiers.
-  // 持久化显式资料库标识符。
+  // 持久化显式知识库标识符。
   libraryIds: string[];
   // Effective identifiers after authorization.
   // 授权校验后的生效标识符。
@@ -340,13 +340,13 @@ export interface KnowledgePackageManifest {
   // 可移植包协议版本。
   packageVersion: number;
   // Source library identity retained only for provenance.
-  // 仅用于来源追踪的原资料库标识。
+  // 仅用于来源追踪的原知识库标识。
   sourceLibraryId: string;
   // Original library name.
-  // 原始资料库名称。
+  // 原始知识库名称。
   name: string;
   // Original library description.
-  // 原始资料库说明。
+  // 原始知识库说明。
   description: string;
   // Authoritative per-library schema version.
   // 权威单库结构版本。
@@ -392,18 +392,18 @@ export interface KnowledgePackageInspection {
   // 已校验的包元数据。
   package: KnowledgePackageManifest;
   // Existing same-name library when present.
-  // 存在时的同名资料库。
+  // 存在时的同名知识库。
   conflictingLibrary?: KnowledgeLibrarySummary | null;
 }
 
 // KnowledgePackageImportResult reports one created or explicitly replaced library.
-// KnowledgePackageImportResult 报告一个新建或显式替换的资料库。
+// KnowledgePackageImportResult 报告一个新建或显式替换的知识库。
 export interface KnowledgePackageImportResult {
   // Imported authoritative library summary.
-  // 已导入的权威资料库摘要。
+  // 已导入的权威知识库摘要。
   library: KnowledgeLibrarySummary;
   // Whether one existing library was replaced.
-  // 是否替换了一个现有资料库。
+  // 是否替换了一个现有知识库。
   replacedExisting: boolean;
   // Non-fatal warnings produced after a successful commit.
   // 成功提交后产生的非致命告警。
@@ -431,6 +431,6 @@ export interface KnowledgePackageFileListing {
   // 共享目录导航载荷。
   directory: ProjectDirectoryListing;
   // Selectable packages in the current directory.
-  // 当前目录中的可选资料库包。
+  // 当前目录中的可选知识库包。
   packages: KnowledgePackageFileSummary[];
 }

@@ -40,33 +40,33 @@ pub enum AiToolKind {
     AudioGeneration,
 }
 
-/// Host-owned fallback tool id used by the configured web-search provider chain.
-/// 宿主侧配置化网页搜索供应商链使用的回退工具标识。
-pub const WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID: &str = "vulcan_web_search_chain";
+/// Host-owned tool id used by one explicitly bound web-search target.
+/// 单个显式绑定网页搜索目标使用的宿主侧工具标识。
+pub const WEB_SEARCH_HOST_BINDING_TOOL_ID: &str = "vulcan_web_search_binding";
 
-/// Host-owned fallback tool id used by the configured image-understanding provider chain.
-/// 宿主侧配置化图片理解供应商链使用的回退工具标识。
-pub const UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID: &str = "vulcan_understand_image_chain";
+/// Host-owned tool id used by one explicitly bound image-understanding target.
+/// 单个显式绑定图片理解目标使用的宿主侧工具标识。
+pub const UNDERSTAND_IMAGE_HOST_BINDING_TOOL_ID: &str = "vulcan_understand_image_binding";
 
-/// Host-owned fallback tool id used by the configured image-generation provider chain.
-/// 宿主侧配置化图片生成供应商链使用的回退工具标识。
-pub const IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID: &str = "vulcan_image_generation_chain";
+/// Host-owned tool id used by one explicitly bound image-generation target.
+/// 单个显式绑定图片生成目标使用的宿主侧工具标识。
+pub const IMAGE_GENERATION_HOST_BINDING_TOOL_ID: &str = "vulcan_image_generation_binding";
 
-/// Host-owned fallback tool id used by the configured video-generation provider chain.
-/// 宿主侧配置化视频生成供应商链使用的回退工具标识。
-pub const VIDEO_GENERATION_PROVIDER_CHAIN_TOOL_ID: &str = "vulcan_video_generation_chain";
+/// Host-owned tool id used by one explicitly bound video-generation target.
+/// 单个显式绑定视频生成目标使用的宿主侧工具标识。
+pub const VIDEO_GENERATION_HOST_BINDING_TOOL_ID: &str = "vulcan_video_generation_binding";
 
-/// Host-owned fallback tool id used by the configured speech-synthesis provider chain.
-/// 宿主侧配置化语音合成供应商链使用的回退工具标识。
-pub const SPEECH_SYNTHESIS_PROVIDER_CHAIN_TOOL_ID: &str = "vulcan_speech_synthesis_chain";
+/// Host-owned tool id used by one explicitly bound speech-synthesis target.
+/// 单个显式绑定语音合成目标使用的宿主侧工具标识。
+pub const SPEECH_SYNTHESIS_HOST_BINDING_TOOL_ID: &str = "vulcan_speech_synthesis_binding";
 
-/// Host-owned fallback tool id used by the configured music-generation provider chain.
-/// 宿主侧配置化音乐生成供应商链使用的回退工具标识。
-pub const MUSIC_GENERATION_PROVIDER_CHAIN_TOOL_ID: &str = "vulcan_music_generation_chain";
+/// Host-owned tool id used by one explicitly bound music-generation target.
+/// 单个显式绑定音乐生成目标使用的宿主侧工具标识。
+pub const MUSIC_GENERATION_HOST_BINDING_TOOL_ID: &str = "vulcan_music_generation_binding";
 
-/// Host-owned fallback tool id used by the configured music-cover provider chain.
-/// 宿主侧配置化音乐翻唱供应商链使用的回退工具标识。
-pub const MUSIC_COVER_PROVIDER_CHAIN_TOOL_ID: &str = "vulcan_music_cover_chain";
+/// Host-owned tool id used by one explicitly bound music-cover target.
+/// 单个显式绑定音乐翻唱目标使用的宿主侧工具标识。
+pub const MUSIC_COVER_HOST_BINDING_TOOL_ID: &str = "vulcan_music_cover_binding";
 
 /// Maximum number of enabled targets allowed beneath one semantic AI capability.
 /// 单个语义 AI 能力允许启用的目标上限数量。

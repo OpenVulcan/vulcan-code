@@ -88,24 +88,13 @@ pub(super) fn normalize_minimax_vendor_base_url(base_url: &str) -> String {
     trimmed.to_string()
 }
 
-/// Normalizes one route-order array into a deduplicated, non-empty selector list.
-/// 将单条路由顺序数组归一化为去重且非空的选择器列表。
-pub(super) fn normalize_route_target_order(target_order: &[String]) -> Vec<String> {
-    let mut normalized = Vec::new();
-    for target in target_order {
-        let normalized_target = target.trim();
-        if normalized_target.is_empty() {
-            continue;
-        }
-        if normalized
-            .iter()
-            .any(|existing: &String| existing.eq_ignore_ascii_case(normalized_target))
-        {
-            continue;
-        }
-        normalized.push(normalized_target.to_string());
-    }
-    normalized
+/// Normalizes one optional exact `vendor/target` selector.
+/// 归一化一个可选的精确 `供应商/目标` 选择器。
+pub(super) fn normalize_optional_target_selector(target: Option<&str>) -> Option<String> {
+    target
+        .map(str::trim)
+        .filter(|target| !target.is_empty())
+        .map(ToString::to_string)
 }
 
 /// Normalizes all vendor instances in-place and removes duplicate vendor ids.
@@ -134,13 +123,14 @@ pub(super) fn normalize_ai_capability_vendors(
     *vendors != original
 }
 
-/// Returns the effective route target order by honoring the configured preference and then appending any enabled targets not yet mentioned.
-/// 返回生效路由目标顺序：先尊重已配置偏好，再补齐尚未出现的已启用目标。
-pub(super) fn build_effective_route_target_order(
-    configured_order: &[String],
+/// Resolves one configured target only when it still belongs to an enabled vendor binding.
+/// 仅当一个已配置目标仍属于启用的供应商绑定时解析该目标。
+pub(super) fn resolve_exact_target_binding(
+    selected_target: Option<&str>,
     vendors: &[PersistedAiCapabilityVendorEntry],
     capability_kind: AiToolKind,
-) -> Vec<String> {
+) -> Option<String> {
+    let selected_target = normalize_optional_target_selector(selected_target)?;
     let mut natural_targets = Vec::new();
     for vendor in vendors {
         if !vendor.enabled {
@@ -149,36 +139,33 @@ pub(super) fn build_effective_route_target_order(
         natural_targets.extend(vendor.enabled_target_strings_for(capability_kind));
     }
 
-    let mut ordered = Vec::new();
-    for target in normalize_route_target_order(configured_order) {
-        if natural_targets
-            .iter()
-            .any(|existing| existing.eq_ignore_ascii_case(&target))
-            && !ordered
-                .iter()
-                .any(|existing: &String| existing.eq_ignore_ascii_case(&target))
-        {
-            ordered.push(target);
-        }
-    }
-    for target in natural_targets {
-        if !ordered
-            .iter()
-            .any(|existing: &String| existing.eq_ignore_ascii_case(&target))
-        {
-            ordered.push(target);
-        }
-    }
-    if ordered.len() > MAX_ENABLED_AI_CAPABILITY_TARGETS_PER_KIND {
-        ordered.truncate(MAX_ENABLED_AI_CAPABILITY_TARGETS_PER_KIND);
-    }
-    ordered
+    natural_targets
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(&selected_target))
+        .then_some(selected_target)
 }
 
-/// Returns the stable persisted route target order by honoring the configured preference and then appending any configured targets not yet mentioned.
-/// 返回稳定持久化的路由目标顺序：先尊重已配置偏好，再补齐尚未出现的全部已配置目标。
-pub(super) fn build_stable_route_target_order(
-    configured_order: &[String],
+/// Normalizes one persisted exact binding while retaining disabled but still configured targets.
+/// 规范化一个持久化精确绑定，同时保留已禁用但仍存在配置的目标。
+pub(super) fn normalize_exact_target_binding(
+    selected_target: Option<&str>,
+    vendors: &[PersistedAiCapabilityVendorEntry],
+    capability_kind: AiToolKind,
+) -> Option<String> {
+    let selected_target = normalize_optional_target_selector(selected_target)?;
+    let configured_targets = vendors
+        .iter()
+        .flat_map(|vendor| vendor.configured_target_strings_for(capability_kind))
+        .collect::<Vec<_>>();
+    configured_targets
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(&selected_target))
+        .then_some(selected_target)
+}
+
+/// Returns all configured targets in deterministic declaration order without assigning execution preference.
+/// 按确定性的声明顺序返回全部已配置目标，不赋予任何执行优先级。
+pub(super) fn build_configured_target_list(
     vendors: &[PersistedAiCapabilityVendorEntry],
     capability_kind: AiToolKind,
 ) -> Vec<String> {
@@ -188,17 +175,6 @@ pub(super) fn build_stable_route_target_order(
     }
 
     let mut ordered = Vec::new();
-    for target in normalize_route_target_order(configured_order) {
-        if configured_targets
-            .iter()
-            .any(|existing| existing.eq_ignore_ascii_case(&target))
-            && !ordered
-                .iter()
-                .any(|existing: &String| existing.eq_ignore_ascii_case(&target))
-        {
-            ordered.push(target);
-        }
-    }
     for target in configured_targets {
         if !ordered
             .iter()

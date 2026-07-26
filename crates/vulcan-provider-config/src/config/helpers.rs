@@ -58,15 +58,6 @@ pub(super) fn default_web_search_max_results() -> usize {
     5
 }
 
-/// Returns whether one value still equals its type default for compact serialization.
-/// 返回某个值是否仍等于其类型默认值，以便紧凑序列化。
-pub(super) fn is_default<T>(value: &T) -> bool
-where
-    T: Default + PartialEq,
-{
-    *value == T::default()
-}
-
 /// Returns whether one boolean value is false for compact serialization.
 /// 返回单个布尔值是否为 false，以便紧凑序列化。
 pub(super) fn is_false(value: &bool) -> bool {
@@ -79,8 +70,8 @@ pub(super) fn is_true(value: &bool) -> bool {
     *value
 }
 
-/// Returns whether one AI-tool policy is the default automatic policy.
-/// 返回单个 AI 工具策略是否为默认自动策略。
+/// Returns whether one AI-tool policy is the default provider-native policy.
+/// 返回单个 AI 工具策略是否为默认 Provider 原生策略。
 pub(super) fn is_default_ai_tool_policy(policy: &AiToolPolicy) -> bool {
-    *policy == AiToolPolicy::Auto
+    *policy == AiToolPolicy::ForceNative
 }

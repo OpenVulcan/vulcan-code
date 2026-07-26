@@ -333,13 +333,9 @@ mod tests {
         assert!(blueprint.capabilities.supports_tool_call);
         assert_eq!(blueprint.capabilities.ai_tools.len(), 1);
         assert!(blueprint.capabilities.ai_tools[0].native_provider_tool);
-        assert!(
-            blueprint.capabilities.ai_tools[0]
-                .fallback_tool_id
-                .is_none()
-        );
-        // ai_tool_plan must select the provider-native branch; only HostFallback decisions are registered as host tools.
-        // ai_tool_plan 必须选择 Provider 原生分支；只有 HostFallback 决策才会注册为宿主工具。
+        assert!(blueprint.capabilities.ai_tools[0].host_tool_id.is_none());
+        // ai_tool_plan must select the provider-native branch; only HostBinding decisions are registered as host tools.
+        // ai_tool_plan 必须选择 Provider 原生分支；只有 HostBinding 决策才会注册为宿主工具。
         let ai_tool_plan = resolve_ai_tool_plan(&blueprint);
         assert_eq!(
             ai_tool_plan.decisions[0].route,

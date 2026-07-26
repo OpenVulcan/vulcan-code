@@ -40,7 +40,7 @@ fn preferred_public_tool_name_for_descriptor(descriptor: &VulcanToolDescriptor) 
         VulcanToolSourceKind::Native
         | VulcanToolSourceKind::VulcanPlugin
         | VulcanToolSourceKind::LuaSkills
-        | VulcanToolSourceKind::AiFallback => build_direct_public_tool_name(&descriptor.id),
+        | VulcanToolSourceKind::AiHostBinding => build_direct_public_tool_name(&descriptor.id),
         VulcanToolSourceKind::Mcp => {
             let direct_name = build_direct_public_tool_name(&descriptor.id);
             if direct_name.starts_with("mcp_") {

@@ -1,5 +1,5 @@
 //! Host-native knowledge-base service handlers.
-//! 宿主原生资料库服务处理器。
+//! 宿主原生知识库服务处理器。
 
 use super::*;
 use std::{fs, path::PathBuf};
@@ -18,7 +18,7 @@ use vulcan_workbench_model::{
 use vulcan_workspace_store::knowledge_base::KnowledgeBaseRuntime;
 
 /// Returns the retained knowledge runtime without holding the service-state lock across I/O.
-/// 返回保留的资料库运行时，且不会在 I/O 期间持有服务状态锁。
+/// 返回保留的知识库运行时，且不会在 I/O 期间持有服务状态锁。
 fn retained_knowledge_runtime(
     state: &SharedServiceBridgeState,
 ) -> Result<KnowledgeBaseRuntime, String> {
@@ -31,7 +31,7 @@ fn retained_knowledge_runtime(
 }
 
 /// Lists libraries, optionally constrained to one project authorization set.
-/// 列出资料库，并可选约束到一个项目授权集合。
+/// 列出知识库，并可选约束到一个项目授权集合。
 pub(super) async fn service_list_knowledge_libraries(
     state: SharedServiceBridgeState,
     project_id: Option<String>,
@@ -43,7 +43,7 @@ pub(super) async fn service_list_knowledge_libraries(
 }
 
 /// Creates one knowledge library and returns its registry summary.
-/// 创建一个资料库并返回其注册摘要。
+/// 创建一个知识库并返回其注册摘要。
 pub(super) async fn service_create_knowledge_library(
     state: SharedServiceBridgeState,
     request: KnowledgeLibraryCreateRequest,
@@ -56,7 +56,7 @@ pub(super) async fn service_create_knowledge_library(
 }
 
 /// Renames one library without changing its identity.
-/// 在不改变身份的前提下重命名一个资料库。
+/// 在不改变身份的前提下重命名一个知识库。
 pub(super) async fn service_rename_knowledge_library(
     state: SharedServiceBridgeState,
     request: KnowledgeLibraryRenameRequest,
@@ -69,7 +69,7 @@ pub(super) async fn service_rename_knowledge_library(
 }
 
 /// Deletes one physically isolated knowledge library.
-/// 删除一个物理隔离资料库。
+/// 删除一个物理隔离知识库。
 pub(super) async fn service_delete_knowledge_library(
     state: SharedServiceBridgeState,
     library_id: String,
@@ -98,7 +98,7 @@ pub(super) async fn service_set_knowledge_project_binding(
 }
 
 /// Lists project bindings for one library.
-/// 列出一个资料库的项目绑定。
+/// 列出一个知识库的项目绑定。
 pub(super) async fn service_list_knowledge_project_bindings(
     state: SharedServiceBridgeState,
     library_id: String,
@@ -110,7 +110,7 @@ pub(super) async fn service_list_knowledge_project_bindings(
 }
 
 /// Lists every active-library binding for one project in a single service request.
-/// 通过单次服务请求列出一个项目的全部活动资料库绑定。
+/// 通过单次服务请求列出一个项目的全部活动知识库绑定。
 pub(super) async fn service_list_project_knowledge_bindings(
     state: SharedServiceBridgeState,
     project_id: String,
@@ -123,11 +123,11 @@ pub(super) async fn service_list_project_knowledge_bindings(
 }
 
 /// Lists every durable import source attached to one library.
-/// 列出关联到一个资料库的全部持久化导入来源。
+/// 列出关联到一个知识库的全部持久化导入来源。
 ///
 /// Parameters: `state` owns the retained runtime and `library_id` selects the physical library.
 /// Returns: a browser-facing JSON array of source summaries.
-/// 参数：`state` 持有保留运行时，`library_id` 选择物理资料库。返回值：面向浏览器的来源摘要 JSON 数组。
+/// 参数：`state` 持有保留运行时，`library_id` 选择物理知识库。返回值：面向浏览器的来源摘要 JSON 数组。
 pub(super) async fn service_list_knowledge_sources(
     state: SharedServiceBridgeState,
     library_id: String,
@@ -155,7 +155,7 @@ pub(super) async fn service_import_knowledge_directory(
 }
 
 /// Requests cooperative cancellation for one exact active knowledge operation.
-/// 请求协作取消一个精确的活动资料库操作。
+/// 请求协作取消一个精确的活动知识库操作。
 pub(super) async fn service_cancel_knowledge_import(
     state: SharedServiceBridgeState,
     library_id: String,
@@ -172,7 +172,7 @@ pub(super) async fn service_cancel_knowledge_import(
 }
 
 /// Returns one library's latest dedicated operation progress row.
-/// 返回一个资料库最近的专用操作进度记录。
+/// 返回一个知识库最近的专用操作进度记录。
 pub(super) async fn service_get_knowledge_import_job(
     state: SharedServiceBridgeState,
     library_id: String,
@@ -184,7 +184,7 @@ pub(super) async fn service_get_knowledge_import_job(
 }
 
 /// Starts rebuilding one library's Jieba FTS index from authoritative rows.
-/// 启动从权威记录重建一个资料库的 Jieba FTS 索引。
+/// 启动从权威记录重建一个知识库的 Jieba FTS 索引。
 pub(super) async fn service_rebuild_knowledge_index(
     state: SharedServiceBridgeState,
     library_id: String,
@@ -208,7 +208,7 @@ pub(super) async fn service_repair_knowledge_index(
 }
 
 /// Returns one library's complete metadata and physical FTS integrity snapshot.
-/// 返回一个资料库的完整元数据与物理 FTS 完整性快照。
+/// 返回一个知识库的完整元数据与物理 FTS 完整性快照。
 pub(super) async fn service_get_knowledge_index_integrity(
     state: SharedServiceBridgeState,
     library_id: String,
@@ -221,7 +221,7 @@ pub(super) async fn service_get_knowledge_index_integrity(
 }
 
 /// Lists library-local Jieba custom dictionary entries.
-/// 列出资料库局部 Jieba 自定义词典条目。
+/// 列出知识库局部 Jieba 自定义词典条目。
 pub(super) async fn service_list_knowledge_custom_words(
     state: SharedServiceBridgeState,
     library_id: String,
@@ -234,7 +234,7 @@ pub(super) async fn service_list_knowledge_custom_words(
 }
 
 /// Upserts one library-local Jieba custom dictionary entry.
-/// 写入一个资料库局部 Jieba 自定义词典条目。
+/// 写入一个知识库局部 Jieba 自定义词典条目。
 pub(super) async fn service_upsert_knowledge_custom_word(
     state: SharedServiceBridgeState,
     request: KnowledgeCustomWordRequest,
@@ -246,7 +246,7 @@ pub(super) async fn service_upsert_knowledge_custom_word(
 }
 
 /// Removes one library-local Jieba custom dictionary entry.
-/// 删除一个资料库局部 Jieba 自定义词典条目。
+/// 删除一个知识库局部 Jieba 自定义词典条目。
 pub(super) async fn service_remove_knowledge_custom_word(
     state: SharedServiceBridgeState,
     library_id: String,
@@ -259,7 +259,7 @@ pub(super) async fn service_remove_knowledge_custom_word(
 }
 
 /// Lists documents directly from one library for the trusted management surface.
-/// 为受信任的管理界面直接列出一个资料库中的文档。
+/// 为受信任的管理界面直接列出一个知识库中的文档。
 pub(super) async fn service_list_knowledge_library_documents(
     state: SharedServiceBridgeState,
     request: KnowledgeLibraryDocumentListRequest,
@@ -304,7 +304,7 @@ pub(super) async fn service_read_knowledge_library_document(
 }
 
 /// Searches one selected library directly for the trusted management surface.
-/// 为受信任的管理界面直接检索一个选中的资料库。
+/// 为受信任的管理界面直接检索一个选中的知识库。
 pub(super) async fn service_search_knowledge_library(
     state: SharedServiceBridgeState,
     request: KnowledgeLibrarySearchRequest,
@@ -322,7 +322,7 @@ pub(super) async fn service_search_knowledge_library(
 }
 
 /// Exports one complete ready library into a portable .vkb package.
-/// 将一个完整且就绪的资料库导出为可移植 .vkb 包。
+/// 将一个完整且就绪的知识库导出为可移植 .vkb 包。
 pub(super) async fn service_export_knowledge_package(
     state: SharedServiceBridgeState,
     request: KnowledgePackageExportRequest,
@@ -338,7 +338,7 @@ pub(super) async fn service_export_knowledge_package(
 }
 
 /// Inspects one .vkb package without mutating library state.
-/// 检查一个 .vkb 包且不改变资料库状态。
+/// 检查一个 .vkb 包且不改变知识库状态。
 pub(super) async fn service_inspect_knowledge_package(
     state: SharedServiceBridgeState,
     request: KnowledgePackageInspectRequest,
@@ -351,7 +351,7 @@ pub(super) async fn service_inspect_knowledge_package(
 }
 
 /// Imports one inspected package using one explicit non-overwriting or replacement strategy.
-/// 使用一个显式的不覆盖或替换策略导入已检查的资料库包。
+/// 使用一个显式的不覆盖或替换策略导入已检查的知识库包。
 pub(super) async fn service_import_knowledge_package(
     state: SharedServiceBridgeState,
     request: KnowledgePackageImportRequest,
@@ -370,7 +370,7 @@ pub(super) async fn service_import_knowledge_package(
         KnowledgePackageImportStrategy::Replace => {
             let target_library_id = request
                 .target_library_id
-                .ok_or_else(|| String::from("覆盖导入必须指定精确目标资料库。"))?;
+                .ok_or_else(|| String::from("覆盖导入必须指定精确目标知识库。"))?;
             runtime
                 .replace_library_from_package(&archive_path, &target_library_id, &request.name)
                 .await?
@@ -381,14 +381,14 @@ pub(super) async fn service_import_knowledge_package(
 }
 
 /// Browses directories and ordinary .vkb files for the package-import picker.
-/// 为资料库包导入选择器浏览目录和普通 .vkb 文件。
+/// 为知识库包导入选择器浏览目录和普通 .vkb 文件。
 pub(super) fn service_browse_knowledge_packages(
     state: SharedServiceBridgeState,
     path: Option<String>,
 ) -> Result<Value, String> {
     let directory = service_browse_project_directories(state, path)?;
     let mut packages = fs::read_dir(PathBuf::from(&directory.path))
-        .map_err(|error| format!("读取资料库包目录失败：{error}"))?
+        .map_err(|error| format!("读取知识库包目录失败：{error}"))?
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let metadata = fs::symlink_metadata(entry.path()).ok()?;
@@ -472,7 +472,7 @@ pub(super) async fn service_search_knowledge(
         .iter()
         .find(|library_id| !authorized.contains(*library_id))
     {
-        return Err(format!("资料库未授权给当前项目：{denied}"));
+        return Err(format!("知识库未授权给当前项目：{denied}"));
     }
     let result = runtime
         .search(&request.library_ids, &request.query, request.limit)
@@ -481,18 +481,18 @@ pub(super) async fn service_search_knowledge(
 }
 
 /// Persists a project-authorized session knowledge selection as an addon namespace.
-/// 将通过项目授权校验的会话资料库选择持久化为附属命名空间。
+/// 将通过项目授权校验的会话知识库选择持久化为附属命名空间。
 pub(super) async fn service_set_session_knowledge_libraries(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: SessionKnowledgeLibrarySelectionRequest,
 ) -> Result<Value, String> {
     let session_id = parse_session_id(&request.conversation_id)
-        .ok_or_else(|| String::from("会话标识符无效，无法保存资料库选择。"))?;
+        .ok_or_else(|| String::from("会话标识符无效，无法保存知识库选择。"))?;
     let mode = match request.mode.as_str() {
         "inherit" => SessionKnowledgeLibrarySelectionMode::Inherit,
         "explicit" => SessionKnowledgeLibrarySelectionMode::Explicit,
-        value => return Err(format!("未知资料库选择模式：{value}")),
+        value => return Err(format!("未知知识库选择模式：{value}")),
     };
     let runtime = retained_knowledge_runtime(&state)?;
     let authorized: BTreeSet<String> = runtime
@@ -505,7 +505,7 @@ pub(super) async fn service_set_session_knowledge_libraries(
         .iter()
         .find(|library_id| !authorized.contains(*library_id))
     {
-        return Err(format!("资料库未授权给当前项目：{denied}"));
+        return Err(format!("知识库未授权给当前项目：{denied}"));
     }
 
     let (controller_runtime, workspace_snapshot) = {
@@ -522,7 +522,7 @@ pub(super) async fn service_set_session_knowledge_libraries(
             != Some(request.project_id.as_str())
         {
             return Err(String::from(
-                "当前会话与请求项目不匹配，已拒绝保存资料库选择。",
+                "当前会话与请求项目不匹配，已拒绝保存知识库选择。",
             ));
         }
         (controller_runtime, workspace_snapshot)
@@ -575,13 +575,13 @@ pub(super) async fn service_set_session_knowledge_libraries(
 }
 
 /// Returns one session's persisted and effective project-authorized knowledge selection.
-/// 返回一个会话持久化且经过项目授权后的有效资料库选择。
+/// 返回一个会话持久化且经过项目授权后的有效知识库选择。
 pub(super) async fn service_get_session_knowledge_libraries(
     state: SharedServiceBridgeState,
     conversation_id: String,
 ) -> Result<Value, String> {
     let session_id = parse_session_id(&conversation_id)
-        .ok_or_else(|| String::from("会话标识符无效，无法读取资料库选择。"))?;
+        .ok_or_else(|| String::from("会话标识符无效，无法读取知识库选择。"))?;
     let (runtime, project_id, selection) = {
         let guard = state
             .lock()
@@ -632,7 +632,7 @@ pub(super) async fn service_get_session_knowledge_libraries(
 }
 
 /// Rejects access unless the exact library is authorized for the exact project.
-/// 除非精确资料库已授权给精确项目，否则拒绝访问。
+/// 除非精确知识库已授权给精确项目，否则拒绝访问。
 async fn require_authorized_library(
     runtime: &KnowledgeBaseRuntime,
     project_id: &str,
@@ -642,6 +642,6 @@ async fn require_authorized_library(
     if authorized.iter().any(|candidate| candidate == library_id) {
         Ok(())
     } else {
-        Err(format!("资料库未授权给当前项目：{library_id}"))
+        Err(format!("知识库未授权给当前项目：{library_id}"))
     }
 }

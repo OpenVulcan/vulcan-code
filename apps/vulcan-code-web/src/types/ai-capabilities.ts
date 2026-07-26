@@ -20,6 +20,9 @@ export interface AiCapabilityTargetSummary {
   // Whether this target is globally enabled.
   // 当前目标是否全局启用。
   enabled: boolean;
+  // Whether this target is the single explicit binding for the capability.
+  // 当前目标是否为该能力唯一的显式绑定。
+  selected: boolean;
 }
 
 // AiCapabilitySummary describes one semantic AI capability exposed by the composer.

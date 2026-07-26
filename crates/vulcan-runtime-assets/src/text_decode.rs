@@ -78,14 +78,14 @@ mod tests {
     /// 验证完整用户文本会保留有效 UTF-8，并移除可选 BOM。
     #[test]
     fn decode_complete_user_text_accepts_utf8_with_optional_bom() {
-        let plain = decode_complete_user_text("资料库内容".as_bytes()).expect("decode UTF-8");
+        let plain = decode_complete_user_text("知识库内容".as_bytes()).expect("decode UTF-8");
         let with_bom =
             decode_complete_user_text(b"\xEF\xBB\xBF\xE8\xB5\x84\xE6\x96\x99\xE5\xBA\x93")
                 .expect("decode UTF-8 BOM");
 
-        assert_eq!(plain.content, "资料库内容");
+        assert_eq!(plain.content, "知识库内容");
         assert_eq!(plain.encoding, "utf-8");
-        assert_eq!(with_bom.content, "资料库");
+        assert_eq!(with_bom.content, "知识库");
         assert_eq!(with_bom.encoding, "utf-8");
     }
 

@@ -1,5 +1,5 @@
 //! Host-native Markdown knowledge libraries backed by isolated SQLite and vldb Jieba FTS5.
-//! 由隔离 SQLite 与 vldb Jieba FTS5 承载的宿主原生 Markdown 资料库。
+//! 由隔离 SQLite 与 vldb Jieba FTS5 承载的宿主原生 Markdown 知识库。
 
 mod markdown;
 mod models;

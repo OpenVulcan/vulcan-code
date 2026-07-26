@@ -3,9 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use vulcan_provider_config::config::{
-    AiToolKind, PersistedAiToolConfiguration, WebSearchRoutingMode,
-};
+use vulcan_provider_config::config::{AiToolKind, PersistedAiToolConfiguration};
 
 /// Semantic AI capability kinds exposed by the workbench quick-toggle surface.
 /// 工作台快捷开关界面暴露的语义 AI 能力类型集合。
@@ -80,8 +78,8 @@ pub fn effective_workbench_disabled_ai_capability_kinds(
 /// `disabled_kinds` 是有效的禁用语义能力集合。
 /// `disabled_target_selectors` is the runtime-only set of disabled `vendor/target` selectors.
 /// `disabled_target_selectors` 是仅本次运行时禁用的 `vendor/target` 选择器集合。
-/// `target_order_overrides` contains runtime-only route orders keyed by semantic capability kind.
-/// `target_order_overrides` 包含按语义能力类型分组的仅运行时路由顺序覆盖。
+/// `target_bindings` contains one runtime-only exact target per semantic capability kind.
+/// `target_bindings` 包含按语义能力类型分组的单个运行时精确目标。
 ///
 /// # Returns
 /// 返回值
@@ -91,17 +89,17 @@ pub fn effective_ai_tool_configuration_for_prompt_overrides(
     configuration: &PersistedAiToolConfiguration,
     disabled_kinds: &BTreeSet<AiToolKind>,
     disabled_target_selectors: &BTreeSet<String>,
-    target_order_overrides: &BTreeMap<AiToolKind, Vec<String>>,
+    target_bindings: &BTreeMap<AiToolKind, String>,
 ) -> PersistedAiToolConfiguration {
     let mut effective_configuration = configuration.clone();
-    for (capability_kind, target_order) in target_order_overrides {
-        apply_target_order_override(&mut effective_configuration, *capability_kind, target_order);
+    for (capability_kind, selected_target) in target_bindings {
+        apply_target_binding(
+            &mut effective_configuration,
+            *capability_kind,
+            selected_target,
+        );
     }
     for disabled_kind in disabled_kinds {
-        if *disabled_kind == AiToolKind::WebSearch {
-            effective_configuration.web_search.mode = WebSearchRoutingMode::Disabled;
-            continue;
-        }
         for vendor in &mut effective_configuration.vendors {
             for binding in &mut vendor.targets {
                 if binding.capability_kind == *disabled_kind {
@@ -126,55 +124,49 @@ pub fn effective_ai_tool_configuration_for_prompt_overrides(
     effective_configuration
 }
 
-/// Applies one runtime target-order override to the cloned AI tool configuration.
-/// 将单个运行时目标顺序覆盖应用到克隆后的 AI 工具配置。
+/// Applies one runtime exact-target override to the cloned AI tool configuration.
+/// 将单个运行时精确目标覆盖应用到克隆后的 AI 工具配置。
 ///
 /// # Parameters
 /// 参数
 /// `configuration` is the cloned runtime AI tool configuration.
 /// `configuration` 是克隆后的运行时 AI 工具配置。
-/// `capability_kind` identifies the semantic capability being reordered.
-/// `capability_kind` 标识正在调整顺序的语义能力。
-/// `target_order` is the user-selected target order for the current prompt.
-/// `target_order` 是用户为当前提示词选择的目标顺序。
-fn apply_target_order_override(
+/// `capability_kind` identifies the semantic capability being bound.
+/// `capability_kind` 标识正在绑定的语义能力。
+/// `selected_target` is the exact user-selected target for the current prompt.
+/// `selected_target` 是用户为当前提示词显式选择的精确目标。
+fn apply_target_binding(
     configuration: &mut PersistedAiToolConfiguration,
     capability_kind: AiToolKind,
-    target_order: &[String],
+    selected_target: &str,
 ) {
     let configured_targets = configuration
         .resolved_configured_targets_for_kind(capability_kind)
         .into_iter()
         .map(|target| target.target_selector)
         .collect::<Vec<_>>();
-    let mut next_order = Vec::new();
-    for selector in target_order {
-        if configured_targets
-            .iter()
-            .any(|configured| configured.eq_ignore_ascii_case(selector))
-            && !next_order
-                .iter()
-                .any(|existing: &String| existing.eq_ignore_ascii_case(selector))
-        {
-            next_order.push(selector.trim().to_string());
-        }
-    }
-    for selector in configured_targets {
-        if !next_order
-            .iter()
-            .any(|existing| existing.eq_ignore_ascii_case(&selector))
-        {
-            next_order.push(selector);
-        }
-    }
+    let exact_binding = configured_targets
+        .iter()
+        .any(|configured| configured.eq_ignore_ascii_case(selected_target))
+        .then(|| selected_target.trim().to_string());
     match capability_kind {
-        AiToolKind::WebSearch => configuration.web_search.target_order = next_order,
-        AiToolKind::UnderstandImage => configuration.understand_image.target_order = next_order,
-        AiToolKind::ImageGeneration => configuration.image_generation.target_order = next_order,
-        AiToolKind::VideoGeneration => configuration.video_generation.target_order = next_order,
-        AiToolKind::SpeechSynthesis => configuration.speech_synthesis.target_order = next_order,
-        AiToolKind::MusicGeneration => configuration.music_generation.target_order = next_order,
-        AiToolKind::MusicCover => configuration.music_cover.target_order = next_order,
+        AiToolKind::WebSearch => configuration.web_search.selected_target = exact_binding,
+        AiToolKind::UnderstandImage => {
+            configuration.understand_image.selected_target = exact_binding
+        }
+        AiToolKind::ImageGeneration => {
+            configuration.image_generation.selected_target = exact_binding
+        }
+        AiToolKind::VideoGeneration => {
+            configuration.video_generation.selected_target = exact_binding
+        }
+        AiToolKind::SpeechSynthesis => {
+            configuration.speech_synthesis.selected_target = exact_binding
+        }
+        AiToolKind::MusicGeneration => {
+            configuration.music_generation.selected_target = exact_binding
+        }
+        AiToolKind::MusicCover => configuration.music_cover.selected_target = exact_binding,
         _ => {}
     }
 }

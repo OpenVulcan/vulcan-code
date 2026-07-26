@@ -19,9 +19,6 @@ use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 /// 语义 `understand_image` 工具接受的已解析调用参数。
 #[derive(Debug, Clone)]
 struct UnderstandImageInvocation {
-    /// Optional semantic target selector such as `auto` or `instance/target`.
-    /// 可选的语义目标选择器，例如 `auto` 或 `实例/目标`。
-    target: Option<String>,
     /// Attachment selector resolved against the host-visible image catalog.
     /// 针对宿主可见图片目录解析的附件选择器。
     image: String,
@@ -30,8 +27,8 @@ struct UnderstandImageInvocation {
     prompt: String,
 }
 
-/// Executes configured image understanding by trying usable providers in configured order.
-/// 按配置顺序尝试可用提供方来执行配置化图片理解。
+/// Executes configured image understanding against the one provider frozen by the host configuration.
+/// 使用宿主配置冻结的唯一提供方执行配置化图片理解。
 pub async fn execute_configured_understand_image(
     args: Value,
     configuration: PersistedAiToolConfiguration,
@@ -45,9 +42,16 @@ pub async fn execute_configured_understand_image(
         .collect::<Vec<_>>();
     if providers.is_empty() {
         return Err(String::from(
-            "The `understand_image` tool is using host compatibility mode, but no usable image-understanding providers are configured.",
+            "The host-compatible `understand_image` tool has no bound provider. Bind exactly one provider before registering the tool.",
         ));
     }
+    if providers.len() != 1 {
+        return Err(format!(
+            "The host-compatible `understand_image` tool has {} usable providers configured. Bind exactly one provider; automatic routing and provider fallback are not supported.",
+            providers.len()
+        ));
+    }
+    let provider = &providers[0];
 
     let image_attachments = conversation_attachments
         .into_iter()
@@ -72,10 +76,6 @@ pub async fn execute_configured_understand_image(
             )
         }
     })?;
-    let available_targets = providers
-        .iter()
-        .map(PersistedUnderstandImageProviderEntry::qualified_target)
-        .collect::<Vec<_>>();
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
@@ -83,92 +83,32 @@ pub async fn execute_configured_understand_image(
             format!("Failed to build the HTTP client for `understand_image`: {error}")
         })?;
 
-    if let Some(explicit_target) = invocation
-        .target
-        .as_deref()
-        .map(str::trim)
-        .filter(|target| !target.is_empty() && !target.eq_ignore_ascii_case("auto"))
-    {
-        let provider = providers
-            .iter()
-            .find(|provider| provider.matches_target(explicit_target))
-            .ok_or_else(|| {
+    let content =
+        execute_single_provider_understanding(&client, provider, &invocation, &image_attachment)
+            .await
+            .map_err(|error| {
                 format!(
-                    "The target `{explicit_target}` requested by `understand_image` does not exist or is not available. Available targets: {}.",
-                    available_targets.join(", ")
+                    "The bound `understand_image` provider `{}` failed: {error}",
+                    provider.qualified_target()
                 )
             })?;
-
-        let content = execute_single_provider_understanding(
-            &client,
-            provider,
-            &invocation,
-            &image_attachment,
-        )
-        .await
-        .map_err(|error| {
-            format!(
-                "The requested `understand_image` target `{}` failed: {error}",
-                provider.qualified_target()
-            )
-        })?;
-        return Ok(Value::String(render_understand_image_result(
-            provider,
-            &invocation,
-            &image_attachment,
-            &content,
-        )));
-    }
-
-    let mut failures = Vec::new();
-    for provider in &providers {
-        match execute_single_provider_understanding(
-            &client,
-            provider,
-            &invocation,
-            &image_attachment,
-        )
-        .await
-        {
-            Ok(content) => {
-                return Ok(Value::String(render_understand_image_result(
-                    provider,
-                    &invocation,
-                    &image_attachment,
-                    &content,
-                )));
-            }
-            Err(error) => failures.push(format!("{}: {error}", provider.name)),
-        }
-    }
-
-    Err(format!(
-        "All configured `understand_image` providers failed: {}.",
-        failures.join("; ")
-    ))
+    Ok(Value::String(render_understand_image_result(
+        provider,
+        &invocation,
+        &image_attachment,
+        &content,
+    )))
 }
 
 /// Builds the JSON schema used by the configured image-understanding fallback tool.
 /// 构建配置化图片理解回退工具使用的 JSON Schema。
 pub fn configured_understand_image_parameters_schema(
-    configuration: &PersistedAiToolConfiguration,
+    _configuration: &PersistedAiToolConfiguration,
     _conversation_attachments: &[ConversationAttachment],
 ) -> Value {
-    let target_enum = std::iter::once(String::from("auto"))
-        .chain(
-            configuration
-                .usable_targets_for_kind(crate::provider_config::AiToolKind::UnderstandImage),
-        )
-        .collect::<Vec<_>>();
     json!({
         "type": "object",
         "properties": {
-            "target": {
-                "type": "string",
-                "enum": target_enum,
-                "default": "auto",
-                "description": "Image-understanding target selector. Use `auto` to follow the configured default provider order, or choose one explicit instance/target pair."
-            },
             "image": {
                 "type": "string",
                 "description": "Image selector. Use the resource id provided for pasted or uploaded image attachments, or use a full local path when the image was provided as a path or returned by another host tool."
@@ -189,12 +129,6 @@ fn parse_understand_image_invocation(args: Value) -> Result<UnderstandImageInvoc
     let object = args.as_object().ok_or_else(|| {
         String::from("The arguments for `understand_image` must be a JSON object.")
     })?;
-    let target = object
-        .get("target")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
     let image = object
         .get("image")
         .and_then(Value::as_str)
@@ -212,11 +146,7 @@ fn parse_understand_image_invocation(args: Value) -> Result<UnderstandImageInvoc
         .unwrap_or("Describe the image.")
         .to_string();
 
-    Ok(UnderstandImageInvocation {
-        target,
-        image,
-        prompt,
-    })
+    Ok(UnderstandImageInvocation { image, prompt })
 }
 
 /// Executes one provider-specific image-understanding request.
@@ -569,13 +499,11 @@ mod tests {
     #[test]
     fn parse_understand_image_invocation_accepts_schema_argument_names() {
         let invocation = parse_understand_image_invocation(json!({
-            "target": "minimax/minimax",
             "image": "screen.png",
             "prompt": "What text appears in the image?"
         }))
         .expect("arguments should parse");
 
-        assert_eq!(invocation.target.as_deref(), Some("minimax/minimax"));
         assert_eq!(invocation.image, "screen.png");
         assert_eq!(invocation.prompt, "What text appears in the image?");
     }
@@ -636,8 +564,8 @@ mod tests {
         let _ = std::fs::remove_file(image_path);
     }
 
-    /// Exposes a strict schema with stable target routing and selector-based image selection.
-    /// 暴露一份包含稳定 target 路由与基于选择器图片选择的严格 Schema。
+    /// Exposes a strict schema with selector-based image selection and no model-visible routing field.
+    /// 暴露一份基于选择器选择图片且不含模型可见路由字段的严格 Schema。
     #[test]
     fn configured_understand_image_schema_requires_image() {
         let configuration = PersistedAiToolConfiguration {
@@ -659,7 +587,7 @@ mod tests {
                 ],
             }],
             understand_image: PersistedUnderstandImageConfiguration {
-                target_order: vec![String::from("minimax/minimax")],
+                selected_target: Some(String::from("minimax/minimax")),
                 ..PersistedUnderstandImageConfiguration::default()
             },
             ..PersistedAiToolConfiguration::default()
@@ -671,7 +599,7 @@ mod tests {
 
         assert_eq!(schema["required"][0], "image");
         assert_eq!(schema["additionalProperties"], false);
-        assert_eq!(schema["properties"]["target"]["enum"][0], "auto");
+        assert!(schema["properties"].get("target").is_none());
         assert!(
             schema["properties"]["image"].get("enum").is_none(),
             "image selector should not use attachment-derived enums"

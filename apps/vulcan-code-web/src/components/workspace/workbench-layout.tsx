@@ -834,7 +834,7 @@ export function WorkbenchLayout(props: {
     setWorkspaceMainView("memory");
   }, []);
   // handleOpenWorkspaceKnowledge opens knowledge library management inside the workbench main panel.
-  // handleOpenWorkspaceKnowledge 在工作台主面板内打开资料库管理。
+  // handleOpenWorkspaceKnowledge 在工作台主面板内打开知识库管理。
   const handleOpenWorkspaceKnowledge = React.useCallback(() => {
     setActiveArea("chat");
     setWorkspaceMainView("knowledge");

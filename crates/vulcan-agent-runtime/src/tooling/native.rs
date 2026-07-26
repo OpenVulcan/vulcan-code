@@ -216,7 +216,7 @@ pub struct NativeToolExecutionRequest {
     /// 持久化工作区状态的原生工具使用的可选控制器运行时。
     pub controller_runtime: Option<ControllerRuntimeHandle>,
     /// Optional project-authorized and session-enabled knowledge-library snapshot.
-    /// 可选的项目授权且会话已启用资料库快照。
+    /// 可选的项目授权且会话已启用知识库快照。
     pub knowledge_access: Option<ExecutionKnowledgeAccessContext>,
     /// Optional host-managed spill directory used for oversized output paging.
     /// 用于超长输出分页落盘的可选宿主管理超限目录。

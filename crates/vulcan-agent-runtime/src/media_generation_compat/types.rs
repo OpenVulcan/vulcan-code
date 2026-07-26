@@ -33,9 +33,6 @@ pub(super) struct ImageGenerationInvocation {
     /// Free-form image prompt.
     /// 自由形式图片提示词。
     pub(super) prompt: String,
-    /// Target selector chosen by the model or `auto`.
-    /// 由模型选择的目标选择器或 `auto`。
-    pub(super) target: Option<String>,
     /// Number of images requested from the provider.
     /// 向提供方请求的图片数量。
     pub(super) count: usize,
@@ -63,9 +60,6 @@ pub(super) struct VideoGenerationInvocation {
     /// Free-form video prompt.
     /// 自由形式视频提示词。
     pub(super) prompt: String,
-    /// Target selector chosen by the model or `auto`.
-    /// 由模型选择的目标选择器或 `auto`。
-    pub(super) target: Option<String>,
     /// Optional first-frame image attachment selector.
     /// 可选首帧图片附件选择器。
     pub(super) first_image: Option<String>,
@@ -87,9 +81,6 @@ pub(super) struct SpeechSynthesisInvocation {
     /// Input text to synthesize.
     /// 需要合成的输入文本。
     pub(super) text: String,
-    /// Target selector chosen by the model or `auto`.
-    /// 由模型选择的目标选择器或 `auto`。
-    pub(super) target: Option<String>,
     /// Optional voice identifier.
     /// 可选语音标识。
     pub(super) voice: Option<String>,
@@ -114,9 +105,6 @@ pub(super) struct MusicGenerationInvocation {
     /// Optional explicit lyrics body.
     /// 可选显式歌词正文。
     pub(super) lyrics: Option<String>,
-    /// Target selector chosen by the model or `auto`.
-    /// 由模型选择的目标选择器或 `auto`。
-    pub(super) target: Option<String>,
     /// Whether to request instrumental generation.
     /// 是否请求纯音乐生成。
     pub(super) instrumental: bool,
@@ -144,9 +132,6 @@ pub(super) struct MusicCoverInvocation {
     /// Optional cover lyrics override.
     /// 可选翻唱歌词覆盖值。
     pub(super) lyrics: Option<String>,
-    /// Target selector chosen by the model or `auto`.
-    /// 由模型选择的目标选择器或 `auto`。
-    pub(super) target: Option<String>,
     /// Output audio format.
     /// 输出音频格式。
     pub(super) format: String,
@@ -165,8 +150,8 @@ pub(super) struct ResolvedVendorTarget {
     /// Capability target binding chosen for this execution attempt.
     /// 本次执行尝试选中的能力目标绑定。
     pub(super) binding: PersistedAiCapabilityTargetBinding,
-    /// Fully qualified `vendor/target` selector exposed to the model.
-    /// 向模型暴露的完整 `供应商/目标` 选择器。
+    /// Fully qualified `vendor/target` selector frozen by the host configuration.
+    /// 由宿主配置冻结的完整 `供应商/目标` 选择器。
     pub(super) target_selector: String,
 }
 

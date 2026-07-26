@@ -261,11 +261,11 @@ mod workspace_persistence_versions;
 mod workspace_session_persistence;
 use agent_stream::*;
 use ai_capabilities::{
-    ai_capabilities, ai_capability_has_native_path, ai_capability_vendor_catalog,
-    ai_capability_vendors, parse_ai_capability_target_order_overrides,
-    parse_ai_capability_target_selectors, service_remove_ai_capability_vendor,
-    service_save_ai_capability_targets, service_save_ai_capability_vendor,
-    service_set_ai_capability_target_enabled, set_ai_capability_target_order_for_kind,
+    ai_capabilities, ai_capability_vendor_catalog, ai_capability_vendors,
+    parse_ai_capability_target_bindings, parse_ai_capability_target_selectors,
+    service_remove_ai_capability_vendor, service_save_ai_capability_targets,
+    service_save_ai_capability_vendor, service_set_ai_capability_target_enabled,
+    set_ai_capability_selected_target_for_kind,
 };
 use attachments::{
     composer_attachment_capabilities, composer_attachment_summary_from_core,

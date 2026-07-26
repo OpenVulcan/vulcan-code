@@ -449,7 +449,7 @@ mod tests {
             .join("tokenizer.tkz");
         let tokenizer =
             TokieTokenizer::from_file(&tokenizer_path).expect("load bundled Qwen tokenizer");
-        let text = "System prompt 用户资料库检索 服务端 用户等级如何获取 ".repeat(600);
+        let text = "System prompt 用户知识库检索 服务端 用户等级如何获取 ".repeat(600);
 
         let segments = tokie_safe_text_segments(&text);
         assert!(segments.len() > 1);

@@ -42,6 +42,7 @@ import type {
 } from "@/types";
 
 import type { ComposerAttachmentPreviewMedia } from "./composer-control-types";
+import { ComposerKnowledgeControl } from "./composer-knowledge-control";
 
 // ComposerAttachmentMenu renders the plus button and attachment submenu.
 // ComposerAttachmentMenu 渲染加号按钮与附件子菜单。
@@ -73,6 +74,15 @@ export function ComposerAttachmentMenu(props: {
   // Opens the session goal editor from the plus menu.
   // 从加号菜单打开会话目标编辑器。
   onOpenGoal: () => void;
+  // Project identifier used to list authorized knowledge libraries.
+  // 用于列出已授权知识库的项目标识符。
+  projectId: string | null;
+  // Conversation identifier whose knowledge selection is edited.
+  // 要编辑知识库选择的会话标识符。
+  conversationId: string | null;
+  // Opens the project knowledge-library management surface.
+  // 打开项目知识库管理界面。
+  onOpenKnowledge: () => void;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -125,6 +135,11 @@ export function ComposerAttachmentMenu(props: {
             )}
           </DropdownMenuSubContent>
         </DropdownMenuSub>
+        <ComposerKnowledgeControl
+          conversationId={props.conversationId}
+          onOpenKnowledge={props.onOpenKnowledge}
+          projectId={props.projectId}
+        />
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
             <BrainCircuit size={15} />

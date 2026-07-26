@@ -11,9 +11,9 @@ pub(crate) enum AiToolRouteKind {
     /// The tool is executed by a provider-native server-side tool.
     /// 该工具由 Provider 原生服务端工具执行。
     ProviderNative,
-    /// The tool should be exposed as a host-executed fallback function.
-    /// 该工具应作为宿主执行的回退函数暴露。
-    HostFallback,
+    /// The tool should be exposed as one explicitly bound host function.
+    /// 该工具应作为一个显式绑定的宿主函数暴露。
+    HostBinding,
     /// The tool is intentionally not exposed for the current model.
     /// 当前模型刻意不暴露该工具。
     Disabled,
@@ -35,9 +35,9 @@ pub(crate) struct AiToolRouteDecision {
     /// Optional provider-native request patch.
     /// 可选 Provider 原生请求补丁。
     pub(crate) native_request_patch: Option<serde_json::Value>,
-    /// Optional host fallback tool identifier.
-    /// 可选宿主回退工具标识。
-    pub(crate) fallback_tool_id: Option<String>,
+    /// Optional explicitly bound host tool identifier.
+    /// 可选的显式绑定宿主工具标识。
+    pub(crate) host_tool_id: Option<String>,
     /// Whether explicit user approval is required.
     /// 是否需要用户显式批准。
     pub(crate) requires_approval: bool,
@@ -92,8 +92,8 @@ pub(crate) fn resolve_ai_tool_plan(blueprint: &ProviderRuntimeBlueprint) -> AiTo
                     .as_ref()
                     .is_some_and(|value| !value.trim().is_empty())
                     || capability.native_request_patch.is_some());
-            let fallback_available = capability
-                .fallback_tool_id
+            let host_binding_available = capability
+                .host_tool_id
                 .as_ref()
                 .is_some_and(|value| !value.trim().is_empty());
 
@@ -110,25 +110,13 @@ pub(crate) fn resolve_ai_tool_plan(blueprint: &ProviderRuntimeBlueprint) -> AiTo
                     AiToolRouteKind::Disabled,
                     String::from("配置策略要求 Provider 原生工具，但当前模型未声明可用原生工具。"),
                 ),
-                AiToolPolicy::ForceHost if fallback_available => (
-                    AiToolRouteKind::HostFallback,
-                    String::from("配置策略要求宿主回退工具，且已配置 fallback 工具。"),
+                AiToolPolicy::ForceHost if host_binding_available => (
+                    AiToolRouteKind::HostBinding,
+                    String::from("配置策略要求宿主工具，且已配置唯一的显式绑定工具。"),
                 ),
                 AiToolPolicy::ForceHost => (
                     AiToolRouteKind::Disabled,
-                    String::from("配置策略要求宿主回退工具，但尚未配置 fallback 工具。"),
-                ),
-                AiToolPolicy::Auto if native_available => (
-                    AiToolRouteKind::ProviderNative,
-                    String::from("自动策略优先使用当前模型声明的 Provider 原生工具。"),
-                ),
-                AiToolPolicy::Auto if fallback_available => (
-                    AiToolRouteKind::HostFallback,
-                    String::from("自动策略未找到 Provider 原生工具，改用已配置宿主 fallback。"),
-                ),
-                AiToolPolicy::Auto => (
-                    AiToolRouteKind::Disabled,
-                    String::from("自动策略未找到 Provider 原生工具，也未配置宿主 fallback。"),
+                    String::from("配置策略要求宿主工具，但尚未配置唯一的显式绑定工具。"),
                 ),
             };
 
@@ -137,7 +125,7 @@ pub(crate) fn resolve_ai_tool_plan(blueprint: &ProviderRuntimeBlueprint) -> AiTo
                 route,
                 native_tool_type: capability.native_tool_type.clone(),
                 native_request_patch: capability.native_request_patch.clone(),
-                fallback_tool_id: capability.fallback_tool_id.clone(),
+                host_tool_id: capability.host_tool_id.clone(),
                 requires_approval: capability.requires_approval,
                 citation_support: capability.citation_support,
                 source_label: capability.source_label.clone(),
@@ -193,17 +181,17 @@ mod tests {
         }
     }
 
-    /// Routes automatic web search to provider-native when a native tool type is declared.
-    /// 当已声明原生工具类型时，会将自动策略网页搜索路由到 Provider 原生能力。
+    /// Routes explicitly selected native web search to the declared provider tool.
+    /// 将显式选择的原生网页搜索绑定到已声明的 Provider 工具。
     #[test]
-    fn router_prefers_provider_native_for_auto_web_search() {
+    fn router_uses_explicit_provider_native_web_search() {
         let blueprint = blueprint_with_ai_tool(ResolvedAiToolCapability {
             kind: AiToolKind::WebSearch,
-            policy: AiToolPolicy::Auto,
+            policy: AiToolPolicy::ForceNative,
             native_provider_tool: true,
             native_tool_type: Some(String::from("web_search_preview")),
             native_request_patch: None,
-            fallback_tool_id: Some(String::from("__test_web_search_fallback")),
+            host_tool_id: None,
             requires_approval: false,
             result_modalities: vec![String::from("text")],
             citation_support: true,

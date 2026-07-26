@@ -587,7 +587,7 @@ fn render_ai_tool_plan_markdown(preparation: &ExecutionPreparation) -> String {
         .map(|decision| {
             let route_label = match decision.route {
                 AiToolRouteKind::ProviderNative => "Provider 原生",
-                AiToolRouteKind::HostFallback => "宿主 fallback",
+                AiToolRouteKind::HostBinding => "宿主 fallback",
                 AiToolRouteKind::Disabled => "禁用",
             };
             let native_label = decision
@@ -601,7 +601,7 @@ fn render_ai_tool_plan_markdown(preparation: &ExecutionPreparation) -> String {
                 "未声明"
             };
             let fallback_label = decision
-                .fallback_tool_id
+                .host_tool_id
                 .as_deref()
                 .map(|value| format!("`{value}`"))
                 .unwrap_or_else(|| String::from("（无）"));
@@ -690,11 +690,11 @@ mod tests {
                 capabilities: ResolvedModelCapabilities {
                     ai_tools: vec![ResolvedAiToolCapability {
                         kind: AiToolKind::WebSearch,
-                        policy: AiToolPolicy::Auto,
+                        policy: AiToolPolicy::ForceNative,
                         native_provider_tool: true,
                         native_tool_type: Some(String::from("web_search_20250305")),
                         native_request_patch: None,
-                        fallback_tool_id: None,
+                        host_tool_id: None,
                         requires_approval: false,
                         result_modalities: vec![String::from("text")],
                         citation_support: true,

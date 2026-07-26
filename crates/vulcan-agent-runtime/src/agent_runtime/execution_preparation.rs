@@ -11,7 +11,9 @@ use crate::conversation_protocol::collect_host_visible_attachments;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::provider_config::ProviderConfigurationFile;
 use crate::tooling::native::SUBMIT_PLAN_TOOL_ID;
-use crate::vulcan_tools_bridge::{build_vulcan_tools_manager, resolve_ai_tool_fallback_aliases};
+use crate::vulcan_tools_bridge::{
+    build_vulcan_tools_manager, resolve_ai_tool_host_binding_aliases,
+};
 use crate::workspace_path::normalize_workspace_path_text;
 use std::path::PathBuf;
 use vulcan_core::types::ConversationPayload as CoreConversationPayload;
@@ -23,9 +25,12 @@ use vulcan_prompt_skills::{
 use vulcan_session_core::{CapabilityPolicyMode, CapabilityPolicySnapshot};
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
+#[path = "execution_preparation/codebase_tool_routing_prompt.rs"]
+mod codebase_tool_routing_prompt;
 #[path = "execution_preparation/tool_exposure.rs"]
 mod tool_exposure;
 
+use codebase_tool_routing_prompt::append_codebase_tool_routing_prompt;
 use tool_exposure::{
     filter_resolved_tool_set_by_tool_exposure, filter_vulcan_plugin_tool_groups,
     resolve_execution_tool_exposure,
@@ -136,7 +141,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         .filter(|resolved| resolved.is_enabled())
         .map(|resolved| resolved.skill.clone())
         .collect::<Vec<_>>();
-    let ai_tool_fallback_aliases = resolve_ai_tool_fallback_aliases(&model_blueprint);
+    let ai_tool_host_binding_aliases = resolve_ai_tool_host_binding_aliases(&model_blueprint);
     let project_vmm = if request.runtime_policy.vmm_enabled {
         request.project_vmm.clone()
     } else {
@@ -172,7 +177,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         tool_exposure.mcp_tools.clone(),
         request.managed_codebase_memory.clone(),
         tool_exposure.ai_tool_configuration.clone(),
-        ai_tool_fallback_aliases.clone(),
+        ai_tool_host_binding_aliases.clone(),
         enabled_prompt_skill_names,
         prepared_prompt_skills,
         prompt_skill_user_root.clone(),
@@ -224,9 +229,9 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         warnings.push(reasoning_note.clone());
     }
 
-    push_missing_ai_tool_fallback_warnings(
+    push_missing_ai_tool_host_binding_warnings(
         &mut warnings,
-        &ai_tool_fallback_aliases,
+        &ai_tool_host_binding_aliases,
         &resolved_tools,
     );
 
@@ -239,6 +244,10 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         resolved_tools.descriptors.clear();
         resolved_tools.definitions.clear();
     }
+    append_codebase_tool_routing_prompt(
+        &mut prompt_skill_developer_segment,
+        &resolved_tools.descriptors,
+    );
 
     let temperature = if model_blueprint.supports_temperature() {
         request.temperature
@@ -472,22 +481,22 @@ fn remove_request_hidden_tools(
 
 /// Adds non-fatal diagnostics when a configured semantic AI fallback could not be exposed.
 /// 当配置的语义 AI 回退工具无法暴露时追加非致命诊断。
-fn push_missing_ai_tool_fallback_warnings(
+fn push_missing_ai_tool_host_binding_warnings(
     warnings: &mut Vec<String>,
-    aliases: &[crate::vulcan_tools_bridge::AiToolFallbackAlias],
+    aliases: &[crate::vulcan_tools_bridge::AiToolHostBindingAlias],
     resolved_tools: &vulcan_tools_manager::ResolvedToolSet,
 ) {
     for alias in aliases {
         let semantic_tool_name = alias.kind.key();
         let exposed = resolved_tools.descriptors.iter().any(|descriptor| {
-            descriptor.source == vulcan_tools_manager::VulcanToolSourceKind::AiFallback
+            descriptor.source == vulcan_tools_manager::VulcanToolSourceKind::AiHostBinding
                 && descriptor.id == semantic_tool_name
         });
         if !exposed {
             warnings.push(format!(
                 "AI 专用工具 `{}` 已配置回退 `{}`，但本轮未找到可暴露的宿主工具。",
                 alias.kind.label(),
-                alias.fallback_tool_id
+                alias.host_tool_id
             ));
         }
     }

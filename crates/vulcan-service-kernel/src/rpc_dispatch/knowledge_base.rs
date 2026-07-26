@@ -1,10 +1,10 @@
 //! Knowledge-base RPC routing.
-//! 资料库 RPC 路由。
+//! 知识库 RPC 路由。
 
 use super::*;
 
 /// Exact public RPC wire names owned by the knowledge-base domain.
-/// 资料库领域持有的精确公开 RPC 线协议名称。
+/// 知识库领域持有的精确公开 RPC 线协议名称。
 #[cfg(test)]
 pub(super) const RPC_METHODS: &[&str] = &[
     "service_list_knowledge_libraries",
@@ -40,7 +40,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
 ];
 
 /// Dispatches one exact knowledge-base RPC.
-/// 分发一个精确资料库 RPC。
+/// 分发一个精确知识库 RPC。
 pub(super) async fn dispatch(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,

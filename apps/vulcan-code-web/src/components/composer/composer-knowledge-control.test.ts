@@ -7,12 +7,20 @@ import {
 } from "@/service/knowledge-base-service";
 
 describe("nextExplicitKnowledgeLibraryIds", () => {
-  it("starts an explicit selection without copying inherited defaults", () => {
+  it("starts an explicit selection from the effective inherited defaults", () => {
     expect(nextExplicitKnowledgeLibraryIds({
       mode: "inherit",
       libraryIds: [],
       effectiveLibraryIds: ["default-library"],
-    }, "selected-library", true)).toEqual(["selected-library"]);
+    }, "selected-library", true)).toEqual(["default-library", "selected-library"]);
+  });
+
+  it("removes one inherited default without clearing the other effective libraries", () => {
+    expect(nextExplicitKnowledgeLibraryIds({
+      mode: "inherit",
+      libraryIds: [],
+      effectiveLibraryIds: ["library-a", "library-b"],
+    }, "library-a", false)).toEqual(["library-b"]);
   });
 
   it("deduplicates additions and removes only the requested library", () => {

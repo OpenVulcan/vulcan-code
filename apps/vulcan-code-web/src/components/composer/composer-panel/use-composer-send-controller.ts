@@ -17,7 +17,7 @@ type ComposerSubmissionSettings = Pick<
   | "reasoningEffort"
   | "disabledAiCapabilityKinds"
   | "disabledAiCapabilityTargetSelectors"
-  | "aiCapabilityTargetOrderOverrides"
+  | "aiCapabilityTargetBindings"
 >;
 
 // UseComposerSendControllerOptions defines draft state, runtime controls, and backend actions for sending.

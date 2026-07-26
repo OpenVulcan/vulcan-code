@@ -5,22 +5,14 @@ use super::*;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedWebSearchConfiguration {
-    /// User-selected web-search routing mode.
-    /// 用户选择的网页搜索路由模式。
-    #[serde(default)]
-    pub mode: WebSearchRoutingMode,
-    /// Ordered fully qualified `vendor/target` selectors used when the semantic tool receives `target=auto`.
-    /// 当语义工具收到 `target=auto` 时使用的完整 `供应商/目标` 选择器顺序。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub target_order: Vec<String>,
-    /// Legacy ordered external provider fallback chain kept only for compatibility migration.
-    /// 仅为兼容迁移保留的旧版按顺序排列的外部供应商回退链。
+    /// Optional exact `vendor/target` binding selected by the user.
+    /// 用户显式选择的可选精确 `供应商/目标` 绑定。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_target: Option<String>,
+    /// Legacy external provider records kept only for compatibility migration.
+    /// 仅为兼容迁移保留的旧版外部供应商记录。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub providers: Vec<PersistedWebSearchProviderEntry>,
-    /// Legacy dispatch mode kept only for compatibility migration.
-    /// 仅为兼容迁移保留的旧版调度模式。
-    #[serde(default, skip_serializing_if = "is_default")]
-    pub dispatch_mode: WebSearchProviderDispatchMode,
     /// Default result-count hint used when the model does not provide an explicit `max_results`.
     /// 当模型未显式提供 `max_results` 时使用的默认结果数量提示。
     #[serde(default = "default_web_search_max_results")]
@@ -32,12 +24,12 @@ pub struct PersistedWebSearchConfiguration {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedUnderstandImageConfiguration {
-    /// Ordered fully qualified `vendor/target` selectors used when the semantic tool receives `target=auto`.
-    /// 当语义工具收到 `target=auto` 时使用的完整 `供应商/目标` 选择器顺序。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub target_order: Vec<String>,
-    /// Legacy ordered external provider list kept only for compatibility migration.
-    /// 仅为兼容迁移保留的旧版按顺序排列的外部提供方列表。
+    /// Optional exact `vendor/target` binding selected by the user.
+    /// 用户显式选择的可选精确 `供应商/目标` 绑定。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_target: Option<String>,
+    /// Legacy external provider records kept only for compatibility migration.
+    /// 仅为兼容迁移保留的旧版外部提供方记录。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub providers: Vec<PersistedUnderstandImageProviderEntry>,
 }
@@ -47,37 +39,37 @@ impl Default for PersistedUnderstandImageConfiguration {
     /// 构建默认图片理解配置。
     fn default() -> Self {
         Self {
-            target_order: Vec::new(),
+            selected_target: None,
             providers: Vec::new(),
         }
     }
 }
 
-/// Persisted route-order configuration shared by host-owned AI capability tools that only need ordered `vendor/target` selectors.
-/// 仅需要有序 `供应商/目标` 选择器的宿主 AI 能力工具共享的持久化路由顺序配置。
+/// Persisted target-binding configuration shared by host-owned AI capability tools.
+/// 宿主 AI 能力工具共享的持久化目标绑定配置。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedAiCapabilityRouteConfiguration {
-    /// Ordered fully qualified `vendor/target` selectors used when the semantic tool receives `target=auto`.
-    /// 当语义工具收到 `target=auto` 时使用的完整 `供应商/目标` 选择器顺序。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub target_order: Vec<String>,
+    /// Optional exact `vendor/target` binding selected by the user.
+    /// 用户显式选择的可选精确 `供应商/目标` 绑定。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_target: Option<String>,
 }
 
 #[allow(dead_code)]
 impl PersistedAiCapabilityRouteConfiguration {
-    /// Returns whether the route-order configuration still equals the built-in default.
-    /// 返回路由顺序配置是否仍等于内置默认值。
+    /// Returns whether the exact-target configuration still equals the built-in default.
+    /// 返回精确目标配置是否仍等于内置默认值。
     pub fn is_default(&self) -> bool {
         self == &Self::default()
     }
 
-    /// Normalizes the persisted route-order array into one deduplicated selector list.
-    /// 将持久化路由顺序数组归一化为去重后的选择器列表。
+    /// Normalizes the optional exact target selector.
+    /// 归一化可选的精确目标选择器。
     pub fn normalize(&mut self) -> bool {
-        let original = self.target_order.clone();
-        self.target_order = normalize_route_target_order(&self.target_order);
-        self.target_order != original
+        let original = self.selected_target.clone();
+        self.selected_target = normalize_optional_target_selector(self.selected_target.as_deref());
+        self.selected_target != original
     }
 }
 
@@ -91,14 +83,14 @@ impl PersistedUnderstandImageConfiguration {
 
     /// Returns whether at least one configured provider can currently be used.
     /// 返回当前是否至少存在一个可用的已配置提供方。
-    pub fn has_usable_provider_chain(&self) -> bool {
-        !self.target_order.is_empty() || !self.providers.is_empty()
+    pub fn has_usable_provider_binding(&self) -> bool {
+        self.selected_target.is_some() || !self.providers.is_empty()
     }
 
     /// Returns the ordered list of currently usable semantic image-understanding targets.
     /// 返回当前可用语义图片理解目标的有序列表。
     pub fn usable_targets(&self) -> Vec<String> {
-        self.target_order.clone()
+        self.selected_target.iter().cloned().collect()
     }
 
     /// Normalizes persisted provider rows so each provider kind appears at most once with one stable identifier.
@@ -131,7 +123,7 @@ impl PersistedUnderstandImageConfiguration {
         }
 
         self.providers = normalized;
-        self.target_order = normalize_route_target_order(&self.target_order);
+        self.selected_target = normalize_optional_target_selector(self.selected_target.as_deref());
         self != &original
     }
 }
@@ -141,10 +133,8 @@ impl Default for PersistedWebSearchConfiguration {
     /// 构建默认网页搜索配置。
     fn default() -> Self {
         Self {
-            mode: WebSearchRoutingMode::default(),
-            target_order: Vec::new(),
+            selected_target: None,
             providers: Vec::new(),
-            dispatch_mode: WebSearchProviderDispatchMode::default(),
             max_results: default_web_search_max_results(),
         }
     }
@@ -160,8 +150,8 @@ impl PersistedWebSearchConfiguration {
 
     /// Returns whether at least one configured provider can be used.
     /// 返回是否至少存在一个可用的已配置供应商。
-    pub fn has_usable_provider_chain(&self) -> bool {
-        !self.target_order.is_empty() || !self.providers.is_empty()
+    pub fn has_usable_provider_binding(&self) -> bool {
+        self.selected_target.is_some() || !self.providers.is_empty()
     }
 
     /// Normalizes persisted provider rows so each provider kind appears at most once with one stable identifier.
@@ -192,10 +182,7 @@ impl PersistedWebSearchConfiguration {
         }
 
         self.providers = normalized;
-        self.target_order = normalize_route_target_order(&self.target_order);
-        if self.mode == WebSearchRoutingMode::Disabled {
-            self.mode = WebSearchRoutingMode::default();
-        }
+        self.selected_target = normalize_optional_target_selector(self.selected_target.as_deref());
         if self.max_results == 0 {
             self.max_results = default_web_search_max_results();
         }
@@ -205,6 +192,6 @@ impl PersistedWebSearchConfiguration {
     /// Returns the ordered list of currently usable semantic web-search targets.
     /// 返回当前可用语义网页搜索目标的有序列表。
     pub fn usable_targets(&self) -> Vec<String> {
-        self.target_order.clone()
+        self.selected_target.iter().cloned().collect()
     }
 }

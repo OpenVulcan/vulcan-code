@@ -1,18 +1,18 @@
 //! Public knowledge-base domain models shared by storage, service, and AI tooling.
-//! 由存储、服务与 AI 工具共享的资料库领域模型。
+//! 由存储、服务与 AI 工具共享的知识库领域模型。
 
 use serde::{Deserialize, Serialize};
 
 /// Stable format identifier stored in every portable knowledge package.
-/// 每个可移植资料库包中存储的稳定格式标识。
+/// 每个可移植知识库包中存储的稳定格式标识。
 pub const KNOWLEDGE_PACKAGE_FORMAT: &str = "vulcan-code-knowledge-base";
 
 /// Current portable knowledge package version.
-/// 当前可移植资料库包版本。
+/// 当前可移植知识库包版本。
 pub const KNOWLEDGE_PACKAGE_VERSION: u32 = 1;
 
 /// Maximum accepted portable package archive size.
-/// 可接受的可移植资料库归档最大字节数。
+/// 可接受的可移植知识库归档最大字节数。
 pub const MAX_KNOWLEDGE_PACKAGE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 /// Portable metadata stored as package.json inside one .vkb archive.
@@ -27,13 +27,13 @@ pub struct KnowledgePackageManifest {
     /// 可移植包协议版本。
     pub package_version: u32,
     /// Source library identity retained only for provenance and validation.
-    /// 仅用于来源追踪和校验的原资料库标识。
+    /// 仅用于来源追踪和校验的原知识库标识。
     pub source_library_id: String,
     /// Original user-visible library name.
-    /// 原始用户可见资料库名称。
+    /// 原始用户可见知识库名称。
     pub name: String,
     /// Original user-visible library description.
-    /// 原始用户可见资料库说明。
+    /// 原始用户可见知识库说明。
     pub description: String,
     /// Authoritative per-library SQLite schema version.
     /// 权威单库 SQLite 结构版本。
@@ -48,7 +48,7 @@ pub struct KnowledgePackageManifest {
     /// 导出的派生索引状态。
     pub index_status: String,
     /// Unix timestamp when the package was created.
-    /// 创建资料库包时的 Unix 毫秒时间戳。
+    /// 创建知识库包时的 Unix 毫秒时间戳。
     pub exported_at_ms: i64,
     /// Lowercase SHA-256 digest of library/content.sqlite3.
     /// library/content.sqlite3 的小写 SHA-256 摘要。
@@ -59,7 +59,7 @@ pub struct KnowledgePackageManifest {
 }
 
 /// Result returned after one package is exported.
-/// 一个资料库包导出后返回的结果。
+/// 一个知识库包导出后返回的结果。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgePackageExportResult {
@@ -72,7 +72,7 @@ pub struct KnowledgePackageExportResult {
 }
 
 /// Read-only inspection result for one candidate package.
-/// 一个候选资料库包的只读检查结果。
+/// 一个候选知识库包的只读检查结果。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgePackageInspection {
@@ -83,20 +83,20 @@ pub struct KnowledgePackageInspection {
     /// 已校验的可移植包元数据。
     pub package: KnowledgePackageManifest,
     /// Existing active library with the same normalized name, when present.
-    /// 存在时返回同规范名称的现有活动资料库。
+    /// 存在时返回同规范名称的现有活动知识库。
     pub conflicting_library: Option<KnowledgeLibrarySummary>,
 }
 
 /// Result returned after one package import or replacement.
-/// 一个资料库包导入或替换后返回的结果。
+/// 一个知识库包导入或替换后返回的结果。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgePackageImportResult {
     /// Imported or replaced authoritative library summary.
-    /// 已导入或替换的权威资料库摘要。
+    /// 已导入或替换的权威知识库摘要。
     pub library: KnowledgeLibrarySummary,
     /// Whether an existing physical library was explicitly replaced.
-    /// 是否显式替换了现有物理资料库。
+    /// 是否显式替换了现有物理知识库。
     pub replaced_existing: bool,
     /// Non-fatal cleanup or post-commit warnings retained after a successful import.
     /// 成功导入后保留的非致命清理或提交后告警。
@@ -104,7 +104,7 @@ pub struct KnowledgePackageImportResult {
 }
 
 /// One custom Jieba word stored inside a physical library database.
-/// 存储在物理资料库数据库中的一个 Jieba 自定义词。
+/// 存储在物理知识库数据库中的一个 Jieba 自定义词。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeCustomWord {
@@ -117,18 +117,18 @@ pub struct KnowledgeCustomWord {
 }
 
 /// One project-scoped knowledge library shown to users and runtime policy code.
-/// 展示给用户和运行时策略代码的一个项目级资料库。
+/// 展示给用户和运行时策略代码的一个项目级知识库。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeLibrarySummary {
     /// Immutable UUID string identifying the library.
-    /// 标识资料库的不可变 UUID 字符串。
+    /// 标识知识库的不可变 UUID 字符串。
     pub id: String,
     /// User-visible library name.
-    /// 用户可见的资料库名称。
+    /// 用户可见的知识库名称。
     pub name: String,
     /// Optional user-visible library description.
-    /// 可选的用户可见资料库说明。
+    /// 可选的用户可见知识库说明。
     pub description: String,
     /// Durable lifecycle state such as active, deleting, or error.
     /// 持久化生命周期状态，例如 active、deleting 或 error。
@@ -146,15 +146,15 @@ pub struct KnowledgeLibrarySummary {
     /// 最近一次完成导入的 Unix 毫秒时间戳。
     pub last_completed_import_at_ms: Option<i64>,
     /// Unix timestamp when the library was created.
-    /// 资料库创建时的 Unix 毫秒时间戳。
+    /// 知识库创建时的 Unix 毫秒时间戳。
     pub created_at_ms: i64,
     /// Unix timestamp when the library metadata last changed.
-    /// 资料库元数据最近变更时的 Unix 毫秒时间戳。
+    /// 知识库元数据最近变更时的 Unix 毫秒时间戳。
     pub updated_at_ms: i64,
 }
 
 /// One durable Markdown source directory attached to a knowledge library.
-/// 关联到一个资料库的持久化 Markdown 来源目录。
+/// 关联到一个知识库的持久化 Markdown 来源目录。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeSourceSummary {
@@ -222,7 +222,7 @@ impl KnowledgeOperationKind {
             "import" => Ok(Self::Import),
             "repair" => Ok(Self::Repair),
             "rebuild" => Ok(Self::Rebuild),
-            _ => Err(format!("未知的资料库操作类型：{value}")),
+            _ => Err(format!("未知的知识库操作类型：{value}")),
         }
     }
 }
@@ -233,7 +233,7 @@ impl KnowledgeOperationKind {
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeIndexIntegritySummary {
     /// Immutable library identifier inspected by the runtime.
-    /// 运行时检查的不可变资料库标识符。
+    /// 运行时检查的不可变知识库标识符。
     pub library_id: String,
     /// Whether the physical FTS virtual table currently exists.
     /// 物理 FTS 虚拟表当前是否存在。
@@ -274,18 +274,18 @@ pub struct KnowledgeIndexIntegritySummary {
 }
 
 /// One explicit authorization binding between a library and a project.
-/// 资料库与项目之间的一条显式授权绑定。
+/// 知识库与项目之间的一条显式授权绑定。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeProjectBinding {
     /// Immutable library identifier.
-    /// 不可变资料库标识符。
+    /// 不可变知识库标识符。
     pub library_id: String,
     /// Immutable project identifier.
     /// 不可变项目标识符。
     pub project_id: String,
     /// Whether inherited session selection enables this library by default.
-    /// 继承型会话选择是否默认启用此资料库。
+    /// 继承型会话选择是否默认启用此知识库。
     pub default_enabled: bool,
 }
 
@@ -373,10 +373,10 @@ pub struct KnowledgeChunk {
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeSearchHit {
     /// Library containing the hit.
-    /// 命中所属资料库标识符。
+    /// 命中所属知识库标识符。
     pub library_id: String,
     /// User-visible library name.
-    /// 用户可见资料库名称。
+    /// 用户可见知识库名称。
     pub library_name: String,
     /// Document containing the hit.
     /// 命中所属文档标识符。
@@ -406,20 +406,20 @@ pub struct KnowledgeSearchHit {
     /// 稳定的词法匹配策略，只能是 `bm25` 或 `substring`。
     pub match_kind: String,
     /// Per-library BM25 score where larger is better.
-    /// 单资料库内越大越优的 BM25 分数；子串补充命中固定为零。
+    /// 单知识库内越大越优的 BM25 分数；子串补充命中固定为零。
     pub bm25_score: f64,
     /// Optional reciprocal-rank-fusion score used only across libraries.
-    /// 仅跨资料库融合时使用的可选倒数排名融合分数。
+    /// 仅跨知识库融合时使用的可选倒数排名融合分数。
     pub rrf_score: Option<f64>,
 }
 
 /// One library-level search failure retained in a federated response.
-/// 联合检索响应中保留的一条资料库级失败。
+/// 联合检索响应中保留的一条知识库级失败。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeSearchFailure {
     /// Library that failed.
-    /// 失败的资料库标识符。
+    /// 失败的知识库标识符。
     pub library_id: String,
     /// Explicit failure detail.
     /// 显式失败详情。
@@ -427,12 +427,12 @@ pub struct KnowledgeSearchFailure {
 }
 
 /// One exact FTS MATCH expression generated by vldb for a physical library.
-/// vldb 为一个物理资料库生成的一条精确 FTS MATCH 表达式。
+/// vldb 为一个物理知识库生成的一条精确 FTS MATCH 表达式。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeFtsQuery {
     /// Library whose dictionary produced the expression.
-    /// 其词典生成该表达式的资料库。
+    /// 其词典生成该表达式的知识库。
     pub library_id: String,
     /// Safe Jieba-tokenized expression sent to SQLite FTS5.
     /// 发送给 SQLite FTS5 的安全 Jieba 分词表达式。
@@ -451,10 +451,10 @@ pub struct KnowledgeSearchResult {
     /// 完成排序的权威命中。
     pub hits: Vec<KnowledgeSearchHit>,
     /// Per-library FTS expressions generated by vldb.
-    /// vldb 生成的逐资料库 FTS 表达式。
+    /// vldb 生成的逐知识库 FTS 表达式。
     pub fts_queries: Vec<KnowledgeFtsQuery>,
     /// Library-level failures not hidden from the caller.
-    /// 不向调用方隐藏的资料库级失败。
+    /// 不向调用方隐藏的知识库级失败。
     pub failures: Vec<KnowledgeSearchFailure>,
 }
 
@@ -467,7 +467,7 @@ pub struct KnowledgeImportReport {
     /// 持久化导入任务标识符。
     pub job_id: String,
     /// Target library identifier.
-    /// 目标资料库标识符。
+    /// 目标知识库标识符。
     pub library_id: String,
     /// Number of Markdown files discovered.
     /// 扫描到的 Markdown 文件数量。
@@ -504,7 +504,7 @@ pub struct KnowledgeImportJobSummary {
     /// 持久化任务标识符。
     pub id: String,
     /// Target library identifier.
-    /// 目标资料库标识符。
+    /// 目标知识库标识符。
     pub library_id: String,
     /// Stable import, repair, or rebuild operation kind.
     /// 稳定的导入、补全或重建操作类型。

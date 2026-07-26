@@ -76,15 +76,15 @@ export function writeComposerSessionMemoryDraft(
   });
 }
 
-// defaultAiCapabilityTargetOrderFromRecord restores a typed route order map from a saved request payload.
-// defaultAiCapabilityTargetOrderFromRecord 从已保存请求载荷恢复类型化路由顺序映射。
-export function defaultAiCapabilityTargetOrderFromRecord(record: Record<string, string[]>): Map<AiCapabilityKind, string[]> {
-  const order = new Map<AiCapabilityKind, string[]>();
-  for (const [kind, selectors] of Object.entries(record)) {
-    if (isComposerAiCapabilityKind(kind)) {
-      order.set(kind, [...selectors]);
+// defaultAiCapabilityTargetBindingsFromRecord restores typed exact bindings from a saved request payload.
+// defaultAiCapabilityTargetBindingsFromRecord 从已保存请求载荷恢复类型化精确绑定。
+export function defaultAiCapabilityTargetBindingsFromRecord(record: Record<string, string>): Map<AiCapabilityKind, string> {
+  const bindings = new Map<AiCapabilityKind, string>();
+  for (const [kind, selector] of Object.entries(record)) {
+    if (isComposerAiCapabilityKind(kind) && selector.trim()) {
+      bindings.set(kind, selector.trim());
     }
   }
-  return order;
+  return bindings;
 }
 

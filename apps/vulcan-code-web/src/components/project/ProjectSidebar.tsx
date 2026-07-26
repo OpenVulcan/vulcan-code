@@ -73,7 +73,7 @@ export function ProjectSidebar(props: {
   // 从工作台侧栏打开记忆功能区。
   onOpenMemory: () => void;
   // Opens the knowledge library management area from the workbench sidebar.
-  // 从工作台侧栏打开资料库管理区域。
+  // 从工作台侧栏打开知识库管理区域。
   onOpenKnowledge: () => void;
   // Selects one top-level application area from the sidebar brand menu.
   // 从侧栏品牌菜单选择一个顶层应用区域。
@@ -97,7 +97,7 @@ export function ProjectSidebar(props: {
   // 内嵌记忆设置视图当前是否激活。
   memoryActive: boolean;
   // Whether the embedded knowledge library management view is currently active.
-  // 内嵌资料库管理视图当前是否激活。
+  // 内嵌知识库管理视图当前是否激活。
   knowledgeActive: boolean;
   onExpandedProjectIdsChange: (projectIds: string[]) => void;
   onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;

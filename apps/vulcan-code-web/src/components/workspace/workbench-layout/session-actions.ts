@@ -75,7 +75,7 @@ export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptio
         activeConversationId,
         request.disabledAiCapabilityKinds,
         request.disabledAiCapabilityTargetSelectors,
-        request.aiCapabilityTargetOrderOverrides,
+        request.aiCapabilityTargetBindings,
       );
       if (!snapshot) {
         toast.info(t("sessionActions.previewCannotSaveCapability"));

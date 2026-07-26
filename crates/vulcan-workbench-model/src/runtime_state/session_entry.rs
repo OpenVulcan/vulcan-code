@@ -50,7 +50,7 @@ pub struct SessionRuntimeStateEntry {
     #[serde(skip)]
     pub vmm_session_memory: VmmSessionMemoryState,
     /// Session knowledge-library selection persisted exclusively in the addon document.
-    /// 仅持久化到附属状态文档的会话资料库选择。
+    /// 仅持久化到附属状态文档的会话知识库选择。
     #[serde(skip)]
     pub knowledge_library_selection: SessionKnowledgeLibrarySelection,
     /// Session-level todolist shown in the conversation tool panel.

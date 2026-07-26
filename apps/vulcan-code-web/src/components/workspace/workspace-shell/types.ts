@@ -127,7 +127,7 @@ export interface WorkspaceShellProps {
   // 从工作台侧栏打开记忆功能区。
   onOpenMemory: () => void;
   // Opens the knowledge library management area from the workbench sidebar.
-  // 从工作台侧栏打开资料库管理区域。
+  // 从工作台侧栏打开知识库管理区域。
   onOpenKnowledge: () => void;
   // Selects one top-level application area from the sidebar brand menu.
   // 从侧栏品牌菜单选择一个顶层应用区域。

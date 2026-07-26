@@ -13,7 +13,7 @@ fn knowledge_document_lines_preserve_empty_document_line() {
 use crate::tooling::native::NativeToolDefinition;
 
 // knowledge_tools returns the complete read-only knowledge tool family.
-// knowledge_tools 返回完整的只读资料库工具族。
+// knowledge_tools 返回完整的只读知识库工具族。
 fn knowledge_tools() -> Vec<Arc<NativeToolDefinition>> {
     vec![
         build_knowledge_search_tool(),
@@ -23,7 +23,7 @@ fn knowledge_tools() -> Vec<Arc<NativeToolDefinition>> {
 }
 
 /// Verifies every knowledge tool is AI-visible and allowed in Plan mode because the family is read-only.
-/// 验证每个资料库工具均对 AI 可见且允许在计划模式使用，因为该工具族只读。
+/// 验证每个知识库工具均对 AI 可见且允许在计划模式使用，因为该工具族只读。
 #[test]
 fn knowledge_tools_are_read_only_plan_tools() {
     for tool in knowledge_tools() {
@@ -60,7 +60,7 @@ fn knowledge_tool_schemas_are_strict_and_read_only() {
 }
 
 /// Verifies a direct knowledge invocation without a turn access snapshot fails closed.
-/// 验证缺少回合访问快照的直接资料库调用会失败关闭。
+/// 验证缺少回合访问快照的直接知识库调用会失败关闭。
 #[tokio::test]
 async fn knowledge_tool_without_access_snapshot_fails_closed() {
     let error = build_knowledge_search_tool()

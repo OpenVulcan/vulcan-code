@@ -118,6 +118,9 @@ export function ComposerDock(props: {
   // onSlashCommand routes one projected slash command.
   // onSlashCommand 路由单个投影 slash 指令。
   onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;
+  // onOpenKnowledge opens the project knowledge-library management surface.
+  // onOpenKnowledge 打开项目知识库管理界面。
+  onOpenKnowledge: () => void;
   // Reports the measured floating composer stack height.
   // 上报浮动输入区堆栈的实测高度。
   onComposerDockHeightChange: (height: number) => void;
@@ -265,6 +268,7 @@ export function ComposerDock(props: {
         onSelectWorkbenchModelSecondaryRoute={props.onSelectWorkbenchModelSecondaryRoute}
         onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
         onSlashCommand={props.onSlashCommand}
+        onOpenKnowledge={props.onOpenKnowledge}
         onSubmitPrompt={props.onSubmitPrompt}
         onSaveAiCapabilityConfiguration={props.onSaveAiCapabilityConfiguration}
         onSaveSessionGoal={props.onSaveSessionGoal}

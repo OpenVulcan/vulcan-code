@@ -12,7 +12,7 @@ const noop = () => undefined;
 
 describe("ProjectSidebar", () => {
   // Verifies the real chat workspace sidebar exposes knowledge library management beside memory.
-  // 验证真实会话工作台侧栏在记忆旁暴露资料库管理入口。
+  // 验证真实会话工作台侧栏在记忆旁暴露知识库管理入口。
   it("renders the knowledge management entry", () => {
     // markup captures the same expanded ProjectSidebar tree used by the chat workspace.
     // markup 捕获会话工作台实际使用的展开 ProjectSidebar 树。
@@ -47,6 +47,6 @@ describe("ProjectSidebar", () => {
       </I18nProvider>,
     );
 
-    expect(markup).toContain("资料库");
+    expect(markup).toContain("知识库");
   });
 });
