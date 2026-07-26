@@ -289,10 +289,14 @@ struct TerminalConversationHookRequest<'a> {
 /// 返回值
 /// Returns the strongly typed committed action, or an explicit hook-runtime lock diagnostic.
 /// 返回强类型已提交操作，或明确的 Hook 运行时锁诊断。
-fn commit_terminal_conversation_hook(
+fn commit_terminal_conversation_hook<F>(
     agent_runtime: &AgentRuntimeBridge,
     request: TerminalConversationHookRequest<'_>,
-) -> Result<TerminalConversationHookCommit, String> {
+    before_completion_commit: F,
+) -> Result<TerminalConversationHookCommit, String>
+where
+    F: FnOnce() -> Result<(), String>,
+{
     if request.action == TerminalConversationHookAction::Complete {
         // hook_runtime must commit logical-turn ownership before workspace terminal state is published.
         // hook_runtime 必须在工作区终态发布前提交逻辑回合所有权。
@@ -313,6 +317,9 @@ fn commit_terminal_conversation_hook(
                 ));
             }
         }
+        // before_completion_commit durably commits controller state while Hook ownership is still locked and intact.
+        // before_completion_commit 在 Hook 所有权仍被锁定且保持完整时持久提交控制器状态。
+        before_completion_commit()?;
         // turn_id and completion_request are produced atomically from the same retained logical turn.
         // turn_id 与 completion_request 由同一个保留逻辑回合原子地产生。
         let (turn_id, completion_request) = hook_runtime
@@ -568,6 +575,26 @@ pub(super) fn apply_execution_report_to_memory(
     if !report_is_regular_session {
         return apply_task_session_execution_report_to_memory(state, report);
     }
+    // vmm_runtime_context is cloned before the retained workspace transaction begins.
+    // vmm_runtime_context 在保留工作区事务开始前完成克隆。
+    let (controller_runtime, vmm_controller_registry) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        (
+            guard.controller_runtime.clone().ok_or_else(|| {
+                String::from("Core VMM controller runtime is unavailable at terminal completion.")
+            })?,
+            guard.vmm_controller_registry.clone(),
+        )
+    };
+    // vmm_controller is the sole terminal TTL state owner for this session.
+    // vmm_controller 是该会话终态 TTL 状态的唯一所有者。
+    let vmm_controller = vmm_controller_registry.get_or_open(
+        &controller_runtime.data_root,
+        session_id,
+        &current_unix_millis_text(),
+    )?;
     let prompt_purpose = report
         .preparation
         .as_ref()
@@ -611,9 +638,9 @@ pub(super) fn apply_execution_report_to_memory(
                     updated_at: now.clone(),
                     ..SessionRuntimeStateEntry::default()
                 });
-            // vmm_state_before_terminal is the exact audit baseline before terminal TTL consumption.
-            // vmm_state_before_terminal 是终态 TTL 消费前的精确审计基线。
-            let vmm_state_before_terminal = runtime_state.vmm_session_memory.clone();
+            // vmm_state_before_terminal is the exact controller audit baseline before TTL consumption.
+            // vmm_state_before_terminal 是 TTL 消费前精确的控制器审计基线。
+            let vmm_state_before_terminal = vmm_controller.snapshot()?;
             let apply_result = apply_terminal_execution_report_to_state(
                 &mut runtime_state,
                 session_id,
@@ -634,25 +661,23 @@ pub(super) fn apply_execution_report_to_memory(
             // consumes_vmm_ttl identifies the single final boundary before either state machine commits ownership.
             // consumes_vmm_ttl 在任一状态机提交所有权前标识唯一终态边界。
             let consumes_vmm_ttl = terminal_action_consumes_vmm_ttl(hook_action, completion_status);
-            // expected_vmm_turn_id preflights TTL mutation on the detached draft before Hook ownership is removed.
-            // expected_vmm_turn_id 在 Hook 所有权被移除前，先对分离草稿执行 TTL 变更预检。
+            // expected_vmm_turn_id identifies the controller command that must commit under the Hook ownership lock.
+            // expected_vmm_turn_id 标识必须在 Hook 所有权锁内提交的控制器命令。
             let expected_vmm_turn_id = if consumes_vmm_ttl
-                && !runtime_state.vmm_session_memory.is_pristine()
+                && (vmm_state_before_terminal.active_turn_id.is_some()
+                    || vmm_state_before_terminal.last_consumed_turn_id.is_some())
             {
-                // turn_id is the exact detached VMM owner that must match the active Hook turn.
-                // turn_id 是必须与活动 Hook 回合匹配的精确分离 VMM 所有者。
-                let turn_id = runtime_state
-                    .vmm_session_memory
+                // turn_id is the exact controller owner that must match the active Hook turn.
+                // turn_id 是必须与活动 Hook 回合匹配的精确控制器所有者。
+                let turn_id = vmm_state_before_terminal
                     .active_turn_id
                     .clone()
+                    .or_else(|| vmm_state_before_terminal.last_consumed_turn_id.clone())
                     .ok_or_else(|| {
                         String::from(
                             "Durable VMM state has no registered active logical turn at terminal completion.",
                         )
                     })?;
-                runtime_state
-                    .vmm_session_memory
-                    .consume_turn(&turn_id, &now)?;
                 Some(turn_id)
             } else {
                 None
@@ -673,6 +698,21 @@ pub(super) fn apply_execution_report_to_memory(
                     pending_subagent_count: completion_gate.pending_subagent_count,
                     action: hook_action,
                     expected_vmm_turn_id: expected_vmm_turn_id.as_deref(),
+                },
+                || {
+                    let Some(turn_id) = expected_vmm_turn_id.as_deref() else {
+                        return Ok(());
+                    };
+                    // command_id makes a terminal retry side-effect free after a durable controller commit.
+                    // command_id 使控制器持久提交后的终态重试不产生副作用。
+                    let command_id = format!("terminal_turn:{turn_id}");
+                    let _ = vmm_controller.execute_command(&command_id, &now, |candidate| {
+                        if candidate.last_consumed_turn_id.as_deref() != Some(turn_id) {
+                            candidate.consume_turn(turn_id, &now)?;
+                        }
+                        Ok(())
+                    })?;
+                    Ok(())
                 },
             )?;
             if let TerminalConversationHookCommit::Completion { turn_id, request } = hook_commit {
@@ -742,13 +782,13 @@ pub(super) fn apply_execution_report_to_memory(
             };
             // vmm_lifecycle_events retain no provider-visible memory text.
             // vmm_lifecycle_events 不保留任何 Provider 可见记忆正文。
+            // vmm_state_after_terminal binds every audit field to one exact controller revision.
+            // vmm_state_after_terminal 将全部审计字段绑定到同一个精确控制器修订。
+            let vmm_state_after_terminal = vmm_controller.snapshot()?;
             let vmm_lifecycle_events = build_vmm_lifecycle_events_for_state_diff(
                 &vmm_state_before_terminal,
-                &runtime_state_snapshot.vmm_session_memory,
-                runtime_state_snapshot
-                    .vmm_session_memory
-                    .last_consumed_turn_id
-                    .as_deref(),
+                &vmm_state_after_terminal,
+                vmm_state_after_terminal.last_consumed_turn_id.as_deref(),
                 VmmRemovedLeaseAuditAction::Expired,
             );
             (

@@ -40,10 +40,7 @@ use vulcan_agent_runtime::{
     RuntimePromptIntervention, RuntimePromptInterventionError,
     agent_profile::AgentProfileCatalog,
     agent_runtime::{
-        context_injection_runtime::{
-            context_injection_panel_cards_for_kind,
-            remove_legacy_vmm_profile_context_injection_state,
-        },
+        context_injection_runtime::context_injection_panel_cards_for_kind,
         conversation_hooks::{ConversationHookRuntime, ConversationTurnCompletionStatus},
         events::{RuntimeEvent, RuntimeEventKind},
         extension_generation::ExtensionGeneration,
@@ -248,6 +245,7 @@ mod task_mirror_status_projection;
 mod vmm;
 mod vmm_hooks;
 mod vmm_runtime_audit;
+mod vmm_session_controller;
 mod webui_prompt_context;
 mod webui_prompt_lifecycle;
 mod webui_turn_chaining;
@@ -473,6 +471,7 @@ pub fn create_service_bridge_state(
         hydrated_conversation_windows: BTreeMap::new(),
         agent_runtime: None,
         codebase_memory_controller: Default::default(),
+        vmm_controller_registry: Default::default(),
         service_runtime: None,
         webui_service_discovery: None,
         controller_runtime: None,
@@ -499,7 +498,6 @@ pub fn create_service_bridge_state(
         session_turn_admission_reservations: BTreeMap::new(),
         project_admission_reservations: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
-        session_vmm_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
     }))

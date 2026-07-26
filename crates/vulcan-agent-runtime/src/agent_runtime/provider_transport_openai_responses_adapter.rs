@@ -240,10 +240,10 @@ mod tests {
     async fn openai_responses_adapter_preserves_continuation_for_append_only_anchor() {
         let adapter = build_test_openai_responses_adapter();
         let mut snapshot = build_test_snapshot();
-        // A cursor created before the first VMM anchor has no anchor coverage, but the initial anchor is tail-only.
-        // 首个 VMM 锚点建立前产生的游标没有锚点覆盖信息，但初始锚点只位于尾部。
-        snapshot.continuation.context_cache_epoch_id = None;
-        snapshot.continuation.context_anchor_revision = None;
+        // The current cursor explicitly proves zero-anchor coverage in the initial VMM epoch.
+        // 当前游标显式证明初始 VMM 纪元中的零锚点覆盖状态。
+        snapshot.continuation.context_cache_epoch_id = Some(String::from("initial"));
+        snapshot.continuation.context_anchor_revision = Some(0);
         let config = build_test_controller_config(
             Some(json!({"reasoning": {"effort": "high"}})),
             Some(CoreProviderContextInjection {
@@ -276,6 +276,51 @@ mod tests {
         );
     }
 
+    /// Verifies a cursor without explicit VMM epoch coverage cannot use the current append-only path.
+    /// 验证缺少显式 VMM 纪元覆盖信息的游标不能使用当前追加式路径。
+    #[tokio::test]
+    async fn openai_responses_adapter_rejects_cursor_without_vmm_epoch_coverage() {
+        // adapter exercises the production continuation proof for an unsupported historical cursor.
+        // adapter 使用不受支持的历史游标覆盖生产 continuation 证明。
+        let adapter = build_test_openai_responses_adapter();
+        // snapshot deliberately omits the mandatory current-format VMM coverage fields.
+        // snapshot 刻意省略当前格式强制要求的 VMM 覆盖字段。
+        let mut snapshot = build_test_snapshot();
+        snapshot.continuation.context_cache_epoch_id = None;
+        snapshot.continuation.context_anchor_revision = None;
+        // config introduces one otherwise-valid tail-only anchor in the initial epoch.
+        // config 在初始纪元引入一条其他条件均有效且仅位于尾部的锚点。
+        let config = build_test_controller_config(
+            None,
+            Some(CoreProviderContextInjection {
+                anchored_prefixes: vec![CoreProviderContextAnchor {
+                    anchor_id: String::from("vmm-memory-1"),
+                    target_message_id: String::from("user-1"),
+                    prefix: String::from("<VMM_MEMORY>memory</VMM_MEMORY>"),
+                }],
+                mutation_kind: CoreProviderContextMutationKind::AppendOnly,
+                cache_epoch_id: Some(String::from("initial")),
+                anchor_revision: Some(1),
+                ..CoreProviderContextInjection::default()
+            }),
+        );
+
+        let request = adapter
+            .build_request(&snapshot, &config)
+            .await
+            .expect("unsupported VMM cursor should force full replay");
+        let params = request
+            .snapshot
+            .additional_params
+            .expect("full replay marker should exist");
+
+        assert_eq!(
+            params[FORCE_FULL_OPENAI_RESPONSES_REPLAY_PARAM],
+            serde_json::Value::Bool(true)
+        );
+        assert!(params.get("previous_response_id").is_none());
+    }
+
     /// Verifies an uncovered initial anchor cannot reuse a cursor when it targets already-covered history instead of the unsent tail.
     /// 验证未覆盖的初始锚点若指向已覆盖历史而不是未发送尾部，就不能复用游标。
     #[tokio::test]
@@ -286,8 +331,8 @@ mod tests {
         // snapshot contains one covered user message, the exact cursor boundary, and the unsent user tail.
         // snapshot 包含一条已覆盖用户消息、精确游标边界和未发送用户尾部。
         let mut snapshot = build_test_snapshot();
-        snapshot.continuation.context_cache_epoch_id = None;
-        snapshot.continuation.context_anchor_revision = None;
+        snapshot.continuation.context_cache_epoch_id = Some(String::from("initial"));
+        snapshot.continuation.context_anchor_revision = Some(0);
         // config attempts to add revision one to user-covered, which the existing cursor already covers.
         // config 尝试把第一版锚点加入已被现有游标覆盖的 user-covered。
         let config = build_test_controller_config(

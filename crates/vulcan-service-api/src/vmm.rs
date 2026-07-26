@@ -248,12 +248,15 @@ pub struct VmmManagementSectionSummary {
 
 /// Request body for one WebUI VMM management action.
 /// WebUI 单次 VMM 管理动作的请求体。
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VmmMemoryActionRequest {
     /// Stable action id.
     /// 稳定动作标识。
     pub action: String,
+    /// Stable UUID identifying this exact user operation across transport retries.
+    /// 跨传输重试标识本次精确用户操作的稳定 UUID。
+    pub command_id: String,
     /// Scope key, either global or project.
     /// 作用域键，可为 global 或 project。
     pub scope: String,

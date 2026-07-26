@@ -3,6 +3,7 @@ use super::*;
 /// One persisted VMM PostAction writeback retry entry.
 /// 一条持久化的 VMM PostAction 写回重试项。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VmmWritebackOutboxEntry {
     /// Stable local outbox entry identifier.
     /// 稳定的本地 outbox 条目标识。
@@ -29,6 +30,7 @@ pub struct VmmWritebackOutboxEntry {
 /// Session-scoped VMM profile synchronization state.
 /// 会话级 VMM 画像同步状态。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VmmProfileSyncState {
     /// Latest compaction id already covered by a full profile hook injection.
     /// 已被全量画像 hook 注入覆盖的最近压缩标识。
@@ -44,11 +46,7 @@ pub struct VmmProfileSyncState {
     pub nodes_by_id: BTreeMap<u64, ProfileNodeEntry>,
     /// Baseline full profile content reused on every provider request.
     /// 每次 Provider 请求都会复用的基础全量画像内容。
-    #[serde(
-        default,
-        alias = "system_prompt_content",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_profile_content: Option<String>,
     /// Latest full profile content used as the incremental refresh comparison baseline.
     /// 用作增量刷新对比基准的最近全量画像内容。
@@ -76,5 +74,32 @@ impl VmmProfileSyncState {
     /// 在 Provider 成功后记录一个已完成逻辑用户回合。
     pub fn record_completed_turn(&mut self) {
         self.completed_turns_since_sync = self.completed_turns_since_sync.saturating_add(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies the removed profile field alias is rejected instead of migrated or ignored.
+    /// 验证已移除的画像字段别名会被拒绝，而不是迁移或忽略。
+    #[test]
+    fn vmm_profile_sync_rejects_historical_field_alias() {
+        // historical_json uses the removed persisted field spelling.
+        // historical_json 使用已经移除的持久化字段拼写。
+        let historical_json = serde_json::json!({
+            "system_prompt_content": "historical profile"
+        });
+
+        // error proves strict current-format decoding rejects the historical alias.
+        // error 证明严格的当前格式解码会拒绝历史别名。
+        let error = serde_json::from_value::<VmmProfileSyncState>(historical_json)
+            .expect_err("historical VMM profile alias must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `system_prompt_content`")
+        );
     }
 }

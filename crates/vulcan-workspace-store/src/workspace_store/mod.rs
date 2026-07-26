@@ -36,13 +36,12 @@ use self::segmented_session_store::{
     SegmentedSessionEventKind, append_segmented_boundary_events, append_segmented_session_events,
     backup_runtime_log_before_compaction, create_segmented_session_in_location,
     find_segmented_session_directory, find_segmented_session_directory_by_id,
-    has_vmm_session_artifacts, hydrate_vmm_session_state, load_session_boundary_state,
-    read_runtime_log_lines, read_segmented_session_event_window, read_state,
-    record_runtime_audit_event, record_runtime_injection_applied,
-    record_vmm_store_lifecycle_event_best_effort, replace_session_boundary_state,
+    load_core_vmm_controller_state, load_session_boundary_state, read_runtime_log_lines,
+    read_segmented_session_event_window, read_state, record_runtime_audit_event,
+    record_runtime_injection_applied, replace_session_boundary_state,
     reset_vmm_state_for_history_rewrite, segmented_session_directory,
-    segmented_session_directory_exists, state_document_from_runtime_state, write_state,
-    write_vmm_state,
+    segmented_session_directory_exists, state_document_from_runtime_state,
+    write_core_vmm_controller_state, write_state,
 };
 use self::session_addon_store::read_session_addon_state;
 pub use goal_store::{
@@ -84,45 +83,162 @@ const SESSION_TRANSCRIPT_MIN_ROW_LIMIT: usize = 100;
 /// App metadata key used to persist collapsed task-project identifiers.
 /// 用于持久化已折叠任务项目标识的应用元数据键。
 const COLLAPSED_TASK_PROJECTS_METADATA_KEY: &str = "workspace.collapsed_task_projects";
+/// Removed hidden-user injection group that represented the historical VMM profile owner.
+/// 表示历史 VMM 画像所有者的已移除隐藏用户注入分组。
+const HISTORICAL_VMM_PROFILE_CONTEXT_INJECTION_TAG: &str = "vmm_profile";
 
-/// Persists one independently versioned VMM snapshot before its first provider-visible request.
-/// 在首次 Provider 可见请求之前持久化一份独立版本化 VMM 快照。
+/// Loads the strict Core-owned VMM state for one persisted session.
+/// 加载单个持久化会话中由 Core 所有的严格 VMM 状态。
 ///
 /// # Parameters
 /// 参数
-/// `session_dir` is the exact segmented directory owning `vmm.json`.
-/// `session_dir` 是拥有 `vmm.json` 的精确分段目录。
-/// `session_id` is the exact persisted session owner.
-/// `session_id` 是精确的持久化会话所有者。
-/// `state` is the complete VMM lease and cache-anchor snapshot.
-/// `state` 是完整的 VMM 租约与缓存锚点快照。
+/// `data_root` is the controller-managed Vulcan data root.
+/// `data_root` 是控制器管理的 Vulcan 数据根目录。
+/// `session_id` is the exact session owner.
+/// `session_id` 是精确的会话所有者。
 ///
 /// # Returns
 /// 返回值
-/// Success only after the new revision is durably published or an identical write is confirmed.
-/// 仅在新版本持久发布或确认写入内容完全相同时返回成功。
-pub fn persist_session_vmm_state_before_provider_request(
-    session_dir: &Path,
-    session_id: &str,
+/// A validated state, clean absence, or an explicit storage and format error.
+/// 返回已校验状态、干净缺失，或明确的存储与格式错误。
+pub fn load_core_session_vmm_state(
+    data_root: &Path,
+    session_id: SessionId,
+) -> Result<Option<vulcan_vmm::VmmSessionMemoryState>, String> {
+    // session_id_text is the canonical persisted owner spelling.
+    // session_id_text 是规范的持久化所有者文本形式。
+    let session_id_text = session_id.to_string();
+    // session_dir resolves the one active or archived directory indexed by the session id.
+    // session_dir 解析由会话标识索引的唯一活动或归档目录。
+    let Some(session_dir) = find_segmented_session_directory_by_id(data_root, &session_id_text)?
+    else {
+        return Ok(None);
+    };
+    load_core_vmm_controller_state(&session_dir, &session_id_text)
+}
+
+/// Persists one candidate state through the strict Core VMM storage adapter.
+/// 通过严格的 Core VMM 存储适配器持久化一份候选状态。
+///
+/// # Parameters
+/// 参数
+/// `data_root` is the controller-managed Vulcan data root.
+/// `data_root` 是控制器管理的 Vulcan 数据根目录。
+/// `session_id` is the exact owning session.
+/// `session_id` 是精确的所属会话。
+/// `state` is the complete controller-serialized candidate.
+/// `state` 是控制器串行化后的完整候选状态。
+///
+/// # Returns
+/// 返回值
+/// Success only after the candidate is durably published or confirmed idempotent.
+/// 仅在候选状态持久发布或确认幂等后返回成功。
+pub fn persist_core_session_vmm_state(
+    data_root: &Path,
+    session_id: SessionId,
     state: &vulcan_vmm::VmmSessionMemoryState,
 ) -> Result<(), String> {
-    if !vulcan_vmm::VmmRuntimeFeaturePolicy::from_env().session_state_enabled {
-        return Ok(());
+    // session_id_text is shared by directory lookup, ownership validation, and the document.
+    // session_id_text 由目录查找、所有权校验与文档共同使用。
+    let session_id_text = session_id.to_string();
+    // session_dir must already exist because the controller never owns general session creation.
+    // session_dir 必须已经存在，因为控制器不拥有普通会话创建职责。
+    let session_dir = find_segmented_session_directory_by_id(data_root, &session_id_text)?
+        .ok_or_else(|| {
+            format!("Session `{session_id}` has no segmented directory for Core VMM persistence.")
+        })?;
+    write_core_vmm_controller_state(&session_dir, &session_id_text, state)
+}
+
+/// Deletes every VMM-owned root artifact for one exact persisted session.
+/// 删除单个精确持久化会话的全部 VMM 根工件。
+///
+/// # Parameters
+/// 参数
+/// `data_root` is the controller-managed Vulcan data root.
+/// `data_root` 是控制器管理的 Vulcan 数据根目录。
+/// `session_id` is the exact session whose VMM ownership is being deleted.
+/// `session_id` 是正在删除 VMM 所有权的精确会话。
+///
+/// # Returns
+/// 返回值
+/// `true` when the session directory existed and its VMM artifacts are now absent.
+/// 会话目录存在且其 VMM 工件现已全部清除时返回 `true`。
+pub fn delete_core_session_vmm_state(
+    data_root: &Path,
+    session_id: SessionId,
+) -> Result<bool, String> {
+    // session_id_text is the canonical key for exact active-or-archived directory lookup.
+    // session_id_text 是精确查找活动或归档目录的规范键。
+    let session_id_text = session_id.to_string();
+    // session_dir is never created by deletion because absence is an idempotent outcome.
+    // session_dir 不会由删除操作创建，因为缺失属于幂等结果。
+    let Some(session_dir) = find_segmented_session_directory_by_id(data_root, &session_id_text)?
+    else {
+        return Ok(false);
+    };
+    reset_vmm_state_for_history_rewrite(&session_dir)?;
+    Ok(true)
+}
+
+/// Rejects ordinary runtime-state JSON that still embeds the removed mutable VMM owner.
+/// 拒绝仍嵌入已移除可变 VMM 所有者的普通运行态 JSON。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` is the raw ordinary runtime-state object loaded from `state.json`.
+/// `runtime_state` 是从 `state.json` 加载的原始普通运行态对象。
+/// `session_id` is the exact owner included in the unsupported-history diagnostic.
+/// `session_id` 是不支持历史格式诊断中包含的精确所有者。
+///
+/// # Returns
+/// 返回值
+/// Success only when the removed `vmm_session_memory` field is absent.
+/// 仅在已移除的 `vmm_session_memory` 字段不存在时返回成功。
+fn reject_embedded_historical_vmm_runtime_state(
+    runtime_state: &serde_json::Value,
+    session_id: &str,
+) -> Result<(), String> {
+    if runtime_state
+        .as_object()
+        .is_some_and(|object| object.contains_key("vmm_session_memory"))
+    {
+        return Err(format!(
+            "Session `{session_id}` contains unsupported historical embedded VMM runtime state; automatic migration and fallback are disabled."
+        ));
     }
-    match write_vmm_state(session_dir, session_id, state) {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            let timestamp = current_unix_millis_text();
-            record_vmm_store_lifecycle_event_best_effort(
-                session_dir,
-                &timestamp,
-                vulcan_context::RuntimeVmmLifecycleAction::WriteFailed,
-                Some(state),
-                "provider_boundary_vmm_write_failed",
-            );
-            Err(error)
-        }
+    Ok(())
+}
+
+/// Rejects decoded ordinary runtime state containing the removed hidden-user VMM profile group.
+/// 拒绝包含已移除隐藏用户 VMM 画像分组的已解码普通运行态。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` is the decoded ordinary runtime state being loaded.
+/// `runtime_state` 是正在加载的已解码普通运行态。
+/// `session_id` is the exact owner included in the unsupported-history diagnostic.
+/// `session_id` 是不支持历史格式诊断中包含的精确所有者。
+///
+/// # Returns
+/// 返回值
+/// Success only when no removed VMM profile injection group is present.
+/// 仅在不存在已移除 VMM 画像注入分组时返回成功。
+fn reject_historical_vmm_profile_context_injection(
+    runtime_state: &SessionRuntimeStateEntry,
+    session_id: &str,
+) -> Result<(), String> {
+    if runtime_state
+        .context_injection_state
+        .groups
+        .values()
+        .any(|group| group.tag == HISTORICAL_VMM_PROFILE_CONTEXT_INJECTION_TAG)
+    {
+        return Err(format!(
+            "Session `{session_id}` contains unsupported historical VMM profile context injection state; automatic cleanup and fallback are disabled."
+        ));
     }
+    Ok(())
 }
 
 mod boundary_store;

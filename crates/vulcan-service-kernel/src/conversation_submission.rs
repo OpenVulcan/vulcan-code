@@ -16,11 +16,13 @@ use vulcan_workbench_model::{
 };
 
 use super::{
-    SharedServiceBridgeState, UserPromptEditSubmitRequest, active_kernel_session_ids,
+    ExistingSubmissionAdmissionAuthorization, SharedServiceBridgeState,
+    UserPromptEditSubmitRequest, active_kernel_session_ids,
     apply_webui_prompt_begin_outer_steps_deferred_context_persist,
-    build_conversation_messages_patched_delta, build_vmm_hook_config_snapshot,
-    capture_preserved_workspace_run_state, composer_attachment_summary_to_core,
-    conversation_messages_from_session, current_unix_millis_text, current_unix_millis_value,
+    begin_existing_prompt_submission_exclusion, build_conversation_messages_patched_delta,
+    build_vmm_hook_config_snapshot, capture_preserved_workspace_run_state,
+    composer_attachment_summary_to_core, conversation_messages_from_session,
+    current_unix_millis_text, current_unix_millis_value,
     current_workspace_snapshot_from_shared_state, emit_materialized_session_message_delta,
     emit_pending_prompts_changed_delta, emit_service_event_with_trace,
     enqueue_webui_pending_prompt_from_submission, hydrate_retained_submission_session_if_needed,
@@ -114,6 +116,8 @@ fn existing_submission_requires_hydration(
 /// `disabled_ai_capability_target_selectors` 禁用本回合选定 AI 能力目标。
 /// `ai_capability_target_bindings` overrides selected AI capability target ordering.
 /// `ai_capability_target_bindings` 覆盖选定 AI 能力目标排序。
+/// `preauthorized_turn_admission` carries exact ownership from an outer destructive-edit transaction.
+/// `preauthorized_turn_admission` 携带外层破坏性编辑事务的精确所有权。
 /// `existing_session_hydration_policy` controls whether an empty retained session is rehydrated.
 /// `existing_session_hydration_policy` 控制是否重新水合空的保留会话。
 ///
@@ -134,6 +138,7 @@ pub(super) async fn service_submit_conversation_prompt(
     disabled_ai_capability_kinds: Option<Vec<String>>,
     disabled_ai_capability_target_selectors: Option<Vec<String>>,
     ai_capability_target_bindings: Option<BTreeMap<String, String>>,
+    preauthorized_turn_admission: Option<ExistingSubmissionAdmissionAuthorization>,
     existing_session_hydration_policy: ExistingSessionHydrationPolicy,
 ) -> Result<SubmitConversationPromptAck, String> {
     // Measures the whole submit RPC body from service entry to final response.
@@ -195,7 +200,12 @@ pub(super) async fn service_submit_conversation_prompt(
         preserved_workspace_run_state,
         retained_dialogue_context_available,
         retained_workspace_snapshot,
-    } = prepare_retained_submission_preflight(&state, project_id.as_deref(), submission_target)?;
+    } = prepare_retained_submission_preflight(
+        &state,
+        project_id.as_deref(),
+        submission_target,
+        preauthorized_turn_admission,
+    )?;
     webui_trace_if_slow(
         "submit_prompt_retained_snapshot_slow",
         retained_snapshot_started_at,

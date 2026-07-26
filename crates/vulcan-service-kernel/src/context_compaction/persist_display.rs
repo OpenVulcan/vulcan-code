@@ -44,11 +44,11 @@ pub(crate) fn spawn_context_compaction_persist_task(
     if !workspace_snapshot_contains_regular_session(&workspace_snapshot, session_id) {
         return;
     }
-    // persist_versions fence the compaction snapshot and its independent vmm.json publication together.
-    // persist_versions 将压缩快照与其独立 vmm.json 发布一并隔离。
-    let (session_persist_version, vmm_persist_version) =
-        match next_webui_session_runtime_persist_versions(&state, session_id) {
-            Ok(versions) => versions,
+    // session_persist_version fences only the ordinary compaction snapshot.
+    // session_persist_version 仅隔离普通压缩快照。
+    let session_persist_version =
+        match next_webui_session_runtime_persist_version(&state, session_id) {
+            Ok(version) => version,
             Err(error) => {
                 eprintln!("[webui-service] context-compaction persist version failed: {error}");
                 return;
@@ -57,11 +57,10 @@ pub(crate) fn spawn_context_compaction_persist_task(
     spawn_service_task(async move {
         let persist_lock = webui_workspace_persist_lock();
         let _persist_guard = persist_lock.lock().await;
-        if !webui_session_runtime_persist_versions_are_current(
+        if !webui_session_runtime_persist_version_is_current(
             &state,
             session_id,
             session_persist_version,
-            vmm_persist_version,
         ) {
             return;
         }

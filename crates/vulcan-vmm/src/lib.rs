@@ -48,8 +48,7 @@ pub use protocol::{
 };
 pub use session_state::{
     VMM_SESSION_MEMORY_MAX_BYTES, VMM_SESSION_MEMORY_SCHEMA_VERSION, VmmCacheEpoch,
-    VmmCachePressure, VmmLeaseTransitionReport, VmmLegacyExtraction, VmmLegacyLeaseItem,
-    VmmMemoryLease, VmmPendingPromptEvent, VmmPromptAnchor, VmmPromptAnchorKind, VmmRecallBatch,
-    VmmSessionMemoryState, take_legacy_vmm_injection_items,
+    VmmCachePressure, VmmLeaseTransitionReport, VmmMemoryLease, VmmPendingPromptEvent,
+    VmmPromptAnchor, VmmPromptAnchorKind, VmmRecallBatch, VmmSessionMemoryState,
 };
 pub use transport::{TonicVmmClient, VmmTransportConfig};

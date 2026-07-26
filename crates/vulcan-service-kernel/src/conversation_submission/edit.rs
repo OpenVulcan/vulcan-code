@@ -249,7 +249,15 @@ pub(crate) async fn service_submit_user_prompt_edit(
         .attachments
         .iter()
         .try_for_each(validate_composer_attachment_summary)?;
-    let (controller_runtime, source_session, project_id) = {
+    // edit_admission_guard excludes every competing turn from validation through rollback or committed replay.
+    // edit_admission_guard 从校验开始排除所有竞争回合，直至回滚恢复或重放提交完成。
+    let edit_admission_guard =
+        begin_existing_prompt_submission_exclusion(&state, session_id, "编辑提示词")?;
+    // edit_submission_authorization lets only this transaction's nested replay pass normal admission.
+    // edit_submission_authorization 仅允许当前事务的嵌套重放通过普通准入。
+    let edit_submission_authorization =
+        edit_admission_guard.existing_submission_authorization(session_id)?;
+    let (controller_runtime, vmm_controller_registry, source_session, project_id) = {
         let mut guard = state
             .lock()
             .map_err(|_| String::from("ERR_SERVICE_STATE_LOCK_FAILED"))?;
@@ -279,8 +287,16 @@ pub(crate) async fn service_submit_user_prompt_edit(
             .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_SESSION_NOT_FOUND"))?;
         let project_id = owning_project_id_for_session(workspace, session_id)
             .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_PROJECT_NOT_FOUND"))?;
-        (controller_runtime, source_session, project_id)
+        (
+            controller_runtime,
+            guard.vmm_controller_registry.clone(),
+            source_session,
+            project_id,
+        )
     };
+    // rewrite_fence blocks stale and replacement controllers until disk and retained state agree.
+    // rewrite_fence 在磁盘与保留状态一致前阻止旧控制器与替代控制器。
+    let rewrite_fence = vmm_controller_registry.begin_lifecycle_transition([session_id])?;
     let rollback = rollback_persisted_session_before_user_prompt(
         &controller_runtime,
         &source_session,
@@ -372,6 +388,7 @@ pub(crate) async fn service_submit_user_prompt_edit(
             ServiceEvent::WorkbenchDelta(Box::new(event)),
         );
     }
+    rewrite_fence.release()?;
     let submission_result = service_submit_conversation_prompt(
         app.clone(),
         state.clone(),
@@ -385,6 +402,7 @@ pub(crate) async fn service_submit_user_prompt_edit(
         None,
         None,
         None,
+        Some(edit_submission_authorization),
         ExistingSessionHydrationPolicy::TrustRetainedSnapshot,
     )
     .await;
@@ -399,6 +417,9 @@ pub(crate) async fn service_submit_user_prompt_edit(
             Ok(acknowledgement)
         }
         Err(submission_error) => {
+            // restore_fence prevents the failed replacement controller from racing old-history restoration.
+            // restore_fence 防止失败的替代控制器与旧历史恢复发生竞争。
+            let restore_fence = vmm_controller_registry.begin_lifecycle_transition([session_id])?;
             let disk_restore_result = rollback.restore();
             let workspace_restore_result = state
                 .lock()
@@ -413,12 +434,18 @@ pub(crate) async fn service_submit_user_prompt_edit(
                     );
                 }
             }
-            match (disk_restore_result, workspace_restore_result) {
-                (Ok(()), Ok(_)) => Err(submission_error),
-                (disk_result, workspace_result) => Err(format!(
-                    "{submission_error}; ERR_USER_PROMPT_EDIT_RESTORE_FAILED: disk={}; workspace={}",
+            let fence_release_result = restore_fence.release();
+            match (
+                disk_restore_result,
+                workspace_restore_result,
+                fence_release_result,
+            ) {
+                (Ok(()), Ok(_), Ok(())) => Err(submission_error),
+                (disk_result, workspace_result, fence_result) => Err(format!(
+                    "{submission_error}; ERR_USER_PROMPT_EDIT_RESTORE_FAILED: disk={}; workspace={}; vmm_fence={}",
                     disk_result.err().unwrap_or_else(|| String::from("ok")),
-                    workspace_result.err().unwrap_or_else(|| String::from("ok"))
+                    workspace_result.err().unwrap_or_else(|| String::from("ok")),
+                    fence_result.err().unwrap_or_else(|| String::from("ok"))
                 )),
             }
         }

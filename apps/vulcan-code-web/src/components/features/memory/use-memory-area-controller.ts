@@ -444,6 +444,7 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
       // nextResult 是唯一允许替换可见动作结果的响应。
       const nextResult = await actionsRef.current.onRunVmmAction({
         action,
+        commandId: crypto.randomUUID(),
         scope: requestScope,
         projectId: requestProjectId,
         payload,

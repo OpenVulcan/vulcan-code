@@ -348,10 +348,6 @@ fn runtime_vmm_action_label(action: RuntimeVmmLifecycleAction) -> &'static str {
         RuntimeVmmLifecycleAction::RevocationBound => "revocation-bound",
         RuntimeVmmLifecycleAction::CacheEpochRebuilt => "cache-epoch-rebuilt",
         RuntimeVmmLifecycleAction::CompactionReclaimed => "compaction-reclaimed",
-        RuntimeVmmLifecycleAction::LegacyMigrated => "legacy-migrated",
-        RuntimeVmmLifecycleAction::FileRecovered => "file-recovered",
-        RuntimeVmmLifecycleAction::FileQuarantined => "file-quarantined",
-        RuntimeVmmLifecycleAction::WriteFailed => "write-failed",
     }
 }
 
@@ -381,10 +377,6 @@ fn runtime_vmm_action_reason(action: RuntimeVmmLifecycleAction) -> &'static str 
         RuntimeVmmLifecycleAction::CompactionReclaimed => {
             "context_compaction_removed_old_anchor_epoch"
         }
-        RuntimeVmmLifecycleAction::LegacyMigrated => "deterministic_legacy_vmm_state_migration",
-        RuntimeVmmLifecycleAction::FileRecovered => "vmm_persistence_recovery_completed",
-        RuntimeVmmLifecycleAction::FileQuarantined => "invalid_vmm_file_isolated",
-        RuntimeVmmLifecycleAction::WriteFailed => "vmm_persistence_write_failed",
     }
 }
 

@@ -37,6 +37,47 @@ fn create_session_writes_metadata_state_and_first_segment() {
     assert_eq!(lines[0].kind, SegmentedSessionEventKind::SessionMeta);
 }
 
+/// Verifies explicit Core VMM deletion clears current and obsolete root artifacts idempotently.
+/// 验证明确定义的 Core VMM 删除会幂等清除当前及废弃根工件。
+#[test]
+fn delete_core_session_vmm_state_clears_exact_session_artifacts() {
+    // root owns the isolated segmented-session catalog.
+    // root 拥有隔离的分段会话目录。
+    let root = test_root("delete_core_session_vmm_state_clears_exact_session_artifacts");
+    // request provides the exact valid UUID identity used by the public delete adapter.
+    // request 提供公共删除适配器使用的精确有效 UUID 身份。
+    let mut request = test_session_request(SegmentPolicy::default());
+    request.session_id = String::from("5140f3a1-d0dc-4851-afd8-0a1181465425");
+    // session_id is parsed once so storage lookup and state ownership use the same identity.
+    // session_id 仅解析一次，使存储查找与状态所有权使用同一身份。
+    let session_id = Uuid::parse_str(&request.session_id).expect("parse test session id");
+    // session_dir is the exact active directory containing the VMM artifacts.
+    // session_dir 是包含 VMM 工件的精确活动目录。
+    let session_dir = create_segmented_session_in_location(&root, false, request)
+        .expect("create segmented session");
+    // state is the valid Core-owned document deleted by the adapter.
+    // state 是由适配器删除的有效 Core 所有文档。
+    let state = vulcan_vmm::VmmSessionMemoryState::new(session_id.to_string(), "1")
+        .expect("create Core VMM state");
+    write_core_vmm_controller_state(&session_dir, &session_id.to_string(), &state)
+        .expect("write Core VMM document");
+    // obsolete_marker proves deletion also clears explicitly rejected historical artifacts.
+    // obsolete_marker 证明删除还会清除明确拒绝的历史工件。
+    let obsolete_marker = session_dir.join(SEGMENTED_VMM_MIGRATION_FILE);
+    fs::write(&obsolete_marker, b"obsolete").expect("write obsolete marker");
+
+    assert!(
+        crate::workspace_store::delete_core_session_vmm_state(&root, session_id)
+            .expect("delete exact Core VMM state")
+    );
+    assert!(!vmm_state_path(&session_dir).exists());
+    assert!(!obsolete_marker.exists());
+    assert!(
+        crate::workspace_store::delete_core_session_vmm_state(&root, session_id)
+            .expect("repeat idempotent Core VMM deletion")
+    );
+}
+
 /// Verifies deterministic task-store directory lookup derives the date from raw creation time.
 /// 验证确定性任务存储目录查找会从原始创建时间推导日期。
 #[test]
@@ -142,7 +183,7 @@ fn fork_session_directory_rewrites_structural_identity() {
             "2026-06-06T10:00:00Z",
         )
         .expect("source VMM state should be built");
-    write_vmm_state(&source_dir, &source_session_id, &source_vmm_state)
+    write_core_vmm_controller_state(&source_dir, &source_session_id, &source_vmm_state)
         .expect("source VMM state should be written");
     fs::write(
         source_dir.join(SEGMENTED_VMM_MIGRATION_COMPLETED_FILE),

@@ -98,23 +98,6 @@ pub(crate) fn record_webui_runtime_injection_merged(
     .map(|_| ())
 }
 
-/// Records one context-injection cancellation event into the segmented session runtime audit log.
-/// 将单个上下文注入取消事件记录到分段会话运行时审计日志。
-pub(crate) fn record_webui_runtime_injection_cancelled(
-    controller_runtime: &ControllerRuntimeHandle,
-    session_id: SessionId,
-    event: vulcan_context::RuntimeInjectionCancelledEvent,
-    timestamp: &str,
-) -> Result<(), String> {
-    vulcan_workspace_store::workspace_store::record_session_runtime_injection_cancelled(
-        &controller_runtime.data_root,
-        session_id,
-        event,
-        timestamp,
-    )
-    .map(|_| ())
-}
-
 /// Records one provider response checkpoint into the segmented session runtime audit log.
 /// 将单个 Provider 响应检查点记录到分段会话运行时审计日志。
 pub(crate) fn record_webui_provider_response_checkpoint(
@@ -318,22 +301,6 @@ pub(crate) fn persistent_injection_source_node_ids(state: &ContextInjectionState
                 .map(move |item| format!("{}:{}", group.tag, item.content_hash))
         })
         .collect()
-}
-
-/// Builds one runtime audit event for legacy VMM injection cleanup.
-/// 为旧版 VMM 注入清理构建一条运行时审计事件。
-pub(crate) fn legacy_vmm_injection_cancelled_event(
-    previous_persistent_fingerprint: Option<String>,
-    reason: &str,
-) -> vulcan_context::RuntimeInjectionCancelledEvent {
-    vulcan_context::RuntimeInjectionCancelledEvent {
-        turn_id: None,
-        cancellation_id: format!("{reason}-{}", current_unix_millis_text()),
-        source_node_ids: vec![String::from("persistent:vmm_profile")],
-        previous_persistent_fingerprint,
-        previous_transient_fingerprint: None,
-        reason: Some(reason.to_string()),
-    }
 }
 
 #[cfg(test)]

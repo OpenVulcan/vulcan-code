@@ -135,7 +135,7 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         session_turn_admission_reservations: BTreeMap::new(),
         project_admission_reservations: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
-        session_vmm_persist_versions: BTreeMap::new(),
+        vmm_controller_registry: Default::default(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
     }));
@@ -204,10 +204,14 @@ fn regular_execution_report_hook_lock_failure_preserves_workspace_state() {
     let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
         session_id,
     )));
+    // controller_root keeps this test's isolated VMM files alive through every assertion.
+    // controller_root 在全部断言期间保持本测试隔离 VMM 文件有效。
+    let controller_root = TestControllerRuntimeRoot::new(session_id);
     {
         // guard initializes the exact pre-commit workspace facts under one service-state lock.
         // guard 在同一服务状态锁内初始化精确的提交前工作区事实。
         let mut guard = state.lock().expect("lock regular session fixture");
+        guard.controller_runtime = Some(controller_root.controller_runtime_handle());
         guard
             .workspace_snapshot
             .as_mut()
@@ -269,7 +273,10 @@ fn regular_execution_report_hook_lock_failure_preserves_workspace_state() {
         Err(error) => error,
     };
 
-    assert!(error.contains("failed to lock conversation hook runtime"));
+    assert!(
+        error.contains("failed to lock conversation hook runtime"),
+        "unexpected terminal rejection: {error}"
+    );
     // workspace proves the detached runtime-state draft never became visible.
     // workspace 证明分离的运行态草稿从未变为可见状态。
     // guard reads all post-failure assertions from one consistent service-state snapshot.
@@ -303,42 +310,58 @@ fn regular_execution_report_vmm_turn_mismatch_preserves_both_owners() {
     let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
         session_id,
     )));
-    {
-        // guard initializes the detached-state baseline that must remain unchanged after rejection.
-        // guard 初始化拒绝后必须保持不变的分离状态基线。
-        let mut guard = state.lock().expect("lock VMM mismatch fixture");
-        // runtime_state owns the durable lease and divergent active turn.
-        // runtime_state 拥有持久租约与分歧的活动回合。
-        let runtime_state = guard
-            .workspace_snapshot
-            .as_mut()
-            .expect("workspace fixture should exist")
-            .session_runtime_state
-            .entry(session_id)
-            .or_default();
-        runtime_state
-            .vmm_session_memory
-            .apply_recall_batch(
-                &session_id.to_string(),
-                "user-anchor",
-                &vulcan_vmm::VmmRecallBatch {
-                    ttl_turns: 1,
-                    injection_tag: String::from("VMM_MEMORY"),
-                    injection_description: String::from("Relevant memories."),
-                    items: vec![vulcan_vmm::ContextItem {
-                        text: String::from("terminal ownership memory"),
-                        memory_id: 901,
-                        ..vulcan_vmm::ContextItem::default()
-                    }],
-                },
-                "1",
-            )
-            .expect("VMM mismatch lease should be created");
-        runtime_state
-            .vmm_session_memory
-            .register_active_turn("vmm-divergent-turn", "2")
-            .expect("VMM divergent turn should be registered");
-    }
+    // controller_root keeps this test's isolated VMM files alive through every assertion.
+    // controller_root 在全部断言期间保持本测试隔离 VMM 文件有效。
+    let controller_root = TestControllerRuntimeRoot::new(session_id);
+    state
+        .lock()
+        .expect("lock VMM mismatch controller fixture")
+        .controller_runtime = Some(controller_root.controller_runtime_handle());
+    // controller_context supplies the process registry and its exact storage root without retaining the service lock.
+    // controller_context 在不保留服务锁的情况下提供进程注册表及其精确存储根。
+    let (vmm_controller_registry, vmm_data_root) = {
+        let guard = state.lock().expect("lock VMM mismatch fixture");
+        let controller_runtime = guard
+            .controller_runtime
+            .as_ref()
+            .expect("test controller runtime should exist");
+        (
+            guard.vmm_controller_registry.clone(),
+            controller_runtime.data_root.clone(),
+        )
+    };
+    // seeded_vmm_state is the controller-owned durable lease with a deliberately divergent turn.
+    // seeded_vmm_state 是控制器持有的持久租约，并带有刻意分歧的回合。
+    let mut seeded_vmm_state = vulcan_vmm::VmmSessionMemoryState::new(session_id.to_string(), "1")
+        .expect("VMM test state should initialize");
+    seeded_vmm_state
+        .apply_recall_batch(
+            &session_id.to_string(),
+            "user-anchor",
+            &vulcan_vmm::VmmRecallBatch {
+                ttl_turns: 1,
+                injection_tag: String::from("VMM_MEMORY"),
+                injection_description: String::from("Relevant memories."),
+                items: vec![vulcan_vmm::ContextItem {
+                    text: String::from("terminal ownership memory"),
+                    memory_id: 901,
+                    ..vulcan_vmm::ContextItem::default()
+                }],
+            },
+            "1",
+        )
+        .expect("VMM mismatch lease should be created");
+    seeded_vmm_state
+        .register_active_turn("vmm-divergent-turn", "2")
+        .expect("VMM divergent turn should be registered");
+    vmm_controller_registry
+        .seed_for_test(&vmm_data_root, session_id, seeded_vmm_state)
+        .expect("seed VMM mismatch controller");
+    // vmm_controller is the exact registry instance later used by terminal completion.
+    // vmm_controller 是终态完成阶段随后使用的同一个注册表实例。
+    let vmm_controller = vmm_controller_registry
+        .get_or_open(&vmm_data_root, session_id, "3")
+        .expect("open seeded VMM controller");
     // agent_runtime owns the real conversation Hook turn that must survive mismatch rejection.
     // agent_runtime 拥有必须在不匹配拒绝后保留的真实会话 Hook 回合。
     let agent_runtime = test_agent_runtime_bridge();
@@ -401,26 +424,16 @@ fn regular_execution_report_vmm_turn_mismatch_preserves_both_owners() {
             .active_turn_id(session_id),
         Some(retained_hook_turn_id.as_str())
     );
-    {
-        // guard keeps the retained workspace borrowed through both unchanged-state assertions.
-        // guard 在两个状态不变断言期间保持对工作区的借用。
-        let guard = state.lock().expect("lock workspace after mismatch");
-        // persisted_vmm_state confirms the detached preflight never became visible after Hook rejection.
-        // persisted_vmm_state 确认 Hook 拒绝后，分离预检从未变为可见状态。
-        let persisted_vmm_state = &guard
-            .workspace_snapshot
-            .as_ref()
-            .expect("workspace should remain available")
-            .session_runtime_state
-            .get(&session_id)
-            .expect("VMM runtime state should remain present")
-            .vmm_session_memory;
-        assert_eq!(persisted_vmm_state.completed_turn_sequence, 0);
-        assert_eq!(
-            persisted_vmm_state.active_turn_id.as_deref(),
-            Some("vmm-divergent-turn")
-        );
-    }
+    // persisted_vmm_state confirms mismatch rejection did not consume controller ownership.
+    // persisted_vmm_state 确认身份不匹配拒绝没有消费控制器所有权。
+    let persisted_vmm_state = vmm_controller
+        .snapshot()
+        .expect("read VMM controller after mismatch");
+    assert_eq!(persisted_vmm_state.completed_turn_sequence, 0);
+    assert_eq!(
+        persisted_vmm_state.active_turn_id.as_deref(),
+        Some("vmm-divergent-turn")
+    );
 }
 
 /// Verifies a Provider fallback commits a durable rejection instead of authorizing continuation.
@@ -435,6 +448,13 @@ async fn context_compaction_fallback_returns_rejected_terminal_outcome() {
     let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
         session_id,
     )));
+    // controller_root keeps this test's isolated VMM files alive through every assertion.
+    // controller_root 在全部断言期间保持本测试隔离 VMM 文件有效。
+    let controller_root = TestControllerRuntimeRoot::new(session_id);
+    state
+        .lock()
+        .expect("lock compaction fallback controller fixture")
+        .controller_runtime = Some(controller_root.controller_runtime_handle());
     // active_stream_task_id proves the fallback commit belongs to the current parent stream.
     // active_stream_task_id 证明回退提交属于当前父流。
     let active_stream_task_id = register_pending_context_compaction_test_stream(&state, session_id);
@@ -567,6 +587,9 @@ async fn context_compaction_hook_lock_failure_preserves_committed_outcome() {
     let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
         session_id,
     )));
+    // controller_root keeps this test's isolated VMM files alive through every assertion.
+    // controller_root 在全部断言期间保持本测试隔离 VMM 文件有效。
+    let controller_root = TestControllerRuntimeRoot::new(session_id);
     // active_stream_task_id proves the successful commit belongs to the current parent stream.
     // active_stream_task_id 证明成功提交属于当前父流。
     let active_stream_task_id = register_pending_context_compaction_test_stream(&state, session_id);
@@ -576,6 +599,7 @@ async fn context_compaction_hook_lock_failure_preserves_committed_outcome() {
         // guard initializes canonical conversation and status state under one lock.
         // guard 在同一把锁内初始化规范会话与状态记录。
         let mut guard = state.lock().expect("lock compaction success fixture");
+        guard.controller_runtime = Some(controller_root.controller_runtime_handle());
         // workspace is the authoritative regular-session snapshot for this fixture.
         // workspace 是当前夹具的权威普通会话快照。
         let workspace = guard
@@ -637,6 +661,20 @@ async fn context_compaction_hook_lock_failure_preserves_committed_outcome() {
         execution_profile: PromptCompactionExecutionProfile::CachePreservingFullFidelity,
         input_prune_report: None,
     };
+    // retry_execution reuses the exact compaction identity to verify end-to-end idempotency.
+    // retry_execution 复用精确压缩身份，以验证端到端幂等性。
+    let retry_execution = execution.clone();
+    // repair_execution drives recovery from a VMM-only committed interruption point.
+    // repair_execution 驱动从仅 VMM 已提交的中断点恢复。
+    let repair_execution = execution.clone();
+    // precommit_workspace preserves the exact ordinary-state baseline before the first domain commit.
+    // precommit_workspace 保留首次领域提交前的精确普通状态基线。
+    let precommit_workspace = state
+        .lock()
+        .expect("lock precommit compaction workspace")
+        .workspace_snapshot
+        .clone()
+        .expect("precommit workspace should exist");
     // agent_runtime owns the notification mutex deliberately poisoned below.
     // agent_runtime 持有下方刻意中毒的通知互斥锁。
     let agent_runtime = test_agent_runtime_bridge();
@@ -702,6 +740,76 @@ async fn context_compaction_hook_lock_failure_preserves_committed_outcome() {
             .session_runtime_kernels
             .get(&session_id)
             .is_some_and(SessionRuntimeKernel::has_active_turn)
+    );
+    drop(terminal_guard);
+    // retry_task_id represents a duplicate completion delivery with fresh transport ownership.
+    // retry_task_id 代表具有新传输所有权的重复完成投递。
+    let retry_task_id = register_pending_context_compaction_test_stream(&state, session_id);
+    // retry_outcome must observe both committed domains and avoid appending a second checkpoint.
+    // retry_outcome 必须观察到两个已提交领域，并避免追加第二个检查点。
+    let retry_outcome = finish_webui_context_compaction_execution(
+        &ServiceEventEmitter::new(Vec::new()),
+        &state,
+        &agent_runtime,
+        session_id,
+        SessionRunPhase::Ready,
+        &section_id,
+        "预算说明",
+        MANUAL_CONTEXT_COMPACTION_TRIGGER,
+        ContextCompactionCommitMode::FinishActiveStream {
+            task_id: retry_task_id,
+        },
+        retry_execution,
+    )
+    .expect("duplicate committed compaction should remain successful");
+    let retry_snapshot = retry_outcome.into_workspace_snapshot();
+    assert_eq!(
+        retry_snapshot
+            .session_compactions
+            .get(&session_id)
+            .map(Vec::len),
+        Some(1)
+    );
+    {
+        // repair_guard restores only ordinary state while retaining the already committed Core VMM document.
+        // repair_guard 仅恢复普通状态，同时保留已经提交的 Core VMM 文档。
+        let mut repair_guard = state.lock().expect("lock VMM-only repair fixture");
+        repair_guard.workspace_snapshot = Some(precommit_workspace);
+    }
+    // repair_task_id owns the retry that must reconstruct the missing ordinary projection.
+    // repair_task_id 拥有必须重建缺失普通投影的重试。
+    let repair_task_id = register_pending_context_compaction_test_stream(&state, session_id);
+    // repair_outcome proves a duplicate controller receipt can safely complete the other domain.
+    // repair_outcome 证明重复控制器回执能够安全补齐另一领域。
+    let repair_outcome = finish_webui_context_compaction_execution(
+        &ServiceEventEmitter::new(Vec::new()),
+        &state,
+        &agent_runtime,
+        session_id,
+        SessionRunPhase::Ready,
+        &section_id,
+        "预算说明",
+        MANUAL_CONTEXT_COMPACTION_TRIGGER,
+        ContextCompactionCommitMode::FinishActiveStream {
+            task_id: repair_task_id,
+        },
+        repair_execution,
+    )
+    .expect("VMM-only committed compaction should repair ordinary state");
+    let repair_snapshot = repair_outcome.into_workspace_snapshot();
+    assert_eq!(
+        repair_snapshot
+            .session_compactions
+            .get(&session_id)
+            .map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        repair_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .and_then(|runtime_state| runtime_state.last_compaction_id.as_deref()),
+        Some("committed-compaction")
     );
 }
 
@@ -2622,31 +2730,29 @@ fn live_transcript_persist_version_is_independent_from_session_persist_version()
         session_id,
     )));
 
-    // runtime_versions belong to the coupled full-session and independent VMM persistence lanes.
-    // runtime_versions 属于耦合分配的完整会话与独立 VMM 持久化通道。
-    let runtime_versions = next_webui_session_runtime_persist_versions(&state, session_id)
-        .expect("runtime persist versions should allocate");
+    // runtime_version belongs only to the ordinary runtime persistence lane.
+    // runtime_version 只属于普通运行时持久化通道。
+    let runtime_version = next_webui_session_runtime_persist_version(&state, session_id)
+        .expect("runtime persist version should allocate");
     // transcript_version belongs to the live transcript-only persistence lane.
     // transcript_version 属于仅运行中转录持久化通道。
     let transcript_version = next_webui_session_transcript_persist_version(&state, session_id)
         .expect("transcript persist version should allocate");
 
-    assert!(webui_session_runtime_persist_versions_are_current(
+    assert!(webui_session_runtime_persist_version_is_current(
         &state,
         session_id,
-        runtime_versions.0,
-        runtime_versions.1,
+        runtime_version,
     ));
     assert!(webui_session_transcript_persist_version_is_current(
         &state,
         session_id,
         transcript_version
     ));
-    assert!(!webui_session_runtime_persist_versions_are_current(
+    assert!(!webui_session_runtime_persist_version_is_current(
         &state,
         session_id,
-        runtime_versions.0.saturating_add(1),
-        runtime_versions.1,
+        runtime_version.saturating_add(1),
     ));
 }
 

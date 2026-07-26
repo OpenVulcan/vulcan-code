@@ -307,6 +307,9 @@ pub struct ServiceBridgeState {
     /// 宿主管理 Codebase Memory Sidecar 的长生命周期控制器。
     pub(crate) codebase_memory_controller:
         crate::codebase_memory_controller::CodebaseMemoryController,
+    /// Process-wide registry owning one serialized VMM controller per session.
+    /// 进程级注册表，为每个会话拥有一个串行化 VMM 控制器。
+    pub(crate) vmm_controller_registry: crate::vmm_session_controller::SessionVmmControllerRegistry,
     /// Tokio runtime that owns bootstrap-spawned background tasks such as shared MCP access.
     /// 持有引导期后台任务的 Tokio 运行时，例如共享 MCP 访问任务。
     pub(crate) service_runtime: Option<Arc<tokio::runtime::Runtime>>,
@@ -390,9 +393,6 @@ pub struct ServiceBridgeState {
     /// Latest background persistence version keyed by session id.
     /// 按会话标识索引的最新后台持久化版本。
     pub(crate) session_persist_versions: BTreeMap<SessionId, u64>,
-    /// Latest independent VMM persistence version keyed by session id.
-    /// 按会话标识索引的最新独立 VMM 持久化版本。
-    pub(crate) session_vmm_persist_versions: BTreeMap<SessionId, u64>,
     /// Latest live transcript persistence version keyed by session id.
     /// 按会话标识索引的最新运行中转录持久化版本。
     pub(crate) session_transcript_persist_versions: BTreeMap<SessionId, u64>,

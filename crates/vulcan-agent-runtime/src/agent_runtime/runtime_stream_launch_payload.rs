@@ -653,8 +653,14 @@ mod tests {
         // profile_outcome keeps profile preparation distinct in this transport-focused test.
         // profile_outcome 在该传输链路测试中保持画像准备的独立性。
         let profile_outcome = start.profile_request.clone().skip();
+        // vmm_session_memory models the Core controller candidate for this launch path.
+        // vmm_session_memory 模拟该启动链路中的 Core 控制器候选状态。
+        let mut vmm_session_memory =
+            vulcan_vmm::VmmSessionMemoryState::new(session_id.to_string(), "1")
+                .expect("test VMM session owner should be valid");
         let continuation = continue_shared_prompt_turn_after_preparation_with_runtime_state(
             &mut runtime_state,
+            &mut vmm_session_memory,
             SharedPromptTurnContinueInput {
                 start,
                 precheck_outcome,

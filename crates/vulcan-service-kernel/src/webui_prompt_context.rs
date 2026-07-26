@@ -40,7 +40,6 @@ pub(crate) fn apply_webui_prompt_begin_outer_steps(
     session_id: SessionId,
     session_title: &str,
 ) {
-    apply_webui_prompt_begin_outer_state_steps(controller_runtime, workspace_snapshot, session_id);
     persist_webui_context_current_document(
         controller_runtime,
         workspace_snapshot,
@@ -68,59 +67,12 @@ pub(crate) fn apply_webui_prompt_begin_outer_steps_deferred_context_persist(
     session_id: SessionId,
     session_title: &str,
 ) {
-    apply_webui_prompt_begin_outer_state_steps(controller_runtime, workspace_snapshot, session_id);
     spawn_webui_context_current_document_persist_task(
         controller_runtime,
         workspace_snapshot,
         session_id,
         session_title,
     );
-}
-
-/// Applies prompt begin state mutations that must complete before the provider request starts.
-/// 应用 Provider 请求启动前必须完成的提示词开始状态变更。
-///
-/// # Parameters
-/// 参数
-/// `controller_runtime` provides audit storage for removed legacy context injections.
-/// `controller_runtime` 提供移除旧上下文注入时使用的审计存储。
-/// `workspace_snapshot` is the mutable WebUI workspace snapshot.
-/// `workspace_snapshot` 是可变 WebUI 工作区快照。
-/// `session_id` selects the prompt session.
-/// `session_id` 选择提示词会话。
-fn apply_webui_prompt_begin_outer_state_steps(
-    controller_runtime: &ControllerRuntimeHandle,
-    workspace_snapshot: &mut WorkspaceSnapshot,
-    session_id: SessionId,
-) {
-    if let Some(runtime_state) = workspace_snapshot
-        .session_runtime_state
-        .get_mut(&session_id)
-    {
-        let previous_persistent_fingerprint =
-            persistent_injection_fingerprint(&runtime_state.context_injection_state);
-        if remove_legacy_vmm_profile_context_injection_state(
-            &mut runtime_state.context_injection_state,
-        ) {
-            let timestamp = current_unix_millis_text();
-            runtime_state.updated_at = timestamp.clone();
-            let event = legacy_vmm_injection_cancelled_event(
-                previous_persistent_fingerprint,
-                "legacy_vmm_profile_webui_prompt_cleanup",
-            );
-            if let Err(error) = record_webui_runtime_injection_cancelled(
-                controller_runtime,
-                session_id,
-                event,
-                &timestamp,
-            ) {
-                webui_trace(
-                    "runtime_injection_cancelled_audit_failed",
-                    format!("session={session_id} error={error}"),
-                );
-            }
-        }
-    }
 }
 
 /// Spawns one background task that persists the current segmented context document.

@@ -11,7 +11,7 @@ use vulcan_provider_config::config::{
     PersistedPromptSkillState, ReasoningEffortLevel,
 };
 use vulcan_session_core::SessionRuntimeKernel;
-use vulcan_vmm::{PostActionRequest, ProfileNodeEntry, VmmConfigLayer, VmmSessionMemoryState};
+use vulcan_vmm::{PostActionRequest, ProfileNodeEntry, VmmConfigLayer};
 
 use crate::SessionKnowledgeLibrarySelection;
 

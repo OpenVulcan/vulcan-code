@@ -246,13 +246,25 @@ pub async fn archive_project_sessions(
 ///
 /// # Returns
 /// 返回值
-/// Returns success only after all active child locators are archived and the active project row is deleted.
-/// 仅在全部活动子定位行归档且活动项目行删除完成后返回成功。
+/// Returns success only after child locators are archived, their VMM documents are deleted, and the active project row is deleted.
+/// 仅在子定位行归档、其 VMM 文档删除且活动项目行删除完成后返回成功。
 pub async fn remove_project_after_archiving_sessions(
     controller: ControllerRuntimeHandle,
     project_id: &str,
 ) -> Result<(), String> {
     archive_project_sessions(controller.clone(), project_id).await?;
+    // archived_entries are queried after archival so retries can finish VMM deletion after a partial prior attempt.
+    // archived_entries 在归档后查询，使重试能够完成先前局部尝试遗留的 VMM 删除。
+    let archived_entries =
+        query_session_index_locators_for_project(&controller, project_id, true).await?;
+    for entry in archived_entries {
+        // removed is intentionally ignored because an already-absent VMM document is an idempotent deletion.
+        // removed 被刻意忽略，因为已经缺失的 VMM 文档属于幂等删除。
+        let _removed = crate::workspace_store::delete_core_session_vmm_state(
+            &controller.data_root,
+            entry.session_id,
+        )?;
+    }
     delete_active_project_row(&controller, project_id).await?;
     Ok(())
 }

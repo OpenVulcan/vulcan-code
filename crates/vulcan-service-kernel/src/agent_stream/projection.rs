@@ -756,6 +756,32 @@ fn emit_context_injection_changed_delta_internal(
     session_id: SessionId,
     require_selected_session: bool,
 ) -> Result<(), String> {
+    // vmm_runtime_context is cloned without retaining the shared service lock.
+    // vmm_runtime_context 在不保留共享服务锁的情况下完成克隆。
+    let vmm_runtime_context = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard
+            .controller_runtime
+            .clone()
+            .map(|controller_runtime| (controller_runtime, guard.vmm_controller_registry.clone()))
+    };
+    // vmm_session_memory is a read-only controller projection for this exact delta.
+    // vmm_session_memory 是用于本次精确增量的只读控制器投影。
+    let vmm_session_memory = if let Some((controller_runtime, registry)) = vmm_runtime_context {
+        Some(
+            registry
+                .get_or_open(
+                    &controller_runtime.data_root,
+                    session_id,
+                    &current_unix_millis_text(),
+                )?
+                .snapshot()?,
+        )
+    } else {
+        None
+    };
     let event = {
         let mut guard = state
             .lock()
@@ -769,6 +795,7 @@ fn emit_context_injection_changed_delta_internal(
             let Some(delta) = context_injection_changed_delta_from_workspace_snapshot(
                 workspace_snapshot,
                 session_id,
+                vmm_session_memory.as_ref(),
             ) else {
                 return Ok(());
             };
@@ -777,6 +804,7 @@ fn emit_context_injection_changed_delta_internal(
             context_injection_changed_delta_from_runtime_state(
                 session_id,
                 workspace_snapshot.session_runtime_state.get(&session_id),
+                vmm_session_memory.as_ref(),
             )
         };
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
@@ -823,6 +851,7 @@ fn emit_context_injection_changed_delta_internal(
 fn context_injection_changed_delta_from_workspace_snapshot(
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
+    vmm_session_memory: Option<&vulcan_vmm::VmmSessionMemoryState>,
 ) -> Option<ContextInjectionChangedDelta> {
     if workspace_snapshot.selected_session != session_id {
         return None;
@@ -830,6 +859,7 @@ fn context_injection_changed_delta_from_workspace_snapshot(
     Some(context_injection_changed_delta_from_runtime_state(
         session_id,
         workspace_snapshot.session_runtime_state.get(&session_id),
+        vmm_session_memory,
     ))
 }
 
@@ -2595,6 +2625,7 @@ mod tests {
         let delta = context_injection_changed_delta_from_workspace_snapshot(
             &workspace_snapshot,
             session_id,
+            None,
         )
         .expect("selected session should produce context injection delta");
 
@@ -2618,6 +2649,7 @@ mod tests {
             context_injection_changed_delta_from_workspace_snapshot(
                 &workspace_snapshot,
                 background_session_id,
+                None,
             )
             .is_none()
         );
@@ -2657,11 +2689,13 @@ mod tests {
         let selected_delta = context_injection_changed_delta_from_workspace_snapshot(
             &workspace_snapshot,
             selected_session_id,
+            None,
         )
         .expect("selected session should emit a clearing delta");
         // Retained by-conversation projection omits empty entries.
         // 按会话保留的投影会省略空条目。
-        let retained_deltas = context_injection_by_conversation_from_workspace(&workspace_snapshot);
+        let retained_deltas =
+            context_injection_by_conversation_from_workspace(&workspace_snapshot, &BTreeMap::new());
 
         assert_eq!(
             selected_delta.conversation_id,

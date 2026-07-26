@@ -352,6 +352,8 @@ pub(crate) fn truncate_auto_compaction_last_user_message(message: &str) -> Strin
 /// # 参数
 /// `active_runtime_state` is the current session runtime state used as the immutable draft source.
 /// `active_runtime_state` 是作为不可变候选来源使用的当前会话运行时状态。
+/// `vmm_session_memory` is the isolated Core controller candidate for the new cache epoch.
+/// `vmm_session_memory` 是新缓存纪元使用的隔离 Core 控制器候选状态。
 /// `session_id` identifies the session that will receive the draft if commit validation succeeds.
 /// `session_id` 标识在提交校验通过后接收候选状态的会话。
 /// `section_id` identifies the visible compaction status section being completed.
@@ -371,6 +373,7 @@ pub(crate) fn truncate_auto_compaction_last_user_message(message: &str) -> Strin
 /// 返回可原子替换活跃状态的完整候选状态；或返回说明不应提交的错误。
 pub(crate) fn build_webui_context_compaction_draft(
     active_runtime_state: &SessionRuntimeStateEntry,
+    vmm_session_memory: &mut vulcan_vmm::VmmSessionMemoryState,
     session_id: SessionId,
     section_id: &str,
     budget_note: &str,
@@ -472,7 +475,7 @@ pub(crate) fn build_webui_context_compaction_draft(
     } else {
         None
     };
-    draft_runtime_state.vmm_session_memory.begin_cache_epoch(
+    vmm_session_memory.begin_cache_epoch(
         &checkpoint.id,
         continuation_message_id.as_deref(),
         &now,

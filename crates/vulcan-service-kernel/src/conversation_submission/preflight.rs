@@ -21,6 +21,9 @@ pub(crate) enum SubmissionTurnAdmission {
     /// An existing-session submission owns one exact reservation row.
     /// 已有会话提交拥有一个精确预留行。
     Existing(ExistingSubmissionTurnAdmission),
+    /// An outer transaction retains one exact reservation accepted by this nested submission.
+    /// 外层事务保留一个由此嵌套提交接受的精确预留。
+    Preauthorized(ExistingSubmissionAdmissionAuthorization),
 }
 
 /// Owned existing-session reservation released only when this submission leaves scope.
@@ -57,10 +60,16 @@ impl SubmissionTurnAdmission {
         match (self, materialized_session.kind) {
             (Self::Unreserved, PromptSessionMaterializationKind::Created) => Ok(None),
             (Self::Existing(_), PromptSessionMaterializationKind::Created) => Ok(None),
+            (Self::Preauthorized(_), PromptSessionMaterializationKind::Created) => Ok(None),
             (Self::Existing(admission), PromptSessionMaterializationKind::Existing)
                 if admission.session_id == materialized_session.session_id =>
             {
                 Ok(Some(admission.reservation_id))
+            }
+            (Self::Preauthorized(authorization), PromptSessionMaterializationKind::Existing)
+                if authorization.session_id == materialized_session.session_id =>
+            {
+                Ok(Some(authorization.reservation_id))
             }
             (Self::Unreserved, PromptSessionMaterializationKind::Existing) => Err(format!(
                 "Existing session `{}` was materialized without submission admission ownership",
@@ -70,6 +79,12 @@ impl SubmissionTurnAdmission {
                 Err(format!(
                     "Submission admission owns session `{}`, but materialization selected `{}`",
                     admission.session_id, materialized_session.session_id
+                ))
+            }
+            (Self::Preauthorized(authorization), PromptSessionMaterializationKind::Existing) => {
+                Err(format!(
+                    "Preauthorized submission owns session `{}`, but materialization selected `{}`",
+                    authorization.session_id, materialized_session.session_id
                 ))
             }
         }
@@ -204,10 +219,22 @@ pub(crate) fn prepare_retained_submission_preflight(
     state: &SharedServiceBridgeState,
     project_id: Option<&str>,
     target: PromptSessionTarget,
+    preauthorized_turn_admission: Option<ExistingSubmissionAdmissionAuthorization>,
 ) -> Result<RetainedSubmissionPreflight, String> {
     // submission_session_id is derived once from the strong target for retained-state lookups.
     // submission_session_id 从强类型目标一次性派生，用于保留状态查找。
     let submission_session_id = target.existing_session_id();
+    if let Some(authorization) = preauthorized_turn_admission
+        && submission_session_id != Some(authorization.session_id)
+    {
+        return Err(format!(
+            "Preauthorized submission owns session `{}`, but request targets `{}`.",
+            authorization.session_id,
+            submission_session_id
+                .map(|session_id| session_id.to_string())
+                .unwrap_or_else(|| String::from("<new>"))
+        ));
+    }
     // guard guarantees every admission decision and retained snapshot field observes the same service-state revision.
     // guard 保证每项准入决策与保留快照字段观察同一个服务状态版本。
     let mut guard = state
@@ -216,9 +243,21 @@ pub(crate) fn prepare_retained_submission_preflight(
     if let Some(session_id) = submission_session_id
         && let Some(reservation) = guard.session_turn_admission_reservations.get(&session_id)
     {
+        let matches_preauthorization = preauthorized_turn_admission.is_some_and(|authorization| {
+            authorization.session_id == session_id
+                && authorization.reservation_id == reservation.reservation_id
+                && reservation.kind == SessionTurnAdmissionReservationKind::PromptSubmission
+        });
+        if !matches_preauthorization {
+            return Err(format!(
+                "会话 `{session_id}` 已由 {} 预留，无法提交新的提示词。",
+                reservation.kind.diagnostic_label()
+            ));
+        }
+    } else if let Some(authorization) = preauthorized_turn_admission {
         return Err(format!(
-            "会话 `{session_id}` 已由 {} 预留，无法提交新的提示词。",
-            reservation.kind.diagnostic_label()
+            "Preauthorized submission reservation for session `{}` is no longer current.",
+            authorization.session_id
         ));
     }
     if let Some(session_id) = submission_session_id
@@ -330,21 +369,25 @@ pub(crate) fn prepare_retained_submission_preflight(
     // turn_admission closes every competing start after this coherent preflight revision.
     // turn_admission 关闭此一致预检版本之后的全部竞争启动。
     let turn_admission = if let Some(session_id) = submission_session_id {
-        // reservation_id uniquely owns the row so stale request cleanup cannot remove a successor.
-        // reservation_id 唯一拥有该行，使过期请求清理无法删除后继预留。
-        let reservation_id = Uuid::new_v4();
-        guard.session_turn_admission_reservations.insert(
-            session_id,
-            SessionTurnAdmissionReservation {
+        if let Some(authorization) = preauthorized_turn_admission {
+            SubmissionTurnAdmission::Preauthorized(authorization)
+        } else {
+            // reservation_id uniquely owns the row so stale request cleanup cannot remove a successor.
+            // reservation_id 唯一拥有该行，使过期请求清理无法删除后继预留。
+            let reservation_id = Uuid::new_v4();
+            guard.session_turn_admission_reservations.insert(
+                session_id,
+                SessionTurnAdmissionReservation {
+                    reservation_id,
+                    kind: SessionTurnAdmissionReservationKind::PromptSubmission,
+                },
+            );
+            SubmissionTurnAdmission::Existing(ExistingSubmissionTurnAdmission {
+                state: state.clone(),
+                session_id,
                 reservation_id,
-                kind: SessionTurnAdmissionReservationKind::PromptSubmission,
-            },
-        );
-        SubmissionTurnAdmission::Existing(ExistingSubmissionTurnAdmission {
-            state: state.clone(),
-            session_id,
-            reservation_id,
-        })
+            })
+        }
     } else {
         SubmissionTurnAdmission::Unreserved
     };

@@ -774,3 +774,49 @@ fn runtime_state_rebuild_from_recent_messages_preserves_continuation() {
         Some("assistant-1")
     );
 }
+
+/// Verifies old ordinary state embedding VMM ownership is rejected instead of silently ignored.
+/// 验证嵌入 VMM 所有权的旧普通状态会被拒绝，而不是被静默忽略。
+#[test]
+fn embedded_historical_vmm_runtime_state_is_rejected() {
+    // runtime_state models the removed ordinary-state ownership format.
+    // runtime_state 模拟已移除的普通状态所有权格式。
+    let runtime_state = serde_json::json!({
+        "updated_at": "1",
+        "vmm_session_memory": {
+            "session_id": "session-a",
+            "revision": 2
+        }
+    });
+
+    let error = reject_embedded_historical_vmm_runtime_state(&runtime_state, "session-a")
+        .expect_err("embedded VMM ownership must be rejected");
+
+    assert!(error.contains("unsupported historical embedded VMM runtime state"));
+    assert!(error.contains("automatic migration and fallback are disabled"));
+}
+
+/// Verifies the removed hidden-user VMM profile group is rejected instead of cleaned at render time.
+/// 验证已移除的隐藏用户 VMM 画像分组会被拒绝，而不是在渲染时清理。
+#[test]
+fn historical_vmm_profile_context_injection_is_rejected() {
+    // runtime_state is the decoded ordinary state containing the removed legacy group.
+    // runtime_state 是包含已移除旧分组的已解码普通状态。
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    runtime_state.context_injection_state.apply_inserts(
+        vec![vulcan_context_injection::InjectionInsert::single(
+            vulcan_context_injection::InjectionKind::Persistent,
+            HISTORICAL_VMM_PROFILE_CONTEXT_INJECTION_TAG,
+            "historical profile",
+            "must not load",
+            None,
+        )],
+        "1",
+    );
+
+    let error = reject_historical_vmm_profile_context_injection(&runtime_state, "session-a")
+        .expect_err("historical profile group must be rejected");
+
+    assert!(error.contains("unsupported historical VMM profile context injection state"));
+    assert!(error.contains("automatic cleanup and fallback are disabled"));
+}

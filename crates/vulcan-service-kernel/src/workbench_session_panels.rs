@@ -453,11 +453,11 @@ fn conversation_attention_summary(
 /// 构建当前选中会话的上下文注入侧面板快照。
 pub(crate) fn context_injection_snapshot_from_runtime_state(
     runtime_state: Option<&SessionRuntimeStateEntry>,
+    vmm_session_memory: Option<&vulcan_vmm::VmmSessionMemoryState>,
 ) -> Option<ContextInjectionSnapshot> {
     let runtime_state = runtime_state?;
-    let mut dynamic_panel_cards = runtime_state
-        .vmm_session_memory
-        .active_panel_card()
+    let mut dynamic_panel_cards = vmm_session_memory
+        .and_then(|state| state.active_panel_card())
         .into_iter()
         .collect::<Vec<_>>();
     dynamic_panel_cards.extend(context_injection_panel_cards_for_kind(
@@ -466,7 +466,9 @@ pub(crate) fn context_injection_snapshot_from_runtime_state(
     ));
     // Expired VMM residents are appended last so the WebUI presents them in a dedicated bottom region.
     // 过期 VMM 驻留项最后追加，使 WebUI 将其展示在独立的底部区域。
-    dynamic_panel_cards.extend(runtime_state.vmm_session_memory.expired_panel_card());
+    if let Some(vmm_session_memory) = vmm_session_memory {
+        dynamic_panel_cards.extend(vmm_session_memory.expired_panel_card());
+    }
     let dynamic_cards = context_injection_cards_to_summary(dynamic_panel_cards);
     let static_profile = static_vmm_profile_snapshot(runtime_state);
     let mut static_cards = Vec::new();
@@ -501,10 +503,14 @@ pub(crate) fn context_injection_snapshot_from_runtime_state(
 pub(crate) fn context_injection_changed_delta_from_runtime_state(
     session_id: SessionId,
     runtime_state: Option<&SessionRuntimeStateEntry>,
+    vmm_session_memory: Option<&vulcan_vmm::VmmSessionMemoryState>,
 ) -> ContextInjectionChangedDelta {
     ContextInjectionChangedDelta {
         conversation_id: session_id.to_string(),
-        context_injection: context_injection_snapshot_from_runtime_state(runtime_state),
+        context_injection: context_injection_snapshot_from_runtime_state(
+            runtime_state,
+            vmm_session_memory,
+        ),
     }
 }
 
@@ -522,6 +528,7 @@ pub(crate) fn context_injection_changed_delta_from_runtime_state(
 /// 返回按会话归属的记忆面板投影，并省略缺少运行态的条目。
 pub(crate) fn context_injection_by_conversation_from_workspace(
     workspace: &WorkspaceSnapshot,
+    vmm_session_states: &BTreeMap<SessionId, vulcan_vmm::VmmSessionMemoryState>,
 ) -> Vec<ContextInjectionChangedDelta> {
     let mut session_ids = workspace.hydrated_session_ids.clone();
     session_ids.insert(workspace.selected_session);
@@ -531,6 +538,7 @@ pub(crate) fn context_injection_by_conversation_from_workspace(
             let delta = context_injection_changed_delta_from_runtime_state(
                 *session_id,
                 workspace.session_runtime_state.get(session_id),
+                vmm_session_states.get(session_id),
             );
             delta.context_injection.is_some().then_some(delta)
         })
@@ -943,7 +951,11 @@ mod tests {
     /// 验证活动 VMM 记忆会展示在独立的底部过期区域之前。
     #[test]
     fn context_injection_snapshot_places_expired_vmm_region_last() {
-        let mut runtime_state = SessionRuntimeStateEntry::default();
+        let runtime_state = SessionRuntimeStateEntry::default();
+        // vmm_session_memory is the controller-owned state projected beside ordinary runtime state.
+        // vmm_session_memory 是与普通运行时状态并列投影的控制器所有状态。
+        let mut vmm_session_memory = vulcan_vmm::VmmSessionMemoryState::new("session-a", "1")
+            .expect("test VMM session owner should be valid");
         // expiring_batch creates one resident that crosses its TTL boundary after the first turn.
         // expiring_batch 创建一条在首个回合后跨越 TTL 边界的驻留记忆。
         let expiring_batch = VmmRecallBatch {
@@ -956,16 +968,13 @@ mod tests {
                 ..ContextItem::default()
             }],
         };
-        runtime_state
-            .vmm_session_memory
+        vmm_session_memory
             .apply_recall_batch("session-a", "user-1", &expiring_batch, "1")
             .expect("expiring recall should succeed");
-        runtime_state
-            .vmm_session_memory
+        vmm_session_memory
             .register_active_turn("turn-1", "1")
             .expect("logical turn should register");
-        runtime_state
-            .vmm_session_memory
+        vmm_session_memory
             .consume_turn("turn-1", "2")
             .expect("logical turn should expire the resident");
         // active_batch adds one still-active identity without reviving the expired identity.
@@ -980,13 +989,15 @@ mod tests {
                 ..ContextItem::default()
             }],
         };
-        runtime_state
-            .vmm_session_memory
+        vmm_session_memory
             .apply_recall_batch("session-a", "user-2", &active_batch, "3")
             .expect("active recall should succeed");
 
-        let snapshot = context_injection_snapshot_from_runtime_state(Some(&runtime_state))
-            .expect("runtime state should project a context injection snapshot");
+        let snapshot = context_injection_snapshot_from_runtime_state(
+            Some(&runtime_state),
+            Some(&vmm_session_memory),
+        )
+        .expect("runtime state should project a context injection snapshot");
         let tags = snapshot
             .dynamic_cards
             .iter()

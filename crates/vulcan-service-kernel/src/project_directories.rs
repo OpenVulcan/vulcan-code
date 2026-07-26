@@ -313,13 +313,28 @@ pub async fn service_add_project_from_path(
         .find(|project| task_project_matches_path(project, &normalized_path_text))
         .cloned()
     {
+        // vmm_controller_registry owns the restore fence independently of the retained service lock.
+        // vmm_controller_registry 独立于保留服务锁持有恢复栅栏。
+        let vmm_controller_registry = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?
+            .vmm_controller_registry
+            .clone();
+        // vmm_lifecycle_fence blocks archived-history readers from reopening controllers while directories move.
+        // vmm_lifecycle_fence 在目录移动期间阻止归档历史读取器重新打开控制器。
+        let vmm_lifecycle_fence = vmm_controller_registry
+            .begin_lifecycle_transition(project.session_ids.iter().copied())?;
         vulcan_workspace_store::workspace_store::restore_project(controller_runtime, &project.id)
             .await?;
         // refresh_result publishes restored project/session membership before releasing the write gate.
         // refresh_result 在释放写入闸门前发布已恢复的项目/会话成员关系。
         let refresh_result = refresh_workbench_snapshot(state.clone()).await;
+        // workbench must commit restored membership before replacement controllers may open active paths.
+        // workbench 必须先提交恢复后的成员关系，替代控制器才可打开活动路径。
+        let workbench = refresh_result?;
+        vmm_lifecycle_fence.release()?;
         drop(persist_guard);
-        return refresh_result.map(Some);
+        return Ok(Some(workbench));
     }
 
     let title = normalized_path

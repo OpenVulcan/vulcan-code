@@ -716,6 +716,8 @@ fn append_hidden_model_guidance_to_prompt(prompt: String, guidance: Option<&str>
 /// 参数
 /// `workspace_snapshot` is the shell-owned workspace snapshot being mutated.
 /// `workspace_snapshot` 是外壳持有并将被修改的工作区快照。
+/// `vmm_session_memory` is the isolated VMM candidate owned by the calling Core controller command.
+/// `vmm_session_memory` 是调用方 Core 控制器命令拥有的隔离 VMM 候选状态。
 /// `input` carries independent profile, precheck, and execution inputs.
 /// `input` 携带相互独立的画像、precheck 与执行输入。
 ///
@@ -725,6 +727,7 @@ fn append_hidden_model_guidance_to_prompt(prompt: String, guidance: Option<&str>
 /// 返回包含真实 Provider 执行请求的 continuation。
 pub fn continue_shared_prompt_turn_after_preparation(
     workspace_snapshot: &mut WorkspaceSnapshot,
+    vmm_session_memory: &mut vulcan_vmm::VmmSessionMemoryState,
     input: SharedPromptTurnContinueInput,
 ) -> Result<SharedPromptTurnContinuation, String> {
     let session_id = input.start.session_id;
@@ -733,7 +736,11 @@ pub fn continue_shared_prompt_turn_after_preparation(
             .session_runtime_state
             .get_mut(&session_id)
             .ok_or_else(|| format!("会话 `{session_id}` 缺少运行态，无法继续提示词回合。"))?;
-        continue_shared_prompt_turn_after_preparation_with_runtime_state(runtime_state, input)?
+        continue_shared_prompt_turn_after_preparation_with_runtime_state(
+            runtime_state,
+            vmm_session_memory,
+            input,
+        )?
     };
     let merged_messages = merge_session_messages_with_conversation_state_records(
         workspace_snapshot
@@ -756,6 +763,8 @@ pub fn continue_shared_prompt_turn_after_preparation(
 /// 参数
 /// `runtime_state` is the session runtime state being mutated.
 /// `runtime_state` 是将被修改的会话运行态。
+/// `vmm_session_memory` is the isolated VMM candidate mutated only within one controller command.
+/// `vmm_session_memory` 是仅在一个控制器命令内修改的隔离 VMM 候选状态。
 /// `input` carries precheck and execution inputs.
 /// `input` 携带 precheck 与执行输入。
 ///
@@ -765,6 +774,7 @@ pub fn continue_shared_prompt_turn_after_preparation(
 /// 返回包含真实 Provider 执行请求的 continuation。
 pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
     runtime_state: &mut SessionRuntimeStateEntry,
+    vmm_session_memory: &mut vulcan_vmm::VmmSessionMemoryState,
     input: SharedPromptTurnContinueInput,
 ) -> Result<SharedPromptTurnContinuation, String> {
     let session_id = input.start.session_id;
@@ -815,19 +825,16 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
             let now = current_unix_millis_text();
             // mode_report records an explicit rollout epoch transition when policy changed.
             // mode_report 记录策略变化时的显式灰度纪元转换。
-            let mode_report = runtime_state
-                .vmm_session_memory
+            let mode_report = vmm_session_memory
                 .synchronize_stable_anchor_rendering(feature_policy.stable_anchors_enabled, &now)?;
             // pending_report binds local expiry and compaction state even when the remote hook fails.
             // pending_report 即使在远端 Hook 失败时也会绑定本地到期与压缩状态。
-            let pending_report = runtime_state
-                .vmm_session_memory
-                .bind_pending_state_to_user(target_message_id, &now)?;
+            let pending_report =
+                vmm_session_memory.bind_pending_state_to_user(target_message_id, &now)?;
             // active_turn_report fences terminal TTL consumption to this exact logical turn.
             // active_turn_report 将终态 TTL 消费限定到当前精确逻辑回合。
-            let active_turn_report = runtime_state
-                .vmm_session_memory
-                .register_active_turn(&expected_turn_id, &now)?;
+            let active_turn_report =
+                vmm_session_memory.register_active_turn(&expected_turn_id, &now)?;
             if mode_report.changed {
                 runtime_state.conversation_state.continuation = Default::default();
             }
@@ -835,7 +842,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
                 runtime_state.updated_at = now;
             }
         } else if input.start.source.runs_completed_turn_hooks()
-            && runtime_state.vmm_session_memory.requires_persistence()
+            && vmm_session_memory.requires_persistence()
         {
             return Err(String::from(
                 "VMM active session state requires an exact canonical user-message id before a terminal user turn can start.",
@@ -894,15 +901,13 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
                         )
                     })?;
                 let now = current_unix_millis_text();
-                runtime_state.vmm_session_memory.apply_recall_batch(
+                vmm_session_memory.apply_recall_batch(
                     &session_id.to_string(),
                     target_message_id,
                     &effect.batch,
                     &now,
                 )?;
-                runtime_state
-                    .vmm_session_memory
-                    .register_active_turn(&expected_turn_id, &now)?;
+                vmm_session_memory.register_active_turn(&expected_turn_id, &now)?;
                 runtime_state.updated_at = now;
             }
             if let Some(rewritten_prompt) = report
@@ -961,7 +966,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
     let runtime_policy = vulcan_session_core::ExecutionRuntimePolicy::main_session();
     let context_injection = core_provider_context_injection_from_state_for_turn(
         &runtime_state.context_injection_state,
-        &runtime_state.vmm_session_memory,
+        vmm_session_memory,
         Some(&expected_turn_id),
     );
     let request = ExecutionPreparationRequest {

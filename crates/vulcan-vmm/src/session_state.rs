@@ -1,26 +1,19 @@
-//! Session-owned VMM lease state, immutable prompt anchors, and legacy migration.
-//! 会话归属的 VMM 租约状态、不可变提示词锚点与旧版迁移。
+//! Session-owned VMM lease state and immutable prompt anchors.
+//! 会话归属的 VMM 租约状态与不可变提示词锚点。
 
-#[cfg(test)]
-use crate::adapter::VMM_PRECHECK_MEMORY_RENDERER_ID;
 use crate::adapter::{
-    is_legacy_vmm_precheck_injection_item, render_vmm_context_item_detail,
-    render_vmm_context_item_model, render_vmm_context_item_panel,
-    vmm_context_item_from_injection_item,
+    render_vmm_context_item_detail, render_vmm_context_item_model, render_vmm_context_item_panel,
 };
 use crate::config::VmmEffectiveConfig;
 use crate::protocol::{ContextItem, PreCheckResponse};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use vulcan_context_injection::{
-    ContextInjectionState, InjectionKind, InjectionPanelCard, InjectionPanelItem, InjectionScope,
-    InjectionStateItem,
-};
+use vulcan_context_injection::{InjectionPanelCard, InjectionPanelItem};
 
 /// Current schema version for independently persisted VMM session memory state.
 /// 独立持久化 VMM 会话记忆状态的当前结构版本。
-pub const VMM_SESSION_MEMORY_SCHEMA_VERSION: u32 = 1;
+pub const VMM_SESSION_MEMORY_SCHEMA_VERSION: u32 = 2;
 /// Maximum physical byte length of one pretty-printed independent VMM state document, including its trailing newline.
 /// 单份美化打印独立 VMM 状态文档允许的最大物理字节数，包含末尾换行符。
 pub const VMM_SESSION_MEMORY_MAX_BYTES: usize = 4 * 1024 * 1024;
@@ -112,9 +105,6 @@ pub enum VmmPromptAnchorKind {
     /// First provider-visible introduction of one or more recalled memories.
     /// 一条或多条召回记忆首次进入 Provider 可见上下文。
     Memory,
-    /// Legacy provider-visible replacement retained for persisted epoch compatibility.
-    /// 为兼容既有持久化纪元而保留的旧版 Provider 可见替换类型。
-    Replacement,
     /// Small append-only notice that invalidates expired historical memory anchors.
     /// 使已过期历史记忆锚点失效的小型追加式通知。
     Revocation,
@@ -129,7 +119,6 @@ impl VmmPromptAnchorKind {
     fn as_id_label(self) -> &'static str {
         match self {
             Self::Memory => "memory",
-            Self::Replacement => "replacement",
             Self::Revocation => "revocation",
             Self::Baseline => "baseline",
         }
@@ -139,6 +128,7 @@ impl VmmPromptAnchorKind {
 /// One immutable provider-visible prefix bound to one exact canonical user message.
 /// 绑定到一条精确规范用户消息的不可变 Provider 可见前缀。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VmmPromptAnchor {
     /// Stable anchor identifier retained for diagnostics and lease ownership.
     /// 为诊断与租约归属保留的稳定锚点标识。
@@ -172,6 +162,7 @@ pub struct VmmPromptAnchor {
 /// Prompt-anchor epoch aligned with one canonical context-compaction baseline.
 /// 与一份规范上下文压缩基线对齐的提示词锚点纪元。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VmmCacheEpoch {
     /// Stable epoch identifier; the compaction id is used after compaction.
     /// 稳定纪元标识；压缩后使用压缩标识。
@@ -186,11 +177,9 @@ pub struct VmmCacheEpoch {
     pub anchors: Vec<VmmPromptAnchor>,
     /// Monotonic revision advanced only when this epoch appends an immutable anchor.
     /// 仅在该纪元追加不可变锚点时推进的单调修订号。
-    #[serde(default)]
     pub anchor_revision: u64,
     /// Whether active leases must be re-anchored on the next real user message.
     /// 是否必须在下一条真实用户消息上重新锚定活动租约。
-    #[serde(default)]
     pub needs_active_baseline: bool,
 }
 
@@ -211,6 +200,7 @@ impl Default for VmmCacheEpoch {
 /// One cache-epoch-resident VMM memory lease with turn-sequence expiry semantics.
 /// 一条采用回合序列到期语义并驻留于缓存纪元的 VMM 记忆租约。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VmmMemoryLease {
     /// Stable semantic identity used as the map key.
     /// 用作映射键的稳定语义身份。
@@ -263,6 +253,7 @@ impl VmmMemoryLease {
 /// One pending append-only prompt event produced by explicit VMM revocation.
 /// 显式撤销 VMM 时产出的一条待追加提示词事件。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VmmPendingPromptEvent {
     /// Stable memory key whose previous historical anchor became inactive.
     /// 先前历史锚点已不再活动的稳定记忆键。
@@ -275,8 +266,8 @@ pub struct VmmPendingPromptEvent {
     pub expired_at: String,
 }
 
-/// Result counters produced by recall, expiry, migration, or epoch transitions.
-/// 召回、到期、迁移或纪元转换产出的结果计数。
+/// Result counters produced by recall, expiry, or epoch transitions.
+/// 召回、到期或纪元转换产出的结果计数。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct VmmLeaseTransitionReport {
     /// Number of newly created active leases.
@@ -320,48 +311,10 @@ pub struct VmmCachePressure {
     pub reclaimable_anchor_estimated_tokens: usize,
 }
 
-/// One validated legacy generic-injection item ready for VMM lease migration.
-/// 一条经过验证、可迁移为 VMM 租约的旧版通用注入项。
-#[derive(Debug, Clone, PartialEq)]
-pub struct VmmLegacyLeaseItem {
-    /// Structured VMM item reconstructed with the legacy renderer contract.
-    /// 按旧版渲染器契约重建的结构化 VMM 条目。
-    pub item: ContextItem,
-    /// Exact remaining TTL persisted by the legacy injection state.
-    /// 旧版注入状态持久化的精确剩余 TTL。
-    pub remaining_turns: u32,
-    /// Original provider-visible grouping tag.
-    /// 原始 Provider 可见分组标签。
-    pub injection_tag: String,
-    /// Original provider-visible grouping description.
-    /// 原始 Provider 可见分组说明。
-    pub injection_description: String,
-    /// Logical turn marker that created or most recently refreshed the legacy item.
-    /// 创建或最近刷新旧版条目的逻辑回合标记。
-    pub created_turn_marker: Option<String>,
-    /// Original legacy creation timestamp used for deterministic duplicate selection.
-    /// 用于确定性重复项选择的原始旧版创建时间戳。
-    pub created_at: String,
-    /// Original legacy refresh timestamp used as the primary duplicate recency key.
-    /// 作为重复项最新性主键的原始旧版刷新时间戳。
-    pub updated_at: String,
-}
-
-/// Result of physically extracting every legacy VMM-owned generic-injection record.
-/// 物理提取全部旧版 VMM 归属通用注入记录的结果。
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct VmmLegacyExtraction {
-    /// Structurally complete, non-expired items eligible to become active leases.
-    /// 结构完整、未到期且可转换为活动租约的条目。
-    pub lease_items: Vec<VmmLegacyLeaseItem>,
-    /// Total exact renderer-owned records removed, including invalid records that must not revive.
-    /// 已移除的精确渲染器归属记录总数，包括不得复活的无效记录。
-    pub removed_owned_item_count: usize,
-}
-
 /// Independently persisted VMM session lease and prompt-anchor state.
 /// 独立持久化的 VMM 会话租约与提示词锚点状态。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VmmSessionMemoryState {
     /// Durable document schema version.
     /// 持久化文档结构版本。
@@ -372,6 +325,9 @@ pub struct VmmSessionMemoryState {
     /// Monotonic state revision used by atomic persistence and diagnostics.
     /// 供原子持久化与诊断使用的单调状态版本。
     pub revision: u64,
+    /// SHA-256 hashes of every committed Core controller command id.
+    /// 每个已提交 Core 控制器命令标识的 SHA-256 哈希。
+    pub committed_command_hashes: Vec<String>,
     /// Number of unique terminal logical turns consumed by this VMM state.
     /// 该 VMM 状态已消费的唯一终态逻辑回合数量。
     pub completed_turn_sequence: u64,
@@ -388,7 +344,6 @@ pub struct VmmSessionMemoryState {
     pub cache_epoch: VmmCacheEpoch,
     /// Whether stable exact-message anchor rendering is active for this cache epoch.
     /// 当前缓存纪元是否启用稳定的精确消息锚点渲染。
-    #[serde(default = "default_true")]
     pub stable_anchor_rendering_enabled: bool,
     /// Cache-epoch-resident leases keyed by stable VMM semantic identity, including expired entries awaiting compaction.
     /// 按稳定 VMM 语义身份索引的缓存纪元驻留租约，包含等待压缩清理的过期项。
@@ -398,10 +353,6 @@ pub struct VmmSessionMemoryState {
     /// 等待绑定到下一条精确用户消息的显式撤销通知。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_prompt_events: Vec<VmmPendingPromptEvent>,
-    /// Optional explicit recovery notice retained after corrupt state or invalid anchors are isolated.
-    /// 损坏状态或无效锚点被隔离后保留的可选明确恢复通知。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recovery_notice: Option<String>,
     /// Unix-millis text captured at the latest durable mutation.
     /// 最近一次持久化变更时捕获的 Unix 毫秒文本。
     pub updated_at: String,
@@ -415,6 +366,7 @@ impl Default for VmmSessionMemoryState {
             schema_version: VMM_SESSION_MEMORY_SCHEMA_VERSION,
             session_id: String::new(),
             revision: 0,
+            committed_command_hashes: Vec::new(),
             completed_turn_sequence: 0,
             last_consumed_turn_id: None,
             active_turn_id: None,
@@ -422,7 +374,6 @@ impl Default for VmmSessionMemoryState {
             stable_anchor_rendering_enabled: true,
             active_leases: BTreeMap::new(),
             pending_prompt_events: Vec::new(),
-            recovery_notice: None,
             updated_at: String::new(),
         }
     }
@@ -467,6 +418,72 @@ impl VmmSessionMemoryState {
         Ok(state)
     }
 
+    /// Returns whether one exact Core controller command has already committed.
+    /// 返回某个精确 Core 控制器命令是否已经提交。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `command_id` is the stable session-scoped command identity.
+    /// `command_id` 是稳定的会话级命令身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when the durable command ledger contains the command hash.
+    /// 当持久化命令账本包含该命令哈希时返回 `true`。
+    pub fn has_committed_controller_command(&self, command_id: &str) -> bool {
+        let command_hash = controller_command_hash(command_id);
+        self.committed_command_hashes
+            .iter()
+            .any(|existing_hash| existing_hash == &command_hash)
+    }
+
+    /// Records one controller command inside the same durable revision as its domain mutation.
+    /// 在领域变更的同一持久化 revision 中记录一个控制器命令。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `command_id` is the stable non-empty session-scoped command identity.
+    /// `command_id` 是稳定且非空的会话级命令身份。
+    /// `revision_before_command` is the revision observed before the command mutation began.
+    /// `revision_before_command` 是命令变更开始前观察到的 revision。
+    /// `updated_at` is the exact command commit timestamp.
+    /// `updated_at` 是精确的命令提交时间戳。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success after the receipt is retained and the state owns a new revision when necessary.
+    /// 在回执被保留且状态按需拥有新 revision 后返回成功。
+    pub fn record_committed_controller_command(
+        &mut self,
+        command_id: &str,
+        revision_before_command: u64,
+        updated_at: &str,
+    ) -> Result<(), String> {
+        if command_id.trim().is_empty() {
+            return Err(String::from(
+                "Core VMM controller command id must not be empty.",
+            ));
+        }
+        if command_id.len() > 512 {
+            return Err(String::from(
+                "Core VMM controller command id exceeds the 512 byte limit.",
+            ));
+        }
+        if self.has_committed_controller_command(command_id) {
+            return Ok(());
+        }
+        // command_hash retains permanent membership proof without persisting caller-controlled command text.
+        // command_hash 在不持久化调用方控制命令文本的情况下保留永久成员证明。
+        self.committed_command_hashes
+            .push(controller_command_hash(command_id));
+        if self.revision == revision_before_command {
+            self.mark_changed(updated_at)?;
+        } else {
+            self.updated_at = updated_at.to_string();
+        }
+        Ok(())
+    }
+
     /// Returns whether the state has never acquired session ownership or durable VMM data.
     /// 返回该状态是否从未获得会话归属或持久化 VMM 数据。
     pub fn is_pristine(&self) -> bool {
@@ -477,7 +494,6 @@ impl VmmSessionMemoryState {
             && self.active_turn_id.is_none()
             && self.active_leases.is_empty()
             && self.pending_prompt_events.is_empty()
-            && self.recovery_notice.is_none()
             && self.cache_epoch == VmmCacheEpoch::default()
     }
 
@@ -561,6 +577,25 @@ impl VmmSessionMemoryState {
         if self.revision == 0 {
             return Err(String::from(
                 "Owned VMM session memory must have a positive durable revision.",
+            ));
+        }
+        // command_hashes proves the permanent idempotency ledger contains only unique SHA-256 identities.
+        // command_hashes 证明永久幂等账本仅包含唯一的 SHA-256 身份。
+        let command_hashes = self
+            .committed_command_hashes
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        if command_hashes.len() != self.committed_command_hashes.len()
+            || command_hashes.iter().any(|command_hash| {
+                command_hash.len() != 64
+                    || !command_hash
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            })
+        {
+            return Err(String::from(
+                "VMM session memory controller command hashes must be unique lowercase SHA-256 values.",
             ));
         }
         if self.updated_at.trim().is_empty() {
@@ -1037,161 +1072,49 @@ impl VmmSessionMemoryState {
         })
     }
 
-    /// Imports validated legacy TTL items and removes the old moving-prefix behavior.
-    /// 导入已验证的旧版 TTL 条目并移除旧的移动前缀行为。
+    /// Abandons one failed active logical turn without consuming TTL or advancing terminal counters.
+    /// 放弃一个失败的活动逻辑回合，且不消费 TTL、不推进终态计数。
     ///
     /// # Parameters
     /// 参数
-    /// `session_id` is the exact host session owner.
-    /// `session_id` 是精确的宿主会话所有者。
-    /// `target_message_id` is the latest exact canonical user message, when one exists.
-    /// `target_message_id` 是存在时最近一条精确规范用户消息。
-    /// `items` are the validated legacy VMM items removed from generic injection state.
-    /// `items` 是从通用注入状态移除的已验证旧版 VMM 条目。
-    /// `updated_at` is the migration timestamp.
-    /// `updated_at` 是迁移时间戳。
+    /// `turn_id` is the exact failed logical-turn identifier currently holding active ownership.
+    /// `turn_id` 是当前持有活动所有权的精确失败逻辑回合标识。
+    /// `updated_at` is the failure-cleanup timestamp.
+    /// `updated_at` 是失败清理时间戳。
     ///
     /// # Returns
     /// 返回值
-    /// Transition counters for the one-time cache-reset migration.
-    /// 返回一次性缓存重置迁移的转换计数。
-    pub fn import_legacy_items(
+    /// A changed report after exact ownership is cleared, or a strict ownership error.
+    /// 精确所有权清除后返回变更报告，否则返回严格所有权错误。
+    pub fn abandon_active_turn(
         &mut self,
-        session_id: &str,
-        target_message_id: Option<&str>,
-        items: Vec<VmmLegacyLeaseItem>,
+        turn_id: &str,
         updated_at: &str,
     ) -> Result<VmmLeaseTransitionReport, String> {
-        if target_message_id.is_some_and(|message_id| message_id.trim().is_empty()) {
-            return Err(String::from(
-                "Legacy VMM migration received an empty canonical user-message id.",
-            ));
-        }
-        validate_legacy_items_capacity(&items)?;
-        if items.is_empty() {
+        if self.is_pristine() {
             return Ok(VmmLeaseTransitionReport::default());
         }
+        if turn_id.trim().is_empty() {
+            return Err(String::from(
+                "VMM active-turn abandonment requires a non-empty logical turn id.",
+            ));
+        }
         validate_mutation_timestamp(updated_at)?;
-        // maximum_remaining_turns proves every imported absolute expiry can be represented before mutation.
-        // maximum_remaining_turns 在变更前证明每个导入绝对到期序号均可表示。
-        let maximum_remaining_turns = items
-            .iter()
-            .map(|item| item.remaining_turns)
-            .max()
-            .expect("non-empty legacy VMM items must have one maximum remaining TTL");
-        self.completed_turn_sequence
-            .checked_add(u64::from(maximum_remaining_turns))
-            .ok_or_else(|| String::from("Legacy VMM expiry sequence overflowed."))?;
-        // next_revision proves the imported durable state can receive a distinct revision.
-        // next_revision 证明导入后的持久化状态可以获得不同修订号。
+        if self.active_turn_id.as_deref() != Some(turn_id) {
+            return Err(format!(
+                "VMM abandoned turn `{turn_id}` does not match the registered active logical turn {:?}.",
+                self.active_turn_id
+            ));
+        }
+        // next_revision rejects an exhausted durable lineage before active ownership is cleared.
+        // next_revision 在清除活动所有权前拒绝已耗尽的持久化谱系。
         self.next_revision()?;
-        // previous_state makes legacy import atomic with respect to validation and capacity failures.
-        // previous_state 使旧数据导入在校验和容量失败时保持原子性。
-        let previous_state = self.clone();
-        self.ensure_owner(session_id, updated_at)?;
-        let mut report = VmmLeaseTransitionReport::default();
-        // Legacy duplicates are reduced to one deterministic latest candidate per stable memory key.
-        // 旧版重复项会按稳定记忆键确定性归并为唯一最新候选项。
-        let mut latest_items = BTreeMap::<String, VmmLegacyLeaseItem>::new();
-        for legacy in items {
-            if legacy.remaining_turns == 0 {
-                return Err(String::from(
-                    "Legacy VMM injection contained an already-expired zero TTL item.",
-                ));
-            }
-            // The stable key is computed from normalized structured identity, never from group labels.
-            // 稳定键仅根据规范化结构身份计算，绝不依赖分组标签。
-            let item = normalized_context_item(&legacy.item);
-            let memory_key = stable_memory_key(&item);
-            // Normalized text is retained on the selected migration candidate.
-            // 规范化文本会保留在最终选中的迁移候选项上。
-            let candidate = VmmLegacyLeaseItem { item, ..legacy };
-            match latest_items.get(&memory_key) {
-                Some(existing)
-                    if legacy_recency_key(existing) >= legacy_recency_key(&candidate) =>
-                {
-                    report.replaced_lease_count += 1;
-                }
-                Some(_) => {
-                    latest_items.insert(memory_key, candidate);
-                    report.replaced_lease_count += 1;
-                }
-                None => {
-                    latest_items.insert(memory_key, candidate);
-                }
-            }
-        }
-
-        // Provider grouping remains deterministic after duplicate selection.
-        // 重复项选择完成后，Provider 分组仍保持确定性。
-        let mut grouped_items = BTreeMap::<(String, String), BTreeMap<String, ContextItem>>::new();
-        for (memory_key, legacy) in latest_items {
-            // The selected candidate alone determines semantic content and remaining TTL.
-            // 仅最终选中的候选项决定语义内容与剩余 TTL。
-            let semantic_content_hash = semantic_content_hash(&memory_key, &legacy.item);
-            let expiry_sequence = self
-                .completed_turn_sequence
-                .checked_add(u64::from(legacy.remaining_turns))
-                .expect("legacy expiry was proven representable before import mutation");
-            let is_new = !self.active_leases.contains_key(&memory_key);
-            self.active_leases.insert(
-                memory_key.clone(),
-                VmmMemoryLease {
-                    memory_key: memory_key.clone(),
-                    semantic_content_hash,
-                    item: legacy.item.clone(),
-                    first_recalled_turn_sequence: self.completed_turn_sequence,
-                    last_recalled_turn_sequence: self.completed_turn_sequence,
-                    expires_after_turn_sequence: expiry_sequence,
-                    active_anchor_id: None,
-                    created_at: updated_at.to_string(),
-                    updated_at: updated_at.to_string(),
-                },
-            );
-            grouped_items
-                .entry((legacy.injection_tag, legacy.injection_description))
-                .or_default()
-                .insert(memory_key, legacy.item);
-            if is_new {
-                report.inserted_lease_count += 1;
-            } else {
-                report.replaced_lease_count += 1;
-            }
-            report.changed = true;
-        }
-
-        if self.stable_anchor_rendering_enabled
-            && let Some(target_message_id) = target_message_id
-        {
-            for ((tag, description), entries) in grouped_items {
-                let keys = entries.keys().cloned().collect::<Vec<_>>();
-                let context_items = entries.values().cloned().collect::<Vec<_>>();
-                let prefix = render_grouped_memory_prefix(&tag, &description, &context_items);
-                let anchor_id = self.append_anchor(
-                    target_message_id,
-                    VmmPromptAnchorKind::Baseline,
-                    prefix,
-                    keys.clone(),
-                    updated_at,
-                );
-                for key in keys {
-                    if let Some(lease) = self.active_leases.get_mut(&key) {
-                        lease.active_anchor_id = Some(anchor_id.clone());
-                    }
-                }
-                report.appended_anchor_count += 1;
-            }
-        } else if self.stable_anchor_rendering_enabled && !self.active_leases.is_empty() {
-            self.cache_epoch.needs_active_baseline = true;
-        }
-        if report.changed {
-            self.mark_changed(updated_at)?;
-        }
-        if let Err(error) = self.validate_capacity_limits() {
-            *self = previous_state;
-            return Err(error);
-        }
-        Ok(report)
+        self.active_turn_id = None;
+        self.mark_changed(updated_at)?;
+        Ok(VmmLeaseTransitionReport {
+            changed: true,
+            ..VmmLeaseTransitionReport::default()
+        })
     }
 
     /// Consumes one unique terminal logical turn while retaining expired leases until compaction.
@@ -1296,8 +1219,8 @@ impl VmmSessionMemoryState {
         // revoked_hash is copied before removal so a body-free prompt notice can retain exact identity evidence.
         // revoked_hash 在移除前复制，使无正文提示通知仍可保留精确身份依据。
         let revoked_hash = lease.semantic_content_hash.clone();
-        // had_resident_anchor distinguishes a visible historical prefix from an anchorless recovery state.
-        // had_resident_anchor 区分可见历史前缀与无锚点恢复状态。
+        // had_resident_anchor distinguishes a visible historical prefix from an anchorless rendering mode.
+        // had_resident_anchor 区分可见历史前缀与无锚点渲染模式。
         let had_resident_anchor = lease.active_anchor_id.is_some();
         self.active_leases.remove(memory_key);
         if had_resident_anchor
@@ -1962,166 +1885,13 @@ fn validate_recall_batch_capacity(batch: &VmmRecallBatch) -> Result<(), String> 
     Ok(())
 }
 
-/// Validates legacy migration candidates before independent VMM state is mutated.
-/// 在独立 VMM 状态发生变更前验证旧版迁移候选项。
-///
-/// # Parameters
-/// 参数
-/// `items` are the exact VMM-owned legacy generic-injection records.
-/// `items` 是精确归属于 VMM 的旧版通用注入记录。
-///
-/// # Returns
-/// 返回值
-/// Success only when count, remaining TTL, and every rendered body are valid.
-/// 仅当数量、剩余 TTL 与每段渲染正文均有效时返回成功。
-fn validate_legacy_items_capacity(items: &[VmmLegacyLeaseItem]) -> Result<(), String> {
-    if items.len() > VMM_RESIDENT_LEASE_MAX_COUNT {
-        return Err(format!(
-            "Legacy VMM migration contains {} items and exceeds the limit of {VMM_RESIDENT_LEASE_MAX_COUNT}.",
-            items.len()
-        ));
-    }
-    for item in items {
-        if item.remaining_turns == 0 {
-            return Err(String::from(
-                "Legacy VMM injection contained an already-expired zero TTL item.",
-            ));
-        }
-        let body_bytes = render_vmm_context_item_model(&item.item).len();
-        if body_bytes == 0 {
-            return Err(String::from("Legacy VMM memory body must not be empty."));
-        }
-        if body_bytes > VMM_MEMORY_BODY_MAX_BYTES {
-            return Err(format!(
-                "Legacy VMM memory body contains {body_bytes} bytes and exceeds the per-memory limit of {VMM_MEMORY_BODY_MAX_BYTES}."
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// Removes legacy VMM-owned generic injections and returns only still-valid lease candidates.
-/// 移除旧版 VMM 归属的通用注入，并仅返回仍有效的租约候选项。
-///
-/// # Parameters
-/// 参数
-/// `state` is the generic context-injection state being migrated in place.
-/// `state` 是需要原地迁移的通用上下文注入状态。
-///
-/// # Returns
-/// 返回值
-/// Exact non-expired, structurally complete legacy lease items; invalid owned records are cleaned but not revived.
-/// 返回精确、未到期且结构完整的旧版租约项；无效归属记录会被清理但不会复活。
-pub fn take_legacy_vmm_injection_items(state: &mut ContextInjectionState) -> VmmLegacyExtraction {
-    let mut migrated = Vec::new();
-    // removed_owned_item_count includes invalid records so persistence still commits their physical cleanup.
-    // removed_owned_item_count 包含无效记录，使持久化仍会提交其物理清理。
-    let mut removed_owned_item_count = 0usize;
-    for group in state.groups.values_mut().filter(|group| {
-        group.kind == InjectionKind::Transient && group.scope == InjectionScope::Session
-    }) {
-        let matching_hashes = group
-            .items
-            .iter()
-            .filter(|(_, item)| is_legacy_vmm_precheck_injection_item(item))
-            .map(|(hash, _)| hash.clone())
-            .collect::<Vec<_>>();
-        for hash in matching_hashes {
-            let item = group
-                .items
-                .remove(&hash)
-                .expect("selected legacy VMM item must remain present during removal");
-            removed_owned_item_count = removed_owned_item_count.saturating_add(1);
-            // Invalid or already-expired owned items are physically cleaned without becoming active leases.
-            // 无效或已到期的归属条目会被物理清理，但不会成为活动租约。
-            if item
-                .remaining_turns
-                .is_none_or(|remaining_turns| remaining_turns == 0)
-            {
-                continue;
-            }
-            // legacy_item preserves the exact established renderer projection for valid migration candidates.
-            // legacy_item 为有效迁移候选保留精确的既有渲染器投影。
-            let legacy_item =
-                legacy_lease_item_from_state_item(item, &group.tag, &group.description);
-            if render_vmm_context_item_model(&legacy_item.item).is_empty() {
-                continue;
-            }
-            migrated.push(legacy_item);
-        }
-    }
-    state.groups.retain(|_, group| !group.items.is_empty());
-    VmmLegacyExtraction {
-        lease_items: migrated,
-        removed_owned_item_count,
-    }
-}
-
-/// Converts one already-validated legacy injection item into a migration record.
-/// 将一条已经验证的旧版注入项转换为迁移记录。
-///
-/// # Parameters
-/// 参数
-/// `item` is the exact VMM-owned generic injection item.
-/// `item` 是精确归属于 VMM 的通用注入项。
-/// `tag` is the original provider grouping tag.
-/// `tag` 是原始 Provider 分组标签。
-/// `description` is the original provider grouping description.
-/// `description` 是原始 Provider 分组说明。
-///
-/// # Returns
-/// 返回值
-/// A typed migration record preserving structured metadata and remaining TTL.
-/// 返回保留结构化元数据与剩余 TTL 的类型化迁移记录。
-fn legacy_lease_item_from_state_item(
-    item: InjectionStateItem,
-    tag: &str,
-    description: &str,
-) -> VmmLegacyLeaseItem {
-    let remaining_turns = item
-        .remaining_turns
-        .expect("legacy VMM TTL was validated before mutation");
-    VmmLegacyLeaseItem {
-        item: vmm_context_item_from_injection_item(&item),
-        remaining_turns,
-        injection_tag: tag.to_string(),
-        injection_description: description.to_string(),
-        created_turn_marker: item.created_turn_marker,
-        created_at: item.created_at,
-        updated_at: item.updated_at,
-    }
-}
-
-/// Builds a deterministic recency key for duplicate legacy VMM items.
-/// 为重复的旧版 VMM 条目构建确定性最新性排序键。
-///
-/// # Parameters
-/// 参数
-/// `item` is one exact legacy migration candidate.
-/// `item` 是一个精确的旧版迁移候选项。
-///
-/// # Returns
-/// 返回值
-/// Numeric and lexical timestamps followed by stable turn and content tie breakers.
-/// 返回数字与字典序时间戳，并附带稳定回合和内容决胜键。
-fn legacy_recency_key(item: &VmmLegacyLeaseItem) -> (u128, String, u128, String, String, String) {
-    (
-        item.updated_at.trim().parse::<u128>().unwrap_or(0),
-        item.updated_at.clone(),
-        item.created_at.trim().parse::<u128>().unwrap_or(0),
-        item.created_at.clone(),
-        item.created_turn_marker.clone().unwrap_or_default(),
-        render_vmm_context_item_model(&item.item),
-    )
-}
-
 /// Normalizes provider-visible text while retaining authoritative structured identity fields.
 /// 规范化 Provider 可见文本，同时保留权威结构化身份字段。
 ///
 /// # Parameters
 /// 参数
-/// `item` is the authoritative item returned by VMM or reconstructed by migration.
-/// `item` 是 VMM 返回或迁移重建的权威条目。
+/// `item` is the authoritative item returned by VMM.
+/// `item` 是 VMM 返回的权威条目。
 ///
 /// # Returns
 /// 返回值
@@ -2262,6 +2032,23 @@ fn collapse_text(value: &str) -> String {
         .join(" ")
 }
 
+/// Computes the permanent ledger hash for one controller command identity.
+/// 为一个控制器命令身份计算永久账本哈希。
+///
+/// # Parameters
+/// 参数
+/// `command_id` is the validated session-scoped command identity.
+/// `command_id` 是已校验的会话级命令身份。
+///
+/// # Returns
+/// 返回值
+/// A domain-separated lowercase SHA-256 digest.
+/// 返回经过域隔离的小写 SHA-256 摘要。
+fn controller_command_hash(command_id: &str) -> String {
+    let payload = format!("vmm-controller-command-v1\0{command_id}");
+    hex_sha256(payload.as_bytes())
+}
+
 /// Computes a lowercase SHA-256 digest for deterministic identities.
 /// 为确定性身份计算小写 SHA-256 摘要。
 ///
@@ -2333,24 +2120,9 @@ fn estimate_vmm_text_tokens_from_bytes(byte_count: usize) -> usize {
     byte_count.saturating_add(2) / 3
 }
 
-/// Returns the enabled compatibility default for persisted stable-anchor rendering mode.
-/// 返回持久化稳定锚点渲染模式的兼容启用默认值。
-///
-/// # Returns
-/// 返回值
-/// `true` for documents written before the rollout field existed.
-/// 对灰度字段出现前写入的文档返回 `true`。
-fn default_true() -> bool {
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{Value, json};
-    use vulcan_context_injection::{
-        InjectionCompactionPolicy, InjectionKind, InjectionScope, InjectionStateGroup,
-    };
 
     /// Builds one deterministic memory-backed VMM item for state-machine tests.
     /// 为状态机测试构建一条确定性的长期记忆 VMM 条目。
@@ -2376,47 +2148,6 @@ mod tests {
         }
     }
 
-    /// Builds one exact renderer-owned legacy injection item for extraction tests.
-    /// 为提取测试构建一条精确渲染器归属的旧版注入项。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `content` is the legacy Provider-visible fallback body.
-    /// `content` 是旧版 Provider 可见回退正文。
-    /// `remaining_turns` is the optional persisted TTL under test.
-    /// `remaining_turns` 是测试中的可选持久化 TTL。
-    ///
-    /// # Returns
-    /// 返回值
-    /// One fully specified generic-injection record owned by the exact VMM renderer id.
-    /// 返回一条由精确 VMM 渲染器标识归属的完整通用注入记录。
-    fn legacy_injection_item(content: &str, remaining_turns: Option<u32>) -> InjectionStateItem {
-        InjectionStateItem {
-            content: content.to_string(),
-            content_hash: format!("legacy-{content}"),
-            ttl_turns: remaining_turns,
-            remaining_turns,
-            last_consumed_turn_id: None,
-            compaction_policy: InjectionCompactionPolicy::Keep,
-            source_display: Some(String::from("VMM")),
-            renderer_id: Some(String::from(VMM_PRECHECK_MEMORY_RENDERER_ID)),
-            metadata: Some(json!({
-                "text": content,
-                "score": 0.5,
-                "turn_id": 17,
-                "has_dialogue": true,
-                "created_datetime": "2026-07-20",
-                "memory_id": 11
-            })),
-            dedupe_key: Some(format!(
-                "{VMM_PRECHECK_MEMORY_RENDERER_ID}:memory:11:{content}"
-            )),
-            created_turn_marker: Some(String::from("turn-1")),
-            created_at: String::from("1"),
-            updated_at: String::from("1"),
-        }
-    }
-
     /// Verifies an explicitly owned constructor produces an immediately valid durable document.
     /// 验证显式归属构造器会生成可立即通过校验的持久化文档。
     #[test]
@@ -2428,6 +2159,43 @@ mod tests {
         state
             .validate("session-a")
             .expect("owned constructor should produce valid durable state");
+    }
+
+    /// Verifies permanent command hashes preserve idempotency beyond the removed rolling window.
+    /// 验证永久命令哈希会在已删除的滚动窗口范围之外继续保持幂等性。
+    #[test]
+    fn controller_command_ledger_never_evicts_older_receipts() {
+        // state owns the durable ledger exercised by this test.
+        // state 持有本测试所检查的持久化账本。
+        let mut state =
+            VmmSessionMemoryState::new("session-a", "1").expect("valid owned VMM session state");
+        // command_count deliberately exceeds the former 256-entry eviction boundary.
+        // command_count 故意超过原先 256 条的淘汰边界。
+        let command_count = 1_024_u64;
+
+        for command_index in 0..command_count {
+            let revision_before_command = state.revision;
+            state
+                .record_committed_controller_command(
+                    &format!("provider_boundary:turn-{command_index}"),
+                    revision_before_command,
+                    &format!("{}", command_index + 2),
+                )
+                .expect("record permanent controller command receipt");
+        }
+
+        assert_eq!(state.committed_command_hashes.len(), command_count as usize);
+        assert!(state.has_committed_controller_command("provider_boundary:turn-0"));
+        assert!(state.has_committed_controller_command("provider_boundary:turn-1023"));
+        assert!(
+            state
+                .committed_command_hashes
+                .iter()
+                .all(|command_hash| command_hash.len() == 64)
+        );
+        state
+            .validate("session-a")
+            .expect("permanent command ledger should remain valid");
     }
 
     /// Verifies the owned constructor rejects empty identity metadata at the creation boundary.
@@ -2692,6 +2460,62 @@ mod tests {
         assert!(state.expired_panel_card().is_none());
     }
 
+    /// Verifies failed-turn abandonment clears only active ownership and preserves TTL state.
+    /// 验证失败回合放弃只清除活动所有权，并保留 TTL 状态。
+    #[test]
+    fn failed_turn_abandonment_preserves_terminal_sequence_and_lease_ttl() {
+        // state owns one live lease and one active logical turn that will fail before Provider execution.
+        // state 持有一条活动租约与一个将在 Provider 执行前失败的活动逻辑回合。
+        let mut state = VmmSessionMemoryState::default();
+        state
+            .apply_recall_batch(
+                "session-a",
+                "user-1",
+                &recall_batch(2, vec![memory_item(7, "keep after failure", 0.8)]),
+                "1",
+            )
+            .expect("recall should succeed");
+        state
+            .register_active_turn("turn-failed", "2")
+            .expect("failed logical turn should register");
+        // completed_turn_sequence_before proves abandonment cannot consume one terminal TTL boundary.
+        // completed_turn_sequence_before 证明放弃操作不能消费终态 TTL 边界。
+        let completed_turn_sequence_before = state.completed_turn_sequence;
+        // lease_expiry_before proves abandonment leaves the existing lease lifetime unchanged.
+        // lease_expiry_before 证明放弃操作保持已有租约生命周期不变。
+        let lease_expiry_before = state.active_leases["memory:7"].expires_after_turn_sequence;
+
+        let report = state
+            .abandon_active_turn("turn-failed", "3")
+            .expect("exact failed turn should be abandoned");
+
+        assert!(report.changed);
+        assert_eq!(report.expired_lease_count, 0);
+        assert!(state.active_turn_id.is_none());
+        assert_eq!(
+            state.completed_turn_sequence,
+            completed_turn_sequence_before
+        );
+        assert!(state.last_consumed_turn_id.is_none());
+        assert_eq!(
+            state.active_leases["memory:7"].expires_after_turn_sequence,
+            lease_expiry_before
+        );
+        // state_before_mismatch proves a different failure identity cannot clear or mutate ownership.
+        // state_before_mismatch 证明不同的失败身份不能清除或修改所有权。
+        state
+            .register_active_turn("turn-current", "4")
+            .expect("new exact turn should register");
+        let state_before_mismatch = state.clone();
+        assert!(
+            state
+                .abandon_active_turn("turn-other", "5")
+                .expect_err("mismatched turn must be rejected")
+                .contains("does not match")
+        );
+        assert_eq!(state, state_before_mismatch);
+    }
+
     /// Verifies an expired resident survives independent JSON persistence until compaction reclaims it.
     /// 验证过期驻留项在压缩回收前可通过独立 JSON 持久化往返保存。
     #[test]
@@ -2871,61 +2695,6 @@ mod tests {
         assert_eq!(revocation.kind, VmmPromptAnchorKind::Revocation);
         assert!(!revocation.prefix.contains("secret-memory-body"));
         assert_eq!(revocation.semantic_content_hashes.len(), 1);
-    }
-
-    /// Verifies pending revocations remain valid when a later imported lease set is also disabled.
-    /// 验证后续导入的租约集合也被禁用时，既有待失效事件仍保持有效。
-    #[test]
-    fn pending_revocations_are_bounded_by_file_size_not_active_lease_limit() {
-        let mut state = VmmSessionMemoryState::default();
-        for batch_index in 0..8u64 {
-            let items = (0..VMM_RECALL_BATCH_MAX_ITEMS as u64)
-                .map(|item_index| {
-                    memory_item(
-                        batch_index * VMM_RECALL_BATCH_MAX_ITEMS as u64 + item_index + 1,
-                        "first-generation",
-                        0.8,
-                    )
-                })
-                .collect::<Vec<_>>();
-            state
-                .apply_recall_batch(
-                    "session-a",
-                    &format!("user-{batch_index}"),
-                    &recall_batch(3, items),
-                    "1",
-                )
-                .expect("first-generation leases should remain within active limits");
-        }
-        state.disable("2").expect("disable VMM state");
-        assert_eq!(
-            state.pending_prompt_events.len(),
-            VMM_RESIDENT_LEASE_MAX_COUNT
-        );
-        let imported = (0..VMM_RESIDENT_LEASE_MAX_COUNT)
-            .map(|index| VmmLegacyLeaseItem {
-                item: memory_item(index as u64 + 10_000, "second-generation", 0.7),
-                remaining_turns: 2,
-                injection_tag: String::from("VMM_MEMORY"),
-                injection_description: String::from("Relevant memories."),
-                created_turn_marker: Some(String::from("turn-2")),
-                created_at: String::from("2"),
-                updated_at: String::from("2"),
-            })
-            .collect::<Vec<_>>();
-        state
-            .import_legacy_items("session-a", None, imported, "2")
-            .expect("second-generation leases should import within active limits");
-
-        state.disable("3").expect("disable VMM state");
-
-        assert_eq!(
-            state.pending_prompt_events.len(),
-            VMM_RESIDENT_LEASE_MAX_COUNT * 2
-        );
-        state
-            .validate("session-a")
-            .expect("pending revocations should remain valid under the document-size boundary");
     }
 
     /// Verifies compaction clears historical anchors and emits only the active baseline.
@@ -3244,263 +3013,5 @@ mod tests {
             .expect_err("active anchor hash mismatch must be rejected");
 
         assert!(error.contains("does not match the semantic hash frozen"));
-    }
-
-    /// Verifies legacy migration rejects an empty memory body before acquiring durable ownership.
-    /// 验证旧版迁移会在获取持久归属前拒绝空记忆正文。
-    #[test]
-    fn empty_legacy_memory_body_is_rejected_without_state_mutation() {
-        // state remains pristine when the legacy renderer record contains no usable Provider text.
-        // state 在旧版渲染器记录不含可用 Provider 文本时保持纯净。
-        let mut state = VmmSessionMemoryState::default();
-        // legacy_item retains valid TTL and identity fields so only its empty body causes rejection.
-        // legacy_item 保留有效 TTL 与身份字段，确保仅由空正文触发拒绝。
-        let legacy_item = VmmLegacyLeaseItem {
-            item: memory_item(11, " \n ", 0.7),
-            remaining_turns: 2,
-            injection_tag: String::from("VMM_MEMORY"),
-            injection_description: String::from("Relevant memories."),
-            created_turn_marker: Some(String::from("turn-1")),
-            created_at: String::from("1"),
-            updated_at: String::from("1"),
-        };
-
-        let error = state
-            .import_legacy_items("session-a", Some("user-1"), vec![legacy_item], "2")
-            .expect_err("empty legacy memory must be rejected");
-
-        assert!(error.contains("must not be empty"));
-        assert!(state.is_pristine());
-    }
-
-    /// Verifies invalid-only legacy cleanup cannot accidentally acquire ownership at revision zero.
-    /// 验证仅清理无效旧记录时不会意外以零版本取得会话归属。
-    #[test]
-    fn empty_legacy_import_is_a_strict_pristine_no_op() {
-        // state is the unowned candidate used when extraction found no migratable lease.
-        // state 是提取过程未发现可迁移租约时使用的无归属候选状态。
-        let mut state = VmmSessionMemoryState::default();
-
-        let report = state
-            .import_legacy_items("session-a", Some("user-1"), Vec::new(), "1")
-            .expect("empty legacy import should remain a no-op");
-
-        assert_eq!(report, VmmLeaseTransitionReport::default());
-        assert!(state.is_pristine());
-        assert_eq!(state.revision, 0);
-    }
-
-    /// Verifies legacy migration selects the exact renderer id and removes empty groups.
-    /// 验证旧版迁移只选择精确渲染器标识并清理空分组。
-    #[test]
-    fn legacy_migration_removes_only_exact_vmm_renderer_items() {
-        let mut state = ContextInjectionState::default();
-        state.groups.insert(
-            String::from("VMM_MEMORY"),
-            InjectionStateGroup {
-                tag: String::from("VMM_MEMORY"),
-                description: String::from("Relevant memories."),
-                kind: InjectionKind::Transient,
-                scope: InjectionScope::Session,
-                priority: -50,
-                compaction_policy: InjectionCompactionPolicy::Keep,
-                items: BTreeMap::from([(
-                    String::from("hash"),
-                    InjectionStateItem {
-                        content: String::from("legacy"),
-                        content_hash: String::from("hash"),
-                        ttl_turns: Some(3),
-                        remaining_turns: Some(2),
-                        last_consumed_turn_id: None,
-                        compaction_policy: InjectionCompactionPolicy::Keep,
-                        source_display: Some(String::from("VMM")),
-                        renderer_id: Some(String::from(VMM_PRECHECK_MEMORY_RENDERER_ID)),
-                        metadata: Some(json!({
-                            "text": "legacy",
-                            "score": 0.5,
-                            "turn_id": 9,
-                            "has_dialogue": true,
-                            "created_datetime": "2026-07-20",
-                            "memory_id": 11
-                        })),
-                        dedupe_key: Some(String::from("memory:11")),
-                        created_turn_marker: Some(String::from("turn-1")),
-                        created_at: String::from("1"),
-                        updated_at: String::from("1"),
-                    },
-                )]),
-            },
-        );
-
-        let extraction = take_legacy_vmm_injection_items(&mut state);
-
-        assert_eq!(extraction.removed_owned_item_count, 1);
-        assert_eq!(extraction.lease_items.len(), 1);
-        assert_eq!(extraction.lease_items[0].remaining_turns, 2);
-        assert_eq!(extraction.lease_items[0].item.memory_id, 11);
-        assert!(state.groups.is_empty());
-    }
-
-    /// Verifies expired and structurally incomplete owned legacy items are cleaned without revival.
-    /// 验证已到期和结构不完整的旧版归属条目会被清理且不会复活。
-    #[test]
-    fn legacy_extraction_drops_invalid_owned_items_and_keeps_valid_candidates() {
-        // state contains one valid candidate plus missing-TTL, expired, and empty-body owned records.
-        // state 包含一条有效候选，以及缺失 TTL、已到期和空正文的归属记录。
-        let mut state = ContextInjectionState::default();
-        state.groups.insert(
-            String::from("VMM_MEMORY"),
-            InjectionStateGroup {
-                tag: String::from("VMM_MEMORY"),
-                description: String::from("Relevant memories."),
-                kind: InjectionKind::Transient,
-                scope: InjectionScope::Session,
-                priority: -50,
-                compaction_policy: InjectionCompactionPolicy::Keep,
-                items: BTreeMap::from([
-                    (
-                        String::from("valid"),
-                        legacy_injection_item("valid-memory", Some(2)),
-                    ),
-                    (
-                        String::from("missing-ttl"),
-                        legacy_injection_item("missing-ttl-memory", None),
-                    ),
-                    (
-                        String::from("expired"),
-                        legacy_injection_item("expired-memory", Some(0)),
-                    ),
-                    (
-                        String::from("empty"),
-                        legacy_injection_item(" \n ", Some(2)),
-                    ),
-                ]),
-            },
-        );
-
-        // extraction must contain only the one usable candidate while counting all physical removals.
-        // extraction 必须仅包含一条可用候选，同时统计全部物理移除项。
-        let extraction = take_legacy_vmm_injection_items(&mut state);
-
-        assert_eq!(extraction.removed_owned_item_count, 4);
-        assert_eq!(extraction.lease_items.len(), 1);
-        assert_eq!(extraction.lease_items[0].item.text, "valid-memory");
-        assert_eq!(extraction.lease_items[0].remaining_turns, 2);
-        assert!(state.groups.is_empty());
-    }
-
-    /// Verifies ambiguous generic injections remain untouched unless the complete legacy writer contract proves ownership.
-    /// 验证在完整旧版写入契约证明归属前，存在歧义的通用注入项保持不变。
-    #[test]
-    fn legacy_extraction_preserves_items_without_complete_vmm_ownership_proof() {
-        // renderer_only lacks both the authoritative source id and structured metadata proof.
-        // renderer_only 同时缺少权威来源标识与结构化元数据证明。
-        let mut renderer_only = legacy_injection_item("renderer-only", Some(2));
-        renderer_only.source_display = None;
-        renderer_only.metadata = None;
-        // wrong_source has valid-looking metadata but explicitly belongs to another source.
-        // wrong_source 具有看似有效的元数据，但明确属于另一个来源。
-        let mut wrong_source = legacy_injection_item("wrong-source", Some(2));
-        wrong_source.source_display = Some(String::from("OTHER"));
-        // incomplete_metadata is missing one field that the legacy writer always persisted.
-        // incomplete_metadata 缺少旧版写入器始终持久化的一个字段。
-        let mut incomplete_metadata = legacy_injection_item("incomplete-metadata", Some(2));
-        incomplete_metadata
-            .metadata
-            .as_mut()
-            .and_then(Value::as_object_mut)
-            .expect("test metadata must be an object")
-            .remove("memory_id");
-        // persistent_group has a complete item but cannot match the legacy transient placement contract.
-        // persistent_group 包含完整条目，但不符合旧版临时注入放置契约。
-        let persistent_group = InjectionStateGroup {
-            tag: String::from("PERSISTENT"),
-            description: String::from("Not a legacy VMM transient group."),
-            kind: InjectionKind::Persistent,
-            scope: InjectionScope::Session,
-            priority: -50,
-            compaction_policy: InjectionCompactionPolicy::Keep,
-            items: BTreeMap::from([(
-                String::from("persistent"),
-                legacy_injection_item("persistent", Some(2)),
-            )]),
-        };
-        // state contains three ambiguous items in a legacy-shaped group and one mismatched group.
-        // state 在旧版形态分组中包含三个歧义项，并包含一个不匹配的分组。
-        let mut state = ContextInjectionState::default();
-        state.groups.insert(
-            String::from("AMBIGUOUS"),
-            InjectionStateGroup {
-                tag: String::from("AMBIGUOUS"),
-                description: String::from("Ambiguous records."),
-                kind: InjectionKind::Transient,
-                scope: InjectionScope::Session,
-                priority: -50,
-                compaction_policy: InjectionCompactionPolicy::Keep,
-                items: BTreeMap::from([
-                    (String::from("renderer-only"), renderer_only),
-                    (String::from("wrong-source"), wrong_source),
-                    (String::from("incomplete-metadata"), incomplete_metadata),
-                ]),
-            },
-        );
-        state
-            .groups
-            .insert(String::from("PERSISTENT"), persistent_group);
-        // original_state proves extraction performs no partial mutation on ambiguous records.
-        // original_state 用于证明提取过程不会局部修改歧义记录。
-        let original_state = state.clone();
-
-        // extraction must not claim ownership or remove any unproven record.
-        // extraction 不得宣称拥有或移除任何未被证明归属的记录。
-        let extraction = take_legacy_vmm_injection_items(&mut state);
-
-        assert_eq!(extraction, VmmLegacyExtraction::default());
-        assert_eq!(state, original_state);
-    }
-
-    /// Verifies duplicate legacy items select the latest refresh deterministically and anchor it once.
-    /// 验证重复旧版条目会确定性选择最新刷新项并只锚定一次。
-    #[test]
-    fn legacy_import_deduplicates_same_memory_by_latest_refresh() {
-        let mut state = VmmSessionMemoryState::default();
-        // The older candidate deliberately has a lexically larger short timestamp trap (`9` vs `10`).
-        // 较旧候选项故意使用字典序陷阱时间戳（`9` 与 `10`）。
-        let older = VmmLegacyLeaseItem {
-            item: memory_item(11, "older-memory", 0.4),
-            remaining_turns: 5,
-            injection_tag: String::from("VMM_MEMORY"),
-            injection_description: String::from("Relevant memories."),
-            created_turn_marker: Some(String::from("turn-1")),
-            created_at: String::from("8"),
-            updated_at: String::from("9"),
-        };
-        // The newer candidate must win both active lease and frozen migration anchor.
-        // 较新候选项必须同时成为活动租约与冻结迁移锚点。
-        let newer = VmmLegacyLeaseItem {
-            item: memory_item(11, "newer-memory", 0.7),
-            remaining_turns: 2,
-            injection_tag: String::from("VMM_MEMORY"),
-            injection_description: String::from("Relevant memories."),
-            created_turn_marker: Some(String::from("turn-2")),
-            created_at: String::from("8"),
-            updated_at: String::from("10"),
-        };
-
-        let report = state
-            .import_legacy_items("session-a", Some("user-1"), vec![newer, older], "11")
-            .expect("duplicate legacy items should migrate deterministically");
-
-        assert_eq!(report.inserted_lease_count, 1);
-        assert_eq!(report.replaced_lease_count, 1);
-        assert_eq!(state.active_leases.len(), 1);
-        assert_eq!(state.active_leases["memory:11"].item.text, "newer-memory");
-        assert_eq!(
-            state.active_leases["memory:11"].expires_after_turn_sequence,
-            2
-        );
-        assert_eq!(state.cache_epoch.anchors.len(), 1);
-        assert!(state.cache_epoch.anchors[0].prefix.contains("newer-memory"));
-        assert!(!state.cache_epoch.anchors[0].prefix.contains("older-memory"));
     }
 }

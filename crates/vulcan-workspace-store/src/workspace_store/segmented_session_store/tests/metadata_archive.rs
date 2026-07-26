@@ -239,7 +239,7 @@ fn archive_and_restore_preserve_segment_lines() {
             "2026-06-06T10:00:30Z",
         )
         .expect("archive VMM fixture should be built");
-    write_vmm_state(&session_dir, &request.session_id, &vmm_state)
+    write_core_vmm_controller_state(&session_dir, &request.session_id, &vmm_state)
         .expect("archive VMM fixture should be written");
     // before_vmm_bytes preserve the exact independent document for byte-stability assertions.
     // before_vmm_bytes 保留独立文档的精确字节，用于断言字节稳定性。
@@ -275,8 +275,9 @@ fn archive_and_restore_preserve_segment_lines() {
     assert_eq!(before_vmm_bytes, archived_vmm_bytes);
     // archived_vmm_state verifies the moved document still validates against the same session identity.
     // archived_vmm_state 验证移动后的文档仍能通过同一会话身份校验。
-    let archived_vmm_state: vulcan_vmm::VmmSessionMemoryState =
-        read_required_json(&vmm_state_path(&archived_dir)).expect("load archived VMM state");
+    let archived_vmm_state = load_core_vmm_controller_state(&archived_dir, &request.session_id)
+        .expect("load archived VMM state")
+        .expect("archived VMM state should exist");
     archived_vmm_state
         .validate(&request.session_id)
         .expect("archived VMM state should retain its owner identity");
@@ -309,8 +310,9 @@ fn archive_and_restore_preserve_segment_lines() {
     assert_eq!(before_vmm_bytes, restored_vmm_bytes);
     // restored_vmm_state verifies identity and lease state remain valid after the round trip.
     // restored_vmm_state 验证完整归档往返后身份与租约状态仍然有效。
-    let restored_vmm_state: vulcan_vmm::VmmSessionMemoryState =
-        read_required_json(&vmm_state_path(&restored_dir)).expect("load restored VMM state");
+    let restored_vmm_state = load_core_vmm_controller_state(&restored_dir, &request.session_id)
+        .expect("load restored VMM state")
+        .expect("restored VMM state should exist");
     restored_vmm_state
         .validate(&request.session_id)
         .expect("restored VMM state should retain its owner identity");

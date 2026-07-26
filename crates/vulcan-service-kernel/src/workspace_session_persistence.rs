@@ -202,11 +202,11 @@ fn spawn_session_versioned_workspace_persist_task<F, Fut>(
     F: FnOnce() -> Fut + Send + 'static,
     Fut: Future<Output = ()> + Send + 'static,
 {
-    // persist_versions fence both the complete snapshot and its independent vmm.json publication.
-    // persist_versions 同时隔离完整快照及其独立 vmm.json 发布。
-    let (session_persist_version, vmm_persist_version) =
-        match next_webui_session_runtime_persist_versions(&state, session_id) {
-            Ok(versions) => versions,
+    // session_persist_version fences only the ordinary session snapshot.
+    // session_persist_version 仅隔离普通会话快照。
+    let session_persist_version =
+        match next_webui_session_runtime_persist_version(&state, session_id) {
+            Ok(version) => version,
             Err(error) => {
                 eprintln!("[webui-service] {version_error_label}: {error}");
                 return;
@@ -215,11 +215,10 @@ fn spawn_session_versioned_workspace_persist_task<F, Fut>(
     spawn_service_task(async move {
         let persist_lock = webui_workspace_persist_lock();
         let _persist_guard = persist_lock.lock().await;
-        if !webui_session_runtime_persist_versions_are_current(
+        if !webui_session_runtime_persist_version_is_current(
             &state,
             session_id,
             session_persist_version,
-            vmm_persist_version,
         ) {
             return;
         }

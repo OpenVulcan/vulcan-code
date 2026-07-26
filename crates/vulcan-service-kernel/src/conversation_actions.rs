@@ -154,6 +154,10 @@ pub(crate) async fn service_fork_conversation(
 ) -> Result<WorkbenchSnapshot, String> {
     let source_session_id = parse_session_id(&request.conversation_id)
         .ok_or_else(|| String::from("ERR_SESSION_FORK_INVALID_CONVERSATION"))?;
+    // source_admission_guard atomically rejects an active source and blocks new turns until copying finishes.
+    // source_admission_guard 原子拒绝活动源会话，并在复制完成前阻止新回合启动。
+    let _source_admission_guard =
+        begin_session_turn_start_exclusion(&state, [source_session_id], "分叉")?;
     let (controller_runtime, source_session, project_id) = {
         let mut guard = state
             .lock()
@@ -185,6 +189,12 @@ pub(crate) async fn service_fork_conversation(
     } else {
         request.title.trim().to_string()
     };
+    // persist_lock owns the process-wide serialization boundary shared by session storage writers.
+    // persist_lock 持有会话存储写入者共享的进程级串行化边界。
+    let persist_lock = webui_workspace_persist_lock();
+    // persist_guard keeps the source directory and authoritative session index at one storage version.
+    // persist_guard 使源目录与权威会话索引保持在同一个存储版本。
+    let persist_guard = persist_lock.lock().await;
     let fork_result = fork_persisted_session(
         &controller_runtime,
         &source_session,
@@ -194,6 +204,7 @@ pub(crate) async fn service_fork_conversation(
         request.anchor_message_id.as_deref(),
     )
     .await?;
+    drop(persist_guard);
     let target_session_id_text = fork_result.session.id.to_string();
     let hydrated = load_hydrated_session_workbench(
         &app,

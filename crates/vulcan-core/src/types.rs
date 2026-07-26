@@ -352,9 +352,6 @@ impl ProviderContextInjection {
                 };
                 covered_anchor_count
             }
-            // A legacy cursor with no VMM coverage may only precede the initial epoch.
-            // 没有 VMM 覆盖信息的旧游标只能位于初始纪元之前。
-            (Some("initial"), None, None) => 0,
             _ => return false,
         };
         // Every uncovered anchor must target a message after the exact local cursor boundary; revision order alone cannot prove placement.
@@ -1236,7 +1233,11 @@ mod continuation_proof_tests {
             .as_mut()
             .expect("context injection should exist")
             .mutation_kind = ProviderContextMutationKind::AppendOnly;
-        let continuation = matching_continuation(&config);
+        // continuation must explicitly prove zero-anchor coverage in the current initial epoch.
+        // continuation 必须显式证明当前初始纪元中的零锚点覆盖状态。
+        let mut continuation = matching_continuation(&config);
+        continuation.context_cache_epoch_id = Some(String::from("initial"));
+        continuation.context_anchor_revision = Some(0);
         assert!(config.continuation_reuse_is_proven(&continuation, &["user-2"]));
     }
 }

@@ -29,6 +29,7 @@ pub(crate) async fn service_run_vmm_memory_action(
     state: SharedServiceBridgeState,
     request: VmmMemoryActionRequest,
 ) -> Result<VmmMemoryActionResult, String> {
+    normalize_vmm_memory_action_command_id(&request.command_id)?;
     if request.action.trim() == "suppress_context_injection_item" {
         return service_suppress_context_injection_item(app, state, request).await;
     }
@@ -72,14 +73,29 @@ pub(crate) async fn service_suppress_context_injection_item(
     if dedupe_key.is_none() && memory_id.is_none() {
         return Err(String::from("缺少需要隐藏的记忆条目标识。"));
     }
+    // suppression_key is the exact semantic lease identity selected by the request.
+    // suppression_key 是请求选择的精确语义租约身份。
+    let suppression_key = dedupe_key
+        .clone()
+        .or_else(|| memory_id.map(|memory_id| format!("memory:{memory_id}")))
+        .ok_or_else(|| String::from("缺少需要隐藏的记忆条目标识。"))?;
+    // request_command_id is validated before any retained or durable state can change.
+    // request_command_id 在任何保留状态或持久状态发生变化前完成校验。
+    let command_id = vmm_suppression_command_id(&request.command_id)?;
+    // mutation_timestamp is shared by the ordinary projection and the durable controller command.
+    // mutation_timestamp 由普通投影与持久控制器命令共同使用。
+    let mutation_timestamp = current_unix_millis_text();
 
-    let (controller_runtime, workspace_snapshot, session_id, changed) = {
+    let (controller_runtime, workspace_snapshot, session_id, context_changed, vmm_changed) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
             String::from("service is still starting; controller runtime is not ready")
         })?;
+        // vmm_controller_registry is process-owned and never exposes mutable VMM state.
+        // vmm_controller_registry 由进程持有，绝不暴露可变 VMM 状态。
+        let vmm_controller_registry = guard.vmm_controller_registry.clone();
         let workspace = guard
             .workspace_snapshot
             .as_mut()
@@ -87,57 +103,84 @@ pub(crate) async fn service_suppress_context_injection_item(
         // session_id is resolved from the initiating request instead of mutable UI selection state.
         // session_id 从动作发起请求解析，而不是依赖可变的 UI 选中状态。
         let session_id = vmm_suppression_session_id(workspace, request.conversation_id.as_deref())?;
-        // runtime_state is the exact session entry that owns the rendered context injection.
-        // runtime_state 是拥有当前渲染上下文注入内容的准确会话条目。
-        let runtime_state = workspace
+        // runtime_state is detached so a controller failure cannot partially mutate retained workspace state.
+        // runtime_state 保持分离，使控制器失败无法部分修改保留的工作区状态。
+        let mut runtime_state = workspace
             .session_runtime_state
-            .entry(session_id)
-            .or_insert_with(|| SessionRuntimeStateEntry {
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_else(|| SessionRuntimeStateEntry {
                 updated_at: current_unix_millis_text(),
                 ..SessionRuntimeStateEntry::default()
             });
-        // mutation_timestamp keeps the independent VMM state and enclosing runtime entry aligned.
-        // mutation_timestamp 使独立 VMM 状态与外层运行态条目保持时间一致。
-        let mutation_timestamp = current_unix_millis_text();
-        let mut changed = false;
+        // context_changed tracks only ordinary context-injection projection mutation.
+        // context_changed 仅跟踪普通上下文注入投影变更。
+        let mut context_changed = false;
         if let Some(dedupe_key) = dedupe_key.as_deref() {
-            changed |= runtime_state
+            context_changed |= runtime_state
                 .context_injection_state
                 .remove_items_by_dedupe_key(Some(InjectionKind::Transient), dedupe_key);
-            changed |= runtime_state
-                .vmm_session_memory
-                .revoke_lease(dedupe_key, &mutation_timestamp)?
-                .changed;
         }
-        if !changed && let Some(memory_id) = memory_id {
-            changed |= runtime_state
+        if !context_changed && let Some(memory_id) = memory_id {
+            context_changed |= runtime_state
                 .context_injection_state
                 .remove_items_by_metadata_u64(
                     Some(InjectionKind::Transient),
                     "memory_id",
                     memory_id,
                 );
-            changed |= runtime_state
-                .vmm_session_memory
-                .revoke_lease(&format!("memory:{memory_id}"), &mutation_timestamp)?
-                .changed;
         }
-        if changed {
-            runtime_state.updated_at = mutation_timestamp;
+        if context_changed {
+            runtime_state.updated_at = mutation_timestamp.clone();
         }
-        (controller_runtime, workspace.clone(), session_id, changed)
-    };
-
-    if changed {
-        persist_workspace_session_update(
-            Some(&state),
-            controller_runtime,
-            &workspace_snapshot,
+        // vmm_controller is committed while the service guard freezes the ordinary-state baseline.
+        // vmm_controller 在服务 guard 冻结普通状态基线期间完成提交。
+        let vmm_controller = vmm_controller_registry.get_or_open(
+            &controller_runtime.data_root,
             session_id,
+            &mutation_timestamp,
+        )?;
+        // vmm_changed reports only the controller-owned lease mutation.
+        // vmm_changed 仅报告控制器持有的租约变更。
+        let mut vmm_changed = false;
+        let vmm_commit =
+            vmm_controller.execute_command(&command_id, &mutation_timestamp, |candidate| {
+                vmm_changed = candidate
+                    .revoke_lease(&suppression_key, &mutation_timestamp)?
+                    .changed;
+                Ok(())
+            })?;
+        if !vmm_commit.applied {
+            vmm_changed = false;
+        }
+        if context_changed {
+            workspace
+                .session_runtime_state
+                .insert(session_id, runtime_state);
+        }
+        (
+            controller_runtime,
+            workspace.clone(),
+            session_id,
+            context_changed,
+            vmm_changed,
         )
-        .await?;
-        emit_context_injection_changed_delta_for_session(&app, &state, session_id)?;
-    }
+    };
+    // changed combines two independently owned projections without sharing mutable VMM state.
+    // changed 合并两个独立所有投影，且不共享可变 VMM 状态。
+    let changed = context_changed || vmm_changed;
+    // Persistence always runs after a duplicate command so a retry can repair an earlier projection write failure.
+    // 重复命令之后仍始终执行持久化，使重试能够修复先前的投影写入失败。
+    persist_workspace_session_update(
+        Some(&state),
+        controller_runtime,
+        &workspace_snapshot,
+        session_id,
+    )
+    .await?;
+    // Projection emission is idempotent and likewise repairs an interrupted prior response path.
+    // 投影发送具备幂等性，同样用于修复先前被中断的响应路径。
+    emit_context_injection_changed_delta_for_session(&app, &state, session_id)?;
 
     Ok(VmmMemoryActionResult {
         action: request.action,
@@ -148,6 +191,7 @@ pub(crate) async fn service_suppress_context_injection_item(
         },
         kind: String::from("suppress_context_injection_item"),
         request: json!({
+            "commandId": request.command_id,
             "conversationId": request.conversation_id,
             "dedupeKey": dedupe_key,
             "memoryId": memory_id,
@@ -158,6 +202,47 @@ pub(crate) async fn service_suppress_context_injection_item(
             "suppressedMemoryId": memory_id,
         }),
     })
+}
+
+/// Builds the durable controller command id for one exact suppression request.
+/// 为一次精确抑制请求构建持久控制器命令标识。
+///
+/// # Parameters
+/// 参数
+/// `request_command_id` is the UUID generated once when the user operation begins.
+/// `request_command_id` 是用户操作开始时仅生成一次的 UUID。
+///
+/// # Returns
+/// 返回值
+/// A normalized session-controller command id, or an explicit invalid-UUID error.
+/// 返回规范化的会话控制器命令标识，或明确的 UUID 无效错误。
+pub(crate) fn vmm_suppression_command_id(request_command_id: &str) -> Result<String, String> {
+    // parsed_command_id is normalized once before the controller namespace prefix is attached.
+    // parsed_command_id 在附加控制器命名空间前仅规范化一次。
+    let parsed_command_id = normalize_vmm_memory_action_command_id(request_command_id)?;
+    Ok(format!("suppress_memory:{parsed_command_id}"))
+}
+
+/// Validates and normalizes one WebUI VMM action command identity.
+/// 校验并规范化一个 WebUI VMM 动作命令身份。
+///
+/// # Parameters
+/// 参数
+/// `request_command_id` is the exact caller-supplied command UUID.
+/// `request_command_id` 是调用方提供的精确命令 UUID。
+///
+/// # Returns
+/// 返回值
+/// The parsed UUID, or an explicit invalid-command diagnostic.
+/// 返回解析后的 UUID，或明确的无效命令诊断。
+fn normalize_vmm_memory_action_command_id(request_command_id: &str) -> Result<uuid::Uuid, String> {
+    if request_command_id != request_command_id.trim() {
+        return Err(String::from(
+            "VMM memory action commandId must not contain surrounding whitespace.",
+        ));
+    }
+    uuid::Uuid::parse_str(request_command_id)
+        .map_err(|error| format!("VMM memory action commandId must be a valid UUID: {error}"))
 }
 
 /// Resolves and validates the exact regular session targeted by a context-injection suppression.

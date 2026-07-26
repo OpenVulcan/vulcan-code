@@ -38,6 +38,9 @@ pub(crate) struct WorkbenchRuntimeProjection<'a> {
     /// Canonical workspace snapshot being projected.
     /// 正在投影的规范工作区快照。
     pub(crate) workspace: &'a vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+    /// Read-only state snapshots from currently open Core VMM session controllers.
+    /// 当前已打开 Core VMM 会话控制器提供的只读状态快照。
+    pub(crate) vmm_session_states: &'a BTreeMap<SessionId, vulcan_vmm::VmmSessionMemoryState>,
     /// Surface messages for the active visible conversation.
     /// 当前可见会话的界面消息。
     pub(crate) surface_messages: &'a [SessionMessageEntry],
@@ -238,6 +241,23 @@ async fn refresh_workbench_snapshot_with_selected_session(
                 .server_states()
         })
         .unwrap_or_default();
+    // vmm_controller_registry is cloned without retaining shared service ownership.
+    // vmm_controller_registry 在不保留共享服务所有权的情况下完成克隆。
+    let vmm_controller_registry = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .vmm_controller_registry
+        .clone();
+    if selected_session_id != SessionId::nil() {
+        let _ = vmm_controller_registry.get_or_open(
+            &controller_runtime.data_root,
+            selected_session_id,
+            &current_unix_millis_text(),
+        )?;
+    }
+    // vmm_session_states are read-only snapshots used only for WebUI projection.
+    // vmm_session_states 是仅用于 WebUI 投影的只读快照。
+    let vmm_session_states = vmm_controller_registry.snapshots()?;
     let mut workbench = workbench_from_runtime(WorkbenchRuntimeProjection {
         controller: &controller_runtime,
         command_session_runtime: agent_runtime_for_status
@@ -251,6 +271,7 @@ async fn refresh_workbench_snapshot_with_selected_session(
         provider_configuration: &provider_configuration,
         ai_tool_configuration: &ai_tool_configuration,
         workspace: &refreshed_snapshot,
+        vmm_session_states: &vmm_session_states,
         surface_messages: surface_messages.as_slice(),
         subagent_navigation,
         pending_questions: pending_question_snapshots_from_agent_runtime(
@@ -765,6 +786,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         provider_configuration,
         ai_tool_configuration,
         workspace,
+        vmm_session_states,
         surface_messages,
         subagent_navigation,
         pending_questions,
@@ -805,6 +827,9 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
     let selected_runtime_state = workspace
         .session_runtime_state
         .get(&workspace.selected_session);
+    // selected_vmm_session_state is a read-only controller projection for the active surface.
+    // selected_vmm_session_state 是活动界面使用的只读控制器投影。
+    let selected_vmm_session_state = vmm_session_states.get(&workspace.selected_session);
     let selected_session_vmm_project_layer = selected_workspace_session(workspace)
         .and_then(|session| cached_project_vmm_layer_for_session(workspace, session));
     let selected_ai_tool_configuration = selected_runtime_state
@@ -1057,9 +1082,13 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                     }),
             )
             .collect(),
-        context_injection: context_injection_snapshot_from_runtime_state(selected_runtime_state),
+        context_injection: context_injection_snapshot_from_runtime_state(
+            selected_runtime_state,
+            selected_vmm_session_state,
+        ),
         context_injection_by_conversation: context_injection_by_conversation_from_workspace(
             workspace,
+            vmm_session_states,
         ),
         context_usage: context_usage_snapshot_from_runtime_state(
             workspace.selected_session,

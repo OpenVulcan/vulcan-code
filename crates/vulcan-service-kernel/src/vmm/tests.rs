@@ -14,6 +14,7 @@ use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 fn test_vmm_action_request(action: &str, payload: Value) -> VmmMemoryActionRequest {
     VmmMemoryActionRequest {
         action: action.to_string(),
+        command_id: uuid::Uuid::new_v4().to_string(),
         scope: String::from("global"),
         project_id: None,
         conversation_id: None,
@@ -152,6 +153,22 @@ fn vmm_suppression_session_id_uses_explicit_conversation() {
     assert!(
         vmm_suppression_session_id(&workspace, Some(&SessionId::new_v4().to_string())).is_err()
     );
+}
+
+/// Verifies suppression retries preserve one command identity independently of VMM revisions.
+/// 验证抑制重试独立于 VMM 修订号保留同一个命令身份。
+#[test]
+fn vmm_suppression_command_id_is_stable_and_strict() {
+    // request_command_id represents the identity generated once by the initiating WebUI operation.
+    // request_command_id 代表发起 WebUI 操作时仅生成一次的身份。
+    let request_command_id = uuid::Uuid::new_v4().to_string();
+    let first = vmm_suppression_command_id(&request_command_id).expect("accept valid command id");
+    let retry = vmm_suppression_command_id(&request_command_id).expect("accept retry command id");
+
+    assert_eq!(first, retry);
+    assert_eq!(first, format!("suppress_memory:{request_command_id}"));
+    assert!(vmm_suppression_command_id("not-a-uuid").is_err());
+    assert!(vmm_suppression_command_id(&format!(" {request_command_id}")).is_err());
 }
 
 /// Verifies draft conversion parses transport and behavior fields without silent drift.

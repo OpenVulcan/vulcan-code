@@ -35,7 +35,7 @@ use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
 use super::{
     AgentRuntimeBridge, SharedServiceBridgeState, WorkbenchRuntimeProjection,
     active_surface_messages_from_workspace_and_state, build_vmm_hook_config_snapshot,
-    emit_service_event_with_trace, fallback_workbench_snapshot,
+    current_unix_millis_text, emit_service_event_with_trace, fallback_workbench_snapshot,
     hydrated_conversation_window_summaries, install_webui_question_runtime_event_bridge,
     mark_webui_service_discovery_failed, mark_webui_service_discovery_ready,
     native_tool_summaries_from_agent_runtime, normalized_workspace_path_text_from_path,
@@ -818,6 +818,24 @@ fn run_service_bootstrap(
             .extension_generation
             .mcp_runtime()
             .server_states();
+        if selected_session_id != uuid::Uuid::nil() {
+            // selected_vmm_controller eagerly validates and opens the selected session before its first UI projection.
+            // selected_vmm_controller 在首次 UI 投影前主动校验并打开选中会话。
+            let _selected_vmm_controller = guard
+                .vmm_controller_registry
+                .get_or_open(
+                    &controller_runtime.data_root,
+                    selected_session_id,
+                    &current_unix_millis_text(),
+                )
+                .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
+        }
+        // vmm_session_states are immutable projections from the controllers opened during bootstrap.
+        // vmm_session_states 是引导期间已打开控制器产生的不可变投影。
+        let vmm_session_states = guard
+            .vmm_controller_registry
+            .snapshots()
+            .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
         let mut workbench = workbench_from_runtime(WorkbenchRuntimeProjection {
             controller: &controller_runtime,
             command_session_runtime: Some(agent_runtime.command_session_runtime.as_ref()),
@@ -829,6 +847,7 @@ fn run_service_bootstrap(
             provider_configuration: &provider_configuration,
             ai_tool_configuration: &ai_tool_configuration,
             workspace: &workspace_snapshot,
+            vmm_session_states: &vmm_session_states,
             surface_messages: surface_messages.as_slice(),
             subagent_navigation,
             pending_questions: pending_question_snapshots_from_agent_runtime(Some(&agent_runtime))

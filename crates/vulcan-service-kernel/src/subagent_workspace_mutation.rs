@@ -400,6 +400,13 @@ where
         native_tools,
         hydrated_window_summaries,
     } = rebuild_inputs;
+    // vmm_session_states are immutable controller projections captured for this rebuild.
+    // vmm_session_states 是为本次重建捕获的不可变控制器投影。
+    let vmm_session_states = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .vmm_controller_registry
+        .snapshots()?;
     let trace_workbench_started_at = current_unix_millis_value();
     let mut workbench = workbench_from_runtime(WorkbenchRuntimeProjection {
         controller: &controller_runtime,
@@ -412,6 +419,7 @@ where
         provider_configuration: &provider_configuration,
         ai_tool_configuration: &ai_tool_configuration,
         workspace: &workspace_snapshot,
+        vmm_session_states: &vmm_session_states,
         surface_messages: surface_messages.as_slice(),
         subagent_navigation,
         pending_questions,

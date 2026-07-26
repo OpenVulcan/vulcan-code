@@ -15,10 +15,6 @@ use vulcan_vmm::{VmmRuntimeFeaturePolicy, VmmSessionMemoryState};
 /// Marker prefix used by the built-in manual test hook inside user prompts.
 /// 用户提示词中内置手动测试 hook 使用的标记前缀。
 const MANUAL_TEST_INJECTION_PREFIX: &str = "@inject ";
-/// Legacy VMM profile tag that used to live in hidden-user injection state.
-/// 旧版曾写入隐藏用户注入态的 VMM 画像标签。
-const LEGACY_VMM_PROFILE_CONTEXT_INJECTION_TAG: &str = "vmm_profile";
-
 /// Converts shared context-injection state into the core overlay for one logical turn.
 /// 将共享上下文注入状态转换为某个逻辑回合的 core 覆盖层。
 pub fn core_provider_context_injection_from_state_for_turn(
@@ -31,7 +27,6 @@ pub fn core_provider_context_injection_from_state_for_turn(
         registry: &registry,
         current_turn_marker,
     };
-    let state = state_without_legacy_vmm_profile_injection(state);
     let view = state.resolve_view_with_options(&options);
     // feature_policy independently gates state consumption and provider anchor rendering.
     // feature_policy 分别控制状态消费与 Provider 锚点渲染。
@@ -138,32 +133,11 @@ pub fn context_injection_panel_cards_for_kind(
     kind: Option<InjectionKind>,
 ) -> Vec<InjectionPanelCard> {
     let registry = context_injection_renderer_registry();
-    let mut state = state_without_legacy_vmm_profile_injection(state);
+    let mut state = state.clone();
     if let Some(kind) = kind {
         state.groups.retain(|_, group| group.kind == kind);
     }
     state.panel_cards_with_registry(&registry)
-}
-
-/// Removes legacy VMM profile hidden-user state and reports whether anything changed.
-/// 删除旧版 VMM 画像隐藏用户状态，并返回是否发生变化。
-pub fn remove_legacy_vmm_profile_context_injection_state(
-    state: &mut ContextInjectionState,
-) -> bool {
-    state.remove_group(
-        Some(InjectionKind::Persistent),
-        LEGACY_VMM_PROFILE_CONTEXT_INJECTION_TAG,
-    )
-}
-
-/// Clones one state and removes hidden-user VMM profile leftovers before rendering.
-/// 克隆一份状态并在渲染前移除隐藏用户 VMM 画像残留。
-fn state_without_legacy_vmm_profile_injection(
-    state: &ContextInjectionState,
-) -> ContextInjectionState {
-    let mut state = state.clone();
-    remove_legacy_vmm_profile_context_injection_state(&mut state);
-    state
 }
 
 /// Builds the renderer registry used by host runtime context-injection views.
@@ -229,45 +203,14 @@ mod tests {
         InjectionInsert::single(InjectionKind::Persistent, tag, "test", content, None)
     }
 
+    /// Verifies panel cards retain their explicit persistent and transient kind filtering.
+    /// 验证面板卡片保留明确的持久与临时类型过滤。
     #[test]
-    fn provider_overlay_filters_legacy_vmm_profile_hidden_user_state() {
+    fn panel_cards_filter_by_injection_kind() {
         let mut state = ContextInjectionState::default();
         state.apply_inserts(
             vec![
-                persistent_insert("vmm_profile", "base profile"),
-                persistent_insert("vmm_profile_delta", "delta profile"),
-            ],
-            "1",
-        );
-
-        let overlay = core_provider_context_injection_from_state_for_turn(
-            &state,
-            &VmmSessionMemoryState::default(),
-            Some("turn-a"),
-        )
-        .expect("overlay");
-
-        assert!(
-            !overlay
-                .persistent_blocks
-                .iter()
-                .any(|block| block.contains("base profile"))
-        );
-        assert!(
-            overlay
-                .persistent_blocks
-                .iter()
-                .any(|block| block.contains("delta profile"))
-        );
-    }
-
-    #[test]
-    fn panel_cards_filter_by_kind_and_remove_legacy_profile_tag() {
-        let mut state = ContextInjectionState::default();
-        state.apply_inserts(
-            vec![
-                persistent_insert("vmm_profile", "base profile"),
-                persistent_insert("vmm_profile_delta", "delta profile"),
+                persistent_insert("persistent_memory", "stable memory"),
                 InjectionInsert::single(
                     InjectionKind::Transient,
                     "vmm_inject",
@@ -287,7 +230,7 @@ mod tests {
         assert_eq!(dynamic.len(), 1);
         assert_eq!(dynamic[0].tag, "vmm_inject");
         assert_eq!(static_cards.len(), 1);
-        assert_eq!(static_cards[0].tag, "vmm_profile_delta");
+        assert_eq!(static_cards[0].tag, "persistent_memory");
     }
 
     /// Verifies cancelled injection groups no longer render into provider overlays.

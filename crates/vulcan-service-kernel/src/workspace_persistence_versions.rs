@@ -23,26 +23,26 @@ fn next_persistence_version(current: u64, channel: &str) -> Result<u64, String> 
         .ok_or_else(|| format!("{channel} persistence version exhausted"))
 }
 
-/// Allocates the next whole-session and independent VMM persistence versions atomically.
-/// 原子分配下一组整会话与独立 VMM 持久化版本。
+/// Allocates the next ordinary whole-session persistence version.
+/// 分配下一个普通整会话持久化版本。
 ///
 /// # Parameters
 /// 参数
-/// `state` owns both per-session persistence version tables.
-/// `state` 持有两份按会话划分的持久化版本表。
+/// `state` owns the ordinary per-session persistence version table.
+/// `state` 持有普通的按会话持久化版本表。
 /// `session_id` selects the session being persisted.
 /// `session_id` 选择正在持久化的会话。
 ///
 /// # Returns
 /// 返回值
-/// The whole-session version followed by the independent VMM version.
-/// 依次返回整会话版本与独立 VMM 版本。
-pub(crate) fn next_webui_session_runtime_persist_versions(
+/// The version assigned to the ordinary runtime snapshot.
+/// 返回分配给普通运行时快照的版本。
+pub(crate) fn next_webui_session_runtime_persist_version(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
-) -> Result<(u64, u64), String> {
-    // guard makes the two domains one indivisible allocation for a single runtime snapshot.
-    // guard 使两个持久化领域针对同一运行态快照形成不可分割的分配。
+) -> Result<u64, String> {
+    // guard serializes allocation for the ordinary runtime persistence lane.
+    // guard 将普通运行时持久化通道的分配串行化。
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -55,80 +55,36 @@ pub(crate) fn next_webui_session_runtime_persist_versions(
         .map_or(Ok(1), |current| {
             next_persistence_version(current, "whole-session")
         })?;
-    // vmm_version independently fences every writer capable of publishing vmm.json.
-    // vmm_version 独立隔离所有可能发布 vmm.json 的写入者。
-    let vmm_version = guard
-        .session_vmm_persist_versions
-        .get(&session_id)
-        .copied()
-        .map_or(Ok(1), |current| next_persistence_version(current, "VMM"))?;
     guard
         .session_persist_versions
         .insert(session_id, session_version);
-    guard
-        .session_vmm_persist_versions
-        .insert(session_id, vmm_version);
-    Ok((session_version, vmm_version))
+    Ok(session_version)
 }
 
-/// Returns whether one runtime snapshot is current in both whole-session and VMM domains.
-/// 判断一份运行态快照在整会话与 VMM 两个领域是否均为最新版本。
+/// Returns whether one ordinary runtime snapshot is current for its session.
+/// 判断一份普通运行态快照是否仍是其会话的最新版本。
 ///
 /// # Parameters
 /// 参数
-/// `state` owns both per-session persistence version tables.
-/// `state` 持有两份按会话划分的持久化版本表。
+/// `state` owns the ordinary per-session persistence version table.
+/// `state` 持有普通的按会话持久化版本表。
 /// `session_id` selects the session being persisted.
 /// `session_id` 选择正在持久化的会话。
 /// `session_version` is the task-local whole-session version.
 /// `session_version` 是任务本地整会话版本。
-/// `vmm_version` is the task-local independent VMM version.
-/// `vmm_version` 是任务本地独立 VMM 版本。
-///
 /// # Returns
 /// 返回值
-/// `true` only when neither persistence domain has advanced.
-/// 仅当两个持久化领域均未推进时返回 `true`。
-pub(crate) fn webui_session_runtime_persist_versions_are_current(
+/// `true` only when the ordinary runtime persistence lane has not advanced.
+/// 仅当普通运行时持久化通道尚未推进时返回 `true`。
+pub(crate) fn webui_session_runtime_persist_version_is_current(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
     session_version: u64,
-    vmm_version: u64,
 ) -> bool {
     let Ok(guard) = state.lock() else {
         return false;
     };
     guard.session_persist_versions.get(&session_id).copied() == Some(session_version)
-        && guard.session_vmm_persist_versions.get(&session_id).copied() == Some(vmm_version)
-}
-
-/// Invalidates every queued writer capable of publishing independent VMM state for one session.
-/// 使单个会话上所有可能发布独立 VMM 状态的排队写入者失效。
-///
-/// # Parameters
-/// 参数
-/// `state` owns the per-session VMM persistence version table.
-/// `state` 持有按会话划分的 VMM 持久化版本表。
-/// `session_id` selects the session whose queued VMM writers must be fenced out.
-/// `session_id` 选择需要隔离排队 VMM 写入者的会话。
-pub(crate) fn invalidate_webui_session_vmm_persist_version(
-    state: &SharedServiceBridgeState,
-    session_id: SessionId,
-) -> Result<(), String> {
-    let mut guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    // next_version advances only the independently owned VMM persistence lineage.
-    // next_version 仅推进独立归属的 VMM 持久化谱系。
-    let next_version = guard
-        .session_vmm_persist_versions
-        .get(&session_id)
-        .copied()
-        .map_or(Ok(1), |current| next_persistence_version(current, "VMM"))?;
-    guard
-        .session_vmm_persist_versions
-        .insert(session_id, next_version);
-    Ok(())
 }
 
 /// Invalidates older background persistence snapshots for one WebUI session.
@@ -144,7 +100,7 @@ pub(crate) fn invalidate_webui_session_persist_version(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
 ) -> Result<(), String> {
-    let _ = next_webui_session_runtime_persist_versions(state, session_id)?;
+    let _ = next_webui_session_runtime_persist_version(state, session_id)?;
     Ok(())
 }
 
@@ -153,8 +109,8 @@ pub(crate) fn invalidate_webui_session_persist_version(
 ///
 /// # Parameters
 /// 参数
-/// `state` owns whole-session, VMM, transcript, and addon persistence version tables.
-/// `state` 持有整会话、VMM、转录与附属状态持久化版本表。
+/// `state` owns whole-session, transcript, and addon persistence version tables.
+/// `state` 持有整会话、转录与附属状态持久化版本表。
 /// `session_id` selects the session whose stale background writes must be fenced out.
 /// `session_id` 选择必须隔离过期后台写入的会话。
 ///
@@ -180,13 +136,6 @@ pub(crate) fn invalidate_webui_session_lifecycle_persist_versions(
         .map_or(Ok(1), |current| {
             next_persistence_version(current, "whole-session")
         })?;
-    // next_vmm_version invalidates every queued writer capable of publishing vmm.json.
-    // next_vmm_version 使所有可能发布 vmm.json 的排队写入者失效。
-    let next_vmm_version = guard
-        .session_vmm_persist_versions
-        .get(&session_id)
-        .copied()
-        .map_or(Ok(1), |current| next_persistence_version(current, "VMM"))?;
     // next_transcript_version invalidates transcript-only persistence tasks.
     // next_transcript_version 使仅转录持久化任务失效。
     let next_transcript_version = guard
@@ -220,9 +169,6 @@ pub(crate) fn invalidate_webui_session_lifecycle_persist_versions(
     guard
         .session_persist_versions
         .insert(session_id, next_session_version);
-    guard
-        .session_vmm_persist_versions
-        .insert(session_id, next_vmm_version);
     guard
         .session_transcript_persist_versions
         .insert(session_id, next_transcript_version);
@@ -815,6 +761,9 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
             mcp_server_states,
         )
     };
+    // vmm_session_states are immutable controller projections captured for this cold refresh.
+    // vmm_session_states 是为本次冷刷新捕获的不可变控制器投影。
+    let vmm_session_states = guard.vmm_controller_registry.snapshots()?;
     let trace_workbench_started_at = current_unix_millis_value();
     let mut workbench = workbench_from_runtime(WorkbenchRuntimeProjection {
         controller: controller_runtime,
@@ -827,6 +776,7 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         provider_configuration,
         ai_tool_configuration,
         workspace: &workspace_snapshot,
+        vmm_session_states: &vmm_session_states,
         surface_messages: surface_messages.as_slice(),
         subagent_navigation,
         pending_questions,
@@ -982,8 +932,8 @@ mod tests {
         );
     }
 
-    /// Verifies one lifecycle fence invalidates whole-session, VMM, transcript, and allocated addon writers only for its target session.
-    /// 验证一次生命周期隔离只对目标会话的整会话、VMM、转录与已分配附属写入者生效。
+    /// Verifies one lifecycle fence invalidates ordinary runtime, transcript, and addon writers only for its target session.
+    /// 验证一次生命周期隔离只对目标会话的普通运行时、转录与附属写入者生效。
     #[test]
     fn lifecycle_persistence_fence_invalidates_every_target_channel() {
         // state owns isolated version maps for this test.
@@ -996,10 +946,10 @@ mod tests {
         // other_session_id proves unrelated session versions remain current.
         // other_session_id 证明无关会话版本保持当前状态。
         let other_session_id = SessionId::from_u128(0x72);
-        // runtime_versions represent one queued whole-session writer and its independent VMM lane.
-        // runtime_versions 表示一名排队整会话写入者及其独立 VMM 通道。
-        let runtime_versions = next_webui_session_runtime_persist_versions(&state, session_id)
-            .expect("runtime persistence versions should allocate");
+        // runtime_version represents one queued ordinary runtime writer.
+        // runtime_version 表示一名排队中的普通运行时写入者。
+        let runtime_version = next_webui_session_runtime_persist_version(&state, session_id)
+            .expect("runtime persistence version should allocate");
         // transcript_version represents a queued transcript-only writer.
         // transcript_version 表示排队中的仅转录写入者。
         let transcript_version = next_webui_session_transcript_persist_version(&state, session_id)
@@ -1028,17 +978,16 @@ mod tests {
         ];
         // other_versions remain valid because the fence is session-scoped.
         // other_versions 保持有效，因为隔离按会话划分。
-        let other_versions = next_webui_session_runtime_persist_versions(&state, other_session_id)
-            .expect("unrelated runtime versions should allocate");
+        let other_version = next_webui_session_runtime_persist_version(&state, other_session_id)
+            .expect("unrelated runtime version should allocate");
 
         invalidate_webui_session_lifecycle_persist_versions(&state, session_id)
             .expect("lifecycle fence should advance every target channel");
 
-        assert!(!webui_session_runtime_persist_versions_are_current(
+        assert!(!webui_session_runtime_persist_version_is_current(
             &state,
             session_id,
-            runtime_versions.0,
-            runtime_versions.1,
+            runtime_version,
         ));
         assert!(!webui_session_transcript_persist_version_is_current(
             &state,
@@ -1050,78 +999,34 @@ mod tests {
             session_id,
             &addon_versions
         ));
-        assert!(webui_session_runtime_persist_versions_are_current(
+        assert!(webui_session_runtime_persist_version_is_current(
             &state,
             other_session_id,
-            other_versions.0,
-            other_versions.1,
+            other_version,
         ));
     }
 
-    /// Verifies a provider-boundary VMM fence invalidates a queued runtime writer without advancing its whole-session lane.
-    /// 验证 Provider 边界 VMM 隔离会使排队运行态写入者失效，且不会推进其整会话通道。
-    #[test]
-    fn vmm_persistence_fence_invalidates_only_the_vmm_lane() {
-        // state owns isolated persistence lineages for the exact session under test.
-        // state 持有本测试精确会话的隔离持久化谱系。
-        let state =
-            create_service_bridge_state(std::sync::Arc::new(PersistenceVersionTestShellHost));
-        // session_id identifies the provider-boundary VMM publication owner.
-        // session_id 标识 Provider 边界 VMM 发布的所有者。
-        let session_id = SessionId::from_u128(0x73);
-        // runtime_versions model a queued snapshot captured before typed recall changed VMM state.
-        // runtime_versions 模拟类型化召回改变 VMM 状态前捕获的排队快照。
-        let runtime_versions = next_webui_session_runtime_persist_versions(&state, session_id)
-            .expect("runtime persistence versions should allocate");
-
-        invalidate_webui_session_vmm_persist_version(&state, session_id)
-            .expect("provider-boundary VMM fence should advance");
-
-        // guard exposes the exact independent counters so the test proves only VMM advanced.
-        // guard 暴露精确的独立计数器，使测试证明只有 VMM 发生推进。
-        let guard = state.lock().expect("lock isolated service state");
-        assert_eq!(
-            guard.session_persist_versions.get(&session_id).copied(),
-            Some(runtime_versions.0)
-        );
-        assert_eq!(
-            guard.session_vmm_persist_versions.get(&session_id).copied(),
-            Some(runtime_versions.1 + 1)
-        );
-        drop(guard);
-        assert!(!webui_session_runtime_persist_versions_are_current(
-            &state,
-            session_id,
-            runtime_versions.0,
-            runtime_versions.1,
-        ));
-    }
-
-    /// Verifies paired runtime allocation is atomic when the VMM generation is exhausted.
-    /// 验证 VMM 代际耗尽时，成对运行态分配保持原子性。
+    /// Verifies ordinary runtime version exhaustion leaves the current generation unchanged.
+    /// 验证普通运行时版本耗尽时当前代际保持不变。
     #[test]
     fn runtime_persistence_version_exhaustion_has_no_partial_advance() {
         let state =
             create_service_bridge_state(std::sync::Arc::new(PersistenceVersionTestShellHost));
-        // session_id owns both version lanes inspected for partial mutation.
-        // session_id 拥有用于检查部分变更的两个版本通道。
+        // session_id owns the exhausted ordinary runtime version lane.
+        // session_id 拥有耗尽的普通运行时版本通道。
         let session_id = SessionId::from_u128(0x74);
         {
             let mut guard = state.lock().expect("lock isolated service state");
-            guard.session_persist_versions.insert(session_id, 7);
-            guard
-                .session_vmm_persist_versions
-                .insert(session_id, u64::MAX);
+            guard.session_persist_versions.insert(session_id, u64::MAX);
         }
 
-        let error = next_webui_session_runtime_persist_versions(&state, session_id)
-            .expect_err("exhausted VMM lineage must reject paired allocation");
+        let error = next_webui_session_runtime_persist_version(&state, session_id)
+            .expect_err("exhausted runtime lineage must reject allocation");
 
-        assert!(error.contains("VMM persistence version exhausted"));
+        assert!(error.contains("session persistence version exhausted"));
         let guard = state.lock().expect("lock isolated service state");
-        assert_eq!(guard.session_persist_versions.get(&session_id), Some(&7));
         assert_eq!(
-            guard.session_vmm_persist_versions.get(&session_id),
+            guard.session_persist_versions.get(&session_id),
             Some(&u64::MAX)
         );
     }
@@ -1141,7 +1046,6 @@ mod tests {
         {
             let mut guard = state.lock().expect("lock isolated service state");
             guard.session_persist_versions.insert(session_id, 2);
-            guard.session_vmm_persist_versions.insert(session_id, 3);
             guard
                 .session_transcript_persist_versions
                 .insert(session_id, 4);
@@ -1156,10 +1060,6 @@ mod tests {
         assert!(error.contains("addon persistence version exhausted"));
         let guard = state.lock().expect("lock isolated service state");
         assert_eq!(guard.session_persist_versions.get(&session_id), Some(&2));
-        assert_eq!(
-            guard.session_vmm_persist_versions.get(&session_id),
-            Some(&3)
-        );
         assert_eq!(
             guard.session_transcript_persist_versions.get(&session_id),
             Some(&4)

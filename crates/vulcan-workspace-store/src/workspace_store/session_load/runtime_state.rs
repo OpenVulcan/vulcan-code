@@ -19,18 +19,12 @@ pub(super) fn load_segmented_runtime_state(
     else {
         return Ok(None);
     };
-    recover_segmented_runtime_checkpoint_transaction(&session_dir, &session_id.to_string())?;
+    reject_historical_segmented_runtime_checkpoint(&session_dir, &session_id.to_string())?;
     let runtime_conversation_state = ensure_runtime_log_from_segmented_context(&session_dir)?;
     let Some(state_document) = read_state(&session_dir)? else {
         let mut runtime_state = runtime_state_from_runtime_log(runtime_conversation_state)?;
         let _ =
             apply_session_addon_state_to_loaded_runtime_state(&session_dir, &mut runtime_state)?;
-        if runtime_state.is_none() && has_vmm_session_artifacts(&session_dir)? {
-            runtime_state = Some(SessionRuntimeStateEntry::default());
-        }
-        if let Some(runtime_state) = runtime_state.as_mut() {
-            hydrate_vmm_session_state(&session_dir, &session_id.to_string(), runtime_state)?;
-        }
         return Ok(runtime_state);
     };
     let has_runtime_state = !state_document.runtime_state.is_null();
@@ -38,20 +32,19 @@ pub(super) fn load_segmented_runtime_state(
         let mut runtime_state = runtime_state_from_runtime_log(runtime_conversation_state)?;
         let _ =
             apply_session_addon_state_to_loaded_runtime_state(&session_dir, &mut runtime_state)?;
-        if runtime_state.is_none() && has_vmm_session_artifacts(&session_dir)? {
-            runtime_state = Some(SessionRuntimeStateEntry::default());
-        }
-        if let Some(runtime_state) = runtime_state.as_mut() {
-            hydrate_vmm_session_state(&session_dir, &session_id.to_string(), runtime_state)?;
-        }
         return Ok(runtime_state);
     }
     let mut runtime_state = if has_runtime_state {
+        reject_embedded_historical_vmm_runtime_state(
+            &state_document.runtime_state,
+            &session_id.to_string(),
+        )?;
         serde_json::from_value::<SessionRuntimeStateEntry>(state_document.runtime_state)
             .map_err(|error| format!("解析分段会话状态文件失败：{error}"))?
     } else {
         SessionRuntimeStateEntry::default()
     };
+    reject_historical_vmm_profile_context_injection(&runtime_state, &session_id.to_string())?;
     let applied_context =
         apply_segmented_current_context(&mut runtime_state, &state_document.current_context)?;
     if runtime_state.updated_at.trim().is_empty() && !state_document.updated_at.trim().is_empty() {
@@ -66,12 +59,9 @@ pub(super) fn load_segmented_runtime_state(
     let Some(mut runtime_state) = runtime_state else {
         return Ok(None);
     };
-    let vmm_hydrated =
-        hydrate_vmm_session_state(&session_dir, &session_id.to_string(), &mut runtime_state)?;
     if !has_runtime_state
         && !applied_context
         && !addon_applied
-        && !vmm_hydrated
         && runtime_state.conversation_state.messages.is_empty()
         && runtime_state.conversation_state.records.is_empty()
     {

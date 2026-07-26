@@ -347,9 +347,153 @@ pub(super) fn test_service_state_with_parent_session(
         session_turn_admission_reservations: BTreeMap::new(),
         project_admission_reservations: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
-        session_vmm_persist_versions: BTreeMap::new(),
+        vmm_controller_registry: Default::default(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
+    }
+}
+
+/// Owns one isolated controller data root for Core VMM service tests.
+/// 为 Core VMM 服务测试持有一个隔离的控制器数据根。
+pub(crate) struct TestControllerRuntimeRoot {
+    /// Exact temporary data root removed when the fixture leaves scope.
+    /// 夹具离开作用域时移除的精确临时数据根。
+    data_root: std::path::PathBuf,
+}
+
+impl TestControllerRuntimeRoot {
+    /// Creates an isolated segmented session directory and its offline controller source.
+    /// 创建隔离的分段会话目录及其离线控制器来源。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_id` is the exact session discoverable by the Core VMM storage adapter.
+    /// `session_id` 是 Core VMM 存储适配器可发现的精确会话。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A scoped fixture that owns all test files.
+    /// 返回持有全部测试文件的作用域夹具。
+    pub(crate) fn new(session_id: SessionId) -> Self {
+        // data_root is unique per test and remains outside every real application data root.
+        // data_root 对每个测试均唯一，并且位于所有真实应用数据根之外。
+        let data_root =
+            std::env::temp_dir().join(format!("vulcan-service-kernel-vmm-test-{}", Uuid::new_v4()));
+        // session_dir uses the exact production segmented-session directory depth.
+        // session_dir 使用与生产一致的分段会话目录层级。
+        let session_dir = data_root
+            .join("sessions")
+            .join("project-a")
+            .join(format!("1970-01-01-{session_id}"));
+        std::fs::create_dir_all(session_dir.join("task"))
+            .expect("create isolated VMM session directory");
+        // metadata is the minimal valid production session index document needed for exact id lookup.
+        // metadata 是按精确标识查找所需的最小有效生产会话索引文档。
+        let metadata = serde_json::json!({
+            "schema_version": 1,
+            "session_id": session_id.to_string(),
+            "project_tag": "project-a",
+            "created_at": "1",
+            "updated_at": "1",
+            "archived_at": null,
+            "project_id": "project-a",
+            "title": "VMM test session",
+            "title_source": "test",
+            "canonical_source": "segmented_rollout",
+            "active_segment": "s001.jsonl",
+            "task_dir": "task",
+            "next_global_seq": 0,
+            "message_count": 0,
+            "last_message_id": null,
+            "last_message_fingerprint": null,
+            "latest_rollback_seq": null,
+            "segment_policy": {
+                "max_lines": 3000,
+                "max_bytes": 8388608
+            },
+            "segments": [{
+                "file": "s001.jsonl",
+                "start_seq": 0,
+                "line_count": 0,
+                "byte_len": 0,
+                "first_timestamp": null,
+                "last_timestamp": null,
+                "first_turn_index": null,
+                "last_turn_index": null,
+                "last_compaction_seq": null
+            }],
+            "tasks": [],
+            "fork_source": null
+        });
+        // encoded_metadata is written once before the controller can discover the session.
+        // encoded_metadata 在控制器发现会话前一次性写入。
+        let mut encoded_metadata =
+            serde_json::to_vec_pretty(&metadata).expect("encode VMM session metadata");
+        encoded_metadata.push(b'\n');
+        std::fs::write(session_dir.join("metadata.json"), encoded_metadata)
+            .expect("write isolated VMM session metadata");
+        Self { data_root }
+    }
+
+    /// Builds an offline controller handle bound to this isolated data root.
+    /// 构建绑定到当前隔离数据根的离线控制器句柄。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A production-shaped handle that never connects to an external controller.
+    /// 返回不会连接外部控制器的生产形态句柄。
+    pub(crate) fn controller_runtime_handle(
+        &self,
+    ) -> vulcan_workspace_store::data_plane::ControllerRuntimeHandle {
+        // registration supplies a complete local identity for the unused offline client proxy.
+        // registration 为不会联网的离线客户端代理提供完整本地身份。
+        let registration = vldb_controller_client::ClientRegistration {
+            client_name: format!("vulcan-service-kernel-test-{}", Uuid::new_v4()),
+            host_kind: String::from("vulcan-service-kernel-test"),
+            process_id: std::process::id(),
+            process_name: String::from("vulcan-service-kernel-test"),
+            lease_ttl_secs: None,
+        };
+        // client is retained only because ControllerRuntimeHandle owns the production data-plane shape.
+        // client 仅因 ControllerRuntimeHandle 持有生产数据平面结构而被保留。
+        let client = vldb_controller_client::ControllerClient::new(
+            vldb_controller_client::ControllerClientConfig::default(),
+            registration,
+        );
+        vulcan_workspace_store::data_plane::ControllerRuntimeHandle::new(
+            client,
+            String::from("http://127.0.0.1:0"),
+            String::from("offline-test-controller"),
+            self.data_root.clone(),
+            self.data_root.join("sqlite").join("offline-test.sqlite3"),
+            format!("offline-test-{}", Uuid::new_v4()),
+        )
+    }
+
+    /// Returns the exact isolated data root owned by this fixture.
+    /// 返回当前夹具持有的精确隔离数据根。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The borrowed controller data-root path.
+    /// 返回借用的控制器数据根路径。
+    pub(crate) fn data_root(&self) -> &std::path::Path {
+        &self.data_root
+    }
+}
+
+impl Drop for TestControllerRuntimeRoot {
+    /// Removes only the exact test-owned temporary data root.
+    /// 仅移除测试持有的精确临时数据根。
+    fn drop(&mut self) {
+        if self
+            .data_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("vulcan-service-kernel-vmm-test-"))
+        {
+            let _ = std::fs::remove_dir_all(&self.data_root);
+        }
     }
 }
 

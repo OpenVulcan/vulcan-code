@@ -788,18 +788,6 @@ pub enum RuntimeVmmLifecycleAction {
     /// Context compaction physically reclaimed immutable VMM anchor bytes.
     /// 上下文压缩物理回收了不可变 VMM 锚点字节。
     CompactionReclaimed,
-    /// Deterministically identified legacy VMM injection state was migrated.
-    /// 可确定归属的旧版 VMM 注入状态已迁移。
-    LegacyMigrated,
-    /// An interrupted or degraded VMM file operation was recovered.
-    /// 中断或降级的 VMM 文件操作已恢复。
-    FileRecovered,
-    /// A corrupt VMM file was isolated for diagnostics.
-    /// 损坏的 VMM 文件已隔离供诊断。
-    FileQuarantined,
-    /// A VMM persistence attempt failed and remains eligible for retry.
-    /// VMM 持久化尝试失败且仍可重试。
-    WriteFailed,
 }
 
 /// Body-free runtime audit payload for one VMM lifecycle transition.

@@ -508,17 +508,22 @@ async fn load_workspace_snapshot_with_runtime_state(
             );
         }
         if !validated_row.archived && load_runtime_state {
-            persistence::recover_segmented_runtime_checkpoint_transaction(&session_dir, &row.id)?;
+            persistence::reject_historical_segmented_runtime_checkpoint(&session_dir, &row.id)?;
             let mut runtime_state = if let Some(state_document) = read_state(&session_dir)? {
                 if state_document.runtime_state.is_null() {
                     None
                 } else {
+                    reject_embedded_historical_vmm_runtime_state(
+                        &state_document.runtime_state,
+                        &row.id,
+                    )?;
                     let mut runtime_state = serde_json::from_value::<SessionRuntimeStateEntry>(
                         state_document.runtime_state,
                     )
                     .map_err(|error| {
                         format!("解析分段会话 `{}` 的 state.json 失败：{error}", row.id)
                     })?;
+                    reject_historical_vmm_profile_context_injection(&runtime_state, &row.id)?;
                     if runtime_state.updated_at.trim().is_empty()
                         && !state_document.updated_at.trim().is_empty()
                     {
@@ -534,11 +539,7 @@ async fn load_workspace_snapshot_with_runtime_state(
                     runtime_state.get_or_insert_with(SessionRuntimeStateEntry::default),
                 );
             }
-            if runtime_state.is_none() && has_vmm_session_artifacts(&session_dir)? {
-                runtime_state = Some(SessionRuntimeStateEntry::default());
-            }
             if let Some(mut runtime_state) = runtime_state {
-                hydrate_vmm_session_state(&session_dir, &row.id, &mut runtime_state)?;
                 let _ = sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state);
                 runtime_state_map.insert(session_id, runtime_state);
             }

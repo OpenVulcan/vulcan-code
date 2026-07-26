@@ -118,6 +118,7 @@ export function WorkspaceMemoryPanel(props: {
     try {
       const result = await props.onRunVmmAction({
         action: "suppress_context_injection_item",
+        commandId: crypto.randomUUID(),
         scope: selectedProjectId ? "project" : "global",
         projectId: selectedProjectId,
         conversationId,
@@ -164,6 +165,7 @@ export function WorkspaceMemoryPanel(props: {
     try {
       const result = await props.onRunVmmAction({
         action: "delete_memories",
+        commandId: crypto.randomUUID(),
         scope: selectedProjectId ? "project" : "global",
         projectId: selectedProjectId,
         payload: {
@@ -210,6 +212,7 @@ export function WorkspaceMemoryPanel(props: {
     try {
       const result = await props.onRunVmmAction({
         action: "get_turn_details",
+        commandId: crypto.randomUUID(),
         scope: selectedProjectId ? "project" : "global",
         projectId: selectedProjectId,
         payload: {

@@ -448,8 +448,8 @@ pub fn render_vmm_context_item_detail(item: &ContextItem) -> String {
     lines.join("\n")
 }
 
-/// Builds a structured VMM context item from one legacy generic injection item.
-/// 从一条旧版通用注入项构建结构化 VMM 上下文项。
+/// Builds a structured VMM context item from one renderer-owned generic injection item.
+/// 从一条归属于渲染器的通用注入项构建结构化 VMM 上下文项。
 ///
 /// # Parameters
 /// 参数
@@ -458,8 +458,8 @@ pub fn render_vmm_context_item_detail(item: &ContextItem) -> String {
 ///
 /// # Returns
 /// 返回值
-/// The exact structured fields understood by the legacy VMM renderer.
-/// 返回旧版 VMM 渲染器所理解的精确结构化字段。
+/// The exact structured fields understood by the VMM renderer.
+/// 返回 VMM 渲染器所理解的精确结构化字段。
 pub(crate) fn vmm_context_item_from_injection_item(item: &InjectionStateItem) -> ContextItem {
     ContextItem {
         text: vmm_metadata_text(item),
@@ -469,52 +469,6 @@ pub(crate) fn vmm_context_item_from_injection_item(item: &InjectionStateItem) ->
         created_datetime: vmm_metadata_created_datetime(item).unwrap_or_default(),
         memory_id: vmm_metadata_memory_id(item),
     }
-}
-
-/// Proves that one generic injection item was emitted by the legacy VMM PreCheck adapter.
-/// 证明一条通用注入项由旧版 VMM PreCheck 适配器产出。
-///
-/// # Parameters
-/// 参数
-/// `item` is the persisted generic injection item whose ownership is being established.
-/// `item` 是需要确认归属的已持久化通用注入项。
-///
-/// # Returns
-/// 返回值
-/// `true` only when renderer id, source id, and every authoritative metadata field match the legacy writer contract.
-/// 仅当渲染器标识、来源标识与全部权威元数据字段都符合旧版写入契约时返回 `true`。
-pub(crate) fn is_legacy_vmm_precheck_injection_item(item: &InjectionStateItem) -> bool {
-    if item.renderer_id.as_deref() != Some(VMM_PRECHECK_MEMORY_RENDERER_ID)
-        || item.source_display.as_deref() != Some("VMM")
-    {
-        return false;
-    }
-    // metadata must independently prove the exact structured payload written by the legacy adapter.
-    // metadata 必须独立证明其符合旧版适配器写入的精确结构化载荷。
-    let Some(metadata) = item.metadata.as_ref().and_then(Value::as_object) else {
-        return false;
-    };
-    metadata
-        .get(VMM_METADATA_TEXT)
-        .is_some_and(Value::is_string)
-        && metadata
-            .get(VMM_METADATA_SCORE)
-            .and_then(Value::as_f64)
-            .is_some()
-        && metadata
-            .get(VMM_METADATA_TURN_ID)
-            .and_then(Value::as_u64)
-            .is_some()
-        && metadata
-            .get(VMM_METADATA_HAS_DIALOGUE)
-            .is_some_and(Value::is_boolean)
-        && metadata
-            .get(VMM_METADATA_CREATED_DATETIME)
-            .is_some_and(Value::is_string)
-        && metadata
-            .get(VMM_METADATA_MEMORY_ID)
-            .and_then(Value::as_u64)
-            .is_some()
 }
 
 /// Builds the dialogue lookup marker from one structured VMM item.

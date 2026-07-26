@@ -172,6 +172,34 @@ fn invalidate_project_session_lifecycle_persist_versions(
     Ok(())
 }
 
+/// Begins one VMM lifecycle fence for every session owned by a transitioning project.
+/// 为正在转换的项目所拥有的每个会话启动 VMM 生命周期栅栏。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the process-wide VMM controller registry.
+/// `state` 持有进程级 VMM 控制器注册表。
+/// `project` contains the exact session membership about to enter a storage transition.
+/// `project` 包含即将进入存储转换的精确会话成员关系。
+///
+/// # Returns
+/// 返回值
+/// One RAII fence blocking every project session controller through the storage transition.
+/// 返回一个在存储转换期间阻止全部项目会话控制器的 RAII 栅栏。
+fn begin_project_session_vmm_lifecycle_transition(
+    state: &SharedServiceBridgeState,
+    project: &TaskProjectSummary,
+) -> Result<crate::vmm_session_controller::SessionVmmLifecycleFence, String> {
+    // registry is cloned so lifecycle fencing never nests the shared service lock.
+    // registry 在克隆后执行生命周期栅栏化，避免嵌套共享服务锁。
+    let registry = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .vmm_controller_registry
+        .clone();
+    registry.begin_lifecycle_transition(project.session_ids.iter().copied())
+}
+
 /// Opens one project directory in the host system file manager.
 /// 在宿主系统文件管理器中打开单个项目文件夹。
 pub(crate) fn service_open_project_directory(
@@ -442,6 +470,7 @@ pub(crate) async fn service_archive_project_conversations(
     // persist_guard remains held until all authoritative child transitions finish.
     // persist_guard 持有至全部权威子转换完成。
     let persist_guard = persist_lock.lock().await;
+    let vmm_lifecycle_fence = begin_project_session_vmm_lifecycle_transition(&state, &project)?;
     // archive_result is inspected only after writers queued during child transitions are invalidated.
     // archive_result 仅在子转换期间排队的写入者失效后才进行检查。
     let archive_result = vulcan_workspace_store::workspace_store::archive_project_sessions(
@@ -455,10 +484,11 @@ pub(crate) async fn service_archive_project_conversations(
     // refresh_result 在过期项目写入者仍被闸门阻挡时更新保留生命周期状态。
     let refresh_result = refresh_workbench_snapshot(state.clone()).await;
     invalidate_project_session_lifecycle_persist_versions(&state, &project)?;
-    drop(persist_guard);
     // workbench is the authoritative retained projection committed by the batch refresh.
     // workbench 是批量刷新提交的权威保留投影。
     let workbench = refresh_result?;
+    vmm_lifecycle_fence.release()?;
+    drop(persist_guard);
     let plugin_cleanup_failures =
         drain_vulcan_plugin_sessions_for_owners(&state, &archived_session_ids).await;
     if !plugin_cleanup_failures.is_empty() {
@@ -519,6 +549,7 @@ pub(crate) async fn service_remove_project(
     // persist_guard covers the complete storage mutation including default-project repair.
     // persist_guard 覆盖包括默认项目修复在内的完整存储变更。
     let persist_guard = persist_lock.lock().await;
+    let vmm_lifecycle_fence = begin_project_session_vmm_lifecycle_transition(&state, &project)?;
     // removal_result covers child archival, row removal, and any required default-project repair.
     // removal_result 覆盖子会话归档、项目行移除及所需默认项目修复。
     let removal_result = async {
@@ -542,10 +573,11 @@ pub(crate) async fn service_remove_project(
     // refresh_result 在待处理写入者继续前从保留状态中移除项目。
     let refresh_result = refresh_workbench_snapshot(state.clone()).await;
     invalidate_project_session_lifecycle_persist_versions(&state, &project)?;
-    drop(persist_guard);
     // workbench is the authoritative retained projection after child archival and project removal.
     // workbench 是子会话归档与项目移除后的权威保留投影。
     let workbench = refresh_result?;
+    vmm_lifecycle_fence.release()?;
+    drop(persist_guard);
     // Project removal synchronizes the remaining enabled set without deleting the removed project's index.
     // 项目移除只同步剩余启用集合，不删除已移除项目的索引。
     if let Err(error) = reconcile_codebase_memory_runtime(&state).await {

@@ -64,15 +64,13 @@ fn runtime_state_deserializes_without_conversation_state() {
     ));
 }
 
-/// Verifies independent VMM lease state never leaks into the legacy runtime-state document.
-/// 验证独立 VMM 租约状态绝不会泄漏到旧版运行态文档。
+/// Verifies ordinary runtime-state documents have no VMM ownership field.
+/// 验证普通运行态文档不存在 VMM 所有权字段。
 #[test]
-fn runtime_state_omits_independent_vmm_session_memory() {
-    let runtime_state = SessionRuntimeStateEntry {
-        vmm_session_memory: vulcan_vmm::VmmSessionMemoryState::new("session-a", "1")
-            .expect("valid VMM session fixture"),
-        ..SessionRuntimeStateEntry::default()
-    };
+fn runtime_state_has_no_vmm_session_memory_field() {
+    // runtime_state represents the complete ordinary persistence model.
+    // runtime_state 表示完整的普通持久化模型。
+    let runtime_state = SessionRuntimeStateEntry::default();
 
     let value = serde_json::to_value(runtime_state).expect("runtime state should serialize");
 

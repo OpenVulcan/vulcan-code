@@ -7,6 +7,13 @@ use vulcan_agent_runtime::conversation_protocol::conversation_state_from_session
 use vulcan_context_injection::{InjectionInsert, InjectionKind};
 use vulcan_workbench_model::SessionTurnStats;
 
+/// Creates strict controller-owned VMM state for one compaction test session.
+/// 为一个压缩测试会话创建严格归属于控制器的 VMM 状态。
+fn test_vmm_session_memory(session_id: SessionId) -> vulcan_vmm::VmmSessionMemoryState {
+    vulcan_vmm::VmmSessionMemoryState::new(session_id.to_string(), "1")
+        .expect("test VMM session owner should be valid")
+}
+
 /// Returns whether text contains CJK characters.
 /// 返回文本是否包含 CJK 字符。
 fn contains_cjk_text(text: &str) -> bool {
@@ -88,8 +95,12 @@ fn webui_context_compaction_draft_prunes_expired_transient_injections_transactio
         input_prune_report: None,
     };
 
+    // vmm_session_memory models the isolated Core controller candidate for this compaction.
+    // vmm_session_memory 模拟本次压缩使用的独立 Core 控制器候选状态。
+    let mut vmm_session_memory = test_vmm_session_memory(session_id);
     let draft = build_webui_context_compaction_draft(
         &active_runtime_state,
+        &mut vmm_session_memory,
         session_id,
         "section-test",
         "预算快照",
@@ -184,8 +195,12 @@ fn webui_context_compaction_draft_keeps_status_markers_unanchored() {
         input_prune_report: None,
     };
 
+    // vmm_session_memory models the isolated Core controller candidate for this compaction.
+    // vmm_session_memory 模拟本次压缩使用的独立 Core 控制器候选状态。
+    let mut vmm_session_memory = test_vmm_session_memory(session_id);
     let draft = build_webui_context_compaction_draft(
         &active_runtime_state,
+        &mut vmm_session_memory,
         session_id,
         &section_id,
         "预算快照",
@@ -248,8 +263,10 @@ fn webui_context_compaction_draft_separates_manual_stats_and_auto_continuation()
         live_context_assembly_fingerprint: Some(String::from("assembly-live")),
         ..SessionRuntimeStateEntry::default()
     };
-    active_runtime_state
-        .vmm_session_memory
+    // active_vmm_session_memory models the committed controller state before either draft.
+    // active_vmm_session_memory 模拟两个候选构建前已经提交的控制器状态。
+    let mut active_vmm_session_memory = test_vmm_session_memory(session_id);
+    active_vmm_session_memory
         .apply_recall_batch(
             &session_id.to_string(),
             "user-old",
@@ -296,8 +313,12 @@ fn webui_context_compaction_draft_separates_manual_stats_and_auto_continuation()
         execution_profile: PromptCompactionExecutionProfile::CachePreservingFullFidelity,
         input_prune_report: None,
     };
+    // manual_vmm_session_memory isolates manual candidate mutation from the committed state.
+    // manual_vmm_session_memory 将手动压缩候选变更与已提交状态隔离。
+    let mut manual_vmm_session_memory = active_vmm_session_memory.clone();
     let manual_draft = build_webui_context_compaction_draft(
         &active_runtime_state,
+        &mut manual_vmm_session_memory,
         session_id,
         "section-manual",
         "Budget snapshot",
@@ -321,28 +342,11 @@ fn webui_context_compaction_draft_separates_manual_stats_and_auto_continuation()
         "manual compaction must not append the automatic continuation note"
     );
     assert_eq!(
-        manual_draft
-            .runtime_state
-            .vmm_session_memory
-            .cache_epoch
-            .epoch_id,
+        manual_vmm_session_memory.cache_epoch.epoch_id,
         "test-auto-continuation"
     );
-    assert!(
-        manual_draft
-            .runtime_state
-            .vmm_session_memory
-            .cache_epoch
-            .anchors
-            .is_empty()
-    );
-    assert!(
-        manual_draft
-            .runtime_state
-            .vmm_session_memory
-            .cache_epoch
-            .needs_active_baseline
-    );
+    assert!(manual_vmm_session_memory.cache_epoch.anchors.is_empty());
+    assert!(manual_vmm_session_memory.cache_epoch.needs_active_baseline);
     assert!(
         manual_draft
             .runtime_state
@@ -360,11 +364,7 @@ fn webui_context_compaction_draft_separates_manual_stats_and_auto_continuation()
             .is_none()
     );
     assert_eq!(
-        active_runtime_state
-            .vmm_session_memory
-            .cache_epoch
-            .anchors
-            .len(),
+        active_vmm_session_memory.cache_epoch.anchors.len(),
         1,
         "draft construction must not mutate the active VMM epoch"
     );
@@ -405,8 +405,12 @@ fn webui_context_compaction_draft_separates_manual_stats_and_auto_continuation()
         execution_profile: PromptCompactionExecutionProfile::CachePreservingFullFidelity,
         input_prune_report: None,
     };
+    // auto_vmm_session_memory isolates automatic candidate mutation from the committed state.
+    // auto_vmm_session_memory 将自动压缩候选变更与已提交状态隔离。
+    let mut auto_vmm_session_memory = active_vmm_session_memory.clone();
     let auto_draft = build_webui_context_compaction_draft(
         &active_runtime_state,
+        &mut auto_vmm_session_memory,
         session_id,
         "section-auto",
         "Budget snapshot",
@@ -478,9 +482,7 @@ fn webui_context_compaction_draft_separates_manual_stats_and_auto_continuation()
             _ => None,
         })
         .expect("automatic compaction should append one synthetic continuation id");
-    let baseline_anchor = auto_draft
-        .runtime_state
-        .vmm_session_memory
+    let baseline_anchor = auto_vmm_session_memory
         .cache_epoch
         .anchors
         .first()
@@ -491,13 +493,7 @@ fn webui_context_compaction_draft_separates_manual_stats_and_auto_continuation()
     );
     assert_eq!(baseline_anchor.target_message_id, synthetic_continuation_id);
     assert!(baseline_anchor.prefix.contains("active-compaction-memory"));
-    assert!(
-        !auto_draft
-            .runtime_state
-            .vmm_session_memory
-            .cache_epoch
-            .needs_active_baseline
-    );
+    assert!(!auto_vmm_session_memory.cache_epoch.needs_active_baseline);
 }
 
 /// Verifies repeated automatic compaction ignores previous continuation notes when finding the last user prompt.

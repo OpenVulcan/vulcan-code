@@ -32,16 +32,23 @@ pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
     let Some(context_budget) = preparation.context_budget.as_ref() else {
         return Ok(None);
     };
-    // vmm_cache_pressure measures immutable text that can only be reclaimed at a compaction boundary.
-    // vmm_cache_pressure 衡量只能在压缩边界回收的不可变文本。
-    let vmm_cache_pressure = state
+    // vmm_controller_registry is cloned without retaining the shared service lock.
+    // vmm_controller_registry 在不保留共享服务锁的情况下完成克隆。
+    let vmm_controller_registry = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?
-        .workspace_snapshot
-        .as_ref()
-        .and_then(|workspace| workspace.session_runtime_state.get(&request.session_id))
-        .map(|runtime_state| runtime_state.vmm_session_memory.cache_pressure())
-        .unwrap_or_default();
+        .vmm_controller_registry
+        .clone();
+    // vmm_controller is the sole owner used for pressure and refreshed injection projections.
+    // vmm_controller 是压力与刷新注入投影使用的唯一所有者。
+    let vmm_controller = vmm_controller_registry.get_or_open(
+        &controller_runtime.data_root,
+        request.session_id,
+        &current_unix_millis_text(),
+    )?;
+    // vmm_cache_pressure measures immutable text that can only be reclaimed at a compaction boundary.
+    // vmm_cache_pressure 衡量只能在压缩边界回收的不可变文本。
+    let vmm_cache_pressure = vmm_controller.snapshot()?.cache_pressure();
     // vmm_pressure_requires_compaction raises priority only after an absolute or proportional threshold.
     // vmm_pressure_requires_compaction 仅在达到绝对或比例阈值后提高压缩优先级。
     let vmm_pressure_requires_compaction =
@@ -256,8 +263,14 @@ pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
             if let Some(error) = rejection_error {
                 return Err(error);
             }
-            let mut refreshed =
-                refreshed_execution_request_after_context_compaction(state, request)?;
+            // refreshed_vmm_state observes the cache epoch committed by the compaction controller command.
+            // refreshed_vmm_state 观察由压缩控制器命令提交的缓存纪元。
+            let refreshed_vmm_state = vmm_controller.snapshot()?;
+            let mut refreshed = refreshed_execution_request_after_context_compaction(
+                state,
+                request,
+                &refreshed_vmm_state,
+            )?;
             refreshed
                 .embedded_turn_usage_segments
                 .push(compaction_usage_segment);
@@ -359,6 +372,7 @@ pub(crate) fn webui_context_compaction_plan_from_conversation_state(
 pub(crate) fn refreshed_execution_request_after_context_compaction(
     state: &SharedServiceBridgeState,
     request: &ExecutionPreparationRequest,
+    vmm_session_memory: &vulcan_vmm::VmmSessionMemoryState,
 ) -> Result<ExecutionPreparationRequest, String> {
     let workspace_snapshot =
         current_workspace_snapshot_from_shared_state(state)?.ok_or_else(|| {
@@ -376,7 +390,7 @@ pub(crate) fn refreshed_execution_request_after_context_compaction(
         .and_then(|event| event.turn_id.clone());
     refreshed.context_injection = core_provider_context_injection_from_state_for_turn(
         &runtime_state.context_injection_state,
-        &runtime_state.vmm_session_memory,
+        vmm_session_memory,
         turn_marker.as_deref(),
     );
     Ok(refreshed)

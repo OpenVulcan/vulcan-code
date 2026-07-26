@@ -16,7 +16,7 @@ use vulcan_provider_config::config::{
 };
 use vulcan_workbench_model::SessionTurnUsageSegmentKind;
 
-mod test_support;
+pub(crate) mod test_support;
 
 use test_support::*;
 

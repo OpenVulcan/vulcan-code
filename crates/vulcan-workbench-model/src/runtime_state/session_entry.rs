@@ -45,10 +45,6 @@ pub struct SessionRuntimeStateEntry {
     /// 会话级 VMM 记忆集成覆盖配置。
     #[serde(default, skip_serializing_if = "VmmConfigLayer::is_empty")]
     pub vmm: VmmConfigLayer,
-    /// Session-owned VMM lease state persisted exclusively in the independent `vmm.json` document.
-    /// 仅持久化到独立 `vmm.json` 文档的会话归属 VMM 租约状态。
-    #[serde(skip)]
-    pub vmm_session_memory: VmmSessionMemoryState,
     /// Session knowledge-library selection persisted exclusively in the addon document.
     /// 仅持久化到附属状态文档的会话知识库选择。
     #[serde(skip)]

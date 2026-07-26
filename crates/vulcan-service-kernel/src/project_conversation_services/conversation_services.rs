@@ -88,6 +88,14 @@ pub(crate) async fn service_archive_conversation(
     // persist_guard remains held until the authoritative lifecycle mutation finishes.
     // persist_guard 持有至权威生命周期变更完成。
     let persist_guard = persist_lock.lock().await;
+    // vmm_lifecycle_fence blocks both stale references and replacement controllers until refresh commits.
+    // vmm_lifecycle_fence 在刷新提交前同时阻止旧引用与替代控制器。
+    let vmm_controller_registry = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .vmm_controller_registry
+        .clone();
+    let vmm_lifecycle_fence = vmm_controller_registry.begin_lifecycle_transition([session_id])?;
     // archive_result is inspected only after writers queued during the storage attempt are invalidated.
     // archive_result 仅在存储尝试期间排队的写入者失效后才进行检查。
     let archive_result = vulcan_workspace_store::workspace_store::archive_single_session(
@@ -101,10 +109,11 @@ pub(crate) async fn service_archive_conversation(
     // refresh_result 在过期写入者仍被闸门阻挡时更新保留生命周期状态。
     let refresh_result = refresh_workbench_snapshot(state.clone()).await;
     invalidate_webui_session_lifecycle_persist_versions(&state, session_id)?;
-    drop(persist_guard);
     // workbench is the authoritative retained projection committed by the refresh inside the persistence gate.
     // workbench 是持久化闸门内刷新所提交的权威保留投影。
     let workbench = refresh_result?;
+    vmm_lifecycle_fence.release()?;
+    drop(persist_guard);
     let plugin_cleanup_failures =
         drain_vulcan_plugin_sessions_for_owners(&state, &[session_id]).await;
     if !plugin_cleanup_failures.is_empty() {

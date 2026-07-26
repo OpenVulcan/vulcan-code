@@ -26,6 +26,13 @@ use crate::{
 
 use super::*;
 
+/// Creates strict controller-owned VMM state for one prompt-turn test session.
+/// 为一个提示词回合测试会话创建严格归属于控制器的 VMM 状态。
+fn test_vmm_session_memory(session_id: SessionId) -> VmmSessionMemoryState {
+    VmmSessionMemoryState::new(session_id.to_string(), "1")
+        .expect("test VMM session owner should be valid")
+}
+
 /// Verifies canonical user ids cannot collide when multiple starts occur within one timestamp tick.
 /// 验证多次启动发生在同一时间戳粒度内时规范用户标识仍不会碰撞。
 #[test]
@@ -119,10 +126,14 @@ fn typed_vmm_recall_targets_visible_canonical_user_message() {
             },
         })],
     );
+    // vmm_session_memory models the Core controller candidate mutated by this continuation.
+    // vmm_session_memory 模拟由本次续接修改的 Core 控制器候选状态。
+    let mut vmm_session_memory = test_vmm_session_memory(start.session_id);
     // continuation applies typed recall state and builds the provider-facing exact-message anchors.
     // continuation 会应用类型化召回状态并构建 Provider 可见的精确消息锚点。
     let continuation = continue_shared_prompt_turn_after_preparation_with_runtime_state(
         &mut runtime_state,
+        &mut vmm_session_memory,
         SharedPromptTurnContinueInput {
             start,
             precheck_outcome,
@@ -368,10 +379,14 @@ fn goal_continuation_reuses_persisted_vmm_profile_baseline() {
     // profile_outcome models an independently completed profile line with no remote refresh.
     // profile_outcome 模拟不执行远端刷新的独立画像线路完成结果。
     let profile_outcome = start.profile_request.clone().skip();
+    // vmm_session_memory models the independent Core controller state for this continuation.
+    // vmm_session_memory 模拟本次续接使用的独立 Core 控制器状态。
+    let mut vmm_session_memory = test_vmm_session_memory(start.session_id);
     // continuation must reconstruct the stable system block from persisted runtime state.
     // continuation 必须从持久化运行态重新构建稳定系统块。
     let continuation = continue_shared_prompt_turn_after_preparation_with_runtime_state(
         &mut runtime_state,
+        &mut vmm_session_memory,
         SharedPromptTurnContinueInput {
             start,
             precheck_outcome,
@@ -452,8 +467,12 @@ fn precheck_cannot_own_vmm_profile_state_or_system_block() {
             phase: vulcan_hooks::SystemPromptHookPhase::SubsequentSession,
         });
 
+    // vmm_session_memory models the independent Core controller state for this continuation.
+    // vmm_session_memory 模拟本次续接使用的独立 Core 控制器状态。
+    let mut vmm_session_memory = test_vmm_session_memory(start.session_id);
     let continuation = continue_shared_prompt_turn_after_preparation_with_runtime_state(
         &mut runtime_state,
+        &mut vmm_session_memory,
         SharedPromptTurnContinueInput {
             start,
             precheck_outcome,
@@ -526,8 +545,12 @@ fn hidden_model_guidance_stays_out_of_visible_transcript() {
     // expected_hook_turn_id is the shared preparation identity that must survive request construction.
     // expected_hook_turn_id 是必须在请求构建后保留的共享准备身份。
     let expected_hook_turn_id = start.preparation_turn_id.clone();
+    // vmm_session_memory models the independent Core controller state for this continuation.
+    // vmm_session_memory 模拟本次续接使用的独立 Core 控制器状态。
+    let mut vmm_session_memory = test_vmm_session_memory(start.session_id);
     let continuation = continue_shared_prompt_turn_after_preparation_with_runtime_state(
         &mut runtime_state,
+        &mut vmm_session_memory,
         SharedPromptTurnContinueInput {
             start,
             precheck_outcome,
@@ -577,9 +600,10 @@ fn precheck_failure_preserves_expired_vmm_resident_and_registers_terminal_turn()
         Vec::new(),
     )
     .expect("old canonical user message should append");
-    runtime_state.vmm_session_memory = VmmSessionMemoryState::default();
-    runtime_state
-        .vmm_session_memory
+    // vmm_session_memory models the Core controller state that already owns one expired lease.
+    // vmm_session_memory 模拟已经持有一条过期租约的 Core 控制器状态。
+    let mut vmm_session_memory = test_vmm_session_memory(session_id);
+    vmm_session_memory
         .apply_recall_batch(
             &session_id.to_string(),
             "old-user",
@@ -596,12 +620,10 @@ fn precheck_failure_preserves_expired_vmm_resident_and_registers_terminal_turn()
             "1",
         )
         .expect("initial VMM recall should succeed");
-    runtime_state
-        .vmm_session_memory
+    vmm_session_memory
         .register_active_turn("old-turn", "1")
         .expect("old logical turn should register");
-    runtime_state
-        .vmm_session_memory
+    vmm_session_memory
         .consume_turn("old-turn", "2")
         .expect("old logical turn should expire the lease");
     // start creates the exact next canonical user message before the failing hook outcome is applied.
@@ -626,6 +648,7 @@ fn precheck_failure_preserves_expired_vmm_resident_and_registers_terminal_turn()
 
     let continuation = continue_shared_prompt_turn_after_preparation_with_runtime_state(
         &mut runtime_state,
+        &mut vmm_session_memory,
         SharedPromptTurnContinueInput {
             start,
             precheck_outcome,
@@ -640,31 +663,15 @@ fn precheck_failure_preserves_expired_vmm_resident_and_registers_terminal_turn()
     .expect("local VMM state should continue despite remote precheck failure");
 
     assert!(continuation.precheck_failure_detail.is_some());
-    assert!(
-        runtime_state
-            .vmm_session_memory
-            .pending_prompt_events
-            .is_empty()
-    );
-    assert!(
-        runtime_state
-            .vmm_session_memory
-            .active_panel_card()
-            .is_none()
-    );
-    assert!(
-        runtime_state
-            .vmm_session_memory
-            .expired_panel_card()
-            .is_some()
-    );
+    assert!(vmm_session_memory.pending_prompt_events.is_empty());
+    assert!(vmm_session_memory.active_panel_card().is_none());
+    assert!(vmm_session_memory.expired_panel_card().is_some());
     assert_eq!(
-        runtime_state.vmm_session_memory.active_turn_id.as_deref(),
+        vmm_session_memory.active_turn_id.as_deref(),
         Some(expected_turn_id.as_str())
     );
     assert_eq!(
-        runtime_state
-            .vmm_session_memory
+        vmm_session_memory
             .cache_epoch
             .anchors
             .last()
@@ -672,8 +679,7 @@ fn precheck_failure_preserves_expired_vmm_resident_and_registers_terminal_turn()
         Some((&VmmPromptAnchorKind::Memory, "old-user"))
     );
     assert_ne!(
-        runtime_state
-            .vmm_session_memory
+        vmm_session_memory
             .cache_epoch
             .anchors
             .last()

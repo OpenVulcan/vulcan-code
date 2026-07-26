@@ -6,8 +6,8 @@ use vulcan_service_api::ServiceEvent;
 use super::*;
 use crate::{
     apply_session_phase_to_state, emit_context_injection_changed_delta,
-    emit_service_event_with_trace, invalidate_webui_session_vmm_persist_version,
-    owning_project_id_for_session, retain_hydrated_conversation_windows_for_workspace,
+    emit_service_event_with_trace, owning_project_id_for_session,
+    retain_hydrated_conversation_windows_for_workspace,
 };
 
 /// Builds the shared precheck plan for a WebUI session using the service VMM layering rules.
@@ -155,14 +155,23 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         session_id,
         Some(&start.preparation_turn_id),
     )?;
-    // Capture the independent VMM revision before typed precheck effects mutate the draft snapshot.
-    // 在类型化 precheck 效果修改草稿快照前捕获独立 VMM 版本。
-    let vmm_state_before_precheck = workspace_snapshot
-        .session_runtime_state
-        .get(&session_id)
-        .map(|runtime_state| runtime_state.vmm_session_memory.clone())
-        .unwrap_or_default();
-    let vmm_revision_before_precheck = vmm_state_before_precheck.revision;
+    // vmm_controller_registry is cloned outside command execution so the shared service lock is never nested.
+    // vmm_controller_registry 在命令执行外完成克隆，避免嵌套共享服务锁。
+    let vmm_controller_registry = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .vmm_controller_registry
+        .clone();
+    // vmm_controller is the sole authoritative state owner for this session.
+    // vmm_controller 是该会话唯一的权威状态所有者。
+    let vmm_controller = vmm_controller_registry.get_or_open(
+        &controller_runtime.data_root,
+        session_id,
+        &current_unix_millis_text(),
+    )?;
+    // vmm_state_before_precheck is retained only for post-commit audit projection.
+    // vmm_state_before_precheck 仅为提交后的审计投影保留。
+    let vmm_state_before_precheck = vmm_controller.snapshot()?;
     webui_after_precheck_trace(
         "after_precheck_03_runtime_state_ready",
         format!(
@@ -215,16 +224,10 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
     if vulcan_vmm::VmmRuntimeFeaturePolicy::from_env().session_state_enabled
         && !effective_vmm_enabled
     {
-        let runtime_state = workspace_snapshot
-            .session_runtime_state
-            .get_mut(&session_id)
-            .ok_or_else(|| format!("会话 `{session_id}` 缺少运行态，无法应用 VMM 禁用转换。"))?;
-        // now timestamps the exact effective-disable transition.
-        // now 为精确的生效禁用转换提供时间戳。
-        let now = current_unix_millis_text();
-        if runtime_state.vmm_session_memory.disable(&now)?.changed {
-            runtime_state.updated_at = now;
-        }
+        webui_trace(
+            "vmm_effective_disable_pending",
+            format!("session={session_id}"),
+        );
     }
     let runtime_reasoning_effort = workspace_snapshot
         .session_runtime_state
@@ -237,21 +240,57 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
     let canonical_user_message_id = start.canonical_user_message_id.clone();
     let prompt_turn_id = start.preparation_turn_id.clone();
     let shared_continue_started_at = current_unix_millis_value();
-    let continuation = continue_shared_prompt_turn_after_preparation(
-        &mut workspace_snapshot,
-        SharedPromptTurnContinueInput {
-            start,
-            profile_outcome,
-            precheck_outcome,
-            ai_tool_configuration,
-            project_configuration,
-            runtime_reasoning_effort,
-            provider_reasoning_effort: active_reasoning_selection_effort(
-                &agent_runtime.provider_configuration,
-            ),
-            patch_visible_user_prompt_record: runs_user_prompt_precheck,
-        },
-    )?;
+    // vmm_command_id makes the full Provider-boundary transition durably idempotent.
+    // vmm_command_id 使完整 Provider 边界转换具备持久幂等性。
+    let vmm_command_id = format!("provider_boundary:{prompt_turn_id}");
+    // vmm_command_timestamp is shared by domain changes, receipt, and durable publication.
+    // vmm_command_timestamp 由领域变更、回执与持久发布共享。
+    let vmm_command_timestamp = current_unix_millis_text();
+    // continuation_result crosses the serialized controller closure without exposing mutable VMM state.
+    // continuation_result 跨越串行控制器闭包传递，且不暴露可变 VMM 状态。
+    let mut continuation_result = None;
+    // vmm_commit owns both shared prompt VMM mutation and durable publication under one session lock.
+    // vmm_commit 在同一会话锁内拥有共享提示词 VMM 变更与持久发布。
+    let vmm_commit =
+        vmm_controller.execute_command(&vmm_command_id, &vmm_command_timestamp, |candidate| {
+            if vulcan_vmm::VmmRuntimeFeaturePolicy::from_env().session_state_enabled
+                && !effective_vmm_enabled
+            {
+                candidate.disable(&vmm_command_timestamp)?;
+            }
+            // continuation is built against the exact isolated controller candidate.
+            // continuation 基于精确的隔离控制器候选状态构建。
+            let continuation = continue_shared_prompt_turn_after_preparation(
+                &mut workspace_snapshot,
+                candidate,
+                SharedPromptTurnContinueInput {
+                    start,
+                    profile_outcome,
+                    precheck_outcome,
+                    ai_tool_configuration,
+                    project_configuration,
+                    runtime_reasoning_effort,
+                    provider_reasoning_effort: active_reasoning_selection_effort(
+                        &agent_runtime.provider_configuration,
+                    ),
+                    patch_visible_user_prompt_record: runs_user_prompt_precheck,
+                },
+            )?;
+            continuation_result = Some(continuation);
+            Ok(())
+        })?;
+    if !vmm_commit.applied {
+        return Err(format!(
+            "Core VMM Provider-boundary command `{vmm_command_id}` was already committed; duplicate Provider dispatch is rejected."
+        ));
+    }
+    // continuation must exist because a newly applied command always runs its mutator.
+    // continuation 必须存在，因为新应用命令始终会运行其变更器。
+    let continuation = continuation_result.ok_or_else(|| {
+        format!(
+            "Core VMM Provider-boundary command `{vmm_command_id}` committed without a continuation result."
+        )
+    })?;
     webui_trace(
         "precheck_continue_request_ready",
         format!(
@@ -400,27 +439,9 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
             current_unix_millis_value().saturating_sub(task_session_root_started_at)
         ),
     );
-    // A changed lease or anchor must be durable before the provider can observe its prompt text.
-    // 已变化的租约或锚点必须在 Provider 观察到对应提示词文本前完成持久化。
-    let vmm_state_after_precheck = workspace_snapshot
-        .session_runtime_state
-        .get(&session_id)
-        .map(|runtime_state| runtime_state.vmm_session_memory.clone())
-        .ok_or_else(|| format!("会话 `{session_id}` 缺少 VMM 运行态，无法完成请求前持久化。"))?;
-    // vmm_state_changed freezes whether the committed draft must advance independent persistence.
-    // vmm_state_changed 固化已提交草稿是否必须推进独立持久化。
-    let vmm_state_changed = vmm_state_after_precheck.revision != vmm_revision_before_precheck;
-    // changed_vmm_session_dir validates the exact persistence target before shared-state commit.
-    // changed_vmm_session_dir 在共享状态提交前验证精确持久化目标。
-    let changed_vmm_session_dir = if vmm_state_changed {
-        Some(request.task_session_store_root.clone().ok_or_else(|| {
-            format!("会话 `{session_id}` 缺少分段目录，无法在 Provider 请求前持久化 VMM 状态。")
-        })?)
-    } else {
-        None
-    };
-    // The authoritative in-memory draft commits before its recoverable independent file projection.
-    // 权威内存草稿先于其可恢复的独立文件投影提交。
+    // vmm_state_after_precheck is the already persisted controller-confirmed snapshot.
+    // vmm_state_after_precheck 是已经持久化并由控制器确认的快照。
+    let vmm_state_after_precheck = vmm_commit.state.clone();
     // now timestamps the authoritative pre-provider workspace transition.
     // now 为权威的 Provider 调用前工作区转换提供时间戳。
     let now = current_unix_millis_text();
@@ -452,16 +473,6 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         session_id,
         SessionRunPhase::Preparing,
     )?;
-    if let Some(session_dir) = changed_vmm_session_dir.as_deref() {
-        // Advancing the VMM lineage prevents queued older runtime snapshots from reaching disk.
-        // 推进 VMM 谱系可阻止排队中的旧运行态快照触达磁盘。
-        invalidate_webui_session_vmm_persist_version(state, session_id)?;
-        vulcan_workspace_store::workspace_store::persist_session_vmm_state_before_provider_request(
-            session_dir,
-            &session_id.to_string(),
-            &vmm_state_after_precheck,
-        )?;
-    }
     // The VMM Hook projection refreshes only after authoritative memory and required disk state agree.
     // VMM Hook 投影仅在权威内存与所需磁盘状态一致后刷新。
     // vmm_snapshot_started_at measures the derived Hook projection refresh.
@@ -735,6 +746,9 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
     run_precheck: bool,
 ) {
     let session_id = start.session_id;
+    // preparation_turn_id remains available for exact VMM failure cleanup after start moves into continuation.
+    // preparation_turn_id 在 start 移入续接流程后仍用于精确的 VMM 失败清理。
+    let preparation_turn_id = start.preparation_turn_id.clone();
     webui_trace(
         "prompt_prepare_task_spawn",
         format!("session={session_id} run_precheck={run_precheck}"),
@@ -816,6 +830,7 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
                     &controller_runtime,
                     &agent_runtime,
                     session_id,
+                    &preparation_turn_id,
                     &error,
                 ) {
                     eprintln!(
@@ -933,6 +948,8 @@ pub(crate) fn start_webui_precheck_or_continue(
 /// `agent_runtime` 提供发出工作台快照所需的投影配置。
 /// `session_id` selects the failed prompt turn.
 /// `session_id` 选择失败的提示词回合。
+/// `failed_turn_id` identifies the exact logical VMM owner that must be abandoned.
+/// `failed_turn_id` 标识必须放弃的精确 VMM 逻辑所有者。
 /// `error` describes the continuation failure.
 /// `error` 描述 continuation 失败原因。
 ///
@@ -946,6 +963,7 @@ pub(crate) fn mark_webui_prompt_preparation_failed(
     controller_runtime: &ControllerRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
+    failed_turn_id: &str,
     error: &str,
 ) -> Result<(), String> {
     // workspace_snapshot is a detached failure draft validated before terminal runtime side effects.
@@ -989,6 +1007,13 @@ pub(crate) fn mark_webui_prompt_preparation_failed(
     // owning_project_id is derived from the validated failure draft before ownership is terminated.
     // owning_project_id 在终止所有权前从已校验失败草稿派生。
     let owning_project_id = owning_project_id_for_session(&workspace_snapshot, session_id);
+    abandon_failed_webui_prompt_vmm_turn(
+        state,
+        controller_runtime,
+        session_id,
+        failed_turn_id,
+        &now,
+    )?;
     {
         // hook_runtime termination removes the logical turn before any later submission can reuse it.
         // hook_runtime 终止会在后续提交复用前移除逻辑回合。
@@ -1036,5 +1061,63 @@ pub(crate) fn mark_webui_prompt_preparation_failed(
             Some(String::from("precheck_continue_failed")),
         );
     });
+    Ok(())
+}
+
+/// Abandons the exact failed prompt turn through the session's sole Core VMM controller.
+/// 通过会话唯一的 Core VMM Controller 放弃精确的失败提示词回合。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the process-wide session controller registry.
+/// `state` 持有进程级会话 Controller Registry。
+/// `controller_runtime` fixes the sole durable data root for this process.
+/// `controller_runtime` 固定本进程唯一的持久数据根目录。
+/// `session_id` selects the exact session controller.
+/// `session_id` 选择精确的会话 Controller。
+/// `failed_turn_id` is the logical turn whose active ownership must be cleared.
+/// `failed_turn_id` 是必须清除活动所有权的逻辑回合。
+/// `updated_at` is the shared failure-cleanup timestamp.
+/// `updated_at` 是共享的失败清理时间戳。
+///
+/// # Returns
+/// 返回值
+/// Success when no VMM turn was registered or the exact active turn is durably abandoned.
+/// 未登记 VMM 回合或精确活动回合已持久放弃时返回成功。
+fn abandon_failed_webui_prompt_vmm_turn(
+    state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    failed_turn_id: &str,
+    updated_at: &str,
+) -> Result<(), String> {
+    // registry is cloned without retaining the shared service lock during controller I/O.
+    // registry 在 Controller I/O 期间不保留共享服务锁。
+    let registry = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .vmm_controller_registry
+        .clone();
+    // controller is the sole authority for active VMM logical-turn ownership.
+    // controller 是 VMM 活动逻辑回合所有权的唯一权威。
+    let controller = registry.get_or_open(&controller_runtime.data_root, session_id, updated_at)?;
+    // active_turn_id distinguishes failures before the Provider-boundary command from committed failures.
+    // active_turn_id 区分 Provider 边界命令前的失败与已经提交的失败。
+    let active_turn_id = controller.snapshot()?.active_turn_id;
+    let Some(active_turn_id) = active_turn_id else {
+        return Ok(());
+    };
+    if active_turn_id != failed_turn_id {
+        return Err(format!(
+            "Failed prompt turn `{failed_turn_id}` does not own Core VMM active turn `{active_turn_id}` for session `{session_id}`."
+        ));
+    }
+    // command_id makes repeated cleanup harmless after the durable abandonment succeeds.
+    // command_id 使持久放弃成功后的重复清理不产生副作用。
+    let command_id = format!("preparation_failed:{failed_turn_id}");
+    controller.execute_command(&command_id, updated_at, |candidate| {
+        candidate.abandon_active_turn(failed_turn_id, updated_at)?;
+        Ok(())
+    })?;
     Ok(())
 }

@@ -137,6 +137,9 @@ export interface VmmMemoryActionRequest {
   // Stable action id.
   // 稳定动作标识。
   action: string;
+  // Stable UUID identifying this exact user operation across transport retries.
+  // 跨传输重试标识本次精确用户操作的稳定 UUID。
+  commandId: string;
   // VMM configuration scope, either global or project.
   // VMM 配置作用域，可为 global 或 project。
   scope: string;

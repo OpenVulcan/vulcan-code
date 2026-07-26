@@ -924,6 +924,21 @@ pub(super) async fn load_hydrated_session_workbench(
                 .server_states()
         })
         .unwrap_or_default();
+    // vmm_controller_registry opens the hydrated session before producing read-only UI snapshots.
+    // vmm_controller_registry 在生成只读界面快照前打开已水合会话。
+    let vmm_controller_registry = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .vmm_controller_registry
+        .clone();
+    let _ = vmm_controller_registry.get_or_open(
+        &read_context.controller_runtime.data_root,
+        parsed_session_id,
+        &current_unix_millis_value().to_string(),
+    )?;
+    // vmm_session_states contain no mutable controller ownership.
+    // vmm_session_states 不包含可变控制器所有权。
+    let vmm_session_states = vmm_controller_registry.snapshots()?;
     let mut workbench = workbench_from_runtime(WorkbenchRuntimeProjection {
         controller: &read_context.controller_runtime,
         command_session_runtime: projection_context
@@ -938,6 +953,7 @@ pub(super) async fn load_hydrated_session_workbench(
         provider_configuration: &projection_context.provider_configuration,
         ai_tool_configuration: &projection_context.ai_tool_configuration,
         workspace: &refreshed_snapshot,
+        vmm_session_states: &vmm_session_states,
         surface_messages: surface_messages.as_slice(),
         subagent_navigation,
         pending_questions: pending_question_snapshots_from_agent_runtime(

@@ -38,6 +38,7 @@ fn retained_session_owner_project_blocks_submission_during_lifecycle_transition(
         &state,
         None,
         PromptSessionTarget::Existing(session_id),
+        None,
     )
     .err()
     .expect("project lifecycle reservation should reject submission");
@@ -88,6 +89,7 @@ fn retained_archived_session_is_rejected_before_admission() {
         &state,
         None,
         PromptSessionTarget::Existing(session_id),
+        None,
     )
     .err()
     .expect("archived target should be rejected");
@@ -134,6 +136,7 @@ fn session_admission_reservation_rejects_retained_submission_preflight() {
         &state,
         None,
         PromptSessionTarget::Existing(session_id),
+        None,
     )
     .err()
     .expect("session reservation should reject submission");
@@ -170,6 +173,7 @@ fn existing_submission_admission_blocks_competitor_and_authorizes_owner() {
         &state,
         None,
         PromptSessionTarget::Existing(session_id),
+        None,
     )
     .expect("first existing submission should reserve admission");
 
@@ -179,6 +183,7 @@ fn existing_submission_admission_blocks_competitor_and_authorizes_owner() {
         &state,
         None,
         PromptSessionTarget::Existing(session_id),
+        None,
     )
     .err()
     .expect("competing submission should be rejected");
@@ -225,6 +230,95 @@ fn existing_submission_admission_blocks_competitor_and_authorizes_owner() {
     assert!(webui_session_kernel_has_active_turn(&guard, session_id));
 }
 
+/// Verifies an outer destructive transaction can authorize only its nested prompt replay.
+/// 验证外层破坏性事务只能授权其自身的嵌套提示词重放。
+///
+/// # Parameters
+/// 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// 返回值
+/// This test returns no value and fails if preauthorization leaks, rejects its owner, or admits a competitor.
+/// 此测试无返回值；若预授权泄漏、拒绝所有者或放行竞争者则失败。
+#[test]
+fn preauthorized_existing_submission_preserves_outer_admission_ownership() {
+    // session_id identifies the exact idle session owned across destructive rewrite and replay.
+    // session_id 标识跨破坏性重写与重放持有的精确空闲会话。
+    let session_id = SessionId::new_v4();
+    // state owns retained workspace, admission rows, and the simulated runtime kernel.
+    // state 持有保留工作区、准入行与模拟运行时内核。
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(
+        test_service_state_with_parent_session(session_id),
+    ));
+    // outer_guard retains the PromptSubmission row for the complete edit transaction.
+    // outer_guard 在完整编辑事务期间保留 PromptSubmission 行。
+    let outer_guard = begin_existing_prompt_submission_exclusion(&state, session_id, "编辑提示词")
+        .expect("outer edit should reserve idle session");
+    // authorization is a non-owning exact token whose lifetime remains bounded by outer_guard.
+    // authorization 是一个无所有权的精确令牌，其生命周期仍受 outer_guard 约束。
+    let authorization = outer_guard
+        .existing_submission_authorization(session_id)
+        .expect("outer guard should expose exact authorization");
+    // preflight must accept only the already-current exact owner instead of inserting a second row.
+    // preflight 必须只接受已经生效的精确所有者，而不是插入第二行。
+    let preflight = prepare_retained_submission_preflight(
+        &state,
+        None,
+        PromptSessionTarget::Existing(session_id),
+        Some(authorization),
+    )
+    .expect("nested replay should accept outer authorization");
+
+    // competitor_error proves an ordinary submission cannot reuse the outer transaction's reservation.
+    // competitor_error 证明普通提交不能复用外层事务的预留。
+    let competitor_error = prepare_retained_submission_preflight(
+        &state,
+        None,
+        PromptSessionTarget::Existing(session_id),
+        None,
+    )
+    .err()
+    .expect("ordinary competitor must remain blocked");
+    assert!(competitor_error.contains("user prompt submission"));
+    // materialized_session represents the exact existing target authorized by the edit transaction.
+    // materialized_session 表示编辑事务授权的精确已有目标。
+    let materialized_session = MaterializedPromptSession {
+        session_id,
+        project_id: Some(String::from("project-a")),
+        session_title: String::from("父会话"),
+        workspace_path: String::new(),
+        kind: PromptSessionMaterializationKind::Existing,
+    };
+    assert_eq!(
+        preflight
+            .turn_admission
+            .kernel_reservation_id(&materialized_session)
+            .expect("nested replay should match exact target"),
+        Some(authorization.reservation_id)
+    );
+
+    drop(preflight);
+    assert_eq!(
+        state
+            .lock()
+            .expect("service state lock")
+            .session_turn_admission_reservations
+            .get(&session_id)
+            .map(|reservation| reservation.reservation_id),
+        Some(authorization.reservation_id)
+    );
+    drop(outer_guard);
+    assert!(
+        !state
+            .lock()
+            .expect("service state lock after outer release")
+            .session_turn_admission_reservations
+            .contains_key(&session_id)
+    );
+}
+
 /// Verifies a stale submission owner cannot bypass or delete a replacement admission row.
 /// 验证过期提交所有者无法绕过或删除替代准入行。
 ///
@@ -253,6 +347,7 @@ fn stale_submission_admission_cannot_start_or_release_replacement() {
         &state,
         None,
         PromptSessionTarget::Existing(session_id),
+        None,
     )
     .expect("first submission should reserve admission");
     // materialized_session is the exact existing target matched by the stale guard.
@@ -340,6 +435,7 @@ fn new_session_project_admission_blocks_lifecycle_transition_until_release() {
         &state,
         Some("project-a"),
         PromptSessionTarget::Create,
+        None,
     )
     .expect("new session should reserve its explicit project");
 
@@ -388,7 +484,7 @@ fn unresolved_project_admission_blocks_lifecycle_transition_during_workspace_loa
     // preflight owns the global unresolved selection scope through the load window.
     // preflight 在加载窗口内拥有全局未解析选择作用域。
     let preflight =
-        prepare_retained_submission_preflight(&state, None, PromptSessionTarget::Create)
+        prepare_retained_submission_preflight(&state, None, PromptSessionTarget::Create, None)
             .expect("draft submission should reserve unresolved project selection");
 
     // conflict proves no exact lifecycle target can overtake unresolved selection.
@@ -426,6 +522,7 @@ fn exact_project_admission_rejects_cross_project_materialization() {
         &state,
         Some("project-a"),
         PromptSessionTarget::Create,
+        None,
     )
     .expect("explicit project should reserve successfully");
     // materialized_session deliberately claims project-b to exercise ownership validation.
@@ -473,6 +570,7 @@ fn stale_project_admission_cannot_release_replacement_owner() {
         &state,
         Some("project-a"),
         PromptSessionTarget::Create,
+        None,
     )
     .expect("first project admission should succeed");
     // replacement_id identifies the newer authoritative owner.
@@ -546,7 +644,7 @@ fn implicit_new_session_admission_pins_retained_default_project() {
     // preflight selects and owns the retained default before any asynchronous load can interleave.
     // preflight 在任何异步加载可能插入前选择并拥有保留默认项目。
     let preflight =
-        prepare_retained_submission_preflight(&state, None, PromptSessionTarget::Create)
+        prepare_retained_submission_preflight(&state, None, PromptSessionTarget::Create, None)
             .expect("implicit submission should reserve retained default project");
 
     assert_eq!(
