@@ -621,6 +621,16 @@ impl ProtocolStreamDecoder for AnthropicStreamDecoder {
         event_name: Option<&str>,
         data: &str,
     ) -> Result<Vec<AiStreamEvent>, ProtocolConversionError> {
+        // A gateway may append the transport-only OpenAI sentinel after Anthropic's semantic message_stop.
+        // 网关可能在 Anthropic 语义 message_stop 之后追加仅用于传输收尾的 OpenAI 哨兵。
+        if data.trim() == "[DONE]" {
+            if self.terminal {
+                return Ok(Vec::new());
+            }
+            return Err(ProtocolConversionError::new(
+                "Anthropic stream received [DONE] before message_stop.",
+            ));
+        }
         if self.terminal {
             return Err(ProtocolConversionError::new(
                 "Anthropic emitted data after a terminal event.",
@@ -1273,5 +1283,34 @@ mod tests {
             }
         );
         assert_eq!(usage.cache_write_tokens, UsageValue::Unknown);
+    }
+
+    /// Verifies a gateway transport sentinel after message_stop does not invalidate completed output.
+    /// 验证 message_stop 后的网关传输哨兵不会使已完成输出失效。
+    #[test]
+    fn gateway_done_after_message_stop_is_ignored() {
+        let mut decoder = AnthropicStreamDecoder::new(String::from("execution"), BTreeMap::new());
+        let completed = decoder
+            .push_sse(Some("message_stop"), r#"{"type":"message_stop"}"#)
+            .expect("message_stop should complete the stream");
+        assert!(
+            completed
+                .iter()
+                .any(|event| matches!(event, AiStreamEvent::ResponseCompleted))
+        );
+
+        let sentinel = decoder
+            .push_sse(Some("done"), "[DONE]")
+            .expect("the transport sentinel should be ignored after message_stop");
+        assert!(sentinel.is_empty());
+        assert!(
+            decoder
+                .finish()
+                .expect("the stream should remain valid")
+                .is_empty()
+        );
+
+        let mut premature = AnthropicStreamDecoder::new(String::from("premature"), BTreeMap::new());
+        assert!(premature.push_sse(Some("done"), "[DONE]").is_err());
     }
 }

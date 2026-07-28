@@ -397,6 +397,7 @@ pub(crate) fn parse_reasoning_effort(value: &str) -> Option<ReasoningEffortLevel
     match value.trim().to_ascii_lowercase().as_str() {
         "off" => Some(ReasoningEffortLevel::Off),
         "none" => Some(ReasoningEffortLevel::None),
+        "adaptive" => Some(ReasoningEffortLevel::Adaptive),
         "minimal" => Some(ReasoningEffortLevel::Minimal),
         "low" => Some(ReasoningEffortLevel::Low),
         "medium" => Some(ReasoningEffortLevel::Medium),
@@ -872,6 +873,16 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies every public adaptive reasoning wire value is accepted by the workbench parser.
+    /// 验证工作台解析器接受公共自适应推理传输值。
+    #[test]
+    fn reasoning_effort_parser_accepts_adaptive() {
+        assert_eq!(
+            parse_reasoning_effort("adaptive"),
+            Some(ReasoningEffortLevel::Adaptive)
+        );
+    }
 
     /// Verifies the backend publishes only effort levels declared by the active model.
     /// 验证后端只发布当前模型声明的推理档位。

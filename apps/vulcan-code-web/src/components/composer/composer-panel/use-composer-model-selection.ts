@@ -188,7 +188,7 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
     if (activeModelChoiceKey) {
       setModelChoice(activeModelChoiceKey);
     }
-  }, [activeModelChoiceKey]);
+  }, [activeModelChoiceKey, availableModelChoices]);
 
   React.useEffect(() => {
     setReasoningEffort((current) => {

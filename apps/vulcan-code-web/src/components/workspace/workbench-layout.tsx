@@ -1093,6 +1093,9 @@ export function WorkbenchLayout(props: {
   // handleSelectConversation 选择会话并持久化它的已读标记。
   const handleSelectConversation = React.useCallback((conversationId: string) => {
     handleOpenWorkspaceChat();
+    // Update the async authority guard before the service can resolve from an already-retained session.
+    // 在服务可能从已保留会话立即返回前，先同步更新异步权威保护。
+    selectedConversationIdRef.current = conversationId;
     setSelectedConversationId(conversationId);
     setWorkbenchState((current) => markConversationLocallyRead(current, conversationId));
     void selectConversation(conversationId)
