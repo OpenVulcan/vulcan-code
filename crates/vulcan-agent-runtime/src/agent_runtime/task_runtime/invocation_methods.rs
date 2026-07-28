@@ -1238,6 +1238,7 @@ pub(super) fn agent_orchestration_info_models(
         .public_ai_runtime()
         .ok_or_else(|| String::from("The service has not installed the public AI runtime."))?;
     let configuration = runtime.configuration_snapshot()?;
+    let providers = runtime.effective_providers(&configuration)?;
     let catalogs = runtime.catalog_snapshot()?;
     let session_selector = configuration
         .active
@@ -1251,8 +1252,7 @@ pub(super) fn agent_orchestration_info_models(
         let Some(catalog) = catalogs.get(connection.id.as_str()) else {
             continue;
         };
-        let provider_display_name = runtime
-            .providers()
+        let provider_display_name = providers
             .provider(connection.provider_id.as_str())
             .map(|provider| provider.display_name.clone())
             .unwrap_or_else(|| connection.provider_id.clone());

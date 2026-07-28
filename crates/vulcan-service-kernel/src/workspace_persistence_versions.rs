@@ -511,6 +511,7 @@ fn reasoning_effort_level_from_public(
 ) -> ReasoningEffortLevel {
     match effort {
         vulcan_ai_contract::ReasoningEffort::None => ReasoningEffortLevel::None,
+        vulcan_ai_contract::ReasoningEffort::Adaptive => ReasoningEffortLevel::Adaptive,
         vulcan_ai_contract::ReasoningEffort::Minimal => ReasoningEffortLevel::Minimal,
         vulcan_ai_contract::ReasoningEffort::Low => ReasoningEffortLevel::Low,
         vulcan_ai_contract::ReasoningEffort::Medium => ReasoningEffortLevel::Medium,
@@ -527,6 +528,7 @@ fn reasoning_effort_wire_value(effort: ReasoningEffortLevel) -> &'static str {
     match effort {
         ReasoningEffortLevel::Off => "off",
         ReasoningEffortLevel::None => "none",
+        ReasoningEffortLevel::Adaptive => "adaptive",
         ReasoningEffortLevel::Minimal => "minimal",
         ReasoningEffortLevel::Low => "low",
         ReasoningEffortLevel::Medium => "medium",

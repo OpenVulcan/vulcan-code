@@ -4,7 +4,7 @@
 use crate::{
     AccountUsageQueryKind, AuthenticationProjection, CredentialBillingKind, CredentialMode,
     CredentialProfile, ModelDiscoveryKind, OAuthProviderKind, ProtocolRoute, ProviderDescriptor,
-    ServiceEntry,
+    ProviderKind, ServiceEntry,
 };
 use std::collections::BTreeMap;
 use vulcan_ai_protocols::{
@@ -25,6 +25,7 @@ pub fn minimax_descriptor() -> ProviderDescriptor {
     ProviderDescriptor {
         id: String::from("minimax"),
         display_name: String::from("MiniMax"),
+        kind: ProviderKind::System,
         service_entries: vec![
             service_entry(ServiceEntrySpec {
                 id: "global",
@@ -65,6 +66,7 @@ pub fn openrouter_descriptor() -> ProviderDescriptor {
     ProviderDescriptor {
         id: String::from("openrouter"),
         display_name: String::from("OpenRouter"),
+        kind: ProviderKind::System,
         service_entries: vec![service_entry(ServiceEntrySpec {
             id: "public-api",
             display_name: "Public API",
@@ -73,7 +75,7 @@ pub fn openrouter_descriptor() -> ProviderDescriptor {
                 "api-key",
                 "API Key",
                 CredentialBillingKind::ProviderManaged,
-                AccountUsageQueryKind::OpenRouterCurrentKey,
+                AccountUsageQueryKind::OpenRouterCredits,
                 None,
             )],
             authentication: AuthenticationProjection::BearerAuthorization,
@@ -103,6 +105,7 @@ pub fn openai_descriptor() -> ProviderDescriptor {
     ProviderDescriptor {
         id: String::from("openai"),
         display_name: String::from("OpenAI"),
+        kind: ProviderKind::System,
         service_entries: vec![
             service_entry(ServiceEntrySpec {
                 id: "public-api",
@@ -164,6 +167,7 @@ pub fn anthropic_descriptor() -> ProviderDescriptor {
     ProviderDescriptor {
         id: String::from("anthropic"),
         display_name: String::from("Anthropic"),
+        kind: ProviderKind::System,
         service_entries: vec![
             service_entry(ServiceEntrySpec {
                 id: "public-api",
@@ -225,6 +229,7 @@ pub fn google_descriptor() -> ProviderDescriptor {
     ProviderDescriptor {
         id: String::from("google"),
         display_name: String::from("Google"),
+        kind: ProviderKind::System,
         service_entries: vec![
             service_entry(ServiceEntrySpec {
                 id: "gemini-api",

@@ -113,7 +113,7 @@ pub struct AccountUsageSnapshot {
     pub balance_amount: Option<String>,
     /// Provider-reported quota windows.
     /// 供应商报告的额度窗口。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub quota_windows: Vec<AccountUsageWindow>,
     /// Optional observation timestamp.
     /// 可选观测时间戳。
@@ -123,4 +123,32 @@ pub struct AccountUsageSnapshot {
     /// 可选的受控刷新消息。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refresh_message: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AccountUsageAvailability, AccountUsageSnapshot};
+    use serde_json::json;
+
+    /// Verifies that empty quota windows remain explicit at the WebUI contract boundary.
+    /// 验证空额度窗口在 WebUI 契约边界仍保持显式数组。
+    #[test]
+    fn serializes_empty_quota_windows_as_an_array() {
+        let snapshot = AccountUsageSnapshot {
+            credential_id: "credential-openrouter".to_string(),
+            availability: AccountUsageAvailability::Supported,
+            plan_name: None,
+            used_amount: None,
+            remaining_amount: None,
+            currency: None,
+            balance_amount: Some("12.50".to_string()),
+            quota_windows: Vec::new(),
+            observed_at: None,
+            refresh_message: None,
+        };
+
+        let encoded = serde_json::to_value(snapshot).expect("account usage should serialize");
+
+        assert_eq!(encoded["quota_windows"], json!([]));
+    }
 }

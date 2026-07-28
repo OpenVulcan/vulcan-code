@@ -5,6 +5,19 @@ use crate::ServiceEntry;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// Identifies whether a provider definition is code-owned or user-owned.
+/// 标识供应商定义由代码持有还是由用户持有。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderKind {
+    /// Immutable provider implemented by Vulcan Code.
+    /// 由 Vulcan Code 实现的不可变供应商。
+    System,
+    /// Editable compatibility provider created by the user.
+    /// 由用户创建且可编辑的兼容供应商。
+    Custom,
+}
+
 /// Describes one registered provider adapter.
 /// 描述一个已注册供应商适配器。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -15,6 +28,9 @@ pub struct ProviderDescriptor {
     /// User-visible provider name.
     /// 用户可见供应商名称。
     pub display_name: String,
+    /// Definition ownership and editability kind.
+    /// 定义所有权与可编辑性类别。
+    pub kind: ProviderKind,
     /// Registered service entries.
     /// 已注册服务入口。
     pub service_entries: Vec<ServiceEntry>,
@@ -44,6 +60,44 @@ impl ProviderRegistry {
         registry.register(crate::providers::openai_descriptor())?;
         registry.register(crate::providers::anthropic_descriptor())?;
         registry.register(crate::providers::google_descriptor())?;
+        Ok(registry)
+    }
+
+    /// Builds the effective registry from immutable system providers and persisted custom providers.
+    /// 根据不可变系统供应商与持久化自定义供应商构建有效注册表。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `custom_providers` contains user-owned compatibility descriptors keyed by their exact identifier.
+    /// `custom_providers` 包含按精确标识索引的用户自有兼容供应商描述。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A validated registry containing both ownership classes.
+    /// 返回包含两种所有权类别的已校验注册表。
+    pub fn effective(
+        custom_providers: &BTreeMap<String, ProviderDescriptor>,
+    ) -> Result<Self, String> {
+        let mut registry = Self::first_batch()?;
+        for (provider_id, provider) in custom_providers {
+            if provider_id != &provider.id {
+                return Err(format!(
+                    "Custom provider map key `{provider_id}` does not match descriptor `{}`.",
+                    provider.id
+                ));
+            }
+            if provider.kind != ProviderKind::Custom {
+                return Err(format!(
+                    "Persisted provider `{provider_id}` is not marked as custom."
+                ));
+            }
+            if !provider.id.starts_with("custom:") {
+                return Err(format!(
+                    "Custom provider `{provider_id}` must use the `custom:` identifier prefix."
+                ));
+            }
+            registry.register(provider.clone())?;
+        }
         Ok(registry)
     }
 

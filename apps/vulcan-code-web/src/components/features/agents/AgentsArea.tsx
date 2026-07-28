@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Bot, FolderOpen, Maximize2, Minimize2, Pencil, Plus, RefreshCw, RotateCcw, Save, Trash2, X } from "lucide-react"
+import { Bot, FolderOpen, Pencil, Plus, RefreshCw, RotateCcw, Save, Trash2, X } from "lucide-react"
 import { toast } from "sonner"
 
 import { ModelPickerControl, modelPickerChoiceKey } from "@/components/composer/model-picker-control"
@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { StatusPill } from "@/components/shared/status"
+import { WorkspaceToolPanelMenu } from "@/components/workspace/workspace-tool-panel-menu"
 import { useI18n } from "@/i18n"
 import type { CapabilityPolicyMode, SubagentCatalogSummary, SubagentCategorySummary, SubagentDefinitionSaveRequest, SubagentDefinitionSummary, WorkbenchSnapshot } from "@/types"
 import type { AgentActionProps } from "./agent-area-types"
@@ -464,58 +465,40 @@ export function FloatingAgentCategoryMenu(props: {
     return selected ? localizedCategoryName(selected, locale) : props.selectedCategoryId
   }, [categories, locale, props.selectedCategoryId, text])
 
-  if (!props.expanded) {
-    return (
+  return (
+    <WorkspaceToolPanelMenu
+      activeLabel={activeLabel}
+      ariaLabel={text("智能体分类", "Agent categories")}
+      className="agent-category-floating-menu"
+      collapseLabel={t("workspaceToolPanel.collapseToPill")}
+      expanded={props.expanded}
+      expandLabel={t("workspaceToolPanel.expandState")}
+      heading={text("分类", "Categories")}
+      onExpandedChange={props.onExpandedChange}
+    >
       <button
-        className="workspace-tool-panel-menu-collapsed"
-        onClick={() => props.onExpandedChange(true)}
-        title={t("workspaceToolPanel.expandState")}
+        className={`workspace-tool-panel-menu-row agent-category-floating-row ${props.selectedCategoryId === "" ? "active" : ""}`}
+        onClick={() => props.onSelectCategory("")}
         type="button"
       >
-        <span>{activeLabel}</span>
-        <Maximize2 size={13} />
+        <Bot size={15} />
+        <span>{text("全部", "All")}</span>
+        <strong>{props.workbench.subagentCatalog.definitions.length}</strong>
       </button>
-    )
-  }
-
-  return (
-    <aside className="workspace-tool-panel-menu agent-category-floating-menu" aria-label={text("智能体分类", "Agent categories")}>
-      <div className="workspace-tool-panel-menu-header">
-        <span>{text("分类", "Categories")}</span>
+      {categories.map((category) => (
         <button
-          aria-label={t("workspaceToolPanel.collapseToPill")}
-          className="workspace-tool-panel-menu-icon-button"
-          onClick={() => props.onExpandedChange(false)}
+          className={`workspace-tool-panel-menu-row agent-category-floating-row ${props.selectedCategoryId === category.categoryId ? "active" : ""}`}
+          key={category.categoryId}
+          onClick={() => props.onSelectCategory(category.categoryId)}
+          title={localizedCategoryDescription(category, locale) ?? category.categoryId}
           type="button"
         >
-          <Minimize2 size={13} />
+          <span className="agent-category-floating-icon" style={{ backgroundColor: colorSwatchValue(category.color) }}>{category.emoji}</span>
+          <span>{localizedCategoryName(category, locale)}</span>
+          <strong>{countByCategory.get(category.categoryId) ?? 0}</strong>
         </button>
-      </div>
-      <div className="workspace-tool-panel-menu-list">
-        <button
-          className={`workspace-tool-panel-menu-row agent-category-floating-row ${props.selectedCategoryId === "" ? "active" : ""}`}
-          onClick={() => props.onSelectCategory("")}
-          type="button"
-        >
-          <Bot size={15} />
-          <span>{text("全部", "All")}</span>
-          <strong>{props.workbench.subagentCatalog.definitions.length}</strong>
-        </button>
-        {categories.map((category) => (
-          <button
-            className={`workspace-tool-panel-menu-row agent-category-floating-row ${props.selectedCategoryId === category.categoryId ? "active" : ""}`}
-            key={category.categoryId}
-            onClick={() => props.onSelectCategory(category.categoryId)}
-            title={localizedCategoryDescription(category, locale) ?? category.categoryId}
-            type="button"
-          >
-            <span className="agent-category-floating-icon" style={{ backgroundColor: colorSwatchValue(category.color) }}>{category.emoji}</span>
-            <span>{localizedCategoryName(category, locale)}</span>
-            <strong>{countByCategory.get(category.categoryId) ?? 0}</strong>
-          </button>
-        ))}
-      </div>
-    </aside>
+      ))}
+    </WorkspaceToolPanelMenu>
   )
 }
 

@@ -142,6 +142,9 @@ pub enum ModelDiscoveryKind {
     /// Anthropic public paginated models endpoint.
     /// Anthropic 公共分页模型端点。
     Anthropic,
+    /// Anthropic-compatible models endpoint relative to a versioned API base URL.
+    /// 相对于带版本 API 基础 URL 的 Anthropic 兼容模型端点。
+    AnthropicCompatible,
     /// Google Gemini public paginated models endpoint.
     /// Google Gemini 公共分页模型端点。
     Gemini,
@@ -186,9 +189,9 @@ pub enum AccountUsageQueryKind {
     /// MiniMax Token Plan quota endpoint.
     /// MiniMax Token Plan 配额端点。
     MiniMaxTokenPlan,
-    /// OpenRouter current-key metadata endpoint.
-    /// OpenRouter 当前密钥元数据端点。
-    OpenRouterCurrentKey,
+    /// OpenRouter account credits endpoint using an optional management key.
+    /// 使用可选管理密钥的 OpenRouter 账号余额端点。
+    OpenRouterCredits,
 }
 
 /// Describes one verified protocol route.
@@ -288,6 +291,10 @@ pub struct CredentialConnection {
     /// Secret-store reference.
     /// 秘密存储引用。
     pub secret_reference: String,
+    /// Optional secret-store reference used only for provider account management queries.
+    /// 仅用于供应商账号管理查询的可选秘密存储引用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub management_secret_reference: Option<String>,
     /// Verified protocol profile identifiers.
     /// 已验证协议 Profile 标识。
     pub verified_protocols: BTreeSet<String>,

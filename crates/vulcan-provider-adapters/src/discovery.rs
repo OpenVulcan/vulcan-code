@@ -1,7 +1,10 @@
 //! Strict credential-scoped model discovery.
 //! 严格的凭据作用域模型发现。
 
-use crate::{ConnectionModel, ConnectionModelCatalog};
+use crate::{
+    ConnectionModel, ConnectionModelCatalog,
+    reasoning_catalog::{FixedReasoningProvider, fixed_reasoning_capabilities},
+};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use vulcan_ai_contract::{
@@ -210,14 +213,24 @@ pub fn parse_openai_model_catalog(
     let models = response
         .data
         .into_iter()
-        .map(|model| ConnectionModel {
-            display_name: model.id.clone(),
-            id: model.id,
-            capabilities: ModelCapabilities {
-                operations: vec![AiOperation::ConversationRespond],
-                evidence_revision: String::from("openai.models.v1"),
-                ..ModelCapabilities::default()
-            },
+        .map(|model| {
+            let reasoning =
+                fixed_reasoning_capabilities(FixedReasoningProvider::OpenAi, model.id.as_str());
+            ConnectionModel {
+                display_name: model.id.clone(),
+                id: model.id,
+                capabilities: ModelCapabilities {
+                    operations: vec![AiOperation::ConversationRespond],
+                    reasoning: reasoning.support,
+                    reasoning_efforts: reasoning.efforts,
+                    evidence_revision: if reasoning.support == CapabilitySupport::Unknown {
+                        String::from("openai.models.v1")
+                    } else {
+                        reasoning.evidence_revision.to_string()
+                    },
+                    ..ModelCapabilities::default()
+                },
+            }
         })
         .collect();
     Ok(ConnectionModelCatalog {
@@ -296,15 +309,25 @@ pub(crate) fn parse_anthropic_model_page(body: &str) -> Result<AnthropicModelPag
     let models = response
         .data
         .into_iter()
-        .map(|model| ConnectionModel {
-            id: model.id,
-            display_name: model.display_name,
-            capabilities: ModelCapabilities {
-                operations: vec![AiOperation::ConversationRespond],
-                prompt_cache: anthropic_prompt_cache(),
-                evidence_revision: String::from("anthropic.models.v1"),
-                ..ModelCapabilities::default()
-            },
+        .map(|model| {
+            let reasoning =
+                fixed_reasoning_capabilities(FixedReasoningProvider::Anthropic, model.id.as_str());
+            ConnectionModel {
+                id: model.id,
+                display_name: model.display_name,
+                capabilities: ModelCapabilities {
+                    operations: vec![AiOperation::ConversationRespond],
+                    reasoning: reasoning.support,
+                    reasoning_efforts: reasoning.efforts,
+                    prompt_cache: anthropic_prompt_cache(),
+                    evidence_revision: if reasoning.support == CapabilitySupport::Unknown {
+                        String::from("anthropic.models.v1")
+                    } else {
+                        reasoning.evidence_revision.to_string()
+                    },
+                    ..ModelCapabilities::default()
+                },
+            }
         })
         .collect();
     Ok(AnthropicModelPage {
@@ -366,18 +389,27 @@ pub(crate) fn parse_gemini_model_page(body: &str) -> Result<GeminiModelPage, Str
                     _ => None,
                 })
                 .collect();
+            let model_id = model
+                .name
+                .strip_prefix("models/")
+                .unwrap_or(model.name.as_str())
+                .to_string();
+            let reasoning =
+                fixed_reasoning_capabilities(FixedReasoningProvider::Google, model_id.as_str());
             ConnectionModel {
-                id: model
-                    .name
-                    .strip_prefix("models/")
-                    .unwrap_or(model.name.as_str())
-                    .to_string(),
+                id: model_id,
                 display_name: model.display_name,
                 capabilities: ModelCapabilities {
                     operations,
                     context_limit: model.input_token_limit,
                     output_limit: model.output_token_limit,
-                    evidence_revision: String::from("gemini.models.v1beta"),
+                    reasoning: reasoning.support,
+                    reasoning_efforts: reasoning.efforts,
+                    evidence_revision: if reasoning.support == CapabilitySupport::Unknown {
+                        String::from("gemini.models.v1beta")
+                    } else {
+                        reasoning.evidence_revision.to_string()
+                    },
                     ..ModelCapabilities::default()
                 },
             }
@@ -437,18 +469,26 @@ pub fn parse_google_code_assist_model_catalog(
     let models = response
         .models
         .into_iter()
-        .map(|(id, model)| ConnectionModel {
-            display_name: model.display_name.unwrap_or_else(|| id.clone()),
-            id,
-            capabilities: ModelCapabilities {
-                operations: vec![AiOperation::ConversationRespond],
-                context_limit: model.max_tokens,
-                output_limit: model.max_output_tokens,
-                evidence_revision: String::from(
-                    "google-code-assist.fetch-available-models.v1internal",
-                ),
-                ..ModelCapabilities::default()
-            },
+        .map(|(id, model)| {
+            let reasoning =
+                fixed_reasoning_capabilities(FixedReasoningProvider::Google, id.as_str());
+            ConnectionModel {
+                display_name: model.display_name.unwrap_or_else(|| id.clone()),
+                id,
+                capabilities: ModelCapabilities {
+                    operations: vec![AiOperation::ConversationRespond],
+                    context_limit: model.max_tokens,
+                    output_limit: model.max_output_tokens,
+                    reasoning: reasoning.support,
+                    reasoning_efforts: reasoning.efforts,
+                    evidence_revision: if reasoning.support == CapabilitySupport::Unknown {
+                        String::from("google-code-assist.fetch-available-models.v1internal")
+                    } else {
+                        reasoning.evidence_revision.to_string()
+                    },
+                    ..ModelCapabilities::default()
+                },
+            }
         })
         .collect();
     Ok(ConnectionModelCatalog {
@@ -474,6 +514,8 @@ pub fn parse_google_code_assist_model_catalog(
 /// 返回模型专属能力集合；未知身份获得保守契约。
 fn minimax_text_capabilities(model_id: &str, protocol_id: &str) -> ModelCapabilities {
     let model_family = minimax_model_family(model_id);
+    let reasoning_contract =
+        fixed_reasoning_capabilities(FixedReasoningProvider::MiniMax, model_id);
     let (input_resources, reasoning, context_limit, prompt_cache) = match model_family {
         MiniMaxTextModelFamily::M3 => (
             Vec::new(),
@@ -509,8 +551,12 @@ fn minimax_text_capabilities(model_id: &str, protocol_id: &str) -> ModelCapabili
             CapabilitySupport::Unknown
         },
         parallel_tool_calling: CapabilitySupport::Unknown,
-        reasoning,
-        reasoning_efforts: Vec::new(),
+        reasoning: if reasoning_contract.support == CapabilitySupport::Unknown {
+            reasoning
+        } else {
+            reasoning_contract.support
+        },
+        reasoning_efforts: reasoning_contract.efforts,
         context_limit,
         // MiniMax documents a combined context limit, not a separate output maximum.
         // MiniMax 文档给出的是输入输出合计上下文限制，而不是独立输出上限。
@@ -521,7 +567,7 @@ fn minimax_text_capabilities(model_id: &str, protocol_id: &str) -> ModelCapabili
         } else {
             Vec::new()
         },
-        evidence_revision: String::from("minimax-compatible-text-api-2026-07-28"),
+        evidence_revision: reasoning_contract.evidence_revision.to_string(),
     }
 }
 

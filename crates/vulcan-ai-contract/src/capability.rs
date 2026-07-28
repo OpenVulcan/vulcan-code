@@ -12,6 +12,9 @@ pub enum ReasoningEffort {
     /// Requests reasoning to be disabled when the selected route exposes that exact level.
     /// 当所选路由明确公开该档位时，请求关闭推理。
     None,
+    /// Requests provider-managed adaptive reasoning without a fixed strength.
+    /// 请求由供应商管理且没有固定强度的自适应推理。
+    Adaptive,
     /// Requests the provider's minimal reasoning effort.
     /// 请求供应商的最小推理强度。
     Minimal,
@@ -46,6 +49,7 @@ impl ReasoningEffort {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::None => "none",
+            Self::Adaptive => "adaptive",
             Self::Minimal => "minimal",
             Self::Low => "low",
             Self::Medium => "medium",

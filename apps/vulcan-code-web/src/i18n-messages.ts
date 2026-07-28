@@ -1249,6 +1249,7 @@ export type TranslationKey =
   | "settings.diagnostics.description"
   | "settings.group.models"
   | "settings.modelProviders"
+  | "settings.credentialManagement"
   | "settings.modelList"
   | "settings.providerRetry"
   | "settings.aiVendors"
@@ -1268,6 +1269,7 @@ export type TranslationKey =
   | "settings.aboutLicenses"
   | "settings.archivedRestore"
   | "settings.modelProviders.description"
+  | "settings.credentialManagement.description"
   | "settings.modelList.description"
   | "settings.providerRetry.description"
   | "settings.aiVendors.description"
@@ -2749,7 +2751,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.tools.description": "工具调用、命令会话与输出",
     "settings.diagnostics.description": "启动日志、错误与运行时事件",
     "settings.group.models": "模型设置",
-    "settings.modelProviders": "模型供应商",
+    "settings.modelProviders": "供应商管理",
+    "settings.credentialManagement": "凭据管理",
     "settings.modelList": "模型列表",
     "settings.providerRetry": "请求重试",
     "settings.aiVendors": "能力供应商",
@@ -2768,7 +2771,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.promptComposer": "提示词组合",
     "settings.aboutLicenses": "关于与许可证",
     "settings.archivedRestore": "归档恢复",
-    "settings.modelProviders.description": "对话模型供应商、当前模型和已启用模型状态。",
+    "settings.modelProviders.description": "查看全部已实现供应商，并管理自定义兼容供应商。",
+    "settings.credentialManagement.description": "管理模型账号、调用协议、用量与默认凭据。",
     "settings.modelList.description": "按供应商查看已启用模型，并核对当前工作台模型。",
     "settings.providerRetry.description": "配置普通错误与 429 限流的重试次数、等待间隔和递增规则。",
     "settings.aiVendors.description": "多个语义 AI 工具共用的能力供应商与路由目标。",
@@ -4247,7 +4251,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.tools.description": "Tool calls, command sessions, and output",
     "settings.diagnostics.description": "Startup logs, errors, and runtime events",
     "settings.group.models": "Model settings",
-    "settings.modelProviders": "Model providers",
+    "settings.modelProviders": "Provider management",
+    "settings.credentialManagement": "Credential management",
     "settings.modelList": "Model list",
     "settings.providerRetry": "Request retry",
     "settings.aiVendors": "Capability vendors",
@@ -4266,7 +4271,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.promptComposer": "Prompt composer",
     "settings.aboutLicenses": "About and licenses",
     "settings.archivedRestore": "Archived restore",
-    "settings.modelProviders.description": "Chat model providers, current model, and enabled model status.",
+    "settings.modelProviders.description": "Review all implemented providers and manage custom compatible providers.",
+    "settings.credentialManagement.description": "Manage model accounts, protocols, usage, and default credentials.",
     "settings.modelList.description": "Review enabled models by provider and the active workbench model.",
     "settings.providerRetry.description": "Configure retry counts, wait intervals, and backoff rules for ordinary failures and 429 rate limits.",
     "settings.aiVendors.description": "Capability vendors and route targets shared by semantic AI tools.",

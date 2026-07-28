@@ -297,10 +297,11 @@ fn current_pending_prompt_model_reference(
         .public_ai_runtime
         .resolve_active_selection(&configuration)
         .ok()?;
-    let provider = agent_runtime
+    let providers = agent_runtime
         .public_ai_runtime
-        .providers()
-        .provider(selection.route.provider.id.as_str())?;
+        .effective_providers(&configuration)
+        .ok()?;
+    let provider = providers.provider(selection.route.provider.id.as_str())?;
     Some(PendingPromptModelReference {
         provider_id: selection.route.provider.id,
         model_id: selection.model.id,

@@ -10,8 +10,9 @@ import {
   ModelListSettingsArea,
 } from "@/components/features/settings/provider-model-settings";
 import {
-  ProvidersArea,
+  CredentialManagementArea,
 } from "@/components/features/settings/provider-list-settings";
+import { ProviderManagementArea } from "@/components/features/settings/provider-management-settings";
 import { ProviderRetrySettingsArea } from "@/components/features/settings/provider-retry-settings";
 import { NotificationSettingsArea } from "@/components/features/settings/notification-settings-area";
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types";
@@ -67,8 +68,11 @@ export interface SettingsFeatureContentProps {
 // SettingsFeatureContent 将设置子页面路由到专用模块。
 export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
   if (props.activeSettingsSubArea === "model-providers") {
+    return <ProviderManagementArea />;
+  }
+  if (props.activeSettingsSubArea === "credential-management") {
     return (
-      <ProvidersArea
+      <CredentialManagementArea
         onProviderPickerOpenChange={props.onProviderPickerOpenChange}
         pickerOpen={props.providerPickerOpen}
       />
@@ -108,9 +112,6 @@ export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
     return <ArchivedRestoreSettingsArea conversations={props.workbench.archivedConversations ?? []} projects={props.workbench.projects} />;
   }
   return (
-    <ProvidersArea
-      onProviderPickerOpenChange={props.onProviderPickerOpenChange}
-      pickerOpen={props.providerPickerOpen}
-    />
+    <ProviderManagementArea />
   );
 }

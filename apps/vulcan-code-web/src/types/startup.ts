@@ -10,6 +10,7 @@ export type MainAreaId = "chat" | "agent-skills" | "skills" | "agents" | "memory
 // SettingsSubAreaId 描述 WebUI 设置壳暴露的设置二级页面。
 export type SettingsSubAreaId =
   | "model-providers"
+  | "credential-management"
   | "model-list"
   | "provider-retry"
   | "ai-vendors"

@@ -162,6 +162,9 @@ pub struct PublicAiRuntime {
     /// Latest controlled synchronization error per connection.
     /// 每个连接最近一次受控同步错误。
     catalog_errors: Arc<RwLock<BTreeMap<String, String>>>,
+    /// Process-local account-usage observations keyed by connection.
+    /// 按连接索引的进程内账号用量观测。
+    usage_cache: Arc<RwLock<BTreeMap<String, AccountUsageSnapshot>>>,
     /// Connection-scoped single-flight locks for renewable credential refresh.
     /// 用于可续期凭据刷新的连接作用域单飞锁。
     refresh_locks: Arc<StdMutex<BTreeMap<String, Arc<AsyncMutex<()>>>>>,
@@ -198,6 +201,7 @@ impl PublicAiRuntime {
             protocols,
             catalogs: Arc::new(RwLock::new(RuntimeConnectionCatalogs::default())),
             catalog_errors: Arc::new(RwLock::new(BTreeMap::new())),
+            usage_cache: Arc::new(RwLock::new(BTreeMap::new())),
             refresh_locks: Arc::new(StdMutex::new(BTreeMap::new())),
             secrets,
             configuration: Arc::new(RwLock::new(PersistedAiConfiguration::default())),
@@ -219,6 +223,25 @@ impl PublicAiRuntime {
     /// 返回严格供应商注册表。
     pub fn providers(&self) -> &ProviderRegistry {
         &self.providers
+    }
+
+    /// Builds the effective provider registry for one immutable configuration snapshot.
+    /// 为一个不可变配置快照构建有效供应商注册表。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration` owns the user-defined compatibility providers for this operation.
+    /// `configuration` 持有本次操作使用的用户自定义兼容供应商。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A validated registry containing system and custom providers.
+    /// 返回包含系统供应商与自定义供应商的已校验注册表。
+    pub fn effective_providers(
+        &self,
+        configuration: &PersistedAiConfiguration,
+    ) -> Result<ProviderRegistry, String> {
+        ProviderRegistry::effective(&configuration.custom_providers)
     }
 
     /// Returns the authoritative standalone configuration snapshot.
@@ -495,16 +518,92 @@ impl PublicAiRuntime {
     ) -> Result<AccountUsageSnapshot, String> {
         let (_, entry, connection) =
             self.resolve_connection_metadata(configuration, connection_id)?;
+        let credential_profile = entry
+            .credential_profile(connection.credential_profile_id.as_str())
+            .ok_or_else(|| {
+                format!(
+                    "Credential profile `{}` is not registered for service entry `{}`.",
+                    connection.credential_profile_id, entry.id
+                )
+            })?;
+        let secret_reference = match credential_profile.account_usage_query {
+            crate::AccountUsageQueryKind::OpenRouterCredits => connection
+                .management_secret_reference
+                .as_deref()
+                .ok_or_else(|| {
+                    String::from(
+                        "Add an optional OpenRouter management key to query account credits.",
+                    )
+                })?,
+            crate::AccountUsageQueryKind::Unsupported
+            | crate::AccountUsageQueryKind::MiniMaxTokenPlan => {
+                connection.secret_reference.as_str()
+            }
+        };
         let secret = self
-            .resolve_fresh_execution_secret(
-                connection.id.as_str(),
-                connection.secret_reference.as_str(),
-            )
+            .resolve_fresh_execution_secret(connection.id.as_str(), secret_reference)
             .await?;
-        Ok(self
+        let snapshot = self
             .metadata_client
             .query_account_usage(&entry, &connection, &secret)
-            .await)
+            .await;
+        self.usage_cache
+            .write()
+            .map_err(|_| String::from("The AI account-usage cache lock is poisoned."))?
+            .insert(connection_id.to_string(), snapshot.clone());
+        Ok(snapshot)
+    }
+
+    /// Returns the complete process-local account-usage cache.
+    /// 返回完整的进程内账号用量缓存。
+    pub fn usage_cache_snapshot(&self) -> Result<BTreeMap<String, AccountUsageSnapshot>, String> {
+        self.usage_cache
+            .read()
+            .map(|cache| cache.clone())
+            .map_err(|_| String::from("The AI account-usage cache lock is poisoned."))
+    }
+
+    /// Removes one stale process-local account-usage observation.
+    /// 移除一个过期的进程内账号用量观测。
+    pub fn remove_connection_usage(&self, connection_id: &str) -> Result<(), String> {
+        self.usage_cache
+            .write()
+            .map_err(|_| String::from("The AI account-usage cache lock is poisoned."))?
+            .remove(connection_id);
+        Ok(())
+    }
+
+    /// Refreshes every configured connection that declares a supported usage query.
+    /// 刷新每个声明支持用量查询的已配置连接。
+    pub async fn refresh_supported_connection_usage(
+        &self,
+        configuration: &PersistedAiConfiguration,
+    ) -> Result<(), String> {
+        for connection in configuration.connection_graph.connections.values() {
+            let (_, entry, _) =
+                self.resolve_connection_metadata(configuration, connection.id.as_str())?;
+            let profile = entry
+                .credential_profile(connection.credential_profile_id.as_str())
+                .ok_or_else(|| {
+                    format!(
+                        "Credential profile `{}` is not registered for service entry `{}`.",
+                        connection.credential_profile_id, entry.id
+                    )
+                })?;
+            let should_refresh = match profile.account_usage_query {
+                crate::AccountUsageQueryKind::Unsupported => false,
+                crate::AccountUsageQueryKind::MiniMaxTokenPlan => true,
+                crate::AccountUsageQueryKind::OpenRouterCredits => {
+                    connection.management_secret_reference.is_some()
+                }
+            };
+            if should_refresh {
+                let _ = self
+                    .query_connection_usage(configuration, connection.id.as_str())
+                    .await;
+            }
+        }
+        Ok(())
     }
 
     /// Discovers secondary routes for one exact connection and model.
@@ -584,8 +683,8 @@ impl PublicAiRuntime {
             .get(connection_id)
             .cloned()
             .ok_or_else(|| format!("Connection `{connection_id}` is not configured."))?;
-        let provider = self
-            .providers
+        let providers = self.effective_providers(configuration)?;
+        let provider = providers
             .provider(connection.provider_id.as_str())
             .cloned()
             .ok_or_else(|| format!("Provider `{}` is not registered.", connection.provider_id))?;
@@ -855,13 +954,14 @@ impl PublicAiRuntime {
                     connection.service_entry_id, provider.id
                 )
             })?;
-        let settings_key = PersistedAiConfiguration::connection_model_key(
-            connection.id.as_str(),
+        let override_key = PersistedAiConfiguration::provider_model_protocol_key(
+            connection.provider_id.as_str(),
             model.id.as_str(),
+            connection.selected_protocol.as_str(),
         );
         let mut overrides = configuration
             .model_overrides
-            .get(settings_key.as_str())
+            .get(override_key.as_str())
             .cloned()
             .unwrap_or_default();
         if overrides.prompt_cache.is_none() {
@@ -876,9 +976,13 @@ impl PublicAiRuntime {
             &mut overrides,
         )?;
         validate_model_overrides(&model, connection.selected_protocol.as_str(), &overrides)?;
+        let secondary_route_key = PersistedAiConfiguration::connection_model_key(
+            connection.id.as_str(),
+            model.id.as_str(),
+        );
         let secondary_route = configuration
             .secondary_routes
-            .get(settings_key.as_str())
+            .get(secondary_route_key.as_str())
             .cloned()
             .unwrap_or(SecondaryRouteSelection::Automatic);
         let route =
@@ -1147,6 +1251,7 @@ mod tests {
             credential_id: format!("credential-{id}"),
             display_name: id.to_string(),
             secret_reference: format!("secret-{id}"),
+            management_secret_reference: None,
             verified_protocols: BTreeSet::from([OPENAI_CHAT_PROFILE_ID.to_string()]),
             selected_protocol: OPENAI_CHAT_PROFILE_ID.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),
@@ -1236,6 +1341,37 @@ mod tests {
             .resolve_active_selection(&configuration)
             .expect("active account should resolve");
         assert_eq!(selection.route.connection.id, "two");
+    }
+
+    /// Verifies accounts sharing a provider, model, and protocol receive the same override.
+    /// 验证共享供应商、模型与协议的账号取得同一份覆盖。
+    #[test]
+    fn model_overrides_are_shared_across_matching_accounts() {
+        let (runtime, mut configuration) = two_account_runtime();
+        let key = PersistedAiConfiguration::provider_model_protocol_key(
+            "openrouter",
+            "vendor/model",
+            OPENAI_CHAT_PROFILE_ID,
+        );
+        configuration.model_overrides.insert(
+            key,
+            ModelExecutionOverrides {
+                context_limit: Some(4096),
+                ..ModelExecutionOverrides::default()
+            },
+        );
+
+        for connection_id in ["one", "two"] {
+            configuration.active = Some(ActiveAiModelSelection {
+                provider_id: String::from("openrouter"),
+                model_id: String::from("vendor/model"),
+                connection_id: connection_id.to_string(),
+            });
+            let selection = runtime
+                .resolve_active_selection(&configuration)
+                .expect("shared model override should resolve");
+            assert_eq!(selection.overrides.context_limit, Some(4096));
+        }
     }
 
     /// Verifies adapter-declared explicit defaults become immutable execution values.

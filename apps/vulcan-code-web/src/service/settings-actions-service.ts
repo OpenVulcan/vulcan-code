@@ -2,6 +2,7 @@ import type {
   PublicAiAccountUsage,
   PublicAiConnectionAddRequest,
   PublicAiConnectionUpdateRequest,
+  PublicAiCustomProviderSaveRequest,
   PublicAiModelOverrides,
   PublicAiOAuthChallenge,
   PublicAiOAuthCommitRequest,
@@ -84,6 +85,28 @@ export async function removePublicAiConnection(request: {
   return serviceClient.request<PublicAiSettingsSnapshot>("service_remove_public_ai_connection", { request });
 }
 
+// savePublicAiCustomProvider creates or replaces one user-defined compatible provider.
+// savePublicAiCustomProvider 创建或替换一个用户自定义兼容供应商。
+export async function savePublicAiCustomProvider(
+  request: PublicAiCustomProviderSaveRequest,
+): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_custom_provider",
+    { request },
+  );
+}
+
+// removePublicAiCustomProvider removes one unreferenced user-defined provider.
+// removePublicAiCustomProvider 移除一个未被引用的用户自定义供应商。
+export async function removePublicAiCustomProvider(
+  providerId: string,
+): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_remove_public_ai_custom_provider",
+    { request: { providerId } },
+  );
+}
+
 // syncPublicAiConnection refreshes one model catalog into memory.
 // syncPublicAiConnection 将一个模型目录刷新到内存。
 export async function syncPublicAiConnection(connectionId: string): Promise<PublicAiSettingsSnapshot> {
@@ -93,7 +116,23 @@ export async function syncPublicAiConnection(connectionId: string): Promise<Publ
 // queryPublicAiConnectionUsage queries one exact account without local persistence.
 // queryPublicAiConnectionUsage 查询一个精确账号且不本地持久化。
 export async function queryPublicAiConnectionUsage(connectionId: string): Promise<PublicAiAccountUsage> {
-  return serviceClient.request<PublicAiAccountUsage>("service_query_public_ai_connection_usage", { connectionId });
+  const usage = await serviceClient.request<PublicAiAccountUsage>(
+    "service_query_public_ai_connection_usage",
+    { connectionId },
+  );
+  if (!usage || typeof usage !== "object" || !Array.isArray(usage.quota_windows)) {
+    throw new Error("Public AI account usage response has an invalid quota_windows contract.");
+  }
+  return usage;
+}
+
+// savePublicAiUsageRefreshSettings persists the background usage refresh interval.
+// savePublicAiUsageRefreshSettings 持久化后台用量刷新间隔。
+export async function savePublicAiUsageRefreshSettings(intervalSeconds: number): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_usage_refresh_settings",
+    { request: { intervalSeconds } },
+  );
 }
 
 // selectPublicAiModel persists one exact model and account selection.
@@ -109,8 +148,9 @@ export async function selectPublicAiModel(request: {
 // savePublicAiModelOverrides saves local model narrowing and registered parameters.
 // savePublicAiModelOverrides 保存本地模型收窄与注册参数。
 export async function savePublicAiModelOverrides(request: {
-  connectionId: string;
+  providerId: string;
   modelId: string;
+  protocolId: string;
   overrides: PublicAiModelOverrides;
 }): Promise<PublicAiSettingsSnapshot> {
   return serviceClient.request<PublicAiSettingsSnapshot>("service_save_public_ai_model_overrides", { request });

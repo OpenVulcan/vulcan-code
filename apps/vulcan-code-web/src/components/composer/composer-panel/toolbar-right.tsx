@@ -68,18 +68,20 @@ export function ComposerPanelToolbarRight(props: ComposerPanelToolbarRightProps)
   return (
     <div className="composer-toolbar-right">
       <ContextUsageOrb snapshot={props.contextUsage} />
-      <ComposerSelectControl
-        ariaLabel={props.reasoningAriaLabel}
-        className="reasoning no-indicator"
-        fallbackLabel={props.selectFallbackLabel}
-        hideTriggerSubtitle
-        icon={<Brain size={15} />}
-        onValueChange={props.onReasoningEffortChange}
-        openSignal={props.reasoningPickerOpenSignal}
-        options={props.reasoningEffortOptions}
-        tooltip={<strong>{t("composer.reasoning.tooltip")}</strong>}
-        value={props.reasoningEffort}
-      />
+      {props.reasoningEffortOptions.length > 0 ? (
+        <ComposerSelectControl
+          ariaLabel={props.reasoningAriaLabel}
+          className="reasoning no-indicator"
+          fallbackLabel={props.selectFallbackLabel}
+          hideTriggerSubtitle
+          icon={<Brain size={15} />}
+          onValueChange={props.onReasoningEffortChange}
+          openSignal={props.reasoningPickerOpenSignal}
+          options={props.reasoningEffortOptions}
+          tooltip={<strong>{t("composer.reasoning.tooltip")}</strong>}
+          value={props.reasoningEffort}
+        />
+      ) : null}
       {props.isConversationRunning && (draftHasContent || hasAttachments) ? (
         <Button
           aria-label={props.stopAriaLabel}

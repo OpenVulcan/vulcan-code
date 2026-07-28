@@ -1,8 +1,6 @@
 import * as React from "react";
 import {
   BrainCircuit,
-  Maximize2,
-  Minimize2,
 } from "lucide-react";
 import {
   MemoryArea,
@@ -12,6 +10,7 @@ import {
 } from "@/components/features/memory/MemoryArea";
 import { useI18n } from "@/i18n";
 import type { WorkbenchSnapshot } from "@/types";
+import { WorkspaceToolPanelMenu } from "@/components/workspace/workspace-tool-panel-menu";
 
 // WorkspaceMemorySettings renders the embedded VMM memory settings page.
 // WorkspaceMemorySettings 渲染内嵌 VMM 记忆设置页面。
@@ -69,48 +68,29 @@ export function FloatingMemoryMenu(props: {
   // activeMeta 保存收起胶囊展示的当前菜单标签。
   const activeMeta = memorySubAreaMeta(props.activeSubArea, props.workbench, t);
 
-  if (!props.expanded) {
-    return (
-      <button
-        className="workspace-tool-panel-menu-collapsed"
-        onClick={() => props.onExpandedChange(true)}
-        title={t("workspaceToolPanel.expandState")}
-        type="button"
-      >
-        <span>{activeMeta.label}</span>
-        <Maximize2 size={13} />
-      </button>
-    );
-  }
-
   return (
-    <aside className="workspace-tool-panel-menu" aria-label={t("workspaceToolPanel.memorySettingsMenu")}>
-      <div className="workspace-tool-panel-menu-header">
-        <span>{t("workspaceToolPanel.menu")}</span>
+    <WorkspaceToolPanelMenu
+      activeLabel={activeMeta.label}
+      ariaLabel={t("workspaceToolPanel.memorySettingsMenu")}
+      collapseLabel={t("workspaceToolPanel.collapseToPill")}
+      expanded={props.expanded}
+      expandLabel={t("workspaceToolPanel.expandState")}
+      heading={t("workspaceToolPanel.menu")}
+      onExpandedChange={props.onExpandedChange}
+    >
+      {rows.map((row) => (
         <button
-          aria-label={t("workspaceToolPanel.collapseToPill")}
-          className="workspace-tool-panel-menu-icon-button"
-          onClick={() => props.onExpandedChange(false)}
+          className={`workspace-tool-panel-menu-row ${props.activeSubArea === row.id ? "active" : ""}`}
+          key={row.id}
+          onClick={() => props.onSelectSubArea(row.id)}
+          title={row.detail}
           type="button"
         >
-          <Minimize2 size={13} />
+          {row.icon}
+          <span>{row.label}</span>
         </button>
-      </div>
-      <div className="workspace-tool-panel-menu-list">
-        {rows.map((row) => (
-          <button
-            className={`workspace-tool-panel-menu-row ${props.activeSubArea === row.id ? "active" : ""}`}
-            key={row.id}
-            onClick={() => props.onSelectSubArea(row.id)}
-            title={row.detail}
-            type="button"
-          >
-            {row.icon}
-            <span>{row.label}</span>
-          </button>
-        ))}
-      </div>
-    </aside>
+      ))}
+    </WorkspaceToolPanelMenu>
   );
 }
 

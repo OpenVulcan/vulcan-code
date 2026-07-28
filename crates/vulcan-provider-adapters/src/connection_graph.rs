@@ -341,6 +341,7 @@ mod tests {
             credential_id: format!("credential-{id}"),
             display_name: id.to_string(),
             secret_reference: format!("secret-{id}"),
+            management_secret_reference: None,
             verified_protocols: BTreeSet::from([
                 ANTHROPIC_MESSAGES_PROFILE_ID.to_string(),
                 OPENAI_CHAT_PROFILE_ID.to_string(),

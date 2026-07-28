@@ -68,10 +68,10 @@ pub(crate) fn public_ai_provider_rows(
 ) -> Result<Vec<ProviderSummary>, String> {
     let catalogs = runtime.catalog_snapshot()?;
     let errors = runtime.catalog_error_snapshot()?;
+    let providers = runtime.effective_providers(configuration)?;
     let mut rows = Vec::new();
     for connection in configuration.connection_graph.connections.values() {
-        let provider = runtime
-            .providers()
+        let provider = providers
             .provider(connection.provider_id.as_str())
             .ok_or_else(|| format!("Provider `{}` is not registered.", connection.provider_id))?;
         let models = catalogs

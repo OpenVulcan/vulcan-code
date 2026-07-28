@@ -4,6 +4,94 @@
   overflow: auto;
 }
 
+.provider-management-surface {
+  width: min(1120px, 100%);
+}
+
+.provider-protocol-fieldset {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px;
+}
+
+.provider-protocol-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.credential-management-layout {
+  --workspace-tool-panel-menu-width: 176px;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.credential-management-menu .workspace-tool-panel-menu-row {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.credential-management-menu .workspace-tool-panel-menu-row small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.credential-management-content {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.settings-inline-control {
+  display: grid;
+  grid-template-columns: auto minmax(9rem, 13rem) minmax(16rem, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 12px;
+}
+
+.settings-inline-control small {
+  color: var(--muted-foreground);
+  line-height: 1.4;
+}
+
+.settings-inline-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+.credential-management-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 19rem), 21rem));
+  content-start: normal;
+  align-items: stretch;
+  justify-content: start;
+  gap: 16px;
+}
+
+.provider-credential-select {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
 .settings-capability-page {
   display: grid;
   align-content: start;

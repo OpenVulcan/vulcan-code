@@ -651,6 +651,33 @@ fn run_service_bootstrap(
         &public_ai_configuration,
         &mut logs,
     )?;
+    // usageRefreshRuntime owns the memory-only allowance cache and observes interval changes.
+    // usageRefreshRuntime 持有仅内存用量缓存并观测刷新间隔变更。
+    let usage_refresh_runtime = Arc::clone(&public_ai_runtime);
+    runtime.spawn(async move {
+        loop {
+            let configuration = match usage_refresh_runtime.configuration_snapshot() {
+                Ok(configuration) => configuration,
+                Err(error) => {
+                    eprintln!("[webui-service] public AI usage refresh skipped: {error}");
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    continue;
+                }
+            };
+            if let Err(error) = usage_refresh_runtime
+                .refresh_supported_connection_usage(&configuration)
+                .await
+            {
+                eprintln!("[webui-service] public AI usage refresh failed: {error}");
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(
+                configuration
+                    .usage_refresh_interval_seconds
+                    .clamp(30, 86_400),
+            ))
+            .await;
+        }
+    });
     let agent_runtime = AgentRuntimeBridge {
         provider_configuration: provider_configuration.clone(),
         public_ai_runtime,

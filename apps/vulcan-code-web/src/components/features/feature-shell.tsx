@@ -132,6 +132,7 @@ function FeatureShell(props: {
   // providerPickerOpen 从共享标题栏控制模型供应商目录弹窗。
   const [providerPickerOpen, setProviderPickerOpen] = React.useState(false)
   React.useEffect(() => {
+    setProviderPickerOpen(false)
   }, [props.activeSettingsSubArea])
   // runSkillHeaderAction wraps title-bar actions with disabled and spinner feedback.
   // runSkillHeaderAction 为标题栏动作包裹禁用与旋转反馈。
@@ -184,10 +185,10 @@ function FeatureShell(props: {
   const agentsHeaderAction = null
   // settingsHeaderAction renders actions for the active settings page in the shared title bar.
   // settingsHeaderAction 在共享标题栏中渲染当前设置页操作。
-  const settingsHeaderAction = props.activeArea === "settings" && props.activeSettingsSubArea === "model-providers" ? (
+  const settingsHeaderAction = props.activeArea === "settings" && props.activeSettingsSubArea === "credential-management" ? (
     <div className="feature-header-actions">
       <button className="skill-action-button" onClick={() => setProviderPickerOpen(true)} type="button">
-        <span>{localizedLiteral(locale, "添加 Provider", "Add provider")}</span>
+        <span>{localizedLiteral(locale, "添加凭据", "Add credential")}</span>
       </button>
     </div>
   ) : null
@@ -322,7 +323,6 @@ function FeatureHeader(props: {
           <div
             className="workspace-header-title-text"
             data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
-            onDoubleClick={props.onTitlebarDoubleClick}
           >
             <h1>{headerTitle}</h1>
             {props.descriptor.detail ? <small>{props.descriptor.detail}</small> : null}
@@ -333,7 +333,6 @@ function FeatureHeader(props: {
           aria-hidden="true"
           className="console-header-drag-fill"
           data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
-          onDoubleClick={props.onTitlebarDoubleClick}
         />
       </div>
       <div className="console-header-actions">

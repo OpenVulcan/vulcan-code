@@ -128,7 +128,9 @@ fn map_reasoning_effort(reasoning_effort: ReasoningEffortLevel) -> ContextReason
         ReasoningEffortLevel::Off => ContextReasoningEffort::None,
         ReasoningEffortLevel::None | ReasoningEffortLevel::Minimal => ContextReasoningEffort::None,
         ReasoningEffortLevel::Low => ContextReasoningEffort::Low,
-        ReasoningEffortLevel::Medium => ContextReasoningEffort::Medium,
+        ReasoningEffortLevel::Medium | ReasoningEffortLevel::Adaptive => {
+            ContextReasoningEffort::Medium
+        }
         ReasoningEffortLevel::High => ContextReasoningEffort::High,
         ReasoningEffortLevel::XHigh | ReasoningEffortLevel::Max | ReasoningEffortLevel::Ultra => {
             ContextReasoningEffort::XHigh

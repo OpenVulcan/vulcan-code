@@ -15,7 +15,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use vulcan_ai_contract::{
     AiErrorCategory, AiExecutionError, AiExecutionRequest, AiStreamEvent, DispatchOutcome,
-    InputTokenCount, ModelParameterValue, PromptCachePolicy,
+    InputTokenCount, ModelParameterValue, PromptCachePolicy, ReasoningEffort,
 };
 use vulcan_ai_protocols::{
     EncodedWireRequest, ProtocolConversionError, ProtocolRegistry,
@@ -615,6 +615,28 @@ fn project_provider_request(
             }),
         );
     }
+    if route.provider.id == "minimax"
+        && route.protocol_route.protocol_profile_id
+            == vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
+        && let Some(effort) = request.reasoning_effort
+    {
+        let thinking_type = match effort {
+            ReasoningEffort::None => "disabled",
+            ReasoningEffort::Adaptive => "adaptive",
+            unsupported => {
+                return Err(pre_dispatch_failure(format!(
+                    "MiniMax Anthropic-compatible thinking does not expose reasoning effort `{}`.",
+                    unsupported.as_str()
+                )));
+            }
+        };
+        let body = encoded
+            .body
+            .as_object_mut()
+            .ok_or_else(|| pre_dispatch_failure("MiniMax request body must be a JSON object."))?;
+        body.remove("output_config");
+        body.insert(String::from("thinking"), json!({ "type": thinking_type }));
+    }
     if route.provider.id == "minimax" {
         let body_size = serde_json::to_vec(&encoded.body)
             .map_err(|error| {
@@ -1198,6 +1220,7 @@ mod tests {
             credential_id: String::from("credential"),
             display_name: String::from("Primary"),
             secret_reference: String::from("secret"),
+            management_secret_reference: None,
             verified_protocols: BTreeSet::from([protocol_id.to_string()]),
             selected_protocol: protocol_id.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),
@@ -1244,6 +1267,7 @@ mod tests {
             credential_id: String::from("credential"),
             display_name: String::from("Primary"),
             secret_reference: String::from("secret"),
+            management_secret_reference: None,
             verified_protocols: BTreeSet::from([protocol_id.to_string()]),
             selected_protocol: protocol_id.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),

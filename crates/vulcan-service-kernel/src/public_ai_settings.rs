@@ -6,13 +6,14 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
-use vulcan_ai_contract::{AccountUsageSnapshot, PromptCachePolicy};
+use vulcan_ai_contract::{AccountUsageAvailability, AccountUsageSnapshot, PromptCachePolicy};
 use vulcan_provider_adapters::{
     AccountUsageQueryKind, ActiveAiModelSelection, ConnectionModelCatalog, CredentialBillingKind,
     CredentialConnection, CredentialMode, CredentialSecretEnvelope, CredentialSecretResolver,
-    CredentialSecretStore, ModelExecutionOverrides, OAuthAuthorizationChallenge,
+    CredentialSecretStore, CustomProviderAuthentication, CustomProviderDefinition,
+    CustomProviderProtocol, ModelExecutionOverrides, OAuthAuthorizationChallenge,
     OAuthClientConfiguration, OAuthTransactionPhase, OAuthTransactionSnapshot,
-    PersistedAiConfiguration, ProviderDescriptor, PublicAiRuntime,
+    PersistedAiConfiguration, ProviderDescriptor, ProviderKind, PublicAiRuntime,
 };
 use vulcan_service_api::{ServiceEventEmitter, WorkbenchSnapshot};
 
@@ -28,6 +29,12 @@ use crate::{
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct PublicAiSettingsSnapshot {
+    /// Persisted background account-usage refresh interval.
+    /// 持久化的后台账号用量刷新间隔。
+    usage_refresh_interval_seconds: u64,
+    /// Process-local account-usage observations.
+    /// 进程内账号用量观测。
+    usage_cache: BTreeMap<String, AccountUsageSnapshot>,
     /// Registered provider and service-entry descriptors.
     /// 已注册的供应商与服务入口描述。
     providers: Vec<ProviderDescriptor>,
@@ -46,8 +53,8 @@ pub(super) struct PublicAiSettingsSnapshot {
     /// Latest process-local model synchronization errors.
     /// 最近的进程内模型同步错误。
     catalog_errors: BTreeMap<String, String>,
-    /// Connection-model local overrides.
-    /// 连接模型作用域的本地覆盖。
+    /// Provider-model-protocol local overrides.
+    /// 供应商、模型与协议作用域的本地覆盖。
     model_overrides: BTreeMap<String, ModelExecutionOverrides>,
     /// Explicit override records that avoid exposing composite-key parsing to the browser.
     /// 避免浏览器解析组合键的显式覆盖记录。
@@ -76,6 +83,9 @@ pub(super) struct PublicAiConnectionSnapshot {
     /// Exact usage-query capability declared by the selected credential profile.
     /// 所选凭据配置档声明的精确用量查询能力。
     usage_capability: AccountUsageQueryKind,
+    /// Whether this connection has an optional provider-management credential.
+    /// 此连接是否具有可选的供应商管理凭据。
+    has_management_key: bool,
     /// Credential acquisition mode.
     /// 凭据获取方式。
     credential_mode: CredentialMode,
@@ -109,9 +119,13 @@ impl PublicAiConnectionSnapshot {
     /// 返回值
     /// A complete browser-safe snapshot with resolved credential semantics.
     /// 返回带已解析凭据语义的完整浏览器安全快照。
-    fn new(runtime: &PublicAiRuntime, connection: &CredentialConnection) -> Result<Self, String> {
-        let provider = runtime
-            .providers()
+    fn new(
+        runtime: &PublicAiRuntime,
+        configuration: &PersistedAiConfiguration,
+        connection: &CredentialConnection,
+    ) -> Result<Self, String> {
+        let providers = runtime.effective_providers(configuration)?;
+        let provider = providers
             .provider(connection.provider_id.as_str())
             .ok_or_else(|| format!("Provider `{}` is not registered.", connection.provider_id))?;
         let entry = provider
@@ -139,6 +153,7 @@ impl PublicAiConnectionSnapshot {
             credential_profile_id: connection.credential_profile_id.clone(),
             billing_kind: credential_profile.billing_kind,
             usage_capability: credential_profile.account_usage_query,
+            has_management_key: connection.management_secret_reference.is_some(),
             credential_mode: connection.credential_mode,
             credential_id: connection.credential_id.clone(),
             display_name: connection.display_name.clone(),
@@ -154,12 +169,15 @@ impl PublicAiConnectionSnapshot {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct PublicAiModelOverrideRecord {
-    /// Exact credential connection identifier.
-    /// 精确凭据连接标识。
-    connection_id: String,
+    /// Exact provider identifier.
+    /// 精确供应商标识。
+    provider_id: String,
     /// Exact model identifier.
     /// 精确模型标识。
     model_id: String,
+    /// Exact protocol profile identifier.
+    /// 精确协议配置档标识。
+    protocol_id: String,
     /// Complete local override value.
     /// 完整本地覆盖值。
     overrides: ModelExecutionOverrides,
@@ -191,6 +209,9 @@ pub(super) struct PublicAiConnectionAddRequest {
     /// Secret entered by the user.
     /// 用户输入的秘密。
     secret: String,
+    /// Optional provider-management key used only for allowance queries.
+    /// 仅用于用量查询的可选供应商管理密钥。
+    management_key: Option<String>,
 }
 
 /// Updates editable metadata for one credential connection.
@@ -219,6 +240,23 @@ pub(super) struct PublicAiConnectionUpdateRequest {
     /// Optional replacement secret.
     /// 可选替换秘密。
     secret: Option<String>,
+    /// Optional replacement provider-management key.
+    /// 可选替换供应商管理密钥。
+    management_key: Option<String>,
+    /// Whether the existing provider-management key should be removed.
+    /// 是否移除现有供应商管理密钥。
+    #[serde(default)]
+    remove_management_key: bool,
+}
+
+/// Updates the background account-usage refresh interval.
+/// 更新后台账号用量刷新间隔。
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiUsageRefreshSettingsRequest {
+    /// Refresh interval in seconds.
+    /// 刷新间隔秒数。
+    interval_seconds: u64,
 }
 
 /// Selects one exact public AI model and account.
@@ -242,12 +280,15 @@ pub(super) struct PublicAiModelSelectionRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct PublicAiModelOverridesSaveRequest {
-    /// Exact connection identifier.
-    /// 精确连接标识。
-    connection_id: String,
+    /// Exact provider identifier.
+    /// 精确供应商标识。
+    provider_id: String,
     /// Exact model identifier.
     /// 精确模型标识。
     model_id: String,
+    /// Exact protocol profile identifier.
+    /// 精确协议配置档标识。
+    protocol_id: String,
     /// Complete replacement override value.
     /// 完整替换覆盖值。
     overrides: ModelExecutionOverrides,
@@ -277,6 +318,249 @@ pub(super) struct PublicAiConnectionRemoveRequest {
     /// Explicit replacement default for the same provider.
     /// 同一供应商的显式替代默认账号。
     replacement_default_connection_id: Option<String>,
+}
+
+/// Creates or replaces one user-defined compatible provider.
+/// 创建或替换一个用户自定义兼容供应商。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiCustomProviderSaveRequest {
+    /// Existing provider identifier when editing.
+    /// 编辑时使用的现有供应商标识。
+    provider_id: Option<String>,
+    /// User-visible provider name.
+    /// 用户可见供应商名称。
+    display_name: String,
+    /// Exact compatible API base URL.
+    /// 精确兼容 API 基础 URL。
+    base_url: String,
+    /// The single compatible protocol served by this base URL.
+    /// 此基础 URL 提供的唯一兼容协议。
+    protocol: CustomProviderProtocol,
+    /// Exact API-key header projection.
+    /// 精确 API Key 请求头投影。
+    authentication: CustomProviderAuthentication,
+    /// User-visible label for the first credential or validation identity.
+    /// 首个凭据或验证身份的用户可见标签。
+    credential_display_name: String,
+    /// Secret used for authenticated model discovery.
+    /// 用于鉴权模型发现的秘密。
+    secret: String,
+}
+
+/// Removes one user-defined compatible provider.
+/// 移除一个用户自定义兼容供应商。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiCustomProviderRemoveRequest {
+    /// Exact custom provider identifier.
+    /// 精确自定义供应商标识。
+    provider_id: String,
+}
+
+/// Creates or updates one custom provider without changing any credential.
+/// 创建或更新一个自定义供应商且不改变任何凭据。
+pub(super) async fn service_save_public_ai_custom_provider(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiCustomProviderSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    validate_non_empty("displayName", request.display_name.as_str())?;
+    validate_non_empty(
+        "credentialDisplayName",
+        request.credential_display_name.as_str(),
+    )?;
+    validate_non_empty("secret", request.secret.as_str())?;
+    let updating_existing = request.provider_id.is_some();
+    let provider_id = request
+        .provider_id
+        .clone()
+        .unwrap_or_else(|| format!("custom:{}", uuid::Uuid::new_v4().simple()));
+    let descriptor = CustomProviderDefinition {
+        id: provider_id.clone(),
+        display_name: request.display_name,
+        base_url: request.base_url,
+        protocol: request.protocol,
+        authentication: request.authentication,
+    }
+    .into_descriptor()?;
+    let entry = descriptor
+        .service_entries
+        .first()
+        .ok_or_else(|| String::from("Custom provider must declare one service entry."))?;
+    let route = entry
+        .protocol_routes
+        .first()
+        .ok_or_else(|| String::from("Custom provider must declare one protocol route."))?;
+    let profile = entry
+        .credential_profiles
+        .first()
+        .ok_or_else(|| String::from("Custom provider must declare one credential profile."))?;
+    let connection_id = format!("connection_{}", uuid::Uuid::new_v4().simple());
+    let secret_reference = format!("ai_secret_{}", uuid::Uuid::new_v4().simple());
+    let connection = CredentialConnection {
+        id: connection_id.clone(),
+        provider_id: provider_id.clone(),
+        service_entry_id: entry.id.clone(),
+        credential_profile_id: profile.id.clone(),
+        credential_mode: CredentialMode::Token,
+        credential_id: format!("credential_{}", uuid::Uuid::new_v4().simple()),
+        display_name: request.credential_display_name.trim().to_string(),
+        secret_reference: secret_reference.clone(),
+        management_secret_reference: None,
+        verified_protocols: BTreeSet::from([route.protocol_profile_id.clone()]),
+        selected_protocol: route.protocol_profile_id.clone(),
+        prompt_cache_by_protocol: BTreeMap::new(),
+    };
+    let secret = CredentialSecretEnvelope::new_api_key(request.secret)?;
+    let _transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    match current_configuration
+        .custom_providers
+        .get(provider_id.as_str())
+    {
+        Some(existing) if existing.kind != ProviderKind::Custom => {
+            return Err(format!(
+                "Provider `{provider_id}` is not a user-defined provider."
+            ));
+        }
+        None if updating_existing => {
+            return Err(format!(
+                "Custom provider `{provider_id}` is not configured."
+            ));
+        }
+        Some(_) | None => {}
+    }
+    for existing_connection in current_configuration
+        .connection_graph
+        .connections
+        .values()
+        .filter(|existing_connection| existing_connection.provider_id == provider_id)
+    {
+        if existing_connection.selected_protocol != route.protocol_profile_id {
+            return Err(format!(
+                "Custom provider `{provider_id}` cannot change protocol while credential `{}` uses `{}`.",
+                existing_connection.display_name, existing_connection.selected_protocol
+            ));
+        }
+    }
+    let mut validation_configuration = current_configuration.clone();
+    validation_configuration
+        .custom_providers
+        .insert(provider_id.clone(), descriptor.clone());
+    let validation_providers = runtime.effective_providers(&validation_configuration)?;
+    validation_configuration
+        .connection_graph
+        .add_connection(&validation_providers, connection.clone())?;
+    let secret_store = OsAiCredentialSecretStore;
+    CredentialSecretStore::create_secret(&secret_store, secret_reference.as_str(), &secret)?;
+    if let Err(error) = runtime
+        .refresh_connection_catalog(&validation_configuration, connection_id.as_str())
+        .await
+    {
+        let catalog_cleanup = runtime.remove_connection_catalog(connection_id.as_str());
+        let secret_cleanup =
+            CredentialSecretStore::delete_secret(&secret_store, secret_reference.as_str());
+        return Err(compensated_operation_error(
+            format!("Custom provider model discovery failed before save: {error}"),
+            secret_cleanup,
+            catalog_cleanup,
+        ));
+    }
+    let persist_result = mutate_public_ai_configuration_in_transaction(
+        &state,
+        "保存自定义供应商失败",
+        |configuration| {
+            configuration
+                .custom_providers
+                .insert(provider_id.clone(), descriptor.clone());
+            if !updating_existing {
+                let effective_providers = runtime.effective_providers(configuration)?;
+                configuration
+                    .connection_graph
+                    .add_connection(&effective_providers, connection.clone())?;
+            }
+            Ok(())
+        },
+    );
+    let configuration = match persist_result {
+        Ok(configuration) => configuration,
+        Err(error) => {
+            let catalog_cleanup = runtime.remove_connection_catalog(connection_id.as_str());
+            let secret_cleanup =
+                CredentialSecretStore::delete_secret(&secret_store, secret_reference.as_str());
+            return Err(compensated_operation_error(
+                error,
+                secret_cleanup,
+                catalog_cleanup,
+            ));
+        }
+    };
+    if updating_existing {
+        let catalog_cleanup = runtime.remove_connection_catalog(connection_id.as_str());
+        let secret_cleanup =
+            CredentialSecretStore::delete_secret(&secret_store, secret_reference.as_str());
+        let cleanup_error =
+            compensated_operation_error(String::new(), secret_cleanup, catalog_cleanup);
+        if !cleanup_error.is_empty() {
+            return Err(format!(
+                "Custom provider was saved, but temporary validation cleanup failed: {cleanup_error}"
+            ));
+        }
+    }
+    let connection_ids = configuration
+        .connection_graph
+        .connections
+        .values()
+        .filter(|existing_connection| {
+            existing_connection.provider_id == provider_id
+                && existing_connection.id != connection_id
+        })
+        .map(|existing_connection| existing_connection.id.clone())
+        .collect::<Vec<_>>();
+    for existing_connection_id in connection_ids {
+        runtime.remove_connection_catalog(existing_connection_id.as_str())?;
+    }
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Removes one unreferenced custom provider.
+/// 移除一个未被引用的自定义供应商。
+pub(super) async fn service_remove_public_ai_custom_provider(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiCustomProviderRemoveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    validate_non_empty("providerId", request.provider_id.as_str())?;
+    let provider_id = request.provider_id;
+    let configuration =
+        mutate_public_ai_configuration(&state, "移除自定义供应商失败", |configuration| {
+            if configuration
+                .connection_graph
+                .connections
+                .values()
+                .any(|connection| connection.provider_id == provider_id)
+            {
+                return Err(format!(
+                    "Custom provider `{provider_id}` still has credentials and cannot be removed."
+                ));
+            }
+            let removed = configuration
+                .custom_providers
+                .remove(provider_id.as_str())
+                .ok_or_else(|| format!("Custom provider `{provider_id}` is not configured."))?;
+            if removed.kind != ProviderKind::Custom {
+                return Err(format!(
+                    "Provider `{provider_id}` is not a user-defined provider."
+                ));
+            }
+            Ok(())
+        })
+        .await?;
+    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
 }
 
 /// Starts one exact provider OAuth flow without persisting transaction state.
@@ -340,9 +624,9 @@ pub(super) async fn service_start_public_ai_oauth(
         "credentialProfileId",
         request.credential_profile_id.as_str(),
     )?;
-    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
-    let provider = runtime
-        .providers()
+    let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
+    let providers = runtime.effective_providers(&configuration)?;
+    let provider = providers
         .provider(request.provider_id.as_str())
         .ok_or_else(|| format!("Provider `{}` is not registered.", request.provider_id))?;
     let entry = provider
@@ -424,9 +708,9 @@ pub(super) async fn service_commit_public_ai_oauth_connection(
     validate_non_empty("providerId", request.provider_id.as_str())?;
     validate_non_empty("displayName", request.display_name.as_str())?;
     validate_non_empty("selectedProtocol", request.selected_protocol.as_str())?;
-    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
-    let provider = runtime
-        .providers()
+    let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
+    let providers = runtime.effective_providers(&configuration)?;
+    let provider = providers
         .provider(request.provider_id.as_str())
         .ok_or_else(|| format!("Provider `{}` is not registered.", request.provider_id))?;
     let entry = provider
@@ -501,6 +785,8 @@ pub(super) async fn service_commit_public_ai_oauth_connection(
             credential_mode: CredentialMode::Auth,
             selected_protocol: request.selected_protocol.clone(),
             secret: None,
+            management_key: None,
+            remove_management_key: false,
         };
         let mut validation_configuration = current_configuration.clone();
         if let Err(error) = apply_connection_update(
@@ -579,6 +865,7 @@ pub(super) async fn service_commit_public_ai_oauth_connection(
         request.display_name,
         request.selected_protocol,
         secret,
+        None,
     )
     .await
 }
@@ -645,6 +932,7 @@ pub(super) async fn service_add_public_ai_connection(
         request.display_name,
         request.selected_protocol,
         secret,
+        request.management_key,
     )
     .await
 }
@@ -661,7 +949,17 @@ async fn add_public_ai_connection_with_secret(
     display_name: String,
     selected_protocol: String,
     secret: CredentialSecretEnvelope,
+    management_key: Option<String>,
 ) -> Result<PublicAiSettingsSnapshot, String> {
+    if provider_id != "openrouter"
+        && management_key
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+    {
+        return Err(String::from(
+            "Provider management keys are currently supported only for OpenRouter.",
+        ));
+    }
     if secret.credential_mode() != credential_mode {
         return Err(String::from(
             "Credential secret mode does not match the requested connection mode.",
@@ -671,8 +969,12 @@ async fn add_public_ai_connection_with_secret(
     let connection_id = format!("connection_{}", uuid::Uuid::new_v4().simple());
     let credential_id = format!("credential_{}", uuid::Uuid::new_v4().simple());
     let secret_reference = format!("ai_secret_{}", uuid::Uuid::new_v4().simple());
-    let provider = runtime
-        .providers()
+    let management_secret_reference = management_key
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+        .map(|_| format!("ai_management_secret_{}", uuid::Uuid::new_v4().simple()));
+    let providers = runtime.effective_providers(&current_configuration)?;
+    let provider = providers
         .provider(provider_id.as_str())
         .ok_or_else(|| format!("Provider `{provider_id}` is not registered."))?;
     let entry = provider
@@ -724,19 +1026,38 @@ async fn add_public_ai_connection_with_secret(
         credential_id,
         display_name: display_name.trim().to_string(),
         secret_reference: secret_reference.clone(),
+        management_secret_reference: management_secret_reference.clone(),
         verified_protocols,
         selected_protocol,
         prompt_cache_by_protocol: BTreeMap::new(),
     };
     let secret_store = OsAiCredentialSecretStore;
     CredentialSecretStore::create_secret(&secret_store, secret_reference.as_str(), &secret)?;
+    if let (Some(reference), Some(value)) = (
+        management_secret_reference.as_deref(),
+        management_key
+            .as_ref()
+            .filter(|value| !value.trim().is_empty()),
+    ) {
+        let management_secret = CredentialSecretEnvelope::new_api_key(value.clone())?;
+        if let Err(error) =
+            CredentialSecretStore::create_secret(&secret_store, reference, &management_secret)
+        {
+            let cleanup =
+                CredentialSecretStore::delete_secret(&secret_store, secret_reference.as_str());
+            return Err(compensated_operation_error(error, cleanup, Ok(())));
+        }
+    }
     let mut validation_configuration = current_configuration;
     if let Err(error) = validation_configuration
         .connection_graph
-        .add_connection(runtime.providers(), connection.clone())
+        .add_connection(&providers, connection.clone())
     {
-        return match CredentialSecretStore::delete_secret(&secret_store, secret_reference.as_str())
-        {
+        return match delete_connection_secrets(
+            &secret_store,
+            secret_reference.as_str(),
+            management_secret_reference.as_deref(),
+        ) {
             Ok(()) => Err(error),
             Err(cleanup_error) => Err(format!(
                 "{error} Secret cleanup also failed: {cleanup_error}"
@@ -748,27 +1069,79 @@ async fn add_public_ai_connection_with_secret(
         .await
     {
         let catalog_cleanup = runtime.remove_connection_catalog(connection_id.as_str());
-        let secret_cleanup =
-            CredentialSecretStore::delete_secret(&secret_store, secret_reference.as_str());
+        let secret_cleanup = delete_connection_secrets(
+            &secret_store,
+            secret_reference.as_str(),
+            management_secret_reference.as_deref(),
+        );
         return Err(compensated_operation_error(
             format!("Credential validation failed before the connection was saved: {error}"),
             secret_cleanup,
             catalog_cleanup,
         ));
     }
+    if management_secret_reference.is_some() {
+        let usage = match runtime
+            .query_connection_usage(&validation_configuration, connection_id.as_str())
+            .await
+        {
+            Ok(usage) => usage,
+            Err(error) => {
+                let catalog_cleanup = combine_results(
+                    runtime.remove_connection_catalog(connection_id.as_str()),
+                    runtime.remove_connection_usage(connection_id.as_str()),
+                );
+                let secret_cleanup = delete_connection_secrets(
+                    &secret_store,
+                    secret_reference.as_str(),
+                    management_secret_reference.as_deref(),
+                );
+                return Err(compensated_operation_error(
+                    error,
+                    secret_cleanup,
+                    catalog_cleanup,
+                ));
+            }
+        };
+        if usage.availability != AccountUsageAvailability::Supported {
+            let catalog_cleanup = combine_results(
+                runtime.remove_connection_catalog(connection_id.as_str()),
+                runtime.remove_connection_usage(connection_id.as_str()),
+            );
+            let secret_cleanup = delete_connection_secrets(
+                &secret_store,
+                secret_reference.as_str(),
+                management_secret_reference.as_deref(),
+            );
+            return Err(compensated_operation_error(
+                usage.refresh_message.unwrap_or_else(|| {
+                    String::from("OpenRouter management key validation failed.")
+                }),
+                secret_cleanup,
+                catalog_cleanup,
+            ));
+        }
+    }
     let add_result =
         mutate_public_ai_configuration(&state, "保存公共 AI 连接失败", |configuration| {
+            let effective_providers = runtime.effective_providers(configuration)?;
             configuration
                 .connection_graph
-                .add_connection(runtime.providers(), connection.clone())
+                .add_connection(&effective_providers, connection.clone())
         })
         .await;
     let configuration = match add_result {
         Ok(configuration) => configuration,
         Err(error) => {
-            let catalog_cleanup = runtime.remove_connection_catalog(connection_id.as_str());
-            let secret_cleanup =
-                CredentialSecretStore::delete_secret(&secret_store, secret_reference.as_str());
+            let catalog_cleanup = combine_results(
+                runtime.remove_connection_catalog(connection_id.as_str()),
+                runtime.remove_connection_usage(connection_id.as_str()),
+            );
+            let secret_cleanup = delete_connection_secrets(
+                &secret_store,
+                secret_reference.as_str(),
+                management_secret_reference.as_deref(),
+            );
             return Err(compensated_operation_error(
                 error,
                 secret_cleanup,
@@ -804,6 +1177,18 @@ pub(super) async fn service_update_public_ai_connection(
         .get(request.connection_id.as_str())
         .cloned()
         .ok_or_else(|| format!("Connection `{}` is not configured.", request.connection_id))?;
+    if request.management_key.is_some() && request.remove_management_key {
+        return Err(String::from(
+            "A management key cannot be replaced and removed in the same request.",
+        ));
+    }
+    if current.provider_id != "openrouter"
+        && (request.management_key.is_some() || request.remove_management_key)
+    {
+        return Err(String::from(
+            "Provider management keys are currently supported only for OpenRouter.",
+        ));
+    }
     if current.provider_id == "minimax"
         && let Some(secret) = request.secret.as_deref()
     {
@@ -853,6 +1238,22 @@ pub(super) async fn service_update_public_ai_connection(
     } else {
         None
     };
+    let management_mutation = match prepare_management_secret_mutation(
+        &secret_store,
+        &current,
+        request.management_key.as_deref(),
+        request.remove_management_key,
+    ) {
+        Ok(mutation) => mutation,
+        Err(error) => {
+            let rollback = rollback_replaced_secret(
+                &secret_store,
+                current.secret_reference.as_str(),
+                replaced_secret.as_ref(),
+            );
+            return Err(compensated_operation_error(error, rollback, Ok(())));
+        }
+    };
     let connection_id = request.connection_id.clone();
     let mut validation_configuration = current_configuration.clone();
     if let Err(error) = apply_connection_update(
@@ -866,7 +1267,15 @@ pub(super) async fn service_update_public_ai_connection(
             current.secret_reference.as_str(),
             replaced_secret.as_ref(),
         )?;
+        rollback_management_secret_mutation(&secret_store, &management_mutation)?;
         return Err(error);
+    }
+    if let Some(connection) = validation_configuration
+        .connection_graph
+        .connections
+        .get_mut(connection_id.as_str())
+    {
+        connection.management_secret_reference = management_mutation.resulting_reference(&current);
     }
     if identity_changed
         && let Err(error) = runtime
@@ -878,15 +1287,46 @@ pub(super) async fn service_update_public_ai_connection(
             current.secret_reference.as_str(),
             replaced_secret.as_ref(),
         );
+        let management_rollback =
+            rollback_management_secret_mutation(&secret_store, &management_mutation);
         let restore_result = runtime
             .refresh_connection_catalog(&current_configuration, connection_id.as_str())
             .await
             .map(|_| ());
         return Err(compensated_operation_error(
             format!("Credential validation failed before the connection was updated: {error}"),
-            rollback_result,
+            combine_results(rollback_result, management_rollback),
             restore_result,
         ));
+    }
+    if management_mutation.requires_validation() {
+        let usage = runtime
+            .query_connection_usage(&validation_configuration, connection_id.as_str())
+            .await;
+        let validation_error = match usage {
+            Ok(snapshot) if snapshot.availability == AccountUsageAvailability::Supported => None,
+            Ok(snapshot) => {
+                Some(snapshot.refresh_message.unwrap_or_else(|| {
+                    String::from("OpenRouter management key validation failed.")
+                }))
+            }
+            Err(error) => Some(error),
+        };
+        if let Some(error) = validation_error {
+            let primary_rollback = rollback_replaced_secret(
+                &secret_store,
+                current.secret_reference.as_str(),
+                replaced_secret.as_ref(),
+            );
+            let management_rollback =
+                rollback_management_secret_mutation(&secret_store, &management_mutation);
+            let cache_cleanup = runtime.remove_connection_usage(connection_id.as_str());
+            return Err(compensated_operation_error(
+                error,
+                combine_results(primary_rollback, management_rollback),
+                cache_cleanup,
+            ));
+        }
     }
     let update_result = mutate_public_ai_configuration_in_transaction(
         &state,
@@ -904,18 +1344,24 @@ pub(super) async fn service_update_public_ai_connection(
                 current.secret_reference.as_str(),
                 replaced_secret.as_ref(),
             );
+            let management_rollback =
+                rollback_management_secret_mutation(&secret_store, &management_mutation);
+            let cache_cleanup = runtime.remove_connection_usage(connection_id.as_str());
             let restore_result = runtime
                 .refresh_connection_catalog(&current_configuration, connection_id.as_str())
                 .await
                 .map(|_| ());
             return Err(compensated_operation_error(
                 error,
-                rollback_result,
-                restore_result,
+                combine_results(rollback_result, management_rollback),
+                combine_results(cache_cleanup, restore_result),
             ));
         }
     };
     drop(transaction);
+    if management_mutation.removes_key() {
+        runtime.remove_connection_usage(connection_id.as_str())?;
+    }
     publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
     build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
 }
@@ -946,8 +1392,8 @@ fn apply_connection_update(
         .get(connection_id)
         .cloned()
         .ok_or_else(|| format!("Connection `{connection_id}` is not configured."))?;
-    let provider = runtime
-        .providers()
+    let providers = runtime.effective_providers(configuration)?;
+    let provider = providers
         .provider(latest.provider_id.as_str())
         .ok_or_else(|| format!("Provider `{}` is not registered.", latest.provider_id))?;
     let entry = provider
@@ -978,7 +1424,7 @@ fn apply_connection_update(
         .remove(connection_id);
     configuration
         .connection_graph
-        .add_connection(runtime.providers(), candidate)
+        .add_connection(&providers, candidate)
 }
 
 /// Restores a replaced secret with a monotonic revision when validation or persistence fails.
@@ -1005,6 +1451,158 @@ fn rollback_replaced_secret(
         replacement.revision,
         &rollback,
     )
+}
+
+/// Records one reversible provider-management secret mutation.
+/// 记录一次可回滚的供应商管理秘密变更。
+enum ManagementSecretMutation {
+    /// No management credential changed.
+    /// 管理凭据未发生变化。
+    Unchanged,
+    /// A new management credential was created.
+    /// 已创建新的管理凭据。
+    Created { reference: String },
+    /// An existing management credential was replaced.
+    /// 已替换现有管理凭据。
+    Replaced {
+        reference: String,
+        previous: CredentialSecretEnvelope,
+        replacement: CredentialSecretEnvelope,
+    },
+    /// An existing management credential was removed.
+    /// 已移除现有管理凭据。
+    Removed {
+        reference: String,
+        previous: CredentialSecretEnvelope,
+    },
+}
+
+impl ManagementSecretMutation {
+    /// Resolves the connection reference produced by this mutation.
+    /// 解析此变更产生的连接引用。
+    fn resulting_reference(&self, current: &CredentialConnection) -> Option<String> {
+        match self {
+            Self::Unchanged => current.management_secret_reference.clone(),
+            Self::Created { reference } | Self::Replaced { reference, .. } => {
+                Some(reference.clone())
+            }
+            Self::Removed { .. } => None,
+        }
+    }
+
+    /// Returns whether the resulting key must be verified against the provider.
+    /// 返回产生的密钥是否必须向供应商验证。
+    fn requires_validation(&self) -> bool {
+        matches!(self, Self::Created { .. } | Self::Replaced { .. })
+    }
+
+    /// Returns whether this mutation removes the allowance-query credential.
+    /// 返回此变更是否移除用量查询凭据。
+    fn removes_key(&self) -> bool {
+        matches!(self, Self::Removed { .. })
+    }
+}
+
+/// Applies the requested optional management-key edit before configuration persistence.
+/// 在配置持久化前应用请求的可选管理密钥编辑。
+fn prepare_management_secret_mutation(
+    secret_store: &OsAiCredentialSecretStore,
+    current: &CredentialConnection,
+    management_key: Option<&str>,
+    remove_management_key: bool,
+) -> Result<ManagementSecretMutation, String> {
+    if remove_management_key {
+        let Some(reference) = current.management_secret_reference.as_deref() else {
+            return Ok(ManagementSecretMutation::Unchanged);
+        };
+        let previous = CredentialSecretResolver::read_secret(secret_store, reference)?;
+        CredentialSecretStore::delete_secret(secret_store, reference)?;
+        return Ok(ManagementSecretMutation::Removed {
+            reference: reference.to_string(),
+            previous,
+        });
+    }
+    let Some(value) = management_key.filter(|value| !value.trim().is_empty()) else {
+        return Ok(ManagementSecretMutation::Unchanged);
+    };
+    if let Some(reference) = current.management_secret_reference.as_deref() {
+        let previous = CredentialSecretResolver::read_secret(secret_store, reference)?;
+        let replacement = previous.replace_api_key(value.to_string())?;
+        CredentialSecretStore::replace_secret(
+            secret_store,
+            reference,
+            previous.revision,
+            &replacement,
+        )?;
+        return Ok(ManagementSecretMutation::Replaced {
+            reference: reference.to_string(),
+            previous,
+            replacement,
+        });
+    }
+    let reference = format!("ai_management_secret_{}", uuid::Uuid::new_v4().simple());
+    let secret = CredentialSecretEnvelope::new_api_key(value.to_string())?;
+    CredentialSecretStore::create_secret(secret_store, reference.as_str(), &secret)?;
+    Ok(ManagementSecretMutation::Created { reference })
+}
+
+/// Reverts one provider-management secret mutation.
+/// 回滚一次供应商管理秘密变更。
+fn rollback_management_secret_mutation(
+    secret_store: &OsAiCredentialSecretStore,
+    mutation: &ManagementSecretMutation,
+) -> Result<(), String> {
+    match mutation {
+        ManagementSecretMutation::Unchanged => Ok(()),
+        ManagementSecretMutation::Created { reference } => {
+            CredentialSecretStore::delete_secret(secret_store, reference)
+        }
+        ManagementSecretMutation::Replaced {
+            reference,
+            previous,
+            replacement,
+        } => {
+            let rollback = replacement.advance_with_material(previous.material.clone())?;
+            CredentialSecretStore::replace_secret(
+                secret_store,
+                reference,
+                replacement.revision,
+                &rollback,
+            )
+        }
+        ManagementSecretMutation::Removed {
+            reference,
+            previous,
+        } => secret_store.restore_deleted_secret(reference, previous),
+    }
+}
+
+/// Deletes the primary and optional management secrets as one cleanup operation.
+/// 将主秘密和可选管理秘密作为一次清理操作删除。
+fn delete_connection_secrets(
+    secret_store: &OsAiCredentialSecretStore,
+    primary_reference: &str,
+    management_reference: Option<&str>,
+) -> Result<(), String> {
+    CredentialSecretStore::delete_secret(secret_store, primary_reference)?;
+    if let Some(reference) = management_reference
+        && let Err(error) = CredentialSecretStore::delete_secret(secret_store, reference)
+    {
+        return Err(format!(
+            "Primary secret was deleted but management secret cleanup failed: {error}"
+        ));
+    }
+    Ok(())
+}
+
+/// Combines two independent rollback results without hiding either failure.
+/// 合并两个独立回滚结果且不隐藏任何失败。
+fn combine_results(first: Result<(), String>, second: Result<(), String>) -> Result<(), String> {
+    match (first, second) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(first), Err(second)) => Err(format!("{first}; {second}")),
+    }
 }
 
 /// Preserves a primary failure while exposing any failed compensation step.
@@ -1096,7 +1694,19 @@ pub(super) async fn service_remove_public_ai_connection(
     let secret_store = OsAiCredentialSecretStore;
     let removed_secret =
         CredentialSecretResolver::read_secret(&secret_store, removed.secret_reference.as_str())?;
+    let removed_management_secret = removed
+        .management_secret_reference
+        .as_deref()
+        .map(|reference| CredentialSecretResolver::read_secret(&secret_store, reference))
+        .transpose()?;
     CredentialSecretStore::delete_secret(&secret_store, removed.secret_reference.as_str())?;
+    if let Some(reference) = removed.management_secret_reference.as_deref()
+        && let Err(error) = CredentialSecretStore::delete_secret(&secret_store, reference)
+    {
+        let restore =
+            secret_store.restore_deleted_secret(removed.secret_reference.as_str(), &removed_secret);
+        return Err(compensated_operation_error(error, restore, Ok(())));
+    }
     let remove_result = mutate_public_ai_configuration_in_transaction(
         &state,
         "移除公共 AI 连接失败",
@@ -1113,11 +1723,18 @@ pub(super) async fn service_remove_public_ai_connection(
         Err(error) => {
             let _ = secret_store
                 .restore_deleted_secret(removed.secret_reference.as_str(), &removed_secret);
+            if let (Some(reference), Some(secret)) = (
+                removed.management_secret_reference.as_deref(),
+                removed_management_secret.as_ref(),
+            ) {
+                let _ = secret_store.restore_deleted_secret(reference, secret);
+            }
             return Err(error);
         }
     };
     drop(transaction);
     runtime.remove_connection_catalog(connection_id.as_str())?;
+    runtime.remove_connection_usage(connection_id.as_str())?;
     publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
     build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
 }
@@ -1150,6 +1767,32 @@ pub(super) async fn service_query_public_ai_connection_usage(
         .await
 }
 
+/// Saves the background account-usage refresh interval.
+/// 保存后台账号用量刷新间隔。
+pub(super) async fn service_save_public_ai_usage_refresh_settings(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiUsageRefreshSettingsRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    if !(30..=86_400).contains(&request.interval_seconds) {
+        return Err(String::from(
+            "Account usage refresh interval must be between 30 and 86400 seconds.",
+        ));
+    }
+    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
+    let configuration = mutate_public_ai_configuration(
+        &state,
+        "保存账号用量刷新间隔失败",
+        |configuration| {
+            configuration.usage_refresh_interval_seconds = request.interval_seconds;
+            Ok(())
+        },
+    )
+    .await?;
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
 /// Selects one model and remembers its exact account.
 /// 选择一个模型并记住其精确账号。
 pub(super) async fn service_select_public_ai_model(
@@ -1178,48 +1821,67 @@ pub(super) async fn service_select_public_ai_model(
     build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
 }
 
-/// Saves one connection-model override set after adapter validation.
-/// 在适配器校验后保存一组连接模型覆盖。
+/// Saves one provider-model-protocol override set after validating every matching account route.
+/// 在校验全部匹配账号路由后保存一组供应商、模型与协议覆盖。
 pub(super) async fn service_save_public_ai_model_overrides(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: PublicAiModelOverridesSaveRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
     let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
-    let key = PersistedAiConfiguration::connection_model_key(
-        request.connection_id.as_str(),
+    let catalogs = runtime.catalog_snapshot()?;
+    let key = PersistedAiConfiguration::provider_model_protocol_key(
+        request.provider_id.as_str(),
         request.model_id.as_str(),
+        request.protocol_id.as_str(),
     );
     let configuration = mutate_public_ai_configuration(
         &state,
         "保存公共 AI 模型覆盖失败",
         |configuration| {
+            let matching_connection_ids = configuration
+                .connection_graph
+                .connections
+                .values()
+                .filter(|connection| connection.provider_id == request.provider_id)
+                .filter(|connection| connection.selected_protocol == request.protocol_id)
+                .filter(|connection| {
+                    catalogs.get(connection.id.as_str()).is_some_and(|catalog| {
+                        catalog
+                            .models
+                            .iter()
+                            .any(|model| model.id == request.model_id)
+                    })
+                })
+                .map(|connection| connection.id.clone())
+                .collect::<Vec<_>>();
+            if matching_connection_ids.is_empty() {
+                return Err(format!(
+                    "Provider `{}` model `{}` has no synchronized account using protocol `{}`.",
+                    request.provider_id, request.model_id, request.protocol_id
+                ));
+            }
             let previous = configuration
                 .model_overrides
                 .insert(key.clone(), request.overrides);
-            let connection = configuration
-                .connection_graph
-                .connections
-                .get(request.connection_id.as_str())
-                .ok_or_else(|| {
-                    format!("Connection `{}` is not configured.", request.connection_id)
-                })?;
-            let mut validation_configuration = configuration.clone();
-            validation_configuration.active = Some(ActiveAiModelSelection {
-                provider_id: connection.provider_id.clone(),
-                model_id: request.model_id.clone(),
-                connection_id: request.connection_id.clone(),
-            });
-            if let Err(error) = runtime.resolve_active_selection(&validation_configuration) {
-                match previous {
-                    Some(value) => {
-                        configuration.model_overrides.insert(key.clone(), value);
+            for connection_id in matching_connection_ids {
+                let mut validation_configuration = configuration.clone();
+                validation_configuration.active = Some(ActiveAiModelSelection {
+                    provider_id: request.provider_id.clone(),
+                    model_id: request.model_id.clone(),
+                    connection_id,
+                });
+                if let Err(error) = runtime.resolve_active_selection(&validation_configuration) {
+                    match previous {
+                        Some(value) => {
+                            configuration.model_overrides.insert(key.clone(), value);
+                        }
+                        None => {
+                            configuration.model_overrides.remove(key.as_str());
+                        }
                     }
-                    None => {
-                        configuration.model_overrides.remove(key.as_str());
-                    }
+                    return Err(error);
                 }
-                return Err(error);
             }
             Ok(())
         },
@@ -1274,38 +1936,44 @@ fn build_public_ai_settings_snapshot(
     configuration: &PersistedAiConfiguration,
 ) -> Result<PublicAiSettingsSnapshot, String> {
     let catalogs = runtime.catalog_snapshot()?;
-    let model_override_records = catalogs
-        .iter()
-        .flat_map(|(connection_id, catalog)| {
-            catalog.models.iter().filter_map(|model| {
-                let key = PersistedAiConfiguration::connection_model_key(
-                    connection_id.as_str(),
-                    model.id.as_str(),
-                );
-                configuration
-                    .model_overrides
-                    .get(key.as_str())
-                    .cloned()
-                    .map(|overrides| PublicAiModelOverrideRecord {
-                        connection_id: connection_id.clone(),
+    let providers = runtime.effective_providers(configuration)?;
+    let mut model_override_records_by_key = BTreeMap::new();
+    for (connection_id, catalog) in &catalogs {
+        let Some(connection) = configuration
+            .connection_graph
+            .connections
+            .get(connection_id.as_str())
+        else {
+            continue;
+        };
+        for model in &catalog.models {
+            let key = PersistedAiConfiguration::provider_model_protocol_key(
+                connection.provider_id.as_str(),
+                model.id.as_str(),
+                connection.selected_protocol.as_str(),
+            );
+            if let Some(overrides) = configuration.model_overrides.get(key.as_str()).cloned() {
+                model_override_records_by_key.entry(key).or_insert_with(|| {
+                    PublicAiModelOverrideRecord {
+                        provider_id: connection.provider_id.clone(),
                         model_id: model.id.clone(),
+                        protocol_id: connection.selected_protocol.clone(),
                         overrides,
-                    })
-            })
-        })
-        .collect();
+                    }
+                });
+            }
+        }
+    }
+    let model_override_records = model_override_records_by_key.into_values().collect();
     Ok(PublicAiSettingsSnapshot {
-        providers: runtime
-            .providers()
-            .providers()
-            .into_iter()
-            .cloned()
-            .collect(),
+        usage_refresh_interval_seconds: configuration.usage_refresh_interval_seconds,
+        usage_cache: runtime.usage_cache_snapshot()?,
+        providers: providers.providers().into_iter().cloned().collect(),
         connections: configuration
             .connection_graph
             .connections
             .values()
-            .map(|connection| PublicAiConnectionSnapshot::new(runtime, connection))
+            .map(|connection| PublicAiConnectionSnapshot::new(runtime, configuration, connection))
             .collect::<Result<Vec<_>, _>>()?,
         provider_defaults: configuration
             .connection_graph
@@ -1435,9 +2103,6 @@ fn remove_connection_from_configuration(
     {
         configuration.active = None;
     }
-    configuration.model_overrides.retain(|key, _| {
-        !key.starts_with(format!("{}:{connection_id}:", connection_id.len()).as_str())
-    });
     configuration.secondary_routes.retain(|key, _| {
         !key.starts_with(format!("{}:{connection_id}:", connection_id.len()).as_str())
     });

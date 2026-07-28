@@ -349,6 +349,12 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
             ModelDiscoveryKind::Anthropic => {
                 discover_anthropic_models(&self.http, entry, connection, secret, generation).await
             }
+            ModelDiscoveryKind::AnthropicCompatible => {
+                discover_anthropic_compatible_models(
+                    &self.http, entry, connection, secret, generation,
+                )
+                .await
+            }
             ModelDiscoveryKind::Gemini => {
                 discover_gemini_models(&self.http, entry, connection, secret, generation).await
             }
@@ -395,8 +401,8 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
             AccountUsageQueryKind::MiniMaxTokenPlan => {
                 query_minimax_token_plan(&self.http, entry, secret.expose_value()).await
             }
-            AccountUsageQueryKind::OpenRouterCurrentKey => {
-                query_openrouter_current_key(&self.http, entry, secret.expose_value()).await
+            AccountUsageQueryKind::OpenRouterCredits => {
+                query_openrouter_credits(&self.http, entry, secret.expose_value()).await
             }
         };
         match result {
@@ -650,6 +656,58 @@ async fn discover_anthropic_models(
     ))
 }
 
+/// Fetches every Anthropic-compatible model page relative to a versioned base URL.
+/// 相对于带版本基础 URL 获取每一页 Anthropic 兼容模型。
+async fn discover_anthropic_compatible_models(
+    http: &reqwest::Client,
+    entry: &ServiceEntry,
+    connection: &CredentialConnection,
+    secret: &CredentialExecutionSecret,
+    generation: u64,
+) -> Result<ConnectionModelCatalog, String> {
+    let mut models = Vec::<ConnectionModel>::new();
+    let mut after_id = None::<String>;
+    loop {
+        let mut url = reqwest::Url::parse(
+            format!("{}/models", entry.base_url.trim_end_matches('/')).as_str(),
+        )
+        .map_err(|_| String::from("Anthropic-compatible model discovery URL is invalid."))?;
+        url.query_pairs_mut().append_pair("limit", "1000");
+        if let Some(cursor) = after_id.as_deref() {
+            url.query_pairs_mut().append_pair("after_id", cursor);
+        }
+        let body = send_metadata_get(
+            http,
+            entry,
+            url.as_str(),
+            secret,
+            "Anthropic-compatible model discovery",
+        )
+        .await?;
+        let page = parse_anthropic_model_page(body.as_str())?;
+        models.extend(page.models);
+        if !page.has_more {
+            break;
+        }
+        let next = page.last_id.ok_or_else(|| {
+            String::from(
+                "Anthropic-compatible model discovery reported more pages without `last_id`.",
+            )
+        })?;
+        if after_id.as_deref() == Some(next.as_str()) {
+            return Err(String::from(
+                "Anthropic-compatible model discovery repeated the same pagination cursor.",
+            ));
+        }
+        after_id = Some(next);
+    }
+    Ok(build_anthropic_model_catalog(
+        connection.id.as_str(),
+        generation,
+        models,
+    ))
+}
+
 /// Fetches every documented Gemini model page.
 /// 获取每一页文档化 Gemini 模型。
 async fn discover_gemini_models(
@@ -877,14 +935,14 @@ async fn query_minimax_token_plan(
     })
 }
 
-/// Queries the documented OpenRouter current-key endpoint.
-/// 查询文档化的 OpenRouter 当前密钥端点。
-async fn query_openrouter_current_key(
+/// Queries the documented OpenRouter credits endpoint with a management key.
+/// 使用管理密钥查询文档化的 OpenRouter 余额端点。
+async fn query_openrouter_credits(
     http: &reqwest::Client,
     entry: &ServiceEntry,
     secret: &str,
 ) -> Result<AccountUsageSnapshot, String> {
-    let url = format!("{}/key", entry.base_url.trim_end_matches('/'));
+    let url = format!("{}/credits", entry.base_url.trim_end_matches('/'));
     let response = http
         .get(url.as_str())
         .bearer_auth(secret)
@@ -904,19 +962,19 @@ async fn query_openrouter_current_key(
             controlled_error_body(body.as_str())
         ));
     }
-    let response: OpenRouterKeyResponse = serde_json::from_str(body.as_str())
+    let response: OpenRouterCreditsResponse = serde_json::from_str(body.as_str())
         .map_err(|error| format!("OpenRouter account usage JSON is invalid: {error}"))?;
+    let total_credits = response.data.total_credits.to_string();
+    let total_usage = response.data.total_usage.to_string();
+    let remaining = subtract_non_negative_decimal(total_credits.as_str(), total_usage.as_str())?;
     Ok(AccountUsageSnapshot {
         credential_id: String::new(),
         availability: AccountUsageAvailability::Supported,
-        plan_name: response
-            .data
-            .is_free_tier
-            .map(|is_free| if is_free { "Free" } else { "Paid" }.to_string()),
-        used_amount: response.data.usage.map(|value| value.to_string()),
-        remaining_amount: response.data.limit_remaining.map(|value| value.to_string()),
+        plan_name: Some(String::from("OpenRouter Credits")),
+        used_amount: Some(total_usage),
+        remaining_amount: Some(remaining.clone()),
         currency: Some(String::from("USD")),
-        balance_amount: None,
+        balance_amount: Some(remaining),
         quota_windows: Vec::new(),
         observed_at: current_unix_milliseconds(),
         refresh_message: None,
@@ -1128,9 +1186,10 @@ fn minimax_quota_window(input: MiniMaxQuotaWindowInput) -> Result<AccountUsageWi
         id: input.id,
         display_name: input.display_name,
         bucket_name: Some(input.bucket_name),
-        used: (!input.unlimited).then(|| input.total.saturating_sub(input.remaining).to_string()),
-        remaining: (!input.unlimited).then(|| input.remaining.to_string()),
-        total: (!input.unlimited).then(|| input.total.to_string()),
+        used: (input.available && !input.unlimited)
+            .then(|| input.total.saturating_sub(input.remaining).to_string()),
+        remaining: (input.available && !input.unlimited).then(|| input.remaining.to_string()),
+        total: (input.available && !input.unlimited).then(|| input.total.to_string()),
         remaining_percent: input
             .available
             .then_some(input.remaining_percent)
@@ -1164,28 +1223,124 @@ fn controlled_error_body(body: &str) -> String {
     body.chars().take(2_000).collect()
 }
 
-/// OpenRouter current-key response.
-/// OpenRouter 当前密钥响应。
+/// OpenRouter credits response.
+/// OpenRouter 余额响应。
 #[derive(Debug, Deserialize)]
-struct OpenRouterKeyResponse {
-    /// Current key metadata.
-    /// 当前密钥元数据。
-    data: OpenRouterKeyData,
+struct OpenRouterCreditsResponse {
+    /// Account credit metadata.
+    /// 账号余额元数据。
+    data: OpenRouterCreditsData,
 }
 
-/// OpenRouter current-key metadata used by the public usage contract.
-/// 公共用量契约使用的 OpenRouter 当前密钥元数据。
+/// OpenRouter account credit metadata used by the public usage contract.
+/// 公共用量契约使用的 OpenRouter 账号余额元数据。
 #[derive(Debug, Deserialize)]
-struct OpenRouterKeyData {
-    /// Total usage amount.
-    /// 总使用金额。
-    usage: Option<serde_json::Number>,
-    /// Remaining configured limit.
-    /// 剩余配置限额。
-    limit_remaining: Option<serde_json::Number>,
-    /// Whether this key is on the free tier.
-    /// 此密钥是否属于免费层。
-    is_free_tier: Option<bool>,
+struct OpenRouterCreditsData {
+    /// Total purchased credits.
+    /// 累计购买额度。
+    total_credits: serde_json::Number,
+    /// Total consumed credits.
+    /// 累计消耗额度。
+    total_usage: serde_json::Number,
+}
+
+/// Subtracts two non-negative JSON decimal strings without floating-point loss.
+/// 在不产生浮点精度损失的情况下对两个非负 JSON 十进制字符串做减法。
+fn subtract_non_negative_decimal(minuend: &str, subtrahend: &str) -> Result<String, String> {
+    let (mut left, left_scale) = normalized_unsigned_decimal_digits(minuend)?;
+    let (mut right, right_scale) = normalized_unsigned_decimal_digits(subtrahend)?;
+    let scale = left_scale.max(right_scale);
+    left.extend(std::iter::repeat_n(0, scale - left_scale));
+    right.extend(std::iter::repeat_n(0, scale - right_scale));
+    let width = left.len().max(right.len());
+    left.splice(0..0, std::iter::repeat_n(0, width - left.len()));
+    right.splice(0..0, std::iter::repeat_n(0, width - right.len()));
+    if left < right {
+        return Err(String::from(
+            "OpenRouter credits response reports total_usage greater than total_credits.",
+        ));
+    }
+    let mut borrow = 0_i16;
+    let mut result = vec![0_u8; width];
+    for index in (0..width).rev() {
+        let mut digit = left[index] as i16 - borrow - right[index] as i16;
+        if digit < 0 {
+            digit += 10;
+            borrow = 1;
+        } else {
+            borrow = 0;
+        }
+        result[index] = digit as u8;
+    }
+    format_unsigned_decimal_digits(result, scale)
+}
+
+/// Normalizes one non-negative JSON number into base-10 digits and a fractional scale.
+/// 将一个非负 JSON 数字归一化为十进制数字及小数位数。
+fn normalized_unsigned_decimal_digits(value: &str) -> Result<(Vec<u8>, usize), String> {
+    if value.starts_with('-') {
+        return Err(String::from(
+            "OpenRouter credits values cannot be negative.",
+        ));
+    }
+    let (mantissa, exponent) = match value.split_once(['e', 'E']) {
+        Some((mantissa, exponent)) => (
+            mantissa,
+            exponent
+                .parse::<i32>()
+                .map_err(|_| String::from("OpenRouter credits exponent is invalid."))?,
+        ),
+        None => (value, 0),
+    };
+    let fractional_digits = mantissa
+        .split_once('.')
+        .map_or(0, |(_, fraction)| fraction.len());
+    let digits = mantissa
+        .chars()
+        .filter(|character| *character != '.')
+        .map(|character| {
+            character
+                .to_digit(10)
+                .map(|digit| digit as u8)
+                .ok_or_else(|| String::from("OpenRouter credits value is not a JSON decimal."))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if digits.is_empty() {
+        return Err(String::from("OpenRouter credits value is empty."));
+    }
+    let resulting_scale = fractional_digits as i32 - exponent;
+    if resulting_scale < 0 {
+        let mut expanded = digits;
+        expanded.extend(std::iter::repeat_n(0, (-resulting_scale) as usize));
+        Ok((expanded, 0))
+    } else {
+        Ok((digits, resulting_scale as usize))
+    }
+}
+
+/// Formats normalized decimal digits while retaining exact fractional significance.
+/// 格式化归一化十进制数字并保留精确的小数有效位。
+fn format_unsigned_decimal_digits(mut digits: Vec<u8>, scale: usize) -> Result<String, String> {
+    while digits.len() > scale.saturating_add(1) && digits.first() == Some(&0) {
+        digits.remove(0);
+    }
+    if digits.len() <= scale {
+        digits.splice(0..0, std::iter::repeat_n(0, scale + 1 - digits.len()));
+    }
+    let mut text = digits
+        .into_iter()
+        .map(|digit| char::from(b'0' + digit))
+        .collect::<String>();
+    if scale > 0 {
+        text.insert(text.len() - scale, '.');
+        while text.ends_with('0') {
+            text.pop();
+        }
+        if text.ends_with('.') {
+            text.pop();
+        }
+    }
+    Ok(text)
 }
 
 /// OpenRouter model-endpoints response envelope.
@@ -1323,7 +1478,7 @@ struct MiniMaxQuotaModelRemain {
 mod tests {
     use super::{
         MiniMaxQuotaModelRemain, minimax_key_profile_id, minimax_quota_windows,
-        resolve_minimax_region,
+        resolve_minimax_region, subtract_non_negative_decimal,
     };
 
     /// Verifies MiniMax billing profiles are selected only from reviewed literal prefixes.
@@ -1412,5 +1567,20 @@ mod tests {
         assert!(windows.iter().all(|window| window.available));
         assert!(!windows[0].unlimited);
         assert!(windows[1].unlimited);
+    }
+
+    /// Verifies OpenRouter credit balances retain decimal precision and exponent semantics.
+    /// 验证 OpenRouter 余额保留十进制精度及指数语义。
+    #[test]
+    fn openrouter_credit_subtraction_is_exact() {
+        assert_eq!(
+            subtract_non_negative_decimal("100.10", "0.09").expect("decimal subtraction"),
+            "100.01"
+        );
+        assert_eq!(
+            subtract_non_negative_decimal("1e2", "2.5").expect("exponent subtraction"),
+            "97.5"
+        );
+        assert!(subtract_non_negative_decimal("1", "2").is_err());
     }
 }

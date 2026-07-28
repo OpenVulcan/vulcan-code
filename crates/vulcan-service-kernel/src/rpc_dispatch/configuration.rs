@@ -21,8 +21,11 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_add_public_ai_connection",
     "service_update_public_ai_connection",
     "service_remove_public_ai_connection",
+    "service_save_public_ai_custom_provider",
+    "service_remove_public_ai_custom_provider",
     "service_sync_public_ai_connection",
     "service_query_public_ai_connection_usage",
+    "service_save_public_ai_usage_refresh_settings",
     "service_select_public_ai_model",
     "service_save_public_ai_model_overrides",
     "service_save_public_ai_default_connection",
@@ -131,6 +134,22 @@ pub(super) async fn dispatch(
             service_remove_public_ai_connection(app, state, rpc_required_param(params, "request")?)
                 .await,
         ),
+        "service_save_public_ai_custom_provider" => rpc_json_result(
+            service_save_public_ai_custom_provider(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_remove_public_ai_custom_provider" => rpc_json_result(
+            service_remove_public_ai_custom_provider(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
         "service_sync_public_ai_connection" => rpc_json_result(
             service_sync_public_ai_connection(
                 app,
@@ -143,6 +162,14 @@ pub(super) async fn dispatch(
             service_query_public_ai_connection_usage(
                 state,
                 rpc_required_param(params, "connectionId")?,
+            )
+            .await,
+        ),
+        "service_save_public_ai_usage_refresh_settings" => rpc_json_result(
+            service_save_public_ai_usage_refresh_settings(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
             )
             .await,
         ),

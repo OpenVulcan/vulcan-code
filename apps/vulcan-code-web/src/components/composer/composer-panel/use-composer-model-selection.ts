@@ -5,7 +5,6 @@ import {
   type ModelPickerChoice,
 } from "@/components/composer/model-picker-control";
 import type { ComposerSelectOption } from "@/components/composer/composer-model";
-import { useI18n } from "@/i18n";
 import type { ProviderSummary, ReasoningSelectionSummary } from "@/types";
 
 // ComposerActiveProviderModel identifies the provider and model currently targeted by composer controls.
@@ -81,9 +80,6 @@ export interface ComposerModelSelectionController {
 // Returns: stable selection state, submission-safe reasoning data, and picker actions.
 // 返回值：稳定的选择状态、提交安全的推理数据与选择器操作。
 export function useComposerModelSelection(options: UseComposerModelSelectionOptions): ComposerModelSelectionController {
-  // t resolves fallback reasoning labels when the backend selector is unavailable.
-  // t 在后端选择器不可用时解析回退推理标签。
-  const { t } = useI18n();
   // modelChoice stores the optimistic provider/model key rendered by the picker.
   // modelChoice 保存模型选择器渲染的乐观 Provider/模型键。
   const [modelChoice, setModelChoice] = React.useState("");
@@ -137,26 +133,14 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
     const model = provider?.models?.find((candidate) => candidate.id === selectedChoice.modelId) ?? null;
     return provider && model ? { provider, model } : null;
   }, [activeModelChoiceKey, availableModelChoices, modelChoice, options.providers]);
-  // fallbackReasoningEffortOptions supplies preview labels only when the backend exposes no selector view.
-  // fallbackReasoningEffortOptions 仅在后端未暴露选择器视图时提供预览标签。
-  const fallbackReasoningEffortOptions = React.useMemo<ComposerSelectOption[]>(() => [
-    { value: "off", label: t("composer.reasoning.off") },
-    { value: "low", label: t("composer.reasoning.low") },
-    { value: "medium", label: t("composer.reasoning.medium") },
-    { value: "high", label: t("composer.reasoning.high") },
-    { value: "x-high", label: t("composer.reasoning.max") },
-  ], [t]);
-  // reasoningEffortOptions prefers backend-routed capabilities over local preview labels.
-  // reasoningEffortOptions 优先使用后端路由能力，再使用本地预览标签。
+  // reasoningEffortOptions exposes only levels declared by the active model catalog.
+  // reasoningEffortOptions 仅暴露当前模型目录明确声明的档位。
   const reasoningEffortOptions = React.useMemo<ComposerSelectOption[]>(() => {
-    if (options.reasoningSelection?.options.length) {
-      return options.reasoningSelection.options.map((option) => ({
-        value: option.value,
-        label: option.label,
-      }));
-    }
-    return fallbackReasoningEffortOptions;
-  }, [fallbackReasoningEffortOptions, options.reasoningSelection]);
+    return options.reasoningSelection?.options.map((option) => ({
+      value: option.value,
+      label: option.label,
+    })) ?? [];
+  }, [options.reasoningSelection]);
   // reasoningEffortValuesSignature changes only when the set or order of selectable values changes.
   // reasoningEffortValuesSignature 仅在可选值集合或顺序变化时改变。
   const reasoningEffortValuesSignature = React.useMemo(
@@ -189,7 +173,7 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
       if (reasoningEffortOptions.some((option) => option.value === current)) {
         return current;
       }
-      return reasoningEffortOptions[0]?.value ?? "medium";
+      return reasoningEffortOptions[0]?.value ?? "";
     });
   }, [reasoningEffortValuesSignature, serviceSelectedReasoningEffort]);
 

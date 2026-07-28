@@ -10,21 +10,26 @@ import {
 } from "@/components/ui/dialog"
 import { savePublicAiModelOverrides } from "@/service/settings-actions-service"
 import type {
-  PublicAiConnection,
   PublicAiModel,
   PublicAiModelOverrides,
   PublicAiSettingsSnapshot,
 } from "@/types"
 
-// PublicAiModelOverridesDialog edits only adapter-declared controls for one exact account and model.
-// PublicAiModelOverridesDialog 只编辑一个精确账号与模型由适配器声明的控制项。
+// PublicAiModelOverridesDialog edits adapter-declared controls for one provider, model, and protocol.
+// PublicAiModelOverridesDialog 编辑一个供应商、模型与协议由适配器声明的控制项。
 export function PublicAiModelOverridesDialog(props: {
-  // Exact credential connection.
-  // 精确凭据连接。
-  connection: PublicAiConnection | null
+  // User-visible provider name.
+  // 用户可见供应商名称。
+  providerDisplayName: string | null
+  // Exact provider identifier.
+  // 精确供应商标识。
+  providerId: string | null
   // Exact runtime-discovered model.
   // 精确运行时发现模型。
   model: PublicAiModel | null
+  // Exact protocol profile identifier.
+  // 精确协议配置档标识。
+  protocolId: string | null
   // Existing override value.
   // 现有覆盖值。
   overrides?: PublicAiModelOverrides
@@ -45,6 +50,10 @@ export function PublicAiModelOverridesDialog(props: {
   const [parameterValues, setParameterValues] = React.useState<Record<string, string>>({})
   const [error, setError] = React.useState<string | null>(null)
   const [saving, setSaving] = React.useState(false)
+  const modelParameters = React.useMemo(
+    () => applicableModelParameters(props.model, props.protocolId),
+    [props.model, props.protocolId],
+  )
 
   React.useEffect(() => {
     if (!props.open || !props.model) {
@@ -66,26 +75,26 @@ export function PublicAiModelOverridesDialog(props: {
     )
     setParameterValues(
       Object.fromEntries(
-        props.model.capabilities.model_parameters.map((definition) => {
+        modelParameters.map((definition) => {
           const current = overrides?.model_parameters?.[definition.id] as { value?: unknown } | undefined
           return [definition.id, current?.value === undefined ? "" : String(current.value)]
         }),
       ),
     )
     setError(null)
-  }, [props.model, props.open, props.overrides])
+  }, [modelParameters, props.model, props.open, props.overrides])
 
   // save validates browser scalar input and lets the backend enforce the authoritative contract.
   // save 校验浏览器标量输入，并由后端执行权威契约校验。
   const save = React.useCallback(async () => {
-    if (!props.connection || !props.model) {
+    if (!props.providerId || !props.model || !props.protocolId) {
       return
     }
     setSaving(true)
     setError(null)
     try {
       const modelParameters: Record<string, unknown> = {}
-      for (const definition of props.model.capabilities.model_parameters) {
+      for (const definition of applicableModelParameters(props.model, props.protocolId)) {
         const raw = parameterValues[definition.id]?.trim() ?? ""
         if (!raw) {
           continue
@@ -136,8 +145,9 @@ export function PublicAiModelOverridesDialog(props: {
         model_parameters: modelParameters,
       }
       props.onSaved(await savePublicAiModelOverrides({
-        connectionId: props.connection.id,
+        providerId: props.providerId,
         modelId: props.model.id,
+        protocolId: props.protocolId,
         overrides,
       }))
       props.onOpenChange(false)
@@ -162,7 +172,7 @@ export function PublicAiModelOverridesDialog(props: {
         <DialogHeader>
           <DialogTitle>模型附加条件</DialogTitle>
           <DialogDescription>
-            {props.connection?.display_name} · {props.model?.display_name}
+            {props.providerDisplayName} · {props.model?.display_name} · {protocolDisplayName(props.protocolId)}
           </DialogDescription>
         </DialogHeader>
         <label className="settings-field">
@@ -207,7 +217,7 @@ export function PublicAiModelOverridesDialog(props: {
             </select>
           </label>
         ) : null}
-        {props.model?.capabilities.model_parameters.map((definition) => (
+        {modelParameters.map((definition) => (
           <ModelParameterField
             definition={definition}
             key={definition.id}
@@ -230,6 +240,45 @@ export function PublicAiModelOverridesDialog(props: {
       </DialogContent>
     </Dialog>
   )
+}
+
+// applicableModelParameters returns only controls registered for the exact model protocol.
+// applicableModelParameters 仅返回为精确模型协议注册的控件。
+function applicableModelParameters(
+  model: PublicAiModel | null,
+  protocolId: string | null,
+): PublicAiModel["capabilities"]["model_parameters"] {
+  if (!model || !protocolId) {
+    return []
+  }
+  return model.capabilities.model_parameters.filter((definition) => {
+    const matchesProtocol = definition.protocol_ids.length === 0
+      || definition.protocol_ids.includes(protocolId)
+    const matchesModel = definition.model_ids.length === 0
+      || definition.model_ids.includes(model.id)
+    return matchesProtocol && matchesModel
+  })
+}
+
+// protocolDisplayName maps exact protocol identifiers to user-visible labels.
+// protocolDisplayName 把精确协议标识映射为用户可见标签。
+function protocolDisplayName(protocolId: string | null): string {
+  switch (protocolId) {
+    case "anthropic-messages.v1":
+      return "Anthropic Messages"
+    case "anthropic-messages-video.v1":
+      return "Anthropic Messages + Video"
+    case "claude-code-messages.v1":
+      return "Claude Code Messages"
+    case "openai-chat-completions.v1":
+      return "OpenAI Chat Completions"
+    case "openai-codex-responses.v1":
+      return "OpenAI Codex Responses"
+    case "openai-responses.v1":
+      return "OpenAI Responses"
+    default:
+      return protocolId ?? ""
+  }
 }
 
 // ModelParameterField renders one scalar control exactly from the registered schema.

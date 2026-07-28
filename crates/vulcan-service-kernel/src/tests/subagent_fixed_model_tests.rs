@@ -50,6 +50,7 @@ fn single_visible_public_model_configuration() -> (
             credential_id: String::from("credential-a"),
             display_name: String::from("Account A"),
             secret_reference: String::from("secret-a"),
+            management_secret_reference: None,
             verified_protocols: std::collections::BTreeSet::from([String::from("openai_chat")]),
             selected_protocol: String::from("openai_chat"),
             prompt_cache_by_protocol: std::collections::BTreeMap::new(),

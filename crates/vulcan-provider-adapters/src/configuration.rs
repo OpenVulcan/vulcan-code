@@ -1,7 +1,7 @@
 //! Persisted public AI configuration without provider catalogs or secrets.
 //! 不包含供应商目录或秘钥的持久化公共 AI 配置。
 
-use crate::{PersistedConnectionGraph, SecondaryRouteSelection};
+use crate::{PersistedConnectionGraph, ProviderDescriptor, SecondaryRouteSelection};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use vulcan_ai_contract::{ModelParameterValue, PromptCachePolicy};
@@ -45,8 +45,16 @@ pub struct ModelExecutionOverrides {
 
 /// Stores all new AI configuration while excluding runtime-discovered model catalogs.
 /// 保存全部新 AI 配置，同时排除运行时发现的模型目录。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PersistedAiConfiguration {
+    /// Background account-usage refresh interval in seconds.
+    /// 后台账号用量刷新间隔秒数。
+    #[serde(default = "default_usage_refresh_interval_seconds")]
+    pub usage_refresh_interval_seconds: u64,
+    /// User-owned compatibility provider definitions without credential secrets or model catalogs.
+    /// 不包含凭据秘密或模型目录的用户自有兼容供应商定义。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub custom_providers: BTreeMap<String, ProviderDescriptor>,
     /// Exact active model and account selection.
     /// 精确的当前模型与账号选择。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -55,8 +63,8 @@ pub struct PersistedAiConfiguration {
     /// 供应商连接与账号偏好。
     #[serde(default)]
     pub connection_graph: PersistedConnectionGraph,
-    /// Per-connection model overrides keyed by collision-resistant composite key.
-    /// 按抗冲突组合键索引的连接模型覆盖。
+    /// Per-provider, model, and protocol overrides keyed by a collision-resistant composite key.
+    /// 按抗冲突组合键索引的供应商、模型与协议覆盖。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub model_overrides: BTreeMap<String, ModelExecutionOverrides>,
     /// Per-connection model secondary routes keyed by collision-resistant composite key.
@@ -65,7 +73,53 @@ pub struct PersistedAiConfiguration {
     pub secondary_routes: BTreeMap<String, SecondaryRouteSelection>,
 }
 
+/// Returns the default five-minute account-usage refresh interval.
+/// 返回默认五分钟账号用量刷新间隔。
+fn default_usage_refresh_interval_seconds() -> u64 {
+    300
+}
+
+impl Default for PersistedAiConfiguration {
+    /// Builds one configuration with no providers and a five-minute usage refresh interval.
+    /// 构建一个不含供应商且用量刷新间隔为五分钟的配置。
+    fn default() -> Self {
+        Self {
+            usage_refresh_interval_seconds: default_usage_refresh_interval_seconds(),
+            custom_providers: BTreeMap::new(),
+            active: None,
+            connection_graph: PersistedConnectionGraph::default(),
+            model_overrides: BTreeMap::new(),
+            secondary_routes: BTreeMap::new(),
+        }
+    }
+}
+
 impl PersistedAiConfiguration {
+    /// Builds a stable key for one provider-model-protocol scoped setting.
+    /// 为一个供应商、模型与协议作用域设置构建稳定键。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id`, `model_id`, and `protocol_id` are exact registered identifiers.
+    /// `provider_id`、`model_id` 与 `protocol_id` 是精确注册标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A collision-resistant length-prefixed key shared by every matching account.
+    /// 返回由全部匹配账号共享的抗冲突长度前缀键。
+    pub fn provider_model_protocol_key(
+        provider_id: &str,
+        model_id: &str,
+        protocol_id: &str,
+    ) -> String {
+        format!(
+            "{}:{provider_id}:{}:{model_id}:{}:{protocol_id}",
+            provider_id.len(),
+            model_id.len(),
+            protocol_id.len()
+        )
+    }
+
     /// Builds a stable key for one connection-model scoped setting.
     /// 为一个连接模型作用域设置构建稳定键。
     ///
@@ -99,5 +153,19 @@ mod tests {
             serde_json::to_string(&PersistedAiConfiguration::default()).expect("must serialize");
         assert!(!encoded.contains("catalog"));
         assert!(!encoded.contains("models"));
+    }
+
+    /// Verifies model overrides are independent from credential connection identifiers.
+    /// 验证模型覆盖独立于凭据连接标识。
+    #[test]
+    fn model_override_key_uses_provider_model_and_protocol_scope() {
+        assert_eq!(
+            PersistedAiConfiguration::provider_model_protocol_key(
+                "minimax",
+                "MiniMax-M3",
+                "anthropic-messages.v1",
+            ),
+            "7:minimax:10:MiniMax-M3:21:anthropic-messages.v1",
+        );
     }
 }

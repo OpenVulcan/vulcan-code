@@ -106,6 +106,7 @@ fn resolve_runtime_reasoning_effort(
     let effort = match requested {
         crate::provider_config::ReasoningEffortLevel::Off => return Ok(None),
         crate::provider_config::ReasoningEffortLevel::None => ReasoningEffort::None,
+        crate::provider_config::ReasoningEffortLevel::Adaptive => ReasoningEffort::Adaptive,
         crate::provider_config::ReasoningEffortLevel::Minimal => ReasoningEffort::Minimal,
         crate::provider_config::ReasoningEffortLevel::Low => ReasoningEffort::Low,
         crate::provider_config::ReasoningEffortLevel::Medium => ReasoningEffort::Medium,
@@ -122,11 +123,10 @@ fn resolve_runtime_reasoning_effort(
     {
         Ok(Some(effort))
     } else {
-        Err(format!(
-            "Model `{}` does not expose reasoning effort `{}` in its active catalog.",
-            execution.model.id,
-            effort.as_str()
-        ))
+        // A saved workbench preference can outlive the selected model. The catalog remains
+        // authoritative, so an unsupported preference means provider-default reasoning.
+        // 已保存的工作台偏好可能比所选模型存活更久。目录保持权威，因此不受支持的偏好表示使用供应商默认推理。
+        Ok(None)
     }
 }
 

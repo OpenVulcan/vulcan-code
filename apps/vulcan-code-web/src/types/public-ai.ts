@@ -44,6 +44,7 @@ export interface PublicAiServiceEntry {
   display_name: string;
   base_url: string;
   credential_profiles: PublicAiCredentialProfile[];
+  authentication: string;
   protocol_routes: PublicAiProtocolRoute[];
 }
 
@@ -52,7 +53,27 @@ export interface PublicAiServiceEntry {
 export interface PublicAiProviderDescriptor {
   id: string;
   display_name: string;
+  kind: "system" | "custom";
   service_entries: PublicAiServiceEntry[];
+}
+
+// PublicAiCustomProviderProtocol identifies one user-selected compatible wire protocol.
+// PublicAiCustomProviderProtocol 标识用户选择的一种兼容 Wire 协议。
+export type PublicAiCustomProviderProtocol =
+  | "anthropic_messages"
+  | "open_ai_chat"
+  | "open_ai_responses";
+
+// PublicAiCustomProviderSaveRequest creates or replaces one user-defined provider.
+// PublicAiCustomProviderSaveRequest 创建或替换一个用户自定义供应商。
+export interface PublicAiCustomProviderSaveRequest {
+  providerId?: string;
+  displayName: string;
+  baseUrl: string;
+  protocol: PublicAiCustomProviderProtocol;
+  authentication: "bearer_authorization" | "x_api_key";
+  credentialDisplayName: string;
+  secret: string;
 }
 
 // PublicAiConnection carries redacted credential connection metadata.
@@ -63,7 +84,8 @@ export interface PublicAiConnection {
   service_entry_id: string;
   credential_profile_id: string;
   billing_kind: CredentialBillingKind;
-  usage_capability: "unsupported" | "mini_max_token_plan" | "open_router_current_key";
+  usage_capability: "unsupported" | "mini_max_token_plan" | "open_router_credits";
+  has_management_key: boolean;
   credential_mode: CredentialMode;
   credential_id: string;
   display_name: string;
@@ -143,14 +165,17 @@ export interface PublicAiModelOverrides {
 // PublicAiModelOverrideRecord identifies one override without composite-key parsing.
 // PublicAiModelOverrideRecord 无需解析组合键即可标识一个覆盖。
 export interface PublicAiModelOverrideRecord {
-  connectionId: string;
+  providerId: string;
   modelId: string;
+  protocolId: string;
   overrides: PublicAiModelOverrides;
 }
 
 // PublicAiSettingsSnapshot combines persisted and process-local settings state.
 // PublicAiSettingsSnapshot 组合持久化设置状态与进程内设置状态。
 export interface PublicAiSettingsSnapshot {
+  usageRefreshIntervalSeconds: number;
+  usageCache: Record<string, PublicAiAccountUsage>;
   providers: PublicAiProviderDescriptor[];
   connections: PublicAiConnection[];
   providerDefaults: Record<string, string>;
@@ -203,6 +228,7 @@ export interface PublicAiConnectionAddRequest {
   displayName: string;
   selectedProtocol: string;
   secret: string;
+  managementKey?: string;
 }
 
 // PublicAiConnectionUpdateRequest describes one credential edit.
@@ -215,6 +241,8 @@ export interface PublicAiConnectionUpdateRequest {
   credentialMode: CredentialMode;
   selectedProtocol: string;
   secret?: string;
+  managementKey?: string;
+  removeManagementKey?: boolean;
 }
 
 // PublicAiOAuthClientConfiguration carries user-owned client settings for declared flows.

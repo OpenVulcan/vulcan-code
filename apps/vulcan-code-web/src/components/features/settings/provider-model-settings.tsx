@@ -2,26 +2,25 @@ import * as React from "react"
 import { FileText } from "lucide-react"
 
 import { PublicAiModelOverridesDialog } from "@/components/features/settings/public-ai-model-overrides-dialog"
-import {
-  loadPublicAiSettings,
-  selectPublicAiModel,
-} from "@/service/settings-actions-service"
+import { loadPublicAiSettings } from "@/service/settings-actions-service"
 import type {
-  PublicAiConnection,
   PublicAiModel,
   PublicAiProviderDescriptor,
   PublicAiSettingsSnapshot,
 } from "@/types"
 
-// PublicModelRoute binds one discovered model to the credential that exposes it.
-// PublicModelRoute 将一个发现模型绑定到暴露该模型的凭据。
-interface PublicModelRoute {
-  // Exact credential connection.
-  // 精确凭据连接。
-  connection: PublicAiConnection
-  // Credential-scoped model snapshot.
-  // 凭据作用域模型快照。
+// PublicModelProtocolRoute binds one discovered model to its provider protocol scope.
+// PublicModelProtocolRoute 将一个发现模型绑定到其供应商协议作用域。
+interface PublicModelProtocolRoute {
+  // Number of credential accounts exposing this exact route.
+  // 暴露此精确路由的凭据账号数量。
+  accountCount: number
+  // Credential-discovered model snapshot used for exact capability controls.
+  // 用于精确能力控件的凭据发现模型快照。
   model: PublicAiModel
+  // Exact protocol profile identifier.
+  // 精确协议配置档标识。
+  protocolId: string
 }
 
 // PublicProviderModels groups deduplicated models under one registered provider.
@@ -30,9 +29,9 @@ interface PublicProviderModels {
   // Registered provider descriptor.
   // 已注册供应商描述。
   provider: PublicAiProviderDescriptor
-  // Model routes keyed by exact model identifier.
-  // 按精确模型标识索引的模型路由。
-  models: Map<string, PublicModelRoute[]>
+  // Protocol-scoped model routes keyed by exact model identifier.
+  // 按精确模型标识索引的协议作用域模型路由。
+  models: Map<string, PublicModelProtocolRoute[]>
 }
 
 // ModelListSettingsArea renders the process-local public AI model catalog.
@@ -41,8 +40,7 @@ export function ModelListSettingsArea() {
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [selectedProviderId, setSelectedProviderId] = React.useState<string | null>(null)
-  const [busySelector, setBusySelector] = React.useState<string | null>(null)
-  const [editingRoute, setEditingRoute] = React.useState<PublicModelRoute | null>(null)
+  const [editingRoute, setEditingRoute] = React.useState<PublicModelProtocolRoute | null>(null)
 
   React.useEffect(() => {
     let active = true
@@ -82,25 +80,6 @@ export function ModelListSettingsArea() {
     ?? null
   const totalModelCount = groupedProviders.reduce((total, group) => total + group.models.size, 0)
 
-  // activateRoute persists one exact provider, model, and account selection.
-  // activateRoute 持久化一个精确供应商、模型与账号选择。
-  const activateRoute = React.useCallback(async (route: PublicModelRoute) => {
-    const selector = `${route.connection.id}/${route.model.id}`
-    setBusySelector(selector)
-    setError(null)
-    try {
-      setSnapshot(await selectPublicAiModel({
-        providerId: route.connection.provider_id,
-        modelId: route.model.id,
-        connectionId: route.connection.id,
-      }))
-    } catch (reason) {
-      setError(errorMessage(reason))
-    } finally {
-      setBusySelector(null)
-    }
-  }, [])
-
   return (
     <div className="settings-direct-content model-list-surface">
       {error ? <p className="settings-muted-line settings-error-text">{error}</p> : null}
@@ -139,34 +118,27 @@ export function ModelListSettingsArea() {
                 if (!representative) {
                   return null
                 }
+                const availableAccountCount = routes.reduce(
+                  (total, route) => total + route.accountCount,
+                  0,
+                )
                 return (
                   <article className="settings-model-row" key={`${selectedGroup.provider.id}/${modelId}`}>
                     <div>
                       <strong>{representative.model.display_name}</strong>
-                      <span>{modelId} · {routes.length} 个可用账号</span>
+                      <span>{modelId} · {availableAccountCount} 个可用账号</span>
                       <div className="settings-card-actions">
                         {routes.map((route) => {
-                          const selector = `${route.connection.id}/${route.model.id}`
-                          const active = snapshot.active?.connection_id === route.connection.id
-                            && snapshot.active.model_id === route.model.id
+                          const selector = `${selectedGroup.provider.id}/${route.model.id}/${route.protocolId}`
                           return (
-                            <React.Fragment key={selector}>
-                              <button
-                                className={`skill-action-button secondary ${active ? "active" : ""}`}
-                                disabled={busySelector === selector}
-                                onClick={() => void activateRoute(route)}
-                                type="button"
-                              >
-                                {active ? "当前 · " : ""}{route.connection.display_name}
-                              </button>
-                              <button
-                                className="skill-action-button secondary"
-                                onClick={() => setEditingRoute(route)}
-                                type="button"
-                              >
-                                附加条件
-                              </button>
-                            </React.Fragment>
+                            <button
+                              className="skill-action-button secondary"
+                              key={selector}
+                              onClick={() => setEditingRoute(route)}
+                              type="button"
+                            >
+                              {protocolDisplayName(route.protocolId)} · 附加条件
+                            </button>
                           )
                         })}
                       </div>
@@ -179,7 +151,6 @@ export function ModelListSettingsArea() {
         </div>
       )}
       <PublicAiModelOverridesDialog
-        connection={editingRoute?.connection ?? null}
         model={editingRoute?.model ?? null}
         onOpenChange={(open) => {
           if (!open) {
@@ -192,20 +163,24 @@ export function ModelListSettingsArea() {
         }}
         open={editingRoute !== null}
         overrides={snapshot?.modelOverrideRecords.find((record) => (
-          record.connectionId === editingRoute?.connection.id
+          record.providerId === selectedGroup?.provider.id
           && record.modelId === editingRoute?.model.id
+          && record.protocolId === editingRoute?.protocolId
         ))?.overrides}
+        protocolId={editingRoute?.protocolId ?? null}
+        providerDisplayName={selectedGroup?.provider.display_name ?? null}
+        providerId={selectedGroup?.provider.id ?? null}
       />
     </div>
   )
 }
 
-// buildProviderModelGroups derives provider/model/account rows from current memory catalogs.
-// buildProviderModelGroups 从当前内存目录派生供应商、模型与账号行。
+// buildProviderModelGroups derives provider, model, and protocol rows from current memory catalogs.
+// buildProviderModelGroups 从当前内存目录派生供应商、模型与协议行。
 function buildProviderModelGroups(snapshot: PublicAiSettingsSnapshot): PublicProviderModels[] {
   return snapshot.providers
     .map((provider) => {
-      const models = new Map<string, PublicModelRoute[]>()
+      const models = new Map<string, PublicModelProtocolRoute[]>()
       for (const connection of snapshot.connections) {
         if (connection.provider_id !== provider.id) {
           continue
@@ -216,13 +191,36 @@ function buildProviderModelGroups(snapshot: PublicAiSettingsSnapshot): PublicPro
         }
         for (const model of catalog.models) {
           const routes = models.get(model.id) ?? []
-          routes.push({ connection, model })
+          const existing = routes.find((route) => route.protocolId === connection.selected_protocol)
+          if (existing) {
+            existing.accountCount += 1
+          } else {
+            routes.push({
+              accountCount: 1,
+              model,
+              protocolId: connection.selected_protocol,
+            })
+          }
           models.set(model.id, routes)
         }
       }
       return { provider, models }
     })
     .filter((group) => group.models.size > 0)
+}
+
+// protocolDisplayName maps exact protocol profile identifiers to user-visible labels.
+// protocolDisplayName 把精确协议配置档标识映射为用户可见标签。
+function protocolDisplayName(protocolId: string): string {
+  const labels: Record<string, string> = {
+    "anthropic-messages.v1": "Anthropic Messages",
+    "anthropic-messages-video.v1": "Anthropic Messages + Video",
+    "claude-code-messages.v1": "Claude Code Messages",
+    "openai-chat-completions.v1": "OpenAI Chat Completions",
+    "openai-codex-responses.v1": "OpenAI Codex Responses",
+    "openai-responses.v1": "OpenAI Responses",
+  }
+  return labels[protocolId] ?? protocolId
 }
 
 // errorMessage converts rejected service values into user-visible diagnostics.

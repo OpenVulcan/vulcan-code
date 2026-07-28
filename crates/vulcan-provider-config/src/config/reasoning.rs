@@ -15,6 +15,9 @@ pub enum ReasoningEffortLevel {
     /// Explicitly requests no reasoning when the active model exposes that level.
     /// 当当前模型公开该档位时，显式请求不进行推理。
     None,
+    /// Requests provider-managed adaptive reasoning.
+    /// 请求由供应商管理的自适应推理。
+    Adaptive,
     /// Requests the smallest provider-declared reasoning preference.
     /// 请求供应商声明的最小推理档位。
     Minimal,
@@ -41,9 +44,10 @@ pub enum ReasoningEffortLevel {
 impl ReasoningEffortLevel {
     /// Lists all workbench reasoning preferences in ascending order.
     /// 按升序列出全部工作台推理偏好。
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Off,
         Self::None,
+        Self::Adaptive,
         Self::Minimal,
         Self::Low,
         Self::Medium,
@@ -65,13 +69,14 @@ impl ReasoningEffortLevel {
         match self {
             Self::Off => 0,
             Self::None => 1,
-            Self::Minimal => 2,
-            Self::Low => 3,
-            Self::Medium => 4,
-            Self::High => 5,
-            Self::XHigh => 6,
-            Self::Max => 7,
-            Self::Ultra => 8,
+            Self::Adaptive => 2,
+            Self::Minimal => 3,
+            Self::Low => 4,
+            Self::Medium => 5,
+            Self::High => 6,
+            Self::XHigh => 7,
+            Self::Max => 8,
+            Self::Ultra => 9,
         }
     }
 
@@ -81,6 +86,7 @@ impl ReasoningEffortLevel {
         match self {
             Self::Off => "默认",
             Self::None => "关闭",
+            Self::Adaptive => "自适应",
             Self::Minimal => "最小",
             Self::Low => "低",
             Self::Medium => "中",
