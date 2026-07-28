@@ -21,6 +21,7 @@ import type { ConversationSessionReviewSummary } from "@/components/conversation
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import { GeneratedMediaPlayerWindow, type GeneratedMediaAttachment } from "@/components/media/generated-media";
 import { Textarea } from "@/components/ui/textarea";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type {
@@ -385,7 +386,7 @@ export function ComposerPanel(props: {
   }, [appendGlobalInput]);
 
   return (
-    <>
+    <TooltipProvider delayDuration={500}>
       {props.pendingPrompts.length ? (
         <PendingPromptQueueStrip
           entries={props.pendingPrompts}
@@ -527,6 +528,6 @@ export function ComposerPanel(props: {
         saving={goalSaving}
         tokenBudget={goalTokenBudgetDraft}
       />
-    </>
+    </TooltipProvider>
   );
 }

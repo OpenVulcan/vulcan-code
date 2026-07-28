@@ -1,7 +1,17 @@
 import * as React from "react";
-import { Check, Cpu, Search } from "lucide-react";
+import { Check, Cpu, RefreshCw, Search, UserRound } from "lucide-react";
+import { ProviderIcon } from "@/components/features/settings/provider-icon";
+import { CredentialUsageOverview } from "@/components/public-ai/credential-usage-overview";
 import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -18,7 +28,11 @@ import {
 } from "@/components/ui/tooltip";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
-import type { ProviderSummary } from "@/types";
+import {
+  loadPublicAiSettings,
+  queryPublicAiConnectionUsage,
+} from "@/service/settings-actions-service";
+import type { ProviderSummary, PublicAiSettingsSnapshot } from "@/types";
 
 // ModelPickerChoice describes one flattened workbench model row.
 // ModelPickerChoice 描述模型筛选器中的单条扁平工作台模型行。
@@ -286,37 +300,222 @@ export function ModelAccountPickerControl(props: {
   // 宿主流程是否临时禁用账号切换。
   disabled?: boolean;
 }) {
-  if (props.accounts.length <= 1) {
+  // t resolves account-card copy in the active locale.
+  // t 使用当前语言解析账号卡片文案。
+  const { t } = useI18n();
+  // selectorOpen prevents the account details card from covering the account menu.
+  // selectorOpen 防止账号详情卡片遮挡账号菜单。
+  const [selectorOpen, setSelectorOpen] = React.useState(false);
+  // detailsOpen controls the hoverable account information card.
+  // detailsOpen 控制可驻留的账号信息悬浮卡片。
+  const [detailsOpen, setDetailsOpen] = React.useState(false);
+  // detailsSnapshot contains the latest process-memory credential and usage snapshot.
+  // detailsSnapshot 包含最新的进程内凭据与用量快照。
+  const [detailsSnapshot, setDetailsSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null);
+  // detailsLoading reports the memory-snapshot read in progress.
+  // detailsLoading 表示正在读取内存快照。
+  const [detailsLoading, setDetailsLoading] = React.useState(false);
+  // usageRefreshing reports an explicit provider usage refresh in progress.
+  // usageRefreshing 表示正在执行显式供应商用量刷新。
+  const [usageRefreshing, setUsageRefreshing] = React.useState(false);
+  // detailsError retains the latest account-card operation failure.
+  // detailsError 保留最近一次账号卡片操作失败。
+  const [detailsError, setDetailsError] = React.useState<string | null>(null);
+  // selectedAccount resolves the exact current connection with the established first-account degradation.
+  // selectedAccount 使用既定的首账号降级规则解析精确当前连接。
+  const selectedAccount = props.accounts.find((account) => account.connectionId === props.value)
+    ?? props.accounts[0];
+  // connection is the authoritative redacted credential metadata for this account.
+  // connection 是该账号的权威脱敏凭据元数据。
+  const connection = detailsSnapshot?.connections.find((candidate) => candidate.id === selectedAccount?.connectionId);
+  // provider is the registered adapter that owns the exact credential.
+  // provider 是拥有该精确凭据的已注册适配器。
+  const provider = detailsSnapshot?.providers.find((candidate) => candidate.id === connection?.provider_id);
+  // entry is the exact regional or plan service entry selected by the credential.
+  // entry 是该凭据选择的精确区域或套餐服务入口。
+  const entry = provider?.service_entries.find((candidate) => candidate.id === connection?.service_entry_id);
+  // credentialProfile is the exact acquisition and usage contract selected by the credential.
+  // credentialProfile 是该凭据选择的精确获取与用量契约。
+  const credentialProfile = entry?.credential_profiles.find((candidate) => candidate.id === connection?.credential_profile_id);
+  // usage is the latest cached or explicitly refreshed account observation.
+  // usage 是最新缓存或显式刷新的账号观测。
+  const usage = connection ? detailsSnapshot?.usageCache[connection.id] : undefined;
+  // usageSupported follows the same provider-specific rules as credential management.
+  // usageSupported 遵循与凭据管理相同的供应商专用规则。
+  const usageSupported = Boolean(
+    connection
+    && credentialProfile?.account_usage_query !== "unsupported"
+    && (connection.provider_id !== "openrouter" || connection.has_management_key),
+  );
+
+  // loadAccountDetails reads only the latest Core-managed memory snapshot.
+  // loadAccountDetails 仅读取最新的 Core 托管内存快照。
+  const loadAccountDetails = React.useCallback(async () => {
+    setDetailsLoading(true);
+    setDetailsError(null);
+    try {
+      // snapshot is the authoritative process-memory account and usage view.
+      // snapshot 是权威的进程内账号与用量视图。
+      const snapshot = await loadPublicAiSettings();
+      setDetailsSnapshot(snapshot);
+    } catch (reason) {
+      setDetailsError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setDetailsLoading(false);
+    }
+  }, []);
+
+  // refreshAccountUsage performs the only provider-facing action available inside the card.
+  // refreshAccountUsage 执行卡片内唯一允许访问供应商的操作。
+  const refreshAccountUsage = React.useCallback(async () => {
+    if (!connection || !usageSupported) {
+      return;
+    }
+    setUsageRefreshing(true);
+    setDetailsError(null);
+    try {
+      // refreshedUsage is the exact account-scoped provider observation.
+      // refreshedUsage 是精确账号作用域的供应商观测。
+      const refreshedUsage = await queryPublicAiConnectionUsage(connection.id);
+      setDetailsSnapshot((current) => current ? {
+        ...current,
+        usageCache: {
+          ...current.usageCache,
+          [connection.id]: refreshedUsage,
+        },
+      } : current);
+    } catch (reason) {
+      setDetailsError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setUsageRefreshing(false);
+    }
+  }, [connection, usageSupported]);
+
+  React.useEffect(() => {
+    setDetailsOpen(false);
+    setDetailsError(null);
+  }, [props.value]);
+
+  if (props.accounts.length <= 1 || !selectedAccount) {
     return null;
   }
   return (
-    <Select
-      disabled={props.disabled}
-      onValueChange={(connectionId) => {
-        // account is the exact model account selected by its stable connection id.
-        // account 是通过稳定连接标识选中的精确模型账号。
-        const account = props.accounts.find((choice) => choice.connectionId === connectionId);
-        if (account) {
-          props.onValueChange(account);
+    <HoverCard
+      closeDelay={250}
+      onOpenChange={(open) => {
+        if (open && selectorOpen) {
+          return;
+        }
+        setDetailsOpen(open);
+        if (open) {
+          void loadAccountDetails();
         }
       }}
-      value={props.value}
+      open={detailsOpen}
+      openDelay={500}
     >
-      <SelectTrigger
-        aria-label={props.ariaLabel}
-        className="composer-select-trigger model-account"
-        size="sm"
+      <Select
+        disabled={props.disabled}
+        onOpenChange={(open) => {
+          setSelectorOpen(open);
+          if (open) {
+            setDetailsOpen(false);
+          }
+        }}
+        onValueChange={(connectionId) => {
+          // account is the exact model account selected by its stable connection id.
+          // account 是通过稳定连接标识选中的精确模型账号。
+          const account = props.accounts.find((choice) => choice.connectionId === connectionId);
+          if (account) {
+            props.onValueChange(account);
+          }
+        }}
+        open={selectorOpen}
+        value={props.value}
       >
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent align="start" className="model-picker-account-content" position="popper">
-        {props.accounts.map((account) => (
-          <SelectItem key={account.connectionId} value={account.connectionId}>
-            {account.accountName}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+        <HoverCardTrigger asChild>
+          <SelectTrigger
+            aria-label={props.ariaLabel}
+            className="composer-select-trigger model-account"
+            size="sm"
+          >
+            <span className="composer-select-icon"><UserRound size={15} /></span>
+            <SelectValue />
+          </SelectTrigger>
+        </HoverCardTrigger>
+        <SelectContent align="start" className="model-picker-account-content" position="popper">
+          {props.accounts.map((account) => (
+            <SelectItem key={account.connectionId} value={account.connectionId}>
+              {account.accountName}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <HoverCardContent align="start" className="w-[22rem] p-0" side="top" sideOffset={8}>
+        <Card className="w-full gap-0 border-0 ring-0 shadow-none" size="sm">
+          <CardHeader>
+            <div className="flex items-start gap-3">
+              <ProviderIcon
+                className="size-8 shrink-0"
+                providerId={connection?.provider_id ?? selectedAccount.providerId}
+                serviceEntryId={connection?.service_entry_id}
+              />
+              <div className="min-w-0 flex-1">
+                <CardTitle className="truncate">{selectedAccount.accountName}</CardTitle>
+                <CardDescription className="truncate text-xs">
+                  {provider?.display_name ?? selectedAccount.providerName}
+                </CardDescription>
+              </div>
+              {usageSupported ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      aria-label={t("composer.accountCard.refresh")}
+                      disabled={usageRefreshing}
+                      onClick={() => void refreshAccountUsage()}
+                      size="icon-sm"
+                      type="button"
+                      variant="outline"
+                    >
+                      <RefreshCw className={`size-4 ${usageRefreshing ? "animate-spin" : ""}`} />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">{t("composer.accountCard.refresh")}</TooltipContent>
+                </Tooltip>
+              ) : null}
+            </div>
+          </CardHeader>
+          <CardContent className="mt-3 flex flex-col gap-3">
+            <div className="grid grid-cols-2 gap-x-3 gap-y-2 border-t pt-3 text-xs">
+              <div className="min-w-0">
+                <p className="text-muted-foreground">{t("composer.accountCard.provider")}</p>
+                <p className="mt-0.5 truncate font-medium">{provider?.display_name ?? selectedAccount.providerName}</p>
+              </div>
+              <div className="min-w-0">
+                <p className="text-muted-foreground">{t("composer.accountCard.serviceEntry")}</p>
+                <p className="mt-0.5 truncate font-medium">{entry?.display_name ?? "—"}</p>
+              </div>
+              <div className="col-span-2 min-w-0">
+                <p className="text-muted-foreground">{t("composer.accountCard.credentialType")}</p>
+                <p className="mt-0.5 truncate font-medium">{credentialProfile?.display_name ?? connection?.credential_profile_id ?? "—"}</p>
+              </div>
+            </div>
+            {connection ? (
+              <CredentialUsageOverview
+                connection={connection}
+                credentialProfile={credentialProfile}
+                usage={usage}
+              />
+            ) : detailsLoading ? (
+              <p className="py-3 text-center text-xs text-muted-foreground">{t("composer.accountCard.loading")}</p>
+            ) : (
+              <p className="py-3 text-center text-xs text-muted-foreground">{t("composer.accountCard.metadataUnavailable")}</p>
+            )}
+            {detailsError ? <p className="text-xs text-destructive" role="status">{detailsError}</p> : null}
+          </CardContent>
+        </Card>
+      </HoverCardContent>
+    </HoverCard>
   );
 }
 
@@ -435,3 +634,4 @@ export function filterModelPickerChoices(choices: ModelPickerChoice[], filter: s
     || choice.modelId.toLowerCase().includes(normalizedFilter)
   ));
 }
+

@@ -533,6 +533,30 @@ export type TranslationKey =
   | "composer.modelPicker.currentAccount"
   | "composer.modelPicker.selectAccount"
   | "composer.aria.account"
+  | "composer.accountCard.refresh"
+  | "composer.accountCard.provider"
+  | "composer.accountCard.serviceEntry"
+  | "composer.accountCard.credentialType"
+  | "composer.accountCard.loading"
+  | "composer.accountCard.metadataUnavailable"
+  | "composer.accountCard.plan"
+  | "composer.accountCard.balance"
+  | "composer.accountCard.usageUnsupported"
+  | "composer.accountCard.managementKeyRequired"
+  | "composer.accountCard.usageNotQueried"
+  | "composer.accountCard.usageUnavailable"
+  | "composer.accountCard.usageInvalid"
+  | "composer.accountCard.noQuotaWindows"
+  | "composer.accountCard.remaining"
+  | "composer.accountCard.weeklyRemaining"
+  | "composer.accountCard.reset"
+  | "composer.accountCard.notIncluded"
+  | "composer.accountCard.unlimited"
+  | "composer.accountCard.general"
+  | "composer.accountCard.video"
+  | "composer.accountCard.billingTokenPlan"
+  | "composer.accountCard.billingPayAsYouGo"
+  | "composer.accountCard.billingProviderManaged"
   | "composer.secondaryRoute.select"
   | "composer.secondaryRoute.search"
   | "composer.secondaryRoute.refresh"
@@ -2067,6 +2091,30 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.modelPicker.currentAccount": "当前账号：{account}",
     "composer.modelPicker.selectAccount": "为 {model} 选择账号",
     "composer.aria.account": "选择模型账号",
+    "composer.accountCard.refresh": "刷新账号用量",
+    "composer.accountCard.provider": "来源供应商",
+    "composer.accountCard.serviceEntry": "服务入口",
+    "composer.accountCard.credentialType": "凭据类型",
+    "composer.accountCard.loading": "正在读取账号信息...",
+    "composer.accountCard.metadataUnavailable": "账号信息暂不可用",
+    "composer.accountCard.plan": "会员套餐",
+    "composer.accountCard.balance": "余额",
+    "composer.accountCard.usageUnsupported": "不支持用量查询",
+    "composer.accountCard.managementKeyRequired": "添加可选管理密钥后可查询余额",
+    "composer.accountCard.usageNotQueried": "用量尚未查询",
+    "composer.accountCard.usageUnavailable": "账号用量暂时不可用",
+    "composer.accountCard.usageInvalid": "账号用量响应格式无效，请重新刷新",
+    "composer.accountCard.noQuotaWindows": "该供应商不提供套餐额度窗口",
+    "composer.accountCard.remaining": "剩余",
+    "composer.accountCard.weeklyRemaining": "周剩余",
+    "composer.accountCard.reset": "重置",
+    "composer.accountCard.notIncluded": "不包含",
+    "composer.accountCard.unlimited": "无限",
+    "composer.accountCard.general": "通用",
+    "composer.accountCard.video": "视频",
+    "composer.accountCard.billingTokenPlan": "套餐",
+    "composer.accountCard.billingPayAsYouGo": "按量计费",
+    "composer.accountCard.billingProviderManaged": "供应商管理",
     "composer.secondaryRoute.select": "选择二级供应商",
     "composer.secondaryRoute.search": "搜索二级供应商",
     "composer.secondaryRoute.refresh": "刷新二级供应商",
@@ -3598,6 +3646,30 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.modelPicker.currentAccount": "Current account: {account}",
     "composer.modelPicker.selectAccount": "Select account for {model}",
     "composer.aria.account": "Select model account",
+    "composer.accountCard.refresh": "Refresh account usage",
+    "composer.accountCard.provider": "Provider",
+    "composer.accountCard.serviceEntry": "Service entry",
+    "composer.accountCard.credentialType": "Credential type",
+    "composer.accountCard.loading": "Loading account information...",
+    "composer.accountCard.metadataUnavailable": "Account information is unavailable",
+    "composer.accountCard.plan": "Plan",
+    "composer.accountCard.balance": "Balance",
+    "composer.accountCard.usageUnsupported": "Usage lookup is unsupported",
+    "composer.accountCard.managementKeyRequired": "Add an optional management key to query balance",
+    "composer.accountCard.usageNotQueried": "Usage has not been queried",
+    "composer.accountCard.usageUnavailable": "Account usage is temporarily unavailable",
+    "composer.accountCard.usageInvalid": "The account usage response is invalid; refresh it again",
+    "composer.accountCard.noQuotaWindows": "This provider does not expose plan quota windows",
+    "composer.accountCard.remaining": "Remaining",
+    "composer.accountCard.weeklyRemaining": "Weekly",
+    "composer.accountCard.reset": "Reset",
+    "composer.accountCard.notIncluded": "Not included",
+    "composer.accountCard.unlimited": "Unlimited",
+    "composer.accountCard.general": "General",
+    "composer.accountCard.video": "Video",
+    "composer.accountCard.billingTokenPlan": "Token plan",
+    "composer.accountCard.billingPayAsYouGo": "Pay as you go",
+    "composer.accountCard.billingProviderManaged": "Provider managed",
     "composer.secondaryRoute.select": "Select secondary provider",
     "composer.secondaryRoute.search": "Search secondary providers",
     "composer.secondaryRoute.refresh": "Refresh secondary providers",

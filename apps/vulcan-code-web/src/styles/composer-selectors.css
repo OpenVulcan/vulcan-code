@@ -182,18 +182,27 @@
 }
 
 .composer-select-trigger.model-account {
+  display: grid;
+  flex: 0 1 108px;
+  grid-template-columns: 15px minmax(0, 1fr);
   width: 108px;
   max-width: 108px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: 7px;
   font-size: 11px;
 }
 
-.composer-select-trigger.model-account > span {
+.composer-select-trigger.model-account > [data-slot="select-value"] {
+  justify-content: center;
   min-width: 0;
   overflow: hidden;
+  text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.composer-select-trigger.model-account > svg:last-child {
+  display: none;
 }
 
 .model-picker-account-content {

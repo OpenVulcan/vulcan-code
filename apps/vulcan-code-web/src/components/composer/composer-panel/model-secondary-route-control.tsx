@@ -21,6 +21,12 @@ export function parseModelPickerChoiceKey(value: string): { providerId: string; 
   };
 }
 
+// secondaryRouteIdentity returns the stable identity used to reconcile optimistic and authoritative selections.
+// secondaryRouteIdentity 返回用于协调乐观选择与权威选择的稳定标识。
+function secondaryRouteIdentity(route: ProviderModelSecondaryRouteSummary | null): string {
+  return route?.routeId.trim() ?? "";
+}
+
 // ModelSecondaryRouteControl renders a compact provider-managed route picker beside the model selector.
 // ModelSecondaryRouteControl 在模型选择器旁渲染紧凑的 Provider 托管路由选择器。
 export function ModelSecondaryRouteControl(props: {
@@ -55,10 +61,19 @@ export function ModelSecondaryRouteControl(props: {
   const [filter, setFilter] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [routes, setRoutes] = React.useState<ProviderModelSecondaryRouteSummary[]>([]);
+  // optimisticRoute is displayed immediately while the backend persists the authoritative selection.
+  // optimisticRoute 在后端持久化权威选择期间立即用于界面显示。
+  const [optimisticRoute, setOptimisticRoute] = React.useState<ProviderModelSecondaryRouteSummary | null>(null);
+  // optimisticRoutePending distinguishes an optimistic Auto selection from the absence of optimistic state.
+  // optimisticRoutePending 区分乐观 Auto 选择与不存在乐观状态。
+  const [optimisticRoutePending, setOptimisticRoutePending] = React.useState(false);
   // onListRoutesRef keeps an in-flight endpoint discovery independent from parent callback identity changes.
   // onListRoutesRef 使进行中的端点发现不受父组件回调引用变化影响。
   const onListRoutesRef = React.useRef(props.onListRoutes);
-  const selectedLabel = props.selectedRoute?.label?.trim() || "Auto";
+  // effectiveSelectedRoute prefers the instant optimistic selection until the service snapshot catches up.
+  // effectiveSelectedRoute 在服务快照追上前优先使用即时乐观选择。
+  const effectiveSelectedRoute = optimisticRoutePending ? optimisticRoute : props.selectedRoute;
+  const selectedLabel = effectiveSelectedRoute?.label?.trim() || "Auto";
   const filteredRoutes = React.useMemo(() => {
     const needle = filter.trim().toLowerCase();
     if (!needle) {
@@ -75,6 +90,20 @@ export function ModelSecondaryRouteControl(props: {
   React.useEffect(() => {
     onListRoutesRef.current = props.onListRoutes;
   }, [props.onListRoutes]);
+
+  React.useEffect(() => {
+    if (
+      optimisticRoutePending
+      && secondaryRouteIdentity(props.selectedRoute) === secondaryRouteIdentity(optimisticRoute)
+    ) {
+      setOptimisticRoutePending(false);
+    }
+  }, [optimisticRoute, optimisticRoutePending, props.selectedRoute]);
+
+  React.useEffect(() => {
+    setOptimisticRoute(null);
+    setOptimisticRoutePending(false);
+  }, [props.modelId, props.providerId]);
 
   React.useEffect(() => {
     if (!open) {
@@ -121,6 +150,9 @@ export function ModelSecondaryRouteControl(props: {
   }, [props.modelId, props.providerId, t]);
 
   const chooseRoute = React.useCallback(async (route: ProviderModelSecondaryRouteSummary | null) => {
+    setOptimisticRoute(route);
+    setOptimisticRoutePending(true);
+    setOpen(false);
     const ok = await props.onSelectRoute(
       props.providerId,
       props.modelId,
@@ -132,11 +164,9 @@ export function ModelSecondaryRouteControl(props: {
       } : null,
     );
     if (!ok) {
-      toast.error(t("composer.secondaryRoute.switchFailed"));
-      return;
+      setOptimisticRoutePending(false);
     }
-    setOpen(false);
-  }, [props, t]);
+  }, [props]);
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -175,11 +205,11 @@ export function ModelSecondaryRouteControl(props: {
         <ScrollArea className="model-picker-scroll">
           <div className="model-picker-list">
             <button
-              className={cn("model-picker-row", !props.selectedRoute && "selected")}
+              className={cn("model-picker-row", !effectiveSelectedRoute && "selected")}
               onClick={() => void chooseRoute(null)}
               type="button"
             >
-              <span className="model-picker-selected-slot">{!props.selectedRoute ? <Check size={15} /> : null}</span>
+              <span className="model-picker-selected-slot">{!effectiveSelectedRoute ? <Check size={15} /> : null}</span>
               <span className="model-picker-row-copy">
                 <span className="model-picker-row-title">Auto</span>
                 <span className="model-picker-row-meta">{t("composer.secondaryRoute.autoEndpoint")}</span>
@@ -190,23 +220,28 @@ export function ModelSecondaryRouteControl(props: {
             ) : filteredRoutes.length === 0 ? (
               <div className="model-picker-empty">{t("composer.secondaryRoute.noMatches")}</div>
             ) : (
-              filteredRoutes.map((route) => (
-                <button
-                  className={cn("model-picker-row", route.active && "selected")}
-                  key={route.routeId}
-                  onClick={() => void chooseRoute(route)}
-                  type="button"
-                >
-                  <span className="model-picker-selected-slot">{route.active ? <Check size={15} /> : null}</span>
-                  <span className="model-picker-row-copy">
-                    <span className="model-picker-row-title">
-                      {route.label}
-                      {route.tag ? <span className="secondary-route-title-tag">（{route.tag}）</span> : null}
+              filteredRoutes.map((route) => {
+                // selected identifies the route currently visible to the user, including optimistic state.
+                // selected 标识当前向用户显示的路由，并包含乐观状态。
+                const selected = secondaryRouteIdentity(route) === secondaryRouteIdentity(effectiveSelectedRoute);
+                return (
+                  <button
+                    className={cn("model-picker-row", selected && "selected")}
+                    key={route.routeId}
+                    onClick={() => void chooseRoute(route)}
+                    type="button"
+                  >
+                    <span className="model-picker-selected-slot">{selected ? <Check size={15} /> : null}</span>
+                    <span className="model-picker-row-copy">
+                      <span className="model-picker-row-title">
+                        {route.label}
+                        {route.tag ? <span className="secondary-route-title-tag">（{route.tag}）</span> : null}
+                      </span>
+                      <span className="model-picker-row-meta">{route.subtitle}</span>
                     </span>
-                    <span className="model-picker-row-meta">{route.subtitle}</span>
-                  </span>
-                </button>
-              ))
+                  </button>
+                );
+              })
             )}
           </div>
         </ScrollArea>

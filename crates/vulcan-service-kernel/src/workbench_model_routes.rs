@@ -115,7 +115,7 @@ pub(super) async fn service_select_workbench_model_secondary_route(
     if provider_id != "openrouter" {
         return Err(String::from("当前只有 OpenRouter 支持二级供应商选择。"));
     }
-    let (runtime, current_configuration, connection_id) = {
+    let (runtime, connection_id) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -136,7 +136,7 @@ pub(super) async fn service_select_workbench_model_secondary_route(
             provider_id.as_str(),
             model_id.as_str(),
         )?;
-        (runtime, configuration, active)
+        (runtime, active)
     };
     let selection = if let Some(route) = request.route {
         let route_id = if route.tag.trim().is_empty() {
@@ -144,14 +144,7 @@ pub(super) async fn service_select_workbench_model_secondary_route(
         } else {
             route.tag.trim()
         };
-        let options = runtime
-            .discover_secondary_routes(
-                &current_configuration,
-                connection_id.as_str(),
-                model_id.as_str(),
-                false,
-            )
-            .await?;
+        let options = runtime.cached_secondary_routes(connection_id.as_str(), model_id.as_str())?;
         let option = options
             .into_iter()
             .find(|option| option.route_id == route_id)

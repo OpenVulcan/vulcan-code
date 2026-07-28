@@ -501,7 +501,11 @@ impl PublicTurnAccumulator {
         match event {
             AiStreamEvent::ResponseTextDelta { delta, .. } => {
                 self.text.push_str(delta.as_str());
+                // liveDelta preserves the same decoded text for the workbench stream while Core keeps its canonical copy.
+                // liveDelta 在 Core 保留规范副本的同时，将同一段已解码文本投影到工作台流。
+                let live_delta = delta.clone();
                 sink.push_delta(ProviderTurnDelta::Output { delta });
+                let _ = live_sender.send(Ok(ProviderStreamDelta::Output(live_delta)));
             }
             AiStreamEvent::ResponseItemStarted {
                 item:
@@ -532,11 +536,19 @@ impl PublicTurnAccumulator {
                     location
                 );
                 self.text.push_str(markdown.as_str());
+                // liveMarkdown keeps generated-resource output visible before the terminal checkpoint.
+                // liveMarkdown 让生成资源输出在终态检查点到达前即可见。
+                let live_markdown = markdown.clone();
                 sink.push_delta(ProviderTurnDelta::Output { delta: markdown });
+                let _ = live_sender.send(Ok(ProviderStreamDelta::Output(live_markdown)));
             }
             AiStreamEvent::ReasoningDelta { delta, .. } => {
                 self.reasoning.push_str(delta.as_str());
+                // liveDelta projects provider reasoning without removing it from Core's canonical response.
+                // liveDelta 投影 Provider 推理内容，同时不从 Core 规范响应中移除该内容。
+                let live_delta = delta.clone();
                 sink.push_delta(ProviderTurnDelta::Thinking { delta });
+                let _ = live_sender.send(Ok(ProviderStreamDelta::Thinking(live_delta)));
             }
             AiStreamEvent::ReasoningCompleted { signature, .. } => {
                 if signature.is_some() {
@@ -1247,6 +1259,78 @@ fn provider_failure(provider_id: &str, message: &str) -> VulcanCoreError {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// RecordingProviderDeltaSink retains canonical Core deltas for adapter projection tests.
+    /// RecordingProviderDeltaSink 为适配器投影测试保留规范 Core 增量。
+    #[derive(Default)]
+    struct RecordingProviderDeltaSink {
+        /// deltas contains every canonical delta received from the public adapter.
+        /// deltas 包含公共适配器发出的每一项规范增量。
+        deltas: Vec<ProviderTurnDelta>,
+    }
+
+    impl VulcanProviderDeltaSink for RecordingProviderDeltaSink {
+        /// Stores one canonical provider delta.
+        /// 保存一项规范 Provider 增量。
+        ///
+        /// # Parameters
+        /// 参数
+        /// `delta` is the exact decoded delta produced by the public protocol.
+        /// `delta` 是公共协议产出的精确解码增量。
+        fn push_delta(&mut self, delta: ProviderTurnDelta) {
+            self.deltas.push(delta);
+        }
+    }
+
+    /// Verifies public text and reasoning deltas reach both Core and the live workbench stream.
+    /// 验证公共文本与推理增量同时到达 Core 和实时工作台流。
+    #[test]
+    fn public_turn_deltas_are_forwarded_to_live_workbench_stream() {
+        let (live_sender, mut live_receiver) = tokio::sync::mpsc::unbounded_channel();
+        let mut sink = RecordingProviderDeltaSink::default();
+        let mut accumulator = PublicTurnAccumulator::default();
+
+        accumulator
+            .apply_event(
+                "minimax",
+                &live_sender,
+                &mut sink,
+                AiStreamEvent::ResponseTextDelta {
+                    item_id: String::from("text-item"),
+                    delta: String::from("最终答案"),
+                },
+            )
+            .expect("text delta should be accepted");
+        accumulator
+            .apply_event(
+                "minimax",
+                &live_sender,
+                &mut sink,
+                AiStreamEvent::ReasoningDelta {
+                    item_id: String::from("reasoning-item"),
+                    delta: String::from("先分析"),
+                },
+            )
+            .expect("reasoning delta should be accepted");
+
+        assert!(matches!(
+            sink.deltas.as_slice(),
+            [
+                ProviderTurnDelta::Output { delta: output },
+                ProviderTurnDelta::Thinking {
+                    delta: reasoning
+                },
+            ] if output == "最终答案" && reasoning == "先分析"
+        ));
+        assert!(matches!(
+            live_receiver.try_recv(),
+            Ok(Ok(ProviderStreamDelta::Output(output))) if output == "最终答案"
+        ));
+        assert!(matches!(
+            live_receiver.try_recv(),
+            Ok(Ok(ProviderStreamDelta::Thinking(reasoning))) if reasoning == "先分析"
+        ));
+    }
 
     /// Verifies generated image bytes enter managed attachment storage and the Data URL is discarded.
     /// 验证生成图片字节会进入托管附件存储，且 Data URL 会被丢弃。

@@ -2,6 +2,7 @@ import * as React from "react"
 import { Boxes, KeyRound, Layers3, RefreshCw, Star, Trash2 } from "lucide-react"
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
+import { CredentialUsageOverview } from "@/components/public-ai/credential-usage-overview"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -44,7 +45,6 @@ import {
 import type {
   CredentialMode,
   PublicAiAccountUsage,
-  PublicAiAccountUsageWindow,
   PublicAiConnection,
   PublicAiConnectionCatalog,
   PublicAiCredentialProfile,
@@ -367,9 +367,6 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
   const providerName = props.provider?.display_name ?? props.connection.provider_id
   const authorizationName = props.credentialProfile?.display_name
     ?? props.connection.credential_profile_id
-  const planName = props.usage?.plan_name
-    ?? credentialBillingKindLabel(props.connection.billing_kind)
-
   return (
     <Card
       className="max-h-[18rem] w-full max-w-[21rem] gap-0 border border-border ring-0"
@@ -407,34 +404,11 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
       </CardHeader>
 
       <CardContent className="mt-3 flex flex-1 flex-col gap-3">
-        <div className="grid grid-cols-2 gap-3 border-t pt-3">
-          <div className="min-w-0">
-            <p className="text-[11px] text-muted-foreground">会员套餐</p>
-            <p className="mt-1 truncate text-sm font-medium">{planName}</p>
-          </div>
-          <div className="min-w-0">
-            <p className="text-[11px] text-muted-foreground">余额</p>
-            <p className="mt-1 truncate text-sm font-medium">
-              {accountBalanceLabel(props.usage)}
-            </p>
-          </div>
-        </div>
-        <div
-          className="flex min-h-0 flex-1 flex-col border-t"
-          data-slot="credential-usage"
-        >
-          <div
-            className="flex min-h-16 flex-1 items-center justify-center"
-            data-slot="credential-usage-content"
-          >
-            <CredentialUsageSummary
-              credentialProfile={props.credentialProfile}
-              hasManagementKey={props.connection.has_management_key}
-              providerId={props.connection.provider_id}
-              usage={props.usage}
-            />
-          </div>
-        </div>
+        <CredentialUsageOverview
+          connection={props.connection}
+          credentialProfile={props.credentialProfile}
+          usage={props.usage}
+        />
         {props.catalogError ? (
           <p className="text-xs text-destructive" role="status">
             {props.catalogError}
@@ -513,253 +487,6 @@ function CredentialIconAction(props: CredentialIconActionProps) {
       <TooltipContent side="top">{props.label}</TooltipContent>
     </Tooltip>
   )
-}
-
-// CredentialUsageSummary renders provider-aware compact quota information.
-// CredentialUsageSummary 渲染供应商感知的紧凑额度信息。
-function CredentialUsageSummary(props: {
-  // credentialProfile determines whether usage lookup exists.
-  // credentialProfile 决定是否存在用量查询。
-  credentialProfile?: PublicAiCredentialProfile
-  // hasManagementKey indicates whether an optional balance credential is available.
-  // hasManagementKey 表示可选余额查询凭据是否可用。
-  hasManagementKey: boolean
-  // providerId identifies the exact provider-specific renderer.
-  // providerId 标识精确的供应商专用渲染器。
-  providerId: string
-  // usage is the latest exact account observation.
-  // usage 是最新精确账号观测。
-  usage?: PublicAiAccountUsage
-}) {
-  if (props.credentialProfile?.account_usage_query === "unsupported") {
-    return <span className="text-center text-xs text-muted-foreground">不支持用量查询</span>
-  }
-  if (props.providerId === "openrouter" && !props.hasManagementKey) {
-    return <span className="text-center text-xs text-muted-foreground">添加可选管理密钥后可查询余额</span>
-  }
-  if (!props.usage) {
-    return <span className="text-center text-xs text-muted-foreground">用量尚未查询</span>
-  }
-  if (props.usage.availability === "temporarily_unavailable") {
-    return (
-      <span className="text-center text-xs text-muted-foreground">
-        {props.usage.refresh_message ?? "账号用量暂时不可用"}
-      </span>
-    )
-  }
-  if (!Array.isArray(props.usage.quota_windows)) {
-    return <span className="text-center text-xs text-destructive">账号用量响应格式无效，请重新刷新</span>
-  }
-  const rows = props.providerId === "minimax"
-    ? miniMaxUsageRows(props.usage.quota_windows)
-    : []
-  if (rows.length > 0) {
-    return <MiniMaxUsageSummary rows={rows} />
-  }
-  if (props.usage.quota_windows.length === 0) {
-    return <span className="text-center text-xs text-muted-foreground">该供应商不提供套餐额度窗口</span>
-  }
-  return (
-    <div className="w-full space-y-1.5">
-      {props.usage.quota_windows.slice(0, 3).map((window) => (
-        <UsageWindowMetric key={window.id} label={window.display_name} window={window} />
-      ))}
-    </div>
-  )
-}
-
-// MiniMaxUsageRow joins current and weekly windows for one resource bucket.
-// MiniMaxUsageRow 将一个资源桶的当前周期与周周期连接起来。
-interface MiniMaxUsageRow {
-  // current is the provider's short rolling window.
-  // current 是供应商短滚动周期。
-  current?: PublicAiAccountUsageWindow
-  // name is the exact provider resource bucket name.
-  // name 是精确供应商资源桶名称。
-  name: string
-  // weekly is the provider's weekly window.
-  // weekly 是供应商周周期。
-  weekly?: PublicAiAccountUsageWindow
-}
-
-// miniMaxUsageRows recognizes the exact normalized MiniMax window identifiers.
-// miniMaxUsageRows 识别精确规范化的 MiniMax 窗口标识。
-function miniMaxUsageRows(windows: PublicAiAccountUsageWindow[]): MiniMaxUsageRow[] {
-  const rows = new Map<string, MiniMaxUsageRow>()
-  for (const window of windows) {
-    const match = /^(.+):(current|weekly)$/.exec(window.id)
-    if (!match || !window.bucket_name) {
-      continue
-    }
-    const row = rows.get(window.bucket_name) ?? { name: window.bucket_name }
-    if (match[2] === "current") {
-      row.current = window
-    } else {
-      row.weekly = window
-    }
-    rows.set(row.name, row)
-  }
-  return [...rows.values()]
-    // A bucket belongs on the card only when at least one declared window is available to the account.
-    // 仅当账号至少拥有一个可用额度窗口时，才在卡片上展示该额度桶。
-    .filter((row) => row.current?.available === true || row.weekly?.available === true)
-    .sort((left, right) => (
-      miniMaxBucketOrder(left.name) - miniMaxBucketOrder(right.name)
-      || left.name.localeCompare(right.name)
-    ))
-}
-
-// MiniMaxUsageSummary renders paired MiniMax Token Plan quota windows.
-// MiniMaxUsageSummary 渲染成对的 MiniMax Token Plan 额度窗口。
-function MiniMaxUsageSummary(props: { rows: MiniMaxUsageRow[] }) {
-  return (
-    <div className="w-full space-y-1.5">
-      {props.rows.map((row) => (
-        <div
-          className="grid grid-cols-[1.75rem_minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-1 text-[11px]"
-          key={row.name}
-        >
-          <span className="font-medium">{miniMaxBucketLabel(row.name)}</span>
-          <UsageWindowMetric label="剩余" window={row.current} />
-          <UsageWindowMetric label="周剩余" window={row.weekly} />
-          <span className="whitespace-nowrap tabular-nums text-muted-foreground">
-            重置 {usageResetDuration(row.current?.resets_at)}
-          </span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-// UsageWindowMetric renders one exact remaining value and compact progress indicator.
-// UsageWindowMetric 渲染一个精确剩余值和紧凑进度指示器。
-function UsageWindowMetric(props: {
-  // label names the quota window.
-  // label 命名额度周期。
-  label: string
-  // window is the exact normalized provider observation.
-  // window 是精确规范化供应商观测。
-  window?: PublicAiAccountUsageWindow
-}) {
-  const percentage = usageWindowPercentage(props.window)
-  const value = usageWindowValue(props.window)
-  return (
-    <div className="min-w-0 space-y-0.5">
-      <div className="flex items-center justify-between gap-1">
-        <span className="truncate text-muted-foreground">{props.label}</span>
-        <span className="shrink-0 tabular-nums">{value}</span>
-      </div>
-      <div
-        aria-label={`${props.label}: ${value}`}
-        aria-valuemax={100}
-        aria-valuemin={0}
-        aria-valuenow={percentage}
-        className="h-1.5 overflow-hidden rounded-full bg-muted"
-        role="progressbar"
-      >
-        <div
-          className={`h-full rounded-full ${percentage <= 10 ? "bg-destructive" : percentage <= 30 ? "bg-amber-500" : "bg-emerald-500"}`}
-          style={{ width: `${percentage}%` }}
-        />
-      </div>
-    </div>
-  )
-}
-
-// usageWindowPercentage returns the normalized visual percentage without inventing quota.
-// usageWindowPercentage 返回规范化视觉百分比且不虚构额度。
-function usageWindowPercentage(window?: PublicAiAccountUsageWindow): number {
-  if (!window || !window.available) {
-    return 0
-  }
-  if (window.unlimited) {
-    return 100
-  }
-  const explicit = Number(window.remaining_percent)
-  if (Number.isFinite(explicit)) {
-    return Math.max(0, Math.min(100, explicit))
-  }
-  const remaining = Number(window.remaining)
-  const total = Number(window.total)
-  if (Number.isFinite(remaining) && Number.isFinite(total) && total > 0) {
-    return Math.max(0, Math.min(100, (remaining / total) * 100))
-  }
-  return 0
-}
-
-// usageWindowValue renders exact counts, percentage, unlimited, or unavailable state.
-// usageWindowValue 渲染精确次数、百分比、无限或不可用状态。
-function usageWindowValue(window?: PublicAiAccountUsageWindow): string {
-  if (!window) {
-    return "—"
-  }
-  if (!window.available) {
-    return "不包含"
-  }
-  if (window.unlimited) {
-    return "无限"
-  }
-  const total = Number(window.total)
-  if (Number.isFinite(total) && total > 0) {
-    return `${window.remaining ?? "0"} / ${window.total}`
-  }
-  return window.remaining_percent !== undefined
-    ? `${window.remaining_percent}%`
-    : "—"
-}
-
-// usageResetDuration renders the provider reset time as a compact countdown.
-// usageResetDuration 将供应商重置时间渲染为紧凑倒计时。
-function usageResetDuration(value?: string): string {
-  if (!value) {
-    return "—"
-  }
-  const numeric = Number(value)
-  const resetMilliseconds = Number.isFinite(numeric)
-    ? numeric * (numeric < 1_000_000_000_000 ? 1000 : 1)
-    : new Date(value).getTime()
-  if (!Number.isFinite(resetMilliseconds)) {
-    return "—"
-  }
-  const remainingMilliseconds = Math.max(0, resetMilliseconds - Date.now())
-  const hours = Math.floor(remainingMilliseconds / 3_600_000)
-  const minutes = Math.floor((remainingMilliseconds % 3_600_000) / 60_000)
-  return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`
-}
-
-// miniMaxBucketOrder keeps the provider's primary resource buckets stable.
-// miniMaxBucketOrder 保持供应商主要资源桶顺序稳定。
-function miniMaxBucketOrder(name: string): number {
-  return name === "general" ? 0 : name === "video" ? 1 : 2
-}
-
-// miniMaxBucketLabel localizes known MiniMax resource buckets.
-// miniMaxBucketLabel 本地化已知 MiniMax 资源桶。
-function miniMaxBucketLabel(name: string): string {
-  return name === "general" ? "通用" : name === "video" ? "视频" : name
-}
-
-// credentialBillingKindLabel renders the persisted credential billing contract.
-// credentialBillingKindLabel 渲染持久化凭据计费契约。
-function credentialBillingKindLabel(kind: PublicAiConnection["billing_kind"]): string {
-  if (kind === "token_plan") {
-    return "套餐"
-  }
-  if (kind === "pay_as_you_go") {
-    return "按量计费"
-  }
-  return "供应商管理"
-}
-
-// accountBalanceLabel renders exact balance and currency without numeric coercion.
-// accountBalanceLabel 渲染精确余额和币种且不进行数值强制转换。
-function accountBalanceLabel(usage?: PublicAiAccountUsage): string {
-  if (!usage?.balance_amount) {
-    return "--"
-  }
-  return usage.currency
-    ? `${usage.balance_amount} ${usage.currency}`
-    : usage.balance_amount
 }
 
 // PublicAiDeleteConnectionDialog confirms destructive removal and requires an explicit replacement default.

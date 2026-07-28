@@ -702,6 +702,38 @@ impl PublicAiRuntime {
         Ok(routes)
     }
 
+    /// Returns the last successful secondary-route discovery without any provider request.
+    /// 在不发起任何供应商请求的情况下返回最近一次成功的二级路由发现结果。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `connection_id` and `model_id` identify the exact cache partition.
+    /// `connection_id` 与 `model_id` 标识精确缓存分区。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Cached route options regardless of TTL, or an explicit cache-miss error.
+    /// 返回不受 TTL 影响的缓存路由选项，或显式的缓存未命中错误。
+    pub fn cached_secondary_routes(
+        &self,
+        connection_id: &str,
+        model_id: &str,
+    ) -> Result<Vec<SecondaryRouteOption>, String> {
+        // cache_key exactly matches the discovery partition used by the selected credential and model.
+        // cache_key 与所选凭据及模型使用的发现缓存分区完全一致。
+        let cache_key = PersistedAiConfiguration::connection_model_key(connection_id, model_id);
+        self.secondary_route_cache
+            .read()
+            .map_err(|_| String::from("The secondary-route cache lock is poisoned."))?
+            .get(cache_key.as_str())
+            .map(|cached| cached.routes.clone())
+            .ok_or_else(|| {
+                format!(
+                    "No cached secondary routes exist for connection `{connection_id}` and model `{model_id}`. Open or refresh the secondary provider list first."
+                )
+            })
+    }
+
     /// Resolves immutable provider metadata for one configured connection.
     /// 为一个已配置连接解析不可变供应商元数据。
     ///
@@ -1478,7 +1510,19 @@ mod tests {
             .discover_secondary_routes(&configuration, "two", "vendor/model", false)
             .await
             .expect("fresh cache should avoid credential access");
-        assert_eq!(cached, vec![cached_route]);
+        assert_eq!(cached, vec![cached_route.clone()]);
+        assert_eq!(
+            runtime
+                .cached_secondary_routes("two", "vendor/model")
+                .expect("selection validation should use the populated cache"),
+            vec![cached_route.clone()]
+        );
+        assert!(
+            runtime
+                .cached_secondary_routes("one", "vendor/model")
+                .is_err(),
+            "selection validation must not reuse another credential's cache partition"
+        );
         assert!(
             runtime
                 .discover_secondary_routes(&configuration, "two", "vendor/model", true)
@@ -1502,6 +1546,14 @@ mod tests {
                 .await
                 .is_err(),
             "expired cache should reach the unavailable secret boundary"
+        );
+        assert_eq!(
+            runtime
+                .cached_secondary_routes("two", "vendor/model")
+                .expect(
+                    "selection validation should not issue an endpoint request for expired cache"
+                ),
+            vec![cached_route]
         );
     }
 

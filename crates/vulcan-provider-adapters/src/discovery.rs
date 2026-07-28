@@ -176,8 +176,12 @@ pub fn parse_openrouter_model_catalog(
         .into_iter()
         .map(|model| {
             let capabilities = openrouter_reported_capabilities(&model);
+            // display_name removes OpenRouter's catalog publisher prefix while preserving the exact routing id.
+            // display_name 移除 OpenRouter 目录中的发布商前缀，同时保留精确路由 ID。
+            let display_name =
+                openrouter_model_display_name(model.name.as_deref(), model.id.as_str());
             ConnectionModel {
-                display_name: model.name.unwrap_or_else(|| model.id.clone()),
+                display_name,
                 id: model.id,
                 capabilities,
             }
@@ -188,6 +192,36 @@ pub fn parse_openrouter_model_catalog(
         models,
         generation,
     })
+}
+
+/// Returns the user-facing model name from one OpenRouter catalog entry.
+/// 从单个 OpenRouter 目录条目返回面向用户的模型名称。
+///
+/// # Parameters
+/// 参数
+/// `reported_name` is OpenRouter's optional publisher-qualified name and `model_id`
+/// is the exact routing identifier used when no display name is reported.
+/// `reported_name` 是 OpenRouter 可选的发布商限定名称，`model_id`
+/// 是未报告显示名称时使用的精确路由标识。
+///
+/// # Returns
+/// 返回值
+/// The model portion after OpenRouter's first publisher separator, or the exact
+/// reported name/model identifier when the separator is absent.
+/// 返回 OpenRouter 首个发布商分隔符后的模型部分；若不存在分隔符，
+/// 则返回精确报告名称或模型标识。
+fn openrouter_model_display_name(reported_name: Option<&str>, model_id: &str) -> String {
+    // normalized_name rejects blank catalog names before applying the OpenRouter display convention.
+    // normalized_name 在应用 OpenRouter 显示约定前拒绝空白目录名称。
+    let Some(normalized_name) = reported_name.map(str::trim).filter(|name| !name.is_empty()) else {
+        return model_id.to_string();
+    };
+    if let Some((publisher, model_name)) = normalized_name.split_once(':') {
+        if !publisher.trim().is_empty() && !model_name.trim().is_empty() {
+            return model_name.trim().to_string();
+        }
+    }
+    normalized_name.to_string()
 }
 
 /// Parses an OpenAI model list without inferring unavailable capabilities.
@@ -1290,9 +1324,10 @@ mod tests {
         let catalog = parse_openrouter_model_catalog(
             "connection",
             1,
-            r#"{"data":[{"id":"vendor/model","name":"Model","context_length":8192,"supported_parameters":["tools","temperature"],"architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096},"reasoning":{"supported_efforts":["max","high","none"],"supports_max_tokens":true,"mandatory":true}}]}"#,
+            r#"{"data":[{"id":"deepseek/deepseek-v4-pro","name":"DeepSeek: DeepSeek V4 Pro","context_length":8192,"supported_parameters":["tools","temperature"],"architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096},"reasoning":{"supported_efforts":["max","high","none"],"supports_max_tokens":true,"mandatory":true}}]}"#,
         )
         .expect("documented response should parse");
+        assert_eq!(catalog.models[0].display_name, "DeepSeek V4 Pro");
         assert_eq!(
             catalog.models[0].capabilities.tool_calling,
             CapabilitySupport::Native
