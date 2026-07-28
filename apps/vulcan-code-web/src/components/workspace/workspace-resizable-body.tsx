@@ -542,6 +542,7 @@ function ConsoleHeader(props: {
           <div
             className="workspace-header-title-text"
             data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
+            onDoubleClick={props.titlebarDragRegion ? undefined : props.onTitlebarDoubleClick}
           >
             <h1>{headerTitle}</h1>
             {props.detail ? <small>{props.detail}</small> : null}
@@ -557,6 +558,7 @@ function ConsoleHeader(props: {
           aria-hidden="true"
           className="console-header-drag-fill"
           data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
+          onDoubleClick={props.titlebarDragRegion ? undefined : props.onTitlebarDoubleClick}
         />
       </div>
       <div className="console-header-actions">

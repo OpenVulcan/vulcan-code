@@ -437,7 +437,10 @@ const handleReorderPendingPrompts = React.useCallback(async (
 // handleSelectWorkbenchModel 通过共享服务持久化单个模型筛选器选择。
 const handleSelectWorkbenchModel = React.useCallback(async (choice: ModelPickerChoice): Promise<boolean> => {
   try {
-    const snapshot = await selectWorkbenchModel(choice);
+    // conversationId scopes model persistence to an existing session; drafts update the global new-session default.
+    // conversationId 将模型持久化限定到既有会话；草稿则更新新会话使用的全局默认值。
+    const conversationId = selectedDraftConversation ? null : selectedConversationId;
+    const snapshot = await selectWorkbenchModel(choice, conversationId);
     if (snapshot) {
       setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
       toast.success(formatConversationActionTranslation(translate, "conversationActions.modelSwitched", {
@@ -450,7 +453,13 @@ const handleSelectWorkbenchModel = React.useCallback(async (choice: ModelPickerC
     toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     return false;
   }
-}, [mergeWorkbenchWithLocalCaches, setWorkbenchState, translate]);
+}, [
+  mergeWorkbenchWithLocalCaches,
+  selectedConversationId,
+  selectedDraftConversation,
+  setWorkbenchState,
+  translate,
+]);
 
 // handleStopCommandSession force-stops one live terminal session from context panels.
 // handleStopCommandSession 从上下文面板强制停止单条实时终端会话。
@@ -468,13 +477,9 @@ const handleStopCommandSession = React.useCallback(async (commandSessionId: stri
 const handleListWorkbenchModelSecondaryRoutes = React.useCallback(async (
   providerId: string,
   modelId: string,
+  forceRefresh: boolean,
 ): Promise<ProviderModelSecondaryRouteSummary[]> => {
-  try {
-    return await listWorkbenchModelSecondaryRoutes(providerId, modelId);
-  } catch (nextError) {
-    toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-    return [];
-  }
+  return listWorkbenchModelSecondaryRoutes(providerId, modelId, forceRefresh);
 }, []);
 
 // handleSelectWorkbenchModelSecondaryRoute persists one backend route choice.

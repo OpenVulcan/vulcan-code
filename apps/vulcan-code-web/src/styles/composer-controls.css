@@ -179,7 +179,10 @@
 }
 
 .composer-select-trigger.model {
+  flex: 0 1 141px;
   width: 141px;
+  max-width: 141px;
+  overflow: hidden;
 }
 
 .composer-select-trigger.capability {

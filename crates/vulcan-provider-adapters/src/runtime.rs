@@ -6,11 +6,11 @@ use crate::{
     CredentialExecutionSecret, CredentialSecretEnvelope, HttpProviderMetadataClient,
     OAuthAuthorizationRuntime, PersistedAiConfiguration, ProviderExecutionClient,
     ProviderExecutionRoute, ProviderMetadataClient, ProviderRegistry, RuntimeConnectionCatalogs,
-    SecondaryRouteSelection,
+    SecondaryRouteOption, SecondaryRouteSelection,
 };
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex as AsyncMutex;
 use vulcan_ai_contract::{AccountUsageSnapshot, PromptCachePolicy};
 use vulcan_ai_protocols::ProtocolRegistry;
@@ -18,6 +18,22 @@ use vulcan_ai_protocols::ProtocolRegistry;
 /// Refreshes renewable tokens this long before their declared expiration.
 /// 在可续期 Token 声明过期前这么长时间执行刷新。
 const OAUTH_REFRESH_SKEW_MS: u64 = 5 * 60 * 1_000;
+
+/// Keeps provider endpoint discovery results fresh for six hours by default.
+/// 默认将供应商端点发现结果保鲜六小时。
+const SECONDARY_ROUTE_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// Stores one process-local secondary-route discovery result.
+/// 保存一份进程内二级路由发现结果。
+#[derive(Debug, Clone)]
+struct SecondaryRouteCacheEntry {
+    /// Exact provider-reported route options.
+    /// 供应商精确报告的路由选项。
+    routes: Vec<SecondaryRouteOption>,
+    /// Monotonic instant when the successful response was received.
+    /// 成功收到响应时的单调时钟时间点。
+    fetched_at: Instant,
+}
 
 /// Reads secret material through a host-owned secure storage boundary.
 /// 通过宿主所有的安全存储边界读取秘密材料。
@@ -165,6 +181,9 @@ pub struct PublicAiRuntime {
     /// Process-local account-usage observations keyed by connection.
     /// 按连接索引的进程内账号用量观测。
     usage_cache: Arc<RwLock<BTreeMap<String, AccountUsageSnapshot>>>,
+    /// Process-local secondary-route catalogs keyed by exact connection and model.
+    /// 按精确连接与模型索引的进程内二级路由目录。
+    secondary_route_cache: Arc<RwLock<BTreeMap<String, SecondaryRouteCacheEntry>>>,
     /// Connection-scoped single-flight locks for renewable credential refresh.
     /// 用于可续期凭据刷新的连接作用域单飞锁。
     refresh_locks: Arc<StdMutex<BTreeMap<String, Arc<AsyncMutex<()>>>>>,
@@ -202,6 +221,7 @@ impl PublicAiRuntime {
             catalogs: Arc::new(RwLock::new(RuntimeConnectionCatalogs::default())),
             catalog_errors: Arc::new(RwLock::new(BTreeMap::new())),
             usage_cache: Arc::new(RwLock::new(BTreeMap::new())),
+            secondary_route_cache: Arc::new(RwLock::new(BTreeMap::new())),
             refresh_locks: Arc::new(StdMutex::new(BTreeMap::new())),
             secrets,
             configuration: Arc::new(RwLock::new(PersistedAiConfiguration::default())),
@@ -612,9 +632,10 @@ impl PublicAiRuntime {
     /// # Parameters
     /// 参数
     /// `configuration` is the authoritative connection graph, `connection_id` selects one
-    /// credential, and `model_id` identifies the exact provider model.
+    /// credential, `model_id` identifies the exact provider model, and `force_refresh` bypasses
+    /// the six-hour process cache.
     /// `configuration` 是权威连接图，`connection_id` 选择一个凭据，
-    /// `model_id` 标识精确供应商模型。
+    /// `model_id` 标识精确供应商模型，`force_refresh` 绕过六小时进程缓存。
     ///
     /// # Returns
     /// 返回值
@@ -625,6 +646,7 @@ impl PublicAiRuntime {
         configuration: &PersistedAiConfiguration,
         connection_id: &str,
         model_id: &str,
+        force_refresh: bool,
     ) -> Result<Vec<crate::SecondaryRouteOption>, String> {
         let (provider, entry, connection) =
             self.resolve_connection_metadata(configuration, connection_id)?;
@@ -642,15 +664,42 @@ impl PublicAiRuntime {
                 "Model `{model_id}` is not present in connection `{connection_id}`."
             ));
         }
+        // cache_key preserves exact credential isolation because endpoint availability may be account-scoped.
+        // cache_key 保留精确凭据隔离，因为端点可用性可能受账号作用域影响。
+        let cache_key = PersistedAiConfiguration::connection_model_key(connection_id, model_id);
+        if !force_refresh {
+            let cached_routes = self
+                .secondary_route_cache
+                .read()
+                .map_err(|_| String::from("The secondary-route cache lock is poisoned."))?
+                .get(cache_key.as_str())
+                .filter(|cached| cached.fetched_at.elapsed() < SECONDARY_ROUTE_CACHE_TTL)
+                .map(|cached| cached.routes.clone());
+            if let Some(cached_routes) = cached_routes {
+                return Ok(cached_routes);
+            }
+        }
         let secret = self
             .resolve_fresh_execution_secret(
                 connection.id.as_str(),
                 connection.secret_reference.as_str(),
             )
             .await?;
-        self.metadata_client
+        let routes = self
+            .metadata_client
             .discover_secondary_routes(&provider, &entry, &connection, model_id, &secret)
-            .await
+            .await?;
+        self.secondary_route_cache
+            .write()
+            .map_err(|_| String::from("The secondary-route cache lock is poisoned."))?
+            .insert(
+                cache_key,
+                SecondaryRouteCacheEntry {
+                    routes: routes.clone(),
+                    fetched_at: Instant::now(),
+                },
+            );
+        Ok(routes)
     }
 
     /// Resolves immutable provider metadata for one configured connection.
@@ -895,6 +944,38 @@ impl PublicAiRuntime {
             .resolve_connection(provider_id, model_id, &catalogs)?
             .clone();
         drop(catalogs);
+        self.resolve_selection_for_connection(configuration, connection, provider_id, model_id)
+    }
+
+    /// Resolves one exact credential connection and model selected by a persisted session.
+    /// 解析持久化会话选择的精确凭据连接与模型。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration` owns connection metadata; `connection_id`, `provider_id`, and `model_id`
+    /// identify the exact session selection.
+    /// `configuration` 持有连接元数据；`connection_id`、`provider_id` 与 `model_id`
+    /// 标识精确的会话选择。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A validated immutable selection, or an error that allows the caller to apply degradation.
+    /// 返回已校验的不可变选择；错误允许调用方执行降级。
+    pub fn resolve_connection_model_selection(
+        &self,
+        configuration: &PersistedAiConfiguration,
+        connection_id: &str,
+        provider_id: &str,
+        model_id: &str,
+    ) -> Result<ResolvedPublicAiSelection, String> {
+        // connection is the exact configured credential requested by the session.
+        // connection 是会话请求的精确已配置凭据。
+        let connection = configuration
+            .connection_graph
+            .connections
+            .get(connection_id)
+            .cloned()
+            .ok_or_else(|| format!("Connection `{connection_id}` is not configured."))?;
         self.resolve_selection_for_connection(configuration, connection, provider_id, model_id)
     }
 
@@ -1325,6 +1406,103 @@ mod tests {
             .resolve_model_selection(&configuration, "openrouter", "vendor/model")
             .expect("stable first account should resolve");
         assert_eq!(selection.route.connection.id, "one");
+    }
+
+    /// Verifies a removed remembered account degrades to another account exposing the same model.
+    /// 验证已记住账号被移除后会降级到另一个暴露相同模型的账号。
+    #[test]
+    fn model_selection_degrades_after_remembered_account_is_removed() {
+        let (runtime, mut configuration) = two_account_runtime();
+        configuration
+            .connection_graph
+            .remember_model_connection("openrouter", "vendor/model", "two")
+            .expect("model account should be remembered");
+        configuration.connection_graph.connections.remove("two");
+
+        let selection = runtime
+            .resolve_model_selection(&configuration, "openrouter", "vendor/model")
+            .expect("remaining account should resolve");
+        assert_eq!(selection.route.connection.id, "one");
+    }
+
+    /// Verifies a session-selected connection overrides the model-wide remembered account.
+    /// 验证会话选中的连接会覆盖模型级记忆账号。
+    #[test]
+    fn connection_model_selection_uses_exact_session_account() {
+        let (runtime, mut configuration) = two_account_runtime();
+        configuration
+            .connection_graph
+            .remember_model_connection("openrouter", "vendor/model", "one")
+            .expect("model account should be remembered");
+
+        let selection = runtime
+            .resolve_connection_model_selection(&configuration, "two", "openrouter", "vendor/model")
+            .expect("exact session account should resolve");
+        assert_eq!(selection.route.connection.id, "two");
+    }
+
+    /// Verifies cached secondary routes are account-scoped, expire after six hours, and may be bypassed explicitly.
+    /// 验证二级路由缓存按账号隔离、六小时后过期，并可被显式绕过。
+    #[tokio::test]
+    async fn secondary_route_cache_honors_scope_ttl_and_forced_refresh() {
+        let (runtime, configuration) = two_account_runtime();
+        // cache_key targets only the second credential and its exact model.
+        // cache_key 仅指向第二个凭据及其精确模型。
+        let cache_key = PersistedAiConfiguration::connection_model_key("two", "vendor/model");
+        // cached_route is deterministic and requires no network access.
+        // cached_route 是确定性的，不需要网络访问。
+        let cached_route = SecondaryRouteOption {
+            route_id: String::from("cached"),
+            provider_display_name: String::from("Cached Provider"),
+            endpoint_display_name: String::from("Cached Endpoint"),
+            prompt_price_per_token: None,
+            completion_price_per_token: None,
+            cache_read_price_per_token: None,
+            latency_milliseconds: None,
+            uptime_percent: None,
+            throughput_tokens_per_second: None,
+        };
+        runtime
+            .secondary_route_cache
+            .write()
+            .expect("cache should be writable")
+            .insert(
+                cache_key.clone(),
+                SecondaryRouteCacheEntry {
+                    routes: vec![cached_route.clone()],
+                    fetched_at: Instant::now(),
+                },
+            );
+
+        let cached = runtime
+            .discover_secondary_routes(&configuration, "two", "vendor/model", false)
+            .await
+            .expect("fresh cache should avoid credential access");
+        assert_eq!(cached, vec![cached_route]);
+        assert!(
+            runtime
+                .discover_secondary_routes(&configuration, "two", "vendor/model", true)
+                .await
+                .is_err(),
+            "forced refresh should bypass the cache and reach the unavailable secret boundary"
+        );
+
+        runtime
+            .secondary_route_cache
+            .write()
+            .expect("cache should be writable")
+            .get_mut(cache_key.as_str())
+            .expect("cached route should remain present")
+            .fetched_at = Instant::now()
+            .checked_sub(SECONDARY_ROUTE_CACHE_TTL)
+            .expect("six hours should fit in the monotonic clock");
+        assert!(
+            runtime
+                .discover_secondary_routes(&configuration, "two", "vendor/model", false)
+                .await
+                .is_err(),
+            "expired cache should reach the unavailable secret boundary"
+        );
     }
 
     /// Verifies one active selection remains bound to its exact account snapshot.

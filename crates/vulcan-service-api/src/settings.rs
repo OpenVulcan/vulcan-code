@@ -308,6 +308,10 @@ pub struct ProviderSummary {
     /// Provider display name.
     /// 供应商显示名称。
     pub name: String,
+    /// Provider display name without the credential account suffix.
+    /// 不包含凭据账号后缀的供应商显示名称。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_display_name: Option<String>,
     /// Provider status text.
     /// 供应商状态文本。
     pub status: String,
@@ -348,6 +352,10 @@ pub struct ProviderModelSummary {
     /// 该模型是否为当前工作台模型。
     #[serde(default)]
     pub active: bool,
+    /// Whether this connection is the resolved preferred account for this provider and model.
+    /// 该连接是否为此供应商与模型解析出的首选账号。
+    #[serde(default)]
+    pub preferred_connection: bool,
     /// Whether this model is enabled for the provider.
     /// 该模型是否已在该供应商下启用。
     #[serde(default)]

@@ -154,6 +154,8 @@ pub(crate) fn apply_execution_preparation(
                 runtime_state.active_agent_id = Some(preparation.agent_id.clone());
                 runtime_state.active_provider_id =
                     Some(preparation.model_blueprint.provider_id.clone());
+                runtime_state.active_connection_id =
+                    Some(preparation.model_blueprint.connection_id.clone());
                 runtime_state.active_model_id = Some(preparation.model_blueprint.model_id.clone());
                 runtime_state.active_reasoning_effort =
                     Some(preparation.model_blueprint.reasoning.requested_effort);

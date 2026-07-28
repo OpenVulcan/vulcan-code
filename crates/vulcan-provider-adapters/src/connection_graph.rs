@@ -31,6 +31,17 @@ pub struct RuntimeConnectionCatalogs {
 }
 
 impl RuntimeConnectionCatalogs {
+    /// Restores the runtime lookup wrapper from an owned process-local snapshot.
+    /// 从拥有所有权的进程内快照恢复运行时查询包装器。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `catalogs` contains exact credential-scoped model catalogs.
+    /// `catalogs` 包含精确的凭据作用域模型目录。
+    pub fn from_snapshot(catalogs: BTreeMap<String, ConnectionModelCatalog>) -> Self {
+        Self { catalogs }
+    }
+
     /// Replaces one connection catalog after a successful refresh.
     /// 在成功刷新后替换一个连接目录。
     ///

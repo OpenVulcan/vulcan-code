@@ -41,6 +41,12 @@ export interface ComposerModelSelectionController {
   // Selected provider/model key rendered by ModelPickerControl.
   // ModelPickerControl 渲染的 Provider/模型选择键。
   modelChoice: string;
+  // Exact active model account resolved from the current snapshot.
+  // 从当前快照解析出的精确当前模型账号。
+  activeModelChoice: ModelPickerChoice | null;
+  // All credential accounts exposing the active provider model.
+  // 暴露当前 Provider 模型的全部凭据账号。
+  activeModelAccounts: ModelPickerChoice[];
   // Full active provider/model row used by secondary-route controls.
   // 二级路由控件使用的完整当前 Provider/模型行。
   activeProviderModel: ComposerActiveProviderModel | null;
@@ -133,6 +139,25 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
     const model = provider?.models?.find((candidate) => candidate.id === selectedChoice.modelId) ?? null;
     return provider && model ? { provider, model } : null;
   }, [activeModelChoiceKey, availableModelChoices, modelChoice, options.providers]);
+  // activeModelChoice is the exact account row currently selected for the active model.
+  // activeModelChoice 是当前模型精确选中的账号行。
+  const activeModelChoice = React.useMemo(
+    () => availableModelChoices.find(
+      (choice) => modelPickerChoiceKey(choice) === (modelChoice || activeModelChoiceKey),
+    ) ?? null,
+    [activeModelChoiceKey, availableModelChoices, modelChoice],
+  );
+  // activeModelAccounts contains only accounts serving the exact active provider/model pair.
+  // activeModelAccounts 仅包含服务于精确当前 Provider/模型组合的账号。
+  const activeModelAccounts = React.useMemo(() => {
+    if (!activeModelChoice) {
+      return [];
+    }
+    return availableModelChoices.filter((choice) => (
+      choice.providerId === activeModelChoice.providerId
+      && choice.modelId === activeModelChoice.modelId
+    ));
+  }, [activeModelChoice, availableModelChoices]);
   // reasoningEffortOptions exposes only levels declared by the active model catalog.
   // reasoningEffortOptions 仅暴露当前模型目录明确声明的档位。
   const reasoningEffortOptions = React.useMemo<ComposerSelectOption[]>(() => {
@@ -231,6 +256,8 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
 
   return {
     modelChoice,
+    activeModelChoice,
+    activeModelAccounts,
     activeProviderModel,
     modelPickerOpenSignal,
     reasoningEffort,

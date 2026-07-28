@@ -113,6 +113,7 @@ fn session_addon_state_write_does_not_rewrite_segmented_state_document() {
         &SessionRuntimeControls {
             active_agent_id: None,
             active_provider_id: Some(String::from("new-provider")),
+            active_connection_id: Some(String::from("new-connection")),
             active_model_id: Some(String::from("new-model")),
             active_reasoning_effort: None,
             active_temperature: None,

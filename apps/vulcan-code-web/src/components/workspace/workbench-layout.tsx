@@ -642,6 +642,7 @@ export function WorkbenchLayout(props: {
   const {
     shellChromeActions,
     showWindowControls,
+    windowDragRegionEnabled,
     handleTitlebarDoubleClick,
   } = useWorkbenchShellChrome({
     startup: props.startup,
@@ -1096,7 +1097,13 @@ export function WorkbenchLayout(props: {
     setWorkbenchState((current) => markConversationLocallyRead(current, conversationId));
     void selectConversation(conversationId)
       .then((snapshot) => {
-        if (snapshot) {
+        // Only the still-selected conversation may replace session-sensitive model controls.
+        // 只有仍处于选中状态的会话才能替换会话敏感的模型控制字段。
+        if (
+          snapshot
+          && selectedConversationIdRef.current === conversationId
+          && snapshot.selectedConversationId === conversationId
+        ) {
           liveStreamStore.rebaseWorkbenchSnapshot(snapshot);
           liveStreamStore.flushNotifications();
           setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(
@@ -1108,7 +1115,13 @@ export function WorkbenchLayout(props: {
         return markConversationRead(conversationId);
       })
       .then((snapshot) => {
-        if (snapshot) {
+        // Read-marker responses can arrive after another conversation has already been selected.
+        // 已读标记响应可能在另一个会话已经被选中后才到达。
+        if (
+          snapshot
+          && selectedConversationIdRef.current === conversationId
+          && snapshot.selectedConversationId === conversationId
+        ) {
           liveStreamStore.rebaseWorkbenchSnapshot(snapshot);
           liveStreamStore.flushNotifications();
           setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
@@ -1117,7 +1130,7 @@ export function WorkbenchLayout(props: {
       .catch((error) => {
         toast.error(error instanceof Error ? error.message : String(error));
       });
-  }, [handleOpenWorkspaceChat, liveStreamStore]);
+  }, [handleOpenWorkspaceChat, liveStreamStore, selectedConversationIdRef]);
 
   React.useEffect(() => {
     notificationCoordinator.setRouteHandler((route) => {
@@ -1659,7 +1672,7 @@ export function WorkbenchLayout(props: {
             selectedConversationId={selectedConversationId}
             onNotificationPresentationContextChange={handleNotificationPresentationContextChange}
             chromeActions={shellChromeActions}
-            titlebarDragRegion={showWindowControls}
+            titlebarDragRegion={windowDragRegionEnabled}
             onTitlebarDoubleClick={handleTitlebarDoubleClick}
             loadingConversationId={loadingConversationId}
             conversationLoadError={conversationLoadError}
@@ -1767,7 +1780,7 @@ export function WorkbenchLayout(props: {
             startup={props.startup}
             workbench={workbenchState}
             chromeActions={shellChromeActions}
-            titlebarDragRegion={showWindowControls}
+            titlebarDragRegion={windowDragRegionEnabled}
             onTitlebarDoubleClick={handleTitlebarDoubleClick}
           />
         )}

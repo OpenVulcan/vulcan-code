@@ -34,9 +34,21 @@ interface WorkbenchShellChromeState {
   // showWindowControls reports whether the current runtime supports custom window controls.
   // showWindowControls 表示当前运行时是否支持自定义窗口控制。
   showWindowControls: boolean;
+  // windowDragRegionEnabled reports whether native titlebar dragging is safe for the current window state.
+  // windowDragRegionEnabled 表示当前窗口状态下是否可以安全启用原生标题栏拖动。
+  windowDragRegionEnabled: boolean;
   // handleTitlebarDoubleClick toggles maximize from non-interactive titlebar space.
   // handleTitlebarDoubleClick 从非交互标题栏区域切换最大化。
   handleTitlebarDoubleClick: (event: React.MouseEvent<HTMLElement>) => void;
+}
+
+// shouldEnableWindowDragRegion prevents Tauri from starting a drag while the window is maximized.
+// shouldEnableWindowDragRegion 防止 Tauri 在窗口最大化时启动拖动流程。
+export function shouldEnableWindowDragRegion(
+  showWindowControls: boolean,
+  isWindowMaximized: boolean,
+): boolean {
+  return showWindowControls && !isWindowMaximized;
 }
 
 // useWorkbenchShellChrome owns the theme and Tauri titlebar state for WorkbenchLayout.
@@ -55,6 +67,12 @@ export function useWorkbenchShellChrome({
   // isWindowMaximized tracks the current Tauri window maximize state for the titlebar button.
   // isWindowMaximized 跟踪当前 Tauri 窗口最大化状态，用于标题栏按钮。
   const [isWindowMaximized, setIsWindowMaximized] = React.useState(false);
+  // windowDragRegionEnabled disables native dragging before a maximized titlebar can corrupt its restore bounds.
+  // windowDragRegionEnabled 在最大化标题栏可能破坏还原边界前禁用原生拖动。
+  const windowDragRegionEnabled = shouldEnableWindowDragRegion(
+    showWindowControls,
+    isWindowMaximized,
+  );
   // refreshWindowMaximizedState synchronizes the local titlebar state with Tauri.
   // refreshWindowMaximizedState 将本地标题栏状态与 Tauri 同步。
   const refreshWindowMaximizedState = React.useCallback(async () => {
@@ -152,6 +170,7 @@ export function useWorkbenchShellChrome({
   return {
     shellChromeActions,
     showWindowControls,
+    windowDragRegionEnabled,
     handleTitlebarDoubleClick,
   };
 }

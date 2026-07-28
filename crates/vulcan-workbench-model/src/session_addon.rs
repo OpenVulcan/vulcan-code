@@ -790,6 +790,10 @@ pub struct SessionRuntimeControls {
     /// 最近一次被该会话使用的激活供应商标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_provider_id: Option<String>,
+    /// Last credential connection identifier selected by the session.
+    /// 该会话最近一次选择的凭据连接标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_connection_id: Option<String>,
     /// Last active model identifier used by the session.
     /// 最近一次被该会话使用的激活模型标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -821,6 +825,7 @@ impl SessionRuntimeControls {
         let controls = Self {
             active_agent_id: runtime_state.active_agent_id.clone(),
             active_provider_id: runtime_state.active_provider_id.clone(),
+            active_connection_id: runtime_state.active_connection_id.clone(),
             active_model_id: runtime_state.active_model_id.clone(),
             active_reasoning_effort: runtime_state.active_reasoning_effort,
             active_temperature: runtime_state.active_temperature,
@@ -838,6 +843,7 @@ impl SessionRuntimeControls {
     pub fn apply_to_runtime_state(&self, runtime_state: &mut SessionRuntimeStateEntry) {
         runtime_state.active_agent_id = self.active_agent_id.clone();
         runtime_state.active_provider_id = self.active_provider_id.clone();
+        runtime_state.active_connection_id = self.active_connection_id.clone();
         runtime_state.active_model_id = self.active_model_id.clone();
         runtime_state.active_reasoning_effort = self.active_reasoning_effort;
         runtime_state.active_temperature = self.active_temperature;
@@ -853,6 +859,7 @@ impl SessionRuntimeControls {
     pub fn has_any_value(&self) -> bool {
         self.active_agent_id.is_some()
             || self.active_provider_id.is_some()
+            || self.active_connection_id.is_some()
             || self.active_model_id.is_some()
             || self.active_reasoning_effort.is_some()
             || self.active_temperature.is_some()

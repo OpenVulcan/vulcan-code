@@ -22,6 +22,8 @@
 }
 
 .composer-select-copy {
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
   flex: 1 1 auto;
   display: grid;
@@ -36,6 +38,9 @@
 }
 
 .composer-select-label {
+  width: 100%;
+  max-width: 100%;
+  display: block;
   min-width: 0;
   overflow: hidden;
   color: var(--foreground);
@@ -137,6 +142,62 @@
 .model-picker-row.selected {
   background: var(--accent);
   outline: none;
+}
+
+.model-picker-group-row {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(70px, 140px);
+  align-items: center;
+  gap: 8px;
+  padding-right: 8px;
+  border-radius: 10px;
+}
+
+.model-picker-group-row:hover,
+.model-picker-group-row:focus-within,
+.model-picker-group-row.selected {
+  background: var(--accent);
+  outline: none;
+}
+
+.model-picker-group-main {
+  width: 100%;
+  min-width: 0;
+  height: 42px;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  justify-content: stretch;
+  gap: 10px;
+  padding: 0 10px;
+  background: transparent;
+  text-align: left;
+}
+
+.model-picker-group-main:hover,
+.model-picker-group-main:focus-visible {
+  background: transparent;
+}
+
+.composer-select-trigger.model-account {
+  width: 108px;
+  max-width: 108px;
+  overflow: hidden;
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+.composer-select-trigger.model-account > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-picker-account-content {
+  min-width: 150px;
 }
 
 .model-picker-selected-slot {

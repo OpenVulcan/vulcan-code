@@ -141,6 +141,9 @@ export async function selectPublicAiModel(request: {
   providerId: string;
   modelId: string;
   connectionId: string;
+  // conversationId scopes the choice to one persisted session; null updates the new-session default.
+  // conversationId 将选择限定到一个持久化会话；null 则更新新会话默认值。
+  conversationId?: string | null;
 }): Promise<PublicAiSettingsSnapshot> {
   return serviceClient.request<PublicAiSettingsSnapshot>("service_select_public_ai_model", { request });
 }
@@ -179,9 +182,12 @@ export interface WorkbenchModelChoice {
   modelId: string;
 }
 
-// selectWorkbenchModel persists the active provider/model pair through the desktop service.
-// selectWorkbenchModel 通过桌面服务持久化当前激活的 Provider/模型组合。
-export async function selectWorkbenchModel(choice: WorkbenchModelChoice): Promise<WorkbenchSnapshot | null> {
+// selectWorkbenchModel persists one model account for a session or the new-session default.
+// selectWorkbenchModel 为会话或新会话默认值持久化一个模型账号。
+export async function selectWorkbenchModel(
+  choice: WorkbenchModelChoice,
+  conversationId: string | null,
+): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
     return null;
   }
@@ -192,6 +198,7 @@ export async function selectWorkbenchModel(choice: WorkbenchModelChoice): Promis
     providerId: choice.providerId,
     modelId: choice.modelId,
     connectionId: choice.connectionId,
+    conversationId,
   });
   return loadWorkbenchSnapshot();
 }
@@ -201,6 +208,7 @@ export async function selectWorkbenchModel(choice: WorkbenchModelChoice): Promis
 export async function listWorkbenchModelSecondaryRoutes(
   providerId: string,
   modelId: string,
+  forceRefresh: boolean,
 ): Promise<ProviderModelSecondaryRouteSummary[]> {
   if (!hasServiceRuntime()) {
     return [];
@@ -208,6 +216,7 @@ export async function listWorkbenchModelSecondaryRoutes(
   return serviceClient.request<ProviderModelSecondaryRouteSummary[]>("service_list_workbench_model_secondary_routes", {
     providerId,
     modelId,
+    forceRefresh,
   });
 }
 

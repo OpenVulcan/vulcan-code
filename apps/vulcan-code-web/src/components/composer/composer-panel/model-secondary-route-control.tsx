@@ -1,5 +1,5 @@
 import React from "react";
-import { Check, Route, Search } from "lucide-react";
+import { Check, RefreshCw, Route, Search } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -35,7 +35,11 @@ export function ModelSecondaryRouteControl(props: {
   selectedRoute: ProviderModelSecondaryRouteSummary | null;
   // Loads route choices.
   // 加载路由选项。
-  onListRoutes: (providerId: string, modelId: string) => Promise<ProviderModelSecondaryRouteSummary[]>;
+  onListRoutes: (
+    providerId: string,
+    modelId: string,
+    forceRefresh: boolean,
+  ) => Promise<ProviderModelSecondaryRouteSummary[]>;
   // Persists one route selection.
   // 持久化单个路由选择。
   onSelectRoute: (
@@ -51,6 +55,9 @@ export function ModelSecondaryRouteControl(props: {
   const [filter, setFilter] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [routes, setRoutes] = React.useState<ProviderModelSecondaryRouteSummary[]>([]);
+  // onListRoutesRef keeps an in-flight endpoint discovery independent from parent callback identity changes.
+  // onListRoutesRef 使进行中的端点发现不受父组件回调引用变化影响。
+  const onListRoutesRef = React.useRef(props.onListRoutes);
   const selectedLabel = props.selectedRoute?.label?.trim() || "Auto";
   const filteredRoutes = React.useMemo(() => {
     const needle = filter.trim().toLowerCase();
@@ -66,13 +73,17 @@ export function ModelSecondaryRouteControl(props: {
   }, [filter, routes]);
 
   React.useEffect(() => {
+    onListRoutesRef.current = props.onListRoutes;
+  }, [props.onListRoutes]);
+
+  React.useEffect(() => {
     if (!open) {
       setFilter("");
       return;
     }
     let cancelled = false;
     setLoading(true);
-    props.onListRoutes(props.providerId, props.modelId)
+    onListRoutesRef.current(props.providerId, props.modelId, false)
       .then((nextRoutes) => {
         if (!cancelled) {
           setRoutes(nextRoutes);
@@ -92,7 +103,22 @@ export function ModelSecondaryRouteControl(props: {
     return () => {
       cancelled = true;
     };
-  }, [open, props.modelId, props.onListRoutes, props.providerId]);
+  }, [open, props.modelId, props.providerId]);
+
+  // refreshRoutes explicitly bypasses the six-hour runtime cache while retaining current rows on failure.
+  // refreshRoutes 显式绕过六小时运行时缓存，并在失败时保留当前列表。
+  const refreshRoutes = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const nextRoutes = await onListRoutesRef.current(props.providerId, props.modelId, true);
+      setRoutes(nextRoutes);
+      toast.success(t("composer.secondaryRoute.refreshed"));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
+  }, [props.modelId, props.providerId, t]);
 
   const chooseRoute = React.useCallback(async (route: ProviderModelSecondaryRouteSummary | null) => {
     const ok = await props.onSelectRoute(
@@ -135,6 +161,16 @@ export function ModelSecondaryRouteControl(props: {
             placeholder={t("composer.secondaryRoute.search")}
             value={filter}
           />
+          <Button
+            aria-label={t("composer.secondaryRoute.refresh")}
+            disabled={loading}
+            onClick={() => void refreshRoutes()}
+            size="icon"
+            type="button"
+            variant="ghost"
+          >
+            <RefreshCw className={cn(loading && "animate-spin")} size={14} />
+          </Button>
         </div>
         <ScrollArea className="model-picker-scroll">
           <div className="model-picker-list">
@@ -149,7 +185,7 @@ export function ModelSecondaryRouteControl(props: {
                 <span className="model-picker-row-meta">{t("composer.secondaryRoute.autoEndpoint")}</span>
               </span>
             </button>
-            {loading ? (
+            {loading && routes.length === 0 ? (
               <div className="model-picker-empty">{t("composer.secondaryRoute.loading")}</div>
             ) : filteredRoutes.length === 0 ? (
               <div className="model-picker-empty">{t("composer.secondaryRoute.noMatches")}</div>

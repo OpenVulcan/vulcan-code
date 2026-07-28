@@ -400,6 +400,12 @@ fn select_conversation_in_retained_state(
             selected_runtime_state,
         );
     }
+    // provider_configuration is the restored session-scoped reasoning preference used by the fast projection.
+    // provider_configuration 是快速投影使用的已恢复会话级思考偏好。
+    let provider_configuration = guard
+        .agent_runtime
+        .as_ref()
+        .map(|agent_runtime| agent_runtime.provider_configuration.clone());
     let messages =
         retained_selected_conversation_messages(&workspace_snapshot, session_id, conversation_id);
     let subagent_navigation =
@@ -420,6 +426,9 @@ fn select_conversation_in_retained_state(
         .filter(|progress| progress.session_id == conversation_id);
     sync_selected_conversation_fields_for_retained_workbench(&mut guard.workbench, conversation_id);
     guard.workspace_snapshot = Some(workspace_snapshot);
+    if let Some(provider_configuration) = provider_configuration.as_ref() {
+        sync_workbench_runtime_control_fields_locked(&mut guard, provider_configuration);
+    }
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
     Ok(Some(guard.workbench.clone()))

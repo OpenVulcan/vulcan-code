@@ -5,7 +5,10 @@
 }
 
 .provider-management-surface {
-  width: min(1120px, 100%);
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
 }
 
 .provider-protocol-fieldset {
@@ -42,8 +45,6 @@
 }
 
 .credential-management-content {
-  width: 100%;
-  min-width: 0;
   display: grid;
   align-content: start;
   gap: 10px;
@@ -77,11 +78,11 @@
 
 .credential-management-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 19rem), 21rem));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   content-start: normal;
   align-items: stretch;
   justify-content: start;
-  gap: 16px;
+  gap: 8px;
 }
 
 .provider-credential-select {

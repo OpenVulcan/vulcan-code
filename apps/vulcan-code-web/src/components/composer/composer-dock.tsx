@@ -96,6 +96,7 @@ export function ComposerDock(props: {
   onListWorkbenchModelSecondaryRoutes: (
     providerId: string,
     modelId: string,
+    forceRefresh: boolean,
   ) => Promise<ProviderModelSecondaryRouteSummary[]>;
   // onSelectWorkbenchModelSecondaryRoute persists a selected secondary route.
   // onSelectWorkbenchModelSecondaryRoute 持久化选中的二级路由。

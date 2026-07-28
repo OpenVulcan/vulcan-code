@@ -79,6 +79,9 @@ export interface ProviderSummary {
   // Provider display name.
   // Provider 显示名称。
   name: string;
+  // Provider display name without the credential account suffix.
+  // 不包含凭据账号后缀的 Provider 显示名称。
+  providerDisplayName?: string;
   // Provider status.
   // Provider 状态。
   status: string;
@@ -113,6 +116,9 @@ export interface ProviderModelSummary {
   // Whether this model is currently active.
   // 该模型当前是否处于激活状态。
   active?: boolean;
+  // Whether this credential connection is the backend-resolved preferred account for this model.
+  // 该凭据连接是否为后端针对当前模型解析出的首选账号。
+  preferredConnection?: boolean;
   // Whether this model is enabled.
   // 该模型是否启用。
   enabled?: boolean;

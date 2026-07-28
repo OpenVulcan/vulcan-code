@@ -21,7 +21,7 @@ use crate::{
     SharedServiceBridgeState, ai_credential_secret_store::OsAiCredentialSecretStore,
     begin_public_ai_configuration_transaction, emit_workbench_event,
     mutate_public_ai_configuration, mutate_public_ai_configuration_in_transaction,
-    public_ai_provider_rows, shell_host_from_state,
+    public_ai_provider_rows_for_selection, shell_host_from_state,
 };
 
 /// Browser-facing public AI settings snapshot.
@@ -273,6 +273,10 @@ pub(super) struct PublicAiModelSelectionRequest {
     /// Exact credential connection identifier.
     /// 精确凭据连接标识。
     connection_id: String,
+    /// Optional persisted conversation receiving this model selection.
+    /// 接收本次模型选择的可选持久化会话。
+    #[serde(default)]
+    conversation_id: Option<String>,
 }
 
 /// Saves local narrowing and model parameter values.
@@ -1800,7 +1804,64 @@ pub(super) async fn service_select_public_ai_model(
     state: SharedServiceBridgeState,
     request: PublicAiModelSelectionRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
-    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
+    // conversation_id is the validated optional session scope for this selection.
+    // conversation_id 是本次选择经过校验的可选会话作用域。
+    let conversation_id = request
+        .conversation_id
+        .as_deref()
+        .map(|value| {
+            value
+                .parse::<crate::SessionId>()
+                .map_err(|error| format!("Invalid conversation id `{value}`: {error}"))
+        })
+        .transpose()?;
+    if let Some(session_id) = conversation_id {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("Failed to lock service state: {error}"))?;
+        // session_exists prevents account-preference persistence when the target session is already gone.
+        // session_exists 防止目标会话已经消失时仍持久化账号偏好。
+        let session_exists = guard
+            .workspace_snapshot
+            .as_ref()
+            .is_some_and(|workspace| workspace.session_runtime_state.contains_key(&session_id));
+        if !session_exists {
+            return Err(format!("Conversation `{session_id}` has no runtime state."));
+        }
+    }
+    // current_configuration is the immutable validation baseline before persistent mutation.
+    // current_configuration 是持久化修改前使用的不可变校验基线。
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    // selected_connection is the exact credential row requested by the composer account selector.
+    // selected_connection 是输入区账号选择器请求的精确凭据行。
+    let selected_connection = current_configuration
+        .connection_graph
+        .connections
+        .get(request.connection_id.as_str())
+        .ok_or_else(|| format!("Connection `{}` is not configured.", request.connection_id))?;
+    if selected_connection.provider_id != request.provider_id {
+        return Err(format!(
+            "Connection `{}` does not belong to provider `{}`.",
+            request.connection_id, request.provider_id
+        ));
+    }
+    // selected_connection_exposes_model rejects mismatched account/model requests before mutation.
+    // selected_connection_exposes_model 在修改前拒绝账号与模型不匹配的请求。
+    let selected_connection_exposes_model = runtime
+        .catalog_snapshot()?
+        .get(request.connection_id.as_str())
+        .is_some_and(|catalog| {
+            catalog
+                .models
+                .iter()
+                .any(|model| model.id == request.model_id)
+        });
+    if !selected_connection_exposes_model {
+        return Err(format!(
+            "Connection `{}` does not expose model `{}`.",
+            request.connection_id, request.model_id
+        ));
+    }
     let configuration =
         mutate_public_ai_configuration(&state, "选择公共 AI 模型失败", |configuration| {
             configuration.connection_graph.remember_model_connection(
@@ -1808,16 +1869,67 @@ pub(super) async fn service_select_public_ai_model(
                 request.model_id.as_str(),
                 request.connection_id.as_str(),
             )?;
-            configuration.active = Some(ActiveAiModelSelection {
-                provider_id: request.provider_id,
-                model_id: request.model_id,
-                connection_id: request.connection_id,
-            });
-            runtime.resolve_active_selection(configuration)?;
+            if conversation_id.is_none() {
+                configuration.active = Some(ActiveAiModelSelection {
+                    provider_id: request.provider_id.clone(),
+                    model_id: request.model_id.clone(),
+                    connection_id: request.connection_id.clone(),
+                });
+                runtime.resolve_active_selection(configuration)?;
+            } else {
+                runtime.resolve_model_selection(
+                    configuration,
+                    request.provider_id.as_str(),
+                    request.model_id.as_str(),
+                )?;
+            }
             Ok(())
         })
         .await?;
+    // persistence_context captures the exact runtime-controls addon after updating a persisted session.
+    // persistence_context 在更新持久化会话后捕获精确的运行时控制附加状态。
+    let persistence_context = if let Some(session_id) = conversation_id {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("Failed to lock service state: {error}"))?;
+        let workspace = guard
+            .workspace_snapshot
+            .as_mut()
+            .ok_or_else(|| String::from("Workspace is not initialized."))?;
+        let runtime_state = workspace
+            .session_runtime_state
+            .get_mut(&session_id)
+            .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
+        runtime_state.active_provider_id = Some(request.provider_id.clone());
+        runtime_state.active_connection_id = Some(request.connection_id.clone());
+        runtime_state.active_model_id = Some(request.model_id.clone());
+        runtime_state.updated_at = crate::current_unix_millis_text();
+        let controller_runtime = guard.controller_runtime.clone();
+        let workspace_snapshot = guard.workspace_snapshot.clone();
+        Some((controller_runtime, session_id, workspace_snapshot))
+    } else {
+        None
+    };
     publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    if let Some((Some(controller_runtime), session_id, Some(workspace_snapshot))) =
+        persistence_context
+        && let Some(addon_state) = crate::session_addon_state_from_workspace_snapshot(
+            &workspace_snapshot,
+            session_id,
+            &[crate::SessionAddonNamespace::RuntimeControls],
+        )
+    {
+        crate::spawn_workspace_session_addon_state_persist_task(
+            app.clone(),
+            state.clone(),
+            controller_runtime,
+            workspace_snapshot,
+            session_id,
+            addon_state,
+            vec![crate::SessionAddonNamespace::RuntimeControls],
+            Some(String::from("model_selection")),
+        );
+    }
     build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
 }
 
@@ -2006,12 +2118,87 @@ pub(crate) fn publish_public_ai_workbench(
     runtime: &PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
 ) -> Result<WorkbenchSnapshot, String> {
-    let rows = public_ai_provider_rows(configuration, runtime)?;
     let workbench = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("Failed to lock service state: {error}"))?;
+        // effective_selection prefers the selected conversation model, then degrades to the global default.
+        // effective_selection 优先使用当前会话模型，失效时再降级到全局默认。
+        let effective_selection = guard
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| {
+                workspace
+                    .session_runtime_state
+                    .get(&workspace.selected_session)
+            })
+            .and_then(|runtime_state| {
+                runtime_state
+                    .active_provider_id
+                    .as_deref()
+                    .zip(runtime_state.active_connection_id.as_deref())
+                    .zip(runtime_state.active_model_id.as_deref())
+            })
+            .and_then(|((provider_id, connection_id), model_id)| {
+                runtime
+                    .resolve_connection_model_selection(
+                        configuration,
+                        connection_id,
+                        provider_id,
+                        model_id,
+                    )
+                    .ok()
+            })
+            .or_else(|| {
+                guard
+                    .workspace_snapshot
+                    .as_ref()
+                    .and_then(|workspace| {
+                        workspace
+                            .session_runtime_state
+                            .get(&workspace.selected_session)
+                    })
+                    .and_then(|runtime_state| {
+                        runtime_state
+                            .active_provider_id
+                            .as_deref()
+                            .zip(runtime_state.active_model_id.as_deref())
+                    })
+                    .and_then(|(provider_id, model_id)| {
+                        runtime
+                            .resolve_model_selection(configuration, provider_id, model_id)
+                            .ok()
+                    })
+            })
+            .or_else(|| runtime.resolve_active_selection(configuration).ok());
+        let rows = public_ai_provider_rows_for_selection(
+            configuration,
+            runtime,
+            effective_selection.as_ref(),
+        )?;
         guard.workbench.providers = rows;
+        if let Some(provider_configuration) = guard
+            .agent_runtime
+            .as_ref()
+            .map(|agent_runtime| agent_runtime.provider_configuration.clone())
+        {
+            guard.workbench.reasoning_selection = crate::reasoning_selection(
+                &provider_configuration,
+                effective_selection
+                    .as_ref()
+                    .map(|selection| &selection.model.capabilities),
+            );
+            guard.workbench.composer_attachment_capabilities =
+                crate::composer_attachment_capabilities(
+                    effective_selection
+                        .as_ref()
+                        .map(|selection| &selection.model.capabilities),
+                );
+        }
+        // A published provider projection is a new authoritative snapshot and must outrank the previous WebUI revision.
+        // 已发布的供应商投影是新的权威快照，必须以更高版本覆盖 WebUI 中的旧快照。
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        guard.workbench.revision = guard.workbench_generation;
         guard.workbench.clone()
     };
     emit_workbench_event(app, &workbench);

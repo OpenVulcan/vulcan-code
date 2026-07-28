@@ -556,12 +556,91 @@ pub(crate) fn refresh_workbench_runtime_controls_locked(
     guard: &mut ServiceBridgeState,
     provider_configuration: &ProviderConfigurationFile,
 ) {
-    let public_model_capabilities = active_public_ai_model_capabilities(
+    sync_workbench_runtime_control_fields_locked(guard, provider_configuration);
+    guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    guard.workbench.revision = guard.workbench_generation;
+}
+
+/// Synchronizes session-sensitive model controls without changing the workbench revision.
+/// 同步会话敏感的模型控制字段，但不修改工作台修订号。
+///
+/// # Parameters
+/// 参数
+/// `guard` owns the retained workspace, public AI runtime, and workbench projection.
+/// `guard` 持有保留工作区、公共 AI 运行时与工作台投影。
+/// `provider_configuration` is the selected session's restored runtime-control configuration.
+/// `provider_configuration` 是当前会话恢复后的运行控制配置。
+pub(crate) fn sync_workbench_runtime_control_fields_locked(
+    guard: &mut ServiceBridgeState,
+    provider_configuration: &ProviderConfigurationFile,
+) {
+    // effective_public_ai_selection prefers the selected session model and degrades to the global default.
+    // effective_public_ai_selection 优先使用当前会话模型，并在失效时降级到全局默认。
+    let effective_public_ai_selection = guard.agent_runtime.as_ref().and_then(|agent_runtime| {
+        let configuration = agent_runtime
+            .public_ai_runtime
+            .configuration_snapshot()
+            .ok()?;
         guard
-            .agent_runtime
+            .workspace_snapshot
             .as_ref()
-            .map(|runtime| runtime.public_ai_runtime.as_ref()),
-    );
+            .and_then(|workspace| {
+                workspace
+                    .session_runtime_state
+                    .get(&workspace.selected_session)
+            })
+            .and_then(|runtime_state| {
+                runtime_state
+                    .active_provider_id
+                    .as_deref()
+                    .zip(runtime_state.active_connection_id.as_deref())
+                    .zip(runtime_state.active_model_id.as_deref())
+            })
+            .and_then(|((provider_id, connection_id), model_id)| {
+                agent_runtime
+                    .public_ai_runtime
+                    .resolve_connection_model_selection(
+                        &configuration,
+                        connection_id,
+                        provider_id,
+                        model_id,
+                    )
+                    .ok()
+            })
+            .or_else(|| {
+                guard
+                    .workspace_snapshot
+                    .as_ref()
+                    .and_then(|workspace| {
+                        workspace
+                            .session_runtime_state
+                            .get(&workspace.selected_session)
+                    })
+                    .and_then(|runtime_state| {
+                        runtime_state
+                            .active_provider_id
+                            .as_deref()
+                            .zip(runtime_state.active_model_id.as_deref())
+                    })
+                    .and_then(|(provider_id, model_id)| {
+                        agent_runtime
+                            .public_ai_runtime
+                            .resolve_model_selection(&configuration, provider_id, model_id)
+                            .ok()
+                    })
+            })
+            .or_else(|| {
+                agent_runtime
+                    .public_ai_runtime
+                    .resolve_active_selection(&configuration)
+                    .ok()
+            })
+    });
+    // public_model_capabilities belongs to the exact effective session selection.
+    // public_model_capabilities 属于精确的当前会话生效选择。
+    let public_model_capabilities = effective_public_ai_selection
+        .as_ref()
+        .map(|selection| selection.model.capabilities.clone());
     let context_usage = guard.workspace_snapshot.as_ref().and_then(|workspace| {
         context_usage_snapshot_from_runtime_state(
             workspace.selected_session,
@@ -572,34 +651,20 @@ pub(crate) fn refresh_workbench_runtime_controls_locked(
             public_model_capabilities.as_ref(),
         )
     });
-    guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
-    guard.workbench.revision = guard.workbench_generation;
     if let Some(agent_runtime) = guard.agent_runtime.as_ref()
         && let Ok(configuration) = agent_runtime.public_ai_runtime.configuration_snapshot()
-        && let Ok(rows) =
-            public_ai_provider_rows(&configuration, agent_runtime.public_ai_runtime.as_ref())
+        && let Ok(rows) = public_ai_provider_rows_for_selection(
+            &configuration,
+            agent_runtime.public_ai_runtime.as_ref(),
+            effective_public_ai_selection.as_ref(),
+        )
     {
         guard.workbench.providers = rows;
     }
     guard.workbench.reasoning_selection =
         reasoning_selection(provider_configuration, public_model_capabilities.as_ref());
-    guard.workbench.composer_attachment_capabilities = composer_attachment_capabilities(
-        guard
-            .agent_runtime
-            .as_ref()
-            .and_then(|agent_runtime| {
-                let configuration = agent_runtime
-                    .public_ai_runtime
-                    .configuration_snapshot()
-                    .ok()?;
-                agent_runtime
-                    .public_ai_runtime
-                    .resolve_active_selection(&configuration)
-                    .ok()
-            })
-            .as_ref()
-            .map(|selection| &selection.model.capabilities),
-    );
+    guard.workbench.composer_attachment_capabilities =
+        composer_attachment_capabilities(public_model_capabilities.as_ref());
     guard.workbench.context_usage = context_usage;
 }
 

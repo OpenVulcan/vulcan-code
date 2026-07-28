@@ -1,5 +1,8 @@
 import * as React from "react"
+import { Database, Gauge, SlidersHorizontal } from "lucide-react"
 
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
@@ -8,6 +11,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Separator } from "@/components/ui/separator"
+import { useI18n } from "@/i18n"
 import { savePublicAiModelOverrides } from "@/service/settings-actions-service"
 import type {
   PublicAiModel,
@@ -43,6 +58,7 @@ export function PublicAiModelOverridesDialog(props: {
   // 保存后接收权威设置快照。
   onSaved: (snapshot: PublicAiSettingsSnapshot) => void
 }) {
+  const { t } = useI18n()
   const [contextLimit, setContextLimit] = React.useState("")
   const [outputLimit, setOutputLimit] = React.useState("")
   const [cacheMode, setCacheMode] = React.useState("provider_default")
@@ -106,7 +122,7 @@ export function PublicAiModelOverridesDialog(props: {
           case "integer": {
             const value = Number(raw)
             if (!Number.isSafeInteger(value)) {
-              throw new Error(`${definition.display_name} 必须是安全整数。`)
+              throw new Error(`${definition.display_name}: ${t("settings.modelOverrides.validation.safeInteger")}`)
             }
             modelParameters[definition.id] = { type: "integer", value }
             break
@@ -129,13 +145,13 @@ export function PublicAiModelOverridesDialog(props: {
         }
         const parsed = Number(trimmed)
         if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-          throw new Error(`${label}必须是正整数。`)
+          throw new Error(`${label}: ${t("settings.modelOverrides.validation.positiveInteger")}`)
         }
         return parsed
       }
       const overrides: PublicAiModelOverrides = {
-        context_limit: parseLimit(contextLimit, "上下文限制"),
-        output_limit: parseLimit(outputLimit, "输出限制"),
+        context_limit: parseLimit(contextLimit, t("settings.modelOverrides.contextLimit")),
+        output_limit: parseLimit(outputLimit, t("settings.modelOverrides.outputLimit")),
         prompt_cache: cacheMode === "managed_explicit"
           ? {
               mode: "managed_explicit",
@@ -163,82 +179,205 @@ export function PublicAiModelOverridesDialog(props: {
     outputLimit,
     parameterValues,
     props,
+    t,
   ])
 
   const promptCache = props.model?.capabilities.prompt_cache
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>模型附加条件</DialogTitle>
-          <DialogDescription>
-            {props.providerDisplayName} · {props.model?.display_name} · {protocolDisplayName(props.protocolId)}
-          </DialogDescription>
+      <DialogContent className="max-h-[calc(100vh-2rem)] gap-0 overflow-hidden p-0 sm:max-w-xl">
+        <DialogHeader className="border-b bg-muted/30 px-5 py-4 pr-12">
+          <div className="flex items-start gap-3">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-xl border bg-background shadow-xs">
+              <SlidersHorizontal className="size-4 text-muted-foreground" />
+            </div>
+            <div className="min-w-0 space-y-2">
+              <div className="space-y-1">
+                <DialogTitle>{t("settings.modelOverrides.title")}</DialogTitle>
+                <DialogDescription>{t("settings.modelOverrides.description")}</DialogDescription>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                <Badge variant="outline">{props.providerDisplayName}</Badge>
+                <Badge variant="secondary">{props.model?.display_name}</Badge>
+                <Badge variant="outline">{protocolDisplayName(props.protocolId)}</Badge>
+              </div>
+            </div>
+          </div>
         </DialogHeader>
-        <label className="settings-field">
-          <span>上下文限制</span>
-          <input
-            max={props.model?.capabilities.context_limit}
-            min={1}
-            onChange={(event) => setContextLimit(event.target.value)}
-            placeholder={props.model?.capabilities.context_limit?.toString() ?? "供应商未声明"}
-            type="number"
-            value={contextLimit}
-          />
-        </label>
-        <label className="settings-field">
-          <span>输出 Token 限制</span>
-          <input
-            max={props.model?.capabilities.output_limit}
-            min={1}
-            onChange={(event) => setOutputLimit(event.target.value)}
-            placeholder={props.model?.capabilities.output_limit?.toString() ?? "供应商未声明"}
-            type="number"
-            value={outputLimit}
-          />
-        </label>
-        <label className="settings-field">
-          <span>提示词缓存</span>
-          <select onChange={(event) => setCacheMode(event.target.value)} value={cacheMode}>
-            <option value="provider_default">供应商默认，不额外注入</option>
-            {promptCache?.supports_managed_explicit ? (
-              <option value="managed_explicit">Vulcan 显式管理</option>
+        <ScrollArea className="max-h-[calc(100vh-12rem)]">
+          <div className="space-y-4 p-5">
+            <section className="space-y-4 rounded-xl border bg-card/40 p-4">
+              <div className="flex items-start gap-2.5">
+                <Gauge className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                <div className="space-y-1">
+                  <h3 className="text-sm font-semibold">{t("settings.modelOverrides.limits")}</h3>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    {t("settings.modelOverrides.limitsDescription")}
+                  </p>
+                </div>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <ModelLimitField
+                  capabilityLimit={props.model?.capabilities.context_limit}
+                  id="model-override-context-limit"
+                  label={t("settings.modelOverrides.contextLimit")}
+                  onChange={setContextLimit}
+                  value={contextLimit}
+                />
+                <ModelLimitField
+                  capabilityLimit={props.model?.capabilities.output_limit}
+                  id="model-override-output-limit"
+                  label={t("settings.modelOverrides.outputLimit")}
+                  onChange={setOutputLimit}
+                  value={outputLimit}
+                />
+              </div>
+            </section>
+
+            <section className="space-y-4 rounded-xl border bg-card/40 p-4">
+              <div className="flex items-start gap-2.5">
+                <Database className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                <div className="space-y-1">
+                  <h3 className="text-sm font-semibold">{t("settings.modelOverrides.cache")}</h3>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    {t("settings.modelOverrides.cacheDescription")}
+                  </p>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="model-override-cache-mode">{t("settings.modelOverrides.cacheMode")}</Label>
+                <Select onValueChange={setCacheMode} value={cacheMode}>
+                  <SelectTrigger className="w-full" id="model-override-cache-mode">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="provider_default">
+                      {t("settings.modelOverrides.providerDefault")}
+                    </SelectItem>
+                    {promptCache?.supports_managed_explicit ? (
+                      <SelectItem value="managed_explicit">
+                        {t("settings.modelOverrides.managedExplicit")}
+                      </SelectItem>
+                    ) : null}
+                  </SelectContent>
+                </Select>
+                {promptCache?.provider_default_behavior ? (
+                  <p className="rounded-lg bg-muted/50 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+                    {promptCache.provider_default_behavior}
+                  </p>
+                ) : null}
+              </div>
+              {cacheMode === "managed_explicit" ? (
+                <div className="space-y-2">
+                  <Label htmlFor="model-override-cache-ttl">{t("settings.modelOverrides.cacheTtl")}</Label>
+                  <Select onValueChange={setCacheTtl} value={cacheTtl}>
+                    <SelectTrigger className="w-full" id="model-override-cache-ttl">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {promptCache?.supported_ttl_options.map((option) => (
+                        <SelectItem key={option.id} value={option.id}>{option.display_name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
+            </section>
+
+            <section className="space-y-4 rounded-xl border bg-card/40 p-4">
+              <div className="space-y-1">
+                <h3 className="text-sm font-semibold">{t("settings.modelOverrides.parameters")}</h3>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  {t("settings.modelOverrides.parametersDescription")}
+                </p>
+              </div>
+              {modelParameters.length > 0 ? <Separator /> : null}
+              {modelParameters.length > 0 ? (
+                <div className="space-y-4">
+                  {modelParameters.map((definition) => (
+                    <ModelParameterField
+                      definition={definition}
+                      key={definition.id}
+                      onChange={(value) => setParameterValues((current) => ({
+                        ...current,
+                        [definition.id]: value,
+                      }))}
+                      value={parameterValues[definition.id] ?? ""}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">{t("settings.modelOverrides.noParameters")}</p>
+              )}
+            </section>
+
+            {error ? (
+              <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">
+                {error}
+              </div>
             ) : null}
-          </select>
-          <small>{promptCache?.provider_default_behavior}</small>
-        </label>
-        {cacheMode === "managed_explicit" ? (
-          <label className="settings-field">
-            <span>缓存 TTL</span>
-            <select onChange={(event) => setCacheTtl(event.target.value)} value={cacheTtl}>
-              {promptCache?.supported_ttl_options.map((option) => (
-                <option key={option.id} value={option.id}>{option.display_name}</option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-        {modelParameters.map((definition) => (
-          <ModelParameterField
-            definition={definition}
-            key={definition.id}
-            onChange={(value) => setParameterValues((current) => ({
-              ...current,
-              [definition.id]: value,
-            }))}
-            value={parameterValues[definition.id] ?? ""}
-          />
-        ))}
-        {error ? <p className="settings-error-text">{error}</p> : null}
-        <DialogFooter>
-          <button className="skill-action-button secondary" onClick={() => props.onOpenChange(false)} type="button">
-            取消
-          </button>
-          <button className="skill-action-button" disabled={saving} onClick={() => void save()} type="button">
-            {saving ? "保存中…" : "保存"}
-          </button>
+          </div>
+        </ScrollArea>
+        <DialogFooter className="m-0 rounded-none px-5 py-3">
+          <Button variant="outline" onClick={() => props.onOpenChange(false)} type="button">
+            {t("settings.modelOverrides.cancel")}
+          </Button>
+          <Button disabled={saving} onClick={() => void save()} type="button">
+            {saving ? t("settings.modelOverrides.saving") : t("settings.modelOverrides.save")}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// ModelLimitField renders one direct-entry token limit without browser stepper controls.
+// ModelLimitField 渲染一个不带浏览器步进器的直接输入 Token 限制。
+function ModelLimitField(props: {
+  // Provider-advertised maximum value.
+  // 供应商声明的最大值。
+  capabilityLimit?: number
+  // Stable browser field identifier.
+  // 稳定浏览器字段标识。
+  id: string
+  // User-visible field label.
+  // 用户可见字段标签。
+  label: string
+  // Updates the direct-entry textual value.
+  // 更新直接输入的文本值。
+  onChange: (value: string) => void
+  // Current direct-entry textual value.
+  // 当前直接输入的文本值。
+  value: string
+}) {
+  const { t } = useI18n()
+  const declared = props.capabilityLimit !== undefined
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <Label htmlFor={props.id}>{props.label}</Label>
+        {declared ? (
+          <Badge className="font-mono font-normal" variant="outline">
+            {t("settings.modelOverrides.providerMaximum")} {props.capabilityLimit}
+          </Badge>
+        ) : null}
+      </div>
+      <Input
+        disabled={!declared}
+        id={props.id}
+        inputMode="numeric"
+        onChange={(event) => props.onChange(event.currentTarget.value)}
+        pattern="[0-9]*"
+        placeholder={declared
+          ? t("settings.modelOverrides.leaveBlank")
+          : t("settings.modelOverrides.providerNotDeclared")}
+        type="text"
+        value={props.value}
+      />
+      {!declared ? (
+        <p className="text-xs text-muted-foreground">{t("settings.modelOverrides.providerNotDeclared")}</p>
+      ) : null}
+    </div>
   )
 }
 
@@ -294,44 +433,84 @@ function ModelParameterField(props: {
   // 更新文本形式。
   onChange: (value: string) => void
 }) {
+  const { t } = useI18n()
+  const fieldId = React.useId()
   const schema = props.definition.schema
   if (schema.type === "boolean") {
+    const selectedValue = props.value === "true"
+      ? "enabled"
+      : props.value === "false"
+        ? "disabled"
+        : "provider-default"
     return (
-      <label className="settings-field">
-        <span>{props.definition.display_name}</span>
-        <select onChange={(event) => props.onChange(event.target.value)} value={props.value}>
-          <option value="">供应商默认</option>
-          <option value="true">启用</option>
-          <option value="false">停用</option>
-        </select>
-        <small>{props.definition.description}</small>
-      </label>
+      <div className="space-y-2">
+        <Label htmlFor={fieldId}>{props.definition.display_name}</Label>
+        <Select
+          onValueChange={(value) => {
+            props.onChange(value === "enabled" ? "true" : value === "disabled" ? "false" : "")
+          }}
+          value={selectedValue}
+        >
+          <SelectTrigger className="w-full" id={fieldId}>
+            <SelectValue placeholder={t("settings.modelOverrides.providerDefault")} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="provider-default">{t("settings.modelOverrides.providerDefault")}</SelectItem>
+            <SelectItem value="enabled">{t("settings.modelOverrides.enabled")}</SelectItem>
+            <SelectItem value="disabled">{t("settings.modelOverrides.disabled")}</SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-xs leading-relaxed text-muted-foreground">{props.definition.description}</p>
+      </div>
     )
   }
   if (schema.type === "enum" && Array.isArray(schema.values)) {
+    const values = schema.values as string[]
+    const selectedIndex = values.indexOf(props.value)
     return (
-      <label className="settings-field">
-        <span>{props.definition.display_name}</span>
-        <select onChange={(event) => props.onChange(event.target.value)} value={props.value}>
-          <option value="">供应商默认</option>
-          {(schema.values as string[]).map((value) => <option key={value} value={value}>{value}</option>)}
-        </select>
-        <small>{props.definition.description}</small>
-      </label>
+      <div className="space-y-2">
+        <Label htmlFor={fieldId}>{props.definition.display_name}</Label>
+        <Select
+          onValueChange={(value) => {
+            if (value === "provider-default") {
+              props.onChange("")
+              return
+            }
+            const optionIndex = Number(value.slice("option-".length))
+            props.onChange(values[optionIndex] ?? "")
+          }}
+          value={selectedIndex >= 0 ? `option-${selectedIndex}` : "provider-default"}
+        >
+          <SelectTrigger className="w-full" id={fieldId}>
+            <SelectValue placeholder={t("settings.modelOverrides.providerDefault")} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="provider-default">{t("settings.modelOverrides.providerDefault")}</SelectItem>
+            {values.map((value, index) => (
+              <SelectItem key={`${index}/${value}`} value={`option-${index}`}>{value}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs leading-relaxed text-muted-foreground">{props.definition.description}</p>
+      </div>
     )
   }
   const supported = ["integer", "decimal", "string"].includes(schema.type)
   return (
-    <label className="settings-field">
-      <span>{props.definition.display_name}</span>
-      <input
+    <div className="space-y-2">
+      <Label htmlFor={fieldId}>{props.definition.display_name}</Label>
+      <Input
         disabled={!supported}
-        onChange={(event) => props.onChange(event.target.value)}
-        placeholder={supported ? "留空使用供应商默认值" : "该复杂参数尚未注册编辑器"}
-        type={schema.type === "integer" || schema.type === "decimal" ? "number" : "text"}
+        id={fieldId}
+        inputMode={schema.type === "integer" ? "numeric" : schema.type === "decimal" ? "decimal" : "text"}
+        onChange={(event) => props.onChange(event.currentTarget.value)}
+        placeholder={supported
+          ? t("settings.modelOverrides.leaveBlank")
+          : t("settings.modelOverrides.unsupportedParameter")}
+        type="text"
         value={props.value}
       />
-      <small>{props.definition.description}</small>
-    </label>
+      <p className="text-xs leading-relaxed text-muted-foreground">{props.definition.description}</p>
+    </div>
   )
 }

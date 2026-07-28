@@ -793,9 +793,48 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
     } = input;
     let public_ai_configuration =
         public_ai_runtime.and_then(|runtime| runtime.configuration_snapshot().ok());
+    // selected_runtime_state owns the persisted model and reasoning controls for the active conversation.
+    // selected_runtime_state 持有当前会话持久化的模型与思考控制。
+    let selected_runtime_state = workspace
+        .session_runtime_state
+        .get(&workspace.selected_session);
     let public_ai_selection = public_ai_runtime
         .zip(public_ai_configuration.as_ref())
-        .and_then(|(runtime, configuration)| runtime.resolve_active_selection(configuration).ok());
+        .and_then(|(runtime, configuration)| {
+            selected_runtime_state
+                .and_then(|runtime_state| {
+                    runtime_state
+                        .active_provider_id
+                        .as_deref()
+                        .zip(runtime_state.active_connection_id.as_deref())
+                        .zip(runtime_state.active_model_id.as_deref())
+                })
+                .and_then(|((provider_id, connection_id), model_id)| {
+                    runtime
+                        .resolve_connection_model_selection(
+                            configuration,
+                            connection_id,
+                            provider_id,
+                            model_id,
+                        )
+                        .ok()
+                })
+                .or_else(|| {
+                    selected_runtime_state
+                        .and_then(|runtime_state| {
+                            runtime_state
+                                .active_provider_id
+                                .as_deref()
+                                .zip(runtime_state.active_model_id.as_deref())
+                        })
+                        .and_then(|(provider_id, model_id)| {
+                            runtime
+                                .resolve_model_selection(configuration, provider_id, model_id)
+                                .ok()
+                        })
+                })
+                .or_else(|| runtime.resolve_active_selection(configuration).ok())
+        });
     let public_ai_model_selectors = public_ai_runtime
         .zip(public_ai_configuration.as_ref())
         .and_then(|(runtime, configuration)| runtime.available_model_selectors(configuration).ok());
@@ -827,9 +866,6 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
             )
         })
         .unwrap_or_default();
-    let selected_runtime_state = workspace
-        .session_runtime_state
-        .get(&workspace.selected_session);
     // selected_vmm_session_state is a read-only controller projection for the active surface.
     // selected_vmm_session_state 是活动界面使用的只读控制器投影。
     let selected_vmm_session_state = vmm_session_states.get(&workspace.selected_session);
@@ -1023,7 +1059,12 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         providers: public_ai_runtime
             .zip(public_ai_configuration.as_ref())
             .and_then(|(runtime, configuration)| {
-                public_ai_provider_rows(configuration, runtime).ok()
+                public_ai_provider_rows_for_selection(
+                    configuration,
+                    runtime,
+                    public_ai_selection.as_ref(),
+                )
+                .ok()
             })
             .unwrap_or_default(),
         mcp_servers: mcp_servers(provider_configuration),

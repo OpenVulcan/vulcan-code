@@ -66,7 +66,32 @@ pub(crate) fn public_ai_provider_rows(
     configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
     runtime: &vulcan_provider_adapters::PublicAiRuntime,
 ) -> Result<Vec<ProviderSummary>, String> {
-    let catalogs = runtime.catalog_snapshot()?;
+    let active_selection = runtime.resolve_active_selection(configuration).ok();
+    public_ai_provider_rows_for_selection(configuration, runtime, active_selection.as_ref())
+}
+
+/// Projects credential-scoped model rows using an explicit effective workbench selection.
+/// 使用明确的工作台生效选择投影凭据作用域模型行。
+///
+/// # Parameters
+/// 参数
+/// `configuration` owns account preferences, `runtime` owns in-memory catalogs, and
+/// `active_selection` is the selected session model after degradation.
+/// `configuration` 持有账号偏好，`runtime` 持有内存目录，`active_selection`
+/// 是完成降级后的当前会话模型。
+///
+/// # Returns
+/// 返回值
+/// One provider row per credential connection with exactly one effective active model row.
+/// 返回每个凭据连接一行，并且仅标记一个生效模型行为当前项。
+pub(crate) fn public_ai_provider_rows_for_selection(
+    configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    active_selection: Option<&vulcan_provider_adapters::ResolvedPublicAiSelection>,
+) -> Result<Vec<ProviderSummary>, String> {
+    let catalogs = vulcan_provider_adapters::RuntimeConnectionCatalogs::from_snapshot(
+        runtime.catalog_snapshot()?,
+    );
     let errors = runtime.catalog_error_snapshot()?;
     let providers = runtime.effective_providers(configuration)?;
     let mut rows = Vec::new();
@@ -96,15 +121,25 @@ pub(crate) fn public_ai_provider_rows(
                                     selection,
                                 )
                             });
-                        let active = configuration.active.as_ref().is_some_and(|active| {
-                            active.provider_id == connection.provider_id
-                                && active.connection_id == connection.id
-                                && active.model_id == model.id
+                        let active = active_selection.is_some_and(|selection| {
+                            selection.route.provider.id == connection.provider_id
+                                && selection.route.connection.id == connection.id
+                                && selection.model.id == model.id
                         });
-                        ProviderModelSummary {
+                        let preferred_connection = configuration
+                            .connection_graph
+                            .resolve_connection(
+                                connection.provider_id.as_str(),
+                                model.id.as_str(),
+                                &catalogs,
+                            )?
+                            .id
+                            == connection.id;
+                        Ok(ProviderModelSummary {
                             id: model.id.clone(),
                             name: model.display_name.clone(),
                             active,
+                            preferred_connection,
                             enabled: true,
                             status: None,
                             family: None,
@@ -134,17 +169,18 @@ pub(crate) fn public_ai_provider_rows(
                             reasoning_profile_json: None,
                             supports_secondary_routes: connection.provider_id == "openrouter",
                             secondary_route,
-                        }
+                        })
                     })
-                    .collect::<Vec<_>>()
+                    .collect::<Result<Vec<_>, String>>()
             })
+            .transpose()?
             .unwrap_or_default();
         let active = models.iter().any(|model| model.active);
         let status = errors
             .get(connection.id.as_str())
             .map(|error| format!("同步失败：{error}"))
             .unwrap_or_else(|| {
-                if catalogs.contains_key(connection.id.as_str()) {
+                if catalogs.get(connection.id.as_str()).is_some() {
                     String::from("目录可用")
                 } else {
                     String::from("目录未同步")
@@ -156,6 +192,7 @@ pub(crate) fn public_ai_provider_rows(
             connection_id: Some(connection.id.clone()),
             account_name: Some(connection.display_name.clone()),
             name: format!("{} · {}", provider.display_name, connection.display_name),
+            provider_display_name: Some(provider.display_name.clone()),
             status,
             configured: true,
             active,

@@ -333,6 +333,68 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
     let mut request = continuation.request;
     request.provider_id_override = agent_runtime.provider_id_override.clone();
     request.model_id_override = agent_runtime.model_id_override.clone();
+    request.connection_id_override = None;
+    if request.provider_id_override.is_none() && request.model_id_override.is_none() {
+        // session_model identifies the persisted provider, credential connection, and model.
+        // session_model 标识持久化的 Provider、凭据连接与模型。
+        let session_model = workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .and_then(|runtime_state| {
+                runtime_state
+                    .active_provider_id
+                    .as_deref()
+                    .zip(runtime_state.active_connection_id.as_deref())
+                    .zip(runtime_state.active_model_id.as_deref())
+            });
+        if let Some(((provider_id, connection_id), model_id)) = session_model {
+            let configuration = agent_runtime.public_ai_runtime.configuration_snapshot()?;
+            if agent_runtime
+                .public_ai_runtime
+                .resolve_connection_model_selection(
+                    &configuration,
+                    connection_id,
+                    provider_id,
+                    model_id,
+                )
+                .is_ok()
+            {
+                request.provider_id_override = Some(provider_id.to_string());
+                request.model_id_override = Some(model_id.to_string());
+                request.connection_id_override = Some(connection_id.to_string());
+            } else if agent_runtime
+                .public_ai_runtime
+                .resolve_model_selection(&configuration, provider_id, model_id)
+                .is_ok()
+            {
+                // An invalid account degrades to the same model's preferred or first available account.
+                // 无效账号降级到同模型的首选账号或第一个可用账号。
+                request.provider_id_override = Some(provider_id.to_string());
+                request.model_id_override = Some(model_id.to_string());
+            }
+        } else if let Some((provider_id, model_id)) = workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .and_then(|runtime_state| {
+                runtime_state
+                    .active_provider_id
+                    .as_deref()
+                    .zip(runtime_state.active_model_id.as_deref())
+            })
+        {
+            // Historical sessions without a connection id retain model-level degradation.
+            // 缺少连接标识的历史会话继续使用模型级降级。
+            let configuration = agent_runtime.public_ai_runtime.configuration_snapshot()?;
+            if agent_runtime
+                .public_ai_runtime
+                .resolve_model_selection(&configuration, provider_id, model_id)
+                .is_ok()
+            {
+                request.provider_id_override = Some(provider_id.to_string());
+                request.model_id_override = Some(model_id.to_string());
+            }
+        }
+    }
     request.controller_runtime = Some(controller_runtime.clone());
     // managedCodebaseMemory is resolved from the live controller authorization table without any workspace-path fallback.
     // managedCodebaseMemory 从实时控制器授权表解析，绝不使用工作区路径回退。

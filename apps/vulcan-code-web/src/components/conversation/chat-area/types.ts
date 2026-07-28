@@ -71,6 +71,7 @@ export interface ChatAreaProps {
   onListWorkbenchModelSecondaryRoutes: (
     providerId: string,
     modelId: string,
+    forceRefresh: boolean,
   ) => Promise<ProviderModelSecondaryRouteSummary[]>;
   // Persists a backend-managed secondary route for one model.
   // 持久化单个模型的后端二级路由。

@@ -9,7 +9,7 @@ use vulcan_service_api::ServiceEventEmitter;
 use vulcan_service_api::{
     ProviderModelSecondaryRouteSelection, ProviderModelSecondaryRouteSummary, WorkbenchSnapshot,
 };
-use vulcan_workbench_model::SessionAddonNamespace;
+use vulcan_workbench_model::{SessionAddonNamespace, SessionRuntimeStateEntry};
 
 use super::{
     SharedServiceBridgeState, current_unix_millis_text, emit_workbench_event,
@@ -45,6 +45,7 @@ pub(super) async fn service_list_workbench_model_secondary_routes(
     state: SharedServiceBridgeState,
     provider_id: String,
     model_id: String,
+    force_refresh: bool,
 ) -> Result<Vec<ProviderModelSecondaryRouteSummary>, String> {
     let provider_id = provider_id.trim().to_string();
     let model_id = model_id.trim().to_string();
@@ -62,23 +63,32 @@ pub(super) async fn service_list_workbench_model_secondary_routes(
         let runtime = std::sync::Arc::clone(&agent_runtime.public_ai_runtime);
         let configuration = runtime.configuration_snapshot()?;
         let active = exact_public_secondary_route_target(
+            runtime.as_ref(),
             &configuration,
+            guard.workspace_snapshot.as_ref().and_then(|workspace| {
+                workspace
+                    .session_runtime_state
+                    .get(&workspace.selected_session)
+            }),
             provider_id.as_str(),
             model_id.as_str(),
         )?;
-        let settings_key = PersistedAiConfiguration::connection_model_key(
-            active.connection_id.as_str(),
-            active.model_id.as_str(),
-        );
+        let settings_key =
+            PersistedAiConfiguration::connection_model_key(active.as_str(), model_id.as_str());
         let active_route = configuration
             .secondary_routes
             .get(settings_key.as_str())
             .cloned()
             .unwrap_or_default();
-        (runtime, configuration, active.connection_id, active_route)
+        (runtime, configuration, active, active_route)
     };
     let choices = runtime
-        .discover_secondary_routes(&configuration, connection_id.as_str(), model_id.as_str())
+        .discover_secondary_routes(
+            &configuration,
+            connection_id.as_str(),
+            model_id.as_str(),
+            force_refresh,
+        )
         .await?;
     Ok(choices
         .into_iter()
@@ -116,11 +126,17 @@ pub(super) async fn service_select_workbench_model_secondary_route(
         let runtime = std::sync::Arc::clone(&agent_runtime.public_ai_runtime);
         let configuration = runtime.configuration_snapshot()?;
         let active = exact_public_secondary_route_target(
+            runtime.as_ref(),
             &configuration,
+            guard.workspace_snapshot.as_ref().and_then(|workspace| {
+                workspace
+                    .session_runtime_state
+                    .get(&workspace.selected_session)
+            }),
             provider_id.as_str(),
             model_id.as_str(),
         )?;
-        (runtime, configuration, active.connection_id)
+        (runtime, configuration, active)
     };
     let selection = if let Some(route) = request.route {
         let route_id = if route.tag.trim().is_empty() {
@@ -133,6 +149,7 @@ pub(super) async fn service_select_workbench_model_secondary_route(
                 &current_configuration,
                 connection_id.as_str(),
                 model_id.as_str(),
+                false,
             )
             .await?;
         let option = options
@@ -157,8 +174,9 @@ pub(super) async fn service_select_workbench_model_secondary_route(
         &state,
         "保存 OpenRouter 二级供应商失败",
         |configuration| {
-            exact_public_secondary_route_target(
+            runtime.resolve_connection_model_selection(
                 configuration,
+                connection_id.as_str(),
                 provider_id.as_str(),
                 model_id.as_str(),
             )?;
@@ -175,10 +193,37 @@ pub(super) async fn service_select_workbench_model_secondary_route(
 /// Resolves and validates the exact active public model targeted by secondary routing.
 /// 解析并校验二级路由所针对的精确当前公共模型。
 fn exact_public_secondary_route_target(
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
+    runtime_state: Option<&SessionRuntimeStateEntry>,
     provider_id: &str,
     model_id: &str,
-) -> Result<vulcan_provider_adapters::ActiveAiModelSelection, String> {
+) -> Result<String, String> {
+    if let Some(runtime_state) = runtime_state
+        && let Some((session_provider_id, session_model_id)) = runtime_state
+            .active_provider_id
+            .as_deref()
+            .zip(runtime_state.active_model_id.as_deref())
+    {
+        if session_provider_id != provider_id || session_model_id != model_id {
+            return Err(format!(
+                "Secondary route target `{provider_id}/{model_id}` is not the active session model."
+            ));
+        }
+        if let Some(connection_id) = runtime_state.active_connection_id.as_deref()
+            && let Ok(selection) = runtime.resolve_connection_model_selection(
+                configuration,
+                connection_id,
+                provider_id,
+                model_id,
+            )
+        {
+            return Ok(selection.route.connection.id);
+        }
+        return runtime
+            .resolve_model_selection(configuration, provider_id, model_id)
+            .map(|selection| selection.route.connection.id);
+    }
     let active = configuration
         .active
         .clone()
@@ -188,7 +233,7 @@ fn exact_public_secondary_route_target(
             "Secondary route target `{provider_id}/{model_id}` is not the active public AI model."
         ));
     }
-    Ok(active)
+    Ok(active.connection_id)
 }
 
 /// Projects one public secondary-route option into the existing workbench contract.

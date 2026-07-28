@@ -204,6 +204,9 @@ pub struct ExecutionPreparationRequest {
     /// Optional request-scoped model override resolved from a child-agent model selector.
     /// 可选的请求级模型覆盖，由子智能体模型选择器解析得到。
     pub model_id_override: Option<String>,
+    /// Optional request-scoped exact credential connection selected by the session.
+    /// 会话选择的可选请求级精确凭据连接。
+    pub connection_id_override: Option<String>,
     /// Optional child-agent prompt context routed through the shared prompt composer.
     /// 通过共享提示词组合器路由的可选子智能体提示词上下文。
     pub subagent_prompt_context: Option<ExecutionSubagentPromptContext>,

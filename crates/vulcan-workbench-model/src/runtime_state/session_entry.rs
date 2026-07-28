@@ -10,6 +10,10 @@ pub struct SessionRuntimeStateEntry {
     /// Last active provider identifier used by the session.
     /// 最近一次被该会话使用的激活供应商标识。
     pub active_provider_id: Option<String>,
+    /// Last credential connection identifier selected by the session.
+    /// 该会话最近一次选择的凭据连接标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_connection_id: Option<String>,
     /// Last active model identifier used by the session.
     /// 最近一次被该会话使用的激活模型标识。
     pub active_model_id: Option<String>,

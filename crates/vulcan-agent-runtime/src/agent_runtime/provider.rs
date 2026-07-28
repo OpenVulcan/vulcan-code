@@ -11,6 +11,9 @@ pub struct ProviderRuntimeBlueprint {
     /// Stable provider identifier.
     /// 稳定供应商标识。
     pub provider_id: String,
+    /// Exact credential connection identifier selected for execution.
+    /// 执行选择的精确凭据连接标识。
+    pub connection_id: String,
     /// Human-readable provider name.
     /// 人类可读的供应商名称。
     pub provider_name: String,
@@ -119,16 +122,28 @@ pub fn resolve_public_ai_provider_blueprint(
     requested_reasoning_effort: ReasoningEffortLevel,
     provider_id_override: Option<&str>,
     model_id_override: Option<&str>,
+    connection_id_override: Option<&str>,
 ) -> Result<ProviderRuntimeBlueprint, String> {
     let configuration = runtime.configuration_snapshot()?;
-    let selection = match (provider_id_override, model_id_override) {
-        (Some(provider_id), Some(model_id)) => {
+    let selection = match (
+        provider_id_override,
+        model_id_override,
+        connection_id_override,
+    ) {
+        (Some(provider_id), Some(model_id), Some(connection_id)) => runtime
+            .resolve_connection_model_selection(
+                &configuration,
+                connection_id,
+                provider_id,
+                model_id,
+            )?,
+        (Some(provider_id), Some(model_id), None) => {
             runtime.resolve_model_selection(&configuration, provider_id, model_id)?
         }
-        (None, None) => runtime.resolve_active_selection(&configuration)?,
+        (None, None, None) => runtime.resolve_active_selection(&configuration)?,
         _ => {
             return Err(String::from(
-                "Public AI request overrides must provide both provider_id and model_id.",
+                "Public AI request overrides require provider_id and model_id; connection_id is optional only with both.",
             ));
         }
     };
@@ -145,6 +160,7 @@ pub fn resolve_public_ai_provider_blueprint(
     }
     Ok(ProviderRuntimeBlueprint {
         provider_id: selection.route.provider.id.clone(),
+        connection_id: selection.route.connection.id.clone(),
         provider_name: selection.route.provider.display_name.clone(),
         runtime_label: String::from("Vulcan Public AI Contract"),
         model_id: selection.model.id.clone(),

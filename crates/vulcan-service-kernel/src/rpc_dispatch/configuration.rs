@@ -70,6 +70,7 @@ pub(super) async fn dispatch(
                 state,
                 rpc_required_param(params, "providerId")?,
                 rpc_required_param(params, "modelId")?,
+                rpc_optional_param(params, "forceRefresh")?.unwrap_or(false),
             )
             .await,
         ),

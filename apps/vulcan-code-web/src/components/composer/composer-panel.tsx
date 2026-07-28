@@ -1,5 +1,6 @@
 import React from "react";
 import {
+  ModelAccountPickerControl,
   ModelPickerControl,
   type ModelPickerChoice,
 } from "@/components/composer/model-picker-control";
@@ -107,6 +108,7 @@ export function ComposerPanel(props: {
   onListWorkbenchModelSecondaryRoutes: (
     providerId: string,
     modelId: string,
+    forceRefresh: boolean,
   ) => Promise<ProviderModelSecondaryRouteSummary[]>;
   // Persists one backend-managed secondary route selection.
   // 持久化单个后端二级路由选择。
@@ -241,6 +243,8 @@ export function ComposerPanel(props: {
   // 模型选择控制器同步服务快照、乐观选择与 slash 打开信号。
   const {
     modelChoice,
+    activeModelChoice,
+    activeModelAccounts,
     activeProviderModel: activeProviderModelSummary,
     modelPickerOpenSignal,
     reasoningEffort,
@@ -257,6 +261,9 @@ export function ComposerPanel(props: {
     onSelectModel: props.onSelectWorkbenchModel,
     onSelectReasoningEffort: props.onSelectWorkbenchReasoningEffort,
   });
+  // secondaryRouteProviderId is the exact provider adapter id, not the credential-scoped row id.
+  // secondaryRouteProviderId 是精确的供应商适配器标识，而不是凭据作用域行标识。
+  const secondaryRouteProviderId = activeProviderModelSummary?.provider.sourceProviderId?.trim() ?? "";
   // placeholder describes the platform-specific send and newline keyboard behavior.
   // placeholder 描述平台相关的发送与换行键盘行为。
   const placeholder = React.useMemo(() => {
@@ -472,12 +479,18 @@ export function ComposerPanel(props: {
               providers={props.providers}
               value={modelChoice}
             />
-            {activeProviderModelSummary?.model.supportsSecondaryRoutes ? (
+            <ModelAccountPickerControl
+              accounts={activeModelAccounts}
+              ariaLabel={t("composer.aria.account")}
+              onValueChange={(choice) => void handleModelChoiceChange(choice)}
+              value={activeModelChoice?.connectionId ?? ""}
+            />
+            {activeProviderModelSummary?.model.supportsSecondaryRoutes && secondaryRouteProviderId ? (
               <ModelSecondaryRouteControl
                 modelId={activeProviderModelSummary.model.id}
                 onListRoutes={props.onListWorkbenchModelSecondaryRoutes}
                 onSelectRoute={props.onSelectWorkbenchModelSecondaryRoute}
-                providerId={activeProviderModelSummary.provider.id}
+                providerId={secondaryRouteProviderId}
                 selectedRoute={activeProviderModelSummary.model.secondaryRoute ?? null}
               />
             ) : null}

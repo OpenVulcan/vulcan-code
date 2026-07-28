@@ -89,6 +89,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         request.reasoning_effort,
         request.provider_id_override.as_deref(),
         request.model_id_override.as_deref(),
+        request.connection_id_override.as_deref(),
     )?;
     let mut warnings = Vec::new();
     let workspace_path = normalize_workspace_path_text(&request.workspace_path);

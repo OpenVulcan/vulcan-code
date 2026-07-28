@@ -154,7 +154,7 @@ export function CredentialManagementArea(props: {
   return (
     <AdaptiveToolPanel
       className="workspace-tool-panel-page workspace-skills-settings credential-management-layout"
-      contentClassName="credential-management-content"
+      contentClassName="workspace-skills-content credential-management-content"
       contentShellClassName="credential-management-content-shell"
       expanded={menuExpanded}
       minContentWidth={336}
@@ -599,10 +599,14 @@ function miniMaxUsageRows(windows: PublicAiAccountUsageWindow[]): MiniMaxUsageRo
     }
     rows.set(row.name, row)
   }
-  return [...rows.values()].sort((left, right) => (
-    miniMaxBucketOrder(left.name) - miniMaxBucketOrder(right.name)
-    || left.name.localeCompare(right.name)
-  ))
+  return [...rows.values()]
+    // A bucket belongs on the card only when at least one declared window is available to the account.
+    // 仅当账号至少拥有一个可用额度窗口时，才在卡片上展示该额度桶。
+    .filter((row) => row.current?.available === true || row.weekly?.available === true)
+    .sort((left, right) => (
+      miniMaxBucketOrder(left.name) - miniMaxBucketOrder(right.name)
+      || left.name.localeCompare(right.name)
+    ))
 }
 
 // MiniMaxUsageSummary renders paired MiniMax Token Plan quota windows.
@@ -612,7 +616,7 @@ function MiniMaxUsageSummary(props: { rows: MiniMaxUsageRow[] }) {
     <div className="w-full space-y-1.5">
       {props.rows.map((row) => (
         <div
-          className="grid grid-cols-[2.75rem_minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-2 text-[11px]"
+          className="grid grid-cols-[1.75rem_minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-1 text-[11px]"
           key={row.name}
         >
           <span className="font-medium">{miniMaxBucketLabel(row.name)}</span>

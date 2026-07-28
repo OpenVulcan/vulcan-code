@@ -43,6 +43,7 @@ fn build_task_start_test_runtime_context(
             agent_prompt_snapshot: None,
             provider_id_override: None,
             model_id_override: None,
+            connection_id_override: None,
             subagent_prompt_context: None,
             task_session_store_root: None,
             session_title: String::from("Parent session"),

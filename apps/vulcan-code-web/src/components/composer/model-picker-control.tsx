@@ -5,6 +5,13 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/compon
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -25,6 +32,9 @@ export interface ModelPickerChoice {
   // Human-readable provider label.
   // 人类可读的 Provider 标签。
   providerName: string;
+  // Human-readable credential account label.
+  // 人类可读的凭据账号标签。
+  accountName: string;
   // Stable model identifier persisted with provider id.
   // 与 Provider 标识一起持久化的稳定模型标识。
   modelId: string;
@@ -34,6 +44,29 @@ export interface ModelPickerChoice {
   // Whether this row is the active workbench model.
   // 该行是否为当前激活的工作台模型。
   active: boolean;
+  // Whether this connection is the backend-resolved preferred account for the model.
+  // 该连接是否为后端针对当前模型解析出的首选账号。
+  preferredConnection: boolean;
+}
+
+// ModelPickerModelGroup represents one provider/model row with all eligible credential accounts.
+// ModelPickerModelGroup 表示包含全部可用凭据账号的单个供应商/模型行。
+export interface ModelPickerModelGroup {
+  // Stable provider identifier shared by every account.
+  // 所有账号共享的稳定 Provider 标识。
+  providerId: string;
+  // Human-readable provider label shared by every account.
+  // 所有账号共享的人类可读 Provider 标签。
+  providerName: string;
+  // Stable model identifier shared by every account.
+  // 所有账号共享的稳定模型标识。
+  modelId: string;
+  // Human-readable model label shared by every account.
+  // 所有账号共享的人类可读模型标签。
+  modelName: string;
+  // Exact account choices exposing this provider model.
+  // 暴露该 Provider 模型的精确账号选项。
+  accounts: ModelPickerChoice[];
 }
 
 // ModelPickerControl renders the shared workbench model filter trigger and list.
@@ -75,14 +108,28 @@ export function ModelPickerControl(props: {
   const { t } = useI18n();
   const [open, setOpen] = React.useState(false);
   const [filter, setFilter] = React.useState("");
+  // selectedRowRef anchors the exact active model row after the dropdown portal finishes layout.
+  // selectedRowRef 在下拉门户完成布局后锚定精确的当前模型行。
+  const selectedRowRef = React.useRef<HTMLElement | null>(null);
   const choices = React.useMemo(() => modelPickerChoicesFromProviders(props.providers), [props.providers]);
   const exactChoice = choices.find((choice) => modelPickerChoiceKey(choice) === props.value);
-  const selectedChoice = props.value ? exactChoice : choices.find((choice) => choice.active) ?? choices[0];
+  // selectedChoice degrades from an obsolete exact account to the backend-resolved active row.
+  // selectedChoice 从已失效的精确账号降级到后端解析出的当前行。
+  const selectedChoice = exactChoice ?? choices.find((choice) => choice.active) ?? choices[0];
   const selectedModelLabel = selectedChoice?.modelName ?? props.unavailableValueLabel ?? props.fallbackLabel;
   const selectedProviderLabel = selectedChoice?.providerName ?? (props.value ? props.value.split("/")[0] : "-");
+  // selectedAccountLabel is the exact credential label owned by the selected connection.
+  // selectedAccountLabel 是所选连接拥有的精确凭据标签。
+  const selectedAccountLabel = selectedChoice?.accountName ?? "-";
   const filteredChoices = React.useMemo(
     () => filterModelPickerChoices(choices, filter),
     [choices, filter],
+  );
+  // filteredGroups collapses credential duplicates only for the composer session picker.
+  // filteredGroups 仅为会话输入区模型选择器折叠凭据重复项。
+  const filteredGroups = React.useMemo(
+    () => groupModelPickerChoices(filteredChoices),
+    [filteredChoices],
   );
 
   React.useEffect(() => {
@@ -97,6 +144,26 @@ export function ModelPickerControl(props: {
     }
     setOpen(true);
   }, [props.openSignal]);
+
+  React.useEffect(() => {
+    if (!open) {
+      return;
+    }
+    // Two animation frames place the row only after Radix positions the portal and ScrollArea viewport.
+    // 两帧动画确保 Radix 完成门户与 ScrollArea 视口定位后再滚动当前行。
+    let scrollFrame = 0;
+    const layoutFrame = window.requestAnimationFrame(() => {
+      scrollFrame = window.requestAnimationFrame(() => {
+        selectedRowRef.current?.scrollIntoView({ block: "center" });
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(layoutFrame);
+      if (scrollFrame) {
+        window.cancelAnimationFrame(scrollFrame);
+      }
+    };
+  }, [open]);
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -121,6 +188,7 @@ export function ModelPickerControl(props: {
           <strong>{t("composer.modelPicker.tooltipTitle")}</strong>
           <span>{formatModelPickerTranslation(t, "composer.modelPicker.currentModel", { model: selectedModelLabel })}</span>
           <span>{formatModelPickerTranslation(t, "composer.modelPicker.currentProvider", { provider: selectedProviderLabel || "-" })}</span>
+          <span>{formatModelPickerTranslation(t, "composer.modelPicker.currentAccount", { account: selectedAccountLabel })}</span>
         </TooltipContent>
       </Tooltip>
       <DropdownMenuContent align="start" className="model-picker-content" sideOffset={8}>
@@ -139,27 +207,50 @@ export function ModelPickerControl(props: {
             {filteredChoices.length === 0 ? (
               <div className="model-picker-empty">{props.noMatchesLabel}</div>
             ) : (
-              filteredChoices.map((choice) => {
-                const selected = modelPickerChoiceKey(choice) === modelPickerChoiceKey(selectedChoice);
+              filteredGroups.map((group) => {
+                // exactGroupChoice is present only when this grouped model is currently selected.
+                // exactGroupChoice 仅在当前聚合模型已被选中时存在。
+                const exactGroupChoice = selectedChoice
+                  && selectedChoice.providerId === group.providerId
+                  && selectedChoice.modelId === group.modelId
+                  ? selectedChoice
+                  : undefined;
+                // resolvedGroupChoice follows active, backend-preferred, then stable first-account order.
+                // resolvedGroupChoice 依次遵循当前激活、后端首选与稳定首账号顺序。
+                const resolvedGroupChoice = resolveModelPickerGroupChoice(group, exactGroupChoice);
+                // selected marks the grouped model independently from its chosen account.
+                // selected 独立于所选账号标记当前聚合模型。
+                const selected = Boolean(exactGroupChoice);
                 return (
-                  <button
-                    className={cn("model-picker-row", selected && "selected")}
-                    key={modelPickerChoiceKey(choice)}
-                    onClick={() => {
-                      props.onValueChange(choice);
-                      setOpen(false);
-                    }}
-                    type="button"
+                  <div
+                    className={cn(
+                      "model-picker-group-row",
+                      selected && "selected",
+                    )}
+                    key={modelPickerGroupKey(group)}
+                    ref={selected ? (element) => {
+                      selectedRowRef.current = element;
+                    } : undefined}
                   >
-                    <span className="model-picker-selected-slot">
-                      {selected ? <Check size={15} /> : null}
-                    </span>
-                    <span className="model-picker-row-copy">
-                      <span className="model-picker-row-title">{choice.modelName}</span>
-                      <span className="model-picker-row-meta">{choice.providerName}</span>
-                    </span>
-                    <span className="model-picker-row-id">{choice.modelId}</span>
-                  </button>
+                    <Button
+                      className="model-picker-group-main"
+                      onClick={() => {
+                        props.onValueChange(resolvedGroupChoice);
+                        setOpen(false);
+                      }}
+                      type="button"
+                      variant="ghost"
+                    >
+                      <span className="model-picker-selected-slot">
+                        {selected ? <Check size={15} /> : null}
+                      </span>
+                      <span className="model-picker-row-copy">
+                        <span className="model-picker-row-title">{group.modelName}</span>
+                        <span className="model-picker-row-meta">{group.providerName}</span>
+                      </span>
+                    </Button>
+                    <span className="model-picker-row-id">{group.modelId}</span>
+                  </div>
                 );
               })
             )}
@@ -167,6 +258,65 @@ export function ModelPickerControl(props: {
         </ScrollArea>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+// ModelAccountPickerControl renders a separate credential selector for the active model.
+// ModelAccountPickerControl 为当前模型渲染独立的凭据选择器。
+// Parameters: ariaLabel describes the control, accounts contains exact credential choices,
+// value identifies the selected connection, and onValueChange persists the chosen account.
+// 参数：ariaLabel 描述控件，accounts 包含精确凭据选项，value 标识当前连接，
+// onValueChange 持久化选中的账号。
+// Returns: a compact account selector, or null when the model has no alternative account.
+// 返回值：紧凑账号选择器；模型没有备选账号时返回 null。
+export function ModelAccountPickerControl(props: {
+  // Accessible label for the credential selector.
+  // 凭据选择器的无障碍标签。
+  ariaLabel: string;
+  // Exact credential choices available to the active provider model.
+  // 当前 Provider 模型可用的精确凭据选项。
+  accounts: ModelPickerChoice[];
+  // Current exact credential connection identifier.
+  // 当前精确凭据连接标识。
+  value: string;
+  // Persists one exact credential choice.
+  // 持久化一个精确凭据选项。
+  onValueChange: (choice: ModelPickerChoice) => void;
+  // Whether the host flow temporarily disables account switching.
+  // 宿主流程是否临时禁用账号切换。
+  disabled?: boolean;
+}) {
+  if (props.accounts.length <= 1) {
+    return null;
+  }
+  return (
+    <Select
+      disabled={props.disabled}
+      onValueChange={(connectionId) => {
+        // account is the exact model account selected by its stable connection id.
+        // account 是通过稳定连接标识选中的精确模型账号。
+        const account = props.accounts.find((choice) => choice.connectionId === connectionId);
+        if (account) {
+          props.onValueChange(account);
+        }
+      }}
+      value={props.value}
+    >
+      <SelectTrigger
+        aria-label={props.ariaLabel}
+        className="composer-select-trigger model-account"
+        size="sm"
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent align="start" className="model-picker-account-content" position="popper">
+        {props.accounts.map((account) => (
+          <SelectItem key={account.connectionId} value={account.connectionId}>
+            {account.accountName}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 
@@ -191,27 +341,91 @@ export function modelPickerChoicesFromProviders(providers: ProviderSummary[]): M
     return models.map((model) => ({
       providerId: provider.sourceProviderId ?? provider.id,
       connectionId: provider.connectionId ?? "",
-      providerName: provider.name,
+      providerName: provider.providerDisplayName ?? provider.name,
+      accountName: provider.accountName ?? provider.name,
       modelId: model.id,
       modelName: model.name,
       active: Boolean(model.active),
+      preferredConnection: Boolean(model.preferredConnection),
     }));
   }).sort((left, right) => (
     left.modelName.localeCompare(right.modelName)
     || left.providerName.localeCompare(right.providerName)
     || left.modelId.localeCompare(right.modelId)
+    || left.accountName.localeCompare(right.accountName)
   ));
 }
 
 // modelPickerChoiceKey builds the stable provider/model value used by controls.
 // modelPickerChoiceKey 构建控件使用的稳定 provider/model 取值。
-export function modelPickerChoiceKey(choice: ModelPickerChoice | undefined): string {
+export function modelPickerChoiceKey<
+  Choice extends Pick<ModelPickerChoice, "providerId" | "modelId" | "connectionId">,
+>(choice: Choice | undefined): string {
   return choice ? JSON.stringify([choice.providerId, choice.modelId, choice.connectionId]) : "";
 }
 
-// filterModelPickerChoices applies the WebUI-style free-text model filter.
-// filterModelPickerChoices 应用与 WebUI 一致的自由文本模型过滤。
-function filterModelPickerChoices(choices: ModelPickerChoice[], filter: string): ModelPickerChoice[] {
+// modelPickerGroupKey builds the stable provider/model key used by grouped rows.
+// modelPickerGroupKey 构建聚合行使用的稳定 Provider/模型键。
+export function modelPickerGroupKey(group: ModelPickerModelGroup): string {
+  return JSON.stringify([group.providerId, group.modelId]);
+}
+
+// groupModelPickerChoices collapses account-specific choices into one provider/model row.
+// groupModelPickerChoices 将账号级选项折叠为单个 Provider/模型行。
+export function groupModelPickerChoices(choices: ModelPickerChoice[]): ModelPickerModelGroup[] {
+  // groups preserves the already sorted model order while collecting exact accounts.
+  // groups 在收集精确账号时保留已经排序的模型顺序。
+  const groups = new Map<string, ModelPickerModelGroup>();
+  choices.forEach((choice) => {
+    // key identifies one provider/model pair independently from its credential connection.
+    // key 独立于凭据连接标识一个 Provider/模型组合。
+    const key = JSON.stringify([choice.providerId, choice.modelId]);
+    // existing is the previously created group for this exact provider model.
+    // existing 是此前为该精确 Provider 模型创建的聚合项。
+    const existing = groups.get(key);
+    if (existing) {
+      existing.accounts.push(choice);
+      return;
+    }
+    groups.set(key, {
+      providerId: choice.providerId,
+      providerName: choice.providerName,
+      modelId: choice.modelId,
+      modelName: choice.modelName,
+      accounts: [choice],
+    });
+  });
+  return Array.from(groups.values());
+}
+
+// resolveModelPickerGroupChoice selects the exact, active, preferred, or stable first account.
+// resolveModelPickerGroupChoice 依次选择精确、激活、首选或稳定首账号。
+export function resolveModelPickerGroupChoice(
+  group: ModelPickerModelGroup,
+  selectedChoice: ModelPickerChoice | undefined,
+): ModelPickerChoice {
+  if (
+    selectedChoice
+    && selectedChoice.providerId === group.providerId
+    && selectedChoice.modelId === group.modelId
+    && group.accounts.some((account) => account.connectionId === selectedChoice.connectionId)
+  ) {
+    return selectedChoice;
+  }
+  // resolved is the first explicit account matching the backend selection order.
+  // resolved 是按照后端选择顺序命中的第一个明确账号。
+  const resolved = group.accounts.find((choice) => choice.active)
+    ?? group.accounts.find((choice) => choice.preferredConnection)
+    ?? group.accounts[0];
+  if (!resolved) {
+    throw new Error("Model picker groups must contain at least one account.");
+  }
+  return resolved;
+}
+
+// filterModelPickerChoices applies a model-name and model-id-only free-text filter.
+// filterModelPickerChoices 仅按模型名称和模型 ID 应用自由文本过滤。
+export function filterModelPickerChoices(choices: ModelPickerChoice[], filter: string): ModelPickerChoice[] {
   const normalizedFilter = filter.trim().toLowerCase();
   if (!normalizedFilter) {
     return choices;
@@ -219,7 +433,5 @@ function filterModelPickerChoices(choices: ModelPickerChoice[], filter: string):
   return choices.filter((choice) => (
     choice.modelName.toLowerCase().includes(normalizedFilter)
     || choice.modelId.toLowerCase().includes(normalizedFilter)
-    || choice.providerName.toLowerCase().includes(normalizedFilter)
-    || choice.providerId.toLowerCase().includes(normalizedFilter)
   ));
 }

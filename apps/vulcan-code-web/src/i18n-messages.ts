@@ -530,8 +530,13 @@ export type TranslationKey =
   | "composer.modelPicker.tooltipTitle"
   | "composer.modelPicker.currentModel"
   | "composer.modelPicker.currentProvider"
+  | "composer.modelPicker.currentAccount"
+  | "composer.modelPicker.selectAccount"
+  | "composer.aria.account"
   | "composer.secondaryRoute.select"
   | "composer.secondaryRoute.search"
+  | "composer.secondaryRoute.refresh"
+  | "composer.secondaryRoute.refreshed"
   | "composer.secondaryRoute.autoEndpoint"
   | "composer.secondaryRoute.loading"
   | "composer.secondaryRoute.noMatches"
@@ -1301,6 +1306,32 @@ export type TranslationKey =
   | "settings.gitCommit.summaryExtraPrompt"
   | "settings.gitCommit.summaryExtraPromptPlaceholder"
   | "settings.gitCommit.summaryExtraPromptHelp"
+  | "settings.modelOverrides.title"
+  | "settings.modelOverrides.description"
+  | "settings.modelOverrides.limits"
+  | "settings.modelOverrides.limitsDescription"
+  | "settings.modelOverrides.contextLimit"
+  | "settings.modelOverrides.outputLimit"
+  | "settings.modelOverrides.leaveBlank"
+  | "settings.modelOverrides.providerMaximum"
+  | "settings.modelOverrides.providerNotDeclared"
+  | "settings.modelOverrides.cache"
+  | "settings.modelOverrides.cacheDescription"
+  | "settings.modelOverrides.cacheMode"
+  | "settings.modelOverrides.providerDefault"
+  | "settings.modelOverrides.managedExplicit"
+  | "settings.modelOverrides.cacheTtl"
+  | "settings.modelOverrides.parameters"
+  | "settings.modelOverrides.parametersDescription"
+  | "settings.modelOverrides.noParameters"
+  | "settings.modelOverrides.unsupportedParameter"
+  | "settings.modelOverrides.enabled"
+  | "settings.modelOverrides.disabled"
+  | "settings.modelOverrides.cancel"
+  | "settings.modelOverrides.save"
+  | "settings.modelOverrides.saving"
+  | "settings.modelOverrides.validation.safeInteger"
+  | "settings.modelOverrides.validation.positiveInteger"
   | "gitCommitDialog.generateEmpty"
   | "gitCommitDialog.generated"
   | "gitCommitDialog.generatedTruncated"
@@ -1977,7 +2008,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.aria.reasoning": "选择推理等级",
     "composer.aria.send": "发送",
     "composer.aria.stop": "停止",
-    "composer.modelPicker.filter": "输入模型名称、ID 或 Provider 过滤",
+    "composer.modelPicker.filter": "输入模型名称或 ID 过滤",
     "composer.modelPicker.noMatches": "当前过滤条件下没有匹配模型。",
     "composer.attachment.add": "添加附件",
     "composer.attachment.extension": "扩展",
@@ -2033,8 +2064,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.modelPicker.tooltipTitle": "点击选择模型",
     "composer.modelPicker.currentModel": "当前模型：{model}",
     "composer.modelPicker.currentProvider": "当前供应商：{provider}",
+    "composer.modelPicker.currentAccount": "当前账号：{account}",
+    "composer.modelPicker.selectAccount": "为 {model} 选择账号",
+    "composer.aria.account": "选择模型账号",
     "composer.secondaryRoute.select": "选择二级供应商",
     "composer.secondaryRoute.search": "搜索二级供应商",
+    "composer.secondaryRoute.refresh": "刷新二级供应商",
+    "composer.secondaryRoute.refreshed": "二级供应商列表已刷新。",
     "composer.secondaryRoute.autoEndpoint": "由 OpenRouter 自动选择 endpoint",
     "composer.secondaryRoute.loading": "正在加载二级供应商...",
     "composer.secondaryRoute.noMatches": "没有匹配的二级供应商",
@@ -2804,6 +2840,32 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.gitCommit.summaryExtraPrompt": "额外总结提示词",
     "settings.gitCommit.summaryExtraPromptPlaceholder": "例如：提交信息必须使用中文；首行不超过 50 字；正文按要点分行。",
     "settings.gitCommit.summaryExtraPromptHelp": "该内容会追加到固定英文基础提示词之后，用于表达你的提交信息习惯。",
+    "settings.modelOverrides.title": "模型附加条件",
+    "settings.modelOverrides.description": "仅收窄当前供应商、模型与协议的运行参数，不改变账号选择。",
+    "settings.modelOverrides.limits": "Token 限制",
+    "settings.modelOverrides.limitsDescription": "留空时使用供应商声明的上限；只能向下收窄。",
+    "settings.modelOverrides.contextLimit": "上下文限制",
+    "settings.modelOverrides.outputLimit": "输出 Token 限制",
+    "settings.modelOverrides.leaveBlank": "留空使用供应商默认值",
+    "settings.modelOverrides.providerMaximum": "供应商上限",
+    "settings.modelOverrides.providerNotDeclared": "供应商未声明，无法覆盖",
+    "settings.modelOverrides.cache": "提示词缓存",
+    "settings.modelOverrides.cacheDescription": "选择供应商默认行为，或在协议支持时由 Vulcan 显式管理。",
+    "settings.modelOverrides.cacheMode": "缓存策略",
+    "settings.modelOverrides.providerDefault": "供应商默认，不额外注入",
+    "settings.modelOverrides.managedExplicit": "Vulcan 显式管理",
+    "settings.modelOverrides.cacheTtl": "缓存 TTL",
+    "settings.modelOverrides.parameters": "模型参数",
+    "settings.modelOverrides.parametersDescription": "这里只显示当前协议明确注册的参数。",
+    "settings.modelOverrides.noParameters": "当前协议没有额外模型参数。",
+    "settings.modelOverrides.unsupportedParameter": "该复杂参数尚未注册可视化编辑器",
+    "settings.modelOverrides.enabled": "启用",
+    "settings.modelOverrides.disabled": "停用",
+    "settings.modelOverrides.cancel": "取消",
+    "settings.modelOverrides.save": "保存更改",
+    "settings.modelOverrides.saving": "保存中…",
+    "settings.modelOverrides.validation.safeInteger": "必须是安全整数",
+    "settings.modelOverrides.validation.positiveInteger": "必须是正整数",
     "gitCommitDialog.generateEmpty": "未生成提交信息。",
     "gitCommitDialog.generated": "已生成提交信息，约",
     "gitCommitDialog.generatedTruncated": "已生成提交信息，diff 已裁剪，约",
@@ -3477,7 +3539,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.aria.reasoning": "Select reasoning level",
     "composer.aria.send": "Send",
     "composer.aria.stop": "Stop",
-    "composer.modelPicker.filter": "Filter by model name, id, or provider",
+    "composer.modelPicker.filter": "Filter by model name or ID",
     "composer.modelPicker.noMatches": "No models match the current filter.",
     "composer.attachment.add": "Add attachment",
     "composer.attachment.extension": "Extension",
@@ -3533,8 +3595,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.modelPicker.tooltipTitle": "Select model",
     "composer.modelPicker.currentModel": "Current model: {model}",
     "composer.modelPicker.currentProvider": "Current provider: {provider}",
+    "composer.modelPicker.currentAccount": "Current account: {account}",
+    "composer.modelPicker.selectAccount": "Select account for {model}",
+    "composer.aria.account": "Select model account",
     "composer.secondaryRoute.select": "Select secondary provider",
     "composer.secondaryRoute.search": "Search secondary providers",
+    "composer.secondaryRoute.refresh": "Refresh secondary providers",
+    "composer.secondaryRoute.refreshed": "Secondary provider list refreshed.",
     "composer.secondaryRoute.autoEndpoint": "OpenRouter automatically selects the endpoint",
     "composer.secondaryRoute.loading": "Loading secondary providers...",
     "composer.secondaryRoute.noMatches": "No secondary providers match",
@@ -4304,6 +4371,32 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.gitCommit.summaryExtraPrompt": "Extra summary prompt",
     "settings.gitCommit.summaryExtraPromptPlaceholder": "Example: write the commit message in Chinese; keep the title under 50 characters; split the body into bullet lines.",
     "settings.gitCommit.summaryExtraPromptHelp": "This text is appended after the fixed English base prompt to express your commit-message preferences.",
+    "settings.modelOverrides.title": "Model overrides",
+    "settings.modelOverrides.description": "Narrow runtime parameters for this provider, model, and protocol without changing account selection.",
+    "settings.modelOverrides.limits": "Token limits",
+    "settings.modelOverrides.limitsDescription": "Leave blank to use the provider limit. Overrides may only narrow it.",
+    "settings.modelOverrides.contextLimit": "Context limit",
+    "settings.modelOverrides.outputLimit": "Output token limit",
+    "settings.modelOverrides.leaveBlank": "Leave blank to use the provider default",
+    "settings.modelOverrides.providerMaximum": "Provider maximum",
+    "settings.modelOverrides.providerNotDeclared": "Not declared by the provider; cannot be overridden",
+    "settings.modelOverrides.cache": "Prompt cache",
+    "settings.modelOverrides.cacheDescription": "Use the provider behavior, or let Vulcan manage caching when the protocol supports it.",
+    "settings.modelOverrides.cacheMode": "Cache policy",
+    "settings.modelOverrides.providerDefault": "Provider default; do not inject controls",
+    "settings.modelOverrides.managedExplicit": "Managed explicitly by Vulcan",
+    "settings.modelOverrides.cacheTtl": "Cache TTL",
+    "settings.modelOverrides.parameters": "Model parameters",
+    "settings.modelOverrides.parametersDescription": "Only parameters registered for the current protocol are shown.",
+    "settings.modelOverrides.noParameters": "This protocol has no additional model parameters.",
+    "settings.modelOverrides.unsupportedParameter": "No visual editor is registered for this complex parameter",
+    "settings.modelOverrides.enabled": "Enabled",
+    "settings.modelOverrides.disabled": "Disabled",
+    "settings.modelOverrides.cancel": "Cancel",
+    "settings.modelOverrides.save": "Save changes",
+    "settings.modelOverrides.saving": "Saving…",
+    "settings.modelOverrides.validation.safeInteger": "must be a safe integer",
+    "settings.modelOverrides.validation.positiveInteger": "must be a positive integer",
     "gitCommitDialog.generateEmpty": "No commit message was generated.",
     "gitCommitDialog.generated": "Commit message generated, about",
     "gitCommitDialog.generatedTruncated": "Commit message generated with truncated diff input, about",
