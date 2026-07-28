@@ -1,7 +1,6 @@
 //! Provider request preview Markdown renderer used by the execution runtime.
 //! 供执行运行时使用的 Provider 请求预览 Markdown 渲染模块。
 
-use crate::agent_runtime::ai_tool_router::{AiToolRouteKind, resolve_ai_tool_plan};
 use crate::agent_runtime::execution_models::ExecutionPreparation;
 use crate::agent_runtime::provider_runtime_dispatch::DEFAULT_RUNTIME_MAX_TURNS_LIMIT;
 use serde_json::{Value, json};
@@ -108,7 +107,8 @@ pub(crate) fn build_provider_request_preview_markdown(
         current_rewrite_fingerprint.as_str(),
         &uncovered_message_ids,
         continuation_boundary_is_proven,
-        preparation.model_blueprint.api_family_key() != "openai-responses"
+        preparation.model_blueprint.protocol_profile_key()
+            != vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID
             || vulcan_vmm::VmmRuntimeFeaturePolicy::from_env().openai_append_continuation_enabled,
     );
     let ai_tool_plan_markdown = render_ai_tool_plan_markdown(preparation);
@@ -220,8 +220,8 @@ pub(crate) fn build_provider_request_preview_markdown(
         preparation.model_blueprint.model_id,
         preparation.model_blueprint.runtime_label,
         preparation.model_blueprint.runtime_kind_key(),
-        preparation.model_blueprint.api_family_label(),
-        preparation.model_blueprint.api_family_key(),
+        preparation.model_blueprint.protocol_profile_label(),
+        preparation.model_blueprint.protocol_profile_key(),
         preparation.model_blueprint.endpoint_summary(),
         preparation.execution_mode,
         temperature_label,
@@ -381,14 +381,19 @@ fn render_core_conversation_message_preview(
             }
             sections.join("\n\n")
         }
-        CoreConversationPayload::ToolResult { tool_call_id, text } => format!(
-            "### {}. tool_result · `{}`{}\n{}",
+        CoreConversationPayload::ToolResult {
+            tool_call_id,
+            is_error,
+            text,
+        } => format!(
+            "### {}. tool_result · `{}`{} · error=`{}`\n{}",
             index + 1,
             message.id,
             tool_call_id
                 .as_deref()
                 .map(|call_id| format!(" · call_id=`{call_id}`"))
                 .unwrap_or_default(),
+            is_error,
             render_text_code_fence(text)
         ),
         CoreConversationPayload::AgentMessage { .. } => format!(
@@ -577,71 +582,8 @@ fn render_json_code_fence(value: &Value) -> String {
 /// Renders the AI-specialized tool routing plan for the active provider/model pair.
 /// 渲染当前供应商/模型组合的 AI 专用工具路由计划。
 fn render_ai_tool_plan_markdown(preparation: &ExecutionPreparation) -> String {
-    let plan = resolve_ai_tool_plan(&preparation.model_blueprint);
-    if plan.is_empty() {
-        return String::from("（当前模型未解析到 AI 专用工具能力）");
-    }
-
-    plan.decisions
-        .iter()
-        .map(|decision| {
-            let route_label = match decision.route {
-                AiToolRouteKind::ProviderNative => "Provider 原生",
-                AiToolRouteKind::HostBinding => "宿主 fallback",
-                AiToolRouteKind::Disabled => "禁用",
-            };
-            let native_label = decision
-                .native_tool_type
-                .as_deref()
-                .map(|value| format!("`{value}`"))
-                .unwrap_or_else(|| String::from("（无）"));
-            let native_patch_label = if decision.native_request_patch.is_some() {
-                "已声明"
-            } else {
-                "未声明"
-            };
-            let fallback_label = decision
-                .host_tool_id
-                .as_deref()
-                .map(|value| format!("`{value}`"))
-                .unwrap_or_else(|| String::from("（无）"));
-            let approval_label = if decision.requires_approval {
-                "需要确认"
-            } else {
-                "无需额外确认"
-            };
-            let citation_label = if decision.citation_support {
-                "支持引用"
-            } else {
-                "未声明引用"
-            };
-
-            format!(
-                concat!(
-                    "### `{}` · {}\n",
-                    "- 路由：{}\n",
-                    "- 原生类型：{}\n",
-                    "- 原生请求补丁：{}\n",
-                    "- fallback：{}\n",
-                    "- 权限：{}\n",
-                    "- 引用：{}\n",
-                    "- 来源：{}\n",
-                    "- 原因：{}"
-                ),
-                decision.kind.key(),
-                decision.kind.label(),
-                route_label,
-                native_label,
-                native_patch_label,
-                fallback_label,
-                approval_label,
-                citation_label,
-                decision.source_label,
-                decision.reason
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
+    let _ = preparation;
+    String::from("（AI 专用能力由当前公共契约模型快照动态注册）")
 }
 
 #[cfg(test)]
@@ -649,10 +591,6 @@ mod tests {
     use super::build_provider_request_preview_markdown;
     use crate::agent_runtime::execution_models::ExecutionPreparation;
     use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
-    use crate::provider_capabilities::{ResolvedAiToolCapability, ResolvedModelCapabilities};
-    use crate::provider_config::{AiToolKind, AiToolPolicy, ProviderRuntimeKind};
-    use serde_json::Value;
-    use std::collections::BTreeMap;
     use uuid::Uuid;
     use vulcan_context::{ContextFullRequestReason, ContextRequestMode};
     use vulcan_core::types::{
@@ -660,10 +598,10 @@ mod tests {
         ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     };
 
-    /// Verifies the provider request preview explicitly renders the canonical API family alongside the runtime kind.
-    /// 验证 Provider 请求预览会把规范接口族与运行时类型一起明确渲染出来。
+    /// Verifies the provider request preview explicitly renders the public protocol profile.
+    /// 验证 Provider 请求预览会明确渲染公共协议画像。
     #[test]
-    fn provider_request_preview_renders_api_family_summary_line() {
+    fn provider_request_preview_renders_protocol_profile_summary_line() {
         let preparation = ExecutionPreparation {
             session_id: Uuid::nil(),
             session_title: String::from("接口族预览测试"),
@@ -675,34 +613,17 @@ mod tests {
             model_blueprint: ProviderRuntimeBlueprint {
                 provider_id: String::from("anthropic"),
                 provider_name: String::from("Anthropic"),
-                runtime_kind: ProviderRuntimeKind::Anthropic,
                 runtime_label: String::from("Anthropic"),
                 model_id: String::from("claude-sonnet-4-6"),
                 model_name: String::from("Claude Sonnet 4.6"),
-                openrouter_endpoint_route: None,
+                protocol_profile_id: String::from(
+                    vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
+                ),
+                public_capabilities: vulcan_ai_contract::ModelCapabilities::default(),
                 base_url: Some(String::from("https://api.anthropic.com")),
                 supports_remote_model_refresh: false,
                 credential_source: String::from("环境变量 `ANTHROPIC_API_KEY`"),
-                user_agent: None,
-                extra_headers: BTreeMap::new(),
-                extra_body: Value::Object(Default::default()),
                 reasoning: Default::default(),
-                capabilities: ResolvedModelCapabilities {
-                    ai_tools: vec![ResolvedAiToolCapability {
-                        kind: AiToolKind::WebSearch,
-                        policy: AiToolPolicy::ForceNative,
-                        native_provider_tool: true,
-                        native_tool_type: Some(String::from("web_search_20250305")),
-                        native_request_patch: None,
-                        host_tool_id: None,
-                        requires_approval: false,
-                        result_modalities: vec![String::from("text")],
-                        citation_support: true,
-                        source_label: String::from("接口类型默认"),
-                    }],
-                    ..Default::default()
-                },
-                interleaved_reasoning: None,
             },
             prompt_preview: String::from("检查请求预览"),
             workspace_path: String::from(r"D:\openvulcan\vulcan-code"),
@@ -765,15 +686,16 @@ mod tests {
 
         let markdown = build_provider_request_preview_markdown(&preparation, &snapshot);
 
-        assert!(markdown.contains("- 运行时：`Anthropic` · kind=`anthropic`"));
-        assert!(markdown.contains("- 接口族：`Anthropic Messages` · family=`anthropic-messages`"));
+        assert!(markdown.contains("- 运行时：`Anthropic` · kind=`public-ai-contract`"));
+        assert!(
+            markdown.contains("- 接口族：`Anthropic Messages` · family=`anthropic-messages.v1`")
+        );
         assert!(markdown.contains("## Context Layers"));
         assert!(markdown.contains("## Context Baseline"));
         assert!(markdown.contains("## Context Request Mode"));
         assert!(markdown.contains("- 模式：`全量上下文`"));
         assert!(markdown.contains("系统"));
         assert!(markdown.contains("## AI Specialized Tools"));
-        assert!(markdown.contains("### `web_search` · 网页搜索"));
-        assert!(markdown.contains("- 路由：Provider 原生"));
+        assert!(markdown.contains("AI 专用能力由当前公共契约模型快照动态注册"));
     }
 }

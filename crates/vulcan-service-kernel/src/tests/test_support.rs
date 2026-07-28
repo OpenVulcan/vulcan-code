@@ -527,7 +527,12 @@ pub(super) fn test_agent_runtime_bridge() -> AgentRuntimeBridge {
     );
     AgentRuntimeBridge {
         provider_configuration,
-        ai_tool_configuration: PersistedAiToolConfiguration::default(),
+        public_ai_runtime: Arc::new(
+            vulcan_provider_adapters::PublicAiRuntime::unavailable()
+                .expect("test public AI runtime should initialize"),
+        ),
+        provider_id_override: None,
+        model_id_override: None,
         agent_profile_catalog: AgentProfileCatalog::default(),
         luaskills_runtime: None,
         vulcan_plugin_runtime,

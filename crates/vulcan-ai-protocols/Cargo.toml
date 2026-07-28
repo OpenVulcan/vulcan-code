@@ -1,0 +1,15 @@
+[package]
+name = "vulcan-ai-protocols"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Provider-independent wire protocol encoders and streaming decoders for Vulcan AI."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+vulcan-ai-contract.workspace = true
+
+[lints]
+workspace = true

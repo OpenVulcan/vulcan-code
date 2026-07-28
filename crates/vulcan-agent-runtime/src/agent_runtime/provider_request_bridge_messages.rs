@@ -7,10 +7,9 @@ use crate::agent_runtime::provider_system_update_lowering::{
 use crate::conversation_protocol::{
     SessionConversationMessage, SessionConversationPayload, SessionConversationToolCall,
 };
-use crate::provider_capabilities::ResolvedModelCapabilities;
-use crate::provider_config::ProviderApiFamily;
 use crate::provider_input_normalizer::normalize_provider_user_input_for_model;
 use std::collections::BTreeSet;
+use vulcan_ai_contract::ModelCapabilities;
 use vulcan_context::RuntimeSystemUpdateEvent;
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,

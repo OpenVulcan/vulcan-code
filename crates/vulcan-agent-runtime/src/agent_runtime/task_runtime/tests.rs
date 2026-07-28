@@ -1,9 +1,7 @@
 use super::*;
 use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::execution_models::ExecutionPromptPurpose;
-use crate::provider_config::{
-    PersistedAiToolConfiguration, ProjectPromptSkillsConfiguration, ReasoningEffortLevel,
-};
+use crate::provider_config::{ProjectPromptSkillsConfiguration, ReasoningEffortLevel};
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::Write;

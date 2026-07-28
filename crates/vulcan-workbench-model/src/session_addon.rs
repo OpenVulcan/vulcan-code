@@ -4,9 +4,7 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use vulcan_provider_config::config::{
-    OpenRouterEndpointRouteSelection, PersistedAiToolConfiguration, ReasoningEffortLevel,
-};
+use vulcan_provider_config::config::ReasoningEffortLevel;
 
 use crate::{SessionId, SessionPlanModeState, SessionRuntimeStateEntry, SessionTodolistState};
 
@@ -26,7 +24,6 @@ pub enum SessionAddonNamespace {
     RuntimeControls,
     /// Session-scoped AI capability routing configuration.
     /// 会话级 AI 扩展能力路由配置。
-    AiCapabilities,
     /// Session-scoped user work mode such as planning or building.
     /// 会话级用户工作模式，例如计划或构建。
     WorkMode,
@@ -76,7 +73,6 @@ impl SessionAddonNamespace {
         match key {
             "metadata" => Some(Self::Metadata),
             "runtime_controls" => Some(Self::RuntimeControls),
-            "ai_capabilities" => Some(Self::AiCapabilities),
             "work_mode" => Some(Self::WorkMode),
             "prompt_skills" => Some(Self::PromptSkills),
             "context_injection" => Some(Self::ContextInjection),
@@ -101,7 +97,6 @@ impl SessionAddonNamespace {
         match self {
             Self::Metadata => "metadata",
             Self::RuntimeControls => "runtime_controls",
-            Self::AiCapabilities => "ai_capabilities",
             Self::WorkMode => "work_mode",
             Self::PromptSkills => "prompt_skills",
             Self::ContextInjection => "context_injection",
@@ -334,8 +329,6 @@ impl SessionAddonState {
     /// `session_id` 是拥有转换后状态的会话。
     /// `runtime_state` is the legacy mixed runtime state.
     /// `runtime_state` 是旧的混合运行态。
-    /// `default_ai_tool_configuration` supplies the first-copy template when the legacy value is missing.
-    /// `default_ai_tool_configuration` 在旧值缺失时提供首次复制模板。
     /// `updated_at` is the timestamp applied to migrated namespaces.
     /// `updated_at` 是应用到迁移命名空间的时间戳。
     ///
@@ -346,7 +339,6 @@ impl SessionAddonState {
     pub fn from_runtime_state(
         session_id: SessionId,
         runtime_state: &SessionRuntimeStateEntry,
-        default_ai_tool_configuration: Option<&PersistedAiToolConfiguration>,
         updated_at: String,
     ) -> Self {
         let mut state = Self::new(session_id);
@@ -355,18 +347,6 @@ impl SessionAddonState {
             let _ = state.set_typed_namespace(
                 SessionAddonNamespace::RuntimeControls,
                 &controls,
-                updated_at.clone(),
-            );
-        }
-
-        let ai_tool_configuration = runtime_state
-            .ai_tool_configuration
-            .as_ref()
-            .or(default_ai_tool_configuration);
-        if let Some(configuration) = ai_tool_configuration {
-            let _ = state.set_typed_namespace(
-                SessionAddonNamespace::AiCapabilities,
-                configuration,
                 updated_at.clone(),
             );
         }
@@ -451,9 +431,6 @@ impl SessionAddonState {
     pub fn apply_to_runtime_state(&self, runtime_state: &mut SessionRuntimeStateEntry) {
         if let Some(controls) = self.runtime_controls() {
             controls.apply_to_runtime_state(runtime_state);
-        }
-        if let Some(configuration) = self.ai_tool_configuration() {
-            runtime_state.ai_tool_configuration = Some(configuration);
         }
         if let Some(work_mode) = self.work_mode() {
             work_mode.apply_to_runtime_state(runtime_state);
@@ -588,43 +565,6 @@ impl SessionAddonState {
             self.revision = self.revision.saturating_add(1).max(1);
         }
         removed
-    }
-
-    /// Reads the session AI capability configuration from the addon namespace.
-    /// 从附属状态命名空间读取会话 AI 能力配置。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The deserialized AI capability configuration when present and valid.
-    /// 存在且有效时返回反序列化后的 AI 能力配置。
-    pub fn ai_tool_configuration(&self) -> Option<PersistedAiToolConfiguration> {
-        self.typed_namespace(SessionAddonNamespace::AiCapabilities)
-    }
-
-    /// Writes the session AI capability configuration namespace.
-    /// 写入会话 AI 能力配置命名空间。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `configuration` is the session-scoped AI capability routing configuration.
-    /// `configuration` 是会话级 AI 能力路由配置。
-    /// `updated_at` is the timestamp applied when changed.
-    /// `updated_at` 是变化时应用的时间戳。
-    ///
-    /// # Returns
-    /// 返回值
-    /// `true` when the namespace changed.
-    /// 当命名空间发生变化时返回 `true`。
-    pub fn set_ai_tool_configuration(
-        &mut self,
-        configuration: &PersistedAiToolConfiguration,
-        updated_at: String,
-    ) -> bool {
-        self.set_typed_namespace(
-            SessionAddonNamespace::AiCapabilities,
-            configuration,
-            updated_at,
-        )
     }
 
     /// Reads runtime controls from the addon namespace.
@@ -854,10 +794,6 @@ pub struct SessionRuntimeControls {
     /// 最近一次被该会话使用的激活模型标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_model_id: Option<String>,
-    /// Last active OpenRouter endpoint route locked by the session.
-    /// 最近一次被该会话锁定使用的 OpenRouter 端点路由。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub active_openrouter_endpoint_route: Option<OpenRouterEndpointRouteSelection>,
     /// Last reasoning-effort preset selected while this session was active.
     /// 最近一次该会话激活时选择的推理档位预设。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -886,9 +822,6 @@ impl SessionRuntimeControls {
             active_agent_id: runtime_state.active_agent_id.clone(),
             active_provider_id: runtime_state.active_provider_id.clone(),
             active_model_id: runtime_state.active_model_id.clone(),
-            active_openrouter_endpoint_route: runtime_state
-                .active_openrouter_endpoint_route
-                .clone(),
             active_reasoning_effort: runtime_state.active_reasoning_effort,
             active_temperature: runtime_state.active_temperature,
         };
@@ -906,8 +839,6 @@ impl SessionRuntimeControls {
         runtime_state.active_agent_id = self.active_agent_id.clone();
         runtime_state.active_provider_id = self.active_provider_id.clone();
         runtime_state.active_model_id = self.active_model_id.clone();
-        runtime_state.active_openrouter_endpoint_route =
-            self.active_openrouter_endpoint_route.clone();
         runtime_state.active_reasoning_effort = self.active_reasoning_effort;
         runtime_state.active_temperature = self.active_temperature;
     }
@@ -923,7 +854,6 @@ impl SessionRuntimeControls {
         self.active_agent_id.is_some()
             || self.active_provider_id.is_some()
             || self.active_model_id.is_some()
-            || self.active_openrouter_endpoint_route.is_some()
             || self.active_reasoning_effort.is_some()
             || self.active_temperature.is_some()
     }

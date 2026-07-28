@@ -132,16 +132,12 @@ pub(crate) fn apply_execution_preparation(
                     .insert(preparation.session_id, context_budget);
             }
             let live_context_budgets = guard.live_context_budgets.clone();
-            let provider_configuration = guard
-                .agent_runtime
-                .as_ref()
-                .map(|runtime| runtime.provider_configuration.clone())
-                .unwrap_or_default();
-            let ai_tool_configuration = guard
-                .agent_runtime
-                .as_ref()
-                .map(|runtime| runtime.ai_tool_configuration.clone())
-                .unwrap_or_default();
+            let public_model_capabilities = active_public_ai_model_capabilities(
+                guard
+                    .agent_runtime
+                    .as_ref()
+                    .map(|runtime| runtime.public_ai_runtime.as_ref()),
+            );
             let (boundary_project_id, context_usage) = {
                 // workspace passed preflight before live budget and runtime identity mutation.
                 // workspace 在 live budget 与运行时身份变更前已通过预检。
@@ -159,10 +155,6 @@ pub(crate) fn apply_execution_preparation(
                 runtime_state.active_provider_id =
                     Some(preparation.model_blueprint.provider_id.clone());
                 runtime_state.active_model_id = Some(preparation.model_blueprint.model_id.clone());
-                runtime_state.active_openrouter_endpoint_route = preparation
-                    .model_blueprint
-                    .openrouter_endpoint_route
-                    .clone();
                 runtime_state.active_reasoning_effort =
                     Some(preparation.model_blueprint.reasoning.requested_effort);
                 runtime_state.active_temperature = preparation.temperature;
@@ -181,8 +173,7 @@ pub(crate) fn apply_execution_preparation(
                     preparation.session_id,
                     workspace.session_runtime_state.get(&preparation.session_id),
                     &live_context_budgets,
-                    &provider_configuration,
-                    &ai_tool_configuration,
+                    public_model_capabilities.as_ref(),
                 );
                 (boundary_project_id, context_usage)
             };

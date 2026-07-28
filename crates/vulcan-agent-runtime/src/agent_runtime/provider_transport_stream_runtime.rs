@@ -10,21 +10,19 @@ use crate::agent_runtime::provider_transport_entry_inputs::{
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_request::ProviderTransportTurnStartMode;
 use crate::agent_runtime::provider_transport_request_budget::{
-    BudgetCheckedStreamingAdapter, ProviderRequestBudgetGuard,
+    BudgetCheckedStreamingAdapter, ProviderBudgetRequest, ProviderRequestBudgetGuard,
 };
 use crate::agent_runtime::provider_transport_retry::{
     ProviderRetryPolicy, provider_delta_makes_retry_unsafe,
 };
 use crate::agent_runtime::provider_transport_stream_executor::StreamingRuntimeToolExecutor;
 use crate::agent_runtime::provider_transport_tool_context::PreparedHostToolRuntimeContext;
-use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
 use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
 use crate::agent_runtime::task_runtime::{TaskRuntime, build_task_execution_handler};
 use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
 use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
 use crate::model::SessionId;
 use async_stream::stream;
-use reqwest::header::HeaderMap;
 use serde_json::json;
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -42,15 +40,6 @@ use vulcan_core::types::{
 /// 在共享运行时包装器消费控制器专用字段后，交给具体 Provider 适配器构造过程的已准备输入对象。
 #[derive(Clone)]
 pub(crate) struct PreparedProviderTransportAdapterInputs {
-    /// Stable provider identifier reused by the concrete Provider adapter.
-    /// 被具体 Provider 适配器复用的稳定 Provider 标识。
-    pub(crate) provider_id: String,
-    /// Stable model identifier reused by the concrete Provider adapter.
-    /// 被具体 Provider 适配器复用的稳定模型标识。
-    pub(crate) model_id: String,
-    /// Fully prepared request headers reused by the concrete Provider adapter.
-    /// 被具体 Provider 适配器复用的完整已准备请求头。
-    pub(crate) request_headers: HeaderMap,
     /// Mirrored provider-visible tool definitions reused by the concrete Provider adapter.
     /// 被具体 Provider 适配器复用的镜像 Provider 可见工具定义集合。
     pub(crate) provider_tool_definitions: Vec<ProviderToolDefinition>,
@@ -115,13 +104,12 @@ pub(crate) fn execute_host_controlled_stream<A, F>(
     tool_request_rejection_tool_ids: Vec<String>,
 ) -> ProviderDeltaStream
 where
-    A: VulcanStreamingProviderAdapter<
-            Request = OpenAiCompatibleCoreTurnRequest,
-            Response = CoreProviderTurnResponse,
-        > + Clone
+    A: VulcanStreamingProviderAdapter<Response = CoreProviderTurnResponse>
+        + Clone
         + Send
         + Sync
         + 'static,
+    A::Request: ProviderBudgetRequest,
     F: Fn(ProviderLiveDeltaSender) -> A + Send + Sync + 'static,
 {
     Box::pin(stream! {
@@ -596,13 +584,12 @@ pub(crate) fn execute_host_controlled_stream_with_prepared_inputs<A, F>(
     prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> ProviderDeltaStream
 where
-    A: VulcanStreamingProviderAdapter<
-            Request = OpenAiCompatibleCoreTurnRequest,
-            Response = CoreProviderTurnResponse,
-        > + Clone
+    A: VulcanStreamingProviderAdapter<Response = CoreProviderTurnResponse>
+        + Clone
         + Send
         + Sync
         + 'static,
+    A::Request: ProviderBudgetRequest,
     F: Fn(ProviderLiveDeltaSender, PreparedProviderTransportAdapterInputs) -> A
         + Send
         + Sync
@@ -612,11 +599,8 @@ where
     let PreparedProviderTransportRuntimeInputs {
         entry_inputs:
             PreparedProviderTransportEntryInputs {
-                provider_id,
-                model_id,
                 prompt,
                 turn_start_mode,
-                request_headers,
                 controller_config,
             },
         tool_context:
@@ -635,9 +619,6 @@ where
     } = prepared_runtime_inputs;
 
     let adapter_inputs = PreparedProviderTransportAdapterInputs {
-        provider_id,
-        model_id,
-        request_headers,
         provider_tool_definitions,
     };
 

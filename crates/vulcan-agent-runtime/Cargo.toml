@@ -32,6 +32,8 @@ tokio = { version = "1.52.2", features = ["rt", "sync", "time", "net", "io-util"
 uuid.workspace = true
 vldb-controller-client.workspace = true
 vulcan-context.workspace = true
+vulcan-ai-contract.workspace = true
+vulcan-ai-protocols.workspace = true
 vulcan-context-compaction.workspace = true
 vulcan-context-injection.workspace = true
 vulcan-core.workspace = true
@@ -46,6 +48,7 @@ vulcan-plugin-runtime.workspace = true
 vulcan-prompt-composer.workspace = true
 vulcan-prompt-skills.workspace = true
 vulcan-provider-config.workspace = true
+vulcan-provider-adapters.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-session-core.workspace = true
 vulcan-subagent-core.workspace = true

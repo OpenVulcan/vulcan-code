@@ -9,8 +9,7 @@ pub(crate) fn context_usage_snapshot_from_runtime_state(
     session_id: SessionId,
     runtime_state: Option<&SessionRuntimeStateEntry>,
     live_context_budgets: &BTreeMap<SessionId, ContextBudgetSnapshot>,
-    provider_configuration: &ProviderConfigurationFile,
-    ai_tool_configuration: &PersistedAiToolConfiguration,
+    model_capabilities: Option<&vulcan_ai_contract::ModelCapabilities>,
 ) -> Option<ContextUsageSnapshot> {
     let runtime_state = runtime_state?;
     let historical_context_budget;
@@ -19,8 +18,7 @@ pub(crate) fn context_usage_snapshot_from_runtime_state(
     } else {
         historical_context_budget = historical_context_budget_snapshot_from_runtime_state(
             runtime_state,
-            provider_configuration,
-            ai_tool_configuration,
+            model_capabilities,
         );
         historical_context_budget.as_ref()
     };
@@ -84,10 +82,8 @@ pub(crate) fn context_usage_snapshot_from_runtime_state(
 /// 参数
 /// `runtime_state` is the selected session runtime-state entry.
 /// `runtime_state` 是当前选中会话的运行态条目。
-/// `provider_configuration` is used to resolve the session model catalog entry.
-/// `provider_configuration` 用于解析会话模型目录项。
-/// `ai_tool_configuration` is used to resolve effective model capability overrides.
-/// `ai_tool_configuration` 用于解析生效模型能力覆盖。
+/// `model_capabilities` contains the already resolved public model limits.
+/// `model_capabilities` 包含已经解析完成的公共模型限制。
 ///
 /// # Returns
 /// 返回值
@@ -95,8 +91,7 @@ pub(crate) fn context_usage_snapshot_from_runtime_state(
 /// 当存在历史用量时返回尽力而为的上下文预算快照。
 pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
     runtime_state: &SessionRuntimeStateEntry,
-    provider_configuration: &ProviderConfigurationFile,
-    ai_tool_configuration: &PersistedAiToolConfiguration,
+    model_capabilities: Option<&vulcan_ai_contract::ModelCapabilities>,
 ) -> Option<ContextBudgetSnapshot> {
     let observed_usage = runtime_state
         .last_successful_provider_usage
@@ -105,14 +100,9 @@ pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
         .filter(|usage| usage.has_any_tokens())?;
     let provider_id = runtime_state.active_provider_id.as_deref()?;
     let model_id = runtime_state.active_model_id.as_deref()?;
-    let capabilities = runtime_state_model_capabilities(
-        runtime_state,
-        provider_configuration,
-        ai_tool_configuration,
-    );
-    let effective_input_limit = capabilities
-        .as_ref()
-        .and_then(|capabilities| capabilities.input_limit.or(capabilities.context_limit));
+    let effective_input_limit = model_capabilities
+        .and_then(|capabilities| capabilities.context_limit)
+        .and_then(|limit| usize::try_from(limit).ok());
     let input_tokens = vulcan_context::observed_input_tokens_from_usage(Some(observed_usage))
         .or(observed_usage.total_tokens)
         .unwrap_or_default();
@@ -128,13 +118,11 @@ pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
             .live_context_budget_fingerprint
             .clone()
             .unwrap_or_else(|| format!("historical:{provider_id}:{model_id}")),
-        context_limit: capabilities
-            .as_ref()
-            .and_then(|capabilities| capabilities.context_limit),
+        context_limit: effective_input_limit,
         effective_input_limit,
-        reserved_output_tokens: capabilities
-            .as_ref()
+        reserved_output_tokens: model_capabilities
             .and_then(|capabilities| capabilities.output_limit)
+            .and_then(|limit| usize::try_from(limit).ok())
             .unwrap_or_default(),
         reserved_reasoning_tokens: 0,
         reserved_compaction_tokens: 0,
@@ -157,83 +145,6 @@ pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
         observed_usage: Some(observed_usage.clone()),
         severity: historical_context_budget_severity(usage_ratio),
     })
-}
-
-/// Resolves model capabilities for the model recorded by one session runtime state.
-/// 为单个会话运行态记录的模型解析模型能力。
-///
-/// # Parameters
-/// 参数
-/// `runtime_state` supplies the provider and model identity.
-/// `runtime_state` 提供供应商与模型身份。
-/// `provider_configuration` supplies enabled model catalog data.
-/// `provider_configuration` 提供已启用模型目录数据。
-/// `ai_tool_configuration` supplies capability overrides.
-/// `ai_tool_configuration` 提供能力覆盖配置。
-///
-/// # Returns
-/// 返回值
-/// Effective model capabilities when the provider can be resolved.
-/// 当供应商可解析时返回生效模型能力。
-pub(crate) fn runtime_state_model_capabilities(
-    runtime_state: &SessionRuntimeStateEntry,
-    provider_configuration: &ProviderConfigurationFile,
-    ai_tool_configuration: &PersistedAiToolConfiguration,
-) -> Option<ResolvedModelCapabilities> {
-    let provider_id = runtime_state.active_provider_id.as_ref()?;
-    let model_id = runtime_state.active_model_id.as_ref()?;
-    let definition = provider_config::supported_provider_by_id(provider_id)?;
-    let model = provider_config::effective_model_choices(provider_id, provider_configuration)
-        .into_iter()
-        .find(|model| model.id == *model_id);
-    Some(resolve_effective_model_capabilities(
-        definition,
-        model.as_ref(),
-        ai_tool_configuration,
-    ))
-}
-
-/// Resolves base model capabilities for the model recorded by one session runtime state.
-/// 为单个会话运行态记录的模型解析基础模型能力。
-///
-/// # Parameters
-/// 参数
-/// `runtime_state` supplies the provider and model identity.
-/// `runtime_state` 提供供应商与模型身份。
-/// `provider_configuration` supplies enabled model catalog data.
-/// `provider_configuration` 提供已启用模型目录数据。
-///
-/// # Returns
-/// 返回值
-/// Base model capabilities before user AI-extension routing overlays are applied.
-/// 返回应用用户 AI 扩展路由覆盖之前的基础模型能力。
-pub(crate) fn runtime_state_base_model_capabilities(
-    runtime_state: &SessionRuntimeStateEntry,
-    provider_configuration: &ProviderConfigurationFile,
-) -> Option<ResolvedModelCapabilities> {
-    let provider_id = runtime_state.active_provider_id.as_ref()?;
-    let model_id = runtime_state.active_model_id.as_ref()?;
-    let definition = provider_config::supported_provider_by_id(provider_id)?;
-    let model = provider_config::effective_model_choices(provider_id, provider_configuration)
-        .into_iter()
-        .find(|model| model.id == *model_id);
-    Some(resolve_model_capabilities(definition, model.as_ref()))
-}
-
-/// Resolves base model capabilities for the globally selected provider model.
-/// 为全局选中的供应商模型解析基础模型能力。
-pub(crate) fn active_provider_configuration_model_capabilities(
-    provider_configuration: &ProviderConfigurationFile,
-) -> Option<ResolvedModelCapabilities> {
-    let (provider_id, model_id) = provider_configuration
-        .model
-        .as_deref()
-        .and_then(provider_config::parse_active_model_reference)?;
-    let definition = provider_config::supported_provider_by_id(provider_id)?;
-    let model = provider_config::effective_model_choices(provider_id, provider_configuration)
-        .into_iter()
-        .find(|model| model.id == model_id);
-    Some(resolve_model_capabilities(definition, model.as_ref()))
 }
 
 /// Resolves one historical usage ratio into the shared context-budget severity buckets.

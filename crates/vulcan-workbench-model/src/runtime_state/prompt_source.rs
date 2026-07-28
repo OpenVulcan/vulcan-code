@@ -82,9 +82,6 @@ pub fn pending_prompt_dispatch_index(
 /// 共享待发送提示词分发门禁所需的运行态事实。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PendingPromptDispatchContext {
-    /// Whether the current provider uses the Anthropic runtime family.
-    /// 当前 Provider 是否使用 Anthropic 运行时族。
-    pub uses_anthropic_runtime: bool,
     /// Whether delegated subagents are still running under the same parent session.
     /// 同一父会话下是否仍有委派子代理正在运行。
     pub has_running_subagents: bool,

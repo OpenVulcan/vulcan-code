@@ -135,7 +135,10 @@ pub(crate) fn record_webui_provider_response_checkpoint(
             ),
             provider_id: preparation.model_blueprint.provider_id.clone(),
             model_id: preparation.model_blueprint.model_id.clone(),
-            provider_family: preparation.model_blueprint.api_family_key().to_string(),
+            provider_family: preparation
+                .model_blueprint
+                .protocol_profile_key()
+                .to_string(),
             finish_reason: Some(finish_reason.to_string()),
             native_state,
             usage: report.last_successful_provider_usage.clone(),
@@ -229,7 +232,7 @@ pub(crate) fn stable_provider_response_checkpoint_hash(
     preparation.model_blueprint.model_id.hash(&mut hasher);
     preparation
         .model_blueprint
-        .api_family_key()
+        .protocol_profile_key()
         .hash(&mut hasher);
     preparation
         .boundary_events

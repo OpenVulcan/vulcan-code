@@ -91,6 +91,39 @@ pub fn stream_runtime_run_with_intervention_and_plugins(
     request: ExecutionPreparationRequest,
     prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
+    stream_runtime_run_with_intervention_plugins_and_public_ai(
+        config,
+        agent_profile_catalog,
+        luaskills_runtime,
+        vulcan_plugin_runtime,
+        extension_generation,
+        task_runtime,
+        question_runtime,
+        command_session_runtime,
+        token_budget_runtime,
+        None,
+        request,
+        prompt_intervention,
+    )
+}
+
+/// Streams one provider run with plugins and one service-owned public AI runtime.
+/// 使用插件与一个服务持有的公共 AI 运行时流式执行一次 Provider 调用。
+#[allow(clippy::too_many_arguments)]
+pub fn stream_runtime_run_with_intervention_plugins_and_public_ai(
+    config: ProviderConfigurationFile,
+    agent_profile_catalog: AgentProfileCatalog,
+    luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    vulcan_plugin_runtime: Option<vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
+    extension_generation: Option<Arc<ExtensionGeneration>>,
+    task_runtime: Arc<TaskRuntime>,
+    question_runtime: Arc<QuestionRuntime>,
+    command_session_runtime: Arc<CommandSessionRuntime>,
+    token_budget_runtime: Arc<TokenBudgetRuntime>,
+    public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
+    request: ExecutionPreparationRequest,
+    prompt_intervention: Option<RuntimePromptIntervention>,
+) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
     let extension_generation = extension_generation.unwrap_or_else(|| {
         Arc::new(ExtensionGeneration::new(
             0,
@@ -110,6 +143,7 @@ pub fn stream_runtime_run_with_intervention_and_plugins(
         question_runtime,
         command_session_runtime,
         token_budget_runtime,
+        public_ai_runtime,
         request,
         prompt_intervention,
     )
@@ -143,11 +177,12 @@ fn stream_runtime_run_with_access(
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
     token_budget_runtime: Arc<TokenBudgetRuntime>,
+    public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
     request: ExecutionPreparationRequest,
     prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
     stream! {
-        let launch = match crate::agent_runtime::runtime_stream_launch::prepare_runtime_stream_launch_with_plugins(
+        let launch = match crate::agent_runtime::runtime_stream_launch::prepare_runtime_stream_launch_with_plugins_and_public_ai(
             &config,
             &agent_profile_catalog,
             luaskills_runtime.clone(),
@@ -157,6 +192,7 @@ fn stream_runtime_run_with_access(
             question_runtime,
             command_session_runtime,
             token_budget_runtime,
+            public_ai_runtime,
             request,
         ).await {
             Ok(launch) => launch,

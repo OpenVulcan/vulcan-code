@@ -1,7 +1,6 @@
 //! Existing-session submission queue decision and commit.
 //! 已有会话提交排队决策与提交。
 
-use vulcan_agent_runtime::provider_config::ProviderConfigurationFile;
 use vulcan_core::types::ConversationAttachment;
 use vulcan_workspace_store::{
     data_plane::ControllerRuntimeHandle, workspace_store::WorkspaceSnapshot,
@@ -44,9 +43,6 @@ pub(crate) struct ExistingSubmissionQueueInput {
     /// Optional reasoning effort retained for later dispatch.
     /// 为后续分发保留的可选推理强度。
     pub(crate) reasoning_effort: Option<String>,
-    /// Optional AI capability kinds disabled for this queued turn.
-    /// 当前排队回合禁用的可选 AI 能力类型。
-    pub(crate) disabled_ai_capability_kinds: Option<Vec<String>>,
     /// Service-entry timestamp used by queued-return latency diagnostics.
     /// 排队返回延迟诊断使用的服务入口时间戳。
     pub(crate) submit_total_started_at: i128,
@@ -216,8 +212,6 @@ fn merge_missing_existing_session_scope(
 /// `state` 持有当前活动任务注册表与会话内核。
 /// `workspace_snapshot` is the hydrated submission workspace used by pending-lane rules.
 /// `workspace_snapshot` 是待发送通道规则使用的已水合提交工作区。
-/// `provider_configuration` determines provider-specific pending-lane behavior.
-/// `provider_configuration` 决定 Provider 特定的待发送通道行为。
 /// `submission_session_id` identifies the existing target, or `None` for a draft conversation.
 /// `submission_session_id` 标识已有目标；草稿会话为 `None`。
 ///
@@ -228,7 +222,6 @@ fn merge_missing_existing_session_scope(
 pub(crate) fn evaluate_existing_submission_queue(
     state: &SharedServiceBridgeState,
     workspace_snapshot: &WorkspaceSnapshot,
-    provider_configuration: &ProviderConfigurationFile,
     submission_session_id: Option<Uuid>,
 ) -> Result<ExistingSubmissionQueueDecision, String> {
     // session_id exists only for submissions targeting an already materialized conversation.
@@ -275,7 +268,6 @@ pub(crate) fn evaluate_existing_submission_queue(
     // should_queue 是当前已有会话的权威共享待发送通道决策。
     let should_queue = session_has_blocking_system_prompt_work(
         workspace_snapshot,
-        provider_configuration,
         session_id,
         has_active_kernel_turn,
         has_precheck_progress,
@@ -330,7 +322,6 @@ pub(crate) fn queue_existing_submission(
         hidden_model_guidance,
         attachments,
         reasoning_effort,
-        disabled_ai_capability_kinds,
         submit_total_started_at,
     } = input;
     webui_submit_trace(
@@ -358,7 +349,6 @@ pub(crate) fn queue_existing_submission(
                 hidden_model_guidance,
                 attachments,
                 reasoning_effort.as_deref(),
-                disabled_ai_capability_kinds.as_deref(),
             )?;
             Ok(queued_hook_event)
         },

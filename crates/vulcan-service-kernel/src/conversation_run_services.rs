@@ -115,12 +115,7 @@ pub(crate) async fn service_compact_selected_conversation_context(
         "当前会话暂时没有可压缩的历史上下文。",
     )?;
 
-    let budget_note = context_compaction_budget_note_from_state(
-        &state,
-        selected_session_id,
-        &agent_runtime.provider_configuration,
-        &agent_runtime.ai_tool_configuration,
-    );
+    let budget_note = context_compaction_budget_note_from_state(&state, selected_session_id);
     let previous_phase = workspace_snapshot
         .session_run_phases
         .get(&selected_session_id)
@@ -170,7 +165,7 @@ pub(crate) async fn service_compact_selected_conversation_context(
             token_budget_runtime: &token_budget_runtime,
             mcp_catalog: &mcp_catalog,
             provider_configuration: &agent_runtime.provider_configuration,
-            ai_tool_configuration: &agent_runtime.ai_tool_configuration,
+            public_ai_runtime: Some(agent_runtime.public_ai_runtime.as_ref()),
             workspace_snapshot,
             logs: &logs,
             subagent_navigation_mode: SubagentNavigationRefreshMode::Rebuild,
@@ -388,7 +383,7 @@ pub(crate) async fn service_stop_conversation_run(
             token_budget_runtime: &token_budget_runtime,
             mcp_catalog: &mcp_catalog,
             provider_configuration: &agent_runtime.provider_configuration,
-            ai_tool_configuration: &agent_runtime.ai_tool_configuration,
+            public_ai_runtime: Some(agent_runtime.public_ai_runtime.as_ref()),
             workspace_snapshot,
             logs: &logs,
             subagent_navigation_mode: SubagentNavigationRefreshMode::Rebuild,

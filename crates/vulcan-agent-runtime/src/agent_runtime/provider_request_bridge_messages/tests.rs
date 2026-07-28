@@ -4,8 +4,7 @@ use super::{
     validate_provider_visible_tool_topology,
 };
 use crate::agent_runtime::provider_system_update_lowering::ProviderSystemUpdateLoweringPolicy;
-use crate::provider_capabilities::ResolvedModelCapabilities;
-use crate::provider_config::ProviderApiFamily;
+use vulcan_ai_contract::{ModelCapabilities, ResourceKind};
 use vulcan_context::{
     RuntimeSystemUpdateEvent, RuntimeSystemUpdateLoweringHint, RuntimeSystemUpdateTrust,
 };
@@ -76,7 +75,7 @@ fn provider_visible_history_applies_system_update_as_user_wrapper() {
 
     let projected = core_messages_to_provider_visible_history_for_model_with_system_updates(
         &messages,
-        Some(ProviderApiFamily::OpenAiChatCompatible),
+        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         None,
         &updates,
         ProviderSystemUpdateLoweringPolicy::default(),
@@ -119,6 +118,7 @@ fn provider_visible_history_moves_system_update_after_tool_result_gap() {
             id: String::from("tool-result-1"),
             payload: CoreConversationPayload::ToolResult {
                 tool_call_id: Some(String::from("provider-call-1")),
+                is_error: false,
                 text: String::from("file body"),
             },
         },
@@ -131,7 +131,7 @@ fn provider_visible_history_moves_system_update_after_tool_result_gap() {
 
     let projected = core_messages_to_provider_visible_history_for_model_with_system_updates(
         &messages,
-        Some(ProviderApiFamily::OpenAiChatCompatible),
+        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         None,
         &updates,
         ProviderSystemUpdateLoweringPolicy::default(),
@@ -178,6 +178,7 @@ fn provider_visible_history_moves_system_update_after_parallel_tool_results() {
             id: String::from("tool-result-1"),
             payload: CoreConversationPayload::ToolResult {
                 tool_call_id: Some(String::from("provider-call-1")),
+                is_error: false,
                 text: String::from("file body"),
             },
         },
@@ -185,6 +186,7 @@ fn provider_visible_history_moves_system_update_after_parallel_tool_results() {
             id: String::from("tool-result-2"),
             payload: CoreConversationPayload::ToolResult {
                 tool_call_id: Some(String::from("provider-call-2")),
+                is_error: false,
                 text: String::from("file list"),
             },
         },
@@ -197,7 +199,7 @@ fn provider_visible_history_moves_system_update_after_parallel_tool_results() {
 
     let projected = core_messages_to_provider_visible_history_for_model_with_system_updates(
         &messages,
-        Some(ProviderApiFamily::OpenAiChatCompatible),
+        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         None,
         &updates,
         ProviderSystemUpdateLoweringPolicy::default(),
@@ -219,10 +221,7 @@ fn provider_visible_history_moves_system_update_after_parallel_tool_results() {
 /// 验证历史附件会在传输编码前根据纯文本模型能力降级。
 #[test]
 fn provider_visible_history_downgrades_model_unsupported_attachments() {
-    let capabilities = ResolvedModelCapabilities {
-        input_modalities: vec![String::from("text")],
-        ..ResolvedModelCapabilities::default()
-    };
+    let capabilities = ModelCapabilities::default();
     let messages = vec![CoreConversationMessage {
         id: String::from("user-1"),
         payload: CoreConversationPayload::UserText {
@@ -237,7 +236,7 @@ fn provider_visible_history_downgrades_model_unsupported_attachments() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(ProviderApiFamily::OpenAiChatCompatible),
+        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         Some(&capabilities),
     );
 
@@ -284,7 +283,7 @@ fn provider_visible_history_filters_legacy_explore_assistant_projection() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(ProviderApiFamily::OpenAiChatCompatible),
+        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         None,
     );
 
@@ -325,6 +324,7 @@ fn provider_visible_history_preserves_matched_tool_result() {
             id: String::from("tool-result-1"),
             payload: CoreConversationPayload::ToolResult {
                 tool_call_id: Some(String::from("provider-call")),
+                is_error: false,
                 text: String::from("file body"),
             },
         },
@@ -332,7 +332,7 @@ fn provider_visible_history_preserves_matched_tool_result() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(ProviderApiFamily::OpenAiChatCompatible),
+        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         None,
     );
 
@@ -375,6 +375,7 @@ fn provider_visible_history_passes_canonical_tool_topology_validator() {
             id: String::from("tool-result-1"),
             payload: CoreConversationPayload::ToolResult {
                 tool_call_id: Some(String::from("provider-call-1")),
+                is_error: false,
                 text: String::from("first done"),
             },
         },
@@ -382,6 +383,7 @@ fn provider_visible_history_passes_canonical_tool_topology_validator() {
             id: String::from("tool-result-2"),
             payload: CoreConversationPayload::ToolResult {
                 tool_call_id: Some(String::from("local-call-2")),
+                is_error: false,
                 text: String::from("second done"),
             },
         },
@@ -389,7 +391,7 @@ fn provider_visible_history_passes_canonical_tool_topology_validator() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(ProviderApiFamily::OpenAiChatCompatible),
+        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         None,
     );
 
@@ -439,6 +441,7 @@ fn provider_visible_tool_topology_validator_rejects_orphan_result() {
         id: String::from("tool-result-1"),
         payload: CoreConversationPayload::ToolResult {
             tool_call_id: Some(String::from("missing-call")),
+            is_error: false,
             text: String::from("orphan body"),
         },
     }];
@@ -456,13 +459,14 @@ fn provider_visible_history_downgrades_orphan_tool_result() {
         id: String::from("tool-result-1"),
         payload: CoreConversationPayload::ToolResult {
             tool_call_id: Some(String::from("missing-call")),
+            is_error: false,
             text: String::from("orphan body"),
         },
     }];
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(ProviderApiFamily::OpenAiChatCompatible),
+        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         None,
     );
 
@@ -507,6 +511,7 @@ fn provider_visible_history_downgrades_partial_tool_batch() {
             id: String::from("tool-result-1"),
             payload: CoreConversationPayload::ToolResult {
                 tool_call_id: Some(String::from("provider-call-1")),
+                is_error: false,
                 text: String::from("first done"),
             },
         },
@@ -514,7 +519,7 @@ fn provider_visible_history_downgrades_partial_tool_batch() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(ProviderApiFamily::OpenAiChatCompatible),
+        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         None,
     );
 
@@ -558,7 +563,7 @@ fn provider_visible_history_downgrades_unanswered_tool_batch() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(ProviderApiFamily::OpenAiChatCompatible),
+        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         None,
     );
 
@@ -606,7 +611,7 @@ fn canonical_fixture_plain_text_history_projects_stably() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(ProviderApiFamily::OpenAiChatCompatible),
+        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         None,
     );
 
@@ -653,6 +658,7 @@ fn canonical_fixture_tool_call_and_result_projects_as_protocol_pair() {
             id: String::from("tool-result-1"),
             payload: CoreConversationPayload::ToolResult {
                 tool_call_id: Some(String::from("provider-call-1")),
+                is_error: false,
                 text: String::from("file body"),
             },
         },
@@ -660,7 +666,7 @@ fn canonical_fixture_tool_call_and_result_projects_as_protocol_pair() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(ProviderApiFamily::OpenAiChatCompatible),
+        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         None,
     );
 
@@ -719,7 +725,7 @@ fn canonical_fixture_provider_switch_downgrades_stale_tool_state() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(ProviderApiFamily::OpenAiChatCompatible),
+        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         None,
     );
 
@@ -757,7 +763,7 @@ fn canonical_fixture_dynamic_injection_projects_as_system_update_wrapper() {
 
     let projected = core_messages_to_provider_visible_history_for_model_with_system_updates(
         &messages,
-        Some(ProviderApiFamily::OpenAiChatCompatible),
+        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         None,
         &updates,
         ProviderSystemUpdateLoweringPolicy::default(),
@@ -779,13 +785,9 @@ fn canonical_fixture_dynamic_injection_projects_as_system_update_wrapper() {
 /// 验证多模态 canonical fixture 只会在 provider 与模型均支持时保留图片和视频附件。
 #[test]
 fn canonical_fixture_image_and_video_understanding_respects_model_capabilities() {
-    let capabilities = ResolvedModelCapabilities {
-        input_modalities: vec![
-            String::from("text"),
-            String::from("image"),
-            String::from("video"),
-        ],
-        ..ResolvedModelCapabilities::default()
+    let capabilities = ModelCapabilities {
+        input_resources: vec![ResourceKind::Image, ResourceKind::Video],
+        ..ModelCapabilities::default()
     };
     let messages = vec![CoreConversationMessage {
         id: String::from("user-multimodal"),
@@ -798,23 +800,29 @@ fn canonical_fixture_image_and_video_understanding_respects_model_capabilities()
         },
     }];
 
-    let gemini_projected = core_messages_to_provider_visible_history_for_model(
+    let responses_projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(ProviderApiFamily::GoogleGeminiGenerateContent),
+        Some(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
         Some(&capabilities),
     );
     let CoreConversationPayload::UserText {
-        attachments: gemini_attachments,
+        text: responses_text,
+        attachments: responses_attachments,
         ..
-    } = &gemini_projected[0].payload
+    } = &responses_projected[0].payload
     else {
-        panic!("Gemini fixture should remain user text");
+        panic!("Responses fixture should remain user text");
     };
-    assert_eq!(gemini_attachments.len(), 2);
+    assert_eq!(responses_attachments.len(), 1);
+    assert_eq!(
+        responses_attachments[0].kind,
+        ConversationAttachmentKind::Image
+    );
+    assert!(responses_text.contains("selected protocol profile"));
 
     let openai_projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(ProviderApiFamily::OpenAiChatCompatible),
+        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         Some(&capabilities),
     );
     let CoreConversationPayload::UserText {
@@ -824,10 +832,6 @@ fn canonical_fixture_image_and_video_understanding_respects_model_capabilities()
     else {
         panic!("OpenAI-compatible fixture should remain user text");
     };
-    assert_eq!(openai_attachments.len(), 1);
-    assert_eq!(
-        openai_attachments[0].kind,
-        ConversationAttachmentKind::Image
-    );
-    assert!(text.contains("this API path"));
+    assert_eq!(openai_attachments.len(), 2);
+    assert_eq!(text, "理解图片和视频");
 }

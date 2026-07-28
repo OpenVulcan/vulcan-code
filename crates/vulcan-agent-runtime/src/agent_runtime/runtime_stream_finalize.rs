@@ -41,8 +41,8 @@ pub(crate) fn apply_latest_request_snapshot(
         RequestContextCompactionBudgetSnapshotInput {
             provider_id: &preparation.model_blueprint.provider_id,
             model_id: &preparation.model_blueprint.model_id,
-            api_family: preparation.model_blueprint.api_family(),
-            capabilities: &preparation.model_blueprint.capabilities,
+            protocol_profile_id: &preparation.model_blueprint.protocol_profile_id,
+            capabilities: &preparation.model_blueprint.public_capabilities,
             reasoning: &preparation.model_blueprint.reasoning,
             request_snapshot,
             compaction_policy: preparation.context_compaction_policy,
@@ -276,9 +276,6 @@ mod tests {
         RuntimeStreamDeltaState, process_provider_stream_delta,
     };
     use crate::context_budget::ContextBudgetSnapshot;
-    use crate::provider_config::ProviderRuntimeKind;
-    use serde_json::json;
-    use std::collections::BTreeMap;
     use uuid::Uuid;
     use vulcan_core::controller::VulcanCoreController;
     use vulcan_core::types::{
@@ -300,20 +297,15 @@ mod tests {
             model_blueprint: ProviderRuntimeBlueprint {
                 provider_id: String::from("openai"),
                 provider_name: String::from("OpenAI"),
-                runtime_kind: ProviderRuntimeKind::OpenAi,
                 runtime_label: String::from("OpenAI"),
                 model_id: String::from("gpt-test"),
                 model_name: String::from("GPT Test"),
-                openrouter_endpoint_route: None,
+                protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+                public_capabilities: vulcan_ai_contract::ModelCapabilities::default(),
                 base_url: Some(String::from("https://api.example.test/v1")),
                 supports_remote_model_refresh: true,
                 credential_source: String::from("环境变量"),
-                user_agent: None,
-                extra_headers: BTreeMap::new(),
-                extra_body: json!({}),
                 reasoning: Default::default(),
-                capabilities: Default::default(),
-                interleaved_reasoning: None,
             },
             prompt_preview: String::from("请分析代码"),
             workspace_path: String::from(r"D:\workspace"),
@@ -377,7 +369,7 @@ mod tests {
                 ConversationSnapshot::default(),
             )
             .expect("valid core conversation snapshot"),
-            vulcan_provider_config::provider_config::ProviderApiFamily::OpenAiChatCompatible,
+            String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         )
     }
 
@@ -545,8 +537,11 @@ mod tests {
             cache_creation_input_tokens: None,
         };
         let mut preparation = build_test_preparation();
-        preparation.model_blueprint.capabilities.input_limit = Some(8_000);
-        preparation.model_blueprint.capabilities.output_limit = Some(1_024);
+        preparation
+            .model_blueprint
+            .public_capabilities
+            .context_limit = Some(8_000);
+        preparation.model_blueprint.public_capabilities.output_limit = Some(1_024);
         preparation.context_budget = Some(ContextBudgetSnapshot {
             baseline_matches_active_runtime: true,
             observed_usage: Some(observed_usage.clone()),

@@ -471,13 +471,20 @@ fn render_message_layer_content(message: &ConversationMessage) -> String {
             }
             sections.join("\n")
         }
-        ConversationPayload::ToolResult { tool_call_id, text } => {
+        ConversationPayload::ToolResult {
+            tool_call_id,
+            is_error,
+            text,
+        } => {
             let mut sections = vec![format!("message_id={}", message.id)];
             if let Some(tool_call_id) = tool_call_id.as_deref() {
                 sections.push(format!("tool_call_id={tool_call_id}"));
             }
             if !text.trim().is_empty() {
                 sections.push(text.trim().to_string());
+            }
+            if *is_error {
+                sections.push(String::from("is_error=true"));
             }
             sections.join("\n")
         }

@@ -39,19 +39,24 @@ pub(crate) fn build_runtime_preparation_resources(
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
     token_budget_runtime: Arc<TokenBudgetRuntime>,
+    public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
     request: ExecutionPreparationRequest,
 ) -> RuntimePreparationResources {
-    let foundation = RuntimeFoundation::build_from_extension_generation_with_runtimes_and_plugins(
-        config,
-        agent_profile_catalog,
-        luaskills_runtime.clone(),
-        vulcan_plugin_runtime,
-        extension_generation,
-        task_runtime,
-        question_runtime,
-        command_session_runtime,
-        token_budget_runtime,
-    );
+    let mut foundation =
+        RuntimeFoundation::build_from_extension_generation_with_runtimes_and_plugins(
+            config,
+            agent_profile_catalog,
+            luaskills_runtime.clone(),
+            vulcan_plugin_runtime,
+            extension_generation,
+            task_runtime,
+            question_runtime,
+            command_session_runtime,
+            token_budget_runtime,
+        );
+    if let Some(public_ai_runtime) = public_ai_runtime {
+        foundation.install_public_ai_runtime(public_ai_runtime);
+    }
 
     RuntimePreparationResources {
         foundation,

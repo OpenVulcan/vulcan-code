@@ -62,8 +62,6 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
   const workbench = chatAreaProps.workbench;
   return (
     <ComposerDock
-      aiCapabilities={workbench.aiCapabilities ?? []}
-      defaultAiCapabilities={workbench.defaultAiCapabilities ?? []}
       attachmentCapabilities={workbench.composerAttachmentCapabilities ?? []}
       projectId={props.projectId}
       conversationId={props.conversationId}
@@ -79,7 +77,6 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
       onOpenKnowledge={chatAreaProps.onOpenKnowledge}
       onComposerDockHeightChange={props.onComposerDockHeightChange}
       onSubmitPrompt={chatAreaProps.onSubmitPrompt}
-      onSaveAiCapabilityConfiguration={chatAreaProps.onSaveAiCapabilityConfiguration}
       onSaveSessionGoal={chatAreaProps.onSaveSessionGoal}
       onResumeSessionGoal={chatAreaProps.onResumeSessionGoal}
       onClearSessionGoal={chatAreaProps.onClearSessionGoal}

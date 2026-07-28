@@ -15,6 +15,10 @@ use vulcan_core::types::{
 
 /// Lightweight provider-stream delta emitted while one real run is still in progress.
 /// 单次真实运行仍在进行中时发出的轻量 Provider 流式增量。
+// Synthetic runtime tests still inject the full neutral delta contract, while the public adapter
+// routes text through the Core sink and emits only host-side fragments in production.
+// 合成运行时测试仍会注入完整中立增量契约；公共适配器在生产环境中通过 Core sink 路由文本，并仅发出宿主侧碎片。
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum ProviderStreamDelta {
     /// Structured request snapshot captured right before the next provider request is dispatched.
     /// 在下一次 Provider 请求真正发出前捕获的结构化请求快照。

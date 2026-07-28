@@ -398,27 +398,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     { id: "providers", label: "Models & Providers", description: "Model providers, defaults, tool support, and reasoning configuration", items: ["Default provider", "Default model", "Tool calls", "Reasoning effort"] },
     { id: "remote", label: "Remote Access", description: "Future browser, mobile, and remote-client access to Core Service", items: ["Bind address", "Access token", "Remote switch", "Audit log"] },
   ],
-  providers: [
-    {
-      id: "deepseek",
-      name: "DeepSeek",
-      status: "Preview",
-      enabledModels: "2 enabled models",
-      active: true,
-      models: [
-        { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", active: true },
-        { id: "deepseek-v4", name: "DeepSeek V4" },
-      ],
-    },
-    {
-      id: "alibaba-cn",
-      name: "Alibaba CN",
-      status: "Preview",
-      enabledModels: "1 enabled model",
-      models: [{ id: "qwen3-coder", name: "Qwen3 Coder" }],
-    },
-    { id: "local", name: "Local Models", status: "Pending", enabledModels: "0", models: [] },
-  ],
+  providers: [],
   mcpTools: [],
   reasoningSelection: {
     selectedEffort: "x-high",
@@ -432,46 +412,6 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   hostTools: {
     nativeTools: [],
   },
-  aiCapabilities: [
-    {
-      kind: "web_search",
-      label: "Web Search",
-      available: true,
-      enabled: true,
-      native: false,
-      bridged: true,
-      targets: [
-        {
-          targetSelector: "builtin/web-search",
-          vendorId: "builtin",
-          vendorName: "Builtin",
-          targetAlias: "web-search",
-          targetName: "Web Search",
-          modelId: "native",
-          enabled: true,
-          selected: true,
-        },
-      ],
-    },
-    {
-      kind: "understand_image",
-      label: "Image Understanding",
-      available: false,
-      enabled: false,
-      native: false,
-      bridged: false,
-      targets: [],
-    },
-    {
-      kind: "image_generation",
-      label: "Image Generation",
-      available: false,
-      enabled: false,
-      native: false,
-      bridged: false,
-      targets: [],
-    },
-  ],
   memories: [
     { id: "user-profile", title: "User Profile", category: "Profile", state: "Waiting for live VMM nodes" },
     { id: "project-memory", title: "Project Memory", category: "Project", state: "Waiting for live VMM nodes" },

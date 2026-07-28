@@ -18,7 +18,6 @@ import {
 } from "@/components/features/memory/MemoryArea";
 import type {
   MainAreaId,
-  ProviderSummary,
   SettingsSubAreaId,
   StartupSnapshot,
   WorkbenchSnapshot,
@@ -39,9 +38,6 @@ export function FeatureContent(props: {
   // Selected settings sub page.
   // 当前设置二级页面。
   activeSettingsSubArea: SettingsSubAreaId;
-  // Provider currently opened in the edit dialog.
-  // 当前在编辑弹窗中打开的模型供应商。
-  editingProvider: ProviderSummary | null;
   // Service-backed skill page actions.
   // 服务端支持的技能页面动作。
   // Independent LuaSkills lifecycle actions.
@@ -59,21 +55,6 @@ export function FeatureContent(props: {
   // Service-backed settings page actions.
   // 服务端支持的设置页面动作。
   settingsActions: SettingsActionProps;
-  // Whether the capability target configuration dialog is open.
-  // 能力目标配置弹窗是否打开。
-  capabilityTargetsDialogOpen: boolean;
-  // Whether the enabled-model configuration dialog is open.
-  // 启用模型配置弹窗是否打开。
-  modelListDialogOpen: boolean;
-  // Updates the provider edit dialog target.
-  // 更新模型供应商编辑弹窗目标。
-  onEditingProviderChange: (provider: ProviderSummary | null) => void;
-  // Updates the capability target configuration dialog open state.
-  // 更新能力目标配置弹窗打开状态。
-  onCapabilityTargetsDialogOpenChange: (open: boolean) => void;
-  // Updates the enabled-model configuration dialog open state.
-  // 更新启用模型配置弹窗打开状态。
-  onModelListDialogOpenChange: (open: boolean) => void;
   // Updates the add-provider picker open state.
   // 更新添加模型供应商选择弹窗的打开状态。
   onProviderPickerOpenChange: (open: boolean) => void;
@@ -140,12 +121,6 @@ export function FeatureContent(props: {
         <SettingsFeatureContent
           activeSettingsSubArea={props.activeSettingsSubArea}
           actions={props.settingsActions}
-          capabilityTargetsDialogOpen={props.capabilityTargetsDialogOpen}
-          editingProvider={props.editingProvider}
-          modelListDialogOpen={props.modelListDialogOpen}
-          onCapabilityTargetsDialogOpenChange={props.onCapabilityTargetsDialogOpenChange}
-          onEditingProviderChange={props.onEditingProviderChange}
-          onModelListDialogOpenChange={props.onModelListDialogOpenChange}
           onProviderPickerOpenChange={props.onProviderPickerOpenChange}
           providerPickerOpen={props.providerPickerOpen}
           startup={props.startup}

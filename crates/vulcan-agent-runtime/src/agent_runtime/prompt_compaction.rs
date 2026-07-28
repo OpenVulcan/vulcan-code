@@ -15,9 +15,7 @@ use crate::agent_runtime::{
 };
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeAccess;
-use crate::provider_config::{
-    PersistedAiToolConfiguration, ProviderConfigurationFile, ReasoningEffortLevel,
-};
+use crate::provider_config::{ProviderConfigurationFile, ReasoningEffortLevel};
 use crate::tooling::CommandSessionRuntime;
 use async_stream::stream;
 use futures_util::{StreamExt, stream::Stream};
@@ -79,9 +77,6 @@ pub struct PromptCompactionJobRequest {
     /// Effective reasoning preset that should be forwarded into the internal summary call.
     /// 应转发到内部总结调用中的生效推理档位。
     pub reasoning_effort: ReasoningEffortLevel,
-    /// Effective AI-tool configuration captured for the internal summary call.
-    /// 为内部总结调用捕获的生效 AI 工具配置。
-    pub ai_tool_configuration: PersistedAiToolConfiguration,
     /// Shared agent-profile catalog used to rebuild one fresh runtime foundation.
     /// 用于重建新运行时基础架构的共享代理画像目录。
     pub agent_profile_catalog: AgentProfileCatalog,
@@ -142,9 +137,6 @@ pub struct PromptCompactionFoundationJobRequest {
     /// Effective reasoning preset that should be forwarded into the internal summary call.
     /// 应转发到内部总结调用中的生效推理档位。
     pub reasoning_effort: ReasoningEffortLevel,
-    /// Effective AI-tool configuration captured for the internal summary call.
-    /// 为内部总结调用捕获的生效 AI 工具配置。
-    pub ai_tool_configuration: PersistedAiToolConfiguration,
     /// Runtime foundation that already owns resolved agents, tools, LuaSkills, MCP, and shared runtimes.
     /// 已持有解析后代理、工具、LuaSkills、MCP 与共享运行时的运行时基础架构。
     pub foundation: Arc<RuntimeFoundation>,
@@ -321,7 +313,6 @@ pub fn stream_prompt_compaction_job(
                 &request.session_title,
                 &request.workspace_path,
                 request.reasoning_effort,
-                request.ai_tool_configuration.clone(),
                 source_conversation_state,
                 prompt_mode,
             );
@@ -480,7 +471,6 @@ pub fn stream_prompt_compaction_foundation_job(
                 &request.session_title,
                 &request.workspace_path,
                 request.reasoning_effort,
-                request.ai_tool_configuration.clone(),
                 source_conversation_state,
                 prompt_mode,
             );
@@ -630,7 +620,6 @@ fn build_prompt_compaction_launch_request(
     session_title: &str,
     workspace_path: &str,
     reasoning_effort: ReasoningEffortLevel,
-    ai_tool_configuration: PersistedAiToolConfiguration,
     conversation_state: vulcan_context::SessionConversationState,
     prompt_mode: ContextCompactionRequestPromptMode,
 ) -> ExecutionPreparationRequest {
@@ -652,6 +641,8 @@ fn build_prompt_compaction_launch_request(
         conversation_hook_turn_id: None,
         execution_agent_id: None,
         agent_prompt_snapshot: None,
+        provider_id_override: None,
+        model_id_override: None,
         subagent_prompt_context: None,
         task_session_store_root: None,
         session_title: session_title.to_string(),
@@ -664,7 +655,6 @@ fn build_prompt_compaction_launch_request(
         execution_mode: String::from("Compaction"),
         temperature: None,
         reasoning_effort,
-        ai_tool_configuration,
         tool_exposure_override: Default::default(),
         tool_request_rejection_reason: None,
         tool_request_rejection_all_tools: false,

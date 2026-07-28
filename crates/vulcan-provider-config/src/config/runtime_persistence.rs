@@ -1,11 +1,16 @@
 //! Runtime persistence models stored inside the shared provider configuration file.
 //! 存储在共享 Provider 配置文件中的运行时持久化模型。
 
-use super::default_true;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use vulcan_vmm::VmmConfigLayer;
+
+/// Returns the default enabled state used by persisted runtime entries.
+/// 返回持久化运行时条目使用的默认启用状态。
+fn default_true() -> bool {
+    true
+}
 /// Persisted skill family used by the runtime foundation.
 /// 运行时基础架构使用的持久化技能类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

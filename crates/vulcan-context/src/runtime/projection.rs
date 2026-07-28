@@ -200,7 +200,11 @@ impl<'a> RuntimeLogProjectionBuilder<'a> {
                     self.open_tool_batch(message, tool_calls, open_batches)?;
                 }
             }
-            SessionConversationPayload::ToolResult { tool_call_id, text } => {
+            SessionConversationPayload::ToolResult {
+                tool_call_id,
+                is_error,
+                text,
+            } => {
                 // provider_tool_call_id is normalized once and reused as the runtime lookup id.
                 // provider_tool_call_id 只规范化一次，并复用为运行时查找标识。
                 let provider_tool_call_id = normalized_optional_identifier(tool_call_id.as_deref());
@@ -222,7 +226,9 @@ impl<'a> RuntimeLogProjectionBuilder<'a> {
                     });
                 // status reflects an actual first match rather than mere identifier presence.
                 // status 反映真实的首次匹配，而不是仅凭标识存在性判断。
-                let status = if tool_batch_id.is_some() {
+                let status = if tool_batch_id.is_some() && *is_error {
+                    RuntimeToolResultStatus::Failed
+                } else if tool_batch_id.is_some() {
                     RuntimeToolResultStatus::Completed
                 } else {
                     RuntimeToolResultStatus::Orphan
@@ -235,7 +241,7 @@ impl<'a> RuntimeLogProjectionBuilder<'a> {
                     provider_tool_call_id,
                     text: text.clone(),
                     status,
-                    error: None,
+                    error: is_error.then(|| text.clone()),
                 }))?;
             }
             SessionConversationPayload::AgentMessage {

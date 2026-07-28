@@ -25,6 +25,7 @@ fn runtime_tool_result_conversation_state() -> vulcan_context::protocol::Session
                 id: String::from("message-result-1"),
                 payload: vulcan_context::protocol::SessionConversationPayload::ToolResult {
                     tool_call_id: Some(String::from("call-1")),
+                    is_error: false,
                     text: String::from("done"),
                 },
             },

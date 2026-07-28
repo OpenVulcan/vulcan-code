@@ -1,4 +1,13 @@
 import type {
+  PublicAiAccountUsage,
+  PublicAiConnectionAddRequest,
+  PublicAiConnectionUpdateRequest,
+  PublicAiModelOverrides,
+  PublicAiOAuthChallenge,
+  PublicAiOAuthCommitRequest,
+  PublicAiOAuthStartRequest,
+  PublicAiOAuthTransaction,
+  PublicAiSettingsSnapshot,
   ProviderModelSecondaryRouteSelection,
   ProviderModelSecondaryRouteSummary,
   WorkbenchSnapshot,
@@ -7,6 +16,114 @@ import {
   hasServiceRuntime,
   serviceClient,
 } from "@/service/webui-service-runtime";
+import { loadWorkbenchSnapshot } from "@/service/workbench-snapshot-service";
+
+// loadPublicAiSettings loads persisted connections and memory-only catalogs.
+// loadPublicAiSettings 加载持久化连接与仅内存目录。
+export async function loadPublicAiSettings(): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>("service_public_ai_settings_snapshot");
+}
+
+// startPublicAiOAuth starts one provider-declared browser authorization flow.
+// startPublicAiOAuth 启动一个供应商声明的浏览器授权流程。
+export async function startPublicAiOAuth(
+  request: PublicAiOAuthStartRequest,
+): Promise<PublicAiOAuthChallenge> {
+  return serviceClient.request<PublicAiOAuthChallenge>("service_start_public_ai_oauth", { request });
+}
+
+// getPublicAiOAuthStatus reads one process-local authorization transaction.
+// getPublicAiOAuthStatus 读取一个进程内授权事务。
+export async function getPublicAiOAuthStatus(transactionId: string): Promise<PublicAiOAuthTransaction> {
+  return serviceClient.request<PublicAiOAuthTransaction>("service_public_ai_oauth_status", {
+    transactionId,
+  });
+}
+
+// cancelPublicAiOAuth cancels one active browser authorization transaction.
+// cancelPublicAiOAuth 取消一个活动浏览器授权事务。
+export async function cancelPublicAiOAuth(transactionId: string): Promise<PublicAiOAuthTransaction> {
+  return serviceClient.request<PublicAiOAuthTransaction>("service_cancel_public_ai_oauth", {
+    transactionId,
+  });
+}
+
+// commitPublicAiOAuthConnection persists one successful authorization as a connection.
+// commitPublicAiOAuthConnection 将一个成功授权持久化为连接。
+export async function commitPublicAiOAuthConnection(
+  request: PublicAiOAuthCommitRequest,
+): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_commit_public_ai_oauth_connection",
+    { request },
+  );
+}
+
+// addPublicAiConnection securely saves and synchronizes one credential connection.
+// addPublicAiConnection 安全保存并同步一个凭据连接。
+export async function addPublicAiConnection(
+  request: PublicAiConnectionAddRequest,
+): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>("service_add_public_ai_connection", { request });
+}
+
+// updatePublicAiConnection updates one credential-scoped route.
+// updatePublicAiConnection 更新一个凭据作用域路由。
+export async function updatePublicAiConnection(
+  request: PublicAiConnectionUpdateRequest,
+): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>("service_update_public_ai_connection", { request });
+}
+
+// removePublicAiConnection removes one credential and its secure secret.
+// removePublicAiConnection 移除一个凭据及其安全秘密。
+export async function removePublicAiConnection(request: {
+  connectionId: string;
+  replacementDefaultConnectionId?: string;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>("service_remove_public_ai_connection", { request });
+}
+
+// syncPublicAiConnection refreshes one model catalog into memory.
+// syncPublicAiConnection 将一个模型目录刷新到内存。
+export async function syncPublicAiConnection(connectionId: string): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>("service_sync_public_ai_connection", { connectionId });
+}
+
+// queryPublicAiConnectionUsage queries one exact account without local persistence.
+// queryPublicAiConnectionUsage 查询一个精确账号且不本地持久化。
+export async function queryPublicAiConnectionUsage(connectionId: string): Promise<PublicAiAccountUsage> {
+  return serviceClient.request<PublicAiAccountUsage>("service_query_public_ai_connection_usage", { connectionId });
+}
+
+// selectPublicAiModel persists one exact model and account selection.
+// selectPublicAiModel 持久化一个精确模型与账号选择。
+export async function selectPublicAiModel(request: {
+  providerId: string;
+  modelId: string;
+  connectionId: string;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>("service_select_public_ai_model", { request });
+}
+
+// savePublicAiModelOverrides saves local model narrowing and registered parameters.
+// savePublicAiModelOverrides 保存本地模型收窄与注册参数。
+export async function savePublicAiModelOverrides(request: {
+  connectionId: string;
+  modelId: string;
+  overrides: PublicAiModelOverrides;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>("service_save_public_ai_model_overrides", { request });
+}
+
+// savePublicAiDefaultConnection changes the explicit initial account for one provider.
+// savePublicAiDefaultConnection 修改一个供应商的显式初始账号。
+export async function savePublicAiDefaultConnection(request: {
+  providerId: string;
+  connectionId: string;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>("service_save_public_ai_default_connection", { request });
+}
 
 // WorkbenchModelChoice carries the provider and model selected by the composer model picker.
 // WorkbenchModelChoice 承载输入区模型选择器选中的 Provider 与模型。
@@ -14,6 +131,9 @@ export interface WorkbenchModelChoice {
   // providerId identifies the selected provider configuration.
   // providerId 标识选中的 Provider 配置。
   providerId: string;
+  // connectionId identifies the exact credential account selected for this model.
+  // connectionId 标识为此模型选定的精确凭据账号。
+  connectionId: string;
   // modelId identifies the selected provider model.
   // modelId 标识选中的 Provider 模型。
   modelId: string;
@@ -25,10 +145,15 @@ export async function selectWorkbenchModel(choice: WorkbenchModelChoice): Promis
   if (!hasServiceRuntime()) {
     return null;
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_select_workbench_model", {
+  if (!choice.connectionId) {
+    throw new Error("The selected model does not identify a public AI credential connection.");
+  }
+  await selectPublicAiModel({
     providerId: choice.providerId,
     modelId: choice.modelId,
+    connectionId: choice.connectionId,
   });
+  return loadWorkbenchSnapshot();
 }
 
 // listWorkbenchModelSecondaryRoutes loads secondary route choices for one provider/model pair.
@@ -92,53 +217,6 @@ export async function selectWebuiLocale(locale: string): Promise<WorkbenchSnapsh
   return serviceClient.request<WorkbenchSnapshot>("service_select_webui_locale", { locale });
 }
 
-// saveProviderConfiguration persists one provider form through the desktop service.
-// saveProviderConfiguration 通过桌面服务持久化单个 Provider 表单。
-export async function saveProviderConfiguration(request: { providerId: string; fields: Record<string, string> }): Promise<WorkbenchSnapshot | null> {
-  if (!hasServiceRuntime()) {
-    return null;
-  }
-  return serviceClient.request<WorkbenchSnapshot>("service_save_provider_configuration", { request });
-}
-
-// removeProviderConfiguration removes one provider through the desktop service.
-// removeProviderConfiguration 通过桌面服务移除单个 Provider。
-export async function removeProviderConfiguration(providerId: string): Promise<WorkbenchSnapshot | null> {
-  if (!hasServiceRuntime()) {
-    return null;
-  }
-  return serviceClient.request<WorkbenchSnapshot>("service_remove_provider_configuration", { providerId });
-}
-
-// saveProviderEnabledModels persists one provider enabled-model list.
-// saveProviderEnabledModels 持久化单个 Provider 的启用模型列表。
-export async function saveProviderEnabledModels(request: { providerId: string; enabledModelIds: string[] }): Promise<WorkbenchSnapshot | null> {
-  if (!hasServiceRuntime()) {
-    return null;
-  }
-  return serviceClient.request<WorkbenchSnapshot>("service_save_provider_enabled_models", { request });
-}
-
-// saveProviderModelOverride persists one provider model capability override.
-// saveProviderModelOverride 持久化单个 Provider 模型能力覆盖。
-export async function saveProviderModelOverride(request: {
-  providerId: string;
-  modelId: string;
-  reasoning: boolean | null;
-  attachment: boolean | null;
-  contextLimit: number | null;
-  inputLimit: number | null;
-  outputLimit: number | null;
-  inputModalities: string[] | null;
-  outputModalities: string[] | null;
-  reasoningProfileJson: string | null;
-}): Promise<WorkbenchSnapshot | null> {
-  if (!hasServiceRuntime()) {
-    return null;
-  }
-  return serviceClient.request<WorkbenchSnapshot>("service_save_provider_model_override", { request });
-}
-
 // saveGitCommitSettings persists Git commit settings through the desktop service.
 // saveGitCommitSettings 通过桌面服务持久化 Git 提交设置。
 export async function saveGitCommitSettings(request: {
@@ -174,55 +252,6 @@ export async function saveProviderRetrySettings(request: {
     return null;
   }
   return serviceClient.request<WorkbenchSnapshot>("service_save_provider_retry_settings", { request });
-}
-
-// saveAiCapabilityVendor persists one shared AI capability vendor.
-// saveAiCapabilityVendor 持久化单个共享 AI 能力供应商。
-export async function saveAiCapabilityVendor(request: {
-  providerId?: never;
-  vendorId: string;
-  enabled: boolean;
-  apiKey: string;
-  baseUrl: string;
-  region: string;
-  connectionMode?: string | null;
-}): Promise<WorkbenchSnapshot | null> {
-  if (!hasServiceRuntime()) {
-    return null;
-  }
-  return serviceClient.request<WorkbenchSnapshot>("service_save_ai_capability_vendor", { request });
-}
-
-// removeAiCapabilityVendor removes one shared AI capability vendor.
-// removeAiCapabilityVendor 移除单个共享 AI 能力供应商。
-export async function removeAiCapabilityVendor(vendorId: string): Promise<WorkbenchSnapshot | null> {
-  if (!hasServiceRuntime()) {
-    return null;
-  }
-  return serviceClient.request<WorkbenchSnapshot>("service_remove_ai_capability_vendor", { vendorId });
-}
-
-// setAiCapabilityTargetEnabled persists one AI capability target enabled state.
-// setAiCapabilityTargetEnabled 持久化单个 AI 能力目标启用状态。
-export async function setAiCapabilityTargetEnabled(
-  request: { capabilityKind: string; vendorId: string; targetAlias: string; enabled: boolean },
-): Promise<WorkbenchSnapshot | null> {
-  if (!hasServiceRuntime()) {
-    return null;
-  }
-  return serviceClient.request<WorkbenchSnapshot>("service_set_ai_capability_target_enabled", { request });
-}
-
-// saveAiCapabilityTargets persists one ordered AI capability target list.
-// saveAiCapabilityTargets 持久化单个有序 AI 能力目标列表。
-export async function saveAiCapabilityTargets(request: {
-  capabilityKind: string;
-  targets: Array<{ vendorId: string; targetAlias: string; modelId: string; enabled: boolean }>;
-}): Promise<WorkbenchSnapshot | null> {
-  if (!hasServiceRuntime()) {
-    return null;
-  }
-  return serviceClient.request<WorkbenchSnapshot>("service_save_ai_capability_targets", { request });
 }
 
 // saveMcpServerConfiguration persists one MCP server through the desktop service.

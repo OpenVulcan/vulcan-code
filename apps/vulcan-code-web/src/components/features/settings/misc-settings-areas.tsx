@@ -180,7 +180,8 @@ function modelPickerChoiceExists(providers: WorkbenchSnapshot["providers"], valu
     return false
   }
   return providers.some((provider) => (provider.models ?? []).some((model) => modelPickerChoiceKey({
-    providerId: provider.id,
+    providerId: provider.sourceProviderId ?? provider.id,
+    connectionId: provider.connectionId ?? "",
     providerName: provider.name,
     modelId: model.id,
     modelName: model.name,

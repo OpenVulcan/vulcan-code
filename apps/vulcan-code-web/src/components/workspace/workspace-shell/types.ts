@@ -2,7 +2,6 @@ import type { ConversationDetailRef, ToolDetailPayload } from "@/components/conv
 import type { ConversationSessionCommitBusyState } from "@/components/conversation/session-todolist-panel";
 import type { ModelPickerChoice } from "@/components/composer/model-picker-control";
 import type {
-  ComposerAiCapabilityConfigurationSave,
   ComposerSlashCommandResult,
   ComposerSubmission,
 } from "@/components/composer/composer-model";
@@ -213,9 +212,6 @@ export interface WorkspaceShellProps {
   // Submits one composer prompt.
   // 提交一个输入区提示词。
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
-  // Persists one session-scoped AI capability draft.
-  // 持久化单个会话级 AI 能力草稿。
-  onSaveAiCapabilityConfiguration: (request: ComposerAiCapabilityConfigurationSave) => Promise<boolean>;
   // Persists one user-authored session goal.
   // 持久化单个用户编写的会话目标。
   onSaveSessionGoal: (objective: string, tokenBudget?: number | null) => Promise<boolean>;

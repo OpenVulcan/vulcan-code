@@ -3,8 +3,9 @@
 
 use serde::Deserialize;
 use vulcan_agent_runtime::provider_config::{
-    self, ProviderConfigurationFile, normalize_git_commit_new_branch_prefix,
+    ProviderConfigurationFile, normalize_git_commit_new_branch_prefix,
 };
+use vulcan_provider_adapters::{PersistedAiConfiguration, PublicAiRuntime};
 use vulcan_provider_config::config::GitCommitSummaryModelSelection;
 use vulcan_service_api::{
     GitCommitSettingsSummary, GitCommitSummaryModelSelectionSummary, ServiceEventEmitter,
@@ -45,11 +46,28 @@ pub(crate) async fn service_save_git_commit_settings(
     let normalized_prefix = normalize_git_commit_new_branch_prefix(&request.new_branch_prefix);
     let summary_model = persisted_git_commit_summary_model_selection(request.summary_model);
     let summary_extra_prompt = request.summary_extra_prompt.trim().to_string();
+    let (public_ai_runtime, public_ai_configuration) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let runtime = guard
+            .agent_runtime
+            .as_ref()
+            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?
+            .public_ai_runtime
+            .clone();
+        let configuration = runtime.configuration_snapshot()?;
+        (runtime, configuration)
+    };
+    validate_git_commit_summary_model_selection(
+        &summary_model,
+        &public_ai_runtime,
+        &public_ai_configuration,
+    )?;
     let workbench = mutate_provider_configuration(
         &state,
         "保存 Git 提交设置失败",
         |configuration| {
-            validate_git_commit_summary_model_selection(&summary_model, configuration)?;
             configuration.git_commit.new_branch_prefix = normalized_prefix;
             configuration.git_commit.summary_model = summary_model;
             configuration.git_commit.summary_extra_prompt = summary_extra_prompt;
@@ -57,7 +75,7 @@ pub(crate) async fn service_save_git_commit_settings(
             Ok(())
         },
         |guard, configuration| {
-            refresh_settings_projection_locked(guard, configuration, None);
+            refresh_settings_projection_locked(guard, configuration);
             guard.workbench.clone()
         },
     )
@@ -125,7 +143,8 @@ fn persisted_git_commit_summary_model_selection(
 /// 校验固定提交总结模型存在于当前生效模型列表中。
 fn validate_git_commit_summary_model_selection(
     selection: &GitCommitSummaryModelSelection,
-    provider_configuration: &ProviderConfigurationFile,
+    public_ai_runtime: &PublicAiRuntime,
+    public_ai_configuration: &PersistedAiConfiguration,
 ) -> Result<(), String> {
     match selection.normalized() {
         GitCommitSummaryModelSelection::Session => Ok(()),
@@ -133,10 +152,11 @@ fn validate_git_commit_summary_model_selection(
             provider_id,
             model_id,
         } => {
-            let exists =
-                provider_config::effective_model_choices(&provider_id, provider_configuration)
-                    .into_iter()
-                    .any(|model| model.id == model_id);
+            let exists = public_ai_runtime.model_is_available(
+                public_ai_configuration,
+                provider_id.as_str(),
+                model_id.as_str(),
+            )?;
             if exists {
                 Ok(())
             } else {
@@ -153,7 +173,8 @@ fn validate_git_commit_summary_model_selection(
 pub(crate) fn resolve_git_commit_summary_model(
     selection: &GitCommitSummaryModelSelection,
     runtime_state: &SessionRuntimeStateEntry,
-    provider_configuration: &ProviderConfigurationFile,
+    public_ai_runtime: &PublicAiRuntime,
+    public_ai_configuration: &PersistedAiConfiguration,
 ) -> Result<(String, String), String> {
     match selection.normalized() {
         GitCommitSummaryModelSelection::Session => {
@@ -165,7 +186,12 @@ pub(crate) fn resolve_git_commit_summary_model(
                 .active_model_id
                 .as_ref()
                 .ok_or_else(|| String::from("提交所属会话没有可用的当前模型。"))?;
-            validate_git_commit_summary_model_pair(provider_id, model_id, provider_configuration)?;
+            validate_git_commit_summary_model_pair(
+                provider_id,
+                model_id,
+                public_ai_runtime,
+                public_ai_configuration,
+            )?;
             Ok((provider_id.clone(), model_id.clone()))
         }
         GitCommitSummaryModelSelection::Fixed {
@@ -175,7 +201,8 @@ pub(crate) fn resolve_git_commit_summary_model(
             validate_git_commit_summary_model_pair(
                 &provider_id,
                 &model_id,
-                provider_configuration,
+                public_ai_runtime,
+                public_ai_configuration,
             )?;
             Ok((provider_id, model_id))
         }
@@ -187,11 +214,11 @@ pub(crate) fn resolve_git_commit_summary_model(
 fn validate_git_commit_summary_model_pair(
     provider_id: &str,
     model_id: &str,
-    provider_configuration: &ProviderConfigurationFile,
+    public_ai_runtime: &PublicAiRuntime,
+    public_ai_configuration: &PersistedAiConfiguration,
 ) -> Result<(), String> {
-    let exists = provider_config::effective_model_choices(provider_id, provider_configuration)
-        .into_iter()
-        .any(|model| model.id == model_id);
+    let exists =
+        public_ai_runtime.model_is_available(public_ai_configuration, provider_id, model_id)?;
     if exists {
         Ok(())
     } else {

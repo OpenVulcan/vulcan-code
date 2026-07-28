@@ -8,17 +8,10 @@ use super::*;
 pub(crate) fn context_compaction_budget_note_from_state(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
-    provider_configuration: &ProviderConfigurationFile,
-    ai_tool_configuration: &PersistedAiToolConfiguration,
 ) -> String {
-    context_compaction_budget_snapshot_from_state(
-        state,
-        session_id,
-        provider_configuration,
-        ai_tool_configuration,
-    )
-    .map(|budget| budget.summary_note())
-    .unwrap_or_else(|| String::from("当前未提供预算快照"))
+    context_compaction_budget_snapshot_from_state(state, session_id)
+        .map(|budget| budget.summary_note())
+        .unwrap_or_else(|| String::from("当前未提供预算快照"))
 }
 
 /// Returns the best available budget snapshot for compaction decisions.
@@ -30,11 +23,6 @@ pub(crate) fn context_compaction_budget_note_from_state(
 /// `state` 是包含实时与持久运行态快照的共享服务桥接状态。
 /// `session_id` identifies the session whose context budget should be read.
 /// `session_id` 标识需要读取上下文预算的会话。
-/// `provider_configuration` resolves model catalog limits when only historical usage exists.
-/// `provider_configuration` 在只有历史用量时解析模型目录限制。
-/// `ai_tool_configuration` resolves effective model capability overrides.
-/// `ai_tool_configuration` 解析生效模型能力覆盖。
-///
 /// # Returns
 /// # 返回值
 /// Returns the live snapshot enriched with the latest historical provider usage when available.
@@ -42,10 +30,8 @@ pub(crate) fn context_compaction_budget_note_from_state(
 pub(crate) fn context_compaction_budget_snapshot_from_state(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
-    provider_configuration: &ProviderConfigurationFile,
-    ai_tool_configuration: &PersistedAiToolConfiguration,
 ) -> Option<ContextBudgetSnapshot> {
-    let (live_budget, runtime_state) = state
+    let (live_budget, runtime_state, public_model_capabilities) = state
         .lock()
         .ok()
         .map(|guard| {
@@ -56,14 +42,19 @@ pub(crate) fn context_compaction_budget_snapshot_from_state(
                     .as_ref()
                     .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
                     .cloned(),
+                active_public_ai_model_capabilities(
+                    guard
+                        .agent_runtime
+                        .as_ref()
+                        .map(|runtime| runtime.public_ai_runtime.as_ref()),
+                ),
             )
         })
         .unwrap_or_default();
     let historical_budget = runtime_state.as_ref().and_then(|runtime_state| {
         historical_context_budget_snapshot_from_runtime_state(
             runtime_state,
-            provider_configuration,
-            ai_tool_configuration,
+            public_model_capabilities.as_ref(),
         )
     });
     live_budget

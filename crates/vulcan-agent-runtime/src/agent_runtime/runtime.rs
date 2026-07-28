@@ -127,6 +127,9 @@ pub struct RuntimeFoundation {
     /// Shared token budget runtime reused by context budget hot paths.
     /// 被上下文预算热路径复用的共享 Token 预算运行时。
     token_budget_runtime: Arc<TokenBudgetRuntime>,
+    /// Process-local public AI registries, catalogs, clients, and secure credential boundary.
+    /// 进程内公共 AI 注册表、目录、客户端与安全凭据边界。
+    public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
 }
 
 impl RuntimeFoundation {
@@ -347,7 +350,35 @@ impl RuntimeFoundation {
             question_runtime,
             command_session_runtime,
             token_budget_runtime,
+            public_ai_runtime: None,
         }
+    }
+
+    /// Installs the process-local public AI runtime before execution preparation.
+    /// 在执行准备前安装进程内公共 AI 运行时。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `runtime` is the service-owned state shared by metadata and execution flows.
+    /// `runtime` 是由服务持有并在元数据与执行流程间共享的状态。
+    pub(crate) fn install_public_ai_runtime(
+        &mut self,
+        runtime: Arc<vulcan_provider_adapters::PublicAiRuntime>,
+    ) {
+        self.public_ai_runtime = Some(runtime);
+    }
+
+    /// Returns the installed public AI runtime.
+    /// 返回已安装的公共 AI 运行时。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The exact shared runtime when the service installed it.
+    /// 返回服务已安装的精确共享运行时。
+    pub(crate) fn public_ai_runtime(
+        &self,
+    ) -> Option<Arc<vulcan_provider_adapters::PublicAiRuntime>> {
+        self.public_ai_runtime.clone()
     }
 
     /// Returns the current runtime summary for UI placeholder surfaces and diagnostics.

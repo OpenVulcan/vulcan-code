@@ -19,45 +19,6 @@ pub trait ContextTokenEstimator: Send + Sync {
     fn estimate_text_tokens(&self, model_id: &str, text: &str) -> Option<usize>;
 }
 
-/// Canonical provider API family used by context budget computation.
-/// 上下文预算计算使用的规范 Provider 接口族。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContextProviderApiFamily {
-    /// OpenAI Responses API family.
-    /// OpenAI Responses 接口族。
-    OpenAiResponses,
-    /// OpenAI Chat Completions compatible API family.
-    /// OpenAI Chat Completions 兼容接口族。
-    OpenAiChatCompatible,
-    /// Anthropic Messages API family.
-    /// Anthropic Messages 接口族。
-    AnthropicMessages,
-    /// Google Gemini GenerateContent API family.
-    /// Google Gemini GenerateContent 接口族。
-    GoogleGeminiGenerateContent,
-    /// Cohere Chat API family.
-    /// Cohere Chat 接口族。
-    CohereChat,
-    /// Reserved AWS Bedrock Converse API family.
-    /// 预留的 AWS Bedrock Converse 接口族。
-    BedrockConverse,
-}
-
-impl ContextProviderApiFamily {
-    /// Returns one stable API-family key used by fingerprints and diagnostics.
-    /// 返回供指纹与诊断使用的稳定接口族键值。
-    pub const fn key(self) -> &'static str {
-        match self {
-            Self::OpenAiResponses => "openai-responses",
-            Self::OpenAiChatCompatible => "openai-chat-compatible",
-            Self::AnthropicMessages => "anthropic-messages",
-            Self::GoogleGeminiGenerateContent => "google-gemini-generate-content",
-            Self::CohereChat => "cohere-chat",
-            Self::BedrockConverse => "bedrock-converse",
-        }
-    }
-}
-
 /// Coarse reasoning-effort bucket used by context-budget reserves.
 /// 上下文预算预留使用的粗粒度推理强度分桶。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,7 +162,7 @@ pub struct RequestContextBudgetSnapshotInput<'a> {
     pub model_id: &'a str,
     /// Canonical provider API family.
     /// 规范 Provider 接口族。
-    pub api_family: ContextProviderApiFamily,
+    pub protocol_profile_id: &'a str,
     /// Resolved provider/model capability snapshot.
     /// 已解析的 Provider/Model 能力快照。
     pub capabilities: &'a ContextBudgetCapabilities,
@@ -245,7 +206,7 @@ pub fn build_request_context_budget_snapshot_with_options(
     let RequestContextBudgetSnapshotInput {
         provider_id,
         model_id,
-        api_family,
+        protocol_profile_id,
         capabilities,
         reasoning,
         request_snapshot,
@@ -299,7 +260,7 @@ pub fn build_request_context_budget_snapshot_with_options(
         fingerprint: build_context_budget_fingerprint(
             provider_id,
             model_id,
-            api_family,
+            protocol_profile_id,
             capabilities,
             reasoning,
             request_snapshot.tool_schemas.len(),
@@ -371,7 +332,7 @@ pub fn apply_context_budget_anchor_baseline(
 pub fn build_context_budget_fingerprint(
     provider_id: &str,
     model_id: &str,
-    api_family: ContextProviderApiFamily,
+    protocol_profile_id: &str,
     capabilities: &ContextBudgetCapabilities,
     reasoning_effort: ContextReasoningEffort,
     visible_tool_count: usize,
@@ -406,7 +367,7 @@ pub fn build_context_budget_fingerprint(
         "{}|{}|{}|ctx={:?}|in={:?}|out={:?}|tool={}|temp={}|attach={}|reason={:?}|it={}|ot={}|tools={}|ai={}|compact={}",
         provider_id,
         model_id,
-        api_family.key(),
+        protocol_profile_id,
         capabilities.context_limit,
         capabilities.input_limit,
         capabilities.output_limit,

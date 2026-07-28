@@ -5,9 +5,7 @@ use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
 use crate::context_budget::{ContextBudgetSnapshot, ContextCompactionPolicy};
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
-use crate::provider_config::{
-    AiToolKind, AiToolPolicy, PersistedAiToolConfiguration, ReasoningEffortLevel,
-};
+use crate::provider_config::ReasoningEffortLevel;
 use crate::provider_config::{
     PersistedPromptConfiguration, PersistedPromptPersonalitySelection,
     ProjectPromptSkillsConfiguration,
@@ -200,6 +198,12 @@ pub struct ExecutionPreparationRequest {
     /// Optional request-scoped fixed agent prompt snapshot.
     /// 可选的请求级固定代理提示词快照。
     pub agent_prompt_snapshot: Option<ExecutionAgentPromptSnapshot>,
+    /// Optional request-scoped provider override resolved from a child-agent model selector.
+    /// 可选的请求级供应商覆盖，由子智能体模型选择器解析得到。
+    pub provider_id_override: Option<String>,
+    /// Optional request-scoped model override resolved from a child-agent model selector.
+    /// 可选的请求级模型覆盖，由子智能体模型选择器解析得到。
+    pub model_id_override: Option<String>,
     /// Optional child-agent prompt context routed through the shared prompt composer.
     /// 通过共享提示词组合器路由的可选子智能体提示词上下文。
     pub subagent_prompt_context: Option<ExecutionSubagentPromptContext>,
@@ -236,9 +240,6 @@ pub struct ExecutionPreparationRequest {
     /// Shared reasoning-effort preset selected by the current workbench run controls.
     /// 当前工作台运行控制区选择的共享推理档位预设。
     pub reasoning_effort: ReasoningEffortLevel,
-    /// Effective AI-tool configuration snapshot locked for the current run.
-    /// 为当前运行锁定的生效 AI 工具配置快照。
-    pub ai_tool_configuration: PersistedAiToolConfiguration,
     /// Request-scoped tool exposure override applied by the shared preparation bridge.
     /// 由共享准备桥应用的请求级工具可见性覆盖。
     pub tool_exposure_override: ToolExposureSnapshot,
@@ -590,14 +591,14 @@ impl ExecutionPreparation {
             ),
             format!(
                 "接口族：{} · family={}",
-                self.model_blueprint.api_family_label(),
-                self.model_blueprint.api_family_key()
+                self.model_blueprint.protocol_profile_label(),
+                self.model_blueprint.protocol_profile_key()
             ),
             format!("接口：{}", self.model_blueprint.endpoint_summary()),
             format!("凭据：{}", self.model_blueprint.credential_source),
             format!(
                 "生命周期：{}",
-                self.model_blueprint.capabilities.lifecycle_summary()
+                self.model_blueprint.public_capabilities.evidence_revision
             ),
             format!(
                 "模型发现：{}",
@@ -632,59 +633,34 @@ impl ExecutionPreparation {
             ),
             format!(
                 "模态：{} · attachment 声明 {}",
-                if self.model_blueprint.capabilities.is_text_only() {
+                if self
+                    .model_blueprint
+                    .public_capabilities
+                    .input_resources
+                    .is_empty()
+                {
                     String::from("text")
                 } else {
-                    self.model_blueprint.capabilities.input_modalities.join("/")
+                    self.model_blueprint
+                        .public_capabilities
+                        .input_resources
+                        .iter()
+                        .map(|kind| format!("{kind:?}").to_ascii_lowercase())
+                        .collect::<Vec<_>>()
+                        .join("/")
                 },
-                if self.model_blueprint.capabilities.supports_attachment {
+                if !self
+                    .model_blueprint
+                    .public_capabilities
+                    .input_resources
+                    .is_empty()
+                {
                     "已声明"
                 } else {
                     "未声明"
                 }
             ),
         ];
-        let mut ai_tool_routes = Vec::new();
-        if self
-            .model_blueprint
-            .capabilities
-            .supports_input_modality("image")
-        {
-            ai_tool_routes.push(String::from("understand_image(模型原生)"));
-        }
-        ai_tool_routes.extend(
-            self.model_blueprint
-                .capabilities
-                .ai_tools
-                .iter()
-                .filter(|tool| {
-                    !(tool.kind == AiToolKind::UnderstandImage
-                        && self
-                            .model_blueprint
-                            .capabilities
-                            .supports_input_modality("image"))
-                })
-                .map(|tool| {
-                    let route_label = if tool.policy == AiToolPolicy::Disabled {
-                        "禁用"
-                    } else if tool.native_provider_tool {
-                        "模型原生"
-                    } else if tool
-                        .host_tool_id
-                        .as_deref()
-                        .is_some_and(|value| !value.trim().is_empty())
-                    {
-                        "宿主工具"
-                    } else {
-                        "未解析"
-                    };
-                    format!("{}({route_label})", tool.kind.key())
-                }),
-        );
-        if !ai_tool_routes.is_empty() {
-            rows.push(format!("AI 扩展能力路由：{}", ai_tool_routes.join("、")));
-        }
-
         if let Some(context_budget) = self.context_budget.as_ref() {
             rows.push(format!("预算：{}", context_budget.summary_note()));
             rows.push(format!("预算指纹：{}", context_budget.fingerprint));

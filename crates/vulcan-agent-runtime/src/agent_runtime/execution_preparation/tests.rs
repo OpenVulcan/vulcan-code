@@ -1,7 +1,6 @@
 use super::prepare_execution_with_tool_snapshot;
 use super::tool_exposure::{
-    ExecutionToolExposureSelection, ToolExposureSelectorState,
-    ai_tool_configuration_for_execution_request, filter_luaskill_prompt_entries,
+    ExecutionToolExposureSelection, ToolExposureSelectorState, filter_luaskill_prompt_entries,
     filter_luaskills_entries, filter_native_tool_ids, filter_resolved_tool_set_by_tool_exposure,
     managed_codebase_memory_tool_is_visible, vulcan_tool_descriptor_is_visible,
 };
@@ -14,7 +13,6 @@ use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::conversation_protocol::SessionConversationState;
 use crate::mcp::configured_mcp_runtime_access;
 use crate::provider_config::{
-    AiToolKind, PersistedAiToolConfiguration, PersistedProviderEntry, PersistedProviderOptions,
     ProjectPromptSkillsConfiguration, ProviderConfigurationFile, ReasoningEffortLevel,
 };
 use crate::tooling::native::{
@@ -44,12 +42,7 @@ use vulcan_vmm::VmmConfigLayer;
 #[test]
 fn prepare_execution_uses_request_execution_agent_override() {
     let config = test_provider_config();
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
-        &config,
-        &AgentProfileCatalog::default(),
-        None,
-        Some(configured_mcp_runtime_access(&config)),
-    );
+    let foundation = test_runtime_foundation(&config);
     let mut request = test_execution_preparation_request();
     request.execution_agent_id = Some(String::from(PLAN_AGENT_ID));
 
@@ -68,12 +61,7 @@ fn prepare_execution_uses_request_execution_agent_override() {
 #[test]
 fn prepare_execution_rejects_missing_request_execution_agent() {
     let config = test_provider_config();
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
-        &config,
-        &AgentProfileCatalog::default(),
-        None,
-        Some(configured_mcp_runtime_access(&config)),
-    );
+    let foundation = test_runtime_foundation(&config);
     let mut request = test_execution_preparation_request();
     request.execution_agent_id = Some(String::from("missing-agent"));
 
@@ -91,12 +79,7 @@ fn prepare_execution_rejects_missing_request_execution_agent() {
 #[test]
 fn execution_prompt_skill_policy_blocks_unselected_global_skills() {
     let config = test_provider_config();
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
-        &config,
-        &AgentProfileCatalog::default(),
-        None,
-        Some(configured_mcp_runtime_access(&config)),
-    );
+    let foundation = test_runtime_foundation(&config);
     let mut request = test_execution_preparation_request();
     request.prompt_skill_policy_override = CapabilityPolicySnapshot {
         mode: CapabilityPolicyMode::AllowOnly,
@@ -211,12 +194,7 @@ fn execution_tool_exposure_keeps_universal_goal_and_todolist_tools() {
 #[test]
 fn request_hidden_tools_remove_universal_todolist_after_exposure() {
     let config = test_provider_config();
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
-        &config,
-        &AgentProfileCatalog::default(),
-        None,
-        Some(configured_mcp_runtime_access(&config)),
-    );
+    let foundation = test_runtime_foundation(&config);
     let mut request = test_execution_preparation_request();
     request.tool_exposure_override.allowed_tools = vec![String::from(TODOLIST_TOOL_ID)];
     request
@@ -346,39 +324,6 @@ fn execution_tool_exposure_isolates_managed_codebase_memory_from_mcp_overrides()
     ));
 }
 
-/// Verifies AI capability selectors narrow the effective AI-tool configuration before provider routing.
-/// 验证 AI 能力选择器会在 Provider 路由之前收窄生效 AI 工具配置。
-#[test]
-fn execution_tool_exposure_applies_ai_capability_allow_and_deny() {
-    let snapshot = ToolExposureSnapshot {
-        allowed_ai_capabilities: vec![String::from("image-generation"), String::from("web_search")],
-        disabled_ai_capabilities: vec![String::from("web search")],
-        ..ToolExposureSnapshot::default()
-    };
-    let selectors = ToolExposureSelectorState::from_snapshot(&snapshot);
-
-    let configuration = ai_tool_configuration_for_execution_request(
-        &PersistedAiToolConfiguration::default(),
-        &selectors,
-    );
-
-    assert!(
-        !configuration
-            .disabled_capability_kinds
-            .contains(&AiToolKind::ImageGeneration)
-    );
-    assert!(
-        configuration
-            .disabled_capability_kinds
-            .contains(&AiToolKind::WebSearch)
-    );
-    assert!(
-        configuration
-            .disabled_capability_kinds
-            .contains(&AiToolKind::MusicGeneration)
-    );
-}
-
 /// Verifies legacy global tool allow-lists do not hide configured AI fallback tools.
 /// 验证旧版全局工具白名单不会隐藏已配置的 AI 回退工具。
 #[test]
@@ -445,7 +390,6 @@ fn execution_tool_exposure_keeps_luaskills_dispatcher_with_family_allow() {
             "codekit search",
         )],
         mcp_tools: Vec::new(),
-        ai_tool_configuration: PersistedAiToolConfiguration::default(),
         selectors,
     };
 
@@ -473,12 +417,7 @@ fn execution_tool_exposure_keeps_luaskills_dispatcher_with_family_allow() {
 #[test]
 fn prepare_execution_captures_matching_tool_descriptor_and_definition_snapshot() {
     let config = test_provider_config();
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
-        &config,
-        &AgentProfileCatalog::default(),
-        None,
-        Some(configured_mcp_runtime_access(&config)),
-    );
+    let foundation = test_runtime_foundation(&config);
     let request = test_execution_preparation_request();
 
     let prepared = prepare_execution_with_tool_snapshot(&foundation, None, &config, &request)
@@ -508,12 +447,7 @@ fn prepare_execution_captures_matching_tool_descriptor_and_definition_snapshot()
 #[test]
 fn prepare_execution_hides_knowledge_tools_without_effective_access() {
     let config = test_provider_config();
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
-        &config,
-        &AgentProfileCatalog::default(),
-        None,
-        Some(configured_mcp_runtime_access(&config)),
-    );
+    let foundation = test_runtime_foundation(&config);
     let request = test_execution_preparation_request();
 
     let prepared = prepare_execution_with_tool_snapshot(&foundation, None, &config, &request)
@@ -535,12 +469,7 @@ fn prepare_execution_hides_knowledge_tools_without_effective_access() {
 #[test]
 fn prepare_execution_exposes_knowledge_tools_for_effective_access() {
     let config = test_provider_config();
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
-        &config,
-        &AgentProfileCatalog::default(),
-        None,
-        Some(configured_mcp_runtime_access(&config)),
-    );
+    let foundation = test_runtime_foundation(&config);
     let mut request = test_execution_preparation_request();
     request.knowledge_access = Some(ExecutionKnowledgeAccessContext {
         project_id: String::from("project-a"),
@@ -566,12 +495,7 @@ fn prepare_execution_exposes_knowledge_tools_for_effective_access() {
 #[test]
 fn prepare_execution_hides_tools_for_context_compaction_purpose() {
     let config = test_provider_config();
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
-        &config,
-        &AgentProfileCatalog::default(),
-        None,
-        Some(configured_mcp_runtime_access(&config)),
-    );
+    let foundation = test_runtime_foundation(&config);
     let mut request = test_execution_preparation_request();
     request.prompt_purpose = ExecutionPromptPurpose::ContextCompaction;
     request.runtime_policy = ExecutionRuntimePolicy::context_compaction();
@@ -592,12 +516,7 @@ fn prepare_execution_hides_tools_for_context_compaction_purpose() {
 #[test]
 fn prepare_execution_keeps_tools_for_cache_preserving_context_compaction_purpose() {
     let config = test_provider_config();
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
-        &config,
-        &AgentProfileCatalog::default(),
-        None,
-        Some(configured_mcp_runtime_access(&config)),
-    );
+    let foundation = test_runtime_foundation(&config);
     let mut request = test_execution_preparation_request();
     request.prompt_purpose = ExecutionPromptPurpose::ContextCompactionCachePreserving;
     request.runtime_policy = ExecutionRuntimePolicy::context_compaction();
@@ -624,12 +543,7 @@ fn prepare_execution_keeps_tools_for_cache_preserving_context_compaction_purpose
 #[test]
 fn prepare_execution_clears_side_effect_inputs_for_task_session_policy() {
     let config = test_provider_config();
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
-        &config,
-        &AgentProfileCatalog::default(),
-        None,
-        Some(configured_mcp_runtime_access(&config)),
-    );
+    let foundation = test_runtime_foundation(&config);
     let mut request = test_execution_preparation_request();
     request.runtime_policy = ExecutionRuntimePolicy::task_session();
     request.execution_scope = ExecutionScope::TaskSession {
@@ -670,23 +584,62 @@ fn prepare_execution_clears_side_effect_inputs_for_task_session_policy() {
 /// Builds one provider configuration that can resolve a provider blueprint without touching the network.
 /// 构建一份无需访问网络即可解析 Provider 蓝图的供应商配置。
 fn test_provider_config() -> ProviderConfigurationFile {
-    let mut provider = BTreeMap::new();
-    provider.insert(
-        String::from("deepseek"),
-        PersistedProviderEntry {
-            name: Some(String::from("DeepSeek")),
-            options: PersistedProviderOptions {
-                api_key: Some(String::from("test-key")),
-                ..PersistedProviderOptions::default()
-            },
-            ..PersistedProviderEntry::default()
+    ProviderConfigurationFile::default()
+}
+
+/// Builds a runtime foundation with one explicit public-AI route and in-memory model catalog.
+/// 构建带有一条显式公共 AI 路由与内存模型目录的运行时基础。
+fn test_runtime_foundation(config: &ProviderConfigurationFile) -> RuntimeFoundation {
+    let mut foundation = RuntimeFoundation::build_from_optional_mcp_access(
+        config,
+        &AgentProfileCatalog::default(),
+        None,
+        Some(configured_mcp_runtime_access(config)),
+    );
+    let runtime = vulcan_provider_adapters::PublicAiRuntime::unavailable()
+        .expect("test public AI runtime should initialize");
+    let connection_id = String::from("test-openrouter");
+    let mut public_configuration = vulcan_provider_adapters::PersistedAiConfiguration {
+        active: Some(vulcan_provider_adapters::ActiveAiModelSelection {
+            provider_id: String::from("openrouter"),
+            model_id: String::from("vendor/model"),
+            connection_id: connection_id.clone(),
+        }),
+        ..vulcan_provider_adapters::PersistedAiConfiguration::default()
+    };
+    public_configuration.connection_graph.connections.insert(
+        connection_id.clone(),
+        vulcan_provider_adapters::CredentialConnection {
+            id: connection_id.clone(),
+            provider_id: String::from("openrouter"),
+            service_entry_id: String::from("public-api"),
+            credential_profile_id: String::from("api-key"),
+            credential_mode: vulcan_provider_adapters::CredentialMode::Token,
+            credential_id: String::from("credential-a"),
+            display_name: String::from("Account A"),
+            secret_reference: String::from("secret-a"),
+            verified_protocols: std::collections::BTreeSet::from([String::from(
+                vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+            )]),
+            selected_protocol: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+            prompt_cache_by_protocol: BTreeMap::new(),
         },
     );
-    ProviderConfigurationFile {
-        model: Some(String::from("deepseek/deepseek-v4-pro")),
-        provider,
-        ..ProviderConfigurationFile::default()
-    }
+    runtime
+        .replace_configuration(public_configuration)
+        .expect("test public AI configuration should install");
+    runtime
+        .replace_catalog(
+            vulcan_provider_adapters::parse_openrouter_model_catalog(
+                connection_id.as_str(),
+                1,
+                r#"{"data":[{"id":"vendor/model","name":"Model","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}}]}"#,
+            )
+            .expect("test public AI model catalog should parse"),
+        )
+        .expect("test public AI model catalog should install");
+    foundation.install_public_ai_runtime(Arc::new(runtime));
+    foundation
 }
 
 /// Builds one minimal LuaSkills runtime entry descriptor for selector tests.
@@ -717,7 +670,6 @@ fn test_exposure_with_selectors(
         luaskills_dispatch_tools: Vec::new(),
         luaskill_prompt_entries: Vec::new(),
         mcp_tools: Vec::new(),
-        ai_tool_configuration: PersistedAiToolConfiguration::default(),
         selectors,
     }
 }
@@ -756,6 +708,8 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         conversation_hook_turn_id: Some(String::from("test-hook-turn")),
         execution_agent_id: None,
         agent_prompt_snapshot: None,
+        provider_id_override: None,
+        model_id_override: None,
         subagent_prompt_context: None,
         task_session_store_root: None,
         session_title: String::from("测试会话"),
@@ -768,7 +722,6 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         execution_mode: String::from("Build"),
         temperature: None,
         reasoning_effort: ReasoningEffortLevel::Off,
-        ai_tool_configuration: PersistedAiToolConfiguration::default(),
         tool_exposure_override: Default::default(),
         tool_request_rejection_reason: None,
         tool_request_rejection_all_tools: false,

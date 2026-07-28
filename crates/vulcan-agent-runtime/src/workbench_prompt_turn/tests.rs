@@ -1,11 +1,7 @@
 //! Tests for shared prompt-turn routing decisions.
 //! 共享提示词回合路由决策测试。
 
-use std::collections::{BTreeMap, BTreeSet};
-
-use vulcan_provider_config::config::{
-    PersistedAiToolConfiguration, ProjectVulcanCodeConfigurationFile,
-};
+use vulcan_provider_config::config::ProjectVulcanCodeConfigurationFile;
 use vulcan_session_boundary::{SessionBoundaryEventKind, SessionEventVisibility};
 use vulcan_vmm::{ContextItem, VmmPromptAnchorKind, VmmRecallBatch, VmmSessionMemoryState};
 use vulcan_workbench_model::{
@@ -138,7 +134,6 @@ fn typed_vmm_recall_targets_visible_canonical_user_message() {
             start,
             precheck_outcome,
             profile_outcome,
-            ai_tool_configuration: PersistedAiToolConfiguration::default(),
             project_configuration: ProjectVulcanCodeConfigurationFile::default(),
             runtime_reasoning_effort: None,
             provider_reasoning_effort: None,
@@ -198,9 +193,6 @@ fn begin_user_prompt(runtime_state: &mut SessionRuntimeStateEntry) -> SharedProm
             source: PendingSessionPromptSource::UserFollowup,
             execution_mode: String::from("Build"),
             reasoning_effort: None,
-            disabled_ai_capability_kinds: BTreeSet::new(),
-            disabled_ai_capability_target_selectors: BTreeSet::new(),
-            ai_capability_target_bindings: BTreeMap::new(),
             owning_project_id: Some(String::from("project-a")),
             prior_session_messages: None,
         },
@@ -261,9 +253,6 @@ fn session_mailbox_begin_keeps_user_input_hidden_even_if_visibility_flag_is_true
             source: PendingSessionPromptSource::SessionMailbox,
             execution_mode: String::from("Build"),
             reasoning_effort: None,
-            disabled_ai_capability_kinds: BTreeSet::new(),
-            disabled_ai_capability_target_selectors: BTreeSet::new(),
-            ai_capability_target_bindings: BTreeMap::new(),
             owning_project_id: Some(String::from("project-a")),
             prior_session_messages: None,
         },
@@ -309,9 +298,6 @@ fn goal_continuation_begin_never_persists_user_message() {
             source: PendingSessionPromptSource::GoalContinuation,
             execution_mode: String::from("Build"),
             reasoning_effort: None,
-            disabled_ai_capability_kinds: BTreeSet::new(),
-            disabled_ai_capability_target_selectors: BTreeSet::new(),
-            ai_capability_target_bindings: BTreeMap::new(),
             owning_project_id: Some(String::from("project-a")),
             prior_session_messages: None,
         },
@@ -365,9 +351,6 @@ fn goal_continuation_reuses_persisted_vmm_profile_baseline() {
             source: PendingSessionPromptSource::GoalContinuation,
             execution_mode: String::from("Build"),
             reasoning_effort: None,
-            disabled_ai_capability_kinds: BTreeSet::new(),
-            disabled_ai_capability_target_selectors: BTreeSet::new(),
-            ai_capability_target_bindings: BTreeMap::new(),
             owning_project_id: Some(String::from("project-a")),
             prior_session_messages: None,
         },
@@ -391,7 +374,6 @@ fn goal_continuation_reuses_persisted_vmm_profile_baseline() {
             start,
             precheck_outcome,
             profile_outcome,
-            ai_tool_configuration: PersistedAiToolConfiguration::default(),
             project_configuration: ProjectVulcanCodeConfigurationFile::default(),
             runtime_reasoning_effort: None,
             provider_reasoning_effort: None,
@@ -477,7 +459,6 @@ fn precheck_cannot_own_vmm_profile_state_or_system_block() {
             start,
             precheck_outcome,
             profile_outcome,
-            ai_tool_configuration: PersistedAiToolConfiguration::default(),
             project_configuration: ProjectVulcanCodeConfigurationFile::default(),
             runtime_reasoning_effort: None,
             provider_reasoning_effort: None,
@@ -530,9 +511,6 @@ fn hidden_model_guidance_stays_out_of_visible_transcript() {
             source: PendingSessionPromptSource::UserFollowup,
             execution_mode: String::from("Build"),
             reasoning_effort: None,
-            disabled_ai_capability_kinds: BTreeSet::new(),
-            disabled_ai_capability_target_selectors: BTreeSet::new(),
-            ai_capability_target_bindings: BTreeMap::new(),
             owning_project_id: Some(String::from("project-a")),
             prior_session_messages: None,
         },
@@ -555,7 +533,6 @@ fn hidden_model_guidance_stays_out_of_visible_transcript() {
             start,
             precheck_outcome,
             profile_outcome,
-            ai_tool_configuration: PersistedAiToolConfiguration::default(),
             project_configuration: ProjectVulcanCodeConfigurationFile::default(),
             runtime_reasoning_effort: None,
             provider_reasoning_effort: None,
@@ -653,7 +630,6 @@ fn precheck_failure_preserves_expired_vmm_resident_and_registers_terminal_turn()
             start,
             precheck_outcome,
             profile_outcome,
-            ai_tool_configuration: PersistedAiToolConfiguration::default(),
             project_configuration: ProjectVulcanCodeConfigurationFile::default(),
             runtime_reasoning_effort: None,
             provider_reasoning_effort: None,
@@ -728,9 +704,6 @@ fn begin_prompt_keeps_runtime_messages_when_records_are_empty() {
             source: PendingSessionPromptSource::UserFollowup,
             execution_mode: String::from("Build"),
             reasoning_effort: None,
-            disabled_ai_capability_kinds: BTreeSet::new(),
-            disabled_ai_capability_target_selectors: BTreeSet::new(),
-            ai_capability_target_bindings: BTreeMap::new(),
             owning_project_id: Some(String::from("project-a")),
             prior_session_messages: Some(&display_rows),
         },
@@ -794,9 +767,6 @@ fn begin_prompt_rejects_invalid_hydration_atomically() {
             source: PendingSessionPromptSource::UserFollowup,
             execution_mode: String::from("Build"),
             reasoning_effort: None,
-            disabled_ai_capability_kinds: BTreeSet::new(),
-            disabled_ai_capability_target_selectors: BTreeSet::new(),
-            ai_capability_target_bindings: BTreeMap::new(),
             owning_project_id: Some(String::from("project-a")),
             prior_session_messages: Some(&display_rows),
         },

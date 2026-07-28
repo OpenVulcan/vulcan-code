@@ -97,9 +97,6 @@ pub(super) async fn dispatch(
                 rpc_optional_param(params, "executionMode")?,
                 rpc_optional_param(params, "reasoningEffort")?,
                 rpc_optional_param(params, "attachments")?,
-                rpc_optional_param(params, "disabledAiCapabilityKinds")?,
-                rpc_optional_param(params, "disabledAiCapabilityTargetSelectors")?,
-                rpc_optional_param(params, "aiCapabilityTargetBindings")?,
                 None,
                 ExistingSessionHydrationPolicy::HydrateIfEmpty,
             )

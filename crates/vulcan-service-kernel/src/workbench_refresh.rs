@@ -32,9 +32,9 @@ pub(crate) struct WorkbenchRuntimeProjection<'a> {
     /// Provider configuration that drives model, settings, and capability projection.
     /// 驱动模型、设置与能力投影的 Provider 配置。
     pub(crate) provider_configuration: &'a ProviderConfigurationFile,
-    /// Default AI tool configuration used when the selected session has no override.
-    /// 当前会话没有覆盖配置时使用的默认 AI 工具配置。
-    pub(crate) ai_tool_configuration: &'a PersistedAiToolConfiguration,
+    /// Optional process-local public AI runtime that owns the live model catalogs.
+    /// 持有实时模型目录的可选进程内公共 AI 运行时。
+    pub(crate) public_ai_runtime: Option<&'a vulcan_provider_adapters::PublicAiRuntime>,
     /// Canonical workspace snapshot being projected.
     /// 正在投影的规范工作区快照。
     pub(crate) workspace: &'a vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
@@ -98,7 +98,6 @@ async fn refresh_workbench_snapshot_with_selected_session(
         logs,
         preserved_workspace_run_state,
         provider_configuration,
-        ai_tool_configuration,
         live_context_budgets,
         agent_runtime_for_status,
         live_listener_task_ids,
@@ -127,11 +126,6 @@ async fn refresh_workbench_snapshot_with_selected_session(
             .as_ref()
             .map(|runtime| runtime.provider_configuration.clone())
             .unwrap_or_default();
-        let ai_tool_configuration = guard
-            .agent_runtime
-            .as_ref()
-            .map(|runtime| runtime.ai_tool_configuration.clone())
-            .unwrap_or_default();
         let live_context_budgets = guard.live_context_budgets.clone();
         // captured_workbench_generation identifies whether a focused domain committed during asynchronous refresh I/O.
         // captured_workbench_generation 标识异步刷新 I/O 期间是否已有聚焦领域完成提交。
@@ -144,7 +138,6 @@ async fn refresh_workbench_snapshot_with_selected_session(
             logs,
             preserved_workspace_run_state,
             provider_configuration,
-            ai_tool_configuration,
             live_context_budgets,
             guard.agent_runtime.clone(),
             guard
@@ -269,7 +262,9 @@ async fn refresh_workbench_snapshot_with_selected_session(
         token_budget_runtime: &token_budget_runtime,
         mcp_catalog: &mcp_catalog,
         provider_configuration: &provider_configuration,
-        ai_tool_configuration: &ai_tool_configuration,
+        public_ai_runtime: agent_runtime_for_status
+            .as_ref()
+            .map(|runtime| runtime.public_ai_runtime.as_ref()),
         workspace: &refreshed_snapshot,
         vmm_session_states: &vmm_session_states,
         surface_messages: surface_messages.as_slice(),
@@ -784,7 +779,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         token_budget_runtime,
         mcp_catalog,
         provider_configuration,
-        ai_tool_configuration,
+        public_ai_runtime,
         workspace,
         vmm_session_states,
         surface_messages,
@@ -796,6 +791,14 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         hydrated_conversation_windows,
         native_tools,
     } = input;
+    let public_ai_configuration =
+        public_ai_runtime.and_then(|runtime| runtime.configuration_snapshot().ok());
+    let public_ai_selection = public_ai_runtime
+        .zip(public_ai_configuration.as_ref())
+        .and_then(|(runtime, configuration)| runtime.resolve_active_selection(configuration).ok());
+    let public_ai_model_selectors = public_ai_runtime
+        .zip(public_ai_configuration.as_ref())
+        .and_then(|(runtime, configuration)| runtime.available_model_selectors(configuration).ok());
     let selected_conversation_id =
         selected_workspace_session_id(workspace).map(|session_id| session_id.to_string());
     let pending_question = selected_conversation_id
@@ -832,11 +835,6 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
     let selected_vmm_session_state = vmm_session_states.get(&workspace.selected_session);
     let selected_session_vmm_project_layer = selected_workspace_session(workspace)
         .and_then(|session| cached_project_vmm_layer_for_session(workspace, session));
-    let selected_ai_tool_configuration = selected_runtime_state
-        .and_then(|runtime_state| runtime_state.ai_tool_configuration.as_ref())
-        .unwrap_or(ai_tool_configuration);
-    let ai_capability_model_capabilities =
-        active_provider_configuration_model_capabilities(provider_configuration);
     let restorable_project_ids = workspace_task_projects_including_archived(workspace)
         .map(|project| project.id.as_str())
         .collect::<BTreeSet<_>>();
@@ -1018,31 +1016,32 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
             input.vulcan_plugin_catalog,
         ),
         subagent_catalog: subagent_catalog_summary(
-            provider_configuration,
+            public_ai_model_selectors.as_ref(),
             input.vulcan_plugin_catalog,
         ),
         settings: settings(),
-        providers: providers(provider_configuration),
+        providers: public_ai_runtime
+            .zip(public_ai_configuration.as_ref())
+            .and_then(|(runtime, configuration)| {
+                public_ai_provider_rows(configuration, runtime).ok()
+            })
+            .unwrap_or_default(),
         mcp_servers: mcp_servers(provider_configuration),
         mcp_tools: mcp_tools(mcp_catalog),
-        reasoning_selection: reasoning_selection(provider_configuration),
+        reasoning_selection: reasoning_selection(
+            provider_configuration,
+            public_ai_selection
+                .as_ref()
+                .map(|selection| &selection.model.capabilities),
+        ),
         thinking_display_mode: workbench_thinking_display_mode(provider_configuration),
         git_commit: git_commit_settings(provider_configuration),
         provider_retry: provider_retry_settings(provider_configuration),
         host_tools: host_tools_settings_with_native_tools(provider_configuration, native_tools),
-        ai_capabilities: ai_capabilities(
-            selected_ai_tool_configuration,
-            ai_capability_model_capabilities.as_ref(),
-        ),
-        default_ai_capabilities: ai_capabilities(
-            ai_tool_configuration,
-            ai_capability_model_capabilities.as_ref(),
-        ),
-        ai_capability_vendors: ai_capability_vendors(selected_ai_tool_configuration),
-        ai_capability_vendor_catalog: ai_capability_vendor_catalog(),
         composer_attachment_capabilities: composer_attachment_capabilities(
-            provider_configuration,
-            selected_ai_tool_configuration,
+            public_ai_selection
+                .as_ref()
+                .map(|selection| &selection.model.capabilities),
         ),
         composer_slash_commands: vulcan_service_api::composer_slash_command_catalog(),
         pending_prompts: selected_runtime_state
@@ -1094,8 +1093,9 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
             workspace.selected_session,
             selected_runtime_state,
             live_context_budgets,
-            provider_configuration,
-            ai_tool_configuration,
+            public_ai_selection
+                .as_ref()
+                .map(|selection| &selection.model.capabilities),
         ),
     }
 }

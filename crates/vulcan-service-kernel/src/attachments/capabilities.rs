@@ -3,41 +3,38 @@
 
 use super::*;
 
-/// Creates composer attachment gates using the same capability resolver as runtime execution.
-/// 使用与运行时执行相同的能力解析器创建输入区附件门控。
+/// Creates composer attachment gates from the exact active public-model snapshot.
+/// 根据精确的当前公共模型快照创建输入区附件门控。
 ///
 /// # Parameters
 /// 参数
-/// `provider_configuration` contains the active model and provider settings.
-/// `provider_configuration` 包含当前模型与 Provider 设置。
-/// `ai_tool_configuration` contains the persisted AI tool bridge configuration.
-/// `ai_tool_configuration` 包含持久化 AI 工具桥接配置。
+/// `capabilities` is the credential-scoped model capability snapshot resolved by the public runtime.
+/// `capabilities` 是公共运行时解析的凭据作用域模型能力快照。
 ///
 /// # Returns
 /// 返回值
 /// Attachment capability summaries for the composer controls.
 /// 输入区控件使用的附件能力摘要。
 pub(crate) fn composer_attachment_capabilities(
-    provider_configuration: &ProviderConfigurationFile,
-    ai_tool_configuration: &PersistedAiToolConfiguration,
+    capabilities: Option<&vulcan_ai_contract::ModelCapabilities>,
 ) -> Vec<ComposerAttachmentCapabilitySummary> {
-    let capabilities =
-        active_workbench_model_capabilities(provider_configuration, ai_tool_configuration);
     composer_attachment_kinds()
         .into_iter()
         .map(|kind| {
+            let resource_kind = match &kind {
+                ConversationAttachmentKind::Image => vulcan_ai_contract::ResourceKind::Image,
+                ConversationAttachmentKind::Audio => vulcan_ai_contract::ResourceKind::Audio,
+                ConversationAttachmentKind::Video => vulcan_ai_contract::ResourceKind::Video,
+                ConversationAttachmentKind::Pdf => vulcan_ai_contract::ResourceKind::File,
+            };
             let native = capabilities
-                .as_ref()
-                .is_some_and(|capabilities| capabilities.supports_attachment_kind(kind.clone()));
-            let enabled = capabilities.as_ref().is_some_and(|capabilities| {
-                capabilities.allows_staged_attachment_kind(kind.clone())
-            });
+                .is_some_and(|capabilities| capabilities.input_resources.contains(&resource_kind));
             ComposerAttachmentCapabilitySummary {
                 kind: kind.modality_name().to_string(),
                 label: composer_attachment_kind_label(&kind).to_string(),
-                enabled,
+                enabled: native,
                 native,
-                bridged: enabled && !native,
+                bridged: false,
                 accept: composer_attachment_kind_accept(&kind).to_string(),
             }
         })

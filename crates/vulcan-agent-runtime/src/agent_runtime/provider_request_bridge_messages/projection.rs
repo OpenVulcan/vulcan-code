@@ -12,12 +12,12 @@ pub(crate) fn core_messages_to_provider_visible_history(
 /// 使用接口族与模型模态投影将规范 core 消息转换为 Provider 可见历史。
 pub(crate) fn core_messages_to_provider_visible_history_for_model(
     messages: &[CoreConversationMessage],
-    api_family: Option<ProviderApiFamily>,
-    capabilities: Option<&ResolvedModelCapabilities>,
+    protocol_profile_id: Option<&str>,
+    capabilities: Option<&ModelCapabilities>,
 ) -> Vec<CoreConversationMessage> {
     core_messages_to_provider_visible_history_for_model_with_system_updates(
         messages,
-        api_family,
+        protocol_profile_id,
         capabilities,
         &[],
         ProviderSystemUpdateLoweringPolicy::default(),
@@ -29,14 +29,14 @@ pub(crate) fn core_messages_to_provider_visible_history_for_model(
 /// 将规范 core 消息与时间顺序 system update 一起转换为 Provider 可见历史。
 pub(crate) fn core_messages_to_provider_visible_history_for_model_with_system_updates(
     messages: &[CoreConversationMessage],
-    api_family: Option<ProviderApiFamily>,
-    capabilities: Option<&ResolvedModelCapabilities>,
+    protocol_profile_id: Option<&str>,
+    capabilities: Option<&ModelCapabilities>,
     system_updates: &[RuntimeSystemUpdateEvent],
     system_update_policy: ProviderSystemUpdateLoweringPolicy,
 ) -> Result<Vec<CoreConversationMessage>, String> {
     let mut projected = project_core_messages_to_provider_visible_history_for_model(
         messages,
-        api_family,
+        protocol_profile_id,
         capabilities,
     );
     apply_provider_visible_system_updates(&mut projected, system_updates, system_update_policy)?;
@@ -51,8 +51,8 @@ pub(crate) fn core_messages_to_provider_visible_history_for_model_with_system_up
 /// 在应用 runtime system-update 覆盖之前，将规范消息投影为 Provider 可见历史。
 fn project_core_messages_to_provider_visible_history_for_model(
     messages: &[CoreConversationMessage],
-    api_family: Option<ProviderApiFamily>,
-    capabilities: Option<&ResolvedModelCapabilities>,
+    protocol_profile_id: Option<&str>,
+    capabilities: Option<&ModelCapabilities>,
 ) -> Vec<CoreConversationMessage> {
     let mut projected = Vec::with_capacity(messages.len());
     let mut index = 0usize;
@@ -66,7 +66,7 @@ fn project_core_messages_to_provider_visible_history_for_model(
                     payload: normalized_user_text_payload(
                         text,
                         attachments,
-                        api_family,
+                        protocol_profile_id,
                         capabilities,
                     ),
                 });
@@ -430,13 +430,13 @@ fn is_legacy_explore_assistant_projection(
 fn normalized_user_text_payload(
     text: &str,
     attachments: &[vulcan_core::types::ConversationAttachment],
-    api_family: Option<ProviderApiFamily>,
-    capabilities: Option<&ResolvedModelCapabilities>,
+    protocol_profile_id: Option<&str>,
+    capabilities: Option<&ModelCapabilities>,
 ) -> CoreConversationPayload {
-    match api_family {
-        Some(api_family) => {
+    match protocol_profile_id {
+        Some(protocol_profile_id) => {
             let normalized = normalize_provider_user_input_for_model(
-                api_family,
+                protocol_profile_id,
                 capabilities,
                 text,
                 attachments,
@@ -481,13 +481,19 @@ fn project_tool_result_message(
     message: &CoreConversationMessage,
     active_tool_call_ids: &mut BTreeSet<String>,
 ) -> CoreConversationMessage {
-    let CoreConversationPayload::ToolResult { tool_call_id, text } = &message.payload else {
+    let CoreConversationPayload::ToolResult {
+        tool_call_id,
+        is_error,
+        text,
+    } = &message.payload
+    else {
         return message.clone();
     };
     let tool_call_key = tool_call_id.as_deref().unwrap_or_default().trim();
     let payload = if !tool_call_key.is_empty() && active_tool_call_ids.remove(tool_call_key) {
         CoreConversationPayload::ToolResult {
             tool_call_id: tool_call_id.clone(),
+            is_error: *is_error,
             text: text.clone(),
         }
     } else {
@@ -607,8 +613,11 @@ fn partial_tool_batch_text(
     if !result_messages.is_empty() {
         lines.push(String::from("Completed tool results:"));
         for result_message in result_messages {
-            if let CoreConversationPayload::ToolResult { tool_call_id, text } =
-                &result_message.payload
+            if let CoreConversationPayload::ToolResult {
+                tool_call_id,
+                is_error,
+                text,
+            } = &result_message.payload
             {
                 let call_label = tool_call_id
                     .as_deref()
@@ -616,9 +625,10 @@ fn partial_tool_batch_text(
                     .filter(|value| !value.is_empty())
                     .unwrap_or("unknown");
                 lines.push(format!(
-                    "- message={} call={}: {}",
+                    "- message={} call={} error={}: {}",
                     result_message.id,
                     call_label,
+                    is_error,
                     text.trim()
                 ));
             }

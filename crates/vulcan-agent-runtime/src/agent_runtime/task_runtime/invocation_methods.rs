@@ -444,22 +444,23 @@ impl TaskRuntime {
                         )
                         .ok()
                         .flatten();
-                    agent_orchestration_info_models(&context.config, focused_model.as_ref())
+                    agent_orchestration_info_models(context, focused_model.as_ref())
                 })
+                .transpose()?
                 .unwrap_or_default()
         } else {
             Vec::new()
         };
         let session_model = model_context
             .as_ref()
-            .and_then(|context| agent_orchestration_session_model(&context.config))
+            .map(agent_orchestration_session_model)
+            .transpose()?
+            .flatten()
             .unwrap_or(Value::Null);
         let agent_fixed_model = model_context
             .as_ref()
-            .and_then(|context| {
-                self.agent_orchestration_info_agent_fixed_model(&request, &context.config)
-                    .ok()
-            })
+            .map(|context| self.agent_orchestration_info_agent_fixed_model(&request, context))
+            .transpose()?
             .flatten()
             .unwrap_or(Value::Null);
         let runtime = if include_runtime {
@@ -534,20 +535,19 @@ impl TaskRuntime {
                 agent_definition_matches_query(definition, query)
             })
             .map(|definition| {
-                json!({
+                let model_selection =
+                    subagent_definition_model_selection(&definition, model_context)?;
+                Ok(json!({
                     "agent_id": definition.id,
                     "name": definition.name,
                     "description": definition.description,
                     "category": definition.source.category_id,
                     "enabled": definition.enabled,
                     "source": subagent_definition_scope_key(definition.source.scope),
-                    "model_selection": subagent_definition_model_selection(
-                        &definition,
-                        model_context.map(|context| &context.config),
-                    ),
-                })
+                    "model_selection": model_selection,
+                }))
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, String>>()?;
         agents.sort_by(|left, right| {
             left["agent_id"]
                 .as_str()
@@ -562,15 +562,15 @@ impl TaskRuntime {
     fn agent_orchestration_info_agent_fixed_model(
         &self,
         request: &AgentOrchestrationInfoRequest,
-        session_config: &ProviderConfigurationFile,
+        model_context: &TaskExecutionRuntimeContext,
     ) -> Result<Option<Value>, String> {
         let Some(definition) = self.agent_orchestration_info_agent_definition(request)? else {
             return Ok(None);
         };
         Ok(Some(subagent_definition_model_selection(
             &definition,
-            Some(session_config),
-        )))
+            Some(model_context),
+        )?))
     }
 
     /// Resolves the focused agent fixed-model selector for agent_orchestration_info.
@@ -1169,35 +1169,41 @@ fn subagent_definition_scope_key(
 /// 构建单个子代理定义的模型选择摘要。
 fn subagent_definition_model_selection(
     definition: &SubagentDefinition,
-    session_config: Option<&ProviderConfigurationFile>,
-) -> Value {
-    let Some(session_config) = session_config else {
-        return match provider_model_selector_from_snapshot(
-            &definition.provider_model,
-            &ProviderConfigurationFile::default(),
-        ) {
-            Some((provider_id, model_id)) => json!({
-                "mode": "fixed",
-                "provider_id": provider_id,
-                "model_id": model_id,
-                "selector": format!("{provider_id}/{model_id}"),
-                "available": Value::Null,
-                "unavailable_reason": Value::Null,
-            }),
-            None => json!({
-                "mode": "session",
-            }),
-        };
+    model_context: Option<&TaskExecutionRuntimeContext>,
+) -> Result<Value, String> {
+    let Some(model_context) = model_context else {
+        return Ok(
+            match provider_model_selector_from_snapshot(
+                &definition.provider_model,
+                &ProviderConfigurationFile::default(),
+            ) {
+                Some((provider_id, model_id)) => json!({
+                    "mode": "fixed",
+                    "provider_id": provider_id,
+                    "model_id": model_id,
+                    "selector": format!("{provider_id}/{model_id}"),
+                    "available": Value::Null,
+                    "unavailable_reason": Value::Null,
+                }),
+                None => json!({
+                    "mode": "session",
+                }),
+            },
+        );
     };
     let Some((provider_id, model_id)) =
-        provider_model_selector_from_snapshot(&definition.provider_model, session_config)
+        provider_model_selector_from_snapshot(&definition.provider_model, &model_context.config)
     else {
-        return json!({
+        return Ok(json!({
             "mode": "session",
-        });
+        }));
     };
-    let available = provider_model_selector_is_available(session_config, &provider_id, &model_id);
-    json!({
+    let available = provider_model_selector_is_available(
+        model_context.foundation.as_ref(),
+        &provider_id,
+        &model_id,
+    )?;
+    Ok(json!({
         "mode": "fixed",
         "provider_id": provider_id,
         "model_id": model_id,
@@ -1206,9 +1212,9 @@ fn subagent_definition_model_selection(
         "unavailable_reason": if available {
             Value::Null
         } else {
-            Value::String(String::from("The configured fixed model is not in the current effective enabled model choices; spawn_agent will fall back to the session model when no explicit model is provided."))
+            Value::String(String::from("The configured fixed model is not present in the current in-memory public AI catalogs; spawn_agent will fall back to the session model when no explicit model is provided."))
         },
-    })
+    }))
 }
 
 /// Builds selectable model rows from the current provider configuration.
@@ -1224,84 +1230,56 @@ fn subagent_definition_model_selection(
 /// Model rows whose selector can be passed to spawn_agent.model.
 /// 可传给 spawn_agent.model 的模型行。
 pub(super) fn agent_orchestration_info_models(
-    session_config: &ProviderConfigurationFile,
+    model_context: &TaskExecutionRuntimeContext,
     agent_fixed_model: Option<&(String, String)>,
-) -> Vec<Value> {
-    let mut models = Vec::new();
-    let session_model = session_config
-        .model
-        .as_deref()
-        .and_then(crate::provider_config::parse_active_model_reference)
-        .map(|(provider_id, model_id)| (provider_id.to_string(), model_id.to_string()));
-    let provider_ids = agent_orchestration_info_model_provider_ids(
-        session_config,
-        session_model.as_ref(),
-        agent_fixed_model,
-    );
-    for provider_id in provider_ids {
-        let provider_name = crate::provider_config::supported_provider_by_id(provider_id)
-            .map(|definition| definition.name.clone())
-            .unwrap_or_else(|| provider_id.to_string());
-        for model in crate::provider_config::effective_model_choices(provider_id, session_config) {
-            let selector_pair = (provider_id.to_string(), model.id.clone());
-            models.push(json!({
-                "selector": format!("{provider_id}/{}", model.id),
-                "provider_id": provider_id,
-                "provider_name": provider_name,
-                "model_id": model.id,
-                "model_name": model.name,
-                "context_limit": model.context_limit,
-                "supports_tool_call": model.tool_call,
-                "supports_reasoning": model.reasoning,
-                "is_session_model": session_model.as_ref() == Some(&selector_pair),
-                "is_agent_fixed_model": agent_fixed_model == Some(&selector_pair),
-                "available": true,
-                "unavailable_reason": Value::Null,
-            }));
+) -> Result<Vec<Value>, String> {
+    let runtime = model_context
+        .foundation
+        .public_ai_runtime()
+        .ok_or_else(|| String::from("The service has not installed the public AI runtime."))?;
+    let configuration = runtime.configuration_snapshot()?;
+    let catalogs = runtime.catalog_snapshot()?;
+    let session_selector = configuration
+        .active
+        .as_ref()
+        .map(|active| format!("{}/{}", active.provider_id, active.model_id));
+    let fixed_selector =
+        agent_fixed_model.map(|(provider_id, model_id)| format!("{provider_id}/{model_id}"));
+    let mut rows = BTreeMap::<String, Value>::new();
+    let mut account_counts = BTreeMap::<String, usize>::new();
+    for connection in configuration.connection_graph.connections.values() {
+        let Some(catalog) = catalogs.get(connection.id.as_str()) else {
+            continue;
+        };
+        let provider_display_name = runtime
+            .providers()
+            .provider(connection.provider_id.as_str())
+            .map(|provider| provider.display_name.clone())
+            .unwrap_or_else(|| connection.provider_id.clone());
+        for model in &catalog.models {
+            let selector = format!("{}/{}", connection.provider_id, model.id);
+            *account_counts.entry(selector.clone()).or_default() += 1;
+            rows.entry(selector.clone()).or_insert_with(|| {
+                json!({
+                    "provider_id": connection.provider_id,
+                    "provider_name": provider_display_name,
+                    "model_id": model.id,
+                    "model_name": model.display_name,
+                    "selector": selector,
+                    "is_session_model": session_selector.as_deref() == Some(selector.as_str()),
+                    "is_agent_fixed_model": fixed_selector.as_deref() == Some(selector.as_str()),
+                })
+            });
         }
     }
-    models.sort_by(|left, right| {
-        left["selector"]
-            .as_str()
-            .unwrap_or_default()
-            .cmp(right["selector"].as_str().unwrap_or_default())
-    });
-    models
-}
-
-/// Builds the provider-id set that can contribute model selectors for orchestration planning.
-/// 构建可为子代理调度规划贡献模型选择器的供应商标识集合。
-///
-/// # Parameters
-/// 参数
-/// `session_config` is the current provider configuration snapshot.
-/// `session_config` 是当前供应商配置快照。
-/// `session_model` is the active session model selector, when configured.
-/// `session_model` 是当前会话模型选择器（如果已配置）。
-/// `agent_fixed_model` is the focused agent fixed model selector, when configured.
-/// `agent_fixed_model` 是聚焦智能体固定模型选择器（如果已配置）。
-///
-/// # Returns
-/// 返回值
-/// Sorted provider ids that should be scanned for effective model choices.
-/// 应扫描有效模型选项的有序供应商标识。
-fn agent_orchestration_info_model_provider_ids<'a>(
-    session_config: &'a ProviderConfigurationFile,
-    session_model: Option<&'a (String, String)>,
-    agent_fixed_model: Option<&'a (String, String)>,
-) -> BTreeSet<&'a str> {
-    let mut provider_ids = session_config
-        .provider
-        .keys()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
-    if let Some((provider_id, _)) = session_model {
-        provider_ids.insert(provider_id.as_str());
-    }
-    if let Some((provider_id, _)) = agent_fixed_model {
-        provider_ids.insert(provider_id.as_str());
-    }
-    provider_ids
+    Ok(rows
+        .into_iter()
+        .map(|(selector, mut row)| {
+            row["account_count"] =
+                json!(account_counts.get(selector.as_str()).copied().unwrap_or(0));
+            row
+        })
+        .collect())
 }
 
 /// Builds the current session model row when it is available.
@@ -1316,15 +1294,27 @@ fn agent_orchestration_info_model_provider_ids<'a>(
 /// 返回值
 /// A compact session model payload, or None when no active model is configured.
 /// 紧凑的会话模型载荷；没有配置激活模型时返回 None。
-fn agent_orchestration_session_model(session_config: &ProviderConfigurationFile) -> Option<Value> {
-    let active_model = session_config.model.as_deref()?;
-    let (provider_id, model_id) =
-        crate::provider_config::parse_active_model_reference(active_model)?;
-    let available = provider_model_selector_is_available(session_config, provider_id, model_id);
-    Some(json!({
-        "selector": format!("{provider_id}/{model_id}"),
-        "provider_id": provider_id,
-        "model_id": model_id,
+fn agent_orchestration_session_model(
+    model_context: &TaskExecutionRuntimeContext,
+) -> Result<Option<Value>, String> {
+    let runtime = model_context
+        .foundation
+        .public_ai_runtime()
+        .ok_or_else(|| String::from("The service has not installed the public AI runtime."))?;
+    let configuration = runtime.configuration_snapshot()?;
+    let Some(active) = configuration.active.as_ref() else {
+        return Ok(None);
+    };
+    let available = runtime.model_is_available(
+        &configuration,
+        active.provider_id.as_str(),
+        active.model_id.as_str(),
+    )?;
+    Ok(Some(json!({
+        "provider_id": active.provider_id,
+        "model_id": active.model_id,
+        "connection_id": active.connection_id,
+        "selector": format!("{}/{}", active.provider_id, active.model_id),
         "available": available,
-    }))
+    })))
 }

@@ -2227,6 +2227,7 @@ pub(crate) fn apply_observed_usage_to_context_budget(
 mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
+    use vulcan_context_injection::InjectionInsert;
     use vulcan_subagent_core::STOPPED_SUBAGENT_TASK_IDS_KEY;
 
     /// Builds one minimal visible message for runtime-projection ordering tests.

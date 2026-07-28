@@ -1,7 +1,7 @@
 //! Core request-preview provider adapter used before real transport dispatch.
 //! 面向真实传输分发前 core 请求预览构建的 Provider 适配器模块。
 
-use crate::agent_runtime::provider_protocol_bridge::scope_continuation_to_active_provider;
+use crate::agent_runtime::provider_continuation::scope_continuation_to_active_provider;
 use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history;
 use async_trait::async_trait;
 use serde_json::Value;

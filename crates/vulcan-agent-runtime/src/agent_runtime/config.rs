@@ -368,7 +368,7 @@ impl AgentRuntimeConfig {
             .collect::<Vec<_>>();
 
         Self {
-            active_model: config.model.clone(),
+            active_model: None,
             active_agent_id: DEFAULT_WORKER_AGENT_ID.to_string(),
             agents,
             skills,

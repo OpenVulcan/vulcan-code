@@ -627,6 +627,7 @@ impl RuntimeConversationProjection {
             id: event.message_id.clone(),
             payload: SessionConversationPayload::ToolResult {
                 tool_call_id: provider_tool_call_id.or(runtime_tool_call_id),
+                is_error: event.status == RuntimeToolResultStatus::Failed,
                 text: event.text.clone(),
             },
         };

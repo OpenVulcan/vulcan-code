@@ -44,13 +44,11 @@ use super::{
     workspace_root,
 };
 
-mod ai_tool_config;
 mod error;
 mod recovery;
 mod startup_snapshot;
 mod startup_updates;
 
-pub(super) use ai_tool_config::*;
 pub(super) use error::*;
 pub(crate) use recovery::service_rebuild_startup_session_vmm;
 pub(super) use startup_snapshot::*;
@@ -99,13 +97,13 @@ fn run_service_bootstrap(
         })?;
     let provider_configuration = vulcan_provider_config::config::load_configuration_file()
         .map_err(|error| ServiceBootstrapError::new("service-process", "Core Service", error))?;
+    let public_ai_configuration = vulcan_provider_config::config::load_public_ai_connections_file()
+        .map_err(|error| ServiceBootstrapError::new("service-process", "Core Service", error))?
+        .configuration;
     if let Ok(mut guard) = state.lock() {
         guard.startup.ui_locale = provider_configuration.ui_locale.clone();
         guard.workbench.ui_locale = provider_configuration.ui_locale.clone();
     }
-    let ai_tool_configuration =
-        load_service_ai_tool_configuration(&provider_configuration, &mut logs);
-
     update_startup(state, event_emitter, "bootstrapping-vldb", &logs, |now| {
         startup_steps_with_status(
             now,
@@ -633,9 +631,31 @@ fn run_service_bootstrap(
             format!("Vulcan Plugin hook 注册失败：{error}"),
         )
     })?;
+    let public_ai_runtime = Arc::new(
+        vulcan_provider_adapters::PublicAiRuntime::first_batch(Arc::new(
+            crate::ai_credential_secret_store::OsAiCredentialSecretStore,
+        ))
+        .map_err(|error| {
+            ServiceBootstrapError::new(
+                "workspace",
+                "Workspace",
+                format!("公共 AI 运行时初始化失败：{error}"),
+            )
+        })?,
+    );
+    public_ai_runtime
+        .replace_configuration(public_ai_configuration.clone())
+        .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
+    refresh_public_ai_catalogs_at_startup(
+        public_ai_runtime.as_ref(),
+        &public_ai_configuration,
+        &mut logs,
+    )?;
     let agent_runtime = AgentRuntimeBridge {
         provider_configuration: provider_configuration.clone(),
-        ai_tool_configuration: ai_tool_configuration.clone(),
+        public_ai_runtime,
+        provider_id_override: None,
+        model_id_override: None,
         agent_profile_catalog,
         luaskills_runtime: agent_luaskills_runtime,
         vulcan_plugin_runtime: vulcan_plugin_runtime.clone(),
@@ -869,7 +889,7 @@ fn run_service_bootstrap(
             token_budget_runtime: &token_budget_runtime,
             mcp_catalog: &mcp_catalog,
             provider_configuration: &provider_configuration,
-            ai_tool_configuration: &ai_tool_configuration,
+            public_ai_runtime: Some(agent_runtime.public_ai_runtime.as_ref()),
             workspace: &workspace_snapshot,
             vmm_session_states: &vmm_session_states,
             surface_messages: surface_messages.as_slice(),
@@ -882,6 +902,11 @@ fn run_service_bootstrap(
             hydrated_conversation_windows: &hydrated_conversation_windows,
             native_tools: native_tool_summaries_from_agent_runtime(Some(&agent_runtime)),
         });
+        workbench.providers = crate::public_ai_provider_rows(
+            &public_ai_configuration,
+            agent_runtime.public_ai_runtime.as_ref(),
+        )
+        .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
         crate::preserve_project_settings_revisions(&mut workbench, &guard.workbench);
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         workbench.revision = guard.workbench_generation;
@@ -938,6 +963,71 @@ fn run_service_bootstrap(
     }
     mark_webui_service_discovery_ready(state);
     emit_service_snapshots(event_emitter, &startup, &emitted_workbench);
+    Ok(())
+}
+
+/// Refreshes every configured public AI catalog into process memory during startup.
+/// 在启动期间把每个已配置公共 AI 目录刷新到进程内存。
+///
+/// # Parameters
+/// 参数
+/// `runtime` owns process-local catalogs, `configuration` owns connection metadata, and `logs`
+/// receives controlled per-connection outcomes.
+/// `runtime` 持有进程内目录，`configuration` 持有连接元数据，`logs` 接收受控的逐连接结果。
+///
+/// # Returns
+/// 返回值
+/// Success after all connections were attempted, or a startup-runtime construction error.
+/// 尝试全部连接后返回成功，或返回启动运行时构建错误。
+fn refresh_public_ai_catalogs_at_startup(
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
+    logs: &mut Vec<String>,
+) -> Result<(), ServiceBootstrapError> {
+    if configuration.connection_graph.connections.is_empty() {
+        return Ok(());
+    }
+    let async_runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| {
+            ServiceBootstrapError::new(
+                "workspace",
+                "Workspace",
+                format!("公共 AI 启动同步运行时创建失败：{error}"),
+            )
+        })?;
+    // Startup synchronization runs independent credential connections concurrently so one
+    // unavailable provider consumes at most one metadata timeout window.
+    // 启动同步并发处理相互独立的凭据连接，使单个不可用供应商最多占用一个元数据超时窗口。
+    let connection_ids = configuration
+        .connection_graph
+        .connections
+        .values()
+        .map(|connection| connection.id.clone())
+        .collect::<Vec<_>>();
+    let results = async_runtime.block_on(async {
+        futures_util::future::join_all(connection_ids.into_iter().map(|connection_id| async move {
+            let result = runtime
+                .refresh_connection_catalog(configuration, connection_id.as_str())
+                .await;
+            (connection_id, result)
+        }))
+        .await
+    });
+    for (connection_id, result) in results {
+        match result {
+            Ok(catalog) => logs.push(format!(
+                "[webui-service] public AI catalog synchronized: connection={} models={}",
+                connection_id,
+                catalog.models.len()
+            )),
+            Err(error) => logs.push(format!(
+                "[webui-service] public AI catalog synchronization failed: connection={} error={}",
+                connection_id, error
+            )),
+        }
+    }
     Ok(())
 }
 

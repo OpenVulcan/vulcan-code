@@ -72,6 +72,7 @@ pub(crate) fn prepare_runtime_launch_input(
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
     token_budget_runtime: Arc<TokenBudgetRuntime>,
+    public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
     request: ExecutionPreparationRequest,
 ) -> Result<RuntimePreparedLaunchInput, ExecutionRunReport> {
     let resources = build_runtime_preparation_resources(
@@ -84,6 +85,7 @@ pub(crate) fn prepare_runtime_launch_input(
         question_runtime,
         command_session_runtime,
         token_budget_runtime,
+        public_ai_runtime,
         request,
     );
     let prepared = match prepare_execution_with_tool_snapshot(

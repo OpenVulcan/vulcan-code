@@ -554,10 +554,6 @@ export type TranslationKey =
   | "pendingPrompt.insertedShort"
   | "pendingPrompt.attachmentCount"
   | "pendingPrompt.attachmentMessage"
-  | "sessionActions.noProjectForCapability"
-  | "sessionActions.noConversationForCapability"
-  | "sessionActions.previewCannotSaveCapability"
-  | "sessionActions.capabilitySaved"
   | "sessionActions.noConversationForGoalSave"
   | "sessionActions.previewCannotSaveGoal"
   | "sessionActions.goalSaved"
@@ -1252,7 +1248,6 @@ export type TranslationKey =
   | "settings.tools.description"
   | "settings.diagnostics.description"
   | "settings.group.models"
-  | "settings.group.aiCapabilities"
   | "settings.modelProviders"
   | "settings.modelList"
   | "settings.providerRetry"
@@ -2060,10 +2055,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "pendingPrompt.insertedShort": "已引导",
     "pendingPrompt.attachmentCount": "{count} 个附件",
     "pendingPrompt.attachmentMessage": "附件消息",
-    "sessionActions.noProjectForCapability": "当前会话没有明确关联项目，无法保存 AI 能力设置。",
-    "sessionActions.noConversationForCapability": "请先创建或选择一个会话，再保存 AI 能力设置。",
-    "sessionActions.previewCannotSaveCapability": "浏览器预览模式下无法保存会话 AI 能力设置。",
-    "sessionActions.capabilitySaved": "已保存当前会话 AI 能力设置。",
     "sessionActions.noConversationForGoalSave": "请先创建或选择一个会话，再设置目标。",
     "sessionActions.previewCannotSaveGoal": "浏览器预览模式下无法保存目标。",
     "sessionActions.goalSaved": "目标已保存。",
@@ -2758,7 +2749,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.tools.description": "工具调用、命令会话与输出",
     "settings.diagnostics.description": "启动日志、错误与运行时事件",
     "settings.group.models": "模型设置",
-    "settings.group.aiCapabilities": "AI 能力",
     "settings.modelProviders": "模型供应商",
     "settings.modelList": "模型列表",
     "settings.providerRetry": "请求重试",
@@ -3563,10 +3553,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "pendingPrompt.insertedShort": "Guided",
     "pendingPrompt.attachmentCount": "{count} attachments",
     "pendingPrompt.attachmentMessage": "Attachment message",
-    "sessionActions.noProjectForCapability": "The current conversation is not linked to a project, so AI capability settings cannot be saved.",
-    "sessionActions.noConversationForCapability": "Create or select a conversation before saving AI capability settings.",
-    "sessionActions.previewCannotSaveCapability": "Session AI capability settings cannot be saved in browser preview mode.",
-    "sessionActions.capabilitySaved": "Saved AI capability settings for the current session.",
     "sessionActions.noConversationForGoalSave": "Create or select a conversation before setting a goal.",
     "sessionActions.previewCannotSaveGoal": "Goals cannot be saved in browser preview mode.",
     "sessionActions.goalSaved": "Goal saved.",
@@ -4261,7 +4247,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.tools.description": "Tool calls, command sessions, and output",
     "settings.diagnostics.description": "Startup logs, errors, and runtime events",
     "settings.group.models": "Model settings",
-    "settings.group.aiCapabilities": "AI capabilities",
     "settings.modelProviders": "Model providers",
     "settings.modelList": "Model list",
     "settings.providerRetry": "Request retry",

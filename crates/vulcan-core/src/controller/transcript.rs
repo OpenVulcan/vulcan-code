@@ -340,6 +340,7 @@ impl VulcanCoreController {
             id: message_id.clone(),
             payload: ConversationPayload::ToolResult {
                 tool_call_id: Some(result.tool_call_id.clone()),
+                is_error: result.is_error,
                 text: result.model_output.clone(),
             },
         });

@@ -19,6 +19,9 @@ export interface ModelPickerChoice {
   // Stable provider identifier owning this model.
   // 拥有该模型的稳定 Provider 标识。
   providerId: string;
+  // Exact credential connection selected for this row.
+  // 本行选定的精确凭据连接。
+  connectionId: string;
   // Human-readable provider label.
   // 人类可读的 Provider 标签。
   providerName: string;
@@ -186,7 +189,8 @@ export function modelPickerChoicesFromProviders(providers: ProviderSummary[]): M
   return providers.flatMap((provider) => {
     const models = provider.models ?? [];
     return models.map((model) => ({
-      providerId: provider.id,
+      providerId: provider.sourceProviderId ?? provider.id,
+      connectionId: provider.connectionId ?? "",
       providerName: provider.name,
       modelId: model.id,
       modelName: model.name,
@@ -202,7 +206,7 @@ export function modelPickerChoicesFromProviders(providers: ProviderSummary[]): M
 // modelPickerChoiceKey builds the stable provider/model value used by controls.
 // modelPickerChoiceKey 构建控件使用的稳定 provider/model 取值。
 export function modelPickerChoiceKey(choice: ModelPickerChoice | undefined): string {
-  return choice ? `${choice.providerId}/${choice.modelId}` : "";
+  return choice ? JSON.stringify([choice.providerId, choice.modelId, choice.connectionId]) : "";
 }
 
 // filterModelPickerChoices applies the WebUI-style free-text model filter.

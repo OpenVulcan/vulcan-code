@@ -10,9 +10,15 @@ pub(crate) struct AgentRuntimeBridge {
     /// Provider configuration captured during service startup.
     /// 服务启动期间捕获的 Provider 配置。
     pub(crate) provider_configuration: ProviderConfigurationFile,
-    /// Standalone AI capability configuration captured during service startup.
-    /// 服务启动期间捕获的独立 AI 能力配置。
-    pub(crate) ai_tool_configuration: PersistedAiToolConfiguration,
+    /// Process-local public AI runtime shared by model synchronization and execution.
+    /// 由模型同步与执行共享的进程内公共 AI 运行时。
+    pub(crate) public_ai_runtime: Arc<vulcan_provider_adapters::PublicAiRuntime>,
+    /// Request-scoped provider override retained only by a queued prompt runtime clone.
+    /// 仅由排队提示词运行时克隆保留的请求级供应商覆盖。
+    pub(crate) provider_id_override: Option<String>,
+    /// Request-scoped model override retained only by a queued prompt runtime clone.
+    /// 仅由排队提示词运行时克隆保留的请求级模型覆盖。
+    pub(crate) model_id_override: Option<String>,
     /// Agent profile catalog reused by runtime preparation.
     /// 运行时准备阶段复用的 Agent 画像目录。
     pub(crate) agent_profile_catalog: AgentProfileCatalog,

@@ -87,6 +87,9 @@ pub struct RuntimeStreamLaunch {
     /// Provider lowering repair events detected before the provider loop starts.
     /// Provider 循环启动前检测到的 Provider 转换修复事件。
     pub(crate) lowering_repair_events: Vec<RuntimeProviderLoweringRepairEvent>,
+    /// Process-local public AI runtime installed for this launch.
+    /// 为本次启动安装的进程内公共 AI 运行时。
+    pub(crate) public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
 }
 
 /// Builds the final runtime-stream launch payload from one execution request and one completed bootstrap payload.
@@ -105,7 +108,11 @@ pub(crate) fn build_runtime_stream_launch_payload(
         ProviderRequestTelemetryContext::from_preparation(&bootstrap.preparation);
     // provider_api_family preserves the canonical typed API family before preparation moves into the launch payload.
     // provider_api_family 在执行准备移入启动载荷前保留规范强类型 API 协议族。
-    let provider_api_family = bootstrap.preparation.model_blueprint.api_family();
+    let protocol_profile_id = bootstrap
+        .preparation
+        .model_blueprint
+        .protocol_profile_id
+        .clone();
     // modelId preserves the exact tokenizer route before preparation moves into the launch payload.
     // modelId 在执行准备移入启动载荷前保留精确 Tokenizer 路由。
     let model_id = bootstrap.preparation.model_blueprint.model_id.clone();
@@ -132,7 +139,7 @@ pub(crate) fn build_runtime_stream_launch_payload(
         warnings: bootstrap.warnings,
         system_preamble: bootstrap.system_preamble,
         core_snapshot: bootstrap.core_snapshot,
-        stream_state: RuntimeStreamDeltaState::new(bootstrap.core_controller, provider_api_family)
+        stream_state: RuntimeStreamDeltaState::new(bootstrap.core_controller, protocol_profile_id)
             .with_tool_request_stream(
                 model_id,
                 stream_token_budget_runtime,
@@ -140,6 +147,7 @@ pub(crate) fn build_runtime_stream_launch_payload(
             )
             .with_provider_request_telemetry_context(provider_telemetry_context),
         lowering_repair_events: bootstrap.lowering_repair_events,
+        public_ai_runtime: bootstrap.public_ai_runtime,
     }
 }
 
@@ -234,14 +242,11 @@ mod tests {
     use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
     use crate::agent_runtime::runtime_stream_bootstrap_core::build_runtime_bootstrap_core;
     use crate::conversation_protocol::SessionConversationState;
-    use crate::provider_config::{PersistedAiToolConfiguration, ProviderRuntimeKind};
     use crate::workbench_prompt_turn::{
         SharedPromptTurnContinueInput, SharedPromptTurnRuntimeBeginInput,
         begin_shared_prompt_turn_with_runtime_state,
         continue_shared_prompt_turn_after_preparation_with_runtime_state,
     };
-    use serde_json::json;
-    use std::collections::BTreeMap;
     use std::sync::Arc;
     use uuid::Uuid;
     use vulcan_core::controller::VulcanCoreController;
@@ -266,20 +271,15 @@ mod tests {
             model_blueprint: ProviderRuntimeBlueprint {
                 provider_id: String::from("openai"),
                 provider_name: String::from("OpenAI"),
-                runtime_kind: ProviderRuntimeKind::OpenAi,
                 runtime_label: String::from("OpenAI"),
                 model_id: String::from("gpt-test"),
                 model_name: String::from("GPT Test"),
-                openrouter_endpoint_route: None,
+                protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+                public_capabilities: vulcan_ai_contract::ModelCapabilities::default(),
                 base_url: Some(String::from("https://api.example.test/v1")),
                 supports_remote_model_refresh: true,
                 credential_source: String::from("环境变量"),
-                user_agent: None,
-                extra_headers: BTreeMap::new(),
-                extra_body: json!({}),
                 reasoning: Default::default(),
-                capabilities: Default::default(),
-                interleaved_reasoning: None,
             },
             prompt_preview: String::from("请分析代码"),
             workspace_path: String::from(r"D:\workspace"),
@@ -336,6 +336,8 @@ mod tests {
             conversation_hook_turn_id: Some(String::from("test-hook-turn")),
             execution_agent_id: None,
             agent_prompt_snapshot: None,
+            provider_id_override: None,
+            model_id_override: None,
             subagent_prompt_context: None,
             task_session_store_root: None,
             session_title: String::from("测试会话"),
@@ -348,7 +350,6 @@ mod tests {
             execution_mode: String::from("Build"),
             temperature: Some(0.2),
             reasoning_effort: crate::provider_config::ReasoningEffortLevel::Off,
-            ai_tool_configuration: PersistedAiToolConfiguration::default(),
             tool_exposure_override: Default::default(),
             tool_request_rejection_reason: None,
             tool_request_rejection_all_tools: false,
@@ -411,6 +412,7 @@ mod tests {
         RuntimeStreamBootstrap {
             preparation: build_test_preparation(),
             active_agent: None,
+            public_ai_runtime: None,
             task_runtime: Arc::new(TaskRuntime::new()),
             token_budget_runtime: Arc::new(TokenBudgetRuntime::initialize_from_resource_directory(
                 std::env::temp_dir(),
@@ -469,8 +471,7 @@ mod tests {
             timestamp_ms: 1,
             metadata: None,
         }];
-        let mut preparation = build_test_preparation();
-        preparation.model_blueprint.capabilities.input_modalities = vec![String::from("text")];
+        let preparation = build_test_preparation();
         let runtime_core = build_runtime_bootstrap_core(&preparation, &request, None)
             .expect("runtime bootstrap core should seed agent messages");
         assert!(matches!(
@@ -486,6 +487,7 @@ mod tests {
         let bootstrap = RuntimeStreamBootstrap {
             preparation,
             active_agent: None,
+            public_ai_runtime: None,
             task_runtime: Arc::new(TaskRuntime::new()),
             token_budget_runtime: Arc::new(TokenBudgetRuntime::initialize_from_resource_directory(
                 std::env::temp_dir(),
@@ -641,9 +643,6 @@ mod tests {
                 source: PendingSessionPromptSource::UserFollowup,
                 execution_mode: String::from("Build"),
                 reasoning_effort: None,
-                disabled_ai_capability_kinds: Default::default(),
-                disabled_ai_capability_target_selectors: Default::default(),
-                ai_capability_target_bindings: Default::default(),
                 owning_project_id: None,
                 prior_session_messages: None,
             },
@@ -668,7 +667,6 @@ mod tests {
                 project_configuration: Default::default(),
                 runtime_reasoning_effort: None,
                 provider_reasoning_effort: None,
-                ai_tool_configuration: PersistedAiToolConfiguration::default(),
                 patch_visible_user_prompt_record: true,
             },
         )
@@ -691,7 +689,6 @@ mod tests {
         preparation.session_id = session_id;
         preparation.session_title = String::from("测试会话");
         preparation.workspace_path = String::from(r"D:\workspace");
-        preparation.model_blueprint.capabilities.input_modalities = vec![String::from("text")];
         let runtime_core = build_runtime_bootstrap_core(&preparation, &request, None)
             .expect("runtime bootstrap core should build");
         let crate::agent_runtime::runtime_stream_bootstrap_core::RuntimeBootstrapCore {
@@ -720,6 +717,7 @@ mod tests {
         let bootstrap = RuntimeStreamBootstrap {
             preparation,
             active_agent: None,
+            public_ai_runtime: None,
             task_runtime: Arc::new(TaskRuntime::new()),
             token_budget_runtime: Arc::new(TokenBudgetRuntime::initialize_from_resource_directory(
                 std::env::temp_dir(),

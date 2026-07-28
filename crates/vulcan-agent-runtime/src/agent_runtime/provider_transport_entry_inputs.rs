@@ -12,9 +12,6 @@ use crate::agent_runtime::provider_transport_tool_context::{
 use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::model::SessionId;
-use crate::provider_config::ModelInterleavedCapability;
-use reqwest::header::HeaderMap;
-use serde_json::Value;
 use std::sync::Arc;
 use vulcan_core::types::{
     ControllerConfig as CoreControllerConfig, ConversationSnapshot as CoreConversationSnapshot,
@@ -26,21 +23,12 @@ use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 /// Prepared host-controlled stream inputs shared by provider-specific entrypoints before they build the concrete adapter.
 /// 在各 Provider 专用入口构建具体适配器之前复用的宿主控制流输入对象。
 pub(crate) struct PreparedProviderTransportEntryInputs {
-    /// Stable provider identifier reused by controller config and transport adapters.
-    /// 被控制器配置与传输适配器复用的稳定 Provider 标识。
-    pub(crate) provider_id: String,
-    /// Stable model identifier reused by controller config and transport adapters.
-    /// 被控制器配置与传输适配器复用的稳定模型标识。
-    pub(crate) model_id: String,
     /// Final outgoing prompt body forwarded into the host-controlled runtime stream.
     /// 被转发到宿主控制运行时流中的最终出站提示词正文。
     pub(crate) prompt: String,
     /// Explicit turn-start mode forwarded into the host-controlled runtime stream.
     /// 被转发到宿主控制运行时流中的显式回合启动模式。
     pub(crate) turn_start_mode: ProviderTransportTurnStartMode,
-    /// Fully cloned request-header map reused by the concrete transport adapter.
-    /// 被具体传输适配器复用的完整克隆请求头映射。
-    pub(crate) request_headers: HeaderMap,
     /// Prebuilt controller configuration handed to `vulcan-core`.
     /// 交给 `vulcan-core` 的预构建控制器配置。
     pub(crate) controller_config: CoreControllerConfig,
@@ -83,16 +71,12 @@ pub(crate) struct PreparedProviderTransportStreamLaunch {
     pub(crate) core_snapshot: CoreConversationSnapshot,
     /// Resolved API key passed down to the concrete provider adapter constructor.
     /// 下传给具体 Provider 适配器构造函数的已解析 API Key。
-    pub(crate) api_key: String,
     /// Optional normalized base URL override used by providers that support custom endpoints.
     /// 供支持自定义端点的 Provider 使用的可选规范化基础地址覆盖值。
-    pub(crate) base_url: Option<String>,
     /// Human-readable runtime label preserved for transport diagnostics.
     /// 为传输诊断保留的人类可读运行时标签。
-    pub(crate) runtime_label: String,
     /// Optional model-scoped interleaved reasoning capability reused by compatible transports.
     /// 兼容传输链路复用的可选模型级交错推理能力描述。
-    pub(crate) interleaved_reasoning: Option<ModelInterleavedCapability>,
     /// Optional host intervention invoked at replay-safe tool boundaries.
     /// 在可回放安全工具边界调用的可选宿主干预钩子。
     pub(crate) prompt_intervention: Option<RuntimePromptIntervention>,
@@ -108,19 +92,14 @@ fn prepare_provider_transport_entry_inputs(
     turn_start_mode: ProviderTransportTurnStartMode,
     temperature: Option<f64>,
     max_turns: usize,
-    headers: &HeaderMap,
-    additional_params: Option<Value>,
     context_injection: Option<CoreProviderContextInjection>,
 ) -> PreparedProviderTransportEntryInputs {
     let provider_id = provider_id.to_string();
     let model_id = model_id.to_string();
 
     PreparedProviderTransportEntryInputs {
-        provider_id: provider_id.clone(),
-        model_id: model_id.clone(),
         prompt: prompt.to_string(),
         turn_start_mode,
-        request_headers: headers.clone(),
         controller_config: CoreControllerConfig {
             provider_id,
             model_id,
@@ -128,7 +107,7 @@ fn prepare_provider_transport_entry_inputs(
             prompt_layers: CoreProviderPromptLayers::from_system_prompt(system_preamble),
             temperature,
             max_turns,
-            additional_params,
+            additional_params: None,
             context_injection,
         },
     }
@@ -144,8 +123,6 @@ fn prepare_provider_transport_runtime_inputs(
     turn_start_mode: ProviderTransportTurnStartMode,
     temperature: Option<f64>,
     max_turns: usize,
-    headers: &HeaderMap,
-    additional_params: Option<Value>,
     context_injection: Option<CoreProviderContextInjection>,
     tools_manager: VulcanToolsManager,
     resolved_tools: &[ResolvedToolDefinition],
@@ -167,8 +144,6 @@ fn prepare_provider_transport_runtime_inputs(
             turn_start_mode,
             temperature,
             max_turns,
-            headers,
-            additional_params,
             context_injection,
         ),
         tool_context: prepare_host_tool_runtime_context(
@@ -186,27 +161,15 @@ fn prepare_provider_transport_runtime_inputs(
     }
 }
 
-/// Normalizes one optional base URL override by dropping empty strings and returning an owned value when present.
-/// 规范化单个可选基础地址覆盖值，在存在时返回拥有所有权的值，并丢弃空字符串。
-fn normalize_optional_base_url(base_url: Option<&str>) -> Option<String> {
-    base_url
-        .filter(|value| !value.trim().is_empty())
-        .map(ToString::to_string)
-}
-
 /// Splits one owned routed provider execution request into shared runtime inputs plus provider-specific launch fields; returns data ready for a concrete stream entrypoint.
 /// 将一份自有的已路由 Provider 执行请求拆分为共享运行时输入与 Provider 专用启动字段；返回可供具体流式入口使用的数据。
 pub(crate) fn prepare_provider_transport_stream_launch(
     request: ProviderTransportExecutionRequest,
 ) -> PreparedProviderTransportStreamLaunch {
     let ProviderTransportExecutionRequest {
-        api_family: _,
-        runtime_kind: _,
         provider_id,
-        runtime_label,
-        api_key,
-        base_url,
         model_id,
+        workspace_path: _,
         execution_mode,
         system_preamble,
         prompt,
@@ -214,14 +177,11 @@ pub(crate) fn prepare_provider_transport_stream_launch(
         core_snapshot,
         temperature,
         max_turns,
-        headers,
         tools_manager,
         session_id,
         task_runtime,
         resolved_tools,
-        additional_params,
         context_injection,
-        interleaved_reasoning,
         request_budget_guard,
         retry_policy,
         prompt_intervention,
@@ -229,7 +189,6 @@ pub(crate) fn prepare_provider_transport_stream_launch(
         tool_request_rejection_all_tools,
         tool_request_rejection_tool_ids,
     } = request;
-    let normalized_base_url = normalize_optional_base_url(base_url.as_deref());
     let runtime_inputs = prepare_provider_transport_runtime_inputs(
         provider_id.as_str(),
         model_id.as_str(),
@@ -238,8 +197,6 @@ pub(crate) fn prepare_provider_transport_stream_launch(
         turn_start_mode,
         temperature,
         max_turns,
-        &headers,
-        additional_params,
         context_injection,
         tools_manager,
         &resolved_tools,
@@ -256,10 +213,6 @@ pub(crate) fn prepare_provider_transport_stream_launch(
     PreparedProviderTransportStreamLaunch {
         runtime_inputs,
         core_snapshot,
-        api_key,
-        base_url: normalized_base_url,
-        runtime_label,
-        interleaved_reasoning,
         prompt_intervention,
     }
 }
@@ -288,8 +241,6 @@ mod tests {
             ProviderTransportTurnStartMode::UserPrompt,
             Some(0.2),
             4,
-            &HeaderMap::new(),
-            None,
             Some(injection.clone()),
         );
 

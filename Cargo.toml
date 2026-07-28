@@ -34,6 +34,9 @@ members = [
     "crates/vulcan-tools-luaskills-call",
     "crates/vulcan-luaskills-prompt",
     "crates/vulcan-luaskills-config",
+    "crates/vulcan-ai-contract",
+    "crates/vulcan-ai-protocols",
+    "crates/vulcan-provider-adapters",
     "crates/vulcan-hello",
 ]
 exclude = [
@@ -79,6 +82,9 @@ vulcan-token-counter = { path = "crates/vulcan-token-counter" }
 vulcan-tools-luaskills-call = { path = "crates/vulcan-tools-luaskills-call" }
 vulcan-luaskills-prompt = { path = "crates/vulcan-luaskills-prompt" }
 vulcan-luaskills-config = { path = "crates/vulcan-luaskills-config" }
+vulcan-ai-contract = { path = "crates/vulcan-ai-contract" }
+vulcan-ai-protocols = { path = "crates/vulcan-ai-protocols" }
+vulcan-provider-adapters = { path = "crates/vulcan-provider-adapters" }
 vldb-controller-client = "0.2.3"
 luaskills = "=0.5.5"
 async-trait = "0.1.89"
@@ -99,7 +105,7 @@ dirs = "6.0.0"
 ignore = "0.4.24"
 jsonschema = "=0.47.0"
 notify = "8.2.0"
-tokio = { version = "1.52.2", features = ["macros", "rt", "sync", "time"] }
+tokio = { version = "1.52.2", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 tracing = "0.1.43"
 tonic = { version = "0.12.3", default-features = false, features = ["transport", "codegen", "prost"] }
 tonic-build = "0.12.3"

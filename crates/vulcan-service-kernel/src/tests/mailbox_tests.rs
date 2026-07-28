@@ -119,12 +119,7 @@ fn guided_prompt_intervention_emits_consumed_pending_prompt_delta() {
     let app = ServiceEventEmitter::new(vec![Arc::new(CapturingServiceEventSink {
         events: Arc::clone(&emitted_events),
     })]);
-    let intervention = build_webui_prompt_intervention(
-        app,
-        Arc::clone(&state),
-        ProviderConfigurationFile::default(),
-        PersistedAiToolConfiguration::default(),
-    );
+    let intervention = build_webui_prompt_intervention(app, Arc::clone(&state));
     let mut controller = test_mailbox_controller();
 
     assert!(
@@ -183,12 +178,8 @@ fn webui_prompt_intervention_is_atomic_on_invalid_mailbox_payload() {
         .input_queue_mut()
         .enqueue_current_turn_input(invalid_input);
     let state = Arc::new(Mutex::new(service_state));
-    let intervention = build_webui_prompt_intervention(
-        ServiceEventEmitter::new(Vec::new()),
-        Arc::clone(&state),
-        ProviderConfigurationFile::default(),
-        PersistedAiToolConfiguration::default(),
-    );
+    let intervention =
+        build_webui_prompt_intervention(ServiceEventEmitter::new(Vec::new()), Arc::clone(&state));
     let mut controller = test_mailbox_controller();
     // original_controller captures every Core field before the rejected intervention.
     // original_controller 捕获被拒绝干预前的全部 Core 字段。

@@ -3,10 +3,7 @@
 
 use super::*;
 use crate::{
-    conversation_submission::{
-        effective_pending_prompt_disabled_ai_capability_kinds,
-        effective_pending_prompt_reasoning_effort,
-    },
+    conversation_submission::effective_pending_prompt_reasoning_effort,
     ensure_webui_goal_session_kernel_turn_start_allowed, start_webui_goal_session_kernel_turn,
 };
 
@@ -89,7 +86,6 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
             state,
             controller_runtime,
             &workspace_snapshot,
-            agent_runtime,
             session_id,
             has_active_session_run,
             allow_from_stopped_phase,
@@ -209,15 +205,6 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
     let runtime_options = entry.runtime_options.clone();
     let entry_agent_runtime = agent_runtime_for_pending_prompt(agent_runtime, &entry);
     let panel_entry_id = entry.panel_entry_id.clone();
-    // disabled_ai_capability_kinds preserves captured user controls but resolves host-created Goal guidance from the persistent session configuration.
-    // disabled_ai_capability_kinds 保留已捕获的用户控制，同时从持久化会话配置解析宿主创建的目标引导。
-    let disabled_ai_capability_kinds = effective_pending_prompt_disabled_ai_capability_kinds(
-        entry.source,
-        &runtime_options.disabled_ai_capability_kinds,
-        &workspace_snapshot,
-        session_id,
-        &entry_agent_runtime.ai_tool_configuration,
-    )?;
     // reasoning_effort prevents a neutral internal queue placeholder from changing the active reasoning selection.
     // reasoning_effort 防止中性的内部队列占位值改变当前推理强度选择。
     let reasoning_effort = effective_pending_prompt_reasoning_effort(
@@ -248,9 +235,6 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
         source: entry.source,
         execution_mode: String::from("build"),
         reasoning_effort,
-        disabled_ai_capability_kinds,
-        disabled_ai_capability_target_selectors: BTreeSet::new(),
-        ai_capability_target_bindings: BTreeMap::new(),
     };
     let precheck_start = if let Some(expected_goal_dispatch_version) = goal_dispatch_version {
         let mut hook_runtime = entry_agent_runtime

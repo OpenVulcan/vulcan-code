@@ -1,8 +1,6 @@
 //! WebUI prompt lifecycle orchestration around precheck and queued dispatch.
 //! WebUI 提示词生命周期编排，覆盖 precheck 与排队分发。
 
-use std::collections::{BTreeMap, BTreeSet};
-
 use vulcan_agent_runtime::{
     ExecutionPreparationRequest,
     agent_runtime::{
@@ -10,7 +8,6 @@ use vulcan_agent_runtime::{
         events::{RuntimeEvent, RuntimeEventKind},
     },
     session_event_runtime::append_runtime_event_projection_to_state,
-    workbench_ai_capability_router::effective_ai_tool_configuration_for_prompt_overrides,
     workbench_prompt_turn::{
         SharedPromptPrecheckPlan, SharedPromptTurnBeginInput, SharedPromptTurnContinueInput,
         SharedPromptTurnStart, begin_shared_prompt_turn,
@@ -51,12 +48,11 @@ use super::{
     prepend_goal_context_to_current_prompt, push_webui_service_diagnostic,
     replace_canonical_current_user_prompt, runtime_parts_from_state,
     segmented_session_directory_for_workspace_session, selected_session_id_from_state,
-    session_ai_tool_configuration_or_default, session_goal_prompt_parts_from_state,
-    session_has_pending_plan_artifact, session_plan_context_for_prompt_from_state,
-    snapshot_webui_context_before_user_prompt, spawn_agent_stream_task, spawn_service_task,
-    spawn_workspace_session_persist_task, spawn_workspace_session_runtime_state_persist_task,
-    start_webui_session_kernel_turn, stop_webui_session_kernel_generation,
-    store_workspace_snapshot_without_workbench_rebuild,
+    session_goal_prompt_parts_from_state, session_has_pending_plan_artifact,
+    session_plan_context_for_prompt_from_state, snapshot_webui_context_before_user_prompt,
+    spawn_agent_stream_task, spawn_service_task, spawn_workspace_session_persist_task,
+    spawn_workspace_session_runtime_state_persist_task, start_webui_session_kernel_turn,
+    stop_webui_session_kernel_generation, store_workspace_snapshot_without_workbench_rebuild,
     sync_hydrated_session_dialogue_ready_marker,
     sync_webui_session_runtime_kernel_to_workspace_state, webui_after_precheck_trace,
     webui_session_has_active_run, webui_session_kernel_has_active_turn,

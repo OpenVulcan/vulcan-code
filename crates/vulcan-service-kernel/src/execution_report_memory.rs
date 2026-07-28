@@ -22,14 +22,14 @@ use super::vmm_runtime_audit::{
 use super::{
     AgentRuntimeBridge, ContextUsageChangedDelta, ServiceBridgeState, ServiceEvent,
     SharedServiceBridgeState, UpdateConversationRunPhaseDelta, WorkbenchDelta,
-    WorkbenchDeltaEnvelope, active_session_summary_for_session_mut,
-    apply_checkpoint_conversation_state, apply_terminal_execution_report_to_state,
-    apply_vmm_writeback_effects_to_runtime_state, build_conversation_messages_patched_delta,
-    build_vmm_hook_config_snapshot, context_usage_snapshot_from_runtime_state,
-    conversation_messages_from_session, current_unix_millis_text, current_unix_millis_value,
-    emit_service_event_with_trace, merge_runtime_state_records_into_display_messages,
-    owning_project_id_for_session, persist_workspace_session_update,
-    replace_conversation_messages_in_workbench_window,
+    WorkbenchDeltaEnvelope, active_public_ai_model_capabilities,
+    active_session_summary_for_session_mut, apply_checkpoint_conversation_state,
+    apply_terminal_execution_report_to_state, apply_vmm_writeback_effects_to_runtime_state,
+    build_conversation_messages_patched_delta, build_vmm_hook_config_snapshot,
+    context_usage_snapshot_from_runtime_state, conversation_messages_from_session,
+    current_unix_millis_text, current_unix_millis_value, emit_service_event_with_trace,
+    merge_runtime_state_records_into_display_messages, owning_project_id_for_session,
+    persist_workspace_session_update, replace_conversation_messages_in_workbench_window,
     replace_task_display_messages_with_runtime_state_records, spawn_service_task,
     spawn_workspace_session_runtime_state_persist_task,
     spawn_workspace_session_transcript_persist_task, sync_hydrated_session_dialogue_ready_marker,
@@ -902,23 +902,18 @@ fn emit_terminal_execution_report_workbench_deltas(
         } else {
             Vec::new()
         };
-        let provider_configuration = guard
-            .agent_runtime
-            .as_ref()
-            .map(|runtime| runtime.provider_configuration.clone())
-            .unwrap_or_default();
-        let ai_tool_configuration = guard
-            .agent_runtime
-            .as_ref()
-            .map(|runtime| runtime.ai_tool_configuration.clone())
-            .unwrap_or_default();
+        let public_model_capabilities = active_public_ai_model_capabilities(
+            guard
+                .agent_runtime
+                .as_ref()
+                .map(|runtime| runtime.public_ai_runtime.as_ref()),
+        );
         let context_usage = if surface_matches {
             context_usage_snapshot_from_runtime_state(
                 session_id,
                 workspace.session_runtime_state.get(&session_id),
                 &guard.live_context_budgets,
-                &provider_configuration,
-                &ai_tool_configuration,
+                public_model_capabilities.as_ref(),
             )
         } else {
             None

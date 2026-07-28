@@ -954,7 +954,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onSlashCommand={props.onSlashCommand}
         onOpenKnowledge={props.onOpenKnowledge}
         onSubmitPrompt={props.onSubmitPrompt}
-        onSaveAiCapabilityConfiguration={props.onSaveAiCapabilityConfiguration}
         onSaveSessionGoal={props.onSaveSessionGoal}
         onResumeSessionGoal={props.onResumeSessionGoal}
         onClearSessionGoal={props.onClearSessionGoal}

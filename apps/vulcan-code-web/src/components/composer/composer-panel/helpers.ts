@@ -1,4 +1,3 @@
-import { isComposerAiCapabilityKind, type AiCapabilityKind } from "@/components/composer/composer-model";
 import type { ComposerAttachmentSummary } from "@/types";
 export interface ComposerSessionMemoryDraft {
   // input is the raw textarea value, including user-authored whitespace.
@@ -74,17 +73,5 @@ export function writeComposerSessionMemoryDraft(
     input,
     attachments: attachments.map((attachment) => ({ ...attachment })),
   });
-}
-
-// defaultAiCapabilityTargetBindingsFromRecord restores typed exact bindings from a saved request payload.
-// defaultAiCapabilityTargetBindingsFromRecord 从已保存请求载荷恢复类型化精确绑定。
-export function defaultAiCapabilityTargetBindingsFromRecord(record: Record<string, string>): Map<AiCapabilityKind, string> {
-  const bindings = new Map<AiCapabilityKind, string>();
-  for (const [kind, selector] of Object.entries(record)) {
-    if (isComposerAiCapabilityKind(kind) && selector.trim()) {
-      bindings.set(kind, selector.trim());
-    }
-  }
-  return bindings;
 }
 

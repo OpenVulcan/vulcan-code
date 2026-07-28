@@ -818,6 +818,7 @@ mod tests {
                     id: String::from("recent-tool-result"),
                     payload: SessionConversationPayload::ToolResult {
                         tool_call_id: Some(String::from("tool-call-provider")),
+                        is_error: false,
                         text: "很大的工具输出".repeat(200),
                     },
                 },

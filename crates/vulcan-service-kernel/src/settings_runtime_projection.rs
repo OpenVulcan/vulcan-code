@@ -394,8 +394,6 @@ pub(crate) fn emit_session_addon_changed_event(
 /// `workspace_snapshot` 提供旧运行态。
 /// `session_id` selects the session being exported.
 /// `session_id` 选择正在导出的会话。
-/// `default_ai_tool_configuration` supplies the default AI capability template.
-/// `default_ai_tool_configuration` 提供默认 AI 能力模板。
 /// `namespaces` limits the addon namespaces exported from the runtime snapshot.
 /// `namespaces` 限定从运行态快照导出的附属状态命名空间。
 ///
@@ -406,7 +404,6 @@ pub(crate) fn emit_session_addon_changed_event(
 pub(crate) fn session_addon_state_from_workspace_snapshot(
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
-    default_ai_tool_configuration: &PersistedAiToolConfiguration,
     namespaces: &[SessionAddonNamespace],
 ) -> Option<SessionAddonState> {
     let runtime_state = workspace_snapshot
@@ -425,13 +422,6 @@ pub(crate) fn session_addon_state_from_workspace_snapshot(
                 if let Some(controls) = SessionRuntimeControls::from_runtime_state(runtime_state) {
                     let _ = addon_state.set_runtime_controls(&controls, updated_at.clone());
                 }
-            }
-            SessionAddonNamespace::AiCapabilities => {
-                let configuration = runtime_state
-                    .ai_tool_configuration
-                    .as_ref()
-                    .unwrap_or(default_ai_tool_configuration);
-                let _ = addon_state.set_ai_tool_configuration(configuration, updated_at.clone());
             }
             SessionAddonNamespace::Todolist if !runtime_state.todolist.is_empty() => {
                 let _ = addon_state.set_todolist(&runtime_state.todolist, updated_at.clone());
@@ -485,48 +475,38 @@ pub(crate) fn emit_service_event_with_trace(
 pub(crate) fn refresh_settings_projection_locked(
     guard: &mut ServiceBridgeState,
     provider_configuration: &ProviderConfigurationFile,
-    ai_tool_configuration: Option<&PersistedAiToolConfiguration>,
 ) {
-    let ai_tool_configuration = ai_tool_configuration
-        .cloned()
-        .or_else(|| {
-            guard
-                .agent_runtime
-                .as_ref()
-                .map(|runtime| runtime.ai_tool_configuration.clone())
-        })
-        .unwrap_or_default();
-    let selected_ai_tool_configuration = guard
-        .workspace_snapshot
-        .as_ref()
-        .and_then(|workspace| {
-            workspace
-                .session_runtime_state
-                .get(&workspace.selected_session)
-                .and_then(|runtime_state| runtime_state.ai_tool_configuration.clone())
-        })
-        .unwrap_or_else(|| ai_tool_configuration.clone());
+    let public_model_capabilities = guard.agent_runtime.as_ref().and_then(|agent_runtime| {
+        let configuration = agent_runtime
+            .public_ai_runtime
+            .configuration_snapshot()
+            .ok()?;
+        agent_runtime
+            .public_ai_runtime
+            .resolve_active_selection(&configuration)
+            .ok()
+            .map(|selection| selection.model.capabilities)
+    });
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
     guard.workbench.ui_locale = provider_configuration.ui_locale.clone();
-    guard.workbench.providers = providers(provider_configuration);
+    if let Some(agent_runtime) = guard.agent_runtime.as_ref()
+        && let Ok(configuration) = agent_runtime.public_ai_runtime.configuration_snapshot()
+        && let Ok(rows) =
+            public_ai_provider_rows(&configuration, agent_runtime.public_ai_runtime.as_ref())
+    {
+        guard.workbench.providers = rows;
+    }
     guard.workbench.mcp_servers = mcp_servers(provider_configuration);
     guard.workbench.mcp_tools = mcp_tools(&cached_mcp_catalog_from_state(guard));
-    guard.workbench.reasoning_selection = reasoning_selection(provider_configuration);
+    guard.workbench.reasoning_selection =
+        reasoning_selection(provider_configuration, public_model_capabilities.as_ref());
     guard.workbench.thinking_display_mode = workbench_thinking_display_mode(provider_configuration);
     guard.workbench.git_commit = git_commit_settings(provider_configuration);
     guard.workbench.provider_retry = provider_retry_settings(provider_configuration);
     guard.workbench.host_tools = host_tools_settings(provider_configuration);
-    let ai_capability_model_capabilities =
-        active_provider_configuration_model_capabilities(provider_configuration);
-    guard.workbench.ai_capabilities = ai_capabilities(
-        &selected_ai_tool_configuration,
-        ai_capability_model_capabilities.as_ref(),
-    );
-    guard.workbench.ai_capability_vendors = ai_capability_vendors(&selected_ai_tool_configuration);
-    guard.workbench.ai_capability_vendor_catalog = ai_capability_vendor_catalog();
     guard.workbench.composer_attachment_capabilities =
-        composer_attachment_capabilities(provider_configuration, &selected_ai_tool_configuration);
+        composer_attachment_capabilities(public_model_capabilities.as_ref());
 }
 
 /// Returns the mutable runtime state for the currently selected regular session.
@@ -563,72 +543,6 @@ pub(crate) fn selected_session_runtime_state_mut(
     Some((session_id, runtime_state))
 }
 
-/// Returns the AI capability configuration owned by one session or the default template.
-/// 返回指定会话拥有的 AI 能力配置，若会话尚无配置则返回默认模板。
-///
-/// # Parameters
-/// 参数
-/// `workspace` is the retained workspace snapshot that may contain session-scoped runtime state.
-/// `workspace` 是可能包含会话级运行态的保留工作区快照。
-/// `session_id` selects the session whose configuration should be used.
-/// `session_id` 选择应使用其配置的会话。
-/// `default_configuration` is the default AI capability template.
-/// `default_configuration` 是默认 AI 能力配置模板。
-///
-/// # Returns
-/// 返回值
-/// The session-scoped AI capability configuration when present, otherwise the default template.
-/// 存在时返回会话级 AI 能力配置，否则返回默认模板。
-pub(crate) fn session_ai_tool_configuration_or_default<'a>(
-    workspace: &'a WorkspaceSnapshot,
-    session_id: SessionId,
-    default_configuration: &'a PersistedAiToolConfiguration,
-) -> &'a PersistedAiToolConfiguration {
-    workspace
-        .session_runtime_state
-        .get(&session_id)
-        .and_then(|runtime_state| runtime_state.ai_tool_configuration.as_ref())
-        .unwrap_or(default_configuration)
-}
-
-/// Initializes one session AI capability configuration from the default template when absent.
-/// 在缺失时使用默认模板初始化单个会话的 AI 能力配置。
-///
-/// # Parameters
-/// 参数
-/// `workspace` is the retained workspace snapshot that owns the session runtime state.
-/// `workspace` 是拥有会话运行态的保留工作区快照。
-/// `session_id` selects the session that should receive its own configuration snapshot.
-/// `session_id` 选择应接收独立配置快照的会话。
-/// `default_configuration` is the default AI capability template.
-/// `default_configuration` 是默认 AI 能力配置模板。
-///
-/// # Returns
-/// 返回值
-/// `true` when this call initialized the session configuration.
-/// 当本次调用初始化了会话配置时返回 `true`。
-pub(crate) fn ensure_session_ai_tool_configuration(
-    workspace: &mut WorkspaceSnapshot,
-    session_id: SessionId,
-    default_configuration: &PersistedAiToolConfiguration,
-) -> bool {
-    if session_id == SessionId::nil() {
-        return false;
-    }
-    let runtime_state = workspace
-        .session_runtime_state
-        .entry(session_id)
-        .or_insert_with(|| SessionRuntimeStateEntry {
-            updated_at: current_unix_millis_text(),
-            ..SessionRuntimeStateEntry::default()
-        });
-    if runtime_state.ensure_ai_tool_configuration(default_configuration) {
-        runtime_state.updated_at = current_unix_millis_text();
-        return true;
-    }
-    false
-}
-
 /// Refreshes model, reasoning, attachment, and context-usage projections after runtime controls change.
 /// 在运行控制项变化后刷新模型、思考、附件与上下文占用投影。
 ///
@@ -638,13 +552,16 @@ pub(crate) fn ensure_session_ai_tool_configuration(
 /// `guard` 是正在更新的服务状态锁。
 /// `provider_configuration` is the effective provider configuration for the selected session.
 /// `provider_configuration` 是当前选中会话的生效 Provider 配置。
-/// `ai_tool_configuration` is the effective AI tool capability configuration.
-/// `ai_tool_configuration` 是生效的 AI 工具能力配置。
 pub(crate) fn refresh_workbench_runtime_controls_locked(
     guard: &mut ServiceBridgeState,
     provider_configuration: &ProviderConfigurationFile,
-    ai_tool_configuration: &PersistedAiToolConfiguration,
 ) {
+    let public_model_capabilities = active_public_ai_model_capabilities(
+        guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.public_ai_runtime.as_ref()),
+    );
     let context_usage = guard.workspace_snapshot.as_ref().and_then(|workspace| {
         context_usage_snapshot_from_runtime_state(
             workspace.selected_session,
@@ -652,16 +569,37 @@ pub(crate) fn refresh_workbench_runtime_controls_locked(
                 .session_runtime_state
                 .get(&workspace.selected_session),
             &guard.live_context_budgets,
-            provider_configuration,
-            ai_tool_configuration,
+            public_model_capabilities.as_ref(),
         )
     });
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
-    guard.workbench.providers = providers(provider_configuration);
-    guard.workbench.reasoning_selection = reasoning_selection(provider_configuration);
-    guard.workbench.composer_attachment_capabilities =
-        composer_attachment_capabilities(provider_configuration, ai_tool_configuration);
+    if let Some(agent_runtime) = guard.agent_runtime.as_ref()
+        && let Ok(configuration) = agent_runtime.public_ai_runtime.configuration_snapshot()
+        && let Ok(rows) =
+            public_ai_provider_rows(&configuration, agent_runtime.public_ai_runtime.as_ref())
+    {
+        guard.workbench.providers = rows;
+    }
+    guard.workbench.reasoning_selection =
+        reasoning_selection(provider_configuration, public_model_capabilities.as_ref());
+    guard.workbench.composer_attachment_capabilities = composer_attachment_capabilities(
+        guard
+            .agent_runtime
+            .as_ref()
+            .and_then(|agent_runtime| {
+                let configuration = agent_runtime
+                    .public_ai_runtime
+                    .configuration_snapshot()
+                    .ok()?;
+                agent_runtime
+                    .public_ai_runtime
+                    .resolve_active_selection(&configuration)
+                    .ok()
+            })
+            .as_ref()
+            .map(|selection| &selection.model.capabilities),
+    );
     guard.workbench.context_usage = context_usage;
 }
 
@@ -681,18 +619,6 @@ pub(crate) fn restore_webui_runtime_controls_for_session(
     let Some(runtime_state) = runtime_state else {
         return;
     };
-    if let (Some(provider_id), Some(model_id)) = (
-        runtime_state.active_provider_id.as_deref(),
-        runtime_state.active_model_id.as_deref(),
-    ) {
-        let model_is_available =
-            provider_config::effective_model_choices(provider_id, provider_configuration)
-                .into_iter()
-                .any(|choice| choice.id == model_id);
-        if model_is_available {
-            provider_configuration.model = Some(format!("{provider_id}/{model_id}"));
-        }
-    }
     if let Some(reasoning_effort) = runtime_state.active_reasoning_effort {
         provider_configuration.workbench_reasoning_effort = Some(reasoning_effort);
     }
@@ -708,11 +634,6 @@ pub(crate) fn store_provider_and_mcp_configuration_after_change(
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
-    let ai_tool_configuration = guard
-        .agent_runtime
-        .as_ref()
-        .map(|runtime| runtime.ai_tool_configuration.clone())
-        .unwrap_or_default();
     if let Some(agent_runtime) = guard.agent_runtime.as_mut() {
         // retiredMcpRuntime keeps the replaced user partition addressable only for existing generation owners during drain.
         // retiredMcpRuntime 仅在排空期间为既有代次持有者保留被替换用户分区的可寻址性。
@@ -731,38 +652,8 @@ pub(crate) fn store_provider_and_mcp_configuration_after_change(
         agent_runtime.extension_generation = next_generation;
         retired_mcp_runtime.retire_user_partition_after(std::time::Duration::from_secs(30));
     }
-    refresh_settings_projection_locked(
-        &mut guard,
-        &provider_configuration,
-        Some(&ai_tool_configuration),
-    );
+    refresh_settings_projection_locked(&mut guard, &provider_configuration);
     Ok(guard.workbench.clone())
-}
-
-/// Returns the canonical WebUI request key for one provider field.
-/// 返回单个 Provider 字段的规范 WebUI 请求键。
-pub(crate) fn provider_field_request_key(field: ProviderFieldKey) -> &'static str {
-    match field {
-        ProviderFieldKey::ApiKey => "apiKey",
-        ProviderFieldKey::BaseUrl => "baseUrl",
-        ProviderFieldKey::ResourceName => "resourceName",
-        ProviderFieldKey::AccountId => "accountId",
-    }
-}
-
-/// Parses one MCP transport key from the WebUI request payload.
-/// 从 WebUI 请求载荷解析单个 AI 工具类型键。
-pub(crate) fn parse_ai_tool_kind(value: &str) -> Result<AiToolKind, String> {
-    match value.trim() {
-        "web_search" => Ok(AiToolKind::WebSearch),
-        "understand_image" => Ok(AiToolKind::UnderstandImage),
-        "image_generation" => Ok(AiToolKind::ImageGeneration),
-        "video_generation" => Ok(AiToolKind::VideoGeneration),
-        "speech_synthesis" => Ok(AiToolKind::SpeechSynthesis),
-        "music_generation" => Ok(AiToolKind::MusicGeneration),
-        "music_cover" => Ok(AiToolKind::MusicCover),
-        other => Err(format!("不支持的 AI 能力类型：{other}")),
-    }
 }
 
 /// Reprojects Agent Skills after a focused prompt-skill configuration change.
@@ -872,8 +763,9 @@ pub(crate) async fn refresh_plugin_catalog_local_state(
         .map_err(|error| format!("合并插件智能体目录失败：{error}"))?;
     // subagent_summary is derived before the commit so no partial workbench mutation can escape.
     // subagent_summary 在提交前完成派生，避免任何局部工作台变更外泄。
+    let available_model_selectors = public_ai_available_model_selectors(state)?;
     let subagent_summary =
-        subagent_catalog_summary_from_catalog(&subagent_catalog, &provider_configuration);
+        subagent_catalog_summary_from_catalog(&subagent_catalog, Some(&available_model_selectors));
     // guard serializes task-runtime replacement and every visible workbench field update.
     // guard 串行化任务运行时替换与所有可见工作台字段更新。
     let mut guard = state

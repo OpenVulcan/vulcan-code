@@ -54,9 +54,6 @@ export function useChatAreaPlanActions(options: UseChatAreaPlanActionsOptions) {
       attachments: [],
       executionMode: "build",
       reasoningEffort: options.reasoningEffort,
-      disabledAiCapabilityKinds: [],
-      disabledAiCapabilityTargetSelectors: [],
-      aiCapabilityTargetBindings: {},
     });
   }, [options]);
 
@@ -75,9 +72,6 @@ export function useChatAreaPlanActions(options: UseChatAreaPlanActionsOptions) {
       attachments: [],
       executionMode: "plan",
       reasoningEffort: options.reasoningEffort,
-      disabledAiCapabilityKinds: [],
-      disabledAiCapabilityTargetSelectors: [],
-      aiCapabilityTargetBindings: {},
     });
   }, [options]);
 

@@ -42,6 +42,7 @@ fn tool_result_metadata(tool_name: &str, tool_call_id: &str) -> Value {
     json!({
         "tool_name": tool_name,
         "tool_call_id": tool_call_id,
+        "is_error": false,
     })
 }
 

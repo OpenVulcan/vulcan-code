@@ -1,5 +1,4 @@
 export * from "./types/startup";
-export * from "./types/ai-capabilities";
 export * from "./types/projects-files";
 export * from "./types/conversation";
 export * from "./types/composer-skills";
@@ -9,3 +8,4 @@ export * from "./types/runtime-context";
 export * from "./types/planning-questions";
 export * from "./types/workbench";
 export * from "./types/knowledge-base";
+export * from "./types/public-ai";

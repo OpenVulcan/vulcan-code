@@ -44,10 +44,7 @@ use vulcan_agent_runtime::{
         conversation_hooks::{ConversationHookRuntime, ConversationTurnCompletionStatus},
         events::{RuntimeEvent, RuntimeEventKind},
         extension_generation::ExtensionGeneration,
-        prompt_composer_runtime::{
-            invalidate_runtime_prompt_luaskill_catalog_cache,
-            invalidate_runtime_prompt_tool_visibility_cache,
-        },
+        prompt_composer_runtime::invalidate_runtime_prompt_luaskill_catalog_cache,
         provider_request_telemetry::ProviderRequestTelemetryEventKind,
         question_runtime::{PendingQuestionChangeCallback, QuestionRuntime},
         task_runtime::{DetachedTaskRuntimeEvent, TaskRuntime},
@@ -65,40 +62,28 @@ use vulcan_agent_runtime::{
         replace_user_mcp_runtime_partition, runtime_mcp_server_configs,
         validate_plugin_mcp_runtime_partition,
     },
-    provider_capabilities::{
-        ResolvedModelCapabilities, resolve_effective_model_capabilities, resolve_model_capabilities,
-    },
     provider_config::{
-        self, PersistedAiToolConfiguration, ProviderConfigurationFile, ReasoningEffortLevel,
-        WorkbenchThinkingDisplayMode,
+        self, ProviderConfigurationFile, ReasoningEffortLevel, WorkbenchThinkingDisplayMode,
     },
-    provider_input_normalizer::normalize_provider_user_input_for_model,
     session_event_runtime::{
         SessionStreamingRecordIds, append_runtime_event_projection_to_state,
         append_stream_delta_record_to_state, apply_checkpoint_conversation_state,
         apply_terminal_execution_report_to_state, collapse_streaming_thinking_in_state,
         seal_active_streaming_records_in_state, seal_streaming_record_in_state,
     },
-    stream_runtime_run_with_intervention_and_plugins,
+    stream_runtime_run_with_intervention_plugins_and_public_ai,
     tooling::{CommandSessionRuntime, command_session_runtime::CommandSessionInputEvent},
     turn_stats::build_session_turn_stats_from_state_with_segments,
-    workbench_ai_capability_router::{
-        WORKBENCH_QUICK_TOGGLE_AI_TOOL_KINDS, effective_ai_tool_configuration_for_prompt_overrides,
-    },
 };
 use vulcan_context::{
     ContextBudgetSeverity, ContextBudgetSnapshot, SessionConversationRecord, append_record,
 };
-use vulcan_context_injection::{
-    ContextInjectionState, InjectionCompactionPolicy, InjectionInsert, InjectionInsertItem,
-    InjectionKind, InjectionPanelCard,
-};
+use vulcan_context_injection::{ContextInjectionState, InjectionKind, InjectionPanelCard};
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::types::{ConversationAttachment, ProviderRequestSnapshot, ProviderUsageSnapshot};
 use vulcan_provider_config::config::{
-    AiToolKind, PersistedLuaSkillToolRegistrationState, PersistedMcpOAuthConfig,
-    PersistedMcpServerEntry, PersistedMcpTransportKind, PersistedPromptSkillState,
-    ProviderFieldKey,
+    PersistedLuaSkillToolRegistrationState, PersistedMcpOAuthConfig, PersistedMcpServerEntry,
+    PersistedMcpTransportKind, PersistedPromptSkillState,
 };
 #[cfg(test)]
 use vulcan_service_api::SessionGoalStatus;
@@ -121,22 +106,21 @@ use vulcan_service_api::{
     LuaSkillsManagedRuntimeComponentSummary, McpServerSummary, McpToolSummary, MemorySummary,
     MessageRole, OptionalTextPatch, PendingQuestionChangedDelta, PendingQuestionOptionSummary,
     PendingQuestionPromptSummary, PendingQuestionSnapshot, PluginSummary, ProjectRemovedDelta,
-    ProjectSummary, ProviderFieldSummary, ProviderModelSummary, ProviderSummary,
-    ReasoningSelectionOptionSummary, ReasoningSelectionSummary, RuntimeModuleSnapshot,
-    ServiceEvent, ServiceEventEmitter, SessionAddonChangedEvent, SessionAddonsChangedDelta,
-    SessionAddonsChangedResponse, SessionGoalSummary, SessionPlanArtifactSummary,
-    SessionPlanModeSummary, SessionTodolistItemSummary, SessionTodolistSummary,
-    SessionVmmPolicyByConversation, SessionVmmPolicySummary, SettingSectionSummary,
-    StartupSnapshot, StartupStepStatus, SubagentCatalogIssueSummary, SubagentCatalogSummary,
-    SubagentCatalogUpdate, SubagentCategorySummary, SubagentDefinitionLocaleSummary,
-    SubagentDefinitionSaveRequest, SubagentDefinitionSummary, SubagentNavigationChangedDelta,
-    SubagentNavigationSnapshot, SubagentPanelRouteResponse, ToolCallSummary,
-    UpdateConversationRunPhaseDelta, UserPromptEditDraftSummary, VmmMemorySnapshot,
-    WEBUI_SERVICE_DISCOVERY_STATUS_FAILED, WEBUI_SERVICE_DISCOVERY_STATUS_READY,
-    WEBUI_SERVICE_DISCOVERY_STATUS_STARTING, WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV,
-    WorkbenchDelta, WorkbenchDeltaEnvelope, WorkbenchSnapshot,
-    webui_service_discovery_snapshot_with_status, webui_service_starting_discovery_snapshot,
-    webui_static_root_from_candidates,
+    ProjectSummary, ProviderModelSummary, ProviderSummary, ReasoningSelectionOptionSummary,
+    ReasoningSelectionSummary, RuntimeModuleSnapshot, ServiceEvent, ServiceEventEmitter,
+    SessionAddonChangedEvent, SessionAddonsChangedDelta, SessionAddonsChangedResponse,
+    SessionGoalSummary, SessionPlanArtifactSummary, SessionPlanModeSummary,
+    SessionTodolistItemSummary, SessionTodolistSummary, SessionVmmPolicyByConversation,
+    SessionVmmPolicySummary, SettingSectionSummary, StartupSnapshot, StartupStepStatus,
+    SubagentCatalogIssueSummary, SubagentCatalogSummary, SubagentCatalogUpdate,
+    SubagentCategorySummary, SubagentDefinitionLocaleSummary, SubagentDefinitionSaveRequest,
+    SubagentDefinitionSummary, SubagentNavigationChangedDelta, SubagentNavigationSnapshot,
+    SubagentPanelRouteResponse, ToolCallSummary, UpdateConversationRunPhaseDelta,
+    UserPromptEditDraftSummary, VmmMemorySnapshot, WEBUI_SERVICE_DISCOVERY_STATUS_FAILED,
+    WEBUI_SERVICE_DISCOVERY_STATUS_READY, WEBUI_SERVICE_DISCOVERY_STATUS_STARTING,
+    WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV, WorkbenchDelta, WorkbenchDeltaEnvelope,
+    WorkbenchSnapshot, webui_service_discovery_snapshot_with_status,
+    webui_service_starting_discovery_snapshot, webui_static_root_from_candidates,
 };
 use vulcan_service_host::{
     SharedWebuiServiceDiscoverySnapshot, WebuiServiceHttpConfig, WebuiServiceRpcDispatcher,
@@ -194,7 +178,7 @@ use vulcan_workspace_store::{
 
 mod agent_skills_watcher;
 mod agent_stream;
-mod ai_capabilities;
+mod ai_credential_secret_store;
 mod attachments;
 mod codebase_memory_controller;
 mod command_sessions;
@@ -221,6 +205,7 @@ mod plugin_ui_events;
 mod project_conversation_services;
 mod project_directories;
 mod provider_settings;
+mod public_ai_settings;
 mod rpc_dispatch;
 mod runtime_summary_projection;
 mod runtime_workspace_helpers;
@@ -228,7 +213,6 @@ mod service_bootstrap;
 mod service_bridge_io;
 mod service_diagnostics_paths;
 mod service_state_access;
-mod session_ai_capabilities;
 mod session_goal_lifecycle;
 mod session_goals;
 mod session_hydration;
@@ -259,13 +243,6 @@ mod workspace_files;
 mod workspace_persistence_versions;
 mod workspace_session_persistence;
 use agent_stream::*;
-use ai_capabilities::{
-    ai_capabilities, ai_capability_vendor_catalog, ai_capability_vendors,
-    parse_ai_capability_target_bindings, parse_ai_capability_target_selectors,
-    service_remove_ai_capability_vendor, service_save_ai_capability_targets,
-    service_save_ai_capability_vendor, service_set_ai_capability_target_enabled,
-    set_ai_capability_selected_target_for_kind,
-};
 use attachments::{
     composer_attachment_capabilities, composer_attachment_summary_from_core,
     composer_attachment_summary_to_core, composer_message_attachments_from_metadata,
@@ -326,8 +303,7 @@ use pending_prompt_services::{
 use pending_prompts::{
     clear_internal_pending_prompt_queue_for_stop, emit_pending_prompts_changed_delta,
     enqueue_webui_pending_prompt_from_submission, pending_prompt_summaries_from_runtime_state,
-    provider_configuration_for_model_reference, runtime_state_has_queued_pending_prompt_work,
-    session_has_blocking_system_prompt_work,
+    runtime_state_has_queued_pending_prompt_work, session_has_blocking_system_prompt_work,
 };
 use plugin_services::{
     service_invoke_plugin_action, service_load_plugin_ui_module, service_read_plugin_text_asset,
@@ -336,11 +312,8 @@ pub use project_conversation_services::service_add_project_initial_directory;
 use project_conversation_services::*;
 pub use project_directories::service_add_project_from_path;
 use project_directories::service_browse_project_directories;
-use provider_settings::{
-    provider_retry_settings, service_remove_provider_configuration,
-    service_save_provider_configuration, service_save_provider_enabled_models,
-    service_save_provider_model_override, service_save_provider_retry_settings,
-};
+use provider_settings::{provider_retry_settings, service_save_provider_retry_settings};
+use public_ai_settings::*;
 use rpc_dispatch::dispatch_service_rpc;
 use runtime_summary_projection::*;
 use runtime_workspace_helpers::*;
@@ -350,7 +323,6 @@ pub use service_bridge_io::spawn_webui_service_http_bridge;
 use service_bridge_io::*;
 use service_diagnostics_paths::*;
 use service_state_access::*;
-use session_ai_capabilities::*;
 use session_goal_lifecycle::{
     account_session_goal_from_report, account_session_goal_provider_usage,
     advance_session_goal_dispatch_version, append_goal_turn_usage_context,
@@ -410,10 +382,10 @@ use webui_turn_chaining::{
 };
 use workbench_context_usage::*;
 use workbench_model_routes::{
-    provider_secondary_route_summary_from_openrouter_selection,
+    provider_secondary_route_summary_from_public_selection,
     service_list_workbench_model_secondary_routes, service_select_webui_locale,
-    service_select_workbench_model, service_select_workbench_model_secondary_route,
-    service_select_workbench_reasoning_effort, service_select_workbench_thinking_display_mode,
+    service_select_workbench_model_secondary_route, service_select_workbench_reasoning_effort,
+    service_select_workbench_thinking_display_mode,
 };
 use workbench_refresh::*;
 use workbench_session_panels::*;
@@ -429,12 +401,6 @@ use workspace_files::{service_workspace_files_list, service_workspace_files_read
 use workspace_persistence_versions::*;
 use workspace_session_persistence::*;
 
-/// Context-injection tag used for the latest session AI capability runtime update.
-/// 最新会话 AI 能力运行时变更注入使用的上下文注入标签。
-const SESSION_AI_CAPABILITY_UPDATE_INJECTION_TAG: &str = "session_ai_capability_update";
-/// Stable dedupe key that replaces stale AI capability update notices in the current context window.
-/// 用于在当前上下文窗口内替换旧 AI 能力变更通知的稳定去重键。
-const SESSION_AI_CAPABILITY_UPDATE_DEDUPE_KEY: &str = "session_ai_capability_update:latest";
 use vulcan_service_runtime::luaskills_bridge::{TauriLuaSkillsCatalog, TauriLuaSkillsHandle};
 use vulcan_service_runtime::mcp_bridge::{TauriMcpRuntimeCatalog, TauriMcpRuntimeHandle};
 use vulcan_service_runtime::token_budget_bridge::TauriTokenBudgetRuntime;

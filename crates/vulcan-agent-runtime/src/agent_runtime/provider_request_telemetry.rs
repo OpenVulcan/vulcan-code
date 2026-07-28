@@ -3,7 +3,6 @@
 
 use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPromptPurpose};
 use crate::model::SessionId;
-use crate::provider_config::ProviderApiFamily;
 use serde::Serialize;
 use serde_json::{Value, to_value};
 use time::{OffsetDateTime, UtcOffset};
@@ -47,7 +46,7 @@ pub(crate) struct ProviderRequestTelemetryContext {
     model_name: String,
     /// Canonical API family that defines whether Provider input already excludes cached tokens.
     /// 定义 Provider 输入是否已经排除缓存 Token 的规范接口族。
-    api_family: ProviderApiFamily,
+    protocol_profile_id: String,
     /// Stable owner category derived from explicit preparation fields.
     /// 从显式执行准备字段派生的稳定归属类别。
     owner_kind: &'static str,
@@ -90,7 +89,7 @@ impl ProviderRequestTelemetryContext {
             workspace_id: preparation.workspace_path.clone(),
             provider_name: preparation.model_blueprint.provider_name.clone(),
             model_name: preparation.model_blueprint.model_name.clone(),
-            api_family: preparation.model_blueprint.api_family(),
+            protocol_profile_id: preparation.model_blueprint.protocol_profile_id.clone(),
             owner_kind,
             owner_id: preparation.agent_id.clone(),
             owner_name: preparation.agent_name.clone(),
@@ -738,10 +737,12 @@ fn build_completed_event(
     let normalized_usage = usage.cloned().unwrap_or_default();
     // uncachedInputTokens converts protocol-specific input semantics into the statistics contract once at the telemetry boundary.
     // uncachedInputTokens 在遥测边界一次性把协议专属输入语义转换为统计契约。
-    let uncached_input_tokens = uncached_input_tokens(context.api_family, &normalized_usage);
+    let uncached_input_tokens =
+        uncached_input_tokens(context.protocol_profile_id.as_str(), &normalized_usage);
     // outputTokens converts protocol-specific reasoning semantics into one complete output count.
     // outputTokens 将协议专属的思考语义转换为一个完整输出计数。
-    let output_tokens = complete_output_tokens(context.api_family, &normalized_usage);
+    let output_tokens =
+        complete_output_tokens(context.protocol_profile_id.as_str(), &normalized_usage);
     let completed_usage = (matches!(status, ProviderRequestTerminalStatus::Succeeded)
         && usage.is_some())
     .then_some(ProviderRequestCompletedUsage {
@@ -794,22 +795,16 @@ fn build_completed_event(
 /// `usage` 包含最终规范化 Provider 用量快照。
 /// Returns the non-cached input-token count without changing the Provider-reported fields.
 /// 返回非缓存输入 Token 数量，且不修改 Provider 原始报告字段。
-fn uncached_input_tokens(api_family: ProviderApiFamily, usage: &ProviderUsageSnapshot) -> usize {
+fn uncached_input_tokens(protocol_profile_id: &str, usage: &ProviderUsageSnapshot) -> usize {
     // inputTokens preserves the Provider-reported input value before statistics normalization.
     // inputTokens 在统计归一化前保留 Provider 报告的输入值。
     let input_tokens = usage.input_tokens.unwrap_or_default();
-    match api_family {
-        ProviderApiFamily::OpenAiResponses
-        | ProviderApiFamily::OpenAiChatCompatible
-        | ProviderApiFamily::GoogleGeminiGenerateContent => {
-            input_tokens.saturating_sub(usage.cached_input_tokens.unwrap_or_default())
-        }
-        ProviderApiFamily::AnthropicMessages => {
-            // Anthropic reports cache writes separately from both uncached input and cache reads.
-            // Anthropic 将缓存写入与非缓存输入、缓存读取分别报告。
-            input_tokens.saturating_add(usage.cache_creation_input_tokens.unwrap_or_default())
-        }
-        ProviderApiFamily::CohereChat | ProviderApiFamily::BedrockConverse => input_tokens,
+    if protocol_profile_id == vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID {
+        // Anthropic reports cache writes separately from both uncached input and cache reads.
+        // Anthropic 将缓存写入与非缓存输入、缓存读取分别报告。
+        input_tokens.saturating_add(usage.cache_creation_input_tokens.unwrap_or_default())
+    } else {
+        input_tokens.saturating_sub(usage.cached_input_tokens.unwrap_or_default())
     }
 }
 
@@ -822,22 +817,10 @@ fn uncached_input_tokens(api_family: ProviderApiFamily, usage: &ProviderUsageSna
 /// `usage` 包含最终规范化 Provider 用量快照。
 /// Returns complete output without counting a Provider-reported reasoning subset twice.
 /// 返回完整输出，并避免重复计算 Provider 报告的思考子集。
-fn complete_output_tokens(api_family: ProviderApiFamily, usage: &ProviderUsageSnapshot) -> usize {
-    // outputTokens preserves the Provider-reported output value before protocol normalization.
-    // outputTokens 在协议归一化前保留 Provider 报告的输出值。
-    let output_tokens = usage.output_tokens.unwrap_or_default();
-    match api_family {
-        ProviderApiFamily::GoogleGeminiGenerateContent => {
-            // Gemini reports visible candidates and hidden thoughts as disjoint output counters.
-            // Gemini 将可见候选输出与隐藏思考报告为互不重叠的输出计数。
-            output_tokens.saturating_add(usage.reasoning_tokens.unwrap_or_default())
-        }
-        ProviderApiFamily::OpenAiResponses
-        | ProviderApiFamily::OpenAiChatCompatible
-        | ProviderApiFamily::AnthropicMessages
-        | ProviderApiFamily::CohereChat
-        | ProviderApiFamily::BedrockConverse => output_tokens,
-    }
+fn complete_output_tokens(_protocol_profile_id: &str, usage: &ProviderUsageSnapshot) -> usize {
+    // All enabled public profiles normalize reasoning into the reported output count.
+    // 所有已启用公共档案都会把推理归一化到已报告输出计数中。
+    usage.output_tokens.unwrap_or_default()
 }
 
 /// Builds one retry-wait telemetry event linked to the failed physical request.
@@ -1078,7 +1061,7 @@ mod tests {
             workspace_id: String::from("workspace-1"),
             provider_name: String::from("Provider Name"),
             model_name: String::from("Model Name"),
-            api_family: ProviderApiFamily::AnthropicMessages,
+            protocol_profile_id: String::from(vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID),
             owner_kind: "main_agent",
             owner_id: String::from("agent-1"),
             owner_name: String::from("Agent One"),
@@ -1168,11 +1151,14 @@ mod tests {
         };
 
         assert_eq!(
-            uncached_input_tokens(ProviderApiFamily::AnthropicMessages, &anthropic_usage),
+            uncached_input_tokens(
+                vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
+                &anthropic_usage,
+            ),
             2_540
         );
         assert_eq!(
-            uncached_input_tokens(ProviderApiFamily::OpenAiChatCompatible, &openai_usage),
+            uncached_input_tokens(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID, &openai_usage,),
             2_509
         );
     }
@@ -1193,11 +1179,11 @@ mod tests {
         };
 
         assert_eq!(
-            complete_output_tokens(ProviderApiFamily::GoogleGeminiGenerateContent, &usage),
-            250
+            complete_output_tokens(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID, &usage),
+            200
         );
         assert_eq!(
-            complete_output_tokens(ProviderApiFamily::OpenAiChatCompatible, &usage),
+            complete_output_tokens(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID, &usage),
             200
         );
     }

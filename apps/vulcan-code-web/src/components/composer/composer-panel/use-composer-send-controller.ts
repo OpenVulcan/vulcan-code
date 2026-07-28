@@ -1,9 +1,6 @@
 import React from "react";
 import { toast } from "sonner";
-import type {
-  ComposerAiCapabilityConfigurationSave,
-  ComposerSubmission,
-} from "@/components/composer/composer-model";
+import type { ComposerSubmission } from "@/components/composer/composer-model";
 import type { ComposerTraceCallback } from "@/components/composer/composer-control-types";
 import type { ComposerDraftSubmissionSnapshot } from "@/components/composer/composer-panel/use-composer-session-draft";
 import { useI18n } from "@/i18n";
@@ -13,11 +10,7 @@ import type { ComposerAttachmentSummary } from "@/types";
 // ComposerSubmissionSettings 包含普通提交与目标创建提交共享的运行时控件。
 type ComposerSubmissionSettings = Pick<
   ComposerSubmission,
-  | "executionMode"
-  | "reasoningEffort"
-  | "disabledAiCapabilityKinds"
-  | "disabledAiCapabilityTargetSelectors"
-  | "aiCapabilityTargetBindings"
+  "executionMode" | "reasoningEffort"
 >;
 
 // UseComposerSendControllerOptions defines draft state, runtime controls, and backend actions for sending.
@@ -38,9 +31,6 @@ export interface UseComposerSendControllerOptions {
   // Backend-confirmed reasoning effort included in submissions.
   // 提交中包含的后端确认推理档位。
   reasoningEffort: string | null;
-  // Complete AI capability controls included in submissions.
-  // 提交中包含的完整 AI 能力控件。
-  capabilityConfiguration: ComposerAiCapabilityConfigurationSave;
   // Whether the selected backend conversation currently has an active run.
   // 当前选中的后端会话是否存在活动运行。
   isConversationRunning: boolean;
@@ -112,8 +102,7 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
   const submissionSettings = React.useMemo<ComposerSubmissionSettings>(() => ({
     executionMode: options.executionMode,
     reasoningEffort: options.reasoningEffort,
-    ...options.capabilityConfiguration,
-  }), [options.capabilityConfiguration, options.executionMode, options.reasoningEffort]);
+  }), [options.executionMode, options.reasoningEffort]);
   // canAutoSubmitCreatedGoal reflects current render state while submitCreatedGoal also performs a synchronous guard.
   // canAutoSubmitCreatedGoal 反映当前渲染状态，submitCreatedGoal 同时执行同步门控。
   const canAutoSubmitCreatedGoal = !options.isConversationRunning && !isSubmitting;

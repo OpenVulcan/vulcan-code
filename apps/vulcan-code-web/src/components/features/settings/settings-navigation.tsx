@@ -2,21 +2,13 @@ import React from "react";
 import {
   Archive,
   Bot,
-  BrainCircuit,
   FileText,
   FolderTree,
   GitCommitHorizontal,
-  Route,
-  Image,
-  Music,
   Bell,
   RefreshCw,
-  RotateCw,
   ScrollText,
-  Search,
   Settings,
-  Video,
-  Volume2,
 } from "lucide-react";
 import { useI18n } from "@/i18n";
 import type { SettingsSubAreaId } from "@/types";
@@ -77,23 +69,6 @@ export function activeSettingsHeaderSummary(activeArea: SettingsSubAreaId, t: Re
   };
 }
 
-// settingsSubAreaCapabilityKind maps a settings page to the backend AI capability kind.
-// settingsSubAreaCapabilityKind 将设置页面映射到后端 AI 能力类型。
-export function settingsSubAreaCapabilityKind(area: SettingsSubAreaId): string | null {
-  const mapping: Partial<Record<SettingsSubAreaId, string>> = {
-    "ai-web-search": "web_search",
-    "ai-understand-image": "understand_image",
-    "ai-understand-video": "understand_video",
-    "ai-understand-audio": "understand_audio",
-    "ai-image-generation": "image_generation",
-    "ai-video-generation": "video_generation",
-    "ai-speech-synthesis": "speech_synthesis",
-    "ai-music-generation": "music_generation",
-    "ai-music-cover": "music_cover",
-  };
-  return mapping[area] ?? null;
-}
-
 // settingsSubAreas returns localized settings sidebar leaf entries.
 // settingsSubAreas 返回本地化设置侧栏叶子入口。
 export function settingsSubAreas(t: ReturnType<typeof useI18n>["t"]): SettingsSubAreaEntry[] {
@@ -112,23 +87,6 @@ export function settingsSubAreaGroups(t: ReturnType<typeof useI18n>["t"]): Setti
         { id: "model-providers", label: t("settings.modelProviders"), icon: <FileText size={16} />, description: t("settings.modelProviders.description") },
         { id: "model-list", label: t("settings.modelList"), icon: <FileText size={16} />, description: t("settings.modelList.description") },
         { id: "provider-retry", label: t("settings.providerRetry"), icon: <RefreshCw size={16} />, description: t("settings.providerRetry.description") },
-      ],
-    },
-    {
-      id: "ai-capabilities",
-      label: t("settings.group.aiCapabilities"),
-      icon: <BrainCircuit size={16} />,
-      items: [
-        { id: "ai-vendors", label: t("settings.aiVendors"), icon: <FileText size={16} />, description: t("settings.aiVendors.description") },
-        { id: "ai-web-search", label: t("settings.aiWebSearch"), icon: <Search size={16} />, description: t("settings.aiWebSearch.description") },
-        { id: "ai-understand-image", label: t("settings.aiUnderstandImage"), icon: <Image size={16} />, description: t("settings.aiUnderstandImage.description") },
-        { id: "ai-understand-video", label: t("settings.aiUnderstandVideo"), icon: <Video size={16} />, description: t("settings.aiUnderstandVideo.description") },
-        { id: "ai-understand-audio", label: t("settings.aiUnderstandAudio"), icon: <Volume2 size={16} />, description: t("settings.aiUnderstandAudio.description") },
-        { id: "ai-image-generation", label: t("settings.aiImageGeneration"), icon: <Image size={16} />, description: t("settings.aiImageGeneration.description") },
-        { id: "ai-video-generation", label: t("settings.aiVideoGeneration"), icon: <Video size={16} />, description: t("settings.aiVideoGeneration.description") },
-        { id: "ai-speech-synthesis", label: t("settings.aiSpeechSynthesis"), icon: <Volume2 size={16} />, description: t("settings.aiSpeechSynthesis.description") },
-        { id: "ai-music-generation", label: t("settings.aiMusicGeneration"), icon: <Music size={16} />, description: t("settings.aiMusicGeneration.description") },
-        { id: "ai-music-cover", label: t("settings.aiMusicCover"), icon: <RotateCw size={16} />, description: t("settings.aiMusicCover.description") },
       ],
     },
     {

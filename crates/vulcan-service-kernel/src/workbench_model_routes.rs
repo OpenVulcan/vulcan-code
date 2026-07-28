@@ -2,8 +2,9 @@
 //! 工作台模型选择与 OpenRouter 二级路由服务。
 
 use serde::Deserialize;
-use serde_json::Value;
-use vulcan_agent_runtime::provider_config::{self, ProviderConfigurationFile};
+use vulcan_provider_adapters::{
+    PersistedAiConfiguration, SecondaryRouteOption, SecondaryRouteSelection,
+};
 use vulcan_service_api::ServiceEventEmitter;
 use vulcan_service_api::{
     ProviderModelSecondaryRouteSelection, ProviderModelSecondaryRouteSummary, WorkbenchSnapshot,
@@ -11,9 +12,9 @@ use vulcan_service_api::{
 use vulcan_workbench_model::SessionAddonNamespace;
 
 use super::{
-    SharedServiceBridgeState, active_reasoning_selection_effort, current_unix_millis_text,
-    emit_workbench_event, mutate_provider_configuration, parse_reasoning_effort,
-    parse_thinking_display_mode, refresh_settings_projection_locked,
+    SharedServiceBridgeState, current_unix_millis_text, emit_workbench_event,
+    mutate_provider_configuration, mutate_public_ai_configuration, parse_reasoning_effort,
+    parse_thinking_display_mode, publish_public_ai_workbench, refresh_settings_projection_locked,
     refresh_workbench_runtime_controls_locked, selected_session_runtime_state_mut,
     session_addon_state_from_workspace_snapshot, spawn_workspace_session_addon_state_persist_task,
 };
@@ -38,120 +39,6 @@ pub(super) struct ProviderModelSecondaryRouteRequest {
     route: Option<ProviderModelSecondaryRouteSelection>,
 }
 
-/// Persists the active workbench provider/model selection.
-/// 持久化当前工作台 Provider/模型选择。
-///
-/// # Parameters
-/// 参数
-/// `app` emits the updated workbench snapshot.
-/// `app` 发送更新后的工作台快照。
-/// `state` owns the shared service bridge state and runtime configuration.
-/// `state` 持有共享服务桥状态与运行时配置。
-/// `provider_id` is the requested provider identifier.
-/// `provider_id` 是请求的 Provider 标识。
-/// `model_id` is the requested model identifier under the provider.
-/// `model_id` 是 Provider 下请求的模型标识。
-///
-/// # Returns
-/// 返回值
-/// Returns the refreshed workbench snapshot after model selection is persisted.
-/// 返回模型选择持久化后的刷新工作台快照。
-pub(super) async fn service_select_workbench_model(
-    app: ServiceEventEmitter,
-    state: SharedServiceBridgeState,
-    provider_id: String,
-    model_id: String,
-) -> Result<WorkbenchSnapshot, String> {
-    let provider_id = provider_id.trim().to_string();
-    let model_id = model_id.trim().to_string();
-    if provider_id.is_empty() || model_id.is_empty() {
-        return Err(String::from("模型选择缺少 Provider 或模型标识。"));
-    }
-
-    let (
-        controller_runtime,
-        persist_session_id,
-        persist_workspace_snapshot,
-        workbench,
-        default_ai_tool_configuration,
-    ) = mutate_provider_configuration(
-        &state,
-        "保存模型选择失败",
-        |configuration| {
-            let has_model = provider_config::effective_model_choices(&provider_id, configuration)
-                .into_iter()
-                .any(|choice| choice.id == model_id);
-            if !has_model {
-                return Err(format!(
-                    "模型 `{model_id}` 不在 `{provider_id}` 的已启用模型列表中。"
-                ));
-            }
-            configuration.model = Some(format!("{provider_id}/{model_id}"));
-            Ok(())
-        },
-        |guard, configuration| {
-            let controller_runtime = guard.controller_runtime.clone();
-            let ai_tool_configuration = guard
-                .agent_runtime
-                .as_ref()
-                .map(|runtime| runtime.ai_tool_configuration.clone())
-                .unwrap_or_default();
-            let selected_effort = active_reasoning_selection_effort(configuration);
-            let openrouter_endpoint_route = (provider_id == "openrouter")
-                .then(|| {
-                    provider_config::openrouter_endpoint_route_for_model(configuration, &model_id)
-                })
-                .flatten();
-            let persist_session_id = guard.workspace_snapshot.as_mut().and_then(|workspace| {
-                selected_session_runtime_state_mut(workspace).map(|(session_id, runtime_state)| {
-                    runtime_state.active_provider_id = Some(provider_id.clone());
-                    runtime_state.active_model_id = Some(model_id.clone());
-                    runtime_state.active_openrouter_endpoint_route = openrouter_endpoint_route;
-                    if let Some(selected_effort) = selected_effort {
-                        runtime_state.active_reasoning_effort = Some(selected_effort);
-                    }
-                    runtime_state.updated_at = current_unix_millis_text();
-                    session_id
-                })
-            });
-            refresh_workbench_runtime_controls_locked(guard, configuration, &ai_tool_configuration);
-            (
-                controller_runtime,
-                persist_session_id,
-                guard.workspace_snapshot.clone(),
-                guard.workbench.clone(),
-                ai_tool_configuration,
-            )
-        },
-    )
-    .await?;
-
-    if let (Some(controller_runtime), Some(session_id), Some(workspace_snapshot)) = (
-        controller_runtime,
-        persist_session_id,
-        persist_workspace_snapshot,
-    ) && let Some(addon_state) = session_addon_state_from_workspace_snapshot(
-        &workspace_snapshot,
-        session_id,
-        &default_ai_tool_configuration,
-        &[SessionAddonNamespace::RuntimeControls],
-    ) {
-        spawn_workspace_session_addon_state_persist_task(
-            app.clone(),
-            state.clone(),
-            controller_runtime,
-            workspace_snapshot,
-            session_id,
-            addon_state,
-            vec![SessionAddonNamespace::RuntimeControls],
-            Some(String::from("model_selection")),
-        );
-    }
-
-    emit_workbench_event(&app, &workbench);
-    Ok(workbench)
-}
-
 /// Lists backend-managed secondary routes for one workbench provider/model pair.
 /// 列出单个工作台 Provider/模型组合的后端二级路由。
 pub(super) async fn service_list_workbench_model_secondary_routes(
@@ -164,34 +51,44 @@ pub(super) async fn service_list_workbench_model_secondary_routes(
     if provider_id != "openrouter" {
         return Ok(Vec::new());
     }
-    let provider_configuration = {
+    let (runtime, configuration, connection_id, active_route) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        guard
+        let agent_runtime = guard
             .agent_runtime
             .as_ref()
-            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?
-            .provider_configuration
-            .clone()
+            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
+        let runtime = std::sync::Arc::clone(&agent_runtime.public_ai_runtime);
+        let configuration = runtime.configuration_snapshot()?;
+        let active = exact_public_secondary_route_target(
+            &configuration,
+            provider_id.as_str(),
+            model_id.as_str(),
+        )?;
+        let settings_key = PersistedAiConfiguration::connection_model_key(
+            active.connection_id.as_str(),
+            active.model_id.as_str(),
+        );
+        let active_route = configuration
+            .secondary_routes
+            .get(settings_key.as_str())
+            .cloned()
+            .unwrap_or_default();
+        (runtime, configuration, active.connection_id, active_route)
     };
-    ensure_provider_model_enabled(&provider_configuration, &provider_id, &model_id)?;
-    let active_route =
-        provider_config::openrouter_endpoint_route_for_model(&provider_configuration, &model_id);
-    let api_key = provider_configuration
-        .provider
-        .get("openrouter")
-        .map(|entry| entry.options.resolved_api_key())
-        .transpose()?
-        .flatten();
-    let choices = fetch_openrouter_secondary_route_choices(model_id.clone(), api_key).await?;
+    let choices = runtime
+        .discover_secondary_routes(&configuration, connection_id.as_str(), model_id.as_str())
+        .await?;
     Ok(choices
         .into_iter()
         .map(|choice| {
-            let active = active_route
-                .as_ref()
-                .is_some_and(|selection| selection.tag == choice.tag);
-            choice.into_summary(&provider_id, &model_id, active)
+            let active = matches!(
+                &active_route,
+                SecondaryRouteSelection::PinnedEndpoint { route_id, .. }
+                    if route_id == &choice.route_id
+            );
+            public_secondary_route_summary(&provider_id, &model_id, choice, active)
         })
         .collect())
 }
@@ -208,98 +105,111 @@ pub(super) async fn service_select_workbench_model_secondary_route(
     if provider_id != "openrouter" {
         return Err(String::from("当前只有 OpenRouter 支持二级供应商选择。"));
     }
-    let selection = request
-        .route
-        .map(openrouter_route_selection_from_service)
-        .transpose()?;
-    let (
-        controller_runtime,
-        persist_session_id,
-        persist_workspace_snapshot,
-        workbench,
-        default_ai_tool_configuration,
-    ) = mutate_provider_configuration(
+    let (runtime, current_configuration, connection_id) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let agent_runtime = guard
+            .agent_runtime
+            .as_ref()
+            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
+        let runtime = std::sync::Arc::clone(&agent_runtime.public_ai_runtime);
+        let configuration = runtime.configuration_snapshot()?;
+        let active = exact_public_secondary_route_target(
+            &configuration,
+            provider_id.as_str(),
+            model_id.as_str(),
+        )?;
+        (runtime, configuration, active.connection_id)
+    };
+    let selection = if let Some(route) = request.route {
+        let route_id = if route.tag.trim().is_empty() {
+            route.route_id.trim()
+        } else {
+            route.tag.trim()
+        };
+        let options = runtime
+            .discover_secondary_routes(
+                &current_configuration,
+                connection_id.as_str(),
+                model_id.as_str(),
+            )
+            .await?;
+        let option = options
+            .into_iter()
+            .find(|option| option.route_id == route_id)
+            .ok_or_else(|| {
+                format!(
+                    "OpenRouter route `{route_id}` is not present in the current endpoint catalog."
+                )
+            })?;
+        SecondaryRouteSelection::PinnedEndpoint {
+            route_id: option.route_id,
+            provider_display_name: option.provider_display_name,
+            endpoint_display_name: option.endpoint_display_name,
+        }
+    } else {
+        SecondaryRouteSelection::Automatic
+    };
+    let settings_key =
+        PersistedAiConfiguration::connection_model_key(connection_id.as_str(), model_id.as_str());
+    let configuration = mutate_public_ai_configuration(
         &state,
         "保存 OpenRouter 二级供应商失败",
         |configuration| {
-            ensure_provider_model_enabled(configuration, &provider_id, &model_id)?;
-            provider_config::set_openrouter_endpoint_route_for_model(
+            exact_public_secondary_route_target(
                 configuration,
-                &model_id,
-                selection.clone(),
-            );
+                provider_id.as_str(),
+                model_id.as_str(),
+            )?;
+            configuration
+                .secondary_routes
+                .insert(settings_key.clone(), selection.clone());
             Ok(())
-        },
-        |guard, configuration| {
-            let controller_runtime = guard.controller_runtime.clone();
-            let ai_tool_configuration = guard
-                .agent_runtime
-                .as_ref()
-                .map(|runtime| runtime.ai_tool_configuration.clone())
-                .unwrap_or_default();
-            let persist_session_id = guard.workspace_snapshot.as_mut().and_then(|workspace| {
-                selected_session_runtime_state_mut(workspace).map(|(session_id, runtime_state)| {
-                    if runtime_state.active_provider_id.as_deref() == Some("openrouter")
-                        && runtime_state.active_model_id.as_deref() == Some(model_id.as_str())
-                    {
-                        runtime_state.active_openrouter_endpoint_route = selection.clone();
-                        runtime_state.updated_at = current_unix_millis_text();
-                    }
-                    session_id
-                })
-            });
-            refresh_workbench_runtime_controls_locked(guard, configuration, &ai_tool_configuration);
-            (
-                controller_runtime,
-                persist_session_id,
-                guard.workspace_snapshot.clone(),
-                guard.workbench.clone(),
-                ai_tool_configuration,
-            )
         },
     )
     .await?;
-    if let (Some(controller_runtime), Some(session_id), Some(workspace_snapshot)) = (
-        controller_runtime,
-        persist_session_id,
-        persist_workspace_snapshot,
-    ) && let Some(addon_state) = session_addon_state_from_workspace_snapshot(
-        &workspace_snapshot,
-        session_id,
-        &default_ai_tool_configuration,
-        &[SessionAddonNamespace::RuntimeControls],
-    ) {
-        spawn_workspace_session_addon_state_persist_task(
-            app.clone(),
-            state.clone(),
-            controller_runtime,
-            workspace_snapshot,
-            session_id,
-            addon_state,
-            vec![SessionAddonNamespace::RuntimeControls],
-            Some(String::from("openrouter_endpoint_route")),
-        );
-    }
-    emit_workbench_event(&app, &workbench);
-    Ok(workbench)
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)
 }
 
-/// Ensures one provider/model pair is currently visible in the effective model list.
-/// 确认单个 Provider/模型组合当前位于有效模型列表中。
-fn ensure_provider_model_enabled(
-    provider_configuration: &ProviderConfigurationFile,
+/// Resolves and validates the exact active public model targeted by secondary routing.
+/// 解析并校验二级路由所针对的精确当前公共模型。
+fn exact_public_secondary_route_target(
+    configuration: &PersistedAiConfiguration,
     provider_id: &str,
     model_id: &str,
-) -> Result<(), String> {
-    let has_model = provider_config::effective_model_choices(provider_id, provider_configuration)
-        .into_iter()
-        .any(|choice| choice.id == model_id);
-    if has_model {
-        Ok(())
-    } else {
-        Err(format!(
-            "模型 `{model_id}` 不在 `{provider_id}` 的已启用模型列表中。"
-        ))
+) -> Result<vulcan_provider_adapters::ActiveAiModelSelection, String> {
+    let active = configuration
+        .active
+        .clone()
+        .ok_or_else(|| String::from("No active public AI model is configured."))?;
+    if active.provider_id != provider_id || active.model_id != model_id {
+        return Err(format!(
+            "Secondary route target `{provider_id}/{model_id}` is not the active public AI model."
+        ));
+    }
+    Ok(active)
+}
+
+/// Projects one public secondary-route option into the existing workbench contract.
+/// 将一个公共二级路由选项投影到现有工作台契约。
+fn public_secondary_route_summary(
+    provider_id: &str,
+    model_id: &str,
+    option: SecondaryRouteOption,
+    active: bool,
+) -> ProviderModelSecondaryRouteSummary {
+    let subtitle = openrouter_secondary_route_option_subtitle(&option);
+    ProviderModelSecondaryRouteSummary {
+        provider_id: provider_id.to_string(),
+        model_id: model_id.to_string(),
+        route_id: option.route_id.clone(),
+        tag: option.route_id,
+        provider_name: option.provider_display_name.clone(),
+        endpoint_name: option.endpoint_display_name,
+        label: option.provider_display_name,
+        subtitle,
+        active,
     }
 }
 
@@ -312,44 +222,35 @@ pub(super) async fn service_select_workbench_reasoning_effort(
 ) -> Result<WorkbenchSnapshot, String> {
     let selected_effort =
         parse_reasoning_effort(effort.trim()).ok_or_else(|| format!("未知思考档位：{effort}"))?;
-    let (
-        controller_runtime,
-        persist_session_id,
-        persist_workspace_snapshot,
-        workbench,
-        default_ai_tool_configuration,
-    ) = mutate_provider_configuration(
-        &state,
-        "保存思考档位失败",
-        |configuration| {
-            configuration.workbench_reasoning_effort = Some(selected_effort);
-            Ok(())
-        },
-        |guard, configuration| {
-            let controller_runtime = guard.controller_runtime.clone();
-            let ai_tool_configuration = guard
-                .agent_runtime
-                .as_ref()
-                .map(|runtime| runtime.ai_tool_configuration.clone())
-                .unwrap_or_default();
-            let persist_session_id = guard.workspace_snapshot.as_mut().and_then(|workspace| {
-                selected_session_runtime_state_mut(workspace).map(|(session_id, runtime_state)| {
-                    runtime_state.active_reasoning_effort = Some(selected_effort);
-                    runtime_state.updated_at = current_unix_millis_text();
-                    session_id
-                })
-            });
-            refresh_workbench_runtime_controls_locked(guard, configuration, &ai_tool_configuration);
-            (
-                controller_runtime,
-                persist_session_id,
-                guard.workspace_snapshot.clone(),
-                guard.workbench.clone(),
-                ai_tool_configuration,
-            )
-        },
-    )
-    .await?;
+    let (controller_runtime, persist_session_id, persist_workspace_snapshot, workbench) =
+        mutate_provider_configuration(
+            &state,
+            "保存思考档位失败",
+            |configuration| {
+                configuration.workbench_reasoning_effort = Some(selected_effort);
+                Ok(())
+            },
+            |guard, configuration| {
+                let controller_runtime = guard.controller_runtime.clone();
+                let persist_session_id = guard.workspace_snapshot.as_mut().and_then(|workspace| {
+                    selected_session_runtime_state_mut(workspace).map(
+                        |(session_id, runtime_state)| {
+                            runtime_state.active_reasoning_effort = Some(selected_effort);
+                            runtime_state.updated_at = current_unix_millis_text();
+                            session_id
+                        },
+                    )
+                });
+                refresh_workbench_runtime_controls_locked(guard, configuration);
+                (
+                    controller_runtime,
+                    persist_session_id,
+                    guard.workspace_snapshot.clone(),
+                    guard.workbench.clone(),
+                )
+            },
+        )
+        .await?;
 
     if let (Some(controller_runtime), Some(session_id), Some(workspace_snapshot)) = (
         controller_runtime,
@@ -358,7 +259,6 @@ pub(super) async fn service_select_workbench_reasoning_effort(
     ) && let Some(addon_state) = session_addon_state_from_workspace_snapshot(
         &workspace_snapshot,
         session_id,
-        &default_ai_tool_configuration,
         &[SessionAddonNamespace::RuntimeControls],
     ) {
         spawn_workspace_session_addon_state_persist_task(
@@ -408,7 +308,7 @@ pub(super) async fn service_select_workbench_thinking_display_mode(
             Ok(())
         },
         |guard, configuration| {
-            refresh_settings_projection_locked(guard, configuration, None);
+            refresh_settings_projection_locked(guard, configuration);
             guard.workbench.clone()
         },
     )
@@ -450,7 +350,7 @@ pub(super) async fn service_select_webui_locale(
         },
         |guard, configuration| {
             guard.startup.ui_locale = Some(selected_locale.clone());
-            refresh_settings_projection_locked(guard, configuration, None);
+            refresh_settings_projection_locked(guard, configuration);
             guard.workbench.clone()
         },
     )

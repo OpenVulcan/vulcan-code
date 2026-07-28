@@ -62,6 +62,38 @@ pub async fn prepare_runtime_stream_launch_with_plugins(
     token_budget_runtime: Arc<TokenBudgetRuntime>,
     request: ExecutionPreparationRequest,
 ) -> Result<RuntimeStreamLaunch, ExecutionRunReport> {
+    prepare_runtime_stream_launch_with_plugins_and_public_ai(
+        config,
+        agent_profile_catalog,
+        luaskills_runtime,
+        vulcan_plugin_runtime,
+        extension_generation,
+        task_runtime,
+        question_runtime,
+        command_session_runtime,
+        token_budget_runtime,
+        None,
+        request,
+    )
+    .await
+}
+
+/// Builds one runtime-stream launch with plugins and one service-owned public AI runtime.
+/// 使用插件与一个服务持有的公共 AI 运行时构建运行时流启动。
+#[allow(clippy::too_many_arguments)]
+pub async fn prepare_runtime_stream_launch_with_plugins_and_public_ai(
+    config: &ProviderConfigurationFile,
+    agent_profile_catalog: &AgentProfileCatalog,
+    luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    vulcan_plugin_runtime: Option<vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
+    extension_generation: Arc<ExtensionGeneration>,
+    task_runtime: Arc<TaskRuntime>,
+    question_runtime: Arc<QuestionRuntime>,
+    command_session_runtime: Arc<CommandSessionRuntime>,
+    token_budget_runtime: Arc<TokenBudgetRuntime>,
+    public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
+    request: ExecutionPreparationRequest,
+) -> Result<RuntimeStreamLaunch, ExecutionRunReport> {
     let prepared_launch_input = prepare_runtime_launch_input(
         config,
         agent_profile_catalog,
@@ -72,6 +104,7 @@ pub async fn prepare_runtime_stream_launch_with_plugins(
         question_runtime,
         command_session_runtime,
         token_budget_runtime,
+        public_ai_runtime,
         request,
     )?;
     build_runtime_stream_launch_from_prepared_input(config.clone(), prepared_launch_input).await

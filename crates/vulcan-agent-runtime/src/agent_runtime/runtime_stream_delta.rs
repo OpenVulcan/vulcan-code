@@ -23,7 +23,6 @@ use vulcan_core::types::{
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     ProviderUsageSnapshot as CoreProviderUsageSnapshot,
 };
-use vulcan_provider_config::provider_config::ProviderApiFamily;
 use vulcan_tools_manager::ResolvedToolDefinition;
 
 /// Owns the mutable runtime-stream loop state that changes while provider deltas are consumed.
@@ -34,7 +33,7 @@ pub(crate) struct RuntimeStreamDeltaState {
     core_controller: VulcanCoreController,
     /// Canonical provider API family resolved before the runtime stream starts.
     /// 运行时流启动前解析出的规范 Provider API 协议族。
-    provider_api_family: ProviderApiFamily,
+    protocol_profile_id: String,
     /// Raw provider reasoning buffer used before synthetic preamble normalization.
     /// 在合成前导语规范化之前累计的 Provider 原始思考缓冲区。
     thinking_raw_output: String,
@@ -94,13 +93,10 @@ impl RuntimeStreamDeltaState {
     /// 返回值
     /// Returns a fresh stream state that preserves the immutable provider family.
     /// 返回保留不可变 Provider 协议族的新流状态。
-    pub(crate) fn new(
-        core_controller: VulcanCoreController,
-        provider_api_family: ProviderApiFamily,
-    ) -> Self {
+    pub(crate) fn new(core_controller: VulcanCoreController, protocol_profile_id: String) -> Self {
         Self {
             core_controller,
-            provider_api_family,
+            protocol_profile_id,
             thinking_raw_output: String::new(),
             thinking_visible_output: String::new(),
             assistant_output: String::new(),
@@ -471,7 +467,7 @@ pub(crate) fn process_provider_stream_delta(
             events.extend([
                 ExecutionStreamEvent::ProviderRequestCheckpoint {
                     session_id,
-                    provider_family: state.provider_api_family.key().to_string(),
+                    provider_family: state.protocol_profile_id.clone(),
                     snapshot,
                 },
                 ExecutionStreamEvent::RequestReady { session_id },
@@ -589,14 +585,14 @@ mod tests {
                 ConversationSnapshot::default(),
             )
             .expect("valid core conversation snapshot"),
-            ProviderApiFamily::OpenAiChatCompatible,
+            String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         )
     }
 
-    /// Preserves the prepared API family when emitting one provider request checkpoint.
-    /// 发出 Provider 请求检查点时保留执行准备阶段解析出的 API 协议族。
+    /// Preserves the prepared protocol profile when emitting one provider request checkpoint.
+    /// 发出 Provider 请求检查点时保留执行准备阶段解析出的协议画像。
     #[test]
-    fn request_checkpoint_uses_prepared_provider_family() {
+    fn request_checkpoint_uses_prepared_protocol_profile() {
         // session_id identifies the stream whose first physical request is observed.
         // session_id 标识观测到首个真实请求的运行时流。
         let session_id = Uuid::nil();
@@ -616,7 +612,7 @@ mod tests {
                 provider_family,
                 snapshot,
                 ..
-            } if provider_family == "openai-chat-compatible"
+            } if provider_family == vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID
                 && snapshot.provider_id == "mock-provider"
         )));
     }

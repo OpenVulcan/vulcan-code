@@ -13,10 +13,6 @@ pub struct SessionRuntimeStateEntry {
     /// Last active model identifier used by the session.
     /// 最近一次被该会话使用的激活模型标识。
     pub active_model_id: Option<String>,
-    /// Last active OpenRouter endpoint route locked by the session.
-    /// 最近一次被该会话锁定使用的 OpenRouter 端点路由。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub active_openrouter_endpoint_route: Option<OpenRouterEndpointRouteSelection>,
     /// Last reasoning-effort preset selected while this session was active.
     /// 最近一次该会话激活时选择的推理档位预设。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -29,10 +25,6 @@ pub struct SessionRuntimeStateEntry {
     /// 该会话最近一次选择的工作模式键。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_work_mode: Option<String>,
-    /// Session-scoped AI capability routing configuration cloned from the default template.
-    /// 从默认模板复制而来的会话级 AI 能力路由配置。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ai_tool_configuration: Option<PersistedAiToolConfiguration>,
     /// Session-level prompt skill state overrides.
     /// 会话级提示词技能状态覆盖。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -139,50 +131,4 @@ pub struct SessionRuntimeStateEntry {
     /// Unix-millis text capturing when the runtime state was last refreshed.
     /// 捕获运行时状态最近刷新时间的 Unix 毫秒文本。
     pub updated_at: String,
-}
-
-impl SessionRuntimeStateEntry {
-    /// Ensures the session owns an AI capability configuration cloned from the default template.
-    /// 确保当前会话拥有一份从默认模板复制而来的 AI 能力配置。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `default_configuration` is the current default AI capability template.
-    /// `default_configuration` 是当前默认 AI 能力配置模板。
-    ///
-    /// # Returns
-    /// 返回值
-    /// `true` when the session configuration was initialized by this call.
-    /// 当本次调用初始化了会话配置时返回 `true`。
-    pub fn ensure_ai_tool_configuration(
-        &mut self,
-        default_configuration: &PersistedAiToolConfiguration,
-    ) -> bool {
-        if self.ai_tool_configuration.is_some() {
-            return false;
-        }
-        self.ai_tool_configuration = Some(default_configuration.clone());
-        true
-    }
-
-    /// Returns the session AI capability configuration or the default template when not initialized yet.
-    /// 返回会话 AI 能力配置；若尚未初始化则返回默认模板。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `default_configuration` is the fallback default AI capability template.
-    /// `default_configuration` 是作为回退使用的默认 AI 能力配置模板。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The effective session-scoped AI capability configuration reference.
-    /// 生效的会话级 AI 能力配置引用。
-    pub fn ai_tool_configuration_or_default<'a>(
-        &'a self,
-        default_configuration: &'a PersistedAiToolConfiguration,
-    ) -> &'a PersistedAiToolConfiguration {
-        self.ai_tool_configuration
-            .as_ref()
-            .unwrap_or(default_configuration)
-    }
 }

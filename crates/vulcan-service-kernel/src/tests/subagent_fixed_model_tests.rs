@@ -27,31 +27,42 @@ fn fixed_model_save_request(
     }
 }
 
-/// Builds a provider configuration with exactly one enabled model for one catalog provider.
-/// 为目录中的一个供应商构建只启用一个模型的供应商配置。
-fn single_enabled_model_provider_configuration() -> (ProviderConfigurationFile, String, String) {
-    let provider = provider_config::supported_providers()
-        .iter()
-        .find(|provider| provider.models.len() >= 2)
-        .or_else(|| {
-            provider_config::supported_providers()
-                .iter()
-                .find(|provider| !provider.models.is_empty())
-        })
-        .expect("provider catalog should contain at least one model");
-    let model_id = provider
-        .models
-        .first()
-        .expect("selected provider should have a model")
-        .id
-        .clone();
-    let mut provider_entry = vulcan_provider_config::config::PersistedProviderEntry::default();
-    provider_entry.set_enabled_models(vec![model_id.clone()]);
-    let mut configuration = ProviderConfigurationFile::default();
-    configuration
-        .provider
-        .insert(provider.id.clone(), provider_entry);
-    (configuration, provider.id.clone(), model_id)
+/// Builds one public-AI configuration and runtime catalog containing a single visible model.
+/// 构建包含单个可见模型的公共 AI 配置与运行时目录。
+fn single_visible_public_model_configuration() -> (
+    vulcan_provider_adapters::PersistedAiConfiguration,
+    std::collections::BTreeMap<String, vulcan_provider_adapters::ConnectionModelCatalog>,
+    String,
+    String,
+) {
+    let provider_id = String::from("openrouter");
+    let model_id = String::from("vendor/model");
+    let connection_id = String::from("connection-a");
+    let mut configuration = vulcan_provider_adapters::PersistedAiConfiguration::default();
+    configuration.connection_graph.connections.insert(
+        connection_id.clone(),
+        vulcan_provider_adapters::CredentialConnection {
+            id: connection_id.clone(),
+            provider_id: provider_id.clone(),
+            service_entry_id: String::from("api"),
+            credential_profile_id: String::from("api-key"),
+            credential_mode: vulcan_provider_adapters::CredentialMode::Token,
+            credential_id: String::from("credential-a"),
+            display_name: String::from("Account A"),
+            secret_reference: String::from("secret-a"),
+            verified_protocols: std::collections::BTreeSet::from([String::from("openai_chat")]),
+            selected_protocol: String::from("openai_chat"),
+            prompt_cache_by_protocol: std::collections::BTreeMap::new(),
+        },
+    );
+    let catalog = vulcan_provider_adapters::parse_openrouter_model_catalog(
+        connection_id.as_str(),
+        1,
+        r#"{"data":[{"id":"vendor/model","name":"Model","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}}]}"#,
+    )
+    .expect("public model fixture should parse");
+    let catalogs = std::collections::BTreeMap::from([(connection_id, catalog)]);
+    (configuration, catalogs, provider_id, model_id)
 }
 
 /// Verifies the WebUI agent catalog summary exposes the shared child-agent forbidden tools.
@@ -60,7 +71,7 @@ fn single_enabled_model_provider_configuration() -> (ProviderConfigurationFile, 
 fn subagent_catalog_summary_projects_child_forbidden_tools() {
     let summary = subagent_catalog_summary_from_catalog(
         &vulcan_task_session::SubagentCatalog::default(),
-        &ProviderConfigurationFile::default(),
+        None,
     );
     let expected = vulcan_session_core::child_agent_forbidden_tool_ids()
         .iter()
@@ -146,14 +157,15 @@ fn loaded_definition_with_provider_model(
 /// 验证新选择的固定模型必须来自当前生效启用模型列表。
 #[test]
 fn validates_new_fixed_model_against_enabled_choices() {
-    let (provider_configuration, provider_id, model_id) =
-        single_enabled_model_provider_configuration();
+    let (public_ai_configuration, public_ai_catalogs, provider_id, model_id) =
+        single_visible_public_model_configuration();
     let request = fixed_model_save_request(Some(provider_id.clone()), Some(model_id.clone()));
 
     let snapshot = validate_subagent_provider_model_request_with_existing(
         &request,
         None,
-        &provider_configuration,
+        &public_ai_configuration,
+        &public_ai_catalogs,
     )
     .expect("enabled model should be accepted");
 
@@ -165,7 +177,8 @@ fn validates_new_fixed_model_against_enabled_choices() {
 /// 验证无效的新固定模型组合在持久化前会被拒绝。
 #[test]
 fn rejects_new_fixed_model_outside_enabled_choices() {
-    let (provider_configuration, provider_id, _) = single_enabled_model_provider_configuration();
+    let (public_ai_configuration, public_ai_catalogs, provider_id, _) =
+        single_visible_public_model_configuration();
     let request = fixed_model_save_request(
         Some(provider_id),
         Some(String::from("__missing_subagent_model__")),
@@ -174,7 +187,8 @@ fn rejects_new_fixed_model_outside_enabled_choices() {
     let error = validate_subagent_provider_model_request_with_existing(
         &request,
         None,
-        &provider_configuration,
+        &public_ai_configuration,
+        &public_ai_catalogs,
     )
     .expect_err("missing model should be rejected");
 
@@ -190,7 +204,8 @@ fn rejects_partial_fixed_model_request() {
     let error = validate_subagent_provider_model_request_with_existing(
         &request,
         None,
-        &ProviderConfigurationFile::default(),
+        &vulcan_provider_adapters::PersistedAiConfiguration::default(),
+        &std::collections::BTreeMap::new(),
     )
     .expect_err("partial fixed model should be rejected");
 
@@ -201,7 +216,8 @@ fn rejects_partial_fixed_model_request() {
 /// 验证编辑无关元数据时可以保留历史中已经存在的无效固定模型组合。
 #[test]
 fn preserves_existing_invalid_fixed_model_pair() {
-    let (provider_configuration, provider_id, _) = single_enabled_model_provider_configuration();
+    let (public_ai_configuration, public_ai_catalogs, provider_id, _) =
+        single_visible_public_model_configuration();
     let stale_model_id = String::from("__removed_subagent_model__");
     let existing = loaded_definition_with_fixed_model(provider_id.clone(), stale_model_id.clone());
     let request = fixed_model_save_request(Some(provider_id.clone()), Some(stale_model_id.clone()));
@@ -209,7 +225,8 @@ fn preserves_existing_invalid_fixed_model_pair() {
     let snapshot = validate_subagent_provider_model_request_with_existing(
         &request,
         Some(&existing),
-        &provider_configuration,
+        &public_ai_configuration,
+        &public_ai_catalogs,
     )
     .expect("unchanged historical fixed model should be preserved");
 
@@ -221,7 +238,6 @@ fn preserves_existing_invalid_fixed_model_pair() {
 /// 验证历史半缺失固定模型元数据会继续以不可用模型诊断形式展示。
 #[test]
 fn projects_partial_fixed_model_as_unavailable_diagnostic() {
-    let (provider_configuration, _, _) = single_enabled_model_provider_configuration();
     let definition = loaded_definition_with_provider_model(
         None,
         Some(String::from("__orphaned_subagent_model__")),
@@ -231,7 +247,9 @@ fn projects_partial_fixed_model_as_unavailable_diagnostic() {
         ..vulcan_task_session::SubagentCatalog::default()
     };
 
-    let summary = subagent_catalog_summary_from_catalog(&catalog, &provider_configuration);
+    let available_model_selectors =
+        std::collections::BTreeSet::from([String::from("openai/gpt-test")]);
+    let summary = subagent_catalog_summary_from_catalog(&catalog, Some(&available_model_selectors));
 
     let provider_model = &summary
         .definitions

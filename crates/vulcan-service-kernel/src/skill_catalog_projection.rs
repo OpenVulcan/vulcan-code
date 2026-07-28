@@ -609,7 +609,7 @@ pub(crate) fn agent_skills_catalog_summary(
 /// Projects agent and expert definitions into the WebUI service API shape.
 /// 将智能体与专家定义投影为 WebUI service API 结构。
 pub(crate) fn subagent_catalog_summary(
-    provider_configuration: &ProviderConfigurationFile,
+    available_model_selectors: Option<&std::collections::BTreeSet<String>>,
     vulcan_plugin_catalog: Option<&VulcanPluginCatalogSnapshot>,
 ) -> SubagentCatalogSummary {
     let system_root = vulcan_runtime_assets::resolve_system_subagents_resource_directory();
@@ -627,14 +627,14 @@ pub(crate) fn subagent_catalog_summary(
                 message: error,
             });
     }
-    subagent_catalog_summary_from_catalog(&catalog, provider_configuration)
+    subagent_catalog_summary_from_catalog(&catalog, available_model_selectors)
 }
 
 /// Projects one already loaded agent catalog into the WebUI service API shape.
 /// 将一个已加载的智能体目录投影为 WebUI service API 结构。
 pub(crate) fn subagent_catalog_summary_from_catalog(
     catalog: &vulcan_task_session::SubagentCatalog,
-    provider_configuration: &ProviderConfigurationFile,
+    available_model_selectors: Option<&std::collections::BTreeSet<String>>,
 ) -> SubagentCatalogSummary {
     let system_definition_ids = system_subagent_definition_ids_for_summary();
     let enabled_count = catalog
@@ -662,7 +662,7 @@ pub(crate) fn subagent_catalog_summary_from_catalog(
                 subagent_definition_summary(
                     definition,
                     &system_definition_ids,
-                    provider_configuration,
+                    available_model_selectors,
                 )
             })
             .collect(),
@@ -707,7 +707,7 @@ pub(crate) fn subagent_catalog_summary_from_catalog(
 fn subagent_definition_summary(
     definition: &vulcan_task_session::SubagentDefinition,
     system_definition_ids: &std::collections::BTreeSet<String>,
-    provider_configuration: &ProviderConfigurationFile,
+    available_model_selectors: Option<&std::collections::BTreeSet<String>>,
 ) -> SubagentDefinitionSummary {
     let plugin_owned =
         definition.source.scope == vulcan_task_session::SubagentDefinitionScope::Plugin;
@@ -786,7 +786,7 @@ fn subagent_definition_summary(
         prompt_skill_policy_mode: capability_policy_mode_key(definition.prompt_skills.policy.mode)
             .to_string(),
         prompt_skill_policy_skills: definition.prompt_skills.policy.selectors.clone(),
-        provider_model: subagent_provider_model_summary(definition, provider_configuration),
+        provider_model: subagent_provider_model_summary(definition, available_model_selectors),
         system_prompt: definition.system_prompt.clone(),
         system_prompt_append: definition.system_prompt_append.clone(),
         allowed_tools: capability_policy_allowed_selectors(&definition.tool_exposure.policy),
@@ -833,7 +833,7 @@ fn capability_policy_denied_selectors(
 /// 为单个子代理定义构建 WebUI 固定模型诊断投影。
 fn subagent_provider_model_summary(
     definition: &vulcan_task_session::SubagentDefinition,
-    provider_configuration: &ProviderConfigurationFile,
+    available_model_selectors: Option<&std::collections::BTreeSet<String>>,
 ) -> SubagentProviderModelSummary {
     let provider_id = definition.provider_model.provider_id.clone();
     let model_id = definition.provider_model.model_id.clone();
@@ -858,11 +858,9 @@ fn subagent_provider_model_summary(
             )),
         };
     };
-    let available =
-        provider_config::effective_model_choices(provider_id_text, provider_configuration)
-            .into_iter()
-            .any(|choice| choice.id == model_id_text);
     let selector = format!("{provider_id_text}/{model_id_text}");
+    let available =
+        available_model_selectors.is_some_and(|selectors| selectors.contains(selector.as_str()));
     SubagentProviderModelSummary {
         provider_id,
         model_id,

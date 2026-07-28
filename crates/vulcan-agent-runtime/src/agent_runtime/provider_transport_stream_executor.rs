@@ -2,11 +2,11 @@
 //! 供 Provider 传输包装器使用的流式宿主工具执行器模块。
 
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
-use crate::agent_runtime::provider_protocol_bridge::{
+use crate::agent_runtime::provider_stream::ProviderStreamDelta;
+use crate::agent_runtime::provider_tool_event_format::{
     attach_tool_name_to_runtime_metadata, build_tool_result_runtime_metadata,
     format_host_tool_result_runtime_detail, format_tool_call_runtime_detail,
 };
-use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::tool_runtime_bridge::{
     VulcanManagedToolRuntimeBridge, attach_runtime_event_projection_barrier,
     build_tool_failure_invocation_result, build_tool_rejection_invocation_result,

@@ -35,17 +35,9 @@ fn idle_existing_session_submission_starts_immediately() {
     // state 提供构建工作区输入时使用的同一保留版本。
     let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
     // provider_configuration supplies provider-specific pending-lane behavior.
-    // provider_configuration 提供 Provider 特定待发送通道行为。
-    let provider_configuration = ProviderConfigurationFile::default();
-
     assert_eq!(
-        evaluate_existing_submission_queue(
-            &state,
-            &workspace_snapshot,
-            &provider_configuration,
-            Some(session_id),
-        )
-        .expect("idle queue decision"),
+        evaluate_existing_submission_queue(&state, &workspace_snapshot, Some(session_id),)
+            .expect("idle queue decision"),
         ExistingSubmissionQueueDecision::StartImmediately
     );
 }
@@ -83,17 +75,9 @@ fn active_kernel_turn_routes_submission_to_existing_session_queue() {
     // state 向决策提供活动内核版本。
     let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
     // provider_configuration supplies provider-specific pending-lane behavior.
-    // provider_configuration 提供 Provider 特定待发送通道行为。
-    let provider_configuration = ProviderConfigurationFile::default();
-
     assert_eq!(
-        evaluate_existing_submission_queue(
-            &state,
-            &workspace_snapshot,
-            &provider_configuration,
-            Some(session_id),
-        )
-        .expect("active queue decision"),
+        evaluate_existing_submission_queue(&state, &workspace_snapshot, Some(session_id),)
+            .expect("active queue decision"),
         ExistingSubmissionQueueDecision::Queue { session_id }
     );
 }

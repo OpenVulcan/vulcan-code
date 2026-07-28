@@ -131,6 +131,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
         let system_preamble = launch.system_preamble;
         let core_snapshot = launch.core_snapshot;
         let mut stream_state = launch.stream_state;
+        let public_ai_runtime = launch.public_ai_runtime;
         // taskExecutionContextGuard owns the exact context generation used by this provider loop.
         // taskExecutionContextGuard 拥有本 Provider 循环使用的精确上下文注册世代。
         let task_execution_context_guard = if let Some(context) = task_execution_context {
@@ -168,6 +169,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
             token_budget_runtime.clone(),
             tools_manager,
             resolved_tool_definitions,
+            public_ai_runtime,
             prompt_intervention,
         );
 

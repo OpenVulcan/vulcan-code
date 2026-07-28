@@ -1,8 +1,6 @@
 //! WebUI chained-turn dispatch after a parent turn reaches an idle point.
 //! WebUI 父级回合到达空闲点后的链式回合分发逻辑。
 
-use std::collections::{BTreeMap, BTreeSet};
-
 use vulcan_agent_runtime::workbench_prompt_turn::{
     SharedPromptPrecheckPlan, SharedPromptTurnBeginInput, begin_shared_prompt_turn,
 };
@@ -14,7 +12,6 @@ use vulcan_workspace_store::{
     workspace_store::{ThreadGoalStatus, VulcanGoalStore},
 };
 
-use super::conversation_submission::effective_session_disabled_ai_capability_kinds;
 use super::session_hydration::{
     capture_preserved_workspace_run_state, load_workspace_for_submission,
     preserve_active_session_run_state, retained_submission_snapshot_has_session_context,
@@ -250,14 +247,6 @@ pub(super) async fn maybe_start_session_goal_continuation_if_idle(
         &mut workspace_snapshot,
     );
     ensure_webui_session_runtime_state(&mut workspace_snapshot, session_id, None)?;
-    // disabled_ai_capability_kinds keeps the provider-visible tool catalog identical to a normal turn using the same session defaults.
-    // disabled_ai_capability_kinds 使 Provider 可见工具目录与使用相同会话默认值的普通回合保持一致。
-    let disabled_ai_capability_kinds = effective_session_disabled_ai_capability_kinds(
-        &workspace_snapshot,
-        session_id,
-        &agent_runtime.ai_tool_configuration,
-        None,
-    )?;
     let Some(session_title) = workspace_snapshot
         .sessions
         .iter()
@@ -299,9 +288,6 @@ pub(super) async fn maybe_start_session_goal_continuation_if_idle(
                 reasoning_effort: active_reasoning_selection_effort(
                     &agent_runtime.provider_configuration,
                 ),
-                disabled_ai_capability_kinds,
-                disabled_ai_capability_target_selectors: BTreeSet::new(),
-                ai_capability_target_bindings: BTreeMap::new(),
             },
         )?;
         start_webui_goal_session_kernel_turn(

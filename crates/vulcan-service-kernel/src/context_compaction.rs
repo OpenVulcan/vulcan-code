@@ -22,9 +22,7 @@ use vulcan_agent_runtime::{
         SessionConversationState, compact_conversation_records_after_summary,
         compact_conversation_with_summary_until, conversation_state_to_compaction_source_messages,
     },
-    provider_config::{
-        PersistedAiToolConfiguration, ProviderConfigurationFile, ReasoningEffortLevel,
-    },
+    provider_config::ReasoningEffortLevel,
     session_event_runtime::SessionStreamingRecordIds,
 };
 #[cfg(test)]
@@ -52,26 +50,25 @@ use vulcan_workspace_store::{
 
 use super::{
     AgentRuntimeBridge, ServiceBridgeState, SharedServiceBridgeState, StreamContentKind,
-    StreamTaskLaunchFailureCommit, active_reasoning_selection_effort,
-    active_stream_task_matches_id, append_runtime_event_projection_and_release_barrier,
-    append_stream_content_delta, append_webui_session_message_entry_to_state,
-    append_webui_session_turn_stats_to_state, apply_observed_usage_to_context_budget,
-    apply_session_phase, apply_session_phase_to_state, build_conversation_messages_patched_delta,
-    build_vmm_hook_config_snapshot, commit_stream_task_registration_failure,
-    complete_streaming_thinking_phase, conversation_messages_from_session,
-    current_unix_millis_text, current_workspace_snapshot_from_shared_state,
-    emit_service_event_with_trace, finish_webui_session_kernel_turn,
-    historical_context_budget_snapshot_from_runtime_state,
+    StreamTaskLaunchFailureCommit, active_public_ai_model_capabilities,
+    active_reasoning_selection_effort, active_stream_task_matches_id,
+    append_runtime_event_projection_and_release_barrier, append_stream_content_delta,
+    append_webui_session_message_entry_to_state, append_webui_session_turn_stats_to_state,
+    apply_observed_usage_to_context_budget, apply_session_phase, apply_session_phase_to_state,
+    build_conversation_messages_patched_delta, build_vmm_hook_config_snapshot,
+    commit_stream_task_registration_failure, complete_streaming_thinking_phase,
+    conversation_messages_from_session, current_unix_millis_text,
+    current_workspace_snapshot_from_shared_state, emit_service_event_with_trace,
+    finish_webui_session_kernel_turn, historical_context_budget_snapshot_from_runtime_state,
     merge_runtime_state_records_into_display_messages, next_webui_session_runtime_persist_version,
     normalized_workspace_path_text_from_path, owning_project_id_for_session,
     persistent_injection_fingerprint, persistent_injection_source_node_ids,
     record_webui_runtime_injection_merged, remove_active_stream_task_if_id,
-    replace_conversation_messages_in_workbench_window, session_ai_tool_configuration_or_default,
-    spawn_service_task, spawn_workspace_session_persist_task,
-    sync_hydrated_session_dialogue_ready_marker, webui_session_kernel_generation,
-    webui_session_runtime_persist_version_is_current, webui_trace, webui_workspace_persist_lock,
-    workbench_surface_matches_conversation, workspace_path_for_session, workspace_root,
-    workspace_snapshot_contains_regular_session,
+    replace_conversation_messages_in_workbench_window, spawn_service_task,
+    spawn_workspace_session_persist_task, sync_hydrated_session_dialogue_ready_marker,
+    webui_session_kernel_generation, webui_session_runtime_persist_version_is_current, webui_trace,
+    webui_workspace_persist_lock, workbench_surface_matches_conversation,
+    workspace_path_for_session, workspace_root, workspace_snapshot_contains_regular_session,
 };
 
 /// Metadata trigger label for user-requested manual context compaction.

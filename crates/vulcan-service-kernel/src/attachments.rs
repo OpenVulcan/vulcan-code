@@ -20,13 +20,11 @@ use vulcan_agent_runtime::{
     },
 };
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
-use vulcan_provider_config::config::{PersistedAiToolConfiguration, ProviderConfigurationFile};
 use vulcan_service_api::{ComposerAttachmentCapabilitySummary, ComposerAttachmentSummary};
 
 use crate::{
-    SharedServiceBridgeState, ai_capabilities::active_workbench_model_capabilities,
-    normalized_workspace_path_text_from_path, parse_session_id, spawn_service_blocking_task,
-    vmm_project_scope_path, workspace_root,
+    SharedServiceBridgeState, normalized_workspace_path_text_from_path, parse_session_id,
+    spawn_service_blocking_task, vmm_project_scope_path, workspace_root,
 };
 mod capabilities;
 mod cleanup;

@@ -1,0 +1,1454 @@
+//! Public AI connection settings and runtime metadata services.
+//! 公共 AI 连接设置与运行时元数据服务。
+
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
+use vulcan_ai_contract::{AccountUsageSnapshot, PromptCachePolicy};
+use vulcan_provider_adapters::{
+    AccountUsageQueryKind, ActiveAiModelSelection, ConnectionModelCatalog, CredentialBillingKind,
+    CredentialConnection, CredentialMode, CredentialSecretEnvelope, CredentialSecretResolver,
+    CredentialSecretStore, ModelExecutionOverrides, OAuthAuthorizationChallenge,
+    OAuthClientConfiguration, OAuthTransactionPhase, OAuthTransactionSnapshot,
+    PersistedAiConfiguration, ProviderDescriptor, PublicAiRuntime,
+};
+use vulcan_service_api::{ServiceEventEmitter, WorkbenchSnapshot};
+
+use crate::{
+    SharedServiceBridgeState, ai_credential_secret_store::OsAiCredentialSecretStore,
+    begin_public_ai_configuration_transaction, emit_workbench_event,
+    mutate_public_ai_configuration, mutate_public_ai_configuration_in_transaction,
+    public_ai_provider_rows, shell_host_from_state,
+};
+
+/// Browser-facing public AI settings snapshot.
+/// 面向浏览器的公共 AI 设置快照。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PublicAiSettingsSnapshot {
+    /// Registered provider and service-entry descriptors.
+    /// 已注册的供应商与服务入口描述。
+    providers: Vec<ProviderDescriptor>,
+    /// Persisted connection metadata without secrets.
+    /// 不含秘密的持久化连接元数据。
+    connections: Vec<PublicAiConnectionSnapshot>,
+    /// Explicit default connection per provider.
+    /// 每个供应商的显式默认连接。
+    provider_defaults: BTreeMap<String, String>,
+    /// Exact active model selection.
+    /// 精确的当前模型选择。
+    active: Option<ActiveAiModelSelection>,
+    /// Process-local connection model catalogs.
+    /// 进程内的连接模型目录。
+    catalogs: BTreeMap<String, ConnectionModelCatalog>,
+    /// Latest process-local model synchronization errors.
+    /// 最近的进程内模型同步错误。
+    catalog_errors: BTreeMap<String, String>,
+    /// Connection-model local overrides.
+    /// 连接模型作用域的本地覆盖。
+    model_overrides: BTreeMap<String, ModelExecutionOverrides>,
+    /// Explicit override records that avoid exposing composite-key parsing to the browser.
+    /// 避免浏览器解析组合键的显式覆盖记录。
+    model_override_records: Vec<PublicAiModelOverrideRecord>,
+}
+
+/// Browser-facing credential metadata that excludes the host secret-store reference.
+/// 面向浏览器且排除宿主秘密存储引用的凭据元数据。
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct PublicAiConnectionSnapshot {
+    /// Stable connection identifier.
+    /// 稳定连接标识。
+    id: String,
+    /// Stable provider identifier.
+    /// 稳定供应商标识。
+    provider_id: String,
+    /// Stable service-entry identifier.
+    /// 稳定服务入口标识。
+    service_entry_id: String,
+    /// Stable credential-profile identifier.
+    /// 稳定凭据配置档标识。
+    credential_profile_id: String,
+    /// Exact billing semantics declared by the selected credential profile.
+    /// 所选凭据配置档声明的精确计费语义。
+    billing_kind: CredentialBillingKind,
+    /// Exact usage-query capability declared by the selected credential profile.
+    /// 所选凭据配置档声明的精确用量查询能力。
+    usage_capability: AccountUsageQueryKind,
+    /// Credential acquisition mode.
+    /// 凭据获取方式。
+    credential_mode: CredentialMode,
+    /// Stable non-secret credential identifier.
+    /// 稳定的非秘密凭据标识。
+    credential_id: String,
+    /// User-visible connection name.
+    /// 用户可见连接名称。
+    display_name: String,
+    /// Verified protocol profile identifiers.
+    /// 已验证协议 Profile 标识。
+    verified_protocols: BTreeSet<String>,
+    /// Currently selected protocol profile.
+    /// 当前选定协议 Profile。
+    selected_protocol: String,
+    /// Protocol-scoped public cache policies.
+    /// 协议作用域的公共缓存策略。
+    prompt_cache_by_protocol: BTreeMap<String, PromptCachePolicy>,
+}
+
+impl PublicAiConnectionSnapshot {
+    /// Redacts one internal connection for browser publication.
+    /// 对一个内部连接进行脱敏以供浏览器发布。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `runtime` owns the strict provider registry and `connection` is the persisted connection.
+    /// `runtime` 持有严格供应商注册表，`connection` 是持久化连接。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A complete browser-safe snapshot with resolved credential semantics.
+    /// 返回带已解析凭据语义的完整浏览器安全快照。
+    fn new(runtime: &PublicAiRuntime, connection: &CredentialConnection) -> Result<Self, String> {
+        let provider = runtime
+            .providers()
+            .provider(connection.provider_id.as_str())
+            .ok_or_else(|| format!("Provider `{}` is not registered.", connection.provider_id))?;
+        let entry = provider
+            .service_entries
+            .iter()
+            .find(|entry| entry.id == connection.service_entry_id)
+            .ok_or_else(|| {
+                format!(
+                    "Service entry `{}` is not registered for provider `{}`.",
+                    connection.service_entry_id, connection.provider_id
+                )
+            })?;
+        let credential_profile = entry
+            .credential_profile(connection.credential_profile_id.as_str())
+            .ok_or_else(|| {
+                format!(
+                    "Credential profile `{}` is not registered for service entry `{}`.",
+                    connection.credential_profile_id, connection.service_entry_id
+                )
+            })?;
+        Ok(Self {
+            id: connection.id.clone(),
+            provider_id: connection.provider_id.clone(),
+            service_entry_id: connection.service_entry_id.clone(),
+            credential_profile_id: connection.credential_profile_id.clone(),
+            billing_kind: credential_profile.billing_kind,
+            usage_capability: credential_profile.account_usage_query,
+            credential_mode: connection.credential_mode,
+            credential_id: connection.credential_id.clone(),
+            display_name: connection.display_name.clone(),
+            verified_protocols: connection.verified_protocols.clone(),
+            selected_protocol: connection.selected_protocol.clone(),
+            prompt_cache_by_protocol: connection.prompt_cache_by_protocol.clone(),
+        })
+    }
+}
+
+/// Browser-facing exact model override record.
+/// 面向浏览器的精确模型覆盖记录。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PublicAiModelOverrideRecord {
+    /// Exact credential connection identifier.
+    /// 精确凭据连接标识。
+    connection_id: String,
+    /// Exact model identifier.
+    /// 精确模型标识。
+    model_id: String,
+    /// Complete local override value.
+    /// 完整本地覆盖值。
+    overrides: ModelExecutionOverrides,
+}
+
+/// Adds one credential connection and its secret.
+/// 添加一个凭据连接及其秘密。
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiConnectionAddRequest {
+    /// Stable provider identifier.
+    /// 稳定供应商标识。
+    provider_id: String,
+    /// Stable service-entry identifier.
+    /// 稳定服务入口标识。
+    service_entry_id: String,
+    /// Selected credential profile.
+    /// 选定的凭据配置档。
+    credential_profile_id: String,
+    /// Selected credential mode.
+    /// 选定的凭据方式。
+    credential_mode: CredentialMode,
+    /// User-visible credential label.
+    /// 用户可见凭据标签。
+    display_name: String,
+    /// Selected verified protocol profile.
+    /// 选定的已验证协议 Profile。
+    selected_protocol: String,
+    /// Secret entered by the user.
+    /// 用户输入的秘密。
+    secret: String,
+}
+
+/// Updates editable metadata for one credential connection.
+/// 更新一个凭据连接的可编辑元数据。
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiConnectionUpdateRequest {
+    /// Exact connection identifier.
+    /// 精确连接标识。
+    connection_id: String,
+    /// User-visible credential label.
+    /// 用户可见凭据标签。
+    display_name: String,
+    /// Selected service entry.
+    /// 选定服务入口。
+    service_entry_id: String,
+    /// Selected credential profile.
+    /// 选定的凭据配置档。
+    credential_profile_id: String,
+    /// Selected credential mode.
+    /// 选定凭据方式。
+    credential_mode: CredentialMode,
+    /// Selected verified protocol profile.
+    /// 选定的已验证协议 Profile。
+    selected_protocol: String,
+    /// Optional replacement secret.
+    /// 可选替换秘密。
+    secret: Option<String>,
+}
+
+/// Selects one exact public AI model and account.
+/// 选择一个精确公共 AI 模型与账号。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiModelSelectionRequest {
+    /// Stable provider identifier.
+    /// 稳定供应商标识。
+    provider_id: String,
+    /// Exact model identifier.
+    /// 精确模型标识。
+    model_id: String,
+    /// Exact credential connection identifier.
+    /// 精确凭据连接标识。
+    connection_id: String,
+}
+
+/// Saves local narrowing and model parameter values.
+/// 保存本地收窄与模型参数值。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiModelOverridesSaveRequest {
+    /// Exact connection identifier.
+    /// 精确连接标识。
+    connection_id: String,
+    /// Exact model identifier.
+    /// 精确模型标识。
+    model_id: String,
+    /// Complete replacement override value.
+    /// 完整替换覆盖值。
+    overrides: ModelExecutionOverrides,
+}
+
+/// Changes the explicit default connection for one provider.
+/// 修改一个供应商的显式默认连接。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiDefaultConnectionSaveRequest {
+    /// Stable provider identifier.
+    /// 稳定供应商标识。
+    provider_id: String,
+    /// Exact connection identifier.
+    /// 精确连接标识。
+    connection_id: String,
+}
+
+/// Removes one connection with an explicit replacement default when required.
+/// 在需要时携带显式替代默认账号移除一个连接。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiConnectionRemoveRequest {
+    /// Exact connection to remove.
+    /// 待移除的精确连接。
+    connection_id: String,
+    /// Explicit replacement default for the same provider.
+    /// 同一供应商的显式替代默认账号。
+    replacement_default_connection_id: Option<String>,
+}
+
+/// Starts one exact provider OAuth flow without persisting transaction state.
+/// 启动一个精确供应商 OAuth 流程且不持久化事务状态。
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiOAuthStartRequest {
+    /// Stable provider identifier.
+    /// 稳定供应商标识。
+    provider_id: String,
+    /// Stable service-entry identifier.
+    /// 稳定服务入口标识。
+    service_entry_id: String,
+    /// Stable renewable credential-profile identifier.
+    /// 稳定的可续期凭据配置档标识。
+    credential_profile_id: String,
+    /// User-owned OAuth client settings required only by declared flows.
+    /// 仅声明需要的流程使用的用户自有 OAuth 客户端设置。
+    #[serde(default)]
+    client: OAuthClientConfiguration,
+}
+
+/// Commits one successful OAuth transaction as a credential connection.
+/// 将一个成功 OAuth 事务提交为凭据连接。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiOAuthCommitRequest {
+    /// Opaque successful transaction identifier.
+    /// 不透明成功事务标识。
+    transaction_id: String,
+    /// Stable provider identifier selected before authorization.
+    /// 授权前选择的稳定供应商标识。
+    provider_id: String,
+    /// Stable service-entry identifier selected before authorization.
+    /// 授权前选择的稳定服务入口标识。
+    service_entry_id: String,
+    /// Stable renewable credential-profile identifier.
+    /// 稳定的可续期凭据配置档标识。
+    credential_profile_id: String,
+    /// User-visible credential label.
+    /// 用户可见凭据标签。
+    display_name: String,
+    /// Selected verified protocol profile.
+    /// 选定的已验证协议 Profile。
+    selected_protocol: String,
+    /// Existing connection replaced by this authorization, when reauthorizing.
+    /// 重新授权时由此次授权替换的现有连接。
+    #[serde(default)]
+    connection_id: Option<String>,
+}
+
+/// Starts a provider-declared OAuth flow and opens the system browser.
+/// 启动供应商声明的 OAuth 流程并打开系统浏览器。
+pub(super) async fn service_start_public_ai_oauth(
+    state: SharedServiceBridgeState,
+    request: PublicAiOAuthStartRequest,
+) -> Result<OAuthAuthorizationChallenge, String> {
+    validate_non_empty("providerId", request.provider_id.as_str())?;
+    validate_non_empty("serviceEntryId", request.service_entry_id.as_str())?;
+    validate_non_empty(
+        "credentialProfileId",
+        request.credential_profile_id.as_str(),
+    )?;
+    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
+    let provider = runtime
+        .providers()
+        .provider(request.provider_id.as_str())
+        .ok_or_else(|| format!("Provider `{}` is not registered.", request.provider_id))?;
+    let entry = provider
+        .service_entries
+        .iter()
+        .find(|entry| entry.id == request.service_entry_id)
+        .ok_or_else(|| {
+            format!(
+                "Service entry `{}` is not registered for provider `{}`.",
+                request.service_entry_id, request.provider_id
+            )
+        })?;
+    let credential_profile = entry
+        .credential_profile(request.credential_profile_id.as_str())
+        .ok_or_else(|| {
+            format!(
+                "Credential profile `{}` is not registered for service entry `{}`.",
+                request.credential_profile_id, request.service_entry_id
+            )
+        })?;
+    let oauth_provider = credential_profile.oauth_provider.ok_or_else(|| {
+        format!(
+            "Credential profile `{}` does not declare an OAuth flow.",
+            request.credential_profile_id
+        )
+    })?;
+    if credential_profile.credential_mode != CredentialMode::Auth {
+        return Err(format!(
+            "Credential profile `{}` does not support renewable authorization.",
+            request.credential_profile_id
+        ));
+    }
+    let challenge = runtime
+        .oauth()
+        .start(oauth_provider, request.client)
+        .await?;
+    if let Err(error) =
+        shell_host_from_state(&state)?.open_url(challenge.authorization_url.as_str())
+    {
+        let _ = runtime
+            .oauth()
+            .cancel(challenge.transaction.transaction_id.as_str())
+            .await;
+        return Err(error);
+    }
+    Ok(challenge)
+}
+
+/// Returns the current state of one process-local OAuth transaction.
+/// 返回一个进程内 OAuth 事务的当前状态。
+pub(super) async fn service_public_ai_oauth_status(
+    state: SharedServiceBridgeState,
+    transaction_id: String,
+) -> Result<OAuthTransactionSnapshot, String> {
+    validate_non_empty("transactionId", transaction_id.as_str())?;
+    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
+    runtime.oauth().status(transaction_id.as_str()).await
+}
+
+/// Cancels one process-local OAuth transaction.
+/// 取消一个进程内 OAuth 事务。
+pub(super) async fn service_cancel_public_ai_oauth(
+    state: SharedServiceBridgeState,
+    transaction_id: String,
+) -> Result<OAuthTransactionSnapshot, String> {
+    validate_non_empty("transactionId", transaction_id.as_str())?;
+    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
+    runtime.oauth().cancel(transaction_id.as_str()).await
+}
+
+/// Commits one successful OAuth transaction as a new connection.
+/// 将一个成功 OAuth 事务提交为新连接。
+pub(super) async fn service_commit_public_ai_oauth_connection(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiOAuthCommitRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    validate_non_empty("transactionId", request.transaction_id.as_str())?;
+    validate_non_empty("providerId", request.provider_id.as_str())?;
+    validate_non_empty("displayName", request.display_name.as_str())?;
+    validate_non_empty("selectedProtocol", request.selected_protocol.as_str())?;
+    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
+    let provider = runtime
+        .providers()
+        .provider(request.provider_id.as_str())
+        .ok_or_else(|| format!("Provider `{}` is not registered.", request.provider_id))?;
+    let entry = provider
+        .service_entries
+        .iter()
+        .find(|entry| entry.id == request.service_entry_id)
+        .ok_or_else(|| {
+            format!(
+                "Service entry `{}` is not registered for provider `{}`.",
+                request.service_entry_id, request.provider_id
+            )
+        })?;
+    let snapshot = runtime
+        .oauth()
+        .status(request.transaction_id.as_str())
+        .await?;
+    if snapshot.phase != OAuthTransactionPhase::Succeeded {
+        return Err(format!(
+            "OAuth transaction `{}` is not successful.",
+            request.transaction_id
+        ));
+    }
+    let credential_profile = entry
+        .credential_profile(request.credential_profile_id.as_str())
+        .ok_or_else(|| {
+            format!(
+                "Credential profile `{}` is not registered for service entry `{}`.",
+                request.credential_profile_id, request.service_entry_id
+            )
+        })?;
+    if credential_profile.oauth_provider != Some(snapshot.provider_kind) {
+        return Err(String::from(
+            "OAuth transaction does not belong to the selected service entry.",
+        ));
+    }
+    let material = runtime
+        .oauth()
+        .take_succeeded(request.transaction_id.as_str())
+        .await?;
+    if let Some(connection_id) = request.connection_id.as_deref() {
+        let transaction = begin_public_ai_configuration_transaction().await;
+        let (_, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+        let current = current_configuration
+            .connection_graph
+            .connections
+            .get(connection_id)
+            .cloned()
+            .ok_or_else(|| format!("Connection `{connection_id}` is not configured."))?;
+        if current.provider_id != request.provider_id {
+            return Err(String::from(
+                "OAuth reauthorization provider does not match the existing connection.",
+            ));
+        }
+        let secret_store = OsAiCredentialSecretStore;
+        let previous = CredentialSecretResolver::read_secret(
+            &secret_store,
+            current.secret_reference.as_str(),
+        )?;
+        let replacement = previous.advance_with_material(material)?;
+        CredentialSecretStore::replace_secret(
+            &secret_store,
+            current.secret_reference.as_str(),
+            previous.revision,
+            &replacement,
+        )?;
+        let connection_id = connection_id.to_string();
+        let update_request = PublicAiConnectionUpdateRequest {
+            connection_id: connection_id.clone(),
+            display_name: request.display_name.clone(),
+            service_entry_id: request.service_entry_id.clone(),
+            credential_profile_id: request.credential_profile_id.clone(),
+            credential_mode: CredentialMode::Auth,
+            selected_protocol: request.selected_protocol.clone(),
+            secret: None,
+        };
+        let mut validation_configuration = current_configuration.clone();
+        if let Err(error) = apply_connection_update(
+            runtime.as_ref(),
+            &mut validation_configuration,
+            &update_request,
+            connection_id.as_str(),
+        ) {
+            rollback_replaced_secret(
+                &secret_store,
+                current.secret_reference.as_str(),
+                Some(&(previous, replacement)),
+            )?;
+            return Err(error);
+        }
+        if let Err(error) = runtime
+            .refresh_connection_catalog(&validation_configuration, connection_id.as_str())
+            .await
+        {
+            let rollback_result = rollback_replaced_secret(
+                &secret_store,
+                current.secret_reference.as_str(),
+                Some(&(previous.clone(), replacement.clone())),
+            );
+            let restore_result = runtime
+                .refresh_connection_catalog(&current_configuration, connection_id.as_str())
+                .await
+                .map(|_| ());
+            return Err(compensated_operation_error(
+                format!(
+                    "OAuth credential validation failed before the connection was updated: {error}"
+                ),
+                rollback_result,
+                restore_result,
+            ));
+        }
+        let update_result = mutate_public_ai_configuration_in_transaction(
+            &state,
+            "重新授权公共 AI 连接失败",
+            |configuration| {
+                *configuration = validation_configuration.clone();
+                Ok(())
+            },
+        );
+        let configuration = match update_result {
+            Ok(configuration) => configuration,
+            Err(error) => {
+                let rollback_result = rollback_replaced_secret(
+                    &secret_store,
+                    current.secret_reference.as_str(),
+                    Some(&(previous, replacement)),
+                );
+                let restore_result = runtime
+                    .refresh_connection_catalog(&current_configuration, connection_id.as_str())
+                    .await
+                    .map(|_| ());
+                return Err(compensated_operation_error(
+                    error,
+                    rollback_result,
+                    restore_result,
+                ));
+            }
+        };
+        drop(transaction);
+        publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+        return build_public_ai_settings_snapshot(runtime.as_ref(), &configuration);
+    }
+    let secret = CredentialSecretEnvelope::new(material)?;
+    add_public_ai_connection_with_secret(
+        app,
+        state,
+        request.provider_id,
+        request.service_entry_id,
+        request.credential_profile_id,
+        CredentialMode::Auth,
+        request.display_name,
+        request.selected_protocol,
+        secret,
+    )
+    .await
+}
+
+/// Returns the current public AI settings snapshot.
+/// 返回当前公共 AI 设置快照。
+pub(super) async fn service_public_ai_settings_snapshot(
+    state: SharedServiceBridgeState,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Adds and synchronizes one public AI credential connection.
+/// 添加并同步一个公共 AI 凭据连接。
+pub(super) async fn service_add_public_ai_connection(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiConnectionAddRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    validate_non_empty("providerId", request.provider_id.as_str())?;
+    validate_non_empty("serviceEntryId", request.service_entry_id.as_str())?;
+    validate_non_empty(
+        "credentialProfileId",
+        request.credential_profile_id.as_str(),
+    )?;
+    validate_non_empty("displayName", request.display_name.as_str())?;
+    validate_non_empty("selectedProtocol", request.selected_protocol.as_str())?;
+    validate_non_empty("secret", request.secret.as_str())?;
+    if request.credential_mode != CredentialMode::Token {
+        return Err(String::from(
+            "Renewable account authorization must be created through the Auth login flow.",
+        ));
+    }
+    let (service_entry_id, credential_profile_id) = if request.provider_id == "minimax" {
+        let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
+        let registration = runtime
+            .metadata_client()
+            .register_minimax_key(request.secret.as_str())
+            .await?;
+        (
+            registration.service_entry_id,
+            registration.credential_profile_id,
+        )
+    } else {
+        validate_non_empty("serviceEntryId", request.service_entry_id.as_str())?;
+        validate_non_empty(
+            "credentialProfileId",
+            request.credential_profile_id.as_str(),
+        )?;
+        (
+            request.service_entry_id.clone(),
+            request.credential_profile_id.clone(),
+        )
+    };
+    let secret = CredentialSecretEnvelope::new_api_key(request.secret)?;
+    add_public_ai_connection_with_secret(
+        app,
+        state,
+        request.provider_id,
+        service_entry_id,
+        credential_profile_id,
+        request.credential_mode,
+        request.display_name,
+        request.selected_protocol,
+        secret,
+    )
+    .await
+}
+
+/// Persists one validated secret and its exact connection as a single compensating transaction.
+/// 以单个补偿事务持久化一个已验证秘密及其精确连接。
+async fn add_public_ai_connection_with_secret(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    provider_id: String,
+    service_entry_id: String,
+    credential_profile_id: String,
+    credential_mode: CredentialMode,
+    display_name: String,
+    selected_protocol: String,
+    secret: CredentialSecretEnvelope,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    if secret.credential_mode() != credential_mode {
+        return Err(String::from(
+            "Credential secret mode does not match the requested connection mode.",
+        ));
+    }
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    let connection_id = format!("connection_{}", uuid::Uuid::new_v4().simple());
+    let credential_id = format!("credential_{}", uuid::Uuid::new_v4().simple());
+    let secret_reference = format!("ai_secret_{}", uuid::Uuid::new_v4().simple());
+    let provider = runtime
+        .providers()
+        .provider(provider_id.as_str())
+        .ok_or_else(|| format!("Provider `{provider_id}` is not registered."))?;
+    let entry = provider
+        .service_entries
+        .iter()
+        .find(|entry| entry.id == service_entry_id)
+        .ok_or_else(|| {
+            format!(
+                "Service entry `{}` is not registered for provider `{}`.",
+                service_entry_id, provider_id
+            )
+        })?;
+    let credential_profile = entry
+        .credential_profile(credential_profile_id.as_str())
+        .ok_or_else(|| {
+            format!(
+                "Credential profile `{credential_profile_id}` is not registered for service entry `{service_entry_id}`."
+            )
+        })?;
+    if credential_profile.credential_mode != credential_mode {
+        return Err(format!(
+            "Credential profile `{credential_profile_id}` does not support credential mode `{credential_mode:?}`."
+        ));
+    }
+    if let Some(required_prefix) = credential_profile.key_prefix.as_deref() {
+        let key_matches = matches!(
+            &secret.material,
+            vulcan_provider_adapters::CredentialSecretMaterial::ApiKey { value }
+                if value.starts_with(required_prefix)
+        );
+        if !key_matches {
+            return Err(format!(
+                "Credential secret does not match the required `{required_prefix}` key prefix for profile `{credential_profile_id}`."
+            ));
+        }
+    }
+    let verified_protocols = entry
+        .protocol_routes
+        .iter()
+        .filter(|route| route.verified)
+        .map(|route| route.protocol_profile_id.clone())
+        .collect();
+    let connection = CredentialConnection {
+        id: connection_id.clone(),
+        provider_id,
+        service_entry_id,
+        credential_profile_id,
+        credential_mode,
+        credential_id,
+        display_name: display_name.trim().to_string(),
+        secret_reference: secret_reference.clone(),
+        verified_protocols,
+        selected_protocol,
+        prompt_cache_by_protocol: BTreeMap::new(),
+    };
+    let secret_store = OsAiCredentialSecretStore;
+    CredentialSecretStore::create_secret(&secret_store, secret_reference.as_str(), &secret)?;
+    let mut validation_configuration = current_configuration;
+    if let Err(error) = validation_configuration
+        .connection_graph
+        .add_connection(runtime.providers(), connection.clone())
+    {
+        return match CredentialSecretStore::delete_secret(&secret_store, secret_reference.as_str())
+        {
+            Ok(()) => Err(error),
+            Err(cleanup_error) => Err(format!(
+                "{error} Secret cleanup also failed: {cleanup_error}"
+            )),
+        };
+    }
+    if let Err(error) = runtime
+        .refresh_connection_catalog(&validation_configuration, connection_id.as_str())
+        .await
+    {
+        let catalog_cleanup = runtime.remove_connection_catalog(connection_id.as_str());
+        let secret_cleanup =
+            CredentialSecretStore::delete_secret(&secret_store, secret_reference.as_str());
+        return Err(compensated_operation_error(
+            format!("Credential validation failed before the connection was saved: {error}"),
+            secret_cleanup,
+            catalog_cleanup,
+        ));
+    }
+    let add_result =
+        mutate_public_ai_configuration(&state, "保存公共 AI 连接失败", |configuration| {
+            configuration
+                .connection_graph
+                .add_connection(runtime.providers(), connection.clone())
+        })
+        .await;
+    let configuration = match add_result {
+        Ok(configuration) => configuration,
+        Err(error) => {
+            let catalog_cleanup = runtime.remove_connection_catalog(connection_id.as_str());
+            let secret_cleanup =
+                CredentialSecretStore::delete_secret(&secret_store, secret_reference.as_str());
+            return Err(compensated_operation_error(
+                error,
+                secret_cleanup,
+                catalog_cleanup,
+            ));
+        }
+    };
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Updates one connection and refreshes only when its connection identity changes.
+/// 更新一个连接，并仅在连接身份变化时刷新。
+pub(super) async fn service_update_public_ai_connection(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiConnectionUpdateRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    let mut request = request;
+    validate_non_empty("connectionId", request.connection_id.as_str())?;
+    validate_non_empty("displayName", request.display_name.as_str())?;
+    validate_non_empty("serviceEntryId", request.service_entry_id.as_str())?;
+    validate_non_empty(
+        "credentialProfileId",
+        request.credential_profile_id.as_str(),
+    )?;
+    validate_non_empty("selectedProtocol", request.selected_protocol.as_str())?;
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    let current = current_configuration
+        .connection_graph
+        .connections
+        .get(request.connection_id.as_str())
+        .cloned()
+        .ok_or_else(|| format!("Connection `{}` is not configured.", request.connection_id))?;
+    if current.provider_id == "minimax"
+        && let Some(secret) = request.secret.as_deref()
+    {
+        let registration = runtime
+            .metadata_client()
+            .register_minimax_key(secret)
+            .await?;
+        request.service_entry_id = registration.service_entry_id;
+        request.credential_profile_id = registration.credential_profile_id;
+        request.credential_mode = CredentialMode::Token;
+    }
+    if current.credential_mode != request.credential_mode && request.secret.is_none() {
+        return Err(String::from(
+            "Changing credential mode requires a newly validated credential.",
+        ));
+    }
+    if current.credential_profile_id != request.credential_profile_id && request.secret.is_none() {
+        return Err(String::from(
+            "Changing credential profile requires a newly validated credential.",
+        ));
+    }
+    let identity_changed = current.service_entry_id != request.service_entry_id
+        || current.credential_profile_id != request.credential_profile_id
+        || current.credential_mode != request.credential_mode
+        || current.selected_protocol != request.selected_protocol
+        || request.secret.is_some();
+    let secret_store = OsAiCredentialSecretStore;
+    let replaced_secret = if let Some(secret) = request.secret.as_deref() {
+        validate_non_empty("secret", secret)?;
+        if request.credential_mode != CredentialMode::Token {
+            return Err(String::from(
+                "Renewable account authorization must be updated through the Auth login flow.",
+            ));
+        }
+        let previous = CredentialSecretResolver::read_secret(
+            &secret_store,
+            current.secret_reference.as_str(),
+        )?;
+        let replacement = previous.replace_api_key(secret.to_string())?;
+        CredentialSecretStore::replace_secret(
+            &secret_store,
+            current.secret_reference.as_str(),
+            previous.revision,
+            &replacement,
+        )?;
+        Some((previous, replacement))
+    } else {
+        None
+    };
+    let connection_id = request.connection_id.clone();
+    let mut validation_configuration = current_configuration.clone();
+    if let Err(error) = apply_connection_update(
+        runtime.as_ref(),
+        &mut validation_configuration,
+        &request,
+        connection_id.as_str(),
+    ) {
+        rollback_replaced_secret(
+            &secret_store,
+            current.secret_reference.as_str(),
+            replaced_secret.as_ref(),
+        )?;
+        return Err(error);
+    }
+    if identity_changed
+        && let Err(error) = runtime
+            .refresh_connection_catalog(&validation_configuration, connection_id.as_str())
+            .await
+    {
+        let rollback_result = rollback_replaced_secret(
+            &secret_store,
+            current.secret_reference.as_str(),
+            replaced_secret.as_ref(),
+        );
+        let restore_result = runtime
+            .refresh_connection_catalog(&current_configuration, connection_id.as_str())
+            .await
+            .map(|_| ());
+        return Err(compensated_operation_error(
+            format!("Credential validation failed before the connection was updated: {error}"),
+            rollback_result,
+            restore_result,
+        ));
+    }
+    let update_result = mutate_public_ai_configuration_in_transaction(
+        &state,
+        "更新公共 AI 连接失败",
+        |configuration| {
+            *configuration = validation_configuration.clone();
+            Ok(())
+        },
+    );
+    let configuration = match update_result {
+        Ok(configuration) => configuration,
+        Err(error) => {
+            let rollback_result = rollback_replaced_secret(
+                &secret_store,
+                current.secret_reference.as_str(),
+                replaced_secret.as_ref(),
+            );
+            let restore_result = runtime
+                .refresh_connection_catalog(&current_configuration, connection_id.as_str())
+                .await
+                .map(|_| ());
+            return Err(compensated_operation_error(
+                error,
+                rollback_result,
+                restore_result,
+            ));
+        }
+    };
+    drop(transaction);
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Applies one validated connection edit to an isolated configuration snapshot.
+/// 将一个已校验连接编辑应用到隔离配置快照。
+///
+/// # Parameters
+/// 参数
+/// `runtime` owns provider descriptors, `configuration` is the isolated candidate,
+/// `request` is the user edit, and `connection_id` is the exact target.
+/// `runtime` 持有供应商描述，`configuration` 是隔离候选配置，
+/// `request` 是用户编辑，`connection_id` 是精确目标。
+///
+/// # Returns
+/// 返回值
+/// Success when the updated connection remains valid in the registered graph.
+/// 当更新后的连接在注册图中仍然有效时返回成功。
+fn apply_connection_update(
+    runtime: &PublicAiRuntime,
+    configuration: &mut PersistedAiConfiguration,
+    request: &PublicAiConnectionUpdateRequest,
+    connection_id: &str,
+) -> Result<(), String> {
+    let latest = configuration
+        .connection_graph
+        .connections
+        .get(connection_id)
+        .cloned()
+        .ok_or_else(|| format!("Connection `{connection_id}` is not configured."))?;
+    let provider = runtime
+        .providers()
+        .provider(latest.provider_id.as_str())
+        .ok_or_else(|| format!("Provider `{}` is not registered.", latest.provider_id))?;
+    let entry = provider
+        .service_entries
+        .iter()
+        .find(|entry| entry.id == request.service_entry_id)
+        .ok_or_else(|| {
+            format!(
+                "Service entry `{}` is not registered for provider `{}`.",
+                request.service_entry_id, latest.provider_id
+            )
+        })?;
+    let mut candidate = latest;
+    candidate.display_name = request.display_name.trim().to_string();
+    candidate.service_entry_id = request.service_entry_id.clone();
+    candidate.credential_profile_id = request.credential_profile_id.clone();
+    candidate.credential_mode = request.credential_mode;
+    candidate.selected_protocol = request.selected_protocol.clone();
+    candidate.verified_protocols = entry
+        .protocol_routes
+        .iter()
+        .filter(|route| route.verified)
+        .map(|route| route.protocol_profile_id.clone())
+        .collect();
+    configuration
+        .connection_graph
+        .connections
+        .remove(connection_id);
+    configuration
+        .connection_graph
+        .add_connection(runtime.providers(), candidate)
+}
+
+/// Restores a replaced secret with a monotonic revision when validation or persistence fails.
+/// 当验证或持久化失败时使用单调递增修订恢复已替换秘密。
+///
+/// # Parameters
+/// 参数
+/// `secret_store` is the secure store, `secret_reference` is opaque, and
+/// `replaced_secret` contains the previous and replacement envelopes when a secret changed.
+/// `secret_store` 是安全仓库，`secret_reference` 是不透明引用，
+/// `replaced_secret` 在秘密变更时包含旧封装与替换封装。
+fn rollback_replaced_secret(
+    secret_store: &OsAiCredentialSecretStore,
+    secret_reference: &str,
+    replaced_secret: Option<&(CredentialSecretEnvelope, CredentialSecretEnvelope)>,
+) -> Result<(), String> {
+    let Some((previous, replacement)) = replaced_secret else {
+        return Ok(());
+    };
+    let rollback = replacement.advance_with_material(previous.material.clone())?;
+    CredentialSecretStore::replace_secret(
+        secret_store,
+        secret_reference,
+        replacement.revision,
+        &rollback,
+    )
+}
+
+/// Preserves a primary failure while exposing any failed compensation step.
+/// 保留主失败，并显式暴露任何失败的补偿步骤。
+///
+/// # Parameters
+/// 参数
+/// `primary` describes the original operation failure, while `first` and `second`
+/// are independent cleanup or state-restoration results.
+/// `primary` 描述原始操作失败，`first` 与 `second` 是彼此独立的清理或状态恢复结果。
+///
+/// # Returns
+/// 返回值
+/// The primary error with deterministic compensation diagnostics appended.
+/// 返回追加确定性补偿诊断后的主错误。
+fn compensated_operation_error(
+    primary: String,
+    first: Result<(), String>,
+    second: Result<(), String>,
+) -> String {
+    let mut errors = Vec::new();
+    if let Err(error) = first {
+        errors.push(format!("first compensation failed: {error}"));
+    }
+    if let Err(error) = second {
+        errors.push(format!("second compensation failed: {error}"));
+    }
+    if errors.is_empty() {
+        primary
+    } else {
+        format!("{primary} Compensation diagnostics: {}.", errors.join("; "))
+    }
+}
+
+/// Saves one explicit provider default connection.
+/// 保存一个显式供应商默认连接。
+pub(super) async fn service_save_public_ai_default_connection(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiDefaultConnectionSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
+    let configuration = mutate_public_ai_configuration(
+        &state,
+        "保存公共 AI 默认账号失败",
+        |configuration| {
+            let connection = configuration
+                .connection_graph
+                .connections
+                .get(request.connection_id.as_str())
+                .ok_or_else(|| {
+                    format!("Connection `{}` is not configured.", request.connection_id)
+                })?;
+            if connection.provider_id != request.provider_id {
+                return Err(format!(
+                    "Connection `{}` does not belong to provider `{}`.",
+                    request.connection_id, request.provider_id
+                ));
+            }
+            configuration
+                .connection_graph
+                .account_preferences
+                .provider_defaults
+                .insert(request.provider_id, request.connection_id);
+            Ok(())
+        },
+    )
+    .await?;
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Removes one public AI credential connection and its secret.
+/// 移除一个公共 AI 凭据连接及其秘密。
+pub(super) async fn service_remove_public_ai_connection(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiConnectionRemoveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    let connection_id = request.connection_id;
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    let removed = current_configuration
+        .connection_graph
+        .connections
+        .get(connection_id.as_str())
+        .cloned()
+        .ok_or_else(|| format!("Connection `{connection_id}` is not configured."))?;
+    let secret_store = OsAiCredentialSecretStore;
+    let removed_secret =
+        CredentialSecretResolver::read_secret(&secret_store, removed.secret_reference.as_str())?;
+    CredentialSecretStore::delete_secret(&secret_store, removed.secret_reference.as_str())?;
+    let remove_result = mutate_public_ai_configuration_in_transaction(
+        &state,
+        "移除公共 AI 连接失败",
+        |configuration| {
+            remove_connection_from_configuration(
+                configuration,
+                connection_id.as_str(),
+                request.replacement_default_connection_id.as_deref(),
+            )
+        },
+    );
+    let configuration = match remove_result {
+        Ok(configuration) => configuration,
+        Err(error) => {
+            let _ = secret_store
+                .restore_deleted_secret(removed.secret_reference.as_str(), &removed_secret);
+            return Err(error);
+        }
+    };
+    drop(transaction);
+    runtime.remove_connection_catalog(connection_id.as_str())?;
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Refreshes one connection model catalog on demand.
+/// 按需刷新一个连接的模型目录。
+pub(super) async fn service_sync_public_ai_connection(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    connection_id: String,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
+    let refresh_result = runtime
+        .refresh_connection_catalog(&configuration, connection_id.as_str())
+        .await;
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    refresh_result?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Queries usage for one exact connection without caching it on disk.
+/// 查询一个精确连接的用量且不写入磁盘缓存。
+pub(super) async fn service_query_public_ai_connection_usage(
+    state: SharedServiceBridgeState,
+    connection_id: String,
+) -> Result<AccountUsageSnapshot, String> {
+    let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
+    runtime
+        .query_connection_usage(&configuration, connection_id.as_str())
+        .await
+}
+
+/// Selects one model and remembers its exact account.
+/// 选择一个模型并记住其精确账号。
+pub(super) async fn service_select_public_ai_model(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiModelSelectionRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
+    let configuration =
+        mutate_public_ai_configuration(&state, "选择公共 AI 模型失败", |configuration| {
+            configuration.connection_graph.remember_model_connection(
+                request.provider_id.as_str(),
+                request.model_id.as_str(),
+                request.connection_id.as_str(),
+            )?;
+            configuration.active = Some(ActiveAiModelSelection {
+                provider_id: request.provider_id,
+                model_id: request.model_id,
+                connection_id: request.connection_id,
+            });
+            runtime.resolve_active_selection(configuration)?;
+            Ok(())
+        })
+        .await?;
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Saves one connection-model override set after adapter validation.
+/// 在适配器校验后保存一组连接模型覆盖。
+pub(super) async fn service_save_public_ai_model_overrides(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiModelOverridesSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
+    let key = PersistedAiConfiguration::connection_model_key(
+        request.connection_id.as_str(),
+        request.model_id.as_str(),
+    );
+    let configuration = mutate_public_ai_configuration(
+        &state,
+        "保存公共 AI 模型覆盖失败",
+        |configuration| {
+            let previous = configuration
+                .model_overrides
+                .insert(key.clone(), request.overrides);
+            let connection = configuration
+                .connection_graph
+                .connections
+                .get(request.connection_id.as_str())
+                .ok_or_else(|| {
+                    format!("Connection `{}` is not configured.", request.connection_id)
+                })?;
+            let mut validation_configuration = configuration.clone();
+            validation_configuration.active = Some(ActiveAiModelSelection {
+                provider_id: connection.provider_id.clone(),
+                model_id: request.model_id.clone(),
+                connection_id: request.connection_id.clone(),
+            });
+            if let Err(error) = runtime.resolve_active_selection(&validation_configuration) {
+                match previous {
+                    Some(value) => {
+                        configuration.model_overrides.insert(key.clone(), value);
+                    }
+                    None => {
+                        configuration.model_overrides.remove(key.as_str());
+                    }
+                }
+                return Err(error);
+            }
+            Ok(())
+        },
+    )
+    .await?;
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Clones the shared runtime and authoritative public AI configuration.
+/// 克隆共享运行时与权威公共 AI 配置。
+pub(crate) fn public_ai_runtime_and_configuration(
+    state: &SharedServiceBridgeState,
+) -> Result<(Arc<PublicAiRuntime>, PersistedAiConfiguration), String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("Failed to lock service state: {error}"))?;
+    let agent_runtime = guard
+        .agent_runtime
+        .as_ref()
+        .ok_or_else(|| String::from("Service is still starting; AI runtime is not ready."))?;
+    let runtime = Arc::clone(&agent_runtime.public_ai_runtime);
+    let configuration = runtime.configuration_snapshot()?;
+    Ok((runtime, configuration))
+}
+
+/// Returns every currently available public AI provider/model selector.
+/// 返回当前全部可用的公共 AI 供应商/模型选择器。
+///
+/// # Parameters
+/// 参数
+///
+/// `state` owns the exact process-local catalogs and persisted connection graph.
+/// `state` 持有精确的进程内目录与持久化连接图。
+///
+/// # Returns
+/// 返回值
+///
+/// A stable deduplicated selector set derived without reading legacy provider catalogs.
+/// 返回不读取旧供应商目录而派生的稳定去重选择器集合。
+pub(crate) fn public_ai_available_model_selectors(
+    state: &SharedServiceBridgeState,
+) -> Result<std::collections::BTreeSet<String>, String> {
+    let (runtime, configuration) = public_ai_runtime_and_configuration(state)?;
+    runtime.available_model_selectors(&configuration)
+}
+
+/// Builds a redacted browser snapshot from persisted and process-local state.
+/// 从持久化状态与进程内状态构建脱敏浏览器快照。
+fn build_public_ai_settings_snapshot(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    let catalogs = runtime.catalog_snapshot()?;
+    let model_override_records = catalogs
+        .iter()
+        .flat_map(|(connection_id, catalog)| {
+            catalog.models.iter().filter_map(|model| {
+                let key = PersistedAiConfiguration::connection_model_key(
+                    connection_id.as_str(),
+                    model.id.as_str(),
+                );
+                configuration
+                    .model_overrides
+                    .get(key.as_str())
+                    .cloned()
+                    .map(|overrides| PublicAiModelOverrideRecord {
+                        connection_id: connection_id.clone(),
+                        model_id: model.id.clone(),
+                        overrides,
+                    })
+            })
+        })
+        .collect();
+    Ok(PublicAiSettingsSnapshot {
+        providers: runtime
+            .providers()
+            .providers()
+            .into_iter()
+            .cloned()
+            .collect(),
+        connections: configuration
+            .connection_graph
+            .connections
+            .values()
+            .map(|connection| PublicAiConnectionSnapshot::new(runtime, connection))
+            .collect::<Result<Vec<_>, _>>()?,
+        provider_defaults: configuration
+            .connection_graph
+            .account_preferences
+            .provider_defaults
+            .clone(),
+        active: configuration.active.clone(),
+        catalogs,
+        catalog_errors: runtime.catalog_error_snapshot()?,
+        model_overrides: configuration.model_overrides.clone(),
+        model_override_records,
+    })
+}
+
+/// Publishes public AI model rows through the existing shared workbench event.
+/// 通过既有共享工作台事件发布公共 AI 模型行。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the snapshot, `state` owns workbench state, and runtime/configuration are exact.
+/// `app` 发出快照，`state` 持有工作台状态，运行时与配置均为精确快照。
+///
+/// # Returns
+/// 返回值
+/// The updated workbench snapshot after an atomic state replacement.
+/// 原子替换状态后返回更新的工作台快照。
+pub(crate) fn publish_public_ai_workbench(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+) -> Result<WorkbenchSnapshot, String> {
+    let rows = public_ai_provider_rows(configuration, runtime)?;
+    let workbench = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("Failed to lock service state: {error}"))?;
+        guard.workbench.providers = rows;
+        guard.workbench.clone()
+    };
+    emit_workbench_event(app, &workbench);
+    Ok(workbench)
+}
+
+/// Removes one connection and all preferences that reference it.
+/// 移除一个连接以及引用它的全部偏好。
+fn remove_connection_from_configuration(
+    configuration: &mut PersistedAiConfiguration,
+    connection_id: &str,
+    replacement_default_connection_id: Option<&str>,
+) -> Result<(), String> {
+    let removed = configuration
+        .connection_graph
+        .connections
+        .get(connection_id)
+        .cloned()
+        .ok_or_else(|| format!("Connection `{connection_id}` is not configured."))?;
+    let deleting_provider_default = configuration
+        .connection_graph
+        .account_preferences
+        .provider_defaults
+        .get(removed.provider_id.as_str())
+        .is_some_and(|value| value == connection_id);
+    let remaining_same_provider = configuration
+        .connection_graph
+        .connections
+        .values()
+        .filter(|connection| {
+            connection.provider_id == removed.provider_id && connection.id != connection_id
+        })
+        .collect::<Vec<_>>();
+    let replacement = if deleting_provider_default && !remaining_same_provider.is_empty() {
+        let replacement_id = replacement_default_connection_id.ok_or_else(|| {
+            format!(
+                "Deleting default connection `{connection_id}` requires an explicit replacement default."
+            )
+        })?;
+        Some(remaining_same_provider
+            .iter()
+            .find(|connection| connection.id == replacement_id)
+            .map(|connection| connection.id.clone())
+            .ok_or_else(|| {
+                format!(
+                    "Replacement connection `{replacement_id}` is not a remaining connection for provider `{}`.",
+                    removed.provider_id
+                )
+            })?)
+    } else {
+        if replacement_default_connection_id.is_some() {
+            return Err(String::from(
+                "A replacement default is only accepted when deleting the current provider default.",
+            ));
+        }
+        None
+    };
+    configuration
+        .connection_graph
+        .connections
+        .remove(connection_id);
+    configuration
+        .connection_graph
+        .account_preferences
+        .model_last_connections
+        .retain(|_, value| value != connection_id);
+    if deleting_provider_default {
+        match replacement {
+            Some(replacement) => {
+                configuration
+                    .connection_graph
+                    .account_preferences
+                    .provider_defaults
+                    .insert(removed.provider_id.clone(), replacement);
+            }
+            None => {
+                configuration
+                    .connection_graph
+                    .account_preferences
+                    .provider_defaults
+                    .remove(removed.provider_id.as_str());
+            }
+        }
+    }
+    if configuration
+        .active
+        .as_ref()
+        .is_some_and(|active| active.connection_id == connection_id)
+    {
+        configuration.active = None;
+    }
+    configuration.model_overrides.retain(|key, _| {
+        !key.starts_with(format!("{}:{connection_id}:", connection_id.len()).as_str())
+    });
+    configuration.secondary_routes.retain(|key, _| {
+        !key.starts_with(format!("{}:{connection_id}:", connection_id.len()).as_str())
+    });
+    Ok(())
+}
+
+/// Rejects empty browser string fields before mutation.
+/// 在变更前拒绝浏览器传入的空字符串字段。
+fn validate_non_empty(field: &str, value: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        return Err(format!("Field `{field}` must not be empty."));
+    }
+    Ok(())
+}

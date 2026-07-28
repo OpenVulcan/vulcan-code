@@ -11,7 +11,6 @@ import { WorkspaceTitleMenu } from "@/components/workspace/workspace-title-menu"
 import {
   activeSettingsHeaderSummary,
   localizedLiteral,
-  settingsSubAreaCapabilityKind,
   settingsSubAreas,
   type SettingsActionProps,
 } from "@/components/features/settings/SettingsFeatureContent"
@@ -40,15 +39,11 @@ import { useI18n } from "@/i18n"
 import type {
   FeatureAreaSummary,
   MainAreaId,
-  ProviderSummary,
   SettingsSubAreaId,
   StartupSnapshot,
   WorkbenchSnapshot,
 } from "@/types"
 import type { WorkspacePageDescriptor } from "@/components/workspace/workspace-page-descriptor"
-
-// ProviderConfigurationSaveRequest describes one provider form submission.
-// ProviderConfigurationSaveRequest 描述单次 Provider 表单提交。
 
 // localizedLiteral chooses a short local component label by the active WebUI locale.
 // localizedLiteral 根据当前 WebUI 语言选择组件内短文案。
@@ -136,17 +131,7 @@ function FeatureShell(props: {
   // providerPickerOpen controls the model-provider catalog dialog from the shared header.
   // providerPickerOpen 从共享标题栏控制模型供应商目录弹窗。
   const [providerPickerOpen, setProviderPickerOpen] = React.useState(false)
-  // editingProvider stores the provider currently being configured.
-  // editingProvider 保存当前正在配置的模型供应商。
-  const [editingProvider, setEditingProvider] = React.useState<ProviderSummary | null>(null)
-  // modelListDialogOpen controls the enabled-model configuration dialog from the shared header.
-  // modelListDialogOpen 从共享标题栏控制启用模型配置弹窗。
-  const [modelListDialogOpen, setModelListDialogOpen] = React.useState(false)
-  // capabilityTargetsDialogOpen controls the capability target dialog from the shared header.
-  // capabilityTargetsDialogOpen 从共享标题栏控制能力目标配置弹窗。
-  const [capabilityTargetsDialogOpen, setCapabilityTargetsDialogOpen] = React.useState(false)
   React.useEffect(() => {
-    setCapabilityTargetsDialogOpen(false)
   }, [props.activeSettingsSubArea])
   // runSkillHeaderAction wraps title-bar actions with disabled and spinner feedback.
   // runSkillHeaderAction 为标题栏动作包裹禁用与旋转反馈。
@@ -205,18 +190,6 @@ function FeatureShell(props: {
         <span>{localizedLiteral(locale, "添加 Provider", "Add provider")}</span>
       </button>
     </div>
-  ) : props.activeArea === "settings" && props.activeSettingsSubArea === "model-list" ? (
-    <div className="feature-header-actions">
-      <button className="skill-action-button" onClick={() => setModelListDialogOpen(true)} type="button">
-        <span>{localizedLiteral(locale, "调整模型列表", "Configure model list")}</span>
-      </button>
-    </div>
-  ) : props.activeArea === "settings" && settingsSubAreaCapabilityKind(props.activeSettingsSubArea) ? (
-    <div className="feature-header-actions">
-      <button className="skill-action-button" onClick={() => setCapabilityTargetsDialogOpen(true)} type="button">
-        <span>{localizedLiteral(locale, "配置接口", "Configure targets")}</span>
-      </button>
-    </div>
   ) : null
   // skillHeaderSummary stores the active skill page title and compact metrics.
   // skillHeaderSummary 保存当前技能页标题与紧凑统计。
@@ -261,15 +234,9 @@ function FeatureShell(props: {
       <FeatureShellContent
         activeArea={props.activeArea}
         activeMemorySubArea={activeMemorySubArea}
-        capabilityTargetsDialogOpen={capabilityTargetsDialogOpen}
         activeSkillSubArea={activeSkillSubArea}
         activeSettingsSubArea={props.activeSettingsSubArea}
-        editingProvider={editingProvider}
         memoryActions={props.memoryActions}
-        modelListDialogOpen={modelListDialogOpen}
-        onEditingProviderChange={setEditingProvider}
-        onCapabilityTargetsDialogOpenChange={setCapabilityTargetsDialogOpen}
-        onModelListDialogOpenChange={setModelListDialogOpen}
         onProviderPickerOpenChange={setProviderPickerOpen}
         providerPickerOpen={providerPickerOpen}
         settingsActions={props.settingsActions}

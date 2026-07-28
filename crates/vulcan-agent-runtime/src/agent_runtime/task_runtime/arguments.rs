@@ -410,7 +410,7 @@ pub(super) fn split_provider_model_selector(selector: &str) -> Result<(String, S
 /// 快照选择了具体模型时返回供应商与模型标识。
 pub(super) fn provider_model_selector_from_snapshot(
     snapshot: &ProviderModelSnapshot,
-    session_config: &ProviderConfigurationFile,
+    _session_config: &ProviderConfigurationFile,
 ) -> Option<(String, String)> {
     let model_id = snapshot.model_id.as_deref()?.trim();
     if model_id.is_empty() {
@@ -422,14 +422,7 @@ pub(super) fn provider_model_selector_from_snapshot(
     let provider_id = snapshot
         .provider_id
         .as_deref()
-        .and_then(|value| normalize_optional_task_label(Some(value)))
-        .or_else(|| {
-            session_config
-                .model
-                .as_deref()
-                .and_then(crate::provider_config::parse_active_model_reference)
-                .map(|(provider_id, _)| provider_id.to_string())
-        })?;
+        .and_then(|value| normalize_optional_task_label(Some(value)))?;
     Some((provider_id, model_id.to_string()))
 }
 
@@ -450,13 +443,15 @@ pub(super) fn provider_model_selector_from_snapshot(
 /// `true` when the model exists in the current effective enabled model choices.
 /// 当模型存在于当前有效启用模型列表中时返回 `true`。
 pub(super) fn provider_model_selector_is_available(
-    session_config: &ProviderConfigurationFile,
+    foundation: &RuntimeFoundation,
     provider_id: &str,
     model_id: &str,
-) -> bool {
-    crate::provider_config::effective_model_choices(provider_id, session_config)
-        .into_iter()
-        .any(|choice| choice.id == model_id)
+) -> Result<bool, String> {
+    let runtime = foundation
+        .public_ai_runtime()
+        .ok_or_else(|| String::from("The service has not installed the public AI runtime."))?;
+    let configuration = runtime.configuration_snapshot()?;
+    runtime.model_is_available(&configuration, provider_id, model_id)
 }
 
 /// Validates an explicit model override selected by a spawn_agent call.
@@ -475,6 +470,7 @@ pub(super) fn provider_model_selector_is_available(
 /// 未显式选择模型或选择器可用时返回 `Ok(())`。
 pub(super) fn validate_explicit_spawn_model_selector(
     session_config: &ProviderConfigurationFile,
+    foundation: &RuntimeFoundation,
     provider_model: &ProviderModelSnapshot,
 ) -> Result<(), String> {
     let Some((provider_id, model_id)) =
@@ -482,7 +478,7 @@ pub(super) fn validate_explicit_spawn_model_selector(
     else {
         return Ok(());
     };
-    if provider_model_selector_is_available(session_config, &provider_id, &model_id) {
+    if provider_model_selector_is_available(foundation, &provider_id, &model_id)? {
         return Ok(());
     }
     Err(format!(
@@ -506,20 +502,26 @@ pub(super) fn validate_explicit_spawn_model_selector(
 /// 当不可用固定模型被移除时返回 `true`。
 pub(super) fn clear_unavailable_profile_model_override(
     session_config: &ProviderConfigurationFile,
+    foundation: &RuntimeFoundation,
     resolved_config: &mut TaskSessionResolvedConfig,
-) -> bool {
+) -> Result<bool, String> {
     let Some((provider_id, model_id)) = provider_model_selector_from_snapshot(
         &resolved_config.effective_config.provider_model,
         session_config,
     ) else {
-        return false;
+        return Ok(false);
     };
-    if provider_model_selector_is_available(session_config, &provider_id, &model_id) {
-        return false;
+    if foundation.public_ai_runtime().is_none() {
+        resolved_config.effective_config.provider_model.provider_id = None;
+        resolved_config.effective_config.provider_model.model_id = None;
+        return Ok(true);
+    }
+    if provider_model_selector_is_available(foundation, &provider_id, &model_id)? {
+        return Ok(false);
     }
     resolved_config.effective_config.provider_model.provider_id = None;
     resolved_config.effective_config.provider_model.model_id = None;
-    true
+    Ok(true)
 }
 
 /// Builds the tool exposure override snapshot from child-agent TaskSession arguments.

@@ -49,7 +49,6 @@ fn compaction_launch_request_excludes_dynamic_vmm_injection() {
         "session",
         "D:/workspace",
         ReasoningEffortLevel::Off,
-        PersistedAiToolConfiguration::default(),
         conversation_state,
         ContextCompactionRequestPromptMode::FullFidelityMerge,
     );

@@ -305,13 +305,6 @@ fn runtime_state_entry_maps_to_segmented_state_document() {
         ..SessionRuntimeStateEntry::default()
     };
     runtime_state.anchor_context_budget_fingerprint = Some("budget-a".to_string());
-    runtime_state.ensure_ai_tool_configuration(&Default::default());
-    runtime_state
-        .ai_tool_configuration
-        .as_mut()
-        .expect("ai capability configuration")
-        .disabled_capability_kinds
-        .insert(AiToolKind::ImageGeneration);
 
     let state = state_document_from_runtime_state("session-alpha", &runtime_state)
         .expect("build state document");
@@ -328,10 +321,7 @@ fn runtime_state_entry_maps_to_segmented_state_document() {
         state.current_context["anchor_context_budget_fingerprint"],
         "budget-a"
     );
-    assert_eq!(
-        state.runtime_state["ai_tool_configuration"]["disabledCapabilityKinds"][0],
-        "image_generation"
-    );
+    assert!(state.runtime_state.get("ai_tool_configuration").is_none());
     assert!(state.runtime_state.get("conversation_state").is_none());
     assert!(state.current_context.get("conversation_state").is_none());
 }

@@ -5,7 +5,6 @@ import {
   type ModelPickerChoice,
 } from "@/components/composer/model-picker-control";
 import type { ComposerSelectOption } from "@/components/composer/composer-model";
-import { parseModelPickerChoiceKey } from "@/components/composer/composer-panel/model-secondary-route-control";
 import { useI18n } from "@/i18n";
 import type { ProviderSummary, ReasoningSelectionSummary } from "@/types";
 
@@ -120,20 +119,24 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
   // activeProviderModel resolves the full API rows needed by secondary-route controls.
   // activeProviderModel 解析二级路由控件所需的完整 API 行。
   const activeProviderModel = React.useMemo<ComposerActiveProviderModel | null>(() => {
-    // parsedChoice separates the selected provider and model identifiers.
-    // parsedChoice 拆分选中的 Provider 与模型标识。
-    const parsedChoice = parseModelPickerChoiceKey(modelChoice || activeModelChoiceKey);
-    if (!parsedChoice) {
+    // selectedChoice resolves the exact provider, model, and credential row.
+    // selectedChoice 解析精确的供应商、模型与凭据行。
+    const selectedChoice = availableModelChoices.find(
+      (choice) => modelPickerChoiceKey(choice) === (modelChoice || activeModelChoiceKey),
+    );
+    if (!selectedChoice) {
       return null;
     }
-    // provider is the unique provider row owning the selected identifier.
-    // provider 是拥有所选标识的唯一 Provider 行。
-    const provider = options.providers.find((candidate) => candidate.id === parsedChoice.providerId);
+    // provider is the unique credential row owning the selected connection.
+    // provider 是拥有所选连接的唯一凭据行。
+    const provider = options.providers.find(
+      (candidate) => candidate.connectionId === selectedChoice.connectionId,
+    );
     // model is the unique model row selected within that provider.
     // model 是该 Provider 内唯一选中的模型行。
-    const model = provider?.models?.find((candidate) => candidate.id === parsedChoice.modelId) ?? null;
+    const model = provider?.models?.find((candidate) => candidate.id === selectedChoice.modelId) ?? null;
     return provider && model ? { provider, model } : null;
-  }, [activeModelChoiceKey, modelChoice, options.providers]);
+  }, [activeModelChoiceKey, availableModelChoices, modelChoice, options.providers]);
   // fallbackReasoningEffortOptions supplies preview labels only when the backend exposes no selector view.
   // fallbackReasoningEffortOptions 仅在后端未暴露选择器视图时提供预览标签。
   const fallbackReasoningEffortOptions = React.useMemo<ComposerSelectOption[]>(() => [

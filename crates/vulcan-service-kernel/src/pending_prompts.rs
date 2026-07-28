@@ -1,13 +1,7 @@
 //! Pending prompt queue service adapters for the WebUI bridge.
 //! WebUI 桥接层待发送提示词队列服务适配器。
 
-use vulcan_agent_runtime::{
-    provider_config::{
-        self, PersistedAiToolConfiguration, ProviderConfigurationFile, ProviderRuntimeKind,
-        ReasoningEffortLevel,
-    },
-    workbench_ai_capability_router::effective_workbench_disabled_ai_capability_kinds,
-};
+use vulcan_agent_runtime::provider_config::{ProviderConfigurationFile, ReasoningEffortLevel};
 use vulcan_core::types::ConversationAttachment;
 use vulcan_service_api::{
     PendingPromptSummary, PendingPromptsChangedDelta, ServiceEvent, ServiceEventEmitter,
@@ -29,8 +23,7 @@ use super::{
     AgentRuntimeBridge, SharedServiceBridgeState, active_reasoning_selection_effort,
     composer_attachment_summary_from_core, current_unix_millis_text, emit_service_event_with_trace,
     owning_project_id_for_session, parse_reasoning_effort,
-    replace_conversation_scoped_projection_entry, session_ai_tool_configuration_or_default,
-    session_has_pending_plan_artifact,
+    replace_conversation_scoped_projection_entry, session_has_pending_plan_artifact,
 };
 
 /// Snapshot of pending prompt queue lengths used by service lifecycle diagnostics.
@@ -117,7 +110,6 @@ pub(super) fn runtime_state_has_queued_pending_prompt_work(
 /// 判断提交的提示词是否必须进入可见队列而不是立即启动。
 pub(super) fn session_has_blocking_system_prompt_work(
     workspace_snapshot: &WorkspaceSnapshot,
-    provider_configuration: &ProviderConfigurationFile,
     session_id: SessionId,
     has_active_run: bool,
     has_precheck_progress: bool,
@@ -128,12 +120,8 @@ pub(super) fn session_has_blocking_system_prompt_work(
     if session_has_pending_plan_artifact(workspace_snapshot, session_id) {
         return true;
     }
-    let dispatch_context = webui_pending_prompt_dispatch_context(
-        workspace_snapshot,
-        provider_configuration,
-        session_id,
-        has_active_run,
-    );
+    let dispatch_context =
+        webui_pending_prompt_dispatch_context(workspace_snapshot, session_id, has_active_run);
     pending_prompt_lane_is_busy(
         &runtime_state.ui_state,
         PendingPromptBusyLaneContext {
@@ -147,16 +135,10 @@ pub(super) fn session_has_blocking_system_prompt_work(
 /// 从 WebUI 持有的运行态事实构建共享待发送提示词分发上下文。
 pub(super) fn webui_pending_prompt_dispatch_context(
     workspace_snapshot: &WorkspaceSnapshot,
-    provider_configuration: &ProviderConfigurationFile,
     session_id: SessionId,
     has_active_run: bool,
 ) -> PendingPromptDispatchContext {
     PendingPromptDispatchContext {
-        uses_anthropic_runtime: session_uses_anthropic_runtime(
-            workspace_snapshot,
-            provider_configuration,
-            session_id,
-        ),
         has_running_subagents: false,
         has_active_run,
         run_phase: workspace_snapshot
@@ -214,23 +196,15 @@ pub(super) fn enqueue_webui_pending_prompt_from_submission(
     hidden_model_guidance: Option<String>,
     attachments: Vec<ConversationAttachment>,
     reasoning_effort: Option<&str>,
-    disabled_ai_capability_kinds: Option<&[String]>,
 ) -> Result<QueuedPendingPromptHookEvent, String> {
-    let session_ai_tool_configuration = session_ai_tool_configuration_or_default(
-        workspace_snapshot,
-        session_id,
-        &agent_runtime.ai_tool_configuration,
-    );
     let entry = build_webui_pending_prompt_panel_entry(
         prompt,
         hidden_model_guidance,
         attachments,
-        current_pending_prompt_model_reference(&agent_runtime.provider_configuration),
+        current_pending_prompt_model_reference(agent_runtime),
         pending_prompt_runtime_options_from_submission(
             &agent_runtime.provider_configuration,
-            session_ai_tool_configuration,
             reasoning_effort,
-            disabled_ai_capability_kinds,
         )?,
     );
     enqueue_webui_pending_prompt_panel_entry(workspace_snapshot, session_id, workspace_path, entry)
@@ -313,25 +287,25 @@ fn enqueue_webui_pending_prompt_panel_entry(
 /// Captures the active provider/model identity for one queued WebUI prompt.
 /// 为单条 WebUI 排队提示词捕获当前激活的供应商与模型身份。
 fn current_pending_prompt_model_reference(
-    provider_configuration: &ProviderConfigurationFile,
+    agent_runtime: &AgentRuntimeBridge,
 ) -> Option<PendingPromptModelReference> {
-    let (provider_id, model_id) = provider_configuration
-        .model
-        .as_deref()
-        .and_then(provider_config::parse_active_model_reference)?;
+    let configuration = agent_runtime
+        .public_ai_runtime
+        .configuration_snapshot()
+        .ok()?;
+    let selection = agent_runtime
+        .public_ai_runtime
+        .resolve_active_selection(&configuration)
+        .ok()?;
+    let provider = agent_runtime
+        .public_ai_runtime
+        .providers()
+        .provider(selection.route.provider.id.as_str())?;
     Some(PendingPromptModelReference {
-        provider_id: provider_id.to_string(),
-        model_id: model_id.to_string(),
-        provider_label: provider_config::provider_summary(provider_id),
-        model_name: provider_config::model_summary(provider_id, model_id, provider_configuration),
-        openrouter_endpoint_route: (provider_id == "openrouter")
-            .then(|| {
-                provider_config::openrouter_endpoint_route_for_model(
-                    provider_configuration,
-                    model_id,
-                )
-            })
-            .flatten(),
+        provider_id: selection.route.provider.id,
+        model_id: selection.model.id,
+        provider_label: provider.display_name.clone(),
+        model_name: selection.model.display_name,
     })
 }
 
@@ -339,9 +313,7 @@ fn current_pending_prompt_model_reference(
 /// 从共享服务路由输入捕获单条 WebUI 排队提示词的运行控制参数。
 fn pending_prompt_runtime_options_from_submission(
     provider_configuration: &ProviderConfigurationFile,
-    ai_tool_configuration: &PersistedAiToolConfiguration,
     reasoning_effort: Option<&str>,
-    disabled_ai_capability_kinds: Option<&[String]>,
 ) -> Result<PendingPromptRuntimeOptions, String> {
     Ok(PendingPromptRuntimeOptions {
         reasoning_effort: reasoning_effort
@@ -351,47 +323,24 @@ fn pending_prompt_runtime_options_from_submission(
         temperature: None,
         web_search_override: Default::default(),
         web_search_provider_id: None,
-        disabled_ai_capability_kinds: effective_workbench_disabled_ai_capability_kinds(
-            ai_tool_configuration,
-            disabled_ai_capability_kinds,
-        )?,
     })
 }
 
-/// Clones provider configuration and overrides only the queued prompt's locked model identity.
-/// 克隆 Provider 配置，并仅覆盖排队提示词锁定的模型身份。
-pub(super) fn provider_configuration_for_model_reference(
-    provider_configuration: &ProviderConfigurationFile,
-    model_reference: Option<&PendingPromptModelReference>,
-) -> ProviderConfigurationFile {
-    let mut next_configuration = provider_configuration.clone();
-    if let Some(model_reference) = model_reference {
-        next_configuration.model = Some(format!(
-            "{}/{}",
-            model_reference.provider_id, model_reference.model_id
-        ));
-        if model_reference.provider_id == "openrouter" {
-            provider_config::set_openrouter_endpoint_route_for_model(
-                &mut next_configuration,
-                &model_reference.model_id,
-                model_reference.openrouter_endpoint_route.clone(),
-            );
-        }
-    }
-    next_configuration
-}
-
-/// Clones the runtime bridge with the queued prompt's locked provider configuration.
-/// 使用排队提示词锁定的 Provider 配置克隆运行时桥接。
+/// Clones the runtime bridge with the queued prompt's locked public model identity.
+/// 使用排队提示词锁定的公共模型身份克隆运行时桥接。
 pub(super) fn agent_runtime_for_pending_prompt(
     agent_runtime: &AgentRuntimeBridge,
     prompt_entry: &vulcan_workbench_model::PendingSessionPromptEntry,
 ) -> AgentRuntimeBridge {
     let mut next_runtime = agent_runtime.clone();
-    next_runtime.provider_configuration = provider_configuration_for_model_reference(
-        &agent_runtime.provider_configuration,
-        prompt_entry.model_reference.as_ref(),
-    );
+    next_runtime.provider_id_override = prompt_entry
+        .model_reference
+        .as_ref()
+        .map(|reference| reference.provider_id.clone());
+    next_runtime.model_id_override = prompt_entry
+        .model_reference
+        .as_ref()
+        .map(|reference| reference.model_id.clone());
     next_runtime
 }
 
@@ -676,29 +625,6 @@ pub(super) fn clear_stale_session_goal_pending_prompts(
         runtime_state.updated_at = current_unix_millis_text();
     }
     Ok(removed)
-}
-
-/// Returns whether one session should use Anthropic-specific queue dispatch ordering.
-/// 返回单个会话是否应使用 Anthropic 专属队列分发顺序。
-fn session_uses_anthropic_runtime(
-    workspace_snapshot: &WorkspaceSnapshot,
-    provider_configuration: &ProviderConfigurationFile,
-    session_id: SessionId,
-) -> bool {
-    if let Some(active_provider_id) = workspace_snapshot
-        .session_runtime_state
-        .get(&session_id)
-        .and_then(|runtime_state| runtime_state.active_provider_id.as_deref())
-    {
-        return provider_config::supported_provider_by_id(active_provider_id)
-            .is_some_and(|definition| definition.runtime == ProviderRuntimeKind::Anthropic);
-    }
-    provider_configuration
-        .model
-        .as_deref()
-        .and_then(provider_config::parse_active_model_reference)
-        .and_then(|(provider_id, _)| provider_config::supported_provider_by_id(provider_id))
-        .is_some_and(|definition| definition.runtime == ProviderRuntimeKind::Anthropic)
 }
 
 /// Builds one compact single-line preview used by the pending prompt queue strip.

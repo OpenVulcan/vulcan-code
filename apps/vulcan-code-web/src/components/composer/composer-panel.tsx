@@ -6,15 +6,12 @@ import {
 import {
   composerAttachmentAccept,
   hasBlockingComposerPopup,
-  isComposerAiCapabilityKind,
   isComposerPrintableKey,
   isComposerTextEntryElement,
-  type ComposerAiCapabilityConfigurationSave,
   type ComposerSlashCommandResult,
   type ComposerSubmission,
 } from "@/components/composer/composer-model";
 import {
-  ComposerAiCapabilityControl,
   ComposerAttachmentMenu,
   ComposerSlashCommandPanel,
   PendingPromptQueueStrip,
@@ -26,7 +23,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type {
-  AiCapabilitySummary,
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
@@ -55,19 +51,12 @@ import { useComposerGoalController } from "@/components/composer/composer-panel/
 import { useComposerSessionDraft } from "@/components/composer/composer-panel/use-composer-session-draft";
 import { useComposerModelSelection } from "@/components/composer/composer-panel/use-composer-model-selection";
 import { useComposerSlashCommands } from "@/components/composer/composer-panel/use-composer-slash-commands";
-import { useComposerAiCapabilities } from "@/components/composer/composer-panel/use-composer-ai-capabilities";
 import { useComposerSendController } from "@/components/composer/composer-panel/use-composer-send-controller";
 import { useComposerPlanMode } from "@/components/composer/composer-panel/use-composer-plan-mode";
 export { ComposerSessionProgressCapsule } from "@/components/composer/composer-panel/progress-capsule";
 // ComposerPanel renders the first-version message input surface.
 // ComposerPanel 渲染第一版消息输入区域。
 export function ComposerPanel(props: {
-  // AI capability route summaries used by the quick capability tree.
-  // 快捷能力树使用的 AI 能力路由摘要。
-  aiCapabilities: AiCapabilitySummary[];
-  // Default AI capability route summaries used to reset the session draft.
-  // 用于重置会话草稿的默认 AI 能力路由摘要。
-  defaultAiCapabilities: AiCapabilitySummary[];
   // Attachment capability gates used by add/drop/paste.
   // 添加、拖拽与粘贴使用的附件能力门控。
   attachmentCapabilities: ComposerAttachmentCapabilitySummary[];
@@ -138,9 +127,6 @@ export function ComposerPanel(props: {
   // Sends one validated composer submission through the caller runtime.
   // 通过调用方运行时发送一条已校验输入区提交。
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
-  // Persists one session-scoped AI capability configuration draft.
-  // 持久化单个会话级 AI 能力配置草稿。
-  onSaveAiCapabilityConfiguration: (request: ComposerAiCapabilityConfigurationSave) => Promise<boolean>;
   // Persists one user-authored session goal.
   // 持久化单个用户编写的会话目标。
   onSaveSessionGoal: (objective: string, tokenBudget?: number | null) => Promise<boolean>;
@@ -251,20 +237,6 @@ export function ComposerPanel(props: {
     goal: visibleSessionGoal,
     onSetSessionPlanMode: props.onSetSessionPlanMode,
   });
-  // AI capability controller synchronizes session routes and produces the shared submission protocol.
-  // The AI capability controller synchronizes exact session bindings and builds the shared submission contract.
-  // AI 能力控制器同步会话精确绑定并生成共享提交协议。
-  const {
-    disabledKinds: disabledAiCapabilityKinds,
-    disabledTargetSelectors: disabledAiCapabilityTargetSelectors,
-    targetBindings: aiCapabilityTargetBindings,
-    submissionConfiguration: aiCapabilitySubmissionConfiguration,
-    saveConfiguration: handleAiCapabilityConfigurationSave,
-  } = useComposerAiCapabilities({
-    scopeKey: draftSlotKey,
-    capabilities: props.aiCapabilities,
-    onSaveConfiguration: props.onSaveAiCapabilityConfiguration,
-  });
   // Model selection controller synchronizes service snapshots, optimistic choices, and slash-open signals.
   // 模型选择控制器同步服务快照、乐观选择与 slash 打开信号。
   const {
@@ -303,7 +275,6 @@ export function ComposerPanel(props: {
     attachments,
     executionMode,
     reasoningEffort: submittedReasoningEffort,
-    capabilityConfiguration: aiCapabilitySubmissionConfiguration,
     isConversationRunning: props.isConversationRunning,
     clearForSubmission,
     restoreFailedSubmission,
@@ -510,17 +481,6 @@ export function ComposerPanel(props: {
                 selectedRoute={activeProviderModelSummary.model.secondaryRoute ?? null}
               />
             ) : null}
-            <ComposerAiCapabilityControl
-              ariaLabel={t("composer.aria.capability")}
-              capabilities={props.aiCapabilities}
-              defaultCapabilities={props.defaultAiCapabilities}
-              disabledKinds={disabledAiCapabilityKinds}
-              disabledTargetSelectors={disabledAiCapabilityTargetSelectors}
-              targetBindings={aiCapabilityTargetBindings}
-              locale={locale}
-              onSaveConfiguration={handleAiCapabilityConfigurationSave}
-              scopeKey={draftSlotKey}
-            />
           </div>
           <ComposerPanelToolbarRight
             attachmentCount={attachments.length}

@@ -7,7 +7,6 @@ use crate::mcp::{
     HOST_MANAGED_CODEBASE_MEMORY_PARTITION_KEY, McpRuntimeToolBinding,
     managed_codebase_memory_public_tool_id,
 };
-use crate::provider_config::{AiToolKind, PersistedAiToolConfiguration};
 use crate::tooling::native::{
     CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, TODOLIST_TOOL_ID, UPDATE_GOAL_TOOL_ID,
 };
@@ -21,22 +20,6 @@ use vulcan_session_core::{
 };
 use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
 use vulcan_tools_manager::{ResolvedToolDefinition, ResolvedToolSet, VulcanToolSourceKind};
-
-/// All AI capability kinds that can be selected by request-scoped tool exposure.
-/// 可被请求级工具可见性选择的全部 AI 能力类型。
-const ALL_AI_TOOL_KINDS: [AiToolKind; 11] = [
-    AiToolKind::WebSearch,
-    AiToolKind::UnderstandImage,
-    AiToolKind::FileSearch,
-    AiToolKind::CodeInterpreter,
-    AiToolKind::ImageGeneration,
-    AiToolKind::ComputerUse,
-    AiToolKind::VideoGeneration,
-    AiToolKind::SpeechSynthesis,
-    AiToolKind::MusicGeneration,
-    AiToolKind::MusicCover,
-    AiToolKind::AudioGeneration,
-];
 
 /// Request-effective tool exposure selected before building the unified tools manager.
 /// 构建统一工具管理器之前选定的请求级生效工具可见性。
@@ -57,9 +40,6 @@ pub(crate) struct ExecutionToolExposureSelection {
     /// MCP tool bindings visible to the current request.
     /// 当前请求可见的 MCP 工具绑定集合。
     pub mcp_tools: Vec<McpRuntimeToolBinding>,
-    /// AI capability configuration after request-scoped allow and deny overrides.
-    /// 应用请求级允许与禁用覆盖后的 AI 能力配置。
-    pub ai_tool_configuration: PersistedAiToolConfiguration,
     /// Normalized selector state used for final public tool filtering.
     /// 用于最终公开工具过滤的规范化选择器状态。
     pub(crate) selectors: ToolExposureSelectorState,
@@ -93,16 +73,12 @@ pub(crate) fn resolve_execution_tool_exposure(
         foundation.resolved_mcp_tools_for_agent(agent_id),
         &selectors,
     );
-    let ai_tool_configuration =
-        ai_tool_configuration_for_execution_request(&request.ai_tool_configuration, &selectors);
-
     ExecutionToolExposureSelection {
         native_tool_ids,
         luaskills_tools,
         luaskills_dispatch_tools,
         luaskill_prompt_entries,
         mcp_tools,
-        ai_tool_configuration,
         selectors,
     }
 }
@@ -137,30 +113,6 @@ pub(crate) fn filter_resolved_tool_set_by_tool_exposure(
     );
 }
 
-/// Builds an effective AI-tool configuration after capability-level request overrides.
-/// 根据能力级请求覆盖构建生效 AI 工具配置。
-pub(crate) fn ai_tool_configuration_for_execution_request(
-    base: &PersistedAiToolConfiguration,
-    selectors: &ToolExposureSelectorState,
-) -> PersistedAiToolConfiguration {
-    let mut configuration = base.clone();
-    if !selectors.ai_allowed_raw.is_empty() {
-        for kind in ALL_AI_TOOL_KINDS {
-            if selectors.ai_kind_matches_allowed(kind) {
-                configuration.disabled_capability_kinds.remove(&kind);
-            } else {
-                configuration.disabled_capability_kinds.insert(kind);
-            }
-        }
-    }
-    for kind in ALL_AI_TOOL_KINDS {
-        if selectors.ai_kind_matches_disabled(kind) {
-            configuration.disabled_capability_kinds.insert(kind);
-        }
-    }
-    configuration
-}
-
 /// Normalized request-scoped selectors split by tool family.
 /// 按工具族拆分的规范化请求级选择器。
 #[derive(Clone, Debug, Default)]
@@ -192,12 +144,6 @@ pub(crate) struct ToolExposureSelectorState {
     /// MCP server-specific deny selectors.
     /// MCP 服务专属禁用选择器。
     mcp_server_disabled: BTreeSet<String>,
-    /// Raw AI capability allow selectors used for semantic-key matching.
-    /// 用于语义键匹配的原始 AI 能力允许选择器。
-    ai_allowed_raw: Vec<String>,
-    /// Raw AI capability deny selectors used for semantic-key matching.
-    /// 用于语义键匹配的原始 AI 能力禁用选择器。
-    ai_disabled_raw: Vec<String>,
 }
 
 impl ToolExposureSelectorState {
@@ -218,21 +164,7 @@ impl ToolExposureSelectorState {
             mcp_tool_disabled: normalized_tool_selector_set(&mcp_override.disabled),
             mcp_server_allowed: normalized_tool_selector_set(&mcp_override.allowed_servers),
             mcp_server_disabled: normalized_tool_selector_set(&mcp_override.disabled_servers),
-            ai_allowed_raw: snapshot.allowed_ai_capabilities.clone(),
-            ai_disabled_raw: snapshot.disabled_ai_capabilities.clone(),
         }
-    }
-
-    /// Returns whether any AI allow selector matches the semantic kind.
-    /// 返回是否存在 AI 允许选择器命中该语义能力类型。
-    fn ai_kind_matches_allowed(&self, kind: AiToolKind) -> bool {
-        ai_tool_kind_matches_any_selector(kind, &self.ai_allowed_raw)
-    }
-
-    /// Returns whether any AI deny selector matches the semantic kind.
-    /// 返回是否存在 AI 禁用选择器命中该语义能力类型。
-    fn ai_kind_matches_disabled(&self, kind: AiToolKind) -> bool {
-        ai_tool_kind_matches_any_selector(kind, &self.ai_disabled_raw)
     }
 
     /// Returns whether global allow-list mode is active for this request.
@@ -700,27 +632,4 @@ fn native_tool_id_is_universal(tool_id: &str) -> bool {
         tool_id,
         TODOLIST_TOOL_ID | GET_GOAL_TOOL_ID | CREATE_GOAL_TOOL_ID | UPDATE_GOAL_TOOL_ID
     )
-}
-
-/// Returns whether one AI capability kind matches any user selector.
-/// 返回某个 AI 能力类型是否命中任一用户选择器。
-fn ai_tool_kind_matches_any_selector(kind: AiToolKind, selectors: &[String]) -> bool {
-    selectors
-        .iter()
-        .any(|selector| ai_tool_kind_matches_selector(kind, selector))
-}
-
-/// Returns whether one AI capability kind matches one user selector.
-/// 返回某个 AI 能力类型是否命中单个用户选择器。
-fn ai_tool_kind_matches_selector(kind: AiToolKind, selector: &str) -> bool {
-    let trimmed = selector.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    trimmed.eq_ignore_ascii_case(kind.key())
-        || trimmed == kind.label()
-        || normalized_tool_selector_set(&[trimmed.to_string()])
-            .iter()
-            .next()
-            .is_some_and(|normalized| normalized == kind.key())
 }

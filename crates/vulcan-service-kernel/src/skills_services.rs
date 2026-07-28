@@ -2987,11 +2987,13 @@ pub(crate) async fn service_save_subagent_definition(
                 .find(|definition| definition.id == original_agent_id)
                 .cloned()
         });
-    let provider_configuration = provider_configuration_from_state(&state)?;
+    let (public_ai_runtime, public_ai_configuration) = public_ai_runtime_and_configuration(&state)?;
+    let public_ai_catalogs = public_ai_runtime.catalog_snapshot()?;
     let requested_provider_model = validate_subagent_provider_model_request_with_existing(
         &request,
         existing.as_ref(),
-        &provider_configuration,
+        &public_ai_configuration,
+        &public_ai_catalogs,
     )?;
     if let Some(existing_definition) = existing
         .as_ref()
@@ -3571,6 +3573,7 @@ fn refresh_subagent_catalog_local_state_with_errors(
         .merge_plugin_definitions(plugin_catalog.enabled_agents.values().cloned())
         .map_err(|error| format!("合并插件智能体目录失败：{error}"))?;
     catalog.errors.extend(transient_errors);
+    let available_model_selectors = public_ai_available_model_selectors(state)?;
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -3582,13 +3585,8 @@ fn refresh_subagent_catalog_local_state_with_errors(
     }
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
-    let provider_configuration = guard
-        .agent_runtime
-        .as_ref()
-        .map(|runtime| runtime.provider_configuration.clone())
-        .unwrap_or_default();
     guard.workbench.subagent_catalog =
-        subagent_catalog_summary_from_catalog(&catalog, &provider_configuration);
+        subagent_catalog_summary_from_catalog(&catalog, Some(&available_model_selectors));
     Ok(SubagentCatalogUpdate {
         revision: guard.workbench_generation,
         subagent_catalog: guard.workbench.subagent_catalog.clone(),
@@ -3717,12 +3715,16 @@ fn apply_optional_text_patch(patch: OptionalTextPatch, value: &mut Option<String
     }
 }
 
-/// Validates a fixed provider/model request against existing metadata and effective model choices.
-/// 根据既有元数据与有效模型列表校验固定供应商/模型请求。
+/// Validates a fixed provider/model request against existing metadata and runtime-discovered models.
+/// 根据既有元数据与运行时发现的模型校验固定供应商/模型请求。
 pub(crate) fn validate_subagent_provider_model_request_with_existing(
     request: &SubagentDefinitionSaveRequest,
     existing: Option<&vulcan_task_session::SubagentDefinition>,
-    provider_configuration: &ProviderConfigurationFile,
+    public_ai_configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
+    public_ai_catalogs: &std::collections::BTreeMap<
+        String,
+        vulcan_provider_adapters::ConnectionModelCatalog,
+    >,
 ) -> Result<vulcan_session_core::ProviderModelSnapshot, String> {
     let provider_id = request
         .provider_model
@@ -3760,9 +3762,13 @@ pub(crate) fn validate_subagent_provider_model_request_with_existing(
     {
         return Ok(snapshot);
     }
-    let available = provider_config::effective_model_choices(provider_id, provider_configuration)
-        .into_iter()
-        .any(|choice| choice.id == model_id);
+    let available = public_ai_configuration
+        .connection_graph
+        .connections
+        .values()
+        .filter(|connection| connection.provider_id == provider_id)
+        .filter_map(|connection| public_ai_catalogs.get(connection.id.as_str()))
+        .any(|catalog| catalog.models.iter().any(|model| model.id == model_id));
     if available {
         Ok(snapshot)
     } else {

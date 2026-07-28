@@ -264,6 +264,7 @@ fn runtime_log_projection_preserves_parallel_tool_batch() {
                 id: String::from("result-a"),
                 payload: SessionConversationPayload::ToolResult {
                     tool_call_id: Some(String::from("call-a")),
+                    is_error: false,
                     text: String::from("ok"),
                 },
             },
@@ -271,6 +272,7 @@ fn runtime_log_projection_preserves_parallel_tool_batch() {
                 id: String::from("result-b"),
                 payload: SessionConversationPayload::ToolResult {
                     tool_call_id: Some(String::from("call-b")),
+                    is_error: false,
                     text: String::from("ok"),
                 },
             },
@@ -306,6 +308,7 @@ fn runtime_log_projection_marks_orphan_tool_result() {
             id: String::from("result-x"),
             payload: SessionConversationPayload::ToolResult {
                 tool_call_id: Some(String::from("missing")),
+                is_error: false,
                 text: String::from("orphan"),
             },
         }],
@@ -470,6 +473,7 @@ fn runtime_log_projection_normalizes_tool_call_identity() {
                 id: String::from("result-1"),
                 payload: SessionConversationPayload::ToolResult {
                     tool_call_id: Some(String::from("  local-call  ")),
+                    is_error: false,
                     text: String::from("ok"),
                 },
             },
@@ -632,6 +636,7 @@ fn runtime_log_round_trip_uses_single_tool_result_message_identifier() {
                 id: String::from("message-result-1"),
                 payload: SessionConversationPayload::ToolResult {
                     tool_call_id: Some(String::from("call-1")),
+                    is_error: false,
                     text: String::from("done"),
                 },
             },
@@ -693,6 +698,7 @@ fn runtime_log_projection_marks_repeated_tool_result_as_orphan() {
                 id: String::from("result-a"),
                 payload: SessionConversationPayload::ToolResult {
                     tool_call_id: Some(String::from("call-a")),
+                    is_error: false,
                     text: String::from("first"),
                 },
             },
@@ -700,6 +706,7 @@ fn runtime_log_projection_marks_repeated_tool_result_as_orphan() {
                 id: String::from("result-a-duplicate"),
                 payload: SessionConversationPayload::ToolResult {
                     tool_call_id: Some(String::from("call-a")),
+                    is_error: false,
                     text: String::from("duplicate"),
                 },
             },

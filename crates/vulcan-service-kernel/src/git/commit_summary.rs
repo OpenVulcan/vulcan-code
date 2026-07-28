@@ -14,7 +14,7 @@ use vulcan_agent_runtime::{
     },
     conversation_protocol::SessionConversationState,
     provider_config::ReasoningEffortLevel,
-    stream_runtime_run_with_intervention_and_plugins,
+    stream_runtime_run_with_intervention_plugins_and_public_ai,
 };
 use vulcan_context::estimate_mixed_language_text_tokens;
 use vulcan_hooks::{HookActor, HookCapabilitySet, HookContext, HookScope};
@@ -64,16 +64,17 @@ pub(crate) async fn service_generate_git_commit_message(
             .session_runtime_state
             .get(&session_id)
             .ok_or_else(|| String::from("无法找到提交所属会话的运行时状态。"))?;
+        let public_ai_configuration = agent_runtime.public_ai_runtime.configuration_snapshot()?;
         let (provider_id, model_id) = resolve_git_commit_summary_model(
             &agent_runtime
                 .provider_configuration
                 .git_commit
                 .summary_model,
             runtime_state,
-            &agent_runtime.provider_configuration,
+            &agent_runtime.public_ai_runtime,
+            &public_ai_configuration,
         )?;
-        let mut summary_provider_configuration = agent_runtime.provider_configuration.clone();
-        summary_provider_configuration.model = Some(format!("{provider_id}/{model_id}"));
+        let summary_provider_configuration = agent_runtime.provider_configuration.clone();
         let reasoning_effort = runtime_state
             .active_reasoning_effort
             .or_else(|| active_reasoning_selection_effort(&summary_provider_configuration))
@@ -537,6 +538,8 @@ async fn run_git_commit_summary_model(
         conversation_hook_turn_id: None,
         execution_agent_id: None,
         agent_prompt_snapshot: None,
+        provider_id_override: None,
+        model_id_override: None,
         subagent_prompt_context: None,
         task_session_store_root: None,
         session_title: String::from("Git commit summary"),
@@ -549,7 +552,6 @@ async fn run_git_commit_summary_model(
         execution_mode: String::from("GitCommitSummary"),
         temperature: None,
         reasoning_effort,
-        ai_tool_configuration: agent_runtime.ai_tool_configuration.clone(),
         tool_exposure_override: Default::default(),
         tool_request_rejection_reason: None,
         tool_request_rejection_all_tools: false,
@@ -571,7 +573,7 @@ async fn run_git_commit_summary_model(
         session_plan_context: None,
         embedded_turn_usage_segments: Vec::new(),
     };
-    let mut stream = Box::pin(stream_runtime_run_with_intervention_and_plugins(
+    let mut stream = Box::pin(stream_runtime_run_with_intervention_plugins_and_public_ai(
         agent_runtime.provider_configuration.clone(),
         agent_runtime.agent_profile_catalog.clone(),
         agent_runtime.luaskills_runtime.clone(),
@@ -581,6 +583,7 @@ async fn run_git_commit_summary_model(
         Arc::clone(&agent_runtime.question_runtime),
         Arc::clone(&agent_runtime.command_session_runtime),
         Arc::clone(&agent_runtime.token_budget_runtime),
+        Some(Arc::clone(&agent_runtime.public_ai_runtime)),
         request,
         None,
     ));

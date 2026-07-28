@@ -14,8 +14,6 @@ use vulcan_workbench_model::take_runtime_intervention_guided_pending_prompt_entr
 /// `app` 是用于发出刷新后工作台快照的 Tauri 应用句柄。
 /// `state` is the shared service bridge state that owns the active workspace snapshot.
 /// `state` 是拥有当前工作区快照的共享服务桥接状态。
-/// `provider_configuration` is the provider configuration used by the shared pending router.
-/// `provider_configuration` 是共享待发送路由器使用的 Provider 配置。
 ///
 /// # Returns
 /// 返回值
@@ -24,18 +22,10 @@ use vulcan_workbench_model::take_runtime_intervention_guided_pending_prompt_entr
 pub(crate) fn build_webui_prompt_intervention(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
-    provider_configuration: ProviderConfigurationFile,
-    ai_tool_configuration: PersistedAiToolConfiguration,
 ) -> RuntimePromptIntervention {
     Arc::new(move |session_id, controller: &mut VulcanCoreController| {
         let (pending_queue_changed, controller_changed) =
-            apply_webui_prompt_intervention_transaction(
-                &state,
-                &provider_configuration,
-                &ai_tool_configuration,
-                session_id,
-                controller,
-            )?;
+            apply_webui_prompt_intervention_transaction(&state, session_id, controller)?;
         if pending_queue_changed
             && let Err(error) = emit_pending_prompts_changed_delta(&app, &state, session_id)
         {
@@ -54,10 +44,6 @@ pub(crate) fn build_webui_prompt_intervention(
 /// 参数
 /// `state` owns the workspace queue state and live session kernel.
 /// `state` 持有工作区队列状态与实时会话内核。
-/// `provider_configuration` supplies the shared pending-prompt dispatch context.
-/// `provider_configuration` 提供共享待发送提示词分发上下文。
-/// `ai_tool_configuration` controls provider normalization for guided attachments.
-/// `ai_tool_configuration` 控制引导附件的 Provider 归一化。
 /// `session_id` identifies the session reaching the safe Provider boundary.
 /// `session_id` 标识到达安全 Provider 边界的会话。
 /// `controller` owns the authoritative Core snapshot committed only after every draft succeeds.
@@ -69,8 +55,6 @@ pub(crate) fn build_webui_prompt_intervention(
 /// 返回待发送队列与控制器是否变化；失败时返回错误且全部权威输入保持不变。
 fn apply_webui_prompt_intervention_transaction(
     state: &SharedServiceBridgeState,
-    provider_configuration: &ProviderConfigurationFile,
-    ai_tool_configuration: &PersistedAiToolConfiguration,
     session_id: SessionId,
     controller: &mut VulcanCoreController,
 ) -> Result<(bool, bool), RuntimePromptInterventionError> {
@@ -84,8 +68,7 @@ fn apply_webui_prompt_intervention_transaction(
             message: String::from("workspace snapshot is not ready"),
         }
     })?;
-    let dispatch_context =
-        webui_pending_prompt_dispatch_context(workspace, provider_configuration, session_id, false);
+    let dispatch_context = webui_pending_prompt_dispatch_context(workspace, session_id, false);
     // runtime_state_draft isolates only the session-scoped pending UI state that this transaction can modify.
     // runtime_state_draft 仅隔离该事务能够修改的会话级待发送 UI 状态。
     let mut runtime_state_draft = workspace.session_runtime_state.get(&session_id).cloned();
@@ -105,11 +88,7 @@ fn apply_webui_prompt_intervention_transaction(
         .unwrap_or_default();
     let mut guided_prompt_changed = false;
     for entry in &guided_entries {
-        let (prompt, attachments) = normalize_webui_interjected_prompt_for_provider(
-            provider_configuration,
-            ai_tool_configuration,
-            entry,
-        );
+        let (prompt, attachments) = normalize_webui_interjected_prompt(entry);
         guided_prompt_changed |= controller_draft
             .append_interjected_user_turn_with_attachments(prompt.as_str(), attachments)
             .is_some();
@@ -502,10 +481,6 @@ pub(crate) fn runtime_event_tool_name(event: &RuntimeEvent) -> Option<&str> {
 ///
 /// # Parameters
 /// 参数
-/// `provider_configuration` is the active provider configuration captured by the running stream.
-/// `provider_configuration` 是当前运行流捕获的活跃 Provider 配置。
-/// `ai_tool_configuration` is the active AI tool routing configuration captured by the running stream.
-/// `ai_tool_configuration` 是当前运行流捕获的活跃 AI 工具路由配置。
 /// `entry` is the internal queued prompt selected for runtime guidance.
 /// `entry` 是被选中用于运行时引导的内部排队提示词。
 ///
@@ -513,48 +488,8 @@ pub(crate) fn runtime_event_tool_name(event: &RuntimeEvent) -> Option<&str> {
 /// 返回值
 /// Provider-safe prompt text and attachments after unsupported modalities have been downgraded.
 /// 返回不支持模态被降级后的 Provider 安全提示词文本与附件集合。
-pub(crate) fn normalize_webui_interjected_prompt_for_provider(
-    provider_configuration: &ProviderConfigurationFile,
-    ai_tool_configuration: &PersistedAiToolConfiguration,
+pub(crate) fn normalize_webui_interjected_prompt(
     entry: &PendingSessionPromptEntry,
 ) -> (String, Vec<ConversationAttachment>) {
-    let scoped_provider_configuration = provider_configuration_for_model_reference(
-        provider_configuration,
-        entry.model_reference.as_ref(),
-    );
-    let Some((provider_id, model_id)) = scoped_provider_configuration
-        .model
-        .as_deref()
-        .and_then(provider_config::parse_active_model_reference)
-    else {
-        return (entry.prompt.clone(), entry.attachments.clone());
-    };
-    let Some(definition) = provider_config::supported_provider_by_id(provider_id) else {
-        return (entry.prompt.clone(), entry.attachments.clone());
-    };
-    let effective_ai_tool_configuration = effective_ai_tool_configuration_for_prompt_overrides(
-        ai_tool_configuration,
-        &entry.runtime_options.disabled_ai_capability_kinds,
-        &BTreeSet::new(),
-        &BTreeMap::new(),
-    );
-    let active_model =
-        provider_config::effective_model_choices(provider_id, &scoped_provider_configuration)
-            .into_iter()
-            .find(|model| model.id == model_id);
-    let capabilities = resolve_effective_model_capabilities(
-        definition,
-        active_model.as_ref(),
-        &effective_ai_tool_configuration,
-    );
-    let api_family = definition
-        .effective_runtime_for_model(model_id)
-        .api_family();
-    let normalized = normalize_provider_user_input_for_model(
-        api_family,
-        Some(&capabilities),
-        &entry.prompt,
-        &entry.attachments,
-    );
-    (normalized.text, normalized.attachments)
+    (entry.prompt.clone(), entry.attachments.clone())
 }

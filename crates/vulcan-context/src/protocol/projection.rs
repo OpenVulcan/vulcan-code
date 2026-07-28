@@ -456,7 +456,11 @@ pub(crate) fn historical_tool_result_text_message(
     message: &SessionConversationMessage,
 ) -> SessionConversationMessage {
     let text = match &message.payload {
-        SessionConversationPayload::ToolResult { tool_call_id, text } => {
+        SessionConversationPayload::ToolResult {
+            tool_call_id,
+            is_error,
+            text,
+        } => {
             let mut parts = Vec::new();
             parts.push(String::from(
                 "[Historical tool result recovered as text only]",
@@ -468,6 +472,9 @@ pub(crate) fn historical_tool_result_text_message(
                 .filter(|value| !value.is_empty())
             {
                 parts.push(format!("tool_call_id: {tool_call_id}"));
+            }
+            if *is_error {
+                parts.push(String::from("is_error: true"));
             }
             if !text.trim().is_empty() {
                 parts.push(text.clone());
@@ -579,8 +586,17 @@ fn conversation_message_to_compaction_source_message(
             tool_calls,
             provider_message_id.as_deref(),
         ),
-        SessionConversationPayload::ToolResult { tool_call_id, text } => {
-            compaction_tool_result_message(message.id.clone(), tool_call_id.as_deref(), text)
+        SessionConversationPayload::ToolResult {
+            tool_call_id,
+            is_error,
+            text,
+        } => {
+            let text = if *is_error {
+                format!("[Tool execution failed]\n{text}")
+            } else {
+                text.clone()
+            };
+            compaction_tool_result_message(message.id.clone(), tool_call_id.as_deref(), &text)
         }
         SessionConversationPayload::AgentMessage {
             message_type,
@@ -923,10 +939,14 @@ fn tool_result_session_message_to_protocol_message(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
+    let is_error = metadata
+        .and_then(|payload| payload.get("is_error"))
+        .and_then(Value::as_bool)?;
     Some(SessionConversationMessage {
         id: message.id.clone(),
         payload: SessionConversationPayload::ToolResult {
             tool_call_id,
+            is_error,
             text: message.body.clone(),
         },
     })

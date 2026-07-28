@@ -97,56 +97,6 @@ fn runtime_state_serializes_session_runtime_kernel() {
     assert!(restored.session_runtime_kernel.is_some());
 }
 
-/// Initializes a missing session AI configuration from the default template.
-/// 从默认模板初始化缺失的会话 AI 配置。
-#[test]
-fn session_runtime_state_initializes_missing_ai_tool_configuration() {
-    let default_configuration = PersistedAiToolConfiguration {
-        disabled_capability_kinds: BTreeSet::from([AiToolKind::WebSearch]),
-        ..PersistedAiToolConfiguration::default()
-    };
-    let mut runtime_state = SessionRuntimeStateEntry::default();
-
-    assert!(runtime_state.ensure_ai_tool_configuration(&default_configuration));
-
-    let session_configuration = runtime_state
-        .ai_tool_configuration
-        .as_ref()
-        .expect("session configuration should be initialized");
-    assert_eq!(
-        session_configuration.disabled_capability_kinds,
-        BTreeSet::from([AiToolKind::WebSearch])
-    );
-}
-
-/// Keeps an existing session AI configuration independent from later default-template changes.
-/// 保持既有会话 AI 配置独立于后续默认模板变化。
-#[test]
-fn session_runtime_state_keeps_existing_ai_tool_configuration() {
-    let mut runtime_state = SessionRuntimeStateEntry {
-        ai_tool_configuration: Some(PersistedAiToolConfiguration {
-            disabled_capability_kinds: BTreeSet::from([AiToolKind::UnderstandImage]),
-            ..PersistedAiToolConfiguration::default()
-        }),
-        ..SessionRuntimeStateEntry::default()
-    };
-    let next_default_configuration = PersistedAiToolConfiguration {
-        disabled_capability_kinds: BTreeSet::from([AiToolKind::WebSearch]),
-        ..PersistedAiToolConfiguration::default()
-    };
-
-    assert!(!runtime_state.ensure_ai_tool_configuration(&next_default_configuration));
-
-    let session_configuration = runtime_state
-        .ai_tool_configuration
-        .as_ref()
-        .expect("existing session configuration should remain present");
-    assert_eq!(
-        session_configuration.disabled_capability_kinds,
-        BTreeSet::from([AiToolKind::UnderstandImage])
-    );
-}
-
 #[test]
 fn pending_prompt_panel_drop_target_matches_webui_before_semantics() {
     let mut ui_state = SessionTranscriptUiState {
@@ -202,7 +152,6 @@ fn pending_prompt_lane_busy_includes_visible_panel_queue() {
         &ui_state,
         PendingPromptBusyLaneContext {
             dispatch: PendingPromptDispatchContext {
-                uses_anthropic_runtime: false,
                 has_running_subagents: false,
                 has_active_run: false,
                 run_phase: None,
@@ -226,7 +175,6 @@ fn pending_prompt_lane_busy_includes_active_provider_phase() {
             &SessionTranscriptUiState::default(),
             PendingPromptBusyLaneContext {
                 dispatch: PendingPromptDispatchContext {
-                    uses_anthropic_runtime: false,
                     has_running_subagents: false,
                     has_active_run: false,
                     run_phase: Some(phase),
@@ -238,7 +186,6 @@ fn pending_prompt_lane_busy_includes_active_provider_phase() {
         assert_eq!(
             pending_prompt_dispatch_block_reason(
                 PendingPromptDispatchContext {
-                    uses_anthropic_runtime: false,
                     has_running_subagents: false,
                     has_active_run: false,
                     run_phase: Some(phase),
@@ -259,7 +206,6 @@ fn pending_prompt_lane_busy_ignores_stale_preparing_without_precheck() {
         &SessionTranscriptUiState::default(),
         PendingPromptBusyLaneContext {
             dispatch: PendingPromptDispatchContext {
-                uses_anthropic_runtime: false,
                 has_running_subagents: false,
                 has_active_run: false,
                 run_phase: Some(crate::SessionRunPhase::Preparing),
@@ -274,34 +220,30 @@ fn pending_prompt_lane_busy_ignores_stale_preparing_without_precheck() {
 /// 验证待发送提示词分发在所有 Provider 运行时下都将运行中子代理视为独立工作。
 #[test]
 fn pending_prompt_dispatch_allows_running_subagents_for_all_runtimes() {
-    for uses_anthropic_runtime in [true, false] {
-        assert_eq!(
-            pending_prompt_dispatch_block_reason(
-                PendingPromptDispatchContext {
-                    uses_anthropic_runtime,
-                    has_running_subagents: true,
-                    has_active_run: false,
-                    run_phase: None,
-                    has_active_compaction: false,
-                },
-                true,
-            ),
-            None
-        );
-        assert_eq!(
-            pending_prompt_dispatch_block_reason(
-                PendingPromptDispatchContext {
-                    uses_anthropic_runtime,
-                    has_running_subagents: false,
-                    has_active_run: false,
-                    run_phase: None,
-                    has_active_compaction: false,
-                },
-                true,
-            ),
-            None
-        );
-    }
+    assert_eq!(
+        pending_prompt_dispatch_block_reason(
+            PendingPromptDispatchContext {
+                has_running_subagents: true,
+                has_active_run: false,
+                run_phase: None,
+                has_active_compaction: false,
+            },
+            true,
+        ),
+        None
+    );
+    assert_eq!(
+        pending_prompt_dispatch_block_reason(
+            PendingPromptDispatchContext {
+                has_running_subagents: false,
+                has_active_run: false,
+                run_phase: None,
+                has_active_compaction: false,
+            },
+            true,
+        ),
+        None
+    );
 }
 
 /// Verifies pending-prompt mailbox inputs are blocked only by an active parent run.
@@ -311,7 +253,6 @@ fn pending_prompt_dispatch_allows_session_mailbox_during_running_siblings() {
     assert_eq!(
         pending_prompt_dispatch_block_reason_for_source(
             PendingPromptDispatchContext {
-                uses_anthropic_runtime: false,
                 has_running_subagents: true,
                 has_active_run: false,
                 run_phase: None,
@@ -325,7 +266,6 @@ fn pending_prompt_dispatch_allows_session_mailbox_during_running_siblings() {
     assert_eq!(
         pending_prompt_dispatch_block_reason_for_source(
             PendingPromptDispatchContext {
-                uses_anthropic_runtime: false,
                 has_running_subagents: true,
                 has_active_run: true,
                 run_phase: None,
@@ -457,7 +397,6 @@ fn runtime_intervention_guidance_ignores_running_subagents() {
     )
     .expect("route guidance prompt");
     let context = PendingPromptDispatchContext {
-        uses_anthropic_runtime: false,
         has_running_subagents: true,
         has_active_run: true,
         run_phase: Some(crate::SessionRunPhase::ToolRunning),
@@ -495,7 +434,6 @@ fn runtime_intervention_guidance_runs_after_subagents_settle() {
     )
     .expect("route guidance prompt");
     let context = PendingPromptDispatchContext {
-        uses_anthropic_runtime: false,
         has_running_subagents: false,
         has_active_run: true,
         run_phase: Some(crate::SessionRunPhase::ToolRunning),

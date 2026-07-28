@@ -119,14 +119,6 @@ const RESOURCES_DIR_NAME: &str = "resources";
 /// 打包 output 构建使用的相对配置目录名称。
 const CONFIG_DIR_NAME: &str = "config";
 
-/// Relative provider catalog directory name nested below the packaged resources root.
-/// 位于打包资源根目录下的相对供应商目录名称。
-const PROVIDERS_DIR_NAME: &str = "providers";
-
-/// Relative AI capability provider catalog directory name nested below the packaged resources root.
-/// 位于打包资源根目录下的相对 AI 能力提供方目录名称。
-const AI_CAPABILITY_PROVIDERS_DIR_NAME: &str = "ai-capability-providers";
-
 /// Relative tokenizer resource directory name nested below the packaged resources root.
 /// 位于打包资源根目录下的相对 tokenizer 资源目录名称。
 const TOKENIZERS_DIR_NAME: &str = "tokenizers";
@@ -180,18 +172,6 @@ pub fn source_config_directory() -> PathBuf {
         .join("..")
         .join("..")
         .join("config")
-}
-
-/// Returns the effective provider catalog directory for the current process.
-/// 返回当前进程使用的生效供应商目录路径。
-pub fn resolve_provider_catalog_directory() -> PathBuf {
-    resolve_app_resources_directory().join(PROVIDERS_DIR_NAME)
-}
-
-/// Returns the effective AI capability provider catalog directory for the current process.
-/// 返回当前进程使用的生效 AI 能力提供方目录路径。
-pub fn resolve_ai_capability_provider_catalog_directory() -> PathBuf {
-    resolve_app_resources_directory().join(AI_CAPABILITY_PROVIDERS_DIR_NAME)
 }
 
 /// Returns the effective tokenizer resource directory for the current process.

@@ -2,12 +2,12 @@
 //! 面向运行时的共享上下文预算估算辅助门面。
 
 use crate::agent_runtime::provider_reasoning::ProviderRuntimeReasoningResolution;
-use crate::provider_capabilities::ResolvedModelCapabilities;
-use crate::provider_config::{ProviderApiFamily, ReasoningEffortLevel};
+use crate::provider_config::ReasoningEffortLevel;
+use vulcan_ai_contract::{ModelCapabilities, ResourceKind};
 use vulcan_context::budget::{
-    ContextBudgetAiToolCapability, ContextBudgetCapabilities, ContextProviderApiFamily,
-    ContextReasoningEffort, ContextTokenEstimator, RequestContextBudgetSnapshotInput,
-    RequestContextBudgetSnapshotOptions, build_request_context_budget_snapshot_with_options,
+    ContextBudgetCapabilities, ContextReasoningEffort, ContextTokenEstimator,
+    RequestContextBudgetSnapshotInput, RequestContextBudgetSnapshotOptions,
+    build_request_context_budget_snapshot_with_options,
 };
 pub use vulcan_context::{
     CONTEXT_BUDGET_COMPACTION_RATIO, CONTEXT_BUDGET_OVERFLOW_RATIO, CONTEXT_BUDGET_WARNING_RATIO,
@@ -29,10 +29,10 @@ pub struct RequestContextCompactionBudgetSnapshotInput<'a> {
     pub model_id: &'a str,
     /// Runtime provider API family.
     /// 运行时 Provider 接口族。
-    pub api_family: ProviderApiFamily,
+    pub protocol_profile_id: &'a str,
     /// Resolved provider/model capabilities.
     /// 已解析的 Provider/Model 能力。
-    pub capabilities: &'a ResolvedModelCapabilities,
+    pub capabilities: &'a ModelCapabilities,
     /// Resolved reasoning controls.
     /// 已解析的推理控制。
     pub reasoning: &'a ProviderRuntimeReasoningResolution,
@@ -67,7 +67,7 @@ pub fn build_request_context_compaction_budget_snapshot(
         RequestContextBudgetSnapshotInput {
             provider_id: input.provider_id,
             model_id: input.model_id,
-            api_family: map_provider_api_family(input.api_family),
+            protocol_profile_id: input.protocol_profile_id,
             capabilities: &capabilities,
             reasoning: map_reasoning_effort(input.reasoning.requested_effort),
             request_snapshot: input.request_snapshot,
@@ -102,8 +102,8 @@ fn apply_context_budget_override(
 pub fn build_context_budget_fingerprint(
     provider_id: &str,
     model_id: &str,
-    api_family: ProviderApiFamily,
-    capabilities: &ResolvedModelCapabilities,
+    protocol_profile_id: &str,
+    capabilities: &ModelCapabilities,
     reasoning_effort: ReasoningEffortLevel,
     visible_tool_count: usize,
     compaction_policy: Option<ContextCompactionPolicy>,
@@ -111,7 +111,7 @@ pub fn build_context_budget_fingerprint(
     vulcan_context::budget::build_context_budget_fingerprint(
         provider_id,
         model_id,
-        map_provider_api_family(api_family),
+        protocol_profile_id,
         &map_capabilities(capabilities),
         map_reasoning_effort(reasoning_effort),
         visible_tool_count,
@@ -121,53 +121,57 @@ pub fn build_context_budget_fingerprint(
 
 /// Maps one runtime provider API family into the shared budget-computation family enum.
 /// 将一条运行时 Provider 接口族映射为共享预算计算接口族枚举。
-fn map_provider_api_family(api_family: ProviderApiFamily) -> ContextProviderApiFamily {
-    match api_family {
-        ProviderApiFamily::OpenAiResponses => ContextProviderApiFamily::OpenAiResponses,
-        ProviderApiFamily::OpenAiChatCompatible => ContextProviderApiFamily::OpenAiChatCompatible,
-        ProviderApiFamily::AnthropicMessages => ContextProviderApiFamily::AnthropicMessages,
-        ProviderApiFamily::GoogleGeminiGenerateContent => {
-            ContextProviderApiFamily::GoogleGeminiGenerateContent
-        }
-        ProviderApiFamily::CohereChat => ContextProviderApiFamily::CohereChat,
-        ProviderApiFamily::BedrockConverse => ContextProviderApiFamily::BedrockConverse,
-    }
-}
-
 /// Maps one runtime reasoning preset into the shared budget-computation reasoning bucket.
 /// 将一条运行时推理档位映射为共享预算计算推理分桶。
 fn map_reasoning_effort(reasoning_effort: ReasoningEffortLevel) -> ContextReasoningEffort {
     match reasoning_effort {
         ReasoningEffortLevel::Off => ContextReasoningEffort::None,
+        ReasoningEffortLevel::None | ReasoningEffortLevel::Minimal => ContextReasoningEffort::None,
         ReasoningEffortLevel::Low => ContextReasoningEffort::Low,
         ReasoningEffortLevel::Medium => ContextReasoningEffort::Medium,
         ReasoningEffortLevel::High => ContextReasoningEffort::High,
-        ReasoningEffortLevel::XHigh => ContextReasoningEffort::XHigh,
+        ReasoningEffortLevel::XHigh | ReasoningEffortLevel::Max | ReasoningEffortLevel::Ultra => {
+            ContextReasoningEffort::XHigh
+        }
     }
 }
 
 /// Maps one runtime capability snapshot into the shared budget-computation capability shape.
 /// 将一份运行时能力快照映射为共享预算计算能力形态。
-fn map_capabilities(capabilities: &ResolvedModelCapabilities) -> ContextBudgetCapabilities {
+fn map_capabilities(capabilities: &ModelCapabilities) -> ContextBudgetCapabilities {
+    let context_limit = capabilities
+        .context_limit
+        .and_then(|value| usize::try_from(value).ok());
+    let output_limit = capabilities
+        .output_limit
+        .and_then(|value| usize::try_from(value).ok());
     ContextBudgetCapabilities {
-        context_limit: capabilities.context_limit,
-        input_limit: capabilities.input_limit,
-        output_limit: capabilities.output_limit,
-        supports_tool_call: capabilities.supports_tool_call,
-        supports_temperature: capabilities.supports_temperature,
-        supports_attachment: capabilities.supports_attachment,
-        input_modalities: capabilities.input_modalities.clone(),
-        output_modalities: capabilities.output_modalities.clone(),
-        ai_tools: capabilities
-            .ai_tools
+        context_limit,
+        input_limit: context_limit,
+        output_limit,
+        supports_tool_call: capabilities.tool_calling.is_supported(),
+        supports_temperature: capabilities
+            .model_parameters
             .iter()
-            .map(|tool| ContextBudgetAiToolCapability {
-                kind_key: tool.kind.key().to_string(),
-                policy_key: format!("{:?}", tool.policy),
-                native_tool_type: tool.native_tool_type.clone(),
-            })
-            .collect(),
+            .any(|parameter| parameter.id == "sampling.temperature"),
+        supports_attachment: !capabilities.input_resources.is_empty(),
+        input_modalities: resource_modalities(&capabilities.input_resources),
+        output_modalities: resource_modalities(&capabilities.output_resources),
+        ai_tools: Vec::new(),
     }
+}
+
+/// Converts public resource kinds into stable context-budget modality labels.
+/// 将公共资源类型转换为稳定的上下文预算模态标签。
+fn resource_modalities(resources: &[ResourceKind]) -> Vec<String> {
+    let mut modalities = vec![String::from("text")];
+    modalities.extend(resources.iter().map(|resource| match resource {
+        ResourceKind::Image => String::from("image"),
+        ResourceKind::Audio => String::from("audio"),
+        ResourceKind::Video => String::from("video"),
+        ResourceKind::File => String::from("file"),
+    }));
+    modalities
 }
 
 #[cfg(test)]
@@ -205,9 +209,9 @@ mod tests {
     /// 验证请求预算快照会保留已解析压缩策略，而不是强制使用默认值。
     #[test]
     fn request_budget_snapshot_uses_resolved_compaction_policy() {
-        let capabilities = ResolvedModelCapabilities {
-            input_limit: Some(20_000),
-            ..ResolvedModelCapabilities::default()
+        let capabilities = ModelCapabilities {
+            context_limit: Some(20_000),
+            ..ModelCapabilities::default()
         };
         let reasoning = ProviderRuntimeReasoningResolution::default();
         let request_snapshot = test_request_snapshot();
@@ -221,7 +225,7 @@ mod tests {
             RequestContextCompactionBudgetSnapshotInput {
                 provider_id: "test-provider",
                 model_id: "test-model",
-                api_family: ProviderApiFamily::OpenAiChatCompatible,
+                protocol_profile_id: vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
                 capabilities: &capabilities,
                 reasoning: &reasoning,
                 request_snapshot: &request_snapshot,
@@ -240,7 +244,7 @@ mod tests {
             RequestContextCompactionBudgetSnapshotInput {
                 provider_id: "test-provider",
                 model_id: "test-model",
-                api_family: ProviderApiFamily::OpenAiChatCompatible,
+                protocol_profile_id: vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
                 capabilities: &capabilities,
                 reasoning: &reasoning,
                 request_snapshot: &request_snapshot,
@@ -258,9 +262,9 @@ mod tests {
     /// 验证请求级上下文预算会把生效输入上限压到模型窗口以内。
     #[test]
     fn request_budget_snapshot_uses_request_context_budget_limit() {
-        let capabilities = ResolvedModelCapabilities {
-            input_limit: Some(20_000),
-            ..ResolvedModelCapabilities::default()
+        let capabilities = ModelCapabilities {
+            context_limit: Some(20_000),
+            ..ModelCapabilities::default()
         };
         let reasoning = ProviderRuntimeReasoningResolution::default();
         let request_snapshot = test_request_snapshot();
@@ -269,7 +273,7 @@ mod tests {
             RequestContextCompactionBudgetSnapshotInput {
                 provider_id: "test-provider",
                 model_id: "test-model",
-                api_family: ProviderApiFamily::OpenAiChatCompatible,
+                protocol_profile_id: vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
                 capabilities: &capabilities,
                 reasoning: &reasoning,
                 request_snapshot: &request_snapshot,
@@ -286,7 +290,7 @@ mod tests {
             RequestContextCompactionBudgetSnapshotInput {
                 provider_id: "test-provider",
                 model_id: "test-model",
-                api_family: ProviderApiFamily::OpenAiChatCompatible,
+                protocol_profile_id: vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
                 capabilities: &capabilities,
                 reasoning: &reasoning,
                 request_snapshot: &request_snapshot,

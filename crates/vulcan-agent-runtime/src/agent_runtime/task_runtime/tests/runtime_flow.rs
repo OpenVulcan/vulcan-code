@@ -41,6 +41,8 @@ fn build_task_start_test_runtime_context(
             conversation_hook_turn_id: Some(String::from("test-hook-turn")),
             execution_agent_id: Some(String::from("main")),
             agent_prompt_snapshot: None,
+            provider_id_override: None,
+            model_id_override: None,
             subagent_prompt_context: None,
             task_session_store_root: None,
             session_title: String::from("Parent session"),
@@ -53,7 +55,6 @@ fn build_task_start_test_runtime_context(
             execution_mode: String::from("build"),
             temperature: None,
             reasoning_effort: ReasoningEffortLevel::High,
-            ai_tool_configuration: PersistedAiToolConfiguration::default(),
             tool_exposure_override: ToolExposureSnapshot::default(),
             tool_request_rejection_reason: None,
             tool_request_rejection_all_tools: false,
@@ -181,7 +182,7 @@ async fn build_task_execution_handler_rejects_closed_parent_live_stream_without_
         .await
         .expect_err("closed parent live stream should reject child start");
 
-    assert!(error.contains("parent live stream closed"));
+    assert!(error.contains("parent live stream closed"), "{error}");
     assert!(error.contains("agent-review"));
     assert!(
         !task_runtime

@@ -1,4 +1,3 @@
-import type { AiCapabilityKind } from "@/components/composer/composer-model";
 import type {
   CommandSessionSummary,
   ComposerAttachmentSummary,
@@ -26,9 +25,6 @@ export async function submitConversationPrompt(
   attachments: ComposerAttachmentSummary[],
   executionMode: string,
   reasoningEffort: string | null,
-  disabledAiCapabilityKinds: AiCapabilityKind[],
-  disabledAiCapabilityTargetSelectors: string[],
-  aiCapabilityTargetBindings: Record<string, string>,
 ): Promise<SubmitConversationPromptAck | null> {
   if (!hasServiceRuntime()) {
     return null;
@@ -41,32 +37,6 @@ export async function submitConversationPrompt(
     attachments,
     executionMode,
     reasoningEffort,
-    disabledAiCapabilityKinds,
-    disabledAiCapabilityTargetSelectors,
-    aiCapabilityTargetBindings,
-  });
-}
-
-// saveSessionAiCapabilityConfiguration persists the composer capability dialog draft for one session.
-// saveSessionAiCapabilityConfiguration 将输入区能力弹窗草稿持久化到单个会话。
-export async function saveSessionAiCapabilityConfiguration(
-  projectId: string | null,
-  conversationId: string | null,
-  disabledAiCapabilityKinds: AiCapabilityKind[],
-  disabledAiCapabilityTargetSelectors: string[],
-  aiCapabilityTargetBindings: Record<string, string>,
-): Promise<WorkbenchSnapshot | null> {
-  if (!hasServiceRuntime()) {
-    return null;
-  }
-  return serviceClient.request<WorkbenchSnapshot>("service_save_session_ai_capability_configuration", {
-    request: {
-      projectId,
-      conversationId,
-      disabledAiCapabilityKinds,
-      disabledAiCapabilityTargetSelectors,
-      aiCapabilityTargetBindings,
-    },
   });
 }
 

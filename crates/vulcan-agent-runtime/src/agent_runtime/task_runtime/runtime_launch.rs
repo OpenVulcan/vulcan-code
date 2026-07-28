@@ -48,6 +48,14 @@ pub(super) fn build_task_runtime_preparation_request(
     request.agent_prompt_snapshot =
         task_record_agent_prompt_snapshot(&context.foundation.task_runtime(), invocation.task_id)?
             .or_else(|| context.agent_prompt_snapshot.clone());
+    let public_model_override = provider_model_selector_from_snapshot(
+        &resolved_config.effective_config.provider_model,
+        &context.config,
+    );
+    request.provider_id_override = public_model_override
+        .as_ref()
+        .map(|(provider_id, _)| provider_id.clone());
+    request.model_id_override = public_model_override.map(|(_, model_id)| model_id);
     request.subagent_prompt_context =
         build_task_subagent_prompt_context(invocation, resolved_config);
     request.task_session_store_root = context.request_template.task_session_store_root.clone();
@@ -314,14 +322,9 @@ fn reject_registered_child_tools(request: &mut ExecutionPreparationRequest, tool
 /// Applies one TaskSession provider/model snapshot to a mutable provider configuration clone.
 /// 将一份 TaskSession 供应商与模型快照应用到可变供应商配置副本上。
 pub(super) fn apply_task_provider_model_override(
-    config: &mut ProviderConfigurationFile,
-    provider_model: &ProviderModelSnapshot,
+    _config: &mut ProviderConfigurationFile,
+    _provider_model: &ProviderModelSnapshot,
 ) {
-    if let Some((provider_id, model_id)) =
-        provider_model_selector_from_snapshot(provider_model, config)
-    {
-        config.model = Some(format!("{provider_id}/{model_id}"));
-    }
 }
 
 /// Applies TaskSession prompt-skill overrides to the child execution request.

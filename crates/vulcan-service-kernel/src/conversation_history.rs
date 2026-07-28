@@ -21,11 +21,10 @@ use vulcan_workbench_model::{SessionId, SessionMessageEntry, SessionMessageRecor
 use vulcan_workspace_store::workspace_store::{SessionHistoryPage, WorkspaceSnapshot};
 
 use super::{
-    AgentRuntimeBridge, ContextBudgetSnapshot, ControllerRuntimeHandle,
-    PersistedAiToolConfiguration, ProviderConfigurationFile, SELECTED_SESSION_TURN_LOAD_LIMIT,
-    SharedServiceBridgeState, TauriLuaSkillsCatalog, TauriMcpRuntimeCatalog,
-    TauriTokenBudgetRuntime, WorkbenchRuntimeProjection, active_kernel_session_ids,
-    active_surface_messages_from_workspace_and_state,
+    AgentRuntimeBridge, ContextBudgetSnapshot, ControllerRuntimeHandle, ProviderConfigurationFile,
+    SELECTED_SESSION_TURN_LOAD_LIMIT, SharedServiceBridgeState, TauriLuaSkillsCatalog,
+    TauriMcpRuntimeCatalog, TauriTokenBudgetRuntime, WorkbenchRuntimeProjection,
+    active_kernel_session_ids, active_surface_messages_from_workspace_and_state,
     apply_hydration_to_selected_workspace_snapshot,
     apply_webui_unclosed_subagent_surface_preload_once, cached_luaskills_catalog_from_state,
     cached_mcp_catalog_from_state, conversation_messages_from_session, current_unix_millis_value,
@@ -72,9 +71,6 @@ struct HydratedSessionProjectionContext {
     /// Provider configuration used to render model and route choices.
     /// 用于渲染模型与路由选项的 Provider 配置。
     provider_configuration: ProviderConfigurationFile,
-    /// AI tool configuration used to render tool visibility summaries.
-    /// 用于渲染工具可见性摘要的 AI 工具配置。
-    ai_tool_configuration: PersistedAiToolConfiguration,
     /// Latest context-budget snapshots keyed by session id.
     /// 按会话标识索引的最近上下文预算快照。
     live_context_budgets: BTreeMap<SessionId, ContextBudgetSnapshot>,
@@ -553,11 +549,6 @@ fn capture_hydrated_session_projection_context(
             .as_ref()
             .map(|runtime| runtime.provider_configuration.clone())
             .unwrap_or_default();
-        let ai_tool_configuration = guard
-            .agent_runtime
-            .as_ref()
-            .map(|runtime| runtime.ai_tool_configuration.clone())
-            .unwrap_or_default();
         HydratedSessionProjectionContext {
             luaskills_catalog: cached_luaskills_catalog_from_state(&guard),
             token_budget_runtime: guard.token_budget_runtime.clone().ok_or_else(|| {
@@ -566,7 +557,6 @@ fn capture_hydrated_session_projection_context(
             mcp_catalog: cached_mcp_catalog_from_state(&guard),
             logs: guard.startup.recent_logs.clone(),
             provider_configuration,
-            ai_tool_configuration,
             live_context_budgets: guard.live_context_budgets.clone(),
             agent_runtime_for_status: guard.agent_runtime.clone(),
             live_listener_task_ids: guard
@@ -951,7 +941,10 @@ pub(super) async fn load_hydrated_session_workbench(
         token_budget_runtime: &projection_context.token_budget_runtime,
         mcp_catalog: &projection_context.mcp_catalog,
         provider_configuration: &projection_context.provider_configuration,
-        ai_tool_configuration: &projection_context.ai_tool_configuration,
+        public_ai_runtime: projection_context
+            .agent_runtime_for_status
+            .as_ref()
+            .map(|runtime| runtime.public_ai_runtime.as_ref()),
         workspace: &refreshed_snapshot,
         vmm_session_states: &vmm_session_states,
         surface_messages: surface_messages.as_slice(),

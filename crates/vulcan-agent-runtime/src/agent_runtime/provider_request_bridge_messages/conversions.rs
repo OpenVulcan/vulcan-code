@@ -30,12 +30,15 @@ pub(crate) fn session_message_to_core_message(
                 .map(session_tool_call_to_core_tool_call)
                 .collect(),
         },
-        SessionConversationPayload::ToolResult { tool_call_id, text } => {
-            CoreConversationPayload::ToolResult {
-                tool_call_id: tool_call_id.clone(),
-                text: text.clone(),
-            }
-        }
+        SessionConversationPayload::ToolResult {
+            tool_call_id,
+            is_error,
+            text,
+        } => CoreConversationPayload::ToolResult {
+            tool_call_id: tool_call_id.clone(),
+            is_error: *is_error,
+            text: text.clone(),
+        },
         SessionConversationPayload::AgentMessage {
             message_type,
             task_name,
@@ -91,12 +94,15 @@ pub(crate) fn core_message_to_session_message(
                 .map(core_tool_call_to_session_tool_call)
                 .collect(),
         },
-        CoreConversationPayload::ToolResult { tool_call_id, text } => {
-            SessionConversationPayload::ToolResult {
-                tool_call_id: tool_call_id.clone(),
-                text: text.clone(),
-            }
-        }
+        CoreConversationPayload::ToolResult {
+            tool_call_id,
+            is_error,
+            text,
+        } => SessionConversationPayload::ToolResult {
+            tool_call_id: tool_call_id.clone(),
+            is_error: *is_error,
+            text: text.clone(),
+        },
         CoreConversationPayload::AgentMessage {
             message_type,
             task_name,

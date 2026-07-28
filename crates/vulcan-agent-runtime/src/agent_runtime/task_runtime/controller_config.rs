@@ -42,17 +42,13 @@ fn clear_rendered_task_prompt_state(config: &mut CoreControllerConfig) {
 /// 应用可安全复用当前 Provider 传输层的供应商与模型覆盖。
 pub(super) fn apply_resolved_provider_model_to_controller(
     config: &mut CoreControllerConfig,
-    base: &CoreControllerConfig,
+    _base: &CoreControllerConfig,
     resolved_config: &TaskSessionResolvedConfig,
 ) {
     let provider_model = &resolved_config.effective_config.provider_model;
-    let session_config = ProviderConfigurationFile {
-        model: Some(format!("{}/{}", base.provider_id, base.model_id)),
-        ..ProviderConfigurationFile::default()
-    };
+    let session_config = ProviderConfigurationFile::default();
     if let Some((provider_id, model_id)) =
         provider_model_selector_from_snapshot(provider_model, &session_config)
-        && provider_id == base.provider_id
     {
         config.provider_id = provider_id;
         config.model_id = model_id;

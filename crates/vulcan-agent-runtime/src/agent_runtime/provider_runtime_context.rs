@@ -36,25 +36,6 @@ static PROJECT_RULES_FILE_CACHE: OnceLock<Mutex<ProjectRulesFileCache>> = OnceLo
 /// Provider 运行时请求共享的进程级项目提示词来源缓存。
 static PROJECT_PROMPT_FILE_CACHE: OnceLock<Mutex<ProjectPromptFileCache>> = OnceLock::new();
 
-/// Builds the effective runtime system prompt sent to the real provider agent.
-/// 构建发送给真实 Provider 代理的生效运行时系统提示词。
-///
-/// # Parameters
-/// # 参数
-/// - `preparation`: Validated execution preparation containing workspace and prompt selections.
-/// - `preparation`：包含工作区与提示词选择的已验证执行准备。
-///
-/// # Returns
-/// # 返回值
-/// Returns the rendered fallback text used by test-only transport assertions.
-/// 返回仅供测试传输断言使用的渲染后回退文本。
-#[cfg(test)]
-pub(crate) fn build_runtime_system_preamble(preparation: &ExecutionPreparation) -> String {
-    build_runtime_prompt_layers_for_agent(preparation, None)
-        .expect("runtime prompt layers should build in test fixtures")
-        .fallback_text
-}
-
 /// Builds the effective layered runtime prompt sent to the real provider agent.
 /// 构建发送给真实 Provider 代理的生效分层运行时提示词。
 ///
@@ -186,7 +167,10 @@ fn build_runtime_prompt_assembly_input(
     Ok(PromptAssemblyInput {
         mode: prompt_assembly_mode_for_preparation(preparation),
         model: ModelDescriptor {
-            family: preparation.model_blueprint.api_family_key().to_string(),
+            family: preparation
+                .model_blueprint
+                .protocol_profile_key()
+                .to_string(),
             model_id: preparation.model_blueprint.model_id.clone(),
             supports_native_personality: true,
         },
@@ -706,12 +690,9 @@ mod tests {
     use crate::context_budget::ContextBudgetSnapshot;
     use crate::model::SessionId;
     use crate::provider_config::{
-        PersistedAiToolConfiguration, PersistedPromptConfiguration,
-        PersistedPromptPersonalitySelection, PersistedProviderEntry, PersistedProviderOptions,
-        ProjectVulcanCodeConfigurationFile, ProviderConfigurationFile, ReasoningEffortLevel,
-        save_project_configuration_file,
+        PersistedPromptConfiguration, PersistedPromptPersonalitySelection,
+        ProjectVulcanCodeConfigurationFile, ReasoningEffortLevel, save_project_configuration_file,
     };
-    use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
     use vulcan_context::{ContextAssembly, ContextBaseline};
@@ -1325,29 +1306,24 @@ mod tests {
     /// Builds one real provider blueprint through the catalog resolver.
     /// 通过目录解析器构建一份真实供应商蓝图。
     fn sample_model_blueprint() -> crate::agent_runtime::provider::ProviderRuntimeBlueprint {
-        let mut provider = BTreeMap::new();
-        provider.insert(
-            String::from("deepseek"),
-            PersistedProviderEntry {
-                name: Some(String::from("DeepSeek")),
-                options: PersistedProviderOptions {
-                    api_key: Some(String::from("test-key")),
-                    ..PersistedProviderOptions::default()
+        crate::agent_runtime::provider::ProviderRuntimeBlueprint {
+            provider_id: String::from("openrouter"),
+            provider_name: String::from("OpenRouter"),
+            runtime_label: String::from("Vulcan Public AI Contract"),
+            model_id: String::from("vendor/model"),
+            model_name: String::from("Model"),
+            protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+            public_capabilities: vulcan_ai_contract::ModelCapabilities::default(),
+            base_url: Some(String::from("https://openrouter.ai/api/v1")),
+            supports_remote_model_refresh: true,
+            credential_source: String::from("Account A"),
+            reasoning:
+                crate::agent_runtime::provider_reasoning::ProviderRuntimeReasoningResolution {
+                    requested_effort: ReasoningEffortLevel::Off,
+                    source_label: String::from("public contract"),
+                    note: None,
                 },
-                ..PersistedProviderEntry::default()
-            },
-        );
-        let config = ProviderConfigurationFile {
-            model: Some(String::from("deepseek/deepseek-v4-pro")),
-            provider,
-            ..ProviderConfigurationFile::default()
-        };
-        crate::agent_runtime::provider::resolve_active_provider_blueprint_with_ai_tools(
-            &config,
-            ReasoningEffortLevel::Off,
-            &PersistedAiToolConfiguration::default(),
-        )
-        .expect("provider blueprint should resolve")
+        }
     }
 
     /// Builds one unique temporary directory for tests.

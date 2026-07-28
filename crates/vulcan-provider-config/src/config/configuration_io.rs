@@ -42,10 +42,6 @@ impl Default for WorkbenchThinkingDisplayMode {
 /// 保存到 Vulcan 家目录中的根级供应商配置文件。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderConfigurationFile {
-    /// Currently selected global model in `provider/model` form.
-    /// 当前以 `provider/model` 形式保存的全局激活模型。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
     /// Remembered workbench reasoning preference selected by the user before any model-specific capability downgrade is applied.
     /// 在应用任意模型级能力回退前，由用户选定并记忆的工作台思考偏好。
     #[serde(
@@ -93,18 +89,6 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "PersistedGitCommitConfiguration::is_default"
     )]
     pub git_commit: PersistedGitCommitConfiguration,
-    /// Remembered OpenRouter endpoint route selections keyed by the exact OpenRouter model identifier.
-    /// 以精确 OpenRouter 模型标识为键记忆的 OpenRouter 端点路由选择集合。
-    #[serde(
-        rename = "openrouterEndpointRoutes",
-        default,
-        skip_serializing_if = "BTreeMap::is_empty"
-    )]
-    pub openrouter_endpoint_routes: BTreeMap<String, OpenRouterEndpointRouteSelection>,
-    /// Persisted provider map keyed by provider identifier.
-    /// 以供应商标识为键保存的供应商映射。
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub provider: BTreeMap<String, PersistedProviderEntry>,
     /// Persisted skill definitions keyed by stable skill id.
     /// 以稳定技能标识为键保存的技能定义集合。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -128,14 +112,6 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "PersistedPromptSkillsConfiguration::is_default"
     )]
     pub prompt_skills: PersistedPromptSkillsConfiguration,
-    /// Legacy embedded AI tool routing and compatibility configuration kept only as a migration fallback for the standalone AI capability file.
-    /// 仅作为独立 AI 能力配置文件迁移回退而保留的旧版内嵌 AI 工具路由与兼容配置。
-    #[serde(
-        default,
-        rename = "aiTools",
-        skip_serializing_if = "PersistedAiToolConfiguration::is_default"
-    )]
-    pub ai_tools: PersistedAiToolConfiguration,
     /// Global VMM memory integration configuration.
     /// 全局 VMM 记忆集成配置。
     #[serde(default, skip_serializing_if = "VmmConfigLayer::is_empty")]
@@ -160,12 +136,28 @@ pub struct ProviderConfigurationFile {
     pub prompt: PersistedPromptConfiguration,
 }
 
-/// Loads the supported provider catalog derived from the split provider resources.
-/// 加载从分离供应商资源目录派生出来的受支持供应商目录。
-pub fn supported_providers() -> &'static [SupportedProviderDefinition] {
-    static PROVIDERS: OnceLock<Vec<SupportedProviderDefinition>> = OnceLock::new();
+/// Versioned standalone public AI connection configuration.
+/// 版本化独立公共 AI 连接配置。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicAiConnectionsFile {
+    /// Exact standalone configuration schema version.
+    /// 精确独立配置 Schema 版本。
+    pub schema_version: u32,
+    /// Persisted public AI connections and user choices.
+    /// 持久化公共 AI 连接与用户选择。
+    pub configuration: vulcan_provider_adapters::PersistedAiConfiguration,
+}
 
-    PROVIDERS.get_or_init(load_supported_providers)
+impl Default for PublicAiConnectionsFile {
+    /// Returns an empty first-version connection file.
+    /// 返回空的第一版连接文件。
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            configuration: vulcan_provider_adapters::PersistedAiConfiguration::default(),
+        }
+    }
 }
 
 /// Returns the persisted Vulcan configuration file path.
@@ -178,6 +170,89 @@ pub fn configuration_file_path() -> PathBuf {
     });
 
     home.join(".vulcan").join("vulcan-code.json")
+}
+
+/// Returns the sole standalone public AI connection file path.
+/// 返回唯一的独立公共 AI 连接文件路径。
+///
+/// # Returns
+/// 返回值
+/// `~/.vulcan/code/ai-connections.toml`.
+/// 返回 `~/.vulcan/code/ai-connections.toml`。
+pub fn public_ai_connections_file_path() -> PathBuf {
+    let home = dirs::home_dir().unwrap_or_else(|| {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .to_path_buf()
+    });
+    home.join(".vulcan")
+        .join("code")
+        .join("ai-connections.toml")
+}
+
+/// Loads the standalone version-one public AI connection file.
+/// 加载独立的第一版公共 AI 连接文件。
+///
+/// # Returns
+/// 返回值
+/// An empty version-one file only when the exact path is missing.
+/// 仅当精确路径缺失时返回空的第一版文件。
+pub fn load_public_ai_connections_file() -> Result<PublicAiConnectionsFile, String> {
+    let path = public_ai_connections_file_path();
+    let exists = path
+        .try_exists()
+        .map_err(|error| format!("探测公共 AI 连接文件失败（{}）：{error}", path.display()))?;
+    if !exists {
+        return Ok(PublicAiConnectionsFile::default());
+    }
+    let text = fs::read_to_string(&path)
+        .map_err(|error| format!("读取公共 AI 连接文件失败（{}）：{error}", path.display()))?;
+    parse_public_ai_connections_text(&text)
+        .map_err(|error| format!("解析公共 AI 连接文件失败（{}）：{error}", path.display()))
+}
+
+/// Parses and validates one standalone public AI connection document.
+/// 解析并校验一份独立公共 AI 连接文档。
+///
+/// # Parameters
+/// 参数
+/// `text` is the exact TOML document read from the authoritative path.
+/// `text` 是从权威路径读取的精确 TOML 文档。
+///
+/// # Returns
+/// 返回值
+/// A version-one document, or an explicit schema/format error.
+/// 返回第一版文档，或明确的 Schema/格式错误。
+fn parse_public_ai_connections_text(text: &str) -> Result<PublicAiConnectionsFile, String> {
+    let file: PublicAiConnectionsFile = toml::from_str(text).map_err(|error| error.to_string())?;
+    if file.schema_version != 1 {
+        return Err(format!(
+            "不支持公共 AI 连接文件 Schema 版本 {}，当前仅支持版本 1。",
+            file.schema_version
+        ));
+    }
+    Ok(file)
+}
+
+/// Atomically saves the standalone version-one public AI connection file.
+/// 原子保存独立的第一版公共 AI 连接文件。
+///
+/// # Parameters
+/// 参数
+/// `configuration` contains no secret material or runtime model catalogs.
+/// `configuration` 不包含秘密材料或运行时模型目录。
+pub fn save_public_ai_connections_file(
+    configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
+) -> Result<(), String> {
+    let path = public_ai_connections_file_path();
+    let file = PublicAiConnectionsFile {
+        schema_version: 1,
+        configuration: configuration.clone(),
+    };
+    let content = toml::to_string_pretty(&file)
+        .map_err(|error| format!("序列化公共 AI 连接文件失败：{error}"))?;
+    crate::atomic_file::write_file_atomically(&path, content.as_bytes())
+        .map_err(|error| format!("写入公共 AI 连接文件失败：{error}"))
 }
 
 /// Returns the project-local Vulcan Code configuration file path for one workspace.
@@ -271,114 +346,50 @@ pub fn load_configuration_file() -> Result<ProviderConfigurationFile, String> {
 /// 将供应商配置文件写回磁盘，并在需要时创建父目录。
 pub fn save_configuration_file(config: &ProviderConfigurationFile) -> Result<(), String> {
     let path = configuration_file_path();
-    let normalized_config = normalize_provider_configuration_for_save(config);
-    let content = serde_json::to_string_pretty(&normalized_config)
+    let content = serde_json::to_string_pretty(config)
         .map_err(|error| format!("序列化供应商配置失败：{}。", error))?;
     crate::atomic_file::write_file_atomically(&path, content.as_bytes())
         .map_err(|error| format!("写入供应商配置失败：{error}。"))
 }
 
-/// Resolves the supported provider definition by identifier.
-/// 根据标识解析受支持的供应商定义。
-pub fn supported_provider_by_id(provider_id: &str) -> Option<&'static SupportedProviderDefinition> {
-    supported_providers()
-        .iter()
-        .find(|definition| definition.id == provider_id)
-}
+#[cfg(test)]
+mod public_ai_connections_tests {
+    use super::{PublicAiConnectionsFile, parse_public_ai_connections_text};
 
-/// Builds picker choices from the supported provider catalog.
-/// 从受支持供应商目录构建选择器选项。
-pub fn supported_provider_choices() -> Vec<ProviderChoice> {
-    supported_providers()
-        .iter()
-        .map(|definition| ProviderChoice {
-            id: definition.id.clone(),
-            name: definition.name.clone(),
-        })
-        .collect()
-}
-
-/// Resolves the full catalog model choices for one provider after merging embedded metadata and user overrides.
-/// 合并内置元数据与用户覆盖后，为某个供应商解析完整目录模型列表。
-pub fn catalog_model_choices(
-    provider_id: &str,
-    config: &ProviderConfigurationFile,
-) -> Vec<ModelChoice> {
-    let mut embedded_models = supported_provider_by_id(provider_id)
-        .map(|definition| definition.models.clone())
-        .unwrap_or_default();
-    apply_provider_reasoning_model_overrides(provider_id, &mut embedded_models);
-
-    let mut catalog = embedded_models.clone();
-
-    if let Some(entry) = config.provider.get(provider_id) {
-        catalog = apply_model_overrides_to_catalog(catalog, &entry.model_overrides);
+    /// Verifies the standalone document round-trips without secrets or runtime catalogs.
+    /// 验证独立文档往返时不包含秘密或运行时目录。
+    #[test]
+    fn standalone_public_ai_document_round_trips_without_runtime_state() {
+        let expected = PublicAiConnectionsFile::default();
+        let text = toml::to_string_pretty(&expected).expect("document must serialize");
+        assert!(!text.contains("secret ="));
+        assert!(!text.contains("catalog"));
+        assert!(!text.contains("models"));
+        let actual = parse_public_ai_connections_text(text.as_str())
+            .expect("version-one document must parse");
+        assert_eq!(actual.schema_version, expected.schema_version);
+        assert_eq!(actual.configuration, expected.configuration);
     }
 
-    apply_provider_reasoning_model_overrides(provider_id, &mut catalog);
-    catalog.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
-    catalog.dedup_by(|left, right| left.id == right.id);
-    catalog
-}
+    /// Verifies unsupported schema revisions are rejected rather than migrated.
+    /// 验证不受支持的 Schema 修订会被拒绝而不是迁移。
+    #[test]
+    fn unsupported_public_ai_schema_is_rejected() {
+        let error = parse_public_ai_connections_text(
+            "schema_version = 2\n\n[configuration.connection_graph]\n",
+        )
+        .expect_err("unsupported schema must fail");
+        assert!(error.contains("Schema 版本 2"));
+    }
 
-/// Resolves the effective enabled model choices for one provider by filtering the full catalog through explicit enabled-model preferences.
-/// 通过显式启用模型偏好过滤完整目录，为某个供应商解析生效可用模型列表。
-pub fn effective_model_choices(
-    provider_id: &str,
-    config: &ProviderConfigurationFile,
-) -> Vec<ModelChoice> {
-    let catalog = catalog_model_choices(provider_id, config);
-    let enabled_ids = resolved_enabled_model_ids(config.provider.get(provider_id), &catalog);
-
-    catalog
-        .into_iter()
-        .filter(|model| enabled_ids.contains(&model.id))
-        .collect()
-}
-
-/// Resolves the explicit enabled-model identifier set for one provider using persisted preferences or first-save defaults.
-/// 使用持久化偏好或首次保存默认值，为某个供应商解析显式启用模型标识集合。
-pub fn enabled_model_ids(
-    provider_id: &str,
-    config: &ProviderConfigurationFile,
-) -> BTreeSet<String> {
-    let catalog = catalog_model_choices(provider_id, config);
-    resolved_enabled_model_ids(config.provider.get(provider_id), &catalog)
-}
-
-/// Parses the active provider/model tuple from the persisted global model string.
-/// 从持久化的全局模型字符串中解析激活的供应商与模型二元组。
-pub fn parse_active_model_reference(model: &str) -> Option<(&str, &str)> {
-    let (provider_id, model_id) = model.split_once('/')?;
-    Some((provider_id, model_id))
-}
-
-/// Returns the remembered OpenRouter endpoint route selection for one exact model identifier.
-/// 返回某个精确模型标识已记忆的 OpenRouter 端点路由选择。
-pub fn openrouter_endpoint_route_for_model(
-    config: &ProviderConfigurationFile,
-    model_id: &str,
-) -> Option<OpenRouterEndpointRouteSelection> {
-    config
-        .openrouter_endpoint_routes
-        .get(model_id)
-        .cloned()
-        .filter(|selection| !selection.is_empty())
-}
-
-/// Persists or clears one remembered OpenRouter endpoint route selection for the given model identifier.
-/// 为指定模型标识持久化保存或清除一条已记忆的 OpenRouter 端点路由选择。
-pub fn set_openrouter_endpoint_route_for_model(
-    config: &mut ProviderConfigurationFile,
-    model_id: impl Into<String>,
-    selection: Option<OpenRouterEndpointRouteSelection>,
-) {
-    let model_id = model_id.into();
-    if let Some(selection) = selection.filter(|selection| !selection.is_empty()) {
-        config
-            .openrouter_endpoint_routes
-            .insert(model_id, selection);
-    } else {
-        config.openrouter_endpoint_routes.remove(model_id.as_str());
+    /// Verifies unknown fields are rejected instead of becoming compatibility aliases.
+    /// 验证未知字段会被拒绝而不是变成兼容别名。
+    #[test]
+    fn unknown_public_ai_fields_are_rejected() {
+        let error = parse_public_ai_connections_text(
+            "schema_version = 1\nlegacy_provider = \"minimax\"\n\n[configuration.connection_graph]\n",
+        )
+        .expect_err("unknown fields must fail");
+        assert!(error.contains("unknown field"));
     }
 }

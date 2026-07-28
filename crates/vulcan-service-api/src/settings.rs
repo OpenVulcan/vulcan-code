@@ -293,6 +293,18 @@ pub struct ProviderSummary {
     /// Stable provider identifier.
     /// 稳定供应商标识。
     pub id: String,
+    /// Exact public provider identifier when this row represents one credential connection.
+    /// 当本行表示一个凭据连接时的精确公共供应商标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_provider_id: Option<String>,
+    /// Exact credential connection identifier for public AI rows.
+    /// 公共 AI 行的精确凭据连接标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_id: Option<String>,
+    /// User-visible account name for public AI rows.
+    /// 公共 AI 行的用户可见账号名。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_name: Option<String>,
     /// Provider display name.
     /// 供应商显示名称。
     pub name: String,
@@ -303,9 +315,6 @@ pub struct ProviderSummary {
     /// 该供应商是否已经保存本地配置。
     #[serde(default)]
     pub configured: bool,
-    /// Enabled model count text.
-    /// 已启用模型数量文本。
-    pub enabled_models: String,
     /// Whether this provider owns the currently active workbench model.
     /// 该供应商是否拥有当前激活的工作台模型。
     #[serde(default)]

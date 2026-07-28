@@ -136,6 +136,7 @@ pub(crate) async fn run_task_with_shared_runtime_context(
     if provider_model_has_override(&request.invocation_config.provider_model) {
         validate_explicit_spawn_model_selector(
             &context.config,
+            context.foundation.as_ref(),
             &request.invocation_config.provider_model,
         )?;
     }
@@ -148,7 +149,11 @@ pub(crate) async fn run_task_with_shared_runtime_context(
         &request.invocation_config,
     )?;
     if !provider_model_has_override(&request.invocation_config.provider_model) {
-        clear_unavailable_profile_model_override(&context.config, &mut resolved_config);
+        clear_unavailable_profile_model_override(
+            &context.config,
+            context.foundation.as_ref(),
+            &mut resolved_config,
+        )?;
     }
     task_runtime_trace(
         "shared_task_config_resolved",
@@ -1035,7 +1040,7 @@ pub(crate) async fn run_task_session_context_compaction(
         .unwrap_or(0);
     let (provider_configuration, _) =
         build_task_runtime_preparation_request(&context, &request, &resolved_config)?;
-    let model_label = provider_configuration.model.clone();
+    let model_label = None;
     let stream = stream_prompt_compaction_foundation_job(PromptCompactionFoundationJobRequest {
         session_id: request.task_id,
         session_title: request.display_title.clone(),
@@ -1048,7 +1053,6 @@ pub(crate) async fn run_task_session_context_compaction(
         provider_configuration,
         model_label,
         reasoning_effort: context.request_template.reasoning_effort,
-        ai_tool_configuration: context.request_template.ai_tool_configuration.clone(),
         foundation: Arc::clone(&context.foundation),
         luaskills_runtime: context.luaskills_runtime.clone(),
     });

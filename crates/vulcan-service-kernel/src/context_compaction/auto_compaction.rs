@@ -460,23 +460,7 @@ pub(crate) fn build_webui_context_compaction_job_request(
         .as_ref()
         .map(|workspace| workspace_path_for_session(workspace, session_id))
         .unwrap_or_else(|| normalized_workspace_path_text_from_path(&workspace_root()));
-    let ai_tool_configuration = workspace_snapshot
-        .as_ref()
-        .map(|workspace| {
-            session_ai_tool_configuration_or_default(
-                workspace,
-                session_id,
-                &agent_runtime.ai_tool_configuration,
-            )
-            .clone()
-        })
-        .unwrap_or_else(|| agent_runtime.ai_tool_configuration.clone());
-    let budget_snapshot = context_compaction_budget_snapshot_from_state(
-        state,
-        session_id,
-        &agent_runtime.provider_configuration,
-        &agent_runtime.ai_tool_configuration,
-    );
+    let budget_snapshot = context_compaction_budget_snapshot_from_state(state, session_id);
     Ok(PromptCompactionJobRequest {
         session_id,
         session_title: current_session_title_from_state(state, session_id),
@@ -491,10 +475,9 @@ pub(crate) fn build_webui_context_compaction_job_request(
             budget_snapshot.as_ref(),
         ),
         provider_configuration: agent_runtime.provider_configuration.clone(),
-        model_label: agent_runtime.provider_configuration.model.clone(),
+        model_label: None,
         reasoning_effort: active_reasoning_selection_effort(&agent_runtime.provider_configuration)
             .unwrap_or(ReasoningEffortLevel::Medium),
-        ai_tool_configuration,
         agent_profile_catalog: agent_runtime.agent_profile_catalog.clone(),
         luaskills_runtime: agent_runtime.luaskills_runtime.clone(),
         mcp_runtime_access,

@@ -101,6 +101,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-compression"
+version = "0.4.42"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e79b3f8a79cccc2898f31920fc69f304859b3bd567490f75ebf51ae1c792a9ac"
+dependencies = [
+ "compression-codecs",
+ "compression-core",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
 name = "async-executor"
 version = "1.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -721,6 +733,26 @@ dependencies = [
  "bytes",
  "memchr",
 ]
+
+[[package]]
+name = "compression-codecs"
+version = "0.4.38"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce2548391e9c1929c21bf6aa2680af86fe4c1b33e6cea9ac1cfeec0bd11218cf"
+dependencies = [
+ "brotli",
+ "compression-core",
+ "flate2",
+ "memchr",
+ "zstd",
+ "zstd-safe",
+]
+
+[[package]]
+name = "compression-core"
+version = "0.4.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc14f565cf027a105f7a44ccf9e5b424348421a1d8952a8fc9d499d313107789"
 
 [[package]]
 name = "concurrent-queue"
@@ -4450,12 +4482,14 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
+ "tokio-util",
  "tower 0.5.3",
  "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-streams 0.4.2",
  "web-sys",
  "webpki-roots",
 ]
@@ -4500,7 +4534,7 @@ dependencies = [
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "wasm-streams",
+ "wasm-streams 0.5.0",
  "web-sys",
 ]
 
@@ -6210,12 +6244,17 @@ version = "0.6.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68d6fdd9f81c2819c9a8b0e0cd91660e7746a8e6ea2ba7c6b2b057985f6bcb51"
 dependencies = [
+ "async-compression",
  "bitflags 2.11.1",
  "bytes",
+ "futures-core",
  "futures-util",
  "http",
  "http-body",
+ "http-body-util",
  "pin-project-lite",
+ "tokio",
+ "tokio-util",
  "tower 0.5.3",
  "tower-layer",
  "tower-service",
@@ -6566,6 +6605,8 @@ dependencies = [
  "tokio",
  "uuid",
  "vldb-controller-client",
+ "vulcan-ai-contract",
+ "vulcan-ai-protocols",
  "vulcan-change-set",
  "vulcan-context",
  "vulcan-context-compaction",
@@ -6579,6 +6620,7 @@ dependencies = [
  "vulcan-plugin-runtime",
  "vulcan-prompt-composer",
  "vulcan-prompt-skills",
+ "vulcan-provider-adapters",
  "vulcan-provider-config",
  "vulcan-runtime-assets",
  "vulcan-session-boundary",
@@ -6591,6 +6633,23 @@ dependencies = [
  "vulcan-vmm",
  "vulcan-workbench-model",
  "vulcan-workspace-store",
+]
+
+[[package]]
+name = "vulcan-ai-contract"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "vulcan-ai-protocols"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "vulcan-ai-contract",
 ]
 
 [[package]]
@@ -6780,6 +6839,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "vulcan-provider-adapters"
+version = "0.1.0"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "base64 0.22.1",
+ "futures-util",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "uuid",
+ "vulcan-ai-contract",
+ "vulcan-ai-protocols",
+]
+
+[[package]]
 name = "vulcan-provider-config"
 version = "0.1.0"
 dependencies = [
@@ -6787,7 +6864,9 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "toml 0.8.2",
  "vulcan-core",
+ "vulcan-provider-adapters",
  "vulcan-runtime-assets",
  "vulcan-vmm",
 ]
@@ -6844,6 +6923,7 @@ dependencies = [
  "uuid",
  "vldb-controller-client",
  "vulcan-agent-runtime",
+ "vulcan-ai-contract",
  "vulcan-context",
  "vulcan-context-compaction",
  "vulcan-context-injection",
@@ -6854,6 +6934,7 @@ dependencies = [
  "vulcan-luaskills-config",
  "vulcan-plugin-runtime",
  "vulcan-prompt-skills",
+ "vulcan-provider-adapters",
  "vulcan-provider-config",
  "vulcan-runtime-assets",
  "vulcan-service-api",
@@ -7157,6 +7238,19 @@ dependencies = [
  "indexmap 2.14.0",
  "wasm-encoder",
  "wasmparser",
+]
+
+[[package]]
+name = "wasm-streams"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15053d8d85c7eccdbefef60f06769760a563c7f0a9d6902a13d35c7800b0ad65"
+dependencies = [
+ "futures-util",
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
@@ -8344,6 +8438,34 @@ dependencies = [
  "crc32fast",
  "log",
  "simd-adler32",
+]
+
+[[package]]
+name = "zstd"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e91ee311a569c327171651566e07972200e76fcfe2242a4fa446149a3881c08a"
+dependencies = [
+ "zstd-safe",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "7.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f49c4d5f0abb602a93fb8736af2a4f4dd9512e36f7f570d66e65ff867ed3b9d"
+dependencies = [
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-sys"
+version = "2.0.16+zstd.1.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91e19ebc2adc8f83e43039e79776e3fda8ca919132d68a1fed6a5faca2683748"
+dependencies = [
+ "cc",
+ "pkg-config",
 ]
 
 [[package]]

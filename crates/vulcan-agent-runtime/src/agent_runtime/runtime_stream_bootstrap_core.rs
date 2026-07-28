@@ -12,7 +12,6 @@ use crate::agent_runtime::provider_request_snapshot_builder::build_core_provider
 use crate::agent_runtime::provider_runtime_context::{
     build_runtime_prompt_layers_for_agent, resolve_runtime_max_turns,
 };
-use crate::agent_runtime::provider_runtime_inputs::resolve_provider_additional_params;
 use crate::agent_runtime::provider_system_update_lowering::{
     ProviderSystemUpdateLoweringPolicy, lower_provider_system_update,
     provider_system_update_repair_event,
@@ -140,8 +139,8 @@ pub(crate) fn build_runtime_bootstrap_core(
     core_snapshot.messages =
         core_messages_to_provider_visible_history_for_model_with_system_updates(
             &core_snapshot.messages,
-            Some(preparation.model_blueprint.api_family()),
-            Some(&preparation.model_blueprint.capabilities),
+            Some(preparation.model_blueprint.protocol_profile_id.as_str()),
+            Some(&preparation.model_blueprint.public_capabilities),
             &preparation.runtime_system_updates,
             system_update_policy,
         )?;
@@ -155,7 +154,7 @@ pub(crate) fn build_runtime_bootstrap_core(
             &system_preamble,
             runtime_prompt.provider_layers.clone(),
             resolve_runtime_max_turns(active_agent, preparation.prompt_purpose),
-            resolve_provider_additional_params(&preparation.model_blueprint),
+            None,
         ),
         core_snapshot.clone(),
     )
@@ -177,7 +176,10 @@ fn collect_system_update_lowering_repairs(
     updates: &[vulcan_context::RuntimeSystemUpdateEvent],
     policy: ProviderSystemUpdateLoweringPolicy,
 ) -> Vec<RuntimeProviderLoweringRepairEvent> {
-    let provider_family = preparation.model_blueprint.api_family_key().to_string();
+    let provider_family = preparation
+        .model_blueprint
+        .protocol_profile_key()
+        .to_string();
     updates
         .iter()
         .filter_map(|update| {
@@ -235,8 +237,8 @@ pub(crate) async fn seed_runtime_request_snapshot(
                 RequestContextCompactionBudgetSnapshotInput {
                     provider_id: &preparation.model_blueprint.provider_id,
                     model_id: &preparation.model_blueprint.model_id,
-                    api_family: preparation.model_blueprint.api_family(),
-                    capabilities: &preparation.model_blueprint.capabilities,
+                    protocol_profile_id: &preparation.model_blueprint.protocol_profile_id,
+                    capabilities: &preparation.model_blueprint.public_capabilities,
                     reasoning: &preparation.model_blueprint.reasoning,
                     request_snapshot: &request_snapshot,
                     compaction_policy: preparation.context_compaction_policy,

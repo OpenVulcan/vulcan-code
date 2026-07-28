@@ -50,123 +50,165 @@ pub(crate) fn setting_section(
     }
 }
 
-/// Creates provider summaries from the local catalog surface.
-/// 从本地目录面创建 Provider 摘要。
-pub(crate) fn providers(
-    provider_configuration: &ProviderConfigurationFile,
-) -> Vec<ProviderSummary> {
-    let active_model_reference = provider_configuration
-        .model
-        .as_deref()
-        .and_then(provider_config::parse_active_model_reference)
-        .map(|(provider_id, model_id)| (provider_id.to_string(), model_id.to_string()));
-    let mut providers = provider_config::supported_providers()
-        .iter()
-        .map(|definition| {
-            let configured = provider_configuration.provider.contains_key(&definition.id);
-            let enabled_ids =
-                provider_config::enabled_model_ids(&definition.id, provider_configuration);
-            let catalog_models =
-                provider_config::catalog_model_choices(&definition.id, provider_configuration)
-                    .into_iter()
-                    .map(|model_choice| {
-                        let catalog_model_id = model_choice.id;
-                        let reasoning_profile_json = model_choice
-                            .reasoning_profile
-                            .as_ref()
-                            .and_then(|profile| serde_json::to_string_pretty(profile).ok());
-                        let active = active_model_reference.as_ref().is_some_and(
-                            |(active_provider_id, active_model_id)| {
-                                active_provider_id == &definition.id
-                                    && active_model_id == &catalog_model_id
-                            },
-                        );
-                        let secondary_route = (definition.id == "openrouter")
-                            .then(|| {
-                                provider_config::openrouter_endpoint_route_for_model(
-                                    provider_configuration,
-                                    &catalog_model_id,
-                                )
-                            })
-                            .flatten()
-                            .map(|selection| {
-                                provider_secondary_route_summary_from_openrouter_selection(
-                                    &definition.id,
-                                    &catalog_model_id,
+/// Projects credential-scoped public AI catalogs into the shared model-picker shape.
+/// 把凭据作用域公共 AI 目录投影为共享模型选择器结构。
+///
+/// # Parameters
+/// 参数
+/// `configuration` owns connection selection and `runtime` owns memory-only catalogs.
+/// `configuration` 持有连接选择，`runtime` 持有仅内存目录。
+///
+/// # Returns
+/// 返回值
+/// One provider row per credential connection so duplicate model accounts remain explicit.
+/// 每个凭据连接对应一行供应商，使重复模型账号保持明确。
+pub(crate) fn public_ai_provider_rows(
+    configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+) -> Result<Vec<ProviderSummary>, String> {
+    let catalogs = runtime.catalog_snapshot()?;
+    let errors = runtime.catalog_error_snapshot()?;
+    let mut rows = Vec::new();
+    for connection in configuration.connection_graph.connections.values() {
+        let provider = runtime
+            .providers()
+            .provider(connection.provider_id.as_str())
+            .ok_or_else(|| format!("Provider `{}` is not registered.", connection.provider_id))?;
+        let models = catalogs
+            .get(connection.id.as_str())
+            .map(|catalog| {
+                catalog
+                    .models
+                    .iter()
+                    .map(|model| {
+                        let settings_key =
+                            vulcan_provider_adapters::PersistedAiConfiguration::connection_model_key(
+                                connection.id.as_str(),
+                                model.id.as_str(),
+                            );
+                        let secondary_route = configuration
+                            .secondary_routes
+                            .get(settings_key.as_str())
+                            .and_then(|selection| {
+                                provider_secondary_route_summary_from_public_selection(
+                                    connection.provider_id.as_str(),
+                                    model.id.as_str(),
                                     selection,
-                                    active,
                                 )
                             });
+                        let active = configuration.active.as_ref().is_some_and(|active| {
+                            active.provider_id == connection.provider_id
+                                && active.connection_id == connection.id
+                                && active.model_id == model.id
+                        });
                         ProviderModelSummary {
-                            enabled: configured && enabled_ids.contains(&catalog_model_id),
-                            id: catalog_model_id.clone(),
-                            name: model_choice.name,
+                            id: model.id.clone(),
+                            name: model.display_name.clone(),
                             active,
-                            status: model_choice.status,
-                            family: model_choice.family,
-                            context_limit: model_choice.context_limit,
-                            input_limit: model_choice.input_limit,
-                            output_limit: model_choice.output_limit,
-                            reasoning: model_choice.reasoning,
-                            attachment: model_choice.attachment,
-                            input_modalities: model_choice.input_modalities,
-                            output_modalities: model_choice.output_modalities,
-                            reasoning_profile_json,
-                            supports_secondary_routes: definition.id == "openrouter",
+                            enabled: true,
+                            status: None,
+                            family: None,
+                            context_limit: model
+                                .capabilities
+                                .context_limit
+                                .and_then(|value| usize::try_from(value).ok()),
+                            input_limit: None,
+                            output_limit: model
+                                .capabilities
+                                .output_limit
+                                .and_then(|value| usize::try_from(value).ok()),
+                            reasoning: Some(!model.capabilities.reasoning_efforts.is_empty()),
+                            attachment: Some(!model.capabilities.input_resources.is_empty()),
+                            input_modalities: model
+                                .capabilities
+                                .input_resources
+                                .iter()
+                                .map(public_resource_kind_label)
+                                .collect(),
+                            output_modalities: model
+                                .capabilities
+                                .output_resources
+                                .iter()
+                                .map(public_resource_kind_label)
+                                .collect(),
+                            reasoning_profile_json: None,
+                            supports_secondary_routes: connection.provider_id == "openrouter",
                             secondary_route,
                         }
                     })
-                    .collect::<Vec<_>>();
-            let models = catalog_models
-                .iter()
-                .filter(|model| model.enabled)
-                .cloned()
-                .collect::<Vec<_>>();
-            let active = models.iter().any(|model| model.active);
-            ProviderSummary {
-                id: definition.id.clone(),
-                name: definition.name.clone(),
-                status: if configured { "已配置" } else { "未配置" }.to_string(),
-                configured,
-                enabled_models: format!("{} 个已启用模型", models.len()),
-                active,
-                models,
-                catalog_models,
-                fields: provider_fields(definition, provider_configuration),
-            }
-        })
-        .collect::<Vec<_>>();
-    providers.sort_by(|left, right| {
-        left.name
-            .cmp(&right.name)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    providers
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let active = models.iter().any(|model| model.active);
+        let status = errors
+            .get(connection.id.as_str())
+            .map(|error| format!("同步失败：{error}"))
+            .unwrap_or_else(|| {
+                if catalogs.contains_key(connection.id.as_str()) {
+                    String::from("目录可用")
+                } else {
+                    String::from("目录未同步")
+                }
+            });
+        rows.push(ProviderSummary {
+            id: connection.id.clone(),
+            source_provider_id: Some(connection.provider_id.clone()),
+            connection_id: Some(connection.id.clone()),
+            account_name: Some(connection.display_name.clone()),
+            name: format!("{} · {}", provider.display_name, connection.display_name),
+            status,
+            configured: true,
+            active,
+            catalog_models: models.clone(),
+            models,
+            fields: Vec::new(),
+        });
+    }
+    Ok(rows)
 }
 
-/// Creates editable provider field summaries for one provider definition.
-/// 为单个供应商定义创建可编辑字段摘要。
-pub(crate) fn provider_fields(
-    definition: &provider_config::SupportedProviderDefinition,
-    provider_configuration: &ProviderConfigurationFile,
-) -> Vec<ProviderFieldSummary> {
-    let options = provider_configuration
-        .provider
-        .get(&definition.id)
-        .map(|entry| entry.options.clone())
-        .unwrap_or_default();
-    definition
-        .input_fields()
-        .into_iter()
-        .map(|field| ProviderFieldSummary {
-            key: provider_field_request_key(field).to_string(),
-            label: definition.field_label(field).to_string(),
-            placeholder: definition.field_placeholder(field),
-            value: options.get(field),
-            secret: field.is_secret(),
-            required: true,
-        })
-        .collect()
+/// Resolves the active public model capability snapshot without exposing credential material.
+/// 在不暴露凭据材料的前提下解析当前公共模型能力快照。
+///
+/// # Parameters
+/// 参数
+/// `runtime` is the optional process-local public AI runtime.
+/// `runtime` 是可选的进程内公共 AI 运行时。
+///
+/// # Returns
+/// 返回值
+/// The active model capabilities when configuration and selection are both valid.
+/// 当配置与选择均有效时返回当前模型能力。
+pub(crate) fn active_public_ai_model_capabilities(
+    runtime: Option<&vulcan_provider_adapters::PublicAiRuntime>,
+) -> Option<vulcan_ai_contract::ModelCapabilities> {
+    let runtime = runtime?;
+    let configuration = runtime.configuration_snapshot().ok()?;
+    runtime
+        .resolve_active_selection(&configuration)
+        .ok()
+        .map(|selection| selection.model.capabilities)
+}
+
+/// Maps one public resource kind to the established WebUI modality label.
+/// 把一个公共资源类别映射为既有 WebUI 模态标签。
+///
+/// # Parameters
+/// 参数
+/// `kind` is the exact registered public resource kind.
+/// `kind` 是精确注册的公共资源类别。
+///
+/// # Returns
+/// 返回值
+/// A stable lowercase modality label.
+/// 返回稳定的小写模态标签。
+fn public_resource_kind_label(kind: &vulcan_ai_contract::ResourceKind) -> String {
+    match kind {
+        vulcan_ai_contract::ResourceKind::Image => String::from("image"),
+        vulcan_ai_contract::ResourceKind::Audio => String::from("audio"),
+        vulcan_ai_contract::ResourceKind::Video => String::from("video"),
+        vulcan_ai_contract::ResourceKind::File => String::from("file"),
+    }
 }
 
 /// Creates MCP server summaries from the shared provider configuration.

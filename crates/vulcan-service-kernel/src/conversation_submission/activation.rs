@@ -1,7 +1,6 @@
 //! Post-materialization activation for immediate conversation submissions.
 //! 即时会话提交的物化后激活。
 
-use vulcan_provider_config::config::PersistedAiToolConfiguration;
 use vulcan_service_api::{
     ConversationSummary, ConversationSummaryChangedDelta, ServiceEvent, ServiceEventEmitter,
     WorkbenchDelta, WorkbenchDeltaEnvelope,
@@ -12,10 +11,10 @@ use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 use crate::{
     MaterializedPromptSession, PromptSessionMaterializationKind, SharedServiceBridgeState,
     conversation_fork_source_summary_from_session, emit_service_event_with_trace,
-    ensure_session_ai_tool_configuration, ensure_webui_session_runtime_state,
-    is_active_session_run_phase, pending_question_snapshots_from_agent_runtime,
-    refresh_conversation_attention_summary, session_plan_mode_summary_from_runtime_state,
-    session_summary_project_id_owned, workspace_session_summary_for_session,
+    ensure_webui_session_runtime_state, is_active_session_run_phase,
+    pending_question_snapshots_from_agent_runtime, refresh_conversation_attention_summary,
+    session_plan_mode_summary_from_runtime_state, session_summary_project_id_owned,
+    workspace_session_summary_for_session,
 };
 
 /// Initializes one materialized session inside the detached submission workspace.
@@ -27,8 +26,6 @@ use crate::{
 /// `workspace_snapshot` 持有已物化会话并接收运行态默认值。
 /// `materialized_session` carries the exact existing-or-created outcome from materialization.
 /// `materialized_session` 携带物化阶段产生的精确已有或新建结果。
-/// `default_ai_tool_configuration` initializes missing session-scoped capability configuration.
-/// `default_ai_tool_configuration` 初始化缺失的会话级能力配置。
 ///
 /// # Returns
 /// 返回值
@@ -37,17 +34,11 @@ use crate::{
 pub(crate) fn prepare_materialized_submission_session(
     workspace_snapshot: &mut WorkspaceSnapshot,
     materialized_session: &MaterializedPromptSession,
-    default_ai_tool_configuration: &PersistedAiToolConfiguration,
 ) -> Result<(), String> {
-    // session_id is the single identity receiving both runtime defaults.
-    // session_id 是接收两类运行态默认值的唯一身份。
+    // session_id is the single identity receiving runtime defaults.
+    // session_id 是接收运行态默认值的唯一身份。
     let session_id = materialized_session.session_id;
     ensure_webui_session_runtime_state(workspace_snapshot, session_id, None)?;
-    ensure_session_ai_tool_configuration(
-        workspace_snapshot,
-        session_id,
-        default_ai_tool_configuration,
-    );
     Ok(())
 }
 

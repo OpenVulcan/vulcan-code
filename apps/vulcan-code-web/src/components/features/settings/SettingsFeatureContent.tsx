@@ -1,9 +1,3 @@
-import {
-  AiCapabilitySettingsArea,
-} from "@/components/features/settings/ai-capability-target-settings";
-import {
-  AiCapabilityVendorsArea,
-} from "@/components/features/settings/ai-capability-vendor-settings";
 import { LogsArea } from "@/components/features/settings/settings-diagnostics-area";
 import { McpSettingsArea } from "@/components/features/settings/mcp-settings-area";
 import {
@@ -23,11 +17,8 @@ import { NotificationSettingsArea } from "@/components/features/settings/notific
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types";
 import {
   activeSettingsHeaderSummary,
-  settingsSubAreaCapabilityKind,
 } from "@/components/features/settings/settings-navigation";
-import { useI18n } from "@/i18n";
 import type {
-  ProviderSummary,
   SettingsSubAreaId,
   StartupSnapshot,
   WorkbenchSnapshot,
@@ -36,7 +27,6 @@ import type {
 export type { SettingsActionProps } from "@/components/features/settings/settings-action-types";
 export {
   activeSettingsHeaderSummary,
-  settingsSubAreaCapabilityKind,
   settingsSubAreaGroups,
   settingsSubAreas,
   type SettingsHeaderSummary,
@@ -59,24 +49,6 @@ export interface SettingsFeatureContentProps {
   // Service-backed settings page actions.
   // 服务端支持的设置页面动作。
   actions: SettingsActionProps;
-  // Whether the capability target configuration dialog is open.
-  // 能力目标配置弹窗是否打开。
-  capabilityTargetsDialogOpen: boolean;
-  // Provider currently opened in the edit dialog.
-  // 当前在编辑弹窗中打开的模型供应商。
-  editingProvider: ProviderSummary | null;
-  // Whether the enabled-model configuration dialog is open.
-  // 启用模型配置弹窗是否打开。
-  modelListDialogOpen: boolean;
-  // Updates the provider edit dialog target.
-  // 更新模型供应商编辑弹窗目标。
-  onEditingProviderChange: (provider: ProviderSummary | null) => void;
-  // Updates the capability target configuration dialog open state.
-  // 更新能力目标配置弹窗打开状态。
-  onCapabilityTargetsDialogOpenChange: (open: boolean) => void;
-  // Updates the enabled-model configuration dialog open state.
-  // 更新启用模型配置弹窗打开状态。
-  onModelListDialogOpenChange: (open: boolean) => void;
   // Updates the add-provider picker open state.
   // 更新添加模型供应商选择弹窗的打开状态。
   onProviderPickerOpenChange: (open: boolean) => void;
@@ -94,41 +66,16 @@ export interface SettingsFeatureContentProps {
 // SettingsFeatureContent routes settings sub pages to their specialized modules.
 // SettingsFeatureContent 将设置子页面路由到专用模块。
 export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
-  const { t } = useI18n();
   if (props.activeSettingsSubArea === "model-providers") {
     return (
       <ProvidersArea
-        actions={props.actions}
-        editingProvider={props.editingProvider}
-        onEditingProviderChange={props.onEditingProviderChange}
         onProviderPickerOpenChange={props.onProviderPickerOpenChange}
         pickerOpen={props.providerPickerOpen}
-        providers={props.workbench.providers}
       />
     );
   }
   if (props.activeSettingsSubArea === "model-list") {
-    return <ModelListSettingsArea actions={props.actions} dialogOpen={props.modelListDialogOpen} onDialogOpenChange={props.onModelListDialogOpenChange} providers={props.workbench.providers} />;
-  }
-  if (props.activeSettingsSubArea === "ai-vendors") {
-    return <AiCapabilityVendorsArea actions={props.actions} capabilities={props.workbench.aiCapabilities ?? []} catalog={props.workbench.aiCapabilityVendorCatalog ?? []} providers={props.workbench.providers} vendors={props.workbench.aiCapabilityVendors ?? []} />;
-  }
-  const activeCapabilityKind = settingsSubAreaCapabilityKind(props.activeSettingsSubArea);
-  if (activeCapabilityKind) {
-    const header = activeSettingsHeaderSummary(props.activeSettingsSubArea, t);
-    return (
-      <AiCapabilitySettingsArea
-        actions={props.actions}
-        activeArea={props.activeSettingsSubArea}
-        capabilityKind={activeCapabilityKind}
-        capabilities={props.workbench.aiCapabilities ?? []}
-        configDialogOpen={props.capabilityTargetsDialogOpen}
-        headerDescription={header.detail}
-        headerTitle={header.title}
-        onConfigDialogOpenChange={props.onCapabilityTargetsDialogOpenChange}
-        vendors={props.workbench.aiCapabilityVendors ?? []}
-      />
-    );
+    return <ModelListSettingsArea />;
   }
   if (props.activeSettingsSubArea === "mcp-servers") {
     return <McpSettingsArea actions={props.actions} logs={props.workbench.logs} modules={props.workbench.modules} servers={props.workbench.mcpServers ?? []} startup={props.startup} />;
@@ -162,12 +109,8 @@ export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
   }
   return (
     <ProvidersArea
-      actions={props.actions}
-      editingProvider={props.editingProvider}
-      onEditingProviderChange={props.onEditingProviderChange}
       onProviderPickerOpenChange={props.onProviderPickerOpenChange}
       pickerOpen={props.providerPickerOpen}
-      providers={props.workbench.providers}
     />
   );
 }

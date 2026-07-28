@@ -1,9 +1,4 @@
 import type {
-  AiCapabilitySummary,
-  AiCapabilityVendorCatalogSummary,
-  AiCapabilityVendorSummary,
-} from "./ai-capabilities";
-import type {
   AgentSkillsCatalogSummary,
   ComposerAttachmentCapabilitySummary,
   LuaSkillsCatalogSummary,
@@ -173,18 +168,6 @@ export interface WorkbenchSnapshot {
   // Host-owned tool settings resolved from the shared service configuration.
   // 从共享服务配置解析出的宿主自有工具设置。
   hostTools?: HostToolsSettingsSummary;
-  // AI capability route summaries for the composer quick controls.
-  // 输入区快捷控制使用的 AI 能力路由摘要。
-  aiCapabilities?: AiCapabilitySummary[];
-  // Default AI capability route summaries used to reset one session draft.
-  // 用于重置单个会话草稿的默认 AI 能力路由摘要。
-  defaultAiCapabilities?: AiCapabilitySummary[];
-  // Shared AI capability vendor summaries.
-  // 共享 AI 能力供应商摘要。
-  aiCapabilityVendors?: AiCapabilityVendorSummary[];
-  // Shared AI capability vendor catalog choices.
-  // 共享 AI 能力供应商目录选项。
-  aiCapabilityVendorCatalog?: AiCapabilityVendorCatalogSummary[];
   // Attachment capability gates for the composer attachment controls.
   // 输入区附件控件使用的附件能力门控。
   composerAttachmentCapabilities?: ComposerAttachmentCapabilitySummary[];

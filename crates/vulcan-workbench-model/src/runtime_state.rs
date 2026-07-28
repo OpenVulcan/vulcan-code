@@ -6,10 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use vulcan_context::SessionConversationState;
 use vulcan_context_injection::ContextInjectionState;
 use vulcan_core::types::{ConversationAttachment, ProviderUsageSnapshot};
-use vulcan_provider_config::config::{
-    AiToolKind, OpenRouterEndpointRouteSelection, PersistedAiToolConfiguration,
-    PersistedPromptSkillState, ReasoningEffortLevel,
-};
+use vulcan_provider_config::config::{PersistedPromptSkillState, ReasoningEffortLevel};
 use vulcan_session_core::SessionRuntimeKernel;
 use vulcan_vmm::{PostActionRequest, ProfileNodeEntry, VmmConfigLayer};
 

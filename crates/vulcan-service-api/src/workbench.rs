@@ -143,22 +143,6 @@ pub struct WorkbenchSnapshot {
     /// 从共享配置文件解析出的宿主自有工具设置。
     #[serde(default)]
     pub host_tools: HostToolsSettingsSummary,
-    /// AI capability route summaries shown by the composer quick controls.
-    /// 输入区快捷控制展示的 AI 能力路由摘要。
-    #[serde(default)]
-    pub ai_capabilities: Vec<AiCapabilitySummary>,
-    /// Default AI capability route summaries used to reset one session draft.
-    /// 用于重置单个会话草稿的默认 AI 能力路由摘要。
-    #[serde(default)]
-    pub default_ai_capabilities: Vec<AiCapabilitySummary>,
-    /// Shared AI capability vendor summaries shown in settings.
-    /// 设置中展示的共享 AI 能力供应商摘要。
-    #[serde(default)]
-    pub ai_capability_vendors: Vec<AiCapabilityVendorSummary>,
-    /// Shared AI capability vendor catalog choices shown by the add-vendor picker.
-    /// 添加供应商选择器展示的共享 AI 能力供应商目录选项。
-    #[serde(default)]
-    pub ai_capability_vendor_catalog: Vec<AiCapabilityVendorCatalogSummary>,
     /// Composer attachment capability gates resolved by the shared runtime.
     /// 由共享运行时解析出的输入区附件能力门控。
     #[serde(default)]

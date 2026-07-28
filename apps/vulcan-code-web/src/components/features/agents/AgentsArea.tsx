@@ -1385,7 +1385,8 @@ function normalizedAgentEditorDraftFileIdentity(draft: AgentEditorDraft): AgentE
 // modelPickerChoiceExists 返回某个供应商/模型键当前是否可被选择。
 function modelPickerChoiceExists(providers: WorkbenchSnapshot["providers"], value: string): boolean {
   return providers.some((provider) => (provider.models ?? []).some((model) => modelPickerChoiceKey({
-    providerId: provider.id,
+    providerId: provider.sourceProviderId ?? provider.id,
+    connectionId: provider.connectionId ?? "",
     providerName: provider.name,
     modelId: model.id,
     modelName: model.name,

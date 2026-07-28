@@ -67,6 +67,9 @@ pub(crate) struct RuntimeStreamBootstrap {
     /// Provider lowering repair events detected before streaming starts.
     /// 流式执行开始前检测到的 Provider 转换修复事件。
     pub lowering_repair_events: Vec<RuntimeProviderLoweringRepairEvent>,
+    /// Process-local public AI runtime installed by the service.
+    /// 由服务安装的进程内公共 AI 运行时。
+    pub public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
 }
 
 /// Builds the full bootstrap payload required before provider streaming starts.
@@ -166,5 +169,6 @@ pub(crate) async fn bootstrap_runtime_stream(
         core_snapshot,
         core_controller,
         lowering_repair_events,
+        public_ai_runtime: foundation.public_ai_runtime(),
     })
 }

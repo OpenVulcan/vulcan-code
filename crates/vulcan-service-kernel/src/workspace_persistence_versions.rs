@@ -396,23 +396,15 @@ pub(crate) fn parse_session_id(value: &str) -> Option<SessionId> {
 pub(crate) fn parse_reasoning_effort(value: &str) -> Option<ReasoningEffortLevel> {
     match value.trim().to_ascii_lowercase().as_str() {
         "off" => Some(ReasoningEffortLevel::Off),
+        "none" => Some(ReasoningEffortLevel::None),
+        "minimal" => Some(ReasoningEffortLevel::Minimal),
         "low" => Some(ReasoningEffortLevel::Low),
         "medium" => Some(ReasoningEffortLevel::Medium),
         "high" => Some(ReasoningEffortLevel::High),
-        "x-high" | "max" => Some(ReasoningEffortLevel::XHigh),
+        "x-high" | "xhigh" => Some(ReasoningEffortLevel::XHigh),
+        "max" => Some(ReasoningEffortLevel::Max),
+        "ultra" => Some(ReasoningEffortLevel::Ultra),
         _ => None,
-    }
-}
-
-/// Converts one shared reasoning-effort enum into the WebUI wire value.
-/// 将单个共享思考档位枚举转换为 WebUI 传输值。
-pub(crate) fn reasoning_effort_wire_value(effort: ReasoningEffortLevel) -> &'static str {
-    match effort {
-        ReasoningEffortLevel::Off => "off",
-        ReasoningEffortLevel::Low => "low",
-        ReasoningEffortLevel::Medium => "medium",
-        ReasoningEffortLevel::High => "high",
-        ReasoningEffortLevel::XHigh => "x-high",
     }
 }
 
@@ -457,55 +449,92 @@ pub(crate) fn workbench_thinking_display_mode(
 pub(crate) fn active_reasoning_selection_effort(
     provider_configuration: &ProviderConfigurationFile,
 ) -> Option<ReasoningEffortLevel> {
-    let preferred_effort = provider_configuration
-        .workbench_reasoning_effort
-        .unwrap_or(ReasoningEffortLevel::Medium);
-    let (provider_id, model_id) = provider_configuration
-        .model
-        .as_deref()
-        .and_then(provider_config::parse_active_model_reference)?;
-    let definition = provider_config::supported_provider_by_id(provider_id)?;
-    let active_model =
-        provider_config::effective_model_choices(provider_id, provider_configuration)
-            .into_iter()
-            .find(|model| model.id == model_id);
-    Some(
-        definition
-            .reasoning_selection_view(active_model.as_ref(), preferred_effort)
-            .selected_effort,
-    )
+    provider_configuration.workbench_reasoning_effort
 }
 
 /// Builds the WebUI reasoning selector snapshot from the shared provider configuration.
 /// 从共享 Provider 配置构建 WebUI 思考选择器快照。
 pub(crate) fn reasoning_selection(
     provider_configuration: &ProviderConfigurationFile,
+    capabilities: Option<&vulcan_ai_contract::ModelCapabilities>,
 ) -> Option<ReasoningSelectionSummary> {
-    let preferred_effort = provider_configuration
+    let capabilities = capabilities?;
+    if capabilities.reasoning_efforts.is_empty() {
+        return None;
+    }
+    let mut options = vec![ReasoningSelectionOptionSummary {
+        value: String::from("off"),
+        label: String::from("默认"),
+    }];
+    options.extend(
+        capabilities
+            .reasoning_efforts
+            .iter()
+            .copied()
+            .map(|effort| {
+                let level = reasoning_effort_level_from_public(effort);
+                ReasoningSelectionOptionSummary {
+                    value: reasoning_effort_wire_value(level).to_string(),
+                    label: level.compact_label().to_string(),
+                }
+            }),
+    );
+    let configured = provider_configuration
         .workbench_reasoning_effort
-        .unwrap_or(ReasoningEffortLevel::Medium);
-    let (provider_id, model_id) = provider_configuration
-        .model
-        .as_deref()
-        .and_then(provider_config::parse_active_model_reference)?;
-    let definition = provider_config::supported_provider_by_id(provider_id)?;
-    let active_model =
-        provider_config::effective_model_choices(provider_id, provider_configuration)
-            .into_iter()
-            .find(|model| model.id == model_id);
-    let view = definition.reasoning_selection_view(active_model.as_ref(), preferred_effort);
+        .unwrap_or(ReasoningEffortLevel::Off);
+    let configured_value = reasoning_effort_wire_value(configured);
+    let selected_effort = if options
+        .iter()
+        .any(|option| option.value == configured_value)
+    {
+        configured_value.to_string()
+    } else {
+        String::from("off")
+    };
+    let note = (selected_effort != configured_value).then(|| {
+        format!(
+            "当前模型不支持已保存的推理档位“{}”，本次使用模型默认值。",
+            configured.compact_label()
+        )
+    });
     Some(ReasoningSelectionSummary {
-        options: view
-            .options
-            .into_iter()
-            .map(|option| ReasoningSelectionOptionSummary {
-                value: reasoning_effort_wire_value(option.effort).to_string(),
-                label: option.label,
-            })
-            .collect(),
-        selected_effort: reasoning_effort_wire_value(view.selected_effort).to_string(),
-        note: view.note,
+        options,
+        selected_effort,
+        note,
     })
+}
+
+/// Converts one public reasoning level into the shared workbench preference.
+/// 将一个公共推理档位转换为共享工作台偏好。
+fn reasoning_effort_level_from_public(
+    effort: vulcan_ai_contract::ReasoningEffort,
+) -> ReasoningEffortLevel {
+    match effort {
+        vulcan_ai_contract::ReasoningEffort::None => ReasoningEffortLevel::None,
+        vulcan_ai_contract::ReasoningEffort::Minimal => ReasoningEffortLevel::Minimal,
+        vulcan_ai_contract::ReasoningEffort::Low => ReasoningEffortLevel::Low,
+        vulcan_ai_contract::ReasoningEffort::Medium => ReasoningEffortLevel::Medium,
+        vulcan_ai_contract::ReasoningEffort::High => ReasoningEffortLevel::High,
+        vulcan_ai_contract::ReasoningEffort::XHigh => ReasoningEffortLevel::XHigh,
+        vulcan_ai_contract::ReasoningEffort::Max => ReasoningEffortLevel::Max,
+        vulcan_ai_contract::ReasoningEffort::Ultra => ReasoningEffortLevel::Ultra,
+    }
+}
+
+/// Returns the stable WebUI wire value for one workbench reasoning preference.
+/// 返回一个工作台推理偏好的稳定 WebUI 传输值。
+fn reasoning_effort_wire_value(effort: ReasoningEffortLevel) -> &'static str {
+    match effort {
+        ReasoningEffortLevel::Off => "off",
+        ReasoningEffortLevel::None => "none",
+        ReasoningEffortLevel::Minimal => "minimal",
+        ReasoningEffortLevel::Low => "low",
+        ReasoningEffortLevel::Medium => "medium",
+        ReasoningEffortLevel::High => "high",
+        ReasoningEffortLevel::XHigh => "x-high",
+        ReasoningEffortLevel::Max => "max",
+        ReasoningEffortLevel::Ultra => "ultra",
+    }
 }
 
 /// Creates a readable generated session title from the submitted prompt.
@@ -543,9 +572,9 @@ pub(crate) struct FullWorkbenchColdRefreshRequest<'a> {
     /// Provides configured provider and model choices.
     /// 提供已配置的供应商与模型选项。
     pub(crate) provider_configuration: &'a ProviderConfigurationFile,
-    /// Provides persisted AI tool visibility configuration.
-    /// 提供已持久化的 AI 工具可见性配置。
-    pub(crate) ai_tool_configuration: &'a PersistedAiToolConfiguration,
+    /// Provides the process-local public AI runtime and its live model catalogs.
+    /// 提供进程内公共 AI 运行时及其实时模型目录。
+    pub(crate) public_ai_runtime: Option<&'a vulcan_provider_adapters::PublicAiRuntime>,
     /// Carries the canonical workspace state being committed.
     /// 携带即将提交的规范工作区状态。
     pub(crate) workspace_snapshot: WorkspaceSnapshot,
@@ -642,7 +671,7 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         token_budget_runtime,
         mcp_catalog,
         provider_configuration,
-        ai_tool_configuration,
+        public_ai_runtime,
         workspace_snapshot,
         logs,
         subagent_navigation_mode,
@@ -691,24 +720,6 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
                 active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot)?,
                 subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot)?,
             ),
-            SubagentNavigationRefreshMode::Preserve => {
-                let subagent_navigation = subagent_navigation_snapshot_from_cached_state(
-                    &mut guard,
-                    &workspace_snapshot,
-                )?;
-                let active_session_id = preserved_active_surface_session_id(
-                    &workspace_snapshot,
-                    subagent_navigation.as_ref(),
-                );
-                (
-                    surface_messages_for_session_without_subagent_navigation_refresh(
-                        &guard,
-                        &workspace_snapshot,
-                        active_session_id,
-                    ),
-                    subagent_navigation,
-                )
-            }
         };
         webui_trace(
             "store_workbench_surface_ready",
@@ -774,7 +785,7 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         token_budget_runtime,
         mcp_catalog,
         provider_configuration,
-        ai_tool_configuration,
+        public_ai_runtime,
         workspace: &workspace_snapshot,
         vmm_session_states: &vmm_session_states,
         surface_messages: surface_messages.as_slice(),
@@ -859,6 +870,35 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies the backend publishes only effort levels declared by the active model.
+    /// 验证后端只发布当前模型声明的推理档位。
+    #[test]
+    fn reasoning_selector_uses_active_model_capabilities() {
+        let configuration = ProviderConfigurationFile {
+            workbench_reasoning_effort: Some(ReasoningEffortLevel::Ultra),
+            ..ProviderConfigurationFile::default()
+        };
+        let capabilities = vulcan_ai_contract::ModelCapabilities {
+            reasoning_efforts: vec![
+                vulcan_ai_contract::ReasoningEffort::Minimal,
+                vulcan_ai_contract::ReasoningEffort::High,
+            ],
+            ..vulcan_ai_contract::ModelCapabilities::default()
+        };
+        let selection = reasoning_selection(&configuration, Some(&capabilities))
+            .expect("active reasoning levels should create a selector");
+        assert_eq!(
+            selection
+                .options
+                .iter()
+                .map(|option| option.value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["off", "minimal", "high"]
+        );
+        assert_eq!(selection.selected_effort, "off");
+        assert!(selection.note.is_some());
+    }
 
     /// No-op shell host used to construct isolated persistence-version state.
     /// 用于构造隔离持久化版本状态的空操作壳宿主。

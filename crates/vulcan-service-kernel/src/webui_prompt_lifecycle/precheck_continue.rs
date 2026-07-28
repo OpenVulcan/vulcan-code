@@ -179,25 +179,6 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
             current_unix_millis_value().saturating_sub(continue_started_at)
         ),
     );
-    let tool_configuration_started_at = current_unix_millis_value();
-    let session_ai_tool_configuration = session_ai_tool_configuration_or_default(
-        &workspace_snapshot,
-        session_id,
-        &agent_runtime.ai_tool_configuration,
-    );
-    let ai_tool_configuration = effective_ai_tool_configuration_for_prompt_overrides(
-        session_ai_tool_configuration,
-        &start.disabled_ai_capability_kinds,
-        &start.disabled_ai_capability_target_selectors,
-        &start.ai_capability_target_bindings,
-    );
-    webui_after_precheck_trace(
-        "after_precheck_04_tool_config_ready",
-        format!(
-            "session={session_id} elapsed_ms={}",
-            current_unix_millis_value().saturating_sub(tool_configuration_started_at)
-        ),
-    );
     let project_configuration_started_at = current_unix_millis_value();
     let project_configuration = load_project_configuration(&start.workspace_path);
     webui_after_precheck_trace(
@@ -267,7 +248,6 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
                     start,
                     profile_outcome,
                     precheck_outcome,
-                    ai_tool_configuration,
                     project_configuration,
                     runtime_reasoning_effort,
                     provider_reasoning_effort: active_reasoning_selection_effort(
@@ -351,6 +331,8 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         );
     }
     let mut request = continuation.request;
+    request.provider_id_override = agent_runtime.provider_id_override.clone();
+    request.model_id_override = agent_runtime.model_id_override.clone();
     request.controller_runtime = Some(controller_runtime.clone());
     // managedCodebaseMemory is resolved from the live controller authorization table without any workspace-path fallback.
     // managedCodebaseMemory 从实时控制器授权表解析，绝不使用工作区路径回退。

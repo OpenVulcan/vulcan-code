@@ -6,9 +6,6 @@ use crate::agent_runtime::provider_transport_retry::ProviderRetryPolicy;
 use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::model::SessionId;
-use crate::provider_config::{ModelInterleavedCapability, ProviderApiFamily, ProviderRuntimeKind};
-use reqwest::header::HeaderMap;
-use serde_json::Value;
 use std::sync::Arc;
 use vulcan_core::types::{
     ConversationSnapshot as CoreConversationSnapshot,
@@ -33,25 +30,23 @@ pub(crate) enum ProviderTransportTurnStartMode {
 pub(crate) struct ProviderTransportExecutionRequest {
     /// Canonical provider API family used to group transport routing and shared protocol behavior.
     /// 用于归并传输路由与共享协议行为的规范 Provider 接口族。
-    pub(crate) api_family: ProviderApiFamily,
     /// Runtime family used to select the concrete transport adapter implementation.
     /// 用于选择具体传输适配实现的运行时家族类型。
-    pub(crate) runtime_kind: ProviderRuntimeKind,
     /// Stable provider identifier attached to request snapshots and continuation records.
     /// 附着到请求快照与 continuation 记录上的稳定 Provider 标识。
     pub(crate) provider_id: String,
     /// Human-readable runtime label surfaced when a provider family is still unsupported.
     /// 当某个 Provider 家族尚未接通时向外暴露的人类可读运行时标签。
-    pub(crate) runtime_label: String,
     /// Resolved API key passed down to the low-level provider adapter.
     /// 下传给底层 Provider 适配器的已解析 API Key。
-    pub(crate) api_key: String,
     /// Optional base URL override used by providers that support custom endpoints.
     /// 供支持自定义端点的 Provider 使用的可选基础地址覆盖值。
-    pub(crate) base_url: Option<String>,
     /// Stable model identifier used by the target provider transport.
     /// 目标 Provider 传输层使用的稳定模型标识。
     pub(crate) model_id: String,
+    /// Canonical workspace path used for host-owned generated resource materialization.
+    /// 用于宿主自有生成资源落盘的规范工作区路径。
+    pub(crate) workspace_path: String,
     /// Execution mode label carried to invocation-time tool guards.
     /// 传递给调用期工具守卫的执行模式标签。
     pub(crate) execution_mode: String,
@@ -73,9 +68,6 @@ pub(crate) struct ProviderTransportExecutionRequest {
     /// Effective turn budget used by the host-owned controller loop.
     /// 宿主自有控制器循环使用的生效轮次预算。
     pub(crate) max_turns: usize,
-    /// Fully resolved outbound request headers.
-    /// 完整解析后的出站请求头集合。
-    pub(crate) headers: HeaderMap,
     /// Shared tools manager used to construct the host-managed runtime bridge.
     /// 用于构建宿主管理运行时桥接层的共享工具管理器。
     pub(crate) tools_manager: VulcanToolsManager,
@@ -88,15 +80,11 @@ pub(crate) struct ProviderTransportExecutionRequest {
     /// Resolved tool definitions exposed to the provider for the current turn.
     /// 当前回合向 Provider 暴露的已解析工具定义集合。
     pub(crate) resolved_tools: Vec<ResolvedToolDefinition>,
-    /// Optional provider-specific additional parameters already merged by upper layers.
-    /// 已由上层合并完成的可选 Provider 专用附加参数。
-    pub(crate) additional_params: Option<Value>,
     /// Optional provider-facing context injection overlay for the current turn.
     /// 当前回合可选的 Provider 可见上下文注入覆盖层。
     pub(crate) context_injection: Option<CoreProviderContextInjection>,
     /// Optional model-scoped interleaved reasoning capability reused by OpenAI-compatible transports.
     /// 供 OpenAI 兼容传输链路复用的可选模型级交错推理能力描述。
-    pub(crate) interleaved_reasoning: Option<ModelInterleavedCapability>,
     /// Optional request-budget guard evaluated before the exact request is dispatched.
     /// 在精确请求分发前执行的可选请求预算守卫。
     pub(crate) request_budget_guard: Option<ProviderRequestBudgetGuard>,
@@ -120,12 +108,9 @@ pub(crate) struct ProviderTransportExecutionRequest {
 /// Builds one owned provider transport execution request from already resolved runtime inputs.
 /// 根据已经解析完成的运行时输入构建一份自有的 Provider 传输执行请求。
 pub(crate) fn build_provider_transport_execution_request(
-    runtime_kind: ProviderRuntimeKind,
     provider_id: String,
-    runtime_label: String,
-    api_key: String,
-    base_url: Option<&str>,
     model_id: &str,
+    workspace_path: &str,
     execution_mode: &str,
     system_preamble: &str,
     prompt: &str,
@@ -133,14 +118,11 @@ pub(crate) fn build_provider_transport_execution_request(
     core_snapshot: CoreConversationSnapshot,
     temperature: Option<f64>,
     max_turns: usize,
-    headers: HeaderMap,
     task_runtime: Arc<TaskRuntime>,
     tools_manager: VulcanToolsManager,
     session_id: SessionId,
     resolved_tools: Vec<ResolvedToolDefinition>,
-    additional_params: Option<Value>,
     context_injection: Option<CoreProviderContextInjection>,
-    interleaved_reasoning: Option<ModelInterleavedCapability>,
     request_budget_guard: Option<ProviderRequestBudgetGuard>,
     retry_policy: ProviderRetryPolicy,
     prompt_intervention: Option<RuntimePromptIntervention>,
@@ -149,13 +131,9 @@ pub(crate) fn build_provider_transport_execution_request(
     tool_request_rejection_tool_ids: Vec<String>,
 ) -> ProviderTransportExecutionRequest {
     ProviderTransportExecutionRequest {
-        api_family: runtime_kind.api_family(),
-        runtime_kind,
         provider_id,
-        runtime_label,
-        api_key,
-        base_url: base_url.map(ToString::to_string),
         model_id: model_id.to_string(),
+        workspace_path: workspace_path.to_string(),
         execution_mode: execution_mode.to_string(),
         system_preamble: system_preamble.to_string(),
         prompt: prompt.to_string(),
@@ -163,14 +141,11 @@ pub(crate) fn build_provider_transport_execution_request(
         core_snapshot,
         temperature,
         max_turns,
-        headers,
         task_runtime,
         tools_manager,
         session_id,
         resolved_tools,
-        additional_params,
         context_injection,
-        interleaved_reasoning,
         request_budget_guard,
         retry_policy,
         prompt_intervention,

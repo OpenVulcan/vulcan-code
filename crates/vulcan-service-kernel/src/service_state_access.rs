@@ -8,6 +8,11 @@ use super::*;
 static PROVIDER_CONFIGURATION_TRANSACTION_LOCK: tokio::sync::Mutex<()> =
     tokio::sync::Mutex::const_new(());
 
+/// Serializes standalone public AI connection-file transactions.
+/// 串行化独立公共 AI 连接文件事务。
+static PUBLIC_AI_CONFIGURATION_TRANSACTION_LOCK: tokio::sync::Mutex<()> =
+    tokio::sync::Mutex::const_new(());
+
 /// Retains weak per-file locks so unrelated project configurations can be saved concurrently.
 /// 保留按文件划分的弱引用锁，使无关项目配置可以并发保存。
 static PROJECT_CONFIGURATION_TRANSACTION_LOCKS: std::sync::LazyLock<
@@ -165,27 +170,6 @@ pub(crate) fn current_workspace_snapshot_from_shared_state(
     state: &SharedServiceBridgeState,
 ) -> Result<Option<WorkspaceSnapshot>, String> {
     current_workspace_snapshot_from_state(state)
-}
-
-/// Clones the latest in-memory workbench snapshot retained by the service bridge.
-/// 克隆服务桥接层保留的最近内存工作台快照。
-///
-/// # Parameters
-/// 参数
-/// `state` owns the retained service bridge state.
-/// `state` 持有保留的服务桥接状态。
-///
-/// # Returns
-/// 返回值
-/// The latest workbench snapshot already emitted by an in-memory mutation.
-/// 返回内存变更已经发出的最近工作台快照。
-pub(crate) fn current_workbench_snapshot_from_state(
-    state: &SharedServiceBridgeState,
-) -> Result<WorkbenchSnapshot, String> {
-    state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))
-        .map(|guard| guard.workbench.clone())
 }
 
 /// Applies one icon mutation to retained project snapshots.
@@ -506,6 +490,93 @@ where
         .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?
         .provider_configuration = configuration.clone();
     Ok(commit(&mut guard, &configuration))
+}
+
+/// Mutates, persists, and publishes one standalone public AI configuration transaction.
+/// 变更、持久化并发布一次独立公共 AI 配置事务。
+///
+/// # Parameters
+/// 参数
+/// `state` resolves the installed runtime, `save_error_context` labels persistence failures, and
+/// `mutate` validates and changes a cloned configuration.
+/// `state` 解析已安装运行时，`save_error_context` 标记持久化失败，`mutate` 校验并变更克隆配置。
+///
+/// # Returns
+/// 返回值
+/// The exact persisted and installed configuration snapshot.
+/// 返回精确的已持久化并已安装配置快照。
+pub(crate) async fn mutate_public_ai_configuration<Mutation>(
+    state: &SharedServiceBridgeState,
+    save_error_context: &str,
+    mutate: Mutation,
+) -> Result<vulcan_provider_adapters::PersistedAiConfiguration, String>
+where
+    Mutation: FnOnce(&mut vulcan_provider_adapters::PersistedAiConfiguration) -> Result<(), String>,
+{
+    let _transaction = PUBLIC_AI_CONFIGURATION_TRANSACTION_LOCK.lock().await;
+    mutate_public_ai_configuration_in_transaction(state, save_error_context, mutate)
+}
+
+/// Acquires exclusive ownership of public AI configuration and credential mutations.
+/// 获取公共 AI 配置与凭据变更的独占所有权。
+///
+/// # Returns
+/// 返回值
+/// A process-wide transaction guard that remains valid until dropped.
+/// 返回一个在释放前始终有效的进程级事务守卫。
+pub(crate) async fn begin_public_ai_configuration_transaction()
+-> tokio::sync::MutexGuard<'static, ()> {
+    PUBLIC_AI_CONFIGURATION_TRANSACTION_LOCK.lock().await
+}
+
+/// Mutates public AI configuration while the caller owns the transaction guard.
+/// 在调用方持有事务守卫期间变更公共 AI 配置。
+///
+/// # Parameters
+/// 参数
+/// `state` resolves the installed runtime, `save_error_context` labels persistence failures, and
+/// `mutate` validates and changes the latest runtime snapshot.
+/// `state` 解析已安装运行时，`save_error_context` 标记持久化失败，`mutate` 校验并变更最新运行时快照。
+///
+/// # Returns
+/// 返回值
+/// The exact persisted and installed configuration snapshot.
+/// 返回精确的已持久化并已安装配置快照。
+pub(crate) fn mutate_public_ai_configuration_in_transaction<Mutation>(
+    state: &SharedServiceBridgeState,
+    save_error_context: &str,
+    mutate: Mutation,
+) -> Result<vulcan_provider_adapters::PersistedAiConfiguration, String>
+where
+    Mutation: FnOnce(&mut vulcan_provider_adapters::PersistedAiConfiguration) -> Result<(), String>,
+{
+    let runtime = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("Failed to lock service state: {error}"))?;
+        std::sync::Arc::clone(
+            &guard
+                .agent_runtime
+                .as_ref()
+                .ok_or_else(|| {
+                    String::from("Service is still starting; public AI runtime is not ready.")
+                })?
+                .public_ai_runtime,
+        )
+    };
+    let mut configuration = runtime.configuration_snapshot()?;
+    mutate(&mut configuration)?;
+    vulcan_provider_config::config::save_public_ai_connections_file(&configuration).map_err(
+        |error| {
+            if save_error_context.is_empty() {
+                error
+            } else {
+                format!("{save_error_context}: {error}")
+            }
+        },
+    )?;
+    runtime.replace_configuration(configuration.clone())?;
+    Ok(configuration)
 }
 
 #[cfg(test)]

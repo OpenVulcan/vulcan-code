@@ -1,8 +1,6 @@
 //! WebUI conversation prompt submission orchestration.
 //! WebUI 会话提示词提交编排逻辑。
 
-use std::collections::BTreeMap;
-
 use uuid::Uuid;
 use vulcan_agent_runtime::workbench_prompt_turn::{
     SharedPromptTurnBeginInput, begin_shared_prompt_turn,
@@ -110,12 +108,6 @@ fn existing_submission_requires_hydration(
 /// `reasoning_effort` 可选覆盖本回合模型推理强度。
 /// `attachments` contains composer attachment summaries to stage into the turn.
 /// `attachments` 包含要加入本回合的输入区附件摘要。
-/// `disabled_ai_capability_kinds` disables selected AI capability kinds for this turn.
-/// `disabled_ai_capability_kinds` 禁用本回合选定 AI 能力类型。
-/// `disabled_ai_capability_target_selectors` disables selected AI capability targets for this turn.
-/// `disabled_ai_capability_target_selectors` 禁用本回合选定 AI 能力目标。
-/// `ai_capability_target_bindings` overrides selected AI capability target ordering.
-/// `ai_capability_target_bindings` 覆盖选定 AI 能力目标排序。
 /// `preauthorized_turn_admission` carries exact ownership from an outer destructive-edit transaction.
 /// `preauthorized_turn_admission` 携带外层破坏性编辑事务的精确所有权。
 /// `existing_session_hydration_policy` controls whether an empty retained session is rehydrated.
@@ -135,9 +127,6 @@ pub(super) async fn service_submit_conversation_prompt(
     execution_mode: Option<String>,
     reasoning_effort: Option<String>,
     attachments: Option<Vec<ComposerAttachmentSummary>>,
-    disabled_ai_capability_kinds: Option<Vec<String>>,
-    disabled_ai_capability_target_selectors: Option<Vec<String>>,
-    ai_capability_target_bindings: Option<BTreeMap<String, String>>,
     preauthorized_turn_admission: Option<ExistingSubmissionAdmissionAuthorization>,
     existing_session_hydration_policy: ExistingSessionHydrationPolicy,
 ) -> Result<SubmitConversationPromptAck, String> {
@@ -254,12 +243,7 @@ pub(super) async fn service_submit_conversation_prompt(
         &mut workspace_snapshot,
     );
     if let ExistingSubmissionQueueDecision::Queue { session_id } =
-        evaluate_existing_submission_queue(
-            &state,
-            &workspace_snapshot,
-            &agent_runtime.provider_configuration,
-            submission_session_id,
-        )?
+        evaluate_existing_submission_queue(&state, &workspace_snapshot, submission_session_id)?
     {
         return queue_existing_submission(
             &app,
@@ -273,7 +257,6 @@ pub(super) async fn service_submit_conversation_prompt(
                 hidden_model_guidance,
                 attachments,
                 reasoning_effort,
-                disabled_ai_capability_kinds,
                 submit_total_started_at,
             },
         );
@@ -312,11 +295,7 @@ pub(super) async fn service_submit_conversation_prompt(
     // kernel_reservation_id binds an existing materialization to the exact admission owner captured before loading.
     // kernel_reservation_id 将已有会话物化结果绑定到加载前捕获的精确准入所有者。
     let kernel_reservation_id = turn_admission.kernel_reservation_id(&materialized_session)?;
-    prepare_materialized_submission_session(
-        &mut workspace_snapshot,
-        &materialized_session,
-        &agent_runtime.ai_tool_configuration,
-    )?;
+    prepare_materialized_submission_session(&mut workspace_snapshot, &materialized_session)?;
     // session_id is copied from the authoritative materialization result after activation consumes its classification.
     // session_id 在激活阶段消费物化分类后，从权威物化结果中复制。
     let session_id = materialized_session.session_id;
@@ -338,13 +317,9 @@ pub(super) async fn service_submit_conversation_prompt(
         &controller_runtime,
         &mut workspace_snapshot,
         session_id,
-        &agent_runtime.ai_tool_configuration,
         SubmissionRuntimeOptionsInput {
             execution_mode,
             reasoning_effort,
-            disabled_ai_capability_kinds,
-            disabled_ai_capability_target_selectors,
-            ai_capability_target_bindings,
         },
     )
     .await?;
@@ -414,10 +389,6 @@ pub(super) async fn service_submit_conversation_prompt(
                 source: PendingSessionPromptSource::UserFollowup,
                 execution_mode: runtime_options.execution_mode,
                 reasoning_effort: runtime_options.reasoning_effort,
-                disabled_ai_capability_kinds: runtime_options.disabled_ai_capability_kinds,
-                disabled_ai_capability_target_selectors: runtime_options
-                    .disabled_ai_capability_target_selectors,
-                ai_capability_target_bindings: runtime_options.ai_capability_target_bindings,
             },
         )
     }?;

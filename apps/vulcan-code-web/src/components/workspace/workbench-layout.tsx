@@ -115,19 +115,11 @@ import {
   toggleProjectPinned,
 } from "@/service/project-actions-service";
 import {
-  removeAiCapabilityVendor,
   removeMcpServerConfiguration,
-  removeProviderConfiguration,
-  saveAiCapabilityTargets,
-  saveAiCapabilityVendor,
   saveGitCommitSettings,
   saveProviderRetrySettings,
   saveMcpServerConfiguration,
-  saveProviderConfiguration,
-  saveProviderEnabledModels,
-  saveProviderModelOverride,
   selectWebuiLocale,
-  setAiCapabilityTargetEnabled,
 } from "@/service/settings-actions-service";
 import {
   installLuaSkill,
@@ -958,7 +950,6 @@ export function WorkbenchLayout(props: {
   });
 
   const {
-    handleSaveAiCapabilityConfiguration,
     handleSaveSessionGoal,
     handleResumeSessionGoal,
     handleClearSessionGoal,
@@ -1708,7 +1699,6 @@ export function WorkbenchLayout(props: {
             }}
             onSlashCommand={handleComposerSlashCommand}
             onSubmitPrompt={handleSubmitConversationPrompt}
-            onSaveAiCapabilityConfiguration={handleSaveAiCapabilityConfiguration}
             onSaveSessionGoal={handleSaveSessionGoal}
             onResumeSessionGoal={handleResumeSessionGoal}
             onClearSessionGoal={handleClearSessionGoal}
@@ -1769,16 +1759,8 @@ export function WorkbenchLayout(props: {
               onSaveVmmConfig: (request) => applySkillWorkbenchAction(() => saveVmmMemoryConfig(request)),
             }}
             settingsActions={{
-              onSaveProvider: (request) => applySkillWorkbenchAction(async () => (await saveProviderConfiguration(request)) ?? workbenchStateRef.current),
-              onRemoveProvider: (providerId) => applySkillWorkbenchAction(async () => (await removeProviderConfiguration(providerId)) ?? workbenchStateRef.current),
-              onSaveProviderEnabledModels: (request) => applySkillWorkbenchAction(async () => (await saveProviderEnabledModels(request)) ?? workbenchStateRef.current),
-              onSaveProviderModelOverride: (request) => applySkillWorkbenchAction(async () => (await saveProviderModelOverride(request)) ?? workbenchStateRef.current),
               onSaveGitCommitSettings: (request) => applySkillWorkbenchAction(async () => (await saveGitCommitSettings(request)) ?? workbenchStateRef.current),
               onSaveProviderRetrySettings: (request) => applySkillWorkbenchAction(async () => (await saveProviderRetrySettings(request)) ?? workbenchStateRef.current),
-              onSaveAiCapabilityVendor: (request) => applySkillWorkbenchAction(async () => (await saveAiCapabilityVendor(request)) ?? workbenchStateRef.current),
-              onRemoveAiCapabilityVendor: (vendorId) => applySkillWorkbenchAction(async () => (await removeAiCapabilityVendor(vendorId)) ?? workbenchStateRef.current),
-              onSetAiCapabilityTargetEnabled: (request) => applySkillWorkbenchAction(async () => (await setAiCapabilityTargetEnabled(request)) ?? workbenchStateRef.current),
-              onSaveAiCapabilityTargets: (request) => applySkillWorkbenchAction(async () => (await saveAiCapabilityTargets(request)) ?? workbenchStateRef.current),
               onSaveMcpServer: (request) => applySkillWorkbenchAction(async () => (await saveMcpServerConfiguration(request as unknown as Record<string, unknown>)) ?? workbenchStateRef.current),
               onRemoveMcpServer: (serverId) => applySkillWorkbenchAction(async () => (await removeMcpServerConfiguration(serverId)) ?? workbenchStateRef.current),
             }}

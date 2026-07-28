@@ -32,17 +32,6 @@ impl ToolCallDraftAssembler {
         }
     }
 
-    /// Appends one exact provider argument fragment to the shared cumulative document.
-    /// 向共享累计文档追加一段精确 Provider 参数碎片。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `fragment` is the next ordered raw JSON fragment.
-    /// `fragment` 是下一段有序原始 JSON 碎片。
-    pub(crate) fn append(&self, fragment: &str) {
-        self.lock_arguments().push_str(fragment);
-    }
-
     /// Replaces the cumulative document with one authoritative provider completion snapshot.
     /// 使用一份权威 Provider 完成快照替换累计文档。
     ///
@@ -63,17 +52,6 @@ impl ToolCallDraftAssembler {
     /// 返回当前精确 UTF-8 字节数。
     pub(crate) fn len(&self) -> usize {
         self.lock_arguments().len()
-    }
-
-    /// Returns whether the cumulative document is currently empty.
-    /// 返回累计文档当前是否为空。
-    ///
-    /// # Returns
-    /// 返回值
-    /// `true` when the shared document contains no bytes.
-    /// 共享文档不包含任何字节时返回 `true`。
-    pub(crate) fn is_empty(&self) -> bool {
-        self.lock_arguments().is_empty()
     }
 
     /// Creates a short-lived immutable snapshot for background tokenization or final JSON parsing.

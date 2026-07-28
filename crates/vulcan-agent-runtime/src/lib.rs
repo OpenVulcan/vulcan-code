@@ -13,11 +13,6 @@
     clippy::result_large_err,
     reason = "runtime launch preparation returns owned terminal reports for existing stream error paths."
 )]
-#![expect(
-    clippy::enum_variant_names,
-    reason = "provider wire-format enums preserve upstream delta naming for serde compatibility."
-)]
-
 pub mod agent_profile;
 pub mod agent_runtime;
 pub mod attachment_asset_index;
@@ -30,18 +25,13 @@ pub mod data_plane {
 
     pub use vulcan_workspace_store::data_plane::*;
 }
-pub mod image_understanding_compat;
 pub mod luaskills_runtime;
 pub mod mcp;
-pub mod media_generation_compat;
 pub mod provider_input_normalizer;
-pub mod router_tool_bridge;
 pub mod session_event_runtime;
 pub mod skills;
 pub mod tooling;
 pub mod turn_stats;
-pub mod web_search_compat;
-pub mod workbench_ai_capability_router;
 pub mod workbench_prompt_turn;
 pub mod workspace_path;
 
@@ -52,15 +42,12 @@ pub use agent_runtime::{
     RuntimePromptIntervention, RuntimePromptInterventionError, RuntimeSkillKind,
     ensure_runtime_defaults, stream_runtime_run, stream_runtime_run_with_intervention,
     stream_runtime_run_with_intervention_and_plugins,
+    stream_runtime_run_with_intervention_plugins_and_public_ai,
 };
 pub use tooling::bridge as vulcan_tools_bridge;
 pub use vulcan_host_tools::project_temp_maintenance;
 pub use vulcan_host_tools::result_format as tool_result_format;
-pub use vulcan_provider_config::ai_tool_configuration;
-pub use vulcan_provider_config::catalog::ai_capability_provider_catalog;
-pub use vulcan_provider_config::{
-    capabilities as provider_capabilities, config as provider_config,
-};
+pub use vulcan_provider_config::config as provider_config;
 pub use vulcan_runtime_assets as runtime_assets;
 pub use vulcan_workbench_model as model;
 pub use vulcan_workspace_store::provider_usage;

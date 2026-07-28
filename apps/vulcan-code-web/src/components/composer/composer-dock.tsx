@@ -3,7 +3,6 @@ import { createPortal } from "react-dom";
 import { ArrowDown } from "lucide-react";
 import { type ModelPickerChoice } from "@/components/composer/model-picker-control";
 import {
-  type ComposerAiCapabilityConfigurationSave,
   type ComposerSlashCommandResult,
   type ComposerSubmission,
 } from "@/components/composer/composer-model";
@@ -23,7 +22,6 @@ import {
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type {
-  AiCapabilitySummary,
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
@@ -45,12 +43,6 @@ export { composerAttachmentMedia } from "@/components/composer/composer-attachme
 // ComposerDock renders composer-related floating controls.
 // ComposerDock 渲染输入区相关的浮动控件。
 export function ComposerDock(props: {
-  // AI capability route summaries used by the composer capability tree.
-  // 输入区能力树使用的 AI 能力路由摘要。
-  aiCapabilities: AiCapabilitySummary[];
-  // Default AI capability route summaries used to reset the session draft.
-  // 用于重置会话草稿的默认 AI 能力路由摘要。
-  defaultAiCapabilities: AiCapabilitySummary[];
   // Attachment capability gates used by composer attachment controls.
   // 输入区附件控件使用的附件能力门控。
   attachmentCapabilities: ComposerAttachmentCapabilitySummary[];
@@ -127,9 +119,6 @@ export function ComposerDock(props: {
   // onSubmitPrompt sends one composer prompt through the workbench runtime.
   // onSubmitPrompt 通过工作台运行时发送一条输入区提示词。
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
-  // onSaveAiCapabilityConfiguration persists one session-scoped capability draft.
-  // onSaveAiCapabilityConfiguration 持久化单个会话级能力草稿。
-  onSaveAiCapabilityConfiguration: (request: ComposerAiCapabilityConfigurationSave) => Promise<boolean>;
   // onSaveSessionGoal persists one user-authored session goal.
   // onSaveSessionGoal 持久化单个用户编写的会话目标。
   onSaveSessionGoal: (objective: string, tokenBudget?: number | null) => Promise<boolean>;
@@ -249,8 +238,6 @@ export function ComposerDock(props: {
         </div>
       ) : null}
       <ComposerPanel
-        aiCapabilities={props.aiCapabilities}
-        defaultAiCapabilities={props.defaultAiCapabilities}
         attachmentCapabilities={props.attachmentCapabilities}
         projectId={props.projectId}
         conversationId={props.conversationId}
@@ -270,7 +257,6 @@ export function ComposerDock(props: {
         onSlashCommand={props.onSlashCommand}
         onOpenKnowledge={props.onOpenKnowledge}
         onSubmitPrompt={props.onSubmitPrompt}
-        onSaveAiCapabilityConfiguration={props.onSaveAiCapabilityConfiguration}
         onSaveSessionGoal={props.onSaveSessionGoal}
         onResumeSessionGoal={props.onResumeSessionGoal}
         onClearSessionGoal={props.onClearSessionGoal}

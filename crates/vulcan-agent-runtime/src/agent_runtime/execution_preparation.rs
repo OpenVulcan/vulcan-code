@@ -4,16 +4,14 @@
 use crate::agent_runtime::execution_models::{
     ExecutionPreparation, ExecutionPreparationRequest, ExecutionPromptPurpose,
 };
-use crate::agent_runtime::provider::resolve_active_provider_blueprint_with_ai_tools;
+use crate::agent_runtime::provider::resolve_public_ai_provider_blueprint;
 use crate::agent_runtime::provider_stream_projection::truncate_preview;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::conversation_protocol::collect_host_visible_attachments;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::provider_config::ProviderConfigurationFile;
 use crate::tooling::native::SUBMIT_PLAN_TOOL_ID;
-use crate::vulcan_tools_bridge::{
-    build_vulcan_tools_manager, resolve_ai_tool_host_binding_aliases,
-};
+use crate::vulcan_tools_bridge::build_vulcan_tools_manager;
 use crate::workspace_path::normalize_workspace_path_text;
 use std::path::PathBuf;
 use vulcan_core::types::ConversationPayload as CoreConversationPayload;
@@ -83,10 +81,14 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     }
 
     let tool_exposure = resolve_execution_tool_exposure(foundation, &active_agent.id, request);
-    let model_blueprint = resolve_active_provider_blueprint_with_ai_tools(
-        config,
+    let public_ai_runtime = foundation
+        .public_ai_runtime()
+        .ok_or_else(|| String::from("The service has not installed the public AI runtime."))?;
+    let model_blueprint = resolve_public_ai_provider_blueprint(
+        public_ai_runtime.as_ref(),
         request.reasoning_effort,
-        &tool_exposure.ai_tool_configuration,
+        request.provider_id_override.as_deref(),
+        request.model_id_override.as_deref(),
     )?;
     let mut warnings = Vec::new();
     let workspace_path = normalize_workspace_path_text(&request.workspace_path);
@@ -141,7 +143,6 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         .filter(|resolved| resolved.is_enabled())
         .map(|resolved| resolved.skill.clone())
         .collect::<Vec<_>>();
-    let ai_tool_host_binding_aliases = resolve_ai_tool_host_binding_aliases(&model_blueprint);
     let project_vmm = if request.runtime_policy.vmm_enabled {
         request.project_vmm.clone()
     } else {
@@ -170,14 +171,11 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         (!workspace_path.is_empty()).then(|| PathBuf::from(workspace_path.clone())),
         request.controller_runtime.clone(),
         request.knowledge_access.clone(),
-        conversation_attachments.clone(),
         tool_exposure.native_tool_ids.clone(),
         tool_exposure.luaskills_tools.clone(),
         implicit_luaskills,
         tool_exposure.mcp_tools.clone(),
         request.managed_codebase_memory.clone(),
-        tool_exposure.ai_tool_configuration.clone(),
-        ai_tool_host_binding_aliases.clone(),
         enabled_prompt_skill_names,
         prepared_prompt_skills,
         prompt_skill_user_root.clone(),
@@ -228,12 +226,6 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     if let Some(reasoning_note) = model_blueprint.reasoning.note.as_ref() {
         warnings.push(reasoning_note.clone());
     }
-
-    push_missing_ai_tool_host_binding_warnings(
-        &mut warnings,
-        &ai_tool_host_binding_aliases,
-        &resolved_tools,
-    );
 
     if !model_blueprint.supports_tool_call() && !resolved_tools.descriptors.is_empty() {
         warnings.push(format!(
@@ -476,29 +468,6 @@ fn remove_request_hidden_tools(
 ) {
     for tool_id in hidden_tool_ids {
         remove_resolved_tool(resolved_tools, tool_id);
-    }
-}
-
-/// Adds non-fatal diagnostics when a configured semantic AI fallback could not be exposed.
-/// 当配置的语义 AI 回退工具无法暴露时追加非致命诊断。
-fn push_missing_ai_tool_host_binding_warnings(
-    warnings: &mut Vec<String>,
-    aliases: &[crate::vulcan_tools_bridge::AiToolHostBindingAlias],
-    resolved_tools: &vulcan_tools_manager::ResolvedToolSet,
-) {
-    for alias in aliases {
-        let semantic_tool_name = alias.kind.key();
-        let exposed = resolved_tools.descriptors.iter().any(|descriptor| {
-            descriptor.source == vulcan_tools_manager::VulcanToolSourceKind::AiHostBinding
-                && descriptor.id == semantic_tool_name
-        });
-        if !exposed {
-            warnings.push(format!(
-                "AI 专用工具 `{}` 已配置回退 `{}`，但本轮未找到可暴露的宿主工具。",
-                alias.kind.label(),
-                alias.host_tool_id
-            ));
-        }
     }
 }
 

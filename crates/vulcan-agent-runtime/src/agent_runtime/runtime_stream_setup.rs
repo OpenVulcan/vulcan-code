@@ -53,9 +53,6 @@ mod tests {
 
     use super::*;
     use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
-    use crate::provider_config::ProviderRuntimeKind;
-    use serde_json::json;
-    use std::collections::BTreeMap;
     use uuid::Uuid;
 
     /// Builds one minimal execution preparation used by startup-batch tests.
@@ -72,20 +69,15 @@ mod tests {
             model_blueprint: ProviderRuntimeBlueprint {
                 provider_id: String::from("openai"),
                 provider_name: String::from("OpenAI"),
-                runtime_kind: ProviderRuntimeKind::OpenAi,
                 runtime_label: String::from("OpenAI"),
                 model_id: String::from("gpt-test"),
                 model_name: String::from("GPT Test"),
-                openrouter_endpoint_route: None,
+                protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+                public_capabilities: vulcan_ai_contract::ModelCapabilities::default(),
                 base_url: Some(String::from("https://api.example.test/v1")),
                 supports_remote_model_refresh: true,
                 credential_source: String::from("环境变量"),
-                user_agent: None,
-                extra_headers: BTreeMap::new(),
-                extra_body: json!({}),
                 reasoning: Default::default(),
-                capabilities: Default::default(),
-                interleaved_reasoning: None,
             },
             prompt_preview: String::from("请分析代码"),
             workspace_path: String::from(r"D:\workspace"),

@@ -364,7 +364,7 @@ mod tests {
             fingerprint: build_context_budget_fingerprint(
                 "openai",
                 "gpt-5",
-                crate::ContextProviderApiFamily::OpenAiResponses,
+                "openai.responses.v1",
                 &crate::ContextBudgetCapabilities::default(),
                 crate::ContextReasoningEffort::None,
                 0,

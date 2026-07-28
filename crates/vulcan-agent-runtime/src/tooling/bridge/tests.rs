@@ -2,17 +2,10 @@
 //! 面向语义 AI 回退别名的宿主桥接层测试。
 
 use super::{
-    AiToolHostBindingAlias, append_ai_tool_host_binding_aliases,
     build_luaskills_dispatch_candidate, build_luaskills_help_candidate, build_vulcan_tools_manager,
-    configured_understand_image_candidate, inject_host_managed_pwd_if_needed,
-    luaskills_entry_to_call_view,
+    inject_host_managed_pwd_if_needed, luaskills_entry_to_call_view,
 };
 use crate::luaskills_runtime::PWD_PARAMETER_NAME;
-use crate::provider_config::{
-    AiToolKind, PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
-    PersistedAiToolConfiguration, PersistedUnderstandImageConfiguration,
-    UNDERSTAND_IMAGE_HOST_BINDING_TOOL_ID,
-};
 use crate::tooling::build_native_tool_catalog;
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::json;
@@ -20,125 +13,8 @@ use std::path::Path;
 use std::sync::Arc;
 use vulcan_luaskills_prompt::{LUASKILL_HELP_TOOL_NAME, LuaSkillPromptEntry};
 use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
-use vulcan_tools_manager::{
-    VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolInvocationResult,
-    VulcanToolSourceKind, VulcanToolsManager,
-};
+use vulcan_tools_manager::VulcanToolsManager;
 use vulcan_vmm::VmmConfigLayer;
-
-/// Builds one configured image-understanding route used by stable registration tests.
-/// 构建供稳定注册测试使用的一条已配置图片理解路由。
-fn test_understand_image_configuration() -> PersistedAiToolConfiguration {
-    PersistedAiToolConfiguration {
-        vendors: vec![PersistedAiCapabilityVendorEntry {
-            id: String::from("minimax"),
-            vendor_id: String::from("minimax"),
-            name: String::from("MiniMax"),
-            enabled: true,
-            api_key: String::from("token"),
-            connection_mode: None,
-            base_url: String::new(),
-            region: String::from("global"),
-            targets: vec![PersistedAiCapabilityTargetBinding::new(
-                AiToolKind::UnderstandImage,
-                "minimax",
-                "minimax",
-            )],
-        }],
-        understand_image: PersistedUnderstandImageConfiguration {
-            selected_target: Some(String::from("minimax/minimax")),
-            ..PersistedUnderstandImageConfiguration::default()
-        },
-        ..PersistedAiToolConfiguration::default()
-    }
-}
-
-/// Builds one inert host-tool candidate used by fallback alias tests.
-/// 构建一条供回退别名测试使用的惰性宿主工具候选项。
-fn test_candidate(id: &str, source: VulcanToolSourceKind) -> VulcanToolCandidate {
-    VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor {
-            id: id.to_string(),
-            name: id.to_string(),
-            description: String::from("Search the web"),
-            help_text: None,
-            source,
-        },
-        parameters_schema: json!({
-            "type": "object",
-            "properties": {
-                "query": { "type": "string" }
-            },
-            "required": ["query"]
-        }),
-        ai_visible: true,
-        plan_policy: VulcanPlanToolPolicy::Visible,
-        request_streaming: None,
-        invoke: Arc::new(|_args, _session_id| {
-            Box::pin(async { Ok(VulcanToolInvocationResult::from_model_output(json!("ok"))) })
-        }),
-    }
-}
-
-/// Verifies a configured host fallback is exposed as the semantic AI tool and the backing tool is not duplicated.
-/// 验证已配置的宿主回退会以语义 AI 工具暴露，并且不会重复暴露底层承载工具。
-#[test]
-fn ai_tool_fallback_alias_exposes_semantic_name_without_backing_duplicate() {
-    let mut candidates = vec![test_candidate("brave-search", VulcanToolSourceKind::Mcp)];
-
-    append_ai_tool_host_binding_aliases(
-        &mut candidates,
-        vec![AiToolHostBindingAlias {
-            kind: AiToolKind::WebSearch,
-            host_tool_id: String::from("mcp_brave_search"),
-        }],
-    );
-
-    let resolved = VulcanToolsManager::new(candidates).resolve_for_execution_mode("Build");
-    assert_eq!(resolved.descriptors.len(), 1);
-    assert_eq!(resolved.descriptors[0].id, "web_search");
-    assert_eq!(resolved.descriptors[0].description, "Search the web");
-    assert_eq!(
-        resolved.descriptors[0].source,
-        VulcanToolSourceKind::AiHostBinding
-    );
-    assert_eq!(
-        resolved.definitions[0].parameters_schema["properties"]["query"]["type"],
-        "string"
-    );
-}
-
-/// Verifies configured image understanding remains exposed as a semantic fallback tool even before any image attachment exists.
-/// 验证已配置的图片理解即使当前还没有图片附件，也会稳定暴露为语义回退工具。
-#[test]
-fn understand_image_fallback_alias_is_registered_without_image_attachments() {
-    let candidate =
-        configured_understand_image_candidate(test_understand_image_configuration(), Vec::new())
-            .expect("configured image understanding should produce a backing tool");
-    let mut candidates = vec![candidate];
-
-    append_ai_tool_host_binding_aliases(
-        &mut candidates,
-        vec![AiToolHostBindingAlias {
-            kind: AiToolKind::UnderstandImage,
-            host_tool_id: String::from(UNDERSTAND_IMAGE_HOST_BINDING_TOOL_ID),
-        }],
-    );
-
-    let resolved = VulcanToolsManager::new(candidates).resolve_for_execution_mode("Build");
-
-    assert_eq!(resolved.descriptors.len(), 1);
-    assert_eq!(resolved.descriptors[0].id, "understand_image");
-    assert_eq!(
-        resolved.descriptors[0].source,
-        VulcanToolSourceKind::AiHostBinding
-    );
-    assert!(
-        resolved.definitions[0].parameters_schema["properties"]["image"]
-            .get("enum")
-            .is_none()
-    );
-}
 
 /// Verifies host-managed PWD injection uses the native workspace-path format expected by LuaSkills host conventions.
 /// 验证宿主管理 PWD 注入会使用 LuaSkills 宿主公约要求的原生工作区路径格式。
@@ -286,15 +162,12 @@ fn vmm_memory_tools_are_filtered_by_effective_config() {
         None,
         None,
         None,
-        Vec::new(),
         base_ids.clone(),
         Vec::new(),
         Vec::new(),
         Vec::new(),
         None,
         Default::default(),
-        Vec::new(),
-        Vec::new(),
         Vec::new(),
         None,
         Vec::new(),
@@ -322,15 +195,12 @@ fn vmm_memory_tools_are_filtered_by_effective_config() {
         None,
         None,
         None,
-        Vec::new(),
         base_ids,
         Vec::new(),
         Vec::new(),
         Vec::new(),
         None,
         Default::default(),
-        Vec::new(),
-        Vec::new(),
         Vec::new(),
         None,
         Vec::new(),

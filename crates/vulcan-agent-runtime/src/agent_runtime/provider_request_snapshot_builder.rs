@@ -9,7 +9,6 @@ use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_pro
 use crate::agent_runtime::provider_request_bridge_tools::resolved_tool_definition_to_core_tool_schema;
 use crate::agent_runtime::provider_request_controller_config::build_core_controller_config_with_layers;
 use crate::agent_runtime::provider_request_snapshot_preview::CoreRequestPreviewProviderAdapter;
-use crate::agent_runtime::provider_request_snapshot_support::serialize_provider_request_headers;
 use crate::agent_runtime::provider_system_update_lowering::ProviderSystemUpdateLoweringPolicy;
 use crate::agent_runtime::provider_visible_agent_messages::append_provider_visible_agent_messages_to_core_snapshot;
 use crate::conversation_protocol::SessionConversationState;
@@ -32,15 +31,6 @@ pub(crate) async fn build_core_provider_request_snapshot(
     resolved_tools: &[ResolvedToolDefinition],
     max_turns_override: Option<usize>,
 ) -> Result<CoreProviderRequestSnapshot, String> {
-    let request_headers =
-        crate::agent_runtime::provider_runtime_inputs::build_provider_request_headers(
-            &preparation.model_blueprint,
-        )?;
-    let serialized_headers = serialize_provider_request_headers(&request_headers);
-    let additional_params =
-        crate::agent_runtime::provider_runtime_inputs::resolve_provider_additional_params(
-            &preparation.model_blueprint,
-        );
     let tool_schemas = resolved_tools
         .iter()
         .map(resolved_tool_definition_to_core_tool_schema)
@@ -49,8 +39,8 @@ pub(crate) async fn build_core_provider_request_snapshot(
     core_snapshot.messages =
         core_messages_to_provider_visible_history_for_model_with_system_updates(
             &core_snapshot.messages,
-            Some(preparation.model_blueprint.api_family()),
-            Some(&preparation.model_blueprint.capabilities),
+            Some(preparation.model_blueprint.protocol_profile_id.as_str()),
+            Some(&preparation.model_blueprint.public_capabilities),
             &preparation.runtime_system_updates,
             ProviderSystemUpdateLoweringPolicy::default(),
         )?;
@@ -64,7 +54,7 @@ pub(crate) async fn build_core_provider_request_snapshot(
             system_preamble,
             prompt_layers,
             max_turns_override,
-            additional_params.clone(),
+            None,
         ),
         core_snapshot,
     )
@@ -74,7 +64,7 @@ pub(crate) async fn build_core_provider_request_snapshot(
         preparation.model_blueprint.provider_id.clone(),
         preparation.model_blueprint.model_id.clone(),
         preview_prompt,
-        serialized_headers,
+        None,
         tool_schemas,
     );
 

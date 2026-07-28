@@ -67,6 +67,15 @@ export interface ProviderSummary {
   // Stable provider identifier.
   // 稳定 Provider 标识。
   id: string;
+  // Exact provider adapter identifier for credential-scoped rows.
+  // 凭据作用域行的精确供应商适配器标识。
+  sourceProviderId?: string;
+  // Exact credential connection identifier.
+  // 精确凭据连接标识。
+  connectionId?: string;
+  // User-visible account label.
+  // 用户可见账号标签。
+  accountName?: string;
   // Provider display name.
   // Provider 显示名称。
   name: string;
@@ -78,7 +87,6 @@ export interface ProviderSummary {
   configured?: boolean;
   // Enabled model count text.
   // 已启用模型数量文本。
-  enabledModels: string;
   // Whether this provider owns the active workbench model.
   // 该 Provider 是否拥有当前激活的工作台模型。
   active?: boolean;

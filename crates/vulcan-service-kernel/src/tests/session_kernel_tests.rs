@@ -240,7 +240,6 @@ async fn webui_pending_prompt_enqueue_does_not_interrupt_active_wait_agent() {
         None,
         Vec::new(),
         None,
-        None,
     )
     .expect("queued prompt should be stored");
 
@@ -282,7 +281,6 @@ fn queued_prompt_hook_waits_for_authoritative_workspace_commit() {
         String::from("queued after commit"),
         None,
         Vec::new(),
-        None,
         None,
     )
     .expect("queued prompt draft should be built");
@@ -337,7 +335,6 @@ fn queued_prompt_hook_lock_failure_preserves_queue_entry() {
         String::from("queue survives hook failure"),
         None,
         Vec::new(),
-        None,
         None,
     )
     .expect("queued prompt draft should be built");

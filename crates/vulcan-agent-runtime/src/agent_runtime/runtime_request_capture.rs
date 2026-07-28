@@ -2,12 +2,13 @@
 //! 面向工作台 API 请求诊断的运行时请求捕获入口。
 
 use crate::agent_profile::AgentProfileCatalog;
+use crate::agent_runtime::ExtensionGeneration;
 use crate::agent_runtime::execution_models::{ExecutionPreparationRequest, ExecutionRunReport};
 use crate::agent_runtime::provider_runtime_dispatch::execute_provider_prompt_capture_stream;
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_transport_request::ProviderTransportTurnStartMode;
 use crate::agent_runtime::question_runtime::QuestionRuntime;
-use crate::agent_runtime::runtime_stream_launch::prepare_runtime_stream_launch;
+use crate::agent_runtime::runtime_stream_launch::prepare_runtime_stream_launch_with_plugins_and_public_ai;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
@@ -39,6 +40,8 @@ use std::sync::Arc;
 /// `command_session_runtime` 是 shell 工具使用的共享命令会话运行时。
 /// `token_budget_runtime` is the shared token-budget runtime used by request assembly.
 /// `token_budget_runtime` 是请求装配使用的共享 token 预算运行时。
+/// `public_ai_runtime` owns the process-local catalogs, routes, and credential boundary.
+/// `public_ai_runtime` 持有进程内目录、路由与凭据边界。
 /// `request` is the simulated execution request to assemble.
 /// `request` 是需要装配的模拟执行请求。
 ///
@@ -55,18 +58,21 @@ pub async fn capture_runtime_provider_wire_request(
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
     token_budget_runtime: Arc<TokenBudgetRuntime>,
+    public_ai_runtime: Arc<vulcan_provider_adapters::PublicAiRuntime>,
     request: ExecutionPreparationRequest,
 ) -> Result<Value, String> {
     let mcp_runtime_access = mcp_runtime.unwrap_or_else(|| configured_mcp_runtime_access(&config));
-    let launch = prepare_runtime_stream_launch(
+    let launch = prepare_runtime_stream_launch_with_plugins_and_public_ai(
         &config,
         &agent_profile_catalog,
         luaskills_runtime,
-        mcp_runtime_access,
+        None,
+        Arc::new(ExtensionGeneration::new(0, None, mcp_runtime_access)),
         task_runtime,
         question_runtime,
         command_session_runtime,
         token_budget_runtime,
+        Some(public_ai_runtime),
         request,
     )
     .await
@@ -91,6 +97,7 @@ pub async fn capture_runtime_provider_wire_request(
         launch.token_budget_runtime,
         launch.tools_manager,
         launch.resolved_tool_definitions,
+        launch.public_ai_runtime,
     );
 
     while let Some(item) = provider_stream.next().await {

@@ -161,13 +161,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
         // activeProviderGoalId 将恰好一次物理请求绑定到其解析后的目标所有者。
         let mut active_provider_goal_id: Option<String> = None;
         let intervention_started_at = current_unix_millis_value();
-        let prompt_ai_tool_configuration = request.ai_tool_configuration.clone();
-        let prompt_intervention = build_webui_prompt_intervention(
-            app.clone(),
-            task_state.clone(),
-            agent_runtime.provider_configuration.clone(),
-            prompt_ai_tool_configuration,
-        );
+        let prompt_intervention = build_webui_prompt_intervention(app.clone(), task_state.clone());
         webui_after_precheck_trace(
             "after_precheck_21_intervention_ready",
             format!(
@@ -180,7 +174,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
             "stream_provider_create_start",
             format!("session={session_id}"),
         );
-        let mut stream = Box::pin(stream_runtime_run_with_intervention_and_plugins(
+        let mut stream = Box::pin(stream_runtime_run_with_intervention_plugins_and_public_ai(
             agent_runtime.provider_configuration.clone(),
             agent_runtime.agent_profile_catalog.clone(),
             agent_runtime.luaskills_runtime.clone(),
@@ -190,6 +184,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
             Arc::clone(&agent_runtime.question_runtime),
             Arc::clone(&agent_runtime.command_session_runtime),
             Arc::clone(&agent_runtime.token_budget_runtime),
+            Some(Arc::clone(&agent_runtime.public_ai_runtime)),
             request.clone(),
             Some(prompt_intervention),
         ));

@@ -2,15 +2,14 @@
 //! 在请求装配完成后、网络发送前使用的 Provider 请求预算守卫。
 
 use crate::agent_runtime::provider_reasoning::ProviderRuntimeReasoningResolution;
-use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
+use crate::agent_runtime::provider_transport_vulcan::VulcanPublicContractRequest;
 use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::context_budget::{
     ContextCompactionPolicy, RequestContextCompactionBudgetSnapshotInput,
     build_request_context_compaction_budget_snapshot,
 };
-use crate::provider_capabilities::ResolvedModelCapabilities;
-use crate::provider_config::ProviderApiFamily;
 use std::sync::Arc;
+use vulcan_ai_contract::ModelCapabilities;
 use vulcan_core::provider::{
     VulcanProviderAdapter, VulcanProviderDeltaSink, VulcanStreamingProviderAdapter,
 };
@@ -31,10 +30,10 @@ pub(crate) struct ProviderRequestBudgetGuard {
     model_id: String,
     /// Canonical provider API family used by context-budget computation.
     /// 上下文预算计算使用的规范 Provider 接口族。
-    api_family: ProviderApiFamily,
+    protocol_profile_id: String,
     /// Resolved provider/model capabilities used to derive budget limits.
     /// 用于推导预算上限的已解析 Provider/Model 能力。
-    capabilities: ResolvedModelCapabilities,
+    capabilities: ModelCapabilities,
     /// Resolved reasoning controls used to reserve thinking tokens.
     /// 用于预留思考 Token 的已解析推理控制。
     reasoning: ProviderRuntimeReasoningResolution,
@@ -55,8 +54,8 @@ impl ProviderRequestBudgetGuard {
     pub(crate) fn new(
         provider_id: impl Into<String>,
         model_id: impl Into<String>,
-        api_family: ProviderApiFamily,
-        capabilities: ResolvedModelCapabilities,
+        protocol_profile_id: impl Into<String>,
+        capabilities: ModelCapabilities,
         reasoning: ProviderRuntimeReasoningResolution,
         context_compaction_policy: Option<ContextCompactionPolicy>,
         context_budget_override: Option<usize>,
@@ -65,7 +64,7 @@ impl ProviderRequestBudgetGuard {
         Self {
             provider_id: provider_id.into(),
             model_id: model_id.into(),
-            api_family,
+            protocol_profile_id: protocol_profile_id.into(),
             capabilities,
             reasoning,
             context_compaction_policy,
@@ -84,7 +83,7 @@ impl ProviderRequestBudgetGuard {
             RequestContextCompactionBudgetSnapshotInput {
                 provider_id: self.provider_id.as_str(),
                 model_id: self.model_id.as_str(),
-                api_family: self.api_family,
+                protocol_profile_id: self.protocol_profile_id.as_str(),
                 capabilities: &self.capabilities,
                 reasoning: &self.reasoning,
                 request_snapshot: snapshot,
@@ -119,6 +118,20 @@ pub(crate) struct BudgetCheckedStreamingAdapter<A> {
     request_budget_guard: Option<ProviderRequestBudgetGuard>,
 }
 
+/// Exposes the canonical request snapshot consumed by the budget guard.
+/// 公开预算门消费的规范请求快照。
+pub(crate) trait ProviderBudgetRequest {
+    /// Returns the exact canonical snapshot represented by this transport request.
+    /// 返回该传输请求所表示的精确规范快照。
+    fn budget_snapshot(&self) -> &CoreProviderRequestSnapshot;
+}
+
+impl ProviderBudgetRequest for VulcanPublicContractRequest {
+    fn budget_snapshot(&self) -> &CoreProviderRequestSnapshot {
+        &self.budget
+    }
+}
+
 impl<A> BudgetCheckedStreamingAdapter<A> {
     /// Wraps one provider adapter with an optional request-budget guard.
     /// 使用可选请求预算守卫包装一个 Provider 适配器。
@@ -133,14 +146,10 @@ impl<A> BudgetCheckedStreamingAdapter<A> {
 #[async_trait::async_trait]
 impl<A> VulcanProviderAdapter for BudgetCheckedStreamingAdapter<A>
 where
-    A: VulcanStreamingProviderAdapter<
-            Request = OpenAiCompatibleCoreTurnRequest,
-            Response = CoreProviderTurnResponse,
-        > + Clone
-        + Send
-        + Sync,
+    A: VulcanStreamingProviderAdapter<Response = CoreProviderTurnResponse> + Clone + Send + Sync,
+    A::Request: ProviderBudgetRequest,
 {
-    type Request = OpenAiCompatibleCoreTurnRequest;
+    type Request = A::Request;
     type Response = CoreProviderTurnResponse;
 
     /// Returns the stable provider identifier used by the wrapped adapter.
@@ -179,7 +188,7 @@ where
     fn validate_built_request(&self, request: &Self::Request) -> Result<(), VulcanCoreError> {
         self.inner.validate_built_request(request)?;
         if let Some(guard) = self.request_budget_guard.as_ref() {
-            guard.validate_snapshot(&request.snapshot)?;
+            guard.validate_snapshot(request.budget_snapshot())?;
         }
         Ok(())
     }
@@ -188,12 +197,8 @@ where
 #[async_trait::async_trait]
 impl<A> VulcanStreamingProviderAdapter for BudgetCheckedStreamingAdapter<A>
 where
-    A: VulcanStreamingProviderAdapter<
-            Request = OpenAiCompatibleCoreTurnRequest,
-            Response = CoreProviderTurnResponse,
-        > + Clone
-        + Send
-        + Sync,
+    A: VulcanStreamingProviderAdapter<Response = CoreProviderTurnResponse> + Clone + Send + Sync,
+    A::Request: ProviderBudgetRequest,
 {
     /// Forwards streaming execution to the wrapped adapter after validation has already passed.
     /// 在校验通过后将流式执行转发给被包装适配器。

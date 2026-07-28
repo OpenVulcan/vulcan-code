@@ -1,13 +1,8 @@
 //! host-side bridge that adapts native, LuaSkills, and MCP runtime sources into the standalone VulcanToolsManager crate.
 //! 将原生工具、LuaSkills 与 MCP 运行时来源适配到独立 VulcanToolsManager crate 的宿主侧桥接层。
 
-use crate::agent_runtime::ai_tool_router::{AiToolRouteKind, resolve_ai_tool_plan};
-use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
 use crate::agent_runtime::question_runtime::{QuestionRuntime, build_question_tool_candidate};
 use crate::agent_runtime::task_runtime::{TaskRuntime, build_subagent_tool_candidates};
-use crate::image_understanding_compat::{
-    configured_understand_image_parameters_schema, execute_configured_understand_image,
-};
 use crate::luaskills_runtime::{
     LUASKILL_SID_PARAMETER_NAME, LUASKILLS_HOST_MANAGED_SID_PREFIX, LuaSkillsRuntimeHandle,
     PWD_PARAMETER_NAME, build_luaskills_tool_invocation_context, build_runlua_tool_candidates,
@@ -20,27 +15,10 @@ use crate::mcp::{
     inject_managed_codebase_memory_context, managed_codebase_memory_public_tool_id,
     model_visible_managed_codebase_memory_schema,
 };
-use crate::media_generation_compat::{
-    configured_image_generation_parameters_schema, configured_music_cover_parameters_schema,
-    configured_music_generation_parameters_schema, configured_speech_synthesis_parameters_schema,
-    configured_video_generation_parameters_schema, execute_configured_image_generation,
-    execute_configured_music_cover, execute_configured_music_generation,
-    execute_configured_speech_synthesis, execute_configured_video_generation,
-};
-use crate::provider_config::{
-    AiToolKind, IMAGE_GENERATION_HOST_BINDING_TOOL_ID, MUSIC_COVER_HOST_BINDING_TOOL_ID,
-    MUSIC_GENERATION_HOST_BINDING_TOOL_ID, PersistedAiToolConfiguration,
-    SPEECH_SYNTHESIS_HOST_BINDING_TOOL_ID, UNDERSTAND_IMAGE_HOST_BINDING_TOOL_ID,
-    VIDEO_GENERATION_HOST_BINDING_TOOL_ID, WEB_SEARCH_HOST_BINDING_TOOL_ID,
-};
-use crate::router_tool_bridge::append_router_contract_tool_candidates;
 use crate::tooling::{
     NativeToolCatalog, NativeToolDescriptor, NativeToolExecutionRequest,
     allocate_unique_public_tool_name, build_direct_public_tool_name,
     build_prefixed_public_tool_name,
-};
-use crate::web_search_compat::{
-    configured_web_search_parameters_schema, execute_configured_web_search,
 };
 use crate::workspace_path::native_workspace_path_text_from_path;
 use luaskills::RuntimeEntryDescriptor;
@@ -49,7 +27,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
-use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 use vulcan_luaskills_prompt::{
     LUASKILL_HELP_TOOL_NAME, LuaSkillPromptEntry, render_luaskill_help_output,
 };
@@ -67,15 +44,9 @@ use vulcan_tools_manager::{
 };
 use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
 
-mod ai_host_binding;
 mod descriptors;
 mod luaskills_dispatch;
 
-#[cfg(test)]
-use ai_host_binding::configured_understand_image_candidate;
-use ai_host_binding::{
-    append_ai_tool_host_binding_aliases, append_configured_ai_tool_backing_candidates,
-};
 use descriptors::{
     entry_declares_luaskill_sid, entry_declares_pwd, luaskills_descriptor_to_vulcan,
     managed_codebase_memory_tool_descriptor, mcp_tool_binding_to_vulcan,
@@ -92,42 +63,6 @@ use luaskills_dispatch::{
 #[cfg(test)]
 mod tests;
 
-/// Shared description suffix that explains how generated-media tools expose export controls and follow-up file paths to the model.
-/// 生成媒体工具共享的描述后缀，用于向模型说明导出控制项以及可复用的后续文件路径。
-const GENERATED_MEDIA_OUTPUT_DESCRIPTION_SUFFIX: &str = " Optional `output_dir` exports a caller-chosen copy. Optional `output_file_stem` suggests the file name without extension. Generated results return `outputs[*].local_path` for follow-up tool calls.";
-
-/// One semantic AI-tool alias bound to one explicitly selected host tool.
-/// 绑定到一个显式选择宿主工具的语义 AI 工具别名。
-#[derive(Debug, Clone)]
-pub struct AiToolHostBindingAlias {
-    /// Stable semantic AI-specialized tool kind exposed to the model.
-    /// 暴露给模型的稳定 AI 专用语义工具类型。
-    pub kind: AiToolKind,
-    /// Concrete host tool identifier that should back the semantic alias.
-    /// 承载该语义别名的具体宿主工具标识。
-    pub host_tool_id: String,
-}
-
-/// Resolves semantic host-tool bindings from one provider/model blueprint.
-/// 从单个 Provider/Model 蓝图解析语义宿主工具绑定。
-pub fn resolve_ai_tool_host_binding_aliases(
-    blueprint: &ProviderRuntimeBlueprint,
-) -> Vec<AiToolHostBindingAlias> {
-    resolve_ai_tool_plan(blueprint)
-        .decisions
-        .into_iter()
-        .filter(|decision| decision.route == AiToolRouteKind::HostBinding)
-        .filter_map(|decision| {
-            decision
-                .host_tool_id
-                .map(|host_tool_id| AiToolHostBindingAlias {
-                    kind: decision.kind,
-                    host_tool_id,
-                })
-        })
-        .collect()
-}
-
 /// Builds one standalone host-owned tools manager from the current host runtime surfaces.
 /// 根据当前宿主运行时工具面构建独立宿主自有工具管理器。
 pub fn build_vulcan_tools_manager(
@@ -140,14 +75,11 @@ pub fn build_vulcan_tools_manager(
     workspace_root: Option<PathBuf>,
     controller_runtime: Option<ControllerRuntimeHandle>,
     knowledge_access: Option<crate::agent_runtime::ExecutionKnowledgeAccessContext>,
-    conversation_attachments: Vec<ConversationAttachment>,
     candidate_native_tool_ids: Vec<String>,
     candidate_luaskills_tools: Vec<RuntimeEntryDescriptor>,
     candidate_luaskills_dispatch_tools: Vec<RuntimeEntryDescriptor>,
     candidate_mcp_tools: Vec<McpRuntimeToolBinding>,
     managed_codebase_memory: Option<ManagedCodebaseMemoryExecutionContext>,
-    ai_tool_configuration: PersistedAiToolConfiguration,
-    ai_tool_host_binding_aliases: Vec<AiToolHostBindingAlias>,
     enabled_prompt_skill_names: Vec<String>,
     prepared_prompt_skills: Vec<vulcan_prompt_skills::PromptSkill>,
     prompt_skill_user_root: Option<PathBuf>,
@@ -514,21 +446,6 @@ pub fn build_vulcan_tools_manager(
             }),
         });
     }
-
-    let router_tool_configuration = ai_tool_configuration.router.clone();
-    let router_workspace_root = workspace_root.clone();
-    append_configured_ai_tool_backing_candidates(
-        &mut candidates,
-        ai_tool_configuration,
-        workspace_root,
-        conversation_attachments,
-    );
-    append_router_contract_tool_candidates(
-        &mut candidates,
-        &router_tool_configuration,
-        router_workspace_root,
-    );
-    append_ai_tool_host_binding_aliases(&mut candidates, ai_tool_host_binding_aliases);
 
     VulcanToolsManager::new(candidates)
 }

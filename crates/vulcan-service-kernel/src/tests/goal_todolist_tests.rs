@@ -697,6 +697,7 @@ fn goal_context_attaches_only_to_the_exact_creation_boundary() {
             payload: SessionConversationPayload::ToolResult {
                 tool_call_id: Some(String::from("create-goal-call")),
                 text: goal_context.prompt_context.clone(),
+                is_error: false,
             },
         });
     let next_prompt = prepend_goal_context_to_current_prompt(

@@ -2,7 +2,6 @@
 //! WebUI 提示词生命周期 pending dispatch 辅助逻辑。
 
 use super::*;
-use crate::conversation_submission::effective_session_disabled_ai_capability_kinds;
 use crate::notify_webui_wait_agent_parent_interruption_if_waiting;
 use crate::pending_prompts::{
     clear_stale_session_goal_pending_prompts, dispatch_queued_pending_prompt_hook,
@@ -200,14 +199,6 @@ pub(crate) async fn maybe_start_webui_mailbox_turn_if_ready(
         mailbox_workspace_started_at,
         format!("session={session_id} source={workspace_source}"),
     );
-    // disabled_ai_capability_kinds keeps mailbox-triggered provider tools identical to ordinary turns in the same session.
-    // disabled_ai_capability_kinds 使 mailbox 触发回合的 Provider 工具与同会话普通回合保持一致。
-    let disabled_ai_capability_kinds = effective_session_disabled_ai_capability_kinds(
-        &workspace_snapshot,
-        session_id,
-        &agent_runtime.ai_tool_configuration,
-        None,
-    )?;
     let Some(session_title) = workspace_snapshot
         .sessions
         .iter()
@@ -241,9 +232,6 @@ pub(crate) async fn maybe_start_webui_mailbox_turn_if_ready(
                 reasoning_effort: active_reasoning_selection_effort(
                     &agent_runtime.provider_configuration,
                 ),
-                disabled_ai_capability_kinds,
-                disabled_ai_capability_target_selectors: BTreeSet::new(),
-                ai_capability_target_bindings: BTreeMap::new(),
             },
         )
     }?;
@@ -376,18 +364,13 @@ pub(crate) async fn pending_prompt_dispatch_readiness(
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     workspace_snapshot: &WorkspaceSnapshot,
-    agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
     has_active_run: bool,
     allow_from_stopped_phase: bool,
     priority_override: bool,
 ) -> Result<PendingPromptDispatchReadiness, String> {
-    let dispatch_context = webui_pending_prompt_dispatch_context(
-        workspace_snapshot,
-        &agent_runtime.provider_configuration,
-        session_id,
-        has_active_run,
-    );
+    let dispatch_context =
+        webui_pending_prompt_dispatch_context(workspace_snapshot, session_id, has_active_run);
     let Some(source) = workspace_snapshot
         .session_runtime_state
         .get(&session_id)

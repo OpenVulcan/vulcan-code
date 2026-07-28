@@ -60,12 +60,8 @@ fn existing_session_activation_commits_summary_and_own_navigation_cleanup() {
 
     // Preparation initializes only the detached workspace and cannot publish sidebar state.
     // 准备阶段只初始化分离工作区，不能发布侧栏状态。
-    prepare_materialized_submission_session(
-        &mut workspace_snapshot,
-        &materialized_session,
-        &PersistedAiToolConfiguration::default(),
-    )
-    .expect("existing session preparation should succeed");
+    prepare_materialized_submission_session(&mut workspace_snapshot, &materialized_session)
+        .expect("existing session preparation should succeed");
     {
         // guard proves detached preparation has not published a revision or cleared live navigation.
         // guard 证明分离准备尚未发布修订号或清理实时导航。
@@ -92,9 +88,7 @@ fn existing_session_activation_commits_summary_and_own_navigation_cleanup() {
     assert!(
         workspace_snapshot
             .session_runtime_state
-            .get(&session_id)
-            .and_then(|runtime_state| runtime_state.ai_tool_configuration.as_ref())
-            .is_some()
+            .contains_key(&session_id)
     );
     // guard observes summary and navigation mutations from the same committed revision.
     // guard 观察同一已提交版本中的摘要与导航修改。
@@ -169,12 +163,8 @@ fn existing_session_activation_preserves_other_parent_panel() {
         kind: PromptSessionMaterializationKind::Existing,
     };
 
-    prepare_materialized_submission_session(
-        &mut workspace_snapshot,
-        &materialized_session,
-        &PersistedAiToolConfiguration::default(),
-    )
-    .expect("existing session preparation should succeed");
+    prepare_materialized_submission_session(&mut workspace_snapshot, &materialized_session)
+        .expect("existing session preparation should succeed");
     commit_materialized_submission_activation(
         &ServiceEventEmitter::new(Vec::new()),
         &state,

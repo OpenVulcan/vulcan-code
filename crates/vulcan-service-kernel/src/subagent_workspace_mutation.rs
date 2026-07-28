@@ -128,9 +128,6 @@ pub(crate) enum SubagentNavigationRefreshMode {
     /// Rebuild subagent navigation from the already-hydrated runtime cache.
     /// 从已经水合完成的运行时缓存重建子代理导航。
     Rebuild,
-    /// Preserve the current subagent navigation while refreshing transcript content.
-    /// 刷新转录内容时保留当前子代理导航。
-    Preserve,
 }
 
 /// Owned input bundle collected under the workspace mutation lock for a later workbench rebuild.
@@ -163,9 +160,9 @@ struct WorkspaceMutationWorkbenchRebuildInputs {
     /// Provider configuration snapshot used to render model and capability choices.
     /// 用于渲染模型与能力选项的 Provider 配置快照。
     provider_configuration: ProviderConfigurationFile,
-    /// AI tool configuration snapshot used to render capability visibility.
-    /// 用于渲染能力可见性的 AI 工具配置快照。
-    ai_tool_configuration: PersistedAiToolConfiguration,
+    /// Process-local public AI runtime used to project live provider and model metadata.
+    /// 用于投影实时供应商与模型元数据的进程内公共 AI 运行时。
+    public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
     /// Surface messages for the active conversation or selected subagent panel.
     /// 当前会话或已选子代理面板的界面消息。
     surface_messages: Vec<SessionMessageEntry>,
@@ -209,24 +206,6 @@ where
         app,
         state,
         SubagentNavigationRefreshMode::Rebuild,
-        mutate,
-    )
-}
-
-/// Mutates the retained workspace snapshot without rebuilding subagent task navigation.
-/// 修改保留的工作区快照但不重建子代理任务导航。
-pub(crate) fn with_workspace_mutation_and_preserved_navigation_full_rebuild_for_cold_path<F>(
-    app: &ServiceEventEmitter,
-    state: &SharedServiceBridgeState,
-    mutate: F,
-) -> Result<WorkspaceSnapshot, String>
-where
-    F: FnOnce(&mut WorkspaceSnapshot),
-{
-    with_workspace_mutation_and_full_workbench_rebuild_for_cold_path_with_subagent_navigation_mode(
-        app,
-        state,
-        SubagentNavigationRefreshMode::Preserve,
         mutate,
     )
 }
@@ -284,11 +263,6 @@ where
             .as_ref()
             .map(|runtime| runtime.provider_configuration.clone())
             .unwrap_or_default();
-        let ai_tool_configuration = guard
-            .agent_runtime
-            .as_ref()
-            .map(|runtime| runtime.ai_tool_configuration.clone())
-            .unwrap_or_default();
         let pending_questions =
             pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref())?;
         let command_session_runtime = guard
@@ -315,21 +289,6 @@ where
                 active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot)?,
                 subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot)?,
             ),
-            SubagentNavigationRefreshMode::Preserve => {
-                let subagent_navigation = guard.workbench.subagent_navigation.clone();
-                let active_session_id = preserved_active_surface_session_id(
-                    &workspace_snapshot,
-                    subagent_navigation.as_ref(),
-                );
-                (
-                    surface_messages_for_session_without_subagent_navigation_refresh(
-                        &guard,
-                        &workspace_snapshot,
-                        active_session_id,
-                    ),
-                    subagent_navigation,
-                )
-            }
         };
         webui_trace_if_slow(
             "workspace_mutation_surface",
@@ -349,6 +308,10 @@ where
             &guard.webui_preloaded_unclosed_subagent_roots,
         );
         let native_tools = native_tool_summaries_from_agent_runtime(guard.agent_runtime.as_ref());
+        let public_ai_runtime = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| Arc::clone(&runtime.public_ai_runtime));
         guard.workspace_snapshot = Some(workspace_snapshot);
         webui_trace_if_slow(
             "workspace_mutation_commit_workspace",
@@ -365,7 +328,7 @@ where
             token_budget_runtime,
             mcp_catalog,
             provider_configuration,
-            ai_tool_configuration,
+            public_ai_runtime,
             surface_messages,
             subagent_navigation,
             pending_questions,
@@ -389,7 +352,7 @@ where
         token_budget_runtime,
         mcp_catalog,
         provider_configuration,
-        ai_tool_configuration,
+        public_ai_runtime,
         surface_messages,
         subagent_navigation,
         pending_questions,
@@ -417,7 +380,7 @@ where
         token_budget_runtime: &token_budget_runtime,
         mcp_catalog: &mcp_catalog,
         provider_configuration: &provider_configuration,
-        ai_tool_configuration: &ai_tool_configuration,
+        public_ai_runtime: public_ai_runtime.as_deref(),
         workspace: &workspace_snapshot,
         vmm_session_states: &vmm_session_states,
         surface_messages: surface_messages.as_slice(),

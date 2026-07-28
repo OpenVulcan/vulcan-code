@@ -1,19 +1,13 @@
 //! Shared prompt-turn reducers used by workbench and service shells.
 //! 工作台与服务外壳共用的提示词轮次归约器。
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt,
-};
+use std::fmt;
 
 use serde_json::Value;
 use time::OffsetDateTime;
 use vulcan_core::types::ConversationAttachment;
 use vulcan_hooks::HookRegistrationSnapshot;
-use vulcan_provider_config::config::{
-    AiToolKind, PersistedAiToolConfiguration, ProjectVulcanCodeConfigurationFile,
-    ReasoningEffortLevel,
-};
+use vulcan_provider_config::config::{ProjectVulcanCodeConfigurationFile, ReasoningEffortLevel};
 use vulcan_session_boundary::{
     SessionBoundaryEvent, SessionBoundaryEventKind, SessionEventScope, SessionEventVisibility,
 };
@@ -119,15 +113,6 @@ pub struct SharedPromptTurnStart {
     /// Reasoning effort requested by the shell command.
     /// 外壳命令请求的推理强度。
     pub reasoning_effort: Option<ReasoningEffortLevel>,
-    /// AI capability kinds disabled for this prompt turn.
-    /// 本次提示词回合禁用的 AI 能力类型。
-    pub disabled_ai_capability_kinds: BTreeSet<AiToolKind>,
-    /// AI capability target selectors disabled for this prompt turn.
-    /// 本次提示词回合禁用的 AI 能力目标选择器。
-    pub disabled_ai_capability_target_selectors: BTreeSet<String>,
-    /// Exact AI capability target bindings requested by this prompt turn.
-    /// 本次提示词回合请求的 AI 能力精确目标绑定。
-    pub ai_capability_target_bindings: BTreeMap<AiToolKind, String>,
     /// session-boundary boundary events produced when this prompt turn is accepted.
     /// 当前提示词回合被接受时生成的 会话边界边界事件。
     pub boundary_events: Vec<SessionBoundaryEvent>,
@@ -156,18 +141,6 @@ impl fmt::Debug for SharedPromptTurnStart {
             .field("attachments", &self.attachments)
             .field("execution_mode", &self.execution_mode)
             .field("reasoning_effort", &self.reasoning_effort)
-            .field(
-                "disabled_ai_capability_kinds",
-                &self.disabled_ai_capability_kinds,
-            )
-            .field(
-                "disabled_ai_capability_target_selectors",
-                &self.disabled_ai_capability_target_selectors,
-            )
-            .field(
-                "ai_capability_target_bindings",
-                &self.ai_capability_target_bindings,
-            )
             .field("boundary_events", &self.boundary_events.len())
             .field(
                 "visible_user_prompt_record_id",
@@ -234,15 +207,6 @@ pub struct SharedPromptTurnBeginInput<'a> {
     /// Reasoning effort requested by the shell command.
     /// 外壳命令请求的推理强度。
     pub reasoning_effort: Option<ReasoningEffortLevel>,
-    /// AI capability kinds disabled for this prompt turn.
-    /// 本次提示词回合禁用的 AI 能力类型。
-    pub disabled_ai_capability_kinds: BTreeSet<AiToolKind>,
-    /// AI capability target selectors disabled for this prompt turn.
-    /// 本次提示词回合禁用的 AI 能力目标选择器。
-    pub disabled_ai_capability_target_selectors: BTreeSet<String>,
-    /// Exact AI capability target bindings requested by this prompt turn.
-    /// 本次提示词回合请求的 AI 能力精确目标绑定。
-    pub ai_capability_target_bindings: BTreeMap<AiToolKind, String>,
 }
 
 /// Runtime-state scoped input required to begin one shared prompt turn.
@@ -287,15 +251,6 @@ pub struct SharedPromptTurnRuntimeBeginInput<'a> {
     /// Reasoning effort requested by the shell command.
     /// 外壳命令请求的推理强度。
     pub reasoning_effort: Option<ReasoningEffortLevel>,
-    /// AI capability kinds disabled for this prompt turn.
-    /// 本次提示词回合禁用的 AI 能力类型。
-    pub disabled_ai_capability_kinds: BTreeSet<AiToolKind>,
-    /// AI capability target selectors disabled for this prompt turn.
-    /// 本次提示词回合禁用的 AI 能力目标选择器。
-    pub disabled_ai_capability_target_selectors: BTreeSet<String>,
-    /// Exact AI capability target bindings requested by this prompt turn.
-    /// 本次提示词回合请求的 AI 能力精确目标绑定。
-    pub ai_capability_target_bindings: BTreeMap<AiToolKind, String>,
     /// Owning project id used by hook routing.
     /// hook 路由使用的所属项目标识。
     pub owning_project_id: Option<String>,
@@ -316,9 +271,6 @@ pub struct SharedPromptTurnContinueInput {
     /// Completed independent profile preparation outcome.
     /// 已完成的独立画像准备结果。
     pub profile_outcome: ConversationProfileOutcome,
-    /// Effective AI tool configuration for the actual provider request.
-    /// 真实 Provider 请求使用的有效 AI 工具配置。
-    pub ai_tool_configuration: PersistedAiToolConfiguration,
     /// Project-local configuration for the execution workspace.
     /// 执行工作区的项目级配置。
     pub project_configuration: ProjectVulcanCodeConfigurationFile,
@@ -396,10 +348,6 @@ pub fn begin_shared_prompt_turn(
                 source: input.source,
                 execution_mode: input.execution_mode,
                 reasoning_effort: input.reasoning_effort,
-                disabled_ai_capability_kinds: input.disabled_ai_capability_kinds,
-                disabled_ai_capability_target_selectors: input
-                    .disabled_ai_capability_target_selectors,
-                ai_capability_target_bindings: input.ai_capability_target_bindings,
                 owning_project_id,
                 prior_session_messages: prior_dialogue_messages.as_deref(),
             },
@@ -603,9 +551,6 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
         attachments: start_attachments,
         execution_mode: input.execution_mode,
         reasoning_effort: input.reasoning_effort,
-        disabled_ai_capability_kinds: input.disabled_ai_capability_kinds,
-        disabled_ai_capability_target_selectors: input.disabled_ai_capability_target_selectors,
-        ai_capability_target_bindings: input.ai_capability_target_bindings,
         boundary_events,
         visible_user_prompt_record_id,
         canonical_user_message_id,
@@ -979,6 +924,8 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         conversation_hook_turn_id: Some(expected_turn_id),
         execution_agent_id: None,
         agent_prompt_snapshot: None,
+        provider_id_override: None,
+        model_id_override: None,
         subagent_prompt_context: None,
         task_session_store_root: None,
         session_title: input.start.session_title,
@@ -996,7 +943,6 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
             .or(input.runtime_reasoning_effort)
             .or(input.provider_reasoning_effort)
             .unwrap_or(ReasoningEffortLevel::Medium),
-        ai_tool_configuration: input.ai_tool_configuration,
         tool_exposure_override: Default::default(),
         tool_request_rejection_reason: None,
         tool_request_rejection_all_tools: false,

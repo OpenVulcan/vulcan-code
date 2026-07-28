@@ -1,5 +1,4 @@
 import React from "react";
-import type { ComposerAiCapabilityConfigurationSave } from "@/components/composer/composer-model";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
 import type {
   ConversationSummary,
@@ -11,7 +10,6 @@ import {
   clearSessionGoal,
   editPendingPrompt,
   resumeSessionGoal,
-  saveSessionAiCapabilityConfiguration,
   saveSessionGoal,
   setSessionPlanMode,
   setSessionVmmPolicy,
@@ -39,8 +37,8 @@ interface WorkbenchSessionActionsOptions {
   mergeWorkbenchWithLocalCaches: (current: WorkbenchSnapshot, incoming: WorkbenchSnapshot) => WorkbenchSnapshot;
 }
 
-// useWorkbenchSessionActions owns active-session AI capability, goal, plan-mode, and prompt-edit callbacks.
-// useWorkbenchSessionActions 持有当前会话 AI 能力、目标、计划模式与提示词编辑回调。
+// useWorkbenchSessionActions owns active-session goal, plan-mode, and prompt-edit callbacks.
+// useWorkbenchSessionActions 持有当前会话目标、计划模式与提示词编辑回调。
 export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptions) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -51,45 +49,6 @@ export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptio
     setWorkbenchState,
     mergeWorkbenchWithLocalCaches,
   } = options;
-  // handleSaveAiCapabilityConfiguration persists the composer capability dialog for the active session.
-  // handleSaveAiCapabilityConfiguration 持久化当前会话的输入区能力弹窗配置。
-  const handleSaveAiCapabilityConfiguration = React.useCallback(async (request: ComposerAiCapabilityConfigurationSave): Promise<boolean> => {
-    const activeProjectId =
-      selectedDraftConversation?.projectId
-      ?? selectedConversation?.projectId
-      ?? null;
-    const activeConversationId = selectedDraftConversation
-      ? null
-      : selectedConversation?.id ?? null;
-    if (!activeProjectId) {
-      toast.error(t("sessionActions.noProjectForCapability"));
-      return false;
-    }
-    if (!activeConversationId) {
-      toast.error(t("sessionActions.noConversationForCapability"));
-      return false;
-    }
-    try {
-      const snapshot = await saveSessionAiCapabilityConfiguration(
-        activeProjectId,
-        activeConversationId,
-        request.disabledAiCapabilityKinds,
-        request.disabledAiCapabilityTargetSelectors,
-        request.aiCapabilityTargetBindings,
-      );
-      if (!snapshot) {
-        toast.info(t("sessionActions.previewCannotSaveCapability"));
-        return false;
-      }
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      toast.success(t("sessionActions.capabilitySaved"));
-      return true;
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-      return false;
-    }
-  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation, t]);
-
   // handleSaveSessionGoal persists one explicit session goal from the composer dialog.
   // handleSaveSessionGoal 从输入区弹窗持久化一个显式会话目标。
   const handleSaveSessionGoal = React.useCallback(async (objective: string, tokenBudget?: number | null): Promise<boolean> => {
@@ -247,7 +206,6 @@ export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptio
   }, []);
 
   return {
-    handleSaveAiCapabilityConfiguration,
     handleSaveSessionGoal,
     handleResumeSessionGoal,
     handleClearSessionGoal,

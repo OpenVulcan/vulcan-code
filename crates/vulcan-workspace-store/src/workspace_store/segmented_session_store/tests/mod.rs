@@ -3,7 +3,6 @@
 
 use super::*;
 use crate::model::SessionRuntimeStateEntry;
-use crate::provider_config::AiToolKind;
 use uuid::Uuid;
 
 /// Builds a unique temporary directory for one segmented-store test.

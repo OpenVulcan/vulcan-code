@@ -156,6 +156,7 @@ fn ensure_webui_session_runtime_state_preserves_goal_bound_canonical_tool_histor
             payload: SessionConversationPayload::ToolResult {
                 tool_call_id: Some(String::from("provider-tool-call-1")),
                 text: String::from("completed"),
+                is_error: false,
             },
         },
     ];

@@ -142,6 +142,9 @@ pub enum SessionConversationPayload {
         /// Optional provider-visible tool-call identifier linked to the result.
         /// 与该结果关联的可选 Provider 可见工具调用标识。
         tool_call_id: Option<String>,
+        /// Whether the host tool execution failed.
+        /// 宿主工具执行是否失败。
+        is_error: bool,
         /// Flattened human-readable tool-result text.
         /// 已扁平化的人类可读工具结果文本。
         text: String,
