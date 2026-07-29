@@ -107,7 +107,7 @@ pub(crate) fn fixed_reasoning_capabilities(
         }
         FixedReasoningProvider::MiniMax => (
             MINIMAX_REASONING_RULES,
-            "minimax-compatible-text-api-2026-07-28",
+            "minimax-compatible-text-openapi-2026-07-30",
         ),
         FixedReasoningProvider::OpenAi => (OPENAI_REASONING_RULES, "openai-model-docs-2026-07-28"),
     };
@@ -280,12 +280,12 @@ const GOOGLE_REASONING_RULES: &[ModelReasoningRule] = &[
     },
 ];
 
-/// MiniMax reasoning is model-owned and exposes no documented effort selector.
-/// MiniMax 思考由模型控制且没有文档化强度选择器。
+/// MiniMax M3 exposes an on/off adaptive-thinking switch while M2.x reasoning remains fixed on.
+/// MiniMax M3 暴露自适应思考开关，而 M2.x 思考保持固定开启。
 const MINIMAX_REASONING_RULES: &[ModelReasoningRule] = &[
     ModelReasoningRule {
         matcher: ModelRuleMatcher::Prefix("MiniMax-M3"),
-        efforts: PROVIDER_DEFAULT_ONLY,
+        efforts: &[ReasoningEffort::None, ReasoningEffort::Adaptive],
     },
     ModelReasoningRule {
         matcher: ModelRuleMatcher::Prefix("MiniMax-M2"),
@@ -356,14 +356,17 @@ mod tests {
         assert!(capabilities.efforts.is_empty());
     }
 
-    /// Verifies MiniMax M3 stays on provider-controlled reasoning without inventing an effort selector.
-    /// 验证 MiniMax M3 保持供应商控制的思考且不虚构强度选择器。
+    /// Verifies MiniMax M3 exposes only the documented disabled/adaptive semantic switch.
+    /// 验证 MiniMax M3 仅暴露文档化的关闭/自适应语义开关。
     #[test]
-    fn minimax_m3_reasoning_is_provider_default_only() {
+    fn minimax_m3_reasoning_exposes_documented_toggle() {
         let capabilities =
             fixed_reasoning_capabilities(FixedReasoningProvider::MiniMax, "MiniMax-M3");
         assert_eq!(capabilities.support, CapabilitySupport::Native);
-        assert!(capabilities.efforts.is_empty());
+        assert_eq!(
+            capabilities.efforts,
+            [ReasoningEffort::None, ReasoningEffort::Adaptive]
+        );
     }
 
     /// Verifies unknown discovered models stay conservative instead of inheriting guessed controls.

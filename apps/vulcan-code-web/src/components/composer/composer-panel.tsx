@@ -56,6 +56,7 @@ import { useComposerModelSelection } from "@/components/composer/composer-panel/
 import { useComposerSlashCommands } from "@/components/composer/composer-panel/use-composer-slash-commands";
 import { useComposerSendController } from "@/components/composer/composer-panel/use-composer-send-controller";
 import { useComposerPlanMode } from "@/components/composer/composer-panel/use-composer-plan-mode";
+import { useComposerDraftSessionSettings } from "@/components/composer/composer-panel/use-composer-draft-session-settings";
 export { ComposerSessionProgressCapsule } from "@/components/composer/composer-panel/progress-capsule";
 // ComposerPanel renders the first-version message input surface.
 // ComposerPanel 渲染第一版消息输入区域。
@@ -222,10 +223,22 @@ export function ComposerPanel(props: {
     restoreInputToSlot,
     replaceDraft,
   } = composerDraft;
+  // draftSessionSettings owns overrides that cannot be persisted until a new conversation materializes.
+  // draftSessionSettings 持有新会话物化前无法持久化的覆盖项。
+  const draftSessionSettings = useComposerDraftSessionSettings(
+    draftSlotKey,
+    props.conversationId,
+  );
 
   // visibleSessionGoal hides completed goals from the composer-level control strip.
   // visibleSessionGoal 从输入区控制条中隐藏已完成目标。
-  const visibleSessionGoal = props.sessionGoal?.status === "complete" ? null : props.sessionGoal;
+  const persistedVisibleSessionGoal =
+    props.sessionGoal?.status === "complete" ? null : props.sessionGoal;
+  // visibleSessionGoal uses the draft goal before materialization and the persisted goal afterwards.
+  // visibleSessionGoal 在物化前使用草稿目标，物化后使用持久目标。
+  const visibleSessionGoal = props.conversationId
+    ? persistedVisibleSessionGoal
+    : draftSessionSettings.initialGoalSummary;
   // Plan controller unifies scoped draft state, persisted snapshots, goal exclusion, and shortcuts.
   // Plan 控制器统一作用域草稿状态、持久化快照、目标互斥与快捷键。
   const {
@@ -259,6 +272,7 @@ export function ComposerPanel(props: {
     openReasoningPicker,
   } = useComposerModelSelection({
     conversationScopeKey: draftSlotKey,
+    persistReasoningSelection: Boolean(props.conversationId),
     providers: props.providers,
     reasoningSelection: props.reasoningSelection,
     onSelectModel: props.onSelectWorkbenchModel,
@@ -267,6 +281,30 @@ export function ComposerPanel(props: {
   // secondaryRouteProviderId is the exact provider adapter id, not the credential-scoped row id.
   // secondaryRouteProviderId 是精确的供应商适配器标识，而不是凭据作用域行标识。
   const secondaryRouteProviderId = activeProviderModelSummary?.provider.sourceProviderId?.trim() ?? "";
+  // pendingSecondaryRouteSelectionRef retains the latest provider/model route write until submission.
+  // pendingSecondaryRouteSelectionRef 将最新供应商/模型路由写入保留到提交边界。
+  const pendingSecondaryRouteSelectionRef = React.useRef<Promise<boolean> | null>(null);
+  // handleSecondaryRouteSelection tracks the exact persistence request started by the route control.
+  // handleSecondaryRouteSelection 跟踪路由控件启动的精确持久化请求。
+  const handleSecondaryRouteSelection = React.useCallback((
+    providerId: string,
+    modelId: string,
+    route: ProviderModelSecondaryRouteSelection | null,
+  ) => {
+    const pending = props.onSelectWorkbenchModelSecondaryRoute(providerId, modelId, route);
+    pendingSecondaryRouteSelectionRef.current = pending;
+    void pending.finally(() => {
+      if (pendingSecondaryRouteSelectionRef.current === pending) {
+        pendingSecondaryRouteSelectionRef.current = null;
+      }
+    });
+    return pending;
+  }, [props.onSelectWorkbenchModelSecondaryRoute]);
+  // flushSecondaryRouteSelection waits only for the currently visible route write.
+  // flushSecondaryRouteSelection 仅等待当前可见的路由写入。
+  const flushSecondaryRouteSelection = React.useCallback(async () => {
+    return await pendingSecondaryRouteSelectionRef.current ?? true;
+  }, []);
   // placeholder describes the platform-specific send and newline keyboard behavior.
   // placeholder 描述平台相关的发送与换行键盘行为。
   const placeholder = React.useMemo(() => {
@@ -292,6 +330,9 @@ export function ComposerPanel(props: {
           connectionId: activeModelChoice.connectionId,
         }
       : null,
+    captureSessionSettings: draftSessionSettings.captureSubmissionSettings,
+    clearSessionSettings: draftSessionSettings.clearSubmissionSettings,
+    beforeSubmit: flushSecondaryRouteSelection,
     isConversationRunning: props.isConversationRunning,
     clearForSubmission,
     restoreFailedSubmission,
@@ -334,9 +375,19 @@ export function ComposerPanel(props: {
     goal: visibleSessionGoal,
     canAutoSubmitCreatedGoal,
     onPrepareEditor: prepareGoalEditor,
-    onSaveGoal: props.onSaveSessionGoal,
+    onSaveGoal: props.conversationId
+      ? props.onSaveSessionGoal
+      : async (objective, tokenBudget) => {
+          draftSessionSettings.setInitialGoal(objective, tokenBudget ?? null);
+          return true;
+        },
     onResumeGoal: props.onResumeSessionGoal,
-    onClearGoal: props.onClearSessionGoal,
+    onClearGoal: props.conversationId
+      ? props.onClearSessionGoal
+      : async () => {
+          draftSessionSettings.clearInitialGoal();
+          return true;
+        },
     onUpdateGoalStatus: props.onUpdateSessionGoalStatus,
     onSubmitCreatedGoal: submitCreatedGoal,
   });
@@ -465,13 +516,25 @@ export function ComposerPanel(props: {
               projectId={props.projectId}
               thinkingDisplayMode={props.thinkingDisplayMode}
               planModeEnabled={planModeEnabled}
-              sessionVmmPolicy={props.sessionVmmPolicy}
+              sessionVmmPolicy={
+                props.conversationId
+                  ? props.sessionVmmPolicy
+                  : draftSessionSettings.vmmPolicy
+              }
+              draftKnowledgeSelection={draftSessionSettings.knowledgeSelection}
+              onDraftKnowledgeSelectionChange={draftSessionSettings.setKnowledgeSelection}
               onOpenKnowledge={props.onOpenKnowledge}
               onPick={openAttachmentPicker}
               onThinkingDisplayModeChange={props.onThinkingDisplayModeChange}
               onOpenGoal={() => void openGoalDialog()}
               onPlanModeChange={(enabled) => void handlePlanModeChange(enabled)}
-              onVmmPolicyChange={(policy, mode) => void props.onSetSessionVmmPolicy(policy, mode)}
+              onVmmPolicyChange={(policy, mode) => {
+                if (props.conversationId) {
+                  void props.onSetSessionVmmPolicy(policy, mode);
+                } else {
+                  draftSessionSettings.setVmmPolicy(policy, mode);
+                }
+              }}
             />
             {planModeEnabled ? (
               <ComposerPlanModeChip
@@ -498,12 +561,14 @@ export function ComposerPanel(props: {
             <ComposerAiCapabilityControl
               ariaLabel={t("composer.aria.capability")}
               conversationId={props.conversationId}
+              draftSelections={draftSessionSettings.providerToolSelections}
+              onDraftSelectionsChange={draftSessionSettings.setProviderToolSelections}
             />
             {activeProviderModelSummary?.model.supportsSecondaryRoutes && secondaryRouteProviderId ? (
               <ModelSecondaryRouteControl
                 modelId={activeProviderModelSummary.model.id}
                 onListRoutes={props.onListWorkbenchModelSecondaryRoutes}
-                onSelectRoute={props.onSelectWorkbenchModelSecondaryRoute}
+                onSelectRoute={handleSecondaryRouteSelection}
                 providerId={secondaryRouteProviderId}
                 selectedRoute={activeProviderModelSummary.model.secondaryRoute ?? null}
               />

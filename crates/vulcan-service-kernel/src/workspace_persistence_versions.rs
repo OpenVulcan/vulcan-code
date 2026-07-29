@@ -499,28 +499,27 @@ pub(crate) fn reasoning_selection(
             }
         })
         .collect::<Vec<_>>();
-    let configured = provider_configuration
-        .workbench_reasoning_effort
-        .unwrap_or(ReasoningEffortLevel::Off);
-    let configured_value = reasoning_effort_wire_value(configured);
-    let selected_effort = if options
-        .iter()
-        .any(|option| option.value == configured_value)
-    {
-        configured_value.to_string()
-    } else {
-        reasoning_effort_wire_value(default_enabled_reasoning_effort(
-            &capabilities.reasoning_efforts,
-        )?)
-        .to_string()
-    };
-    let note = (selected_effort != configured_value).then(|| {
-        format!(
-            "当前模型不支持已保存的推理档位“{}”，已切换到该模型的启用档位“{}”。",
-            configured.compact_label(),
-            selected_effort
-        )
-    });
+    let configured = provider_configuration.workbench_reasoning_effort;
+    let default_effort = default_enabled_reasoning_effort(&capabilities.reasoning_efforts)?;
+    let selected_effort = configured
+        .filter(|effort| {
+            let configured_value = reasoning_effort_wire_value(*effort);
+            options
+                .iter()
+                .any(|option| option.value == configured_value)
+        })
+        .map(reasoning_effort_wire_value)
+        .unwrap_or_else(|| reasoning_effort_wire_value(default_effort))
+        .to_string();
+    let note = configured
+        .filter(|effort| reasoning_effort_wire_value(*effort) != selected_effort)
+        .map(|effort| {
+            format!(
+                "当前模型不支持已保存的推理档位“{}”，已切换到该模型的启用档位“{}”。",
+                effort.compact_label(),
+                selected_effort
+            )
+        });
     Some(ReasoningSelectionSummary {
         options,
         selected_effort,

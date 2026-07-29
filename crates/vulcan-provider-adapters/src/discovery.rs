@@ -998,8 +998,11 @@ fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabi
         .reasoning
         .as_ref()
         .map(|reasoning| {
-            let mut efforts = reasoning.supported_efforts.as_ref().map_or_else(
-                || {
+            let mut efforts = match &reasoning.supported_efforts {
+                OpenRouterSupportedEfforts::Omitted => {
+                    vec![ReasoningEffort::None, ReasoningEffort::Adaptive]
+                }
+                OpenRouterSupportedEfforts::AllGateway => {
                     vec![
                         ReasoningEffort::None,
                         ReasoningEffort::Minimal,
@@ -1009,9 +1012,11 @@ fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabi
                         ReasoningEffort::XHigh,
                         ReasoningEffort::Max,
                     ]
-                },
-                |efforts| normalized_reasoning_efforts(efforts.iter().map(String::as_str)),
-            );
+                }
+                OpenRouterSupportedEfforts::Listed(efforts) => {
+                    normalized_reasoning_efforts(efforts.iter().map(String::as_str))
+                }
+            };
             if reasoning.mandatory {
                 efforts.retain(|effort| *effort != ReasoningEffort::None);
             }
@@ -1473,9 +1478,10 @@ struct OpenRouterModelEntry {
 /// OpenRouter 模型作用域推理元数据。
 #[derive(Debug, Deserialize)]
 struct OpenRouterReasoning {
-    /// Supported effort labels; null means all gateway effort labels are accepted.
-    /// 支持的推理标签；null 表示接受全部网关推理标签。
-    supported_efforts: Option<Vec<String>>,
+    /// Supported effort declaration preserving OpenRouter's omitted-versus-null distinction.
+    /// 保留 OpenRouter 字段缺失与 null 差异的推理档位声明。
+    #[serde(default)]
+    supported_efforts: OpenRouterSupportedEfforts,
     /// Whether the model accepts a direct reasoning token budget.
     /// 模型是否接受直接推理 Token 预算。
     #[serde(default)]
@@ -1484,6 +1490,37 @@ struct OpenRouterReasoning {
     /// 模型是否强制启用推理。
     #[serde(default)]
     mandatory: bool,
+}
+
+/// Preserves OpenRouter's three documented `supported_efforts` states.
+/// 保留 OpenRouter 文档化的三种 `supported_efforts` 状态。
+#[derive(Debug, Default)]
+enum OpenRouterSupportedEfforts {
+    /// The field is omitted, so the model supports reasoning without selectable strength.
+    /// 字段缺失，表示模型支持推理但不提供强度选择。
+    #[default]
+    Omitted,
+    /// The field is null, so all gateway effort values are accepted.
+    /// 字段为 null，表示接受全部网关档位。
+    AllGateway,
+    /// The field contains the exact selectable gateway values.
+    /// 字段包含精确可选的网关档位。
+    Listed(Vec<String>),
+}
+
+/// Deserializes a present OpenRouter effort declaration while serde default handles omission.
+/// 反序列化已出现的 OpenRouter 档位声明，字段缺失由 serde 默认值处理。
+impl<'de> Deserialize<'de> for OpenRouterSupportedEfforts {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let efforts = Option::<Vec<String>>::deserialize(deserializer)?;
+        Ok(match efforts {
+            Some(efforts) => Self::Listed(efforts),
+            None => Self::AllGateway,
+        })
+    }
 }
 
 /// OpenRouter documented model architecture subset.
@@ -1614,6 +1651,58 @@ mod tests {
                 .model_parameters
                 .iter()
                 .any(|parameter| parameter.id == OPENROUTER_REASONING_MAX_TOKENS_PARAMETER_ID)
+        );
+    }
+
+    /// Verifies the same MiniMax-M3 family keeps provider-specific reasoning contracts.
+    /// 验证同一 MiniMax-M3 系列保留供应商专属思考契约。
+    #[test]
+    fn minimax_m3_reasoning_contract_differs_between_direct_and_openrouter_catalogs() {
+        let direct = parse_minimax_model_catalog(
+            "minimax-connection",
+            1,
+            r#"{"data":[{"id":"MiniMax-M3","display_name":"MiniMax-M3","created_at":1}],"has_more":false,"last_id":"MiniMax-M3"}"#,
+        )
+        .expect("MiniMax direct catalog should parse");
+        let openrouter = parse_openrouter_model_catalog(
+            "openrouter-connection",
+            1,
+            r#"{"data":[{"id":"minimax/minimax-m3","name":"MiniMax: MiniMax M3","context_length":1048576,"supported_parameters":["reasoning","tools"],"architecture":{"input_modalities":["text","image","video"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":512000},"reasoning":{"mandatory":false}}]}"#,
+        )
+        .expect("OpenRouter catalog should parse");
+
+        assert_eq!(
+            direct.models[0].capabilities.reasoning_efforts,
+            vec![ReasoningEffort::None, ReasoningEffort::Adaptive]
+        );
+        assert_eq!(
+            openrouter.models[0].capabilities.reasoning_efforts,
+            vec![ReasoningEffort::None, ReasoningEffort::Adaptive]
+        );
+    }
+
+    /// Verifies explicit null still means every OpenRouter gateway effort is selectable.
+    /// 验证显式 null 仍表示所有 OpenRouter 网关档位均可选择。
+    #[test]
+    fn openrouter_null_supported_efforts_exposes_all_gateway_levels() {
+        let catalog = parse_openrouter_model_catalog(
+            "openrouter-connection",
+            1,
+            r#"{"data":[{"id":"example/reasoner","name":"Example Reasoner","context_length":8192,"supported_parameters":["reasoning"],"reasoning":{"supported_efforts":null,"mandatory":false}}]}"#,
+        )
+        .expect("OpenRouter catalog should parse");
+
+        assert_eq!(
+            catalog.models[0].capabilities.reasoning_efforts,
+            vec![
+                ReasoningEffort::None,
+                ReasoningEffort::Minimal,
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+                ReasoningEffort::XHigh,
+                ReasoningEffort::Max,
+            ]
         );
     }
 

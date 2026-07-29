@@ -1,0 +1,248 @@
+import React from "react";
+
+import type {
+  ComposerInitialGoalSnapshot,
+  ComposerKnowledgeSelectionSnapshot,
+  ComposerSessionSettingsSnapshot,
+  ComposerVmmPolicySnapshot,
+} from "@/components/composer/composer-model";
+import type {
+  PublicAiProviderToolCapabilityKind,
+  PublicAiProviderToolTargetSelection,
+  SessionGoalSummary,
+} from "@/types";
+
+// DraftSessionSettingsEntry contains only overrides explicitly authored for one new-conversation slot.
+// DraftSessionSettingsEntry 仅包含为一个新会话草稿槽显式编写的覆盖项。
+interface DraftSessionSettingsEntry {
+  // Explicit VMM override pair.
+  // 显式 VMM 覆盖对。
+  vmmPolicy?: ComposerVmmPolicySnapshot;
+  // Explicit complete provider-tool override.
+  // 显式完整供应商工具覆盖。
+  providerToolSelections?: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
+  >;
+  // Explicit knowledge selection.
+  // 显式知识库选择。
+  knowledgeSelection?: ComposerKnowledgeSelectionSnapshot;
+  // Optional initial goal.
+  // 可选初始目标。
+  initialGoal?: ComposerInitialGoalSnapshot;
+}
+
+// captureDraftSessionSettingsSnapshot returns only the exact unmaterialized slot override.
+// captureDraftSessionSettingsSnapshot 仅返回精确未物化草稿槽的覆盖项。
+// Parameters: entries owns isolated draft slots, scopeKey selects one slot, and conversationId identifies persisted conversations.
+// 参数：entries 持有隔离草稿槽，scopeKey 选择一个槽，conversationId 标识已持久化会话。
+// Returns: a detached settings snapshot for a draft, or null for persisted/empty slots.
+// 返回值：草稿的分离设置快照；已持久化或空槽返回 null。
+export function captureDraftSessionSettingsSnapshot(
+  entries: Readonly<Record<string, DraftSessionSettingsEntry>>,
+  scopeKey: string,
+  conversationId: string | null,
+): ComposerSessionSettingsSnapshot | null {
+  if (conversationId) return null;
+  const entry = entries[scopeKey] ?? {};
+  return Object.keys(entry).length > 0 ? { ...entry } : null;
+}
+
+// clearDraftSessionSettingsEntry removes only one accepted new-conversation slot.
+// clearDraftSessionSettingsEntry 仅移除一个已接受的新会话草稿槽。
+// Parameters: entries owns isolated slots, scopeKey selects the consumed slot, and conversationId blocks persisted-session mutation.
+// 参数：entries 持有隔离槽，scopeKey 选择已消费槽，conversationId 阻止修改持久化会话。
+// Returns: the original map when no draft may be cleared, otherwise a map without the consumed slot.
+// 返回值：无法清理草稿时返回原映射，否则返回移除已消费槽后的映射。
+export function clearDraftSessionSettingsEntry(
+  entries: Readonly<Record<string, DraftSessionSettingsEntry>>,
+  scopeKey: string,
+  conversationId: string | null,
+): Record<string, DraftSessionSettingsEntry> {
+  if (conversationId || !Object.hasOwn(entries, scopeKey)) return entries;
+  const nextEntries = { ...entries };
+  delete nextEntries[scopeKey];
+  return nextEntries;
+}
+
+// ComposerDraftSessionSettingsController exposes draft-local state and an atomic submission capture.
+// ComposerDraftSessionSettingsController 暴露草稿本地状态与原子提交捕获。
+export interface ComposerDraftSessionSettingsController {
+  // VMM policy shown for the current draft.
+  // 当前草稿展示的 VMM 策略。
+  vmmPolicy: ComposerVmmPolicySnapshot | null;
+  // Provider-tool override shown for the current draft.
+  // 当前草稿展示的供应商工具覆盖。
+  providerToolSelections: DraftSessionSettingsEntry["providerToolSelections"];
+  // Knowledge selection shown for the current draft.
+  // 当前草稿展示的知识库选择。
+  knowledgeSelection: ComposerKnowledgeSelectionSnapshot | null;
+  // Synthetic goal summary shown before materialization.
+  // 物化前展示的合成目标摘要。
+  initialGoalSummary: SessionGoalSummary | null;
+  // Updates one VMM policy without losing the other tri-state value.
+  // 更新单项 VMM 策略且不丢失另一项三态值。
+  setVmmPolicy: (policy: string, mode: string) => void;
+  // Replaces the complete provider-tool override.
+  // 替换完整供应商工具覆盖。
+  setProviderToolSelections: (
+    selections: NonNullable<DraftSessionSettingsEntry["providerToolSelections"]>,
+  ) => void;
+  // Replaces the draft knowledge selection.
+  // 替换草稿知识库选择。
+  setKnowledgeSelection: (selection: ComposerKnowledgeSelectionSnapshot) => void;
+  // Creates or replaces the draft initial goal.
+  // 创建或替换草稿初始目标。
+  setInitialGoal: (objective: string, tokenBudget: number | null) => void;
+  // Clears the draft initial goal.
+  // 清理草稿初始目标。
+  clearInitialGoal: () => void;
+  // Captures the latest settings synchronously at submission time.
+  // 在提交时同步捕获最新设置。
+  captureSubmissionSettings: () => ComposerSessionSettingsSnapshot | null;
+  // Clears the exact draft slot only after its first submission is accepted.
+  // 仅在首次提交被接受后清理精确草稿槽。
+  clearSubmissionSettings: () => void;
+}
+
+// useComposerDraftSessionSettings isolates every new-conversation slot from persisted sessions and sibling drafts.
+// useComposerDraftSessionSettings 将每个新会话草稿槽与持久会话及其他草稿隔离。
+export function useComposerDraftSessionSettings(
+  scopeKey: string,
+  conversationId: string | null,
+): ComposerDraftSessionSettingsController {
+  // entries stores explicit overrides by stable draft slot.
+  // entries 按稳定草稿槽保存显式覆盖。
+  const [entries, setEntries] = React.useState<Record<string, DraftSessionSettingsEntry>>({});
+  // entriesRef provides synchronous capture after goal-save and before React commits a render.
+  // entriesRef 在目标保存后、React 提交渲染前提供同步捕获。
+  const entriesRef = React.useRef(entries);
+  entriesRef.current = entries;
+
+  // updateCurrent commits one immutable entry and synchronously updates the capture ref.
+  // updateCurrent 提交一个不可变条目并同步更新捕获引用。
+  const updateCurrent = React.useCallback((
+    updater: (current: DraftSessionSettingsEntry) => DraftSessionSettingsEntry,
+  ) => {
+    if (conversationId) return;
+    // The ref is the synchronous submission authority because React may defer state updaters.
+    // ref 是同步提交权威来源，因为 React 可能延迟执行状态 updater。
+    const currentEntries = entriesRef.current;
+    const nextEntries = {
+      ...currentEntries,
+      [scopeKey]: updater(currentEntries[scopeKey] ?? {}),
+    };
+    entriesRef.current = nextEntries;
+    setEntries(nextEntries);
+  }, [conversationId, scopeKey]);
+
+  const current = conversationId ? {} : entries[scopeKey] ?? {};
+  const setVmmPolicy = React.useCallback((policy: string, mode: string) => {
+    if (!["inherit", "enabled", "disabled"].includes(mode)) return;
+    updateCurrent((entry) => {
+      const currentPolicy = entry.vmmPolicy ?? {
+        precheckMode: "inherit",
+        memoryWritebackMode: "inherit",
+      };
+      if (policy === "precheck") {
+        return {
+          ...entry,
+          vmmPolicy: { ...currentPolicy, precheckMode: mode as ComposerVmmPolicySnapshot["precheckMode"] },
+        };
+      }
+      if (policy === "writeback") {
+        return {
+          ...entry,
+          vmmPolicy: {
+            ...currentPolicy,
+            memoryWritebackMode: mode as ComposerVmmPolicySnapshot["memoryWritebackMode"],
+          },
+        };
+      }
+      return entry;
+    });
+  }, [updateCurrent]);
+  const setProviderToolSelections = React.useCallback((
+    selections: NonNullable<DraftSessionSettingsEntry["providerToolSelections"]>,
+  ) => {
+    updateCurrent((entry) => ({ ...entry, providerToolSelections: selections }));
+  }, [updateCurrent]);
+  const setKnowledgeSelection = React.useCallback((selection: ComposerKnowledgeSelectionSnapshot) => {
+    updateCurrent((entry) => ({ ...entry, knowledgeSelection: selection }));
+  }, [updateCurrent]);
+  const setInitialGoal = React.useCallback((objective: string, tokenBudget: number | null) => {
+    updateCurrent((entry) => ({
+      ...entry,
+      initialGoal: { objective, tokenBudget },
+    }));
+  }, [updateCurrent]);
+  const clearInitialGoal = React.useCallback(() => {
+    updateCurrent((entry) => {
+      const next = { ...entry };
+      delete next.initialGoal;
+      return next;
+    });
+  }, [updateCurrent]);
+  const captureSubmissionSettings = React.useCallback(() => {
+    return captureDraftSessionSettingsSnapshot(
+      entriesRef.current,
+      scopeKey,
+      conversationId,
+    );
+  }, [conversationId, scopeKey]);
+  // clearSubmissionSettings consumes settings only after the backend accepts their submission.
+  // clearSubmissionSettings 仅在后端接受对应提交后消费设置。
+  const clearSubmissionSettings = React.useCallback(() => {
+    const nextEntries = clearDraftSessionSettingsEntry(
+      entriesRef.current,
+      scopeKey,
+      conversationId,
+    );
+    if (nextEntries === entriesRef.current) return;
+    entriesRef.current = nextEntries;
+    setEntries(nextEntries);
+  }, [conversationId, scopeKey]);
+  const initialGoalSummary = current.initialGoal
+    ? syntheticDraftGoal(scopeKey, current.initialGoal)
+    : null;
+  return {
+    vmmPolicy: current.vmmPolicy ?? null,
+    providerToolSelections: current.providerToolSelections,
+    knowledgeSelection: current.knowledgeSelection ?? null,
+    initialGoalSummary,
+    setVmmPolicy,
+    setProviderToolSelections,
+    setKnowledgeSelection,
+    setInitialGoal,
+    clearInitialGoal,
+    captureSubmissionSettings,
+    clearSubmissionSettings,
+  };
+}
+
+// syntheticDraftGoal projects a draft goal through the existing goal-strip component before persistence.
+// syntheticDraftGoal 在持久化前通过现有目标条组件投影草稿目标。
+function syntheticDraftGoal(
+  scopeKey: string,
+  goal: ComposerInitialGoalSnapshot,
+): SessionGoalSummary {
+  const now = Date.now();
+  return {
+    sessionId: scopeKey,
+    goalId: `${scopeKey}:draft-goal`,
+    objective: goal.objective,
+    status: "active",
+    tokenBudget: goal.tokenBudget,
+    tokensUsed: 0,
+    usageTokens: 0,
+    apiCallCount: 0,
+    toolCallCount: 0,
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: 0,
+    timeUsedSeconds: 0,
+    createdAtMs: now,
+    updatedAtMs: now,
+  };
+}

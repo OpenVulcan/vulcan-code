@@ -93,6 +93,18 @@ export function ComposerAiCapabilityControl(props: {
   // Accessible trigger label.
   // 触发器无障碍标签。
   ariaLabel: string;
+  // Optional draft override captured before the conversation exists.
+  // 会话创建前捕获的可选草稿覆盖。
+  draftSelections?: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
+  >;
+  // Saves one complete draft override without calling a session RPC.
+  // 在不调用会话 RPC 的情况下保存完整草稿覆盖。
+  onDraftSelectionsChange?: (
+    selections: Partial<
+      Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
+    >,
+  ) => void;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = React.useState(false);
@@ -120,7 +132,7 @@ export function ComposerAiCapabilityControl(props: {
         }
         const nextDraft = filterEnabledCurrentSelections(
           nextSnapshot,
-          sessionSelections ?? nextSnapshot.providerToolSelections,
+          sessionSelections ?? props.draftSelections ?? nextSnapshot.providerToolSelections,
         );
         const capabilities = orderedProviderToolCapabilities(nextSnapshot);
         setSnapshot(nextSnapshot);
@@ -139,7 +151,7 @@ export function ComposerAiCapabilityControl(props: {
     return () => {
       active = false;
     };
-  }, [open, props.conversationId]);
+  }, [open, props.conversationId, props.draftSelections]);
 
   const capabilities = snapshot ? orderedProviderToolCapabilities(snapshot) : [];
   const selectedTargets = snapshot?.providerToolTargets.filter(
@@ -151,6 +163,9 @@ export function ComposerAiCapabilityControl(props: {
     providerToolSelectionsSignature(draft) !== baselineSignature;
   const save = React.useCallback(async () => {
     if (!props.conversationId) {
+      props.onDraftSelectionsChange?.(draft);
+      setBaselineSignature(providerToolSelectionsSignature(draft));
+      setOpen(false);
       return;
     }
     setSaving(true);
@@ -168,7 +183,11 @@ export function ComposerAiCapabilityControl(props: {
     } finally {
       setSaving(false);
     }
-  }, [draft, props.conversationId]);
+  }, [
+    draft,
+    props.conversationId,
+    props.onDraftSelectionsChange,
+  ]);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -324,15 +343,13 @@ export function ComposerAiCapabilityControl(props: {
         </div>
         <DialogFooter className="composer-capability-dialog-footer">
           <span className="composer-capability-dialog-save-hint">
-            {props.conversationId
-              ? hasUnsavedChanges
-                ? t("composer.capability.saveHint.unsaved")
-                : t("composer.capability.saveHint.clean")
-              : t("composer.capability.sessionRequired")}
+            {hasUnsavedChanges
+              ? t("composer.capability.saveHint.unsaved")
+              : t("composer.capability.saveHint.clean")}
           </span>
           <button
             className="skill-action-button"
-            disabled={saving || !props.conversationId || !hasUnsavedChanges}
+            disabled={saving || !hasUnsavedChanges}
             onClick={() => void save()}
             type="button"
           >

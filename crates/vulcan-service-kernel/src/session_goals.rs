@@ -57,6 +57,38 @@ enum SessionGoalUserStatusUpdate {
     Paused,
 }
 
+/// Persists a validated goal captured atomically with a newly materialized submission.
+/// 持久化与新物化提交原子捕获且已校验的目标。
+///
+/// # Parameters
+/// 参数
+/// `controller_runtime` owns the durable goal store, `session_id` owns the new goal, and the remaining values are user input.
+/// `controller_runtime` 持有持久目标存储，`session_id` 持有新目标，其余值为用户输入。
+///
+/// # Returns
+/// 返回值
+/// Returns success after the active goal is durably created.
+/// 在活动目标持久创建后返回成功。
+pub(crate) async fn persist_initial_submission_goal(
+    controller_runtime: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    objective: &str,
+    token_budget: Option<i64>,
+) -> Result<(), String> {
+    let objective = normalize_session_goal_objective(objective)?;
+    validate_session_goal_budget(token_budget)?;
+    VulcanGoalStore::new(controller_runtime.clone())
+        .replace_thread_goal(
+            session_id,
+            objective.as_str(),
+            ThreadGoalStatus::Active,
+            token_budget,
+        )
+        .await
+        .map_err(|error| format!("保存初始目标失败：{error}"))?;
+    Ok(())
+}
+
 impl SessionGoalUserStatusUpdate {
     /// Converts one user-authorized target into the persisted store status.
     /// 将用户授权的目标转换为持久化存储状态。

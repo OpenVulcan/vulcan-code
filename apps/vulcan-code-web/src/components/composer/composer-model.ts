@@ -3,6 +3,8 @@ import type {
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
+  PublicAiProviderToolCapabilityKind,
+  PublicAiProviderToolTargetSelection,
 } from "@/types";
 
 // ComposerModelSelectionSnapshot freezes the exact provider, model, and credential used by one submission.
@@ -17,6 +19,58 @@ export interface ComposerModelSelectionSnapshot {
   // Exact credential connection selected in the composer.
   // 输入区中选择的精确凭据连接。
   connectionId: string;
+}
+
+// ComposerVmmPolicySnapshot freezes the draft conversation's two tri-state memory policies.
+// ComposerVmmPolicySnapshot 固定草稿会话的两项三态记忆策略。
+export interface ComposerVmmPolicySnapshot {
+  // Precheck-memory injection mode.
+  // 预检记忆注入模式。
+  precheckMode: "inherit" | "enabled" | "disabled";
+  // Post-turn memory writeback mode.
+  // 回合后记忆回写模式。
+  memoryWritebackMode: "inherit" | "enabled" | "disabled";
+}
+
+// ComposerKnowledgeSelectionSnapshot freezes a project-authorized draft knowledge selection.
+// ComposerKnowledgeSelectionSnapshot 固定一份通过项目授权的草稿知识库选择。
+export interface ComposerKnowledgeSelectionSnapshot {
+  // Inherited or explicit selection mode.
+  // 继承或显式选择模式。
+  mode: "inherit" | "explicit";
+  // Explicit library identifiers; inherited mode always uses an empty list.
+  // 显式知识库标识；继承模式始终使用空列表。
+  libraryIds: string[];
+}
+
+// ComposerInitialGoalSnapshot freezes an optional goal created before the first prompt.
+// ComposerInitialGoalSnapshot 固定首次提示词前创建的可选目标。
+export interface ComposerInitialGoalSnapshot {
+  // Human-authored objective.
+  // 用户编写的目标文本。
+  objective: string;
+  // Optional positive token budget.
+  // 可选正数 Token 预算。
+  tokenBudget: number | null;
+}
+
+// ComposerSessionSettingsSnapshot contains draft-only session overrides applied during materialization.
+// ComposerSessionSettingsSnapshot 包含在物化期间应用的草稿专属会话覆盖项。
+export interface ComposerSessionSettingsSnapshot {
+  // Optional explicit VMM policy pair.
+  // 可选显式 VMM 策略对。
+  vmmPolicy?: ComposerVmmPolicySnapshot;
+  // Optional complete capability override; an empty object explicitly disables all capability tools.
+  // 可选完整能力覆盖；空对象表示显式关闭全部能力工具。
+  providerToolSelections?: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
+  >;
+  // Optional knowledge-library override.
+  // 可选知识库覆盖。
+  knowledgeSelection?: ComposerKnowledgeSelectionSnapshot;
+  // Optional initial goal.
+  // 可选初始目标。
+  initialGoal?: ComposerInitialGoalSnapshot;
 }
 
 // ComposerSubmission contains the user prompt and runtime quick-control values.
@@ -40,6 +94,9 @@ export interface ComposerSubmission {
   // Exact model selection captured atomically with this submission.
   // 与本次提交原子捕获的精确模型选择。
   modelSelection: ComposerModelSelectionSnapshot | null;
+  // Draft-only session settings captured atomically with the first submission.
+  // 与首次提交原子捕获的草稿专属会话设置。
+  sessionSettings: ComposerSessionSettingsSnapshot | null;
 }
 
 // ComposerSlashCommandOpenTarget names existing composer popups opened by slash commands.

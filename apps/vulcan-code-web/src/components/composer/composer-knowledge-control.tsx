@@ -12,6 +12,7 @@ import {
 import {
   getSessionKnowledgeLibraries,
   listKnowledgeLibraries,
+  listProjectKnowledgeBindings,
   setSessionKnowledgeLibraries,
   subscribeKnowledgeProjectBindingsChanged,
 } from "@/service/knowledge-base-service";
@@ -33,6 +34,21 @@ export interface ComposerKnowledgeControlProps {
   // Opens the project knowledge-library management surface.
   // 打开项目知识库管理界面。
   onOpenKnowledge: () => void;
+  // Optional draft selection captured before a conversation exists.
+  // 会话创建前捕获的可选草稿选择。
+  draftSelection?: {
+    // Inherited or explicit selection mode.
+    // 继承或显式选择模式。
+    mode: "inherit" | "explicit";
+    // Explicit library identifiers.
+    // 显式知识库标识列表。
+    libraryIds: string[];
+  } | null;
+  // Saves one draft selection without calling a session RPC.
+  // 在不调用会话 RPC 的情况下保存草稿选择。
+  onDraftSelectionChange?: (
+    selection: { mode: "inherit" | "explicit"; libraryIds: string[] },
+  ) => void;
 }
 
 // nextExplicitKnowledgeLibraryIds derives a deduplicated explicit selection from one checkbox change.
@@ -60,6 +76,9 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
   // selection mirrors the persisted and authorization-filtered session choice.
   // selection 对齐已持久化且经过授权过滤的会话选择。
   const [selection, setSelection] = React.useState<SessionKnowledgeLibrarySelectionSummary | null>(null);
+  // draftDefaultLibraryIds contains the project defaults used by an unmaterialized inherited session.
+  // draftDefaultLibraryIds 保存未物化继承会话使用的项目默认知识库标识。
+  const [draftDefaultLibraryIds, setDraftDefaultLibraryIds] = React.useState<string[]>([]);
   // loading prevents edits while loading or persisting a selection.
   // loading 在加载或持久化选择期间阻止编辑。
   const [loading, setLoading] = React.useState(false);
@@ -92,9 +111,10 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
     // sequence 持有本次精确刷新响应。
     const sequence = requestSequence.current + 1;
     requestSequence.current = sequence;
-    if (!props.projectId || !props.conversationId) {
+    if (!props.projectId) {
       setLibraries([]);
       setSelection(null);
+      setDraftDefaultLibraryIds([]);
       setError(null);
       setLoading(false);
       return;
@@ -102,6 +122,26 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
     setLoading(true);
     setError(null);
     try {
+      if (!props.conversationId) {
+        const [nextLibraries, nextBindings] = await Promise.all([
+          listKnowledgeLibraries(props.projectId),
+          listProjectKnowledgeBindings(props.projectId),
+        ]);
+        if (requestSequence.current !== sequence) return;
+        const defaultLibraryIds = nextBindings
+          .filter((binding) => binding.defaultEnabled)
+          .map((binding) => binding.libraryId);
+        setLibraries(nextLibraries);
+        setDraftDefaultLibraryIds(defaultLibraryIds);
+        setSelection({
+          mode: props.draftSelection?.mode ?? "inherit",
+          libraryIds: props.draftSelection?.libraryIds ?? [],
+          effectiveLibraryIds: props.draftSelection?.mode === "explicit"
+            ? props.draftSelection.libraryIds
+            : defaultLibraryIds,
+        });
+        return;
+      }
       // nextLibraries and nextSelection are parallel service-authoritative projections.
       // nextLibraries 与 nextSelection 是并行取得的服务端权威投影。
       const [nextLibraries, nextSelection] = await Promise.all([
@@ -117,7 +157,7 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
     } finally {
       if (requestSequence.current === sequence) setLoading(false);
     }
-  }, [props.conversationId, props.projectId]);
+  }, [props.conversationId, props.draftSelection, props.projectId]);
   latestRefresh.current = refresh;
 
   React.useEffect(() => {
@@ -136,7 +176,17 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
   // persist stores one exact selection and then reloads the service-authoritative projection.
   // persist 保存一份精确选择，然后重新加载服务端权威投影。
   const persist = React.useCallback(async (mode: "inherit" | "explicit", libraryIds: string[]) => {
-    if (!props.projectId || !props.conversationId || mutationInFlight.current) return;
+    if (!props.projectId || mutationInFlight.current) return;
+    if (!props.conversationId) {
+      const normalizedIds = mode === "inherit" ? [] : [...new Set(libraryIds)];
+      props.onDraftSelectionChange?.({ mode, libraryIds: normalizedIds });
+      setSelection({
+        mode,
+        libraryIds: normalizedIds,
+        effectiveLibraryIds: mode === "inherit" ? draftDefaultLibraryIds : normalizedIds,
+      });
+      return;
+    }
     mutationInFlight.current = true;
     const sequence = requestSequence.current + 1;
     requestSequence.current = sequence;
@@ -156,14 +206,19 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
         void latestRefresh.current();
       }
     }
-  }, [props.conversationId, props.projectId]);
+  }, [
+    props.conversationId,
+    draftDefaultLibraryIds,
+    props.onDraftSelectionChange,
+    props.projectId,
+  ]);
 
   // effectiveCount is the enabled-library count shown on the knowledge submenu trigger.
   // effectiveCount 是知识库子菜单入口显示的已启用知识库数量。
   const effectiveCount = selection?.effectiveLibraryIds.length ?? 0;
   // selectionDisabled prevents persistence before a project conversation exists.
   // selectionDisabled 在项目会话存在前阻止持久化选择。
-  const selectionDisabled = !props.projectId || !props.conversationId;
+  const selectionDisabled = !props.projectId;
   return (
     <DropdownMenuSub onOpenChange={(open) => {
       if (open) void refresh();

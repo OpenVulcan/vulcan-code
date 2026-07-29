@@ -400,6 +400,10 @@ pub struct ProviderModelSummary {
     /// 可选推理档位配置 JSON 文本。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_profile_json: Option<String>,
+    /// Exact reasoning selector projected from this model's discovered capabilities.
+    /// 从该模型已发现能力投影出的精确思考选择器。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_selection: Option<ReasoningSelectionSummary>,
     /// Whether this provider/model pair exposes backend-managed secondary routes.
     /// 该 Provider/模型组合是否暴露由后端管理的二级路由。
     #[serde(default)]

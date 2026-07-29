@@ -79,7 +79,43 @@ pub(crate) async fn prepare_submission_runtime_options(
         ensure_session_can_enter_plan_mode(controller_runtime, session_id).await?;
         apply_authorized_plan_mode(workspace_snapshot, session_id);
     }
+    if let Some(reasoning_effort) = options.reasoning_effort {
+        apply_submission_reasoning_effort(workspace_snapshot, session_id, reasoning_effort);
+    }
     Ok(options)
+}
+
+/// Commits the submitted reasoning effort to the exact materialized session.
+/// 将提交的思考档位写入精确的已物化会话。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` owns the target session runtime state.
+/// `workspace_snapshot` 持有目标会话运行时状态。
+/// `session_id` selects the session receiving the reasoning choice.
+/// `session_id` 选择接收思考档位的会话。
+/// `reasoning_effort` is the validated provider-neutral reasoning value.
+/// `reasoning_effort` 是已验证的供应商中立思考档位。
+///
+/// # Returns
+/// 返回值
+/// This function returns no value.
+/// 此函数没有返回值。
+fn apply_submission_reasoning_effort(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    reasoning_effort: ReasoningEffortLevel,
+) {
+    let updated_at = current_unix_millis_text();
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .entry(session_id)
+        .or_insert_with(|| SessionRuntimeStateEntry {
+            updated_at: updated_at.clone(),
+            ..SessionRuntimeStateEntry::default()
+        });
+    runtime_state.active_reasoning_effort = Some(reasoning_effort);
+    runtime_state.updated_at = updated_at;
 }
 
 /// Resolves raw submission controls without mutating session runtime state.
@@ -243,6 +279,43 @@ mod tests {
                 .get(&unrelated_session_id)
                 .and_then(|runtime_state| runtime_state.active_work_mode.as_deref()),
             Some("build")
+        );
+    }
+
+    /// Verifies submission reasoning updates only the newly materialized target session.
+    /// 验证提交的思考档位只更新新物化的目标会话。
+    #[test]
+    fn submission_reasoning_updates_only_the_target_session() {
+        let target_session_id = SessionId::new_v4();
+        let unrelated_session_id = SessionId::new_v4();
+        let mut workspace_snapshot = empty_workspace_snapshot(target_session_id);
+        workspace_snapshot.session_runtime_state.insert(
+            unrelated_session_id,
+            SessionRuntimeStateEntry {
+                active_reasoning_effort: Some(ReasoningEffortLevel::Low),
+                ..SessionRuntimeStateEntry::default()
+            },
+        );
+
+        apply_submission_reasoning_effort(
+            &mut workspace_snapshot,
+            target_session_id,
+            ReasoningEffortLevel::Adaptive,
+        );
+
+        assert_eq!(
+            workspace_snapshot
+                .session_runtime_state
+                .get(&target_session_id)
+                .and_then(|runtime_state| runtime_state.active_reasoning_effort),
+            Some(ReasoningEffortLevel::Adaptive)
+        );
+        assert_eq!(
+            workspace_snapshot
+                .session_runtime_state
+                .get(&unrelated_session_id)
+                .and_then(|runtime_state| runtime_state.active_reasoning_effort),
+            Some(ReasoningEffortLevel::Low)
         );
     }
 }

@@ -902,10 +902,37 @@ fn project_minimax_request(
     request: &AiExecutionRequest,
     encoded: &mut EncodedWireRequest,
 ) -> Result<(), ProviderExecutionFailure> {
-    if request.reasoning_effort.is_some() {
-        return Err(pre_dispatch_failure(
-            "MiniMax reasoning is model-controlled and does not expose a reasoning effort selector.",
-        ));
+    if let Some(effort) = request.reasoning_effort {
+        let thinking_type = match effort {
+            ReasoningEffort::None => "disabled",
+            ReasoningEffort::Adaptive => "adaptive",
+            unsupported => {
+                return Err(pre_dispatch_failure(format!(
+                    "MiniMax-M3 exposes only `none` and `adaptive` reasoning controls; received `{}`.",
+                    unsupported.as_str()
+                )));
+            }
+        };
+        let body = request_body_mut(encoded, "MiniMax")?;
+        match route.protocol_route.protocol_profile_id.as_str() {
+            vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID => {
+                // MiniMax Anthropic uses `thinking.type`; generic Anthropic `output_config.effort` is not accepted.
+                // MiniMax Anthropic 使用 `thinking.type`；通用 Anthropic `output_config.effort` 不被接受。
+                body.remove("output_config");
+                body.insert(String::from("thinking"), json!({ "type": thinking_type }));
+            }
+            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID => {
+                // MiniMax OpenAI Chat uses `thinking.type`; `reasoning_effort` belongs to other OpenAI-compatible APIs.
+                // MiniMax OpenAI Chat 使用 `thinking.type`；`reasoning_effort` 属于其他 OpenAI 兼容 API。
+                body.remove("reasoning_effort");
+                body.insert(String::from("thinking"), json!({ "type": thinking_type }));
+            }
+            protocol_id => {
+                return Err(pre_dispatch_failure(format!(
+                    "MiniMax reasoning projection is not registered for protocol `{protocol_id}`."
+                )));
+            }
+        }
     }
     if let Some(value) = request
         .model_parameters
@@ -1001,7 +1028,15 @@ fn project_openrouter_request(
             .ok_or_else(|| {
                 pre_dispatch_failure("OpenRouter reasoning projection must be a JSON object.")
             })?;
-        reasoning.insert(String::from("effort"), json!(effort.as_str()));
+        if effort == ReasoningEffort::Adaptive {
+            // OpenRouter uses `enabled` when discovery exposes reasoning without selectable effort levels.
+            // 当发现结果只暴露推理开关而没有强度档位时，OpenRouter 使用 `enabled`。
+            reasoning.remove("effort");
+            reasoning.insert(String::from("enabled"), Value::Bool(true));
+        } else {
+            reasoning.remove("enabled");
+            reasoning.insert(String::from("effort"), json!(effort.as_str()));
+        }
     }
     if let SecondaryRouteSelection::PinnedEndpoint { route_id, .. } = &route.secondary_route {
         let body = request_body_mut(encoded, "OpenRouter")?;
@@ -2788,16 +2823,17 @@ mod tests {
         );
     }
 
-    /// Verifies MiniMax Chat leaves model-owned reasoning enabled and projects only reasoning_split.
-    /// 验证 MiniMax Chat 保持模型自有思考开启且仅投影 reasoning_split。
+    /// Verifies MiniMax Chat projects adaptive thinking separately from reasoning output splitting.
+    /// 验证 MiniMax Chat 将自适应思考与思考输出拆分分别投影。
     #[test]
-    fn minimax_openai_chat_uses_provider_controlled_reasoning() {
+    fn minimax_openai_chat_projects_adaptive_thinking() {
         let client = ProviderExecutionClient::new(
             reqwest::Client::new(),
             Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
         );
         let mut request = minimal_request();
         request.model_id = String::from("MiniMax-M3");
+        request.reasoning_effort = Some(ReasoningEffort::Adaptive);
         request.model_parameters.insert(
             MINIMAX_REASONING_SPLIT_PARAMETER_ID.to_string(),
             ModelParameterValue::Boolean(true),
@@ -2809,12 +2845,31 @@ mod tests {
 
         assert_eq!(encoded.body["reasoning_split"], true);
         assert_eq!(encoded.body["stream_options"]["include_usage"], true);
-        assert!(encoded.body.get("thinking").is_none());
+        assert_eq!(encoded.body["thinking"]["type"], "adaptive");
         assert!(encoded.body.get("reasoning_effort").is_none());
     }
 
-    /// Verifies MiniMax rejects undocumented effort controls before dispatch.
-    /// 验证 MiniMax 在分派前拒绝未文档化的思考档位控制。
+    /// Verifies MiniMax Anthropic projects the documented disabled thinking shape.
+    /// 验证 MiniMax Anthropic 投影文档化的关闭思考结构。
+    #[test]
+    fn minimax_anthropic_projects_disabled_thinking() {
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let mut request = minimal_request();
+        request.model_id = String::from("MiniMax-M3");
+        request.reasoning_effort = Some(ReasoningEffort::None);
+
+        let encoded = client
+            .encode_request(&minimax_route(ANTHROPIC_MESSAGES_PROFILE_ID), &request)
+            .expect("MiniMax Anthropic request should encode");
+        assert_eq!(encoded.body["thinking"]["type"], "disabled");
+        assert!(encoded.body.get("output_config").is_none());
+    }
+
+    /// Verifies MiniMax rejects undocumented strength controls before dispatch.
+    /// 验证 MiniMax 在分派前拒绝未文档化的强度控制。
     #[test]
     fn minimax_rejects_undocumented_reasoning_effort() {
         let client = ProviderExecutionClient::new(
@@ -2823,16 +2878,16 @@ mod tests {
         );
         let mut request = minimal_request();
         request.model_id = String::from("MiniMax-M3");
-        request.reasoning_effort = Some(ReasoningEffort::Adaptive);
+        request.reasoning_effort = Some(ReasoningEffort::High);
 
         let failure = client
             .encode_request(&minimax_route(OPENAI_CHAT_PROFILE_ID), &request)
-            .expect_err("MiniMax adaptive effort is not documented");
+            .expect_err("MiniMax high effort is not documented");
         assert!(
             failure
                 .error
                 .message
-                .contains("does not expose a reasoning effort selector")
+                .contains("exposes only `none` and `adaptive`")
         );
     }
 
@@ -2857,6 +2912,30 @@ mod tests {
             assert_eq!(encoded.body["reasoning"]["effort"], "max");
             assert!(encoded.body.get("reasoning_effort").is_none());
             assert!(encoded.body.get("output_config").is_none());
+        }
+    }
+
+    /// Verifies OpenRouter provider-adaptive reasoning uses its unified enable switch.
+    /// 验证 OpenRouter 供应商自适应推理使用其统一启用开关。
+    #[test]
+    fn encode_request_projects_openrouter_adaptive_reasoning_as_enabled() {
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        for protocol_id in [
+            OPENAI_CHAT_PROFILE_ID,
+            OPENAI_RESPONSES_PROFILE_ID,
+            ANTHROPIC_MESSAGES_PROFILE_ID,
+        ] {
+            let mut request = minimal_request();
+            request.reasoning_effort = Some(vulcan_ai_contract::ReasoningEffort::Adaptive);
+
+            let encoded = client
+                .encode_request(&pinned_openrouter_route(protocol_id), &request)
+                .expect("adaptive reasoning request should encode");
+            assert_eq!(encoded.body["reasoning"]["enabled"], true);
+            assert!(encoded.body["reasoning"].get("effort").is_none());
         }
     }
 

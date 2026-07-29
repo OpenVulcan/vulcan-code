@@ -171,6 +171,10 @@ pub(crate) fn public_ai_provider_rows_for_selection(
                                 .map(public_resource_kind_label)
                                 .collect(),
                             reasoning_profile_json: None,
+                            reasoning_selection: reasoning_selection(
+                                &ProviderConfigurationFile::default(),
+                                Some(&model.capabilities),
+                            ),
                             supports_secondary_routes: connection.provider_id == "openrouter",
                             secondary_route,
                         })

@@ -1,6 +1,8 @@
 //! WebUI conversation prompt submission orchestration.
 //! WebUI 会话提示词提交编排逻辑。
 
+use std::collections::BTreeMap;
+
 use uuid::Uuid;
 use vulcan_agent_runtime::workbench_prompt_turn::{
     SharedPromptTurnBeginInput, begin_shared_prompt_turn,
@@ -10,13 +12,16 @@ use vulcan_service_api::{
     UpdateConversationRunPhaseDelta, WorkbenchDelta, WorkbenchDeltaEnvelope,
 };
 use vulcan_workbench_model::{
-    PendingSessionPromptSource, SessionId, SessionRunPhase, SessionState,
+    PendingSessionPromptSource, SessionId, SessionKnowledgeLibrarySelection,
+    SessionKnowledgeLibrarySelectionMode, SessionProviderToolTargetSelection, SessionRunPhase,
+    SessionState,
 };
 use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
 use super::{
-    ExistingSubmissionAdmissionAuthorization, SharedServiceBridgeState,
-    UserPromptEditSubmitRequest, active_kernel_session_ids,
+    ExistingSubmissionAdmissionAuthorization, PromptSessionMaterializationKind,
+    SharedServiceBridgeState, UserPromptEditSubmitRequest, active_kernel_session_ids,
+    advance_session_goal_dispatch_version,
     apply_webui_prompt_begin_outer_steps_deferred_context_persist,
     begin_existing_prompt_submission_exclusion, build_conversation_messages_patched_delta,
     build_vmm_hook_config_snapshot, capture_preserved_workspace_run_state,
@@ -27,8 +32,8 @@ use super::{
     enqueue_webui_pending_prompt_from_submission, hydrate_retained_submission_session_if_needed,
     load_workspace_for_submission, mark_webui_prompt_snapshot_preparing,
     materialize_prompt_session, owning_project_id_for_session, parse_prompt_session_target,
-    parse_session_id, preserve_active_session_run_state,
-    replace_conversation_messages_in_workbench_window,
+    parse_session_id, persist_initial_submission_goal, preserve_active_session_run_state,
+    provider_tool_capability_key, replace_conversation_messages_in_workbench_window,
     retained_submission_snapshot_has_session_context, retained_submission_snapshot_is_usable,
     rollback_persisted_session_before_user_prompt, runtime_parts_from_state,
     session_has_blocking_system_prompt_work, snapshot_webui_context_before_user_prompt,
@@ -36,9 +41,9 @@ use super::{
     start_reserved_webui_session_kernel_user_turn, start_webui_precheck_or_continue,
     start_webui_session_kernel_user_turn, store_workspace_snapshot_without_workbench_rebuild,
     sync_hydrated_session_dialogue_ready_marker, validate_composer_attachment_summary,
-    webui_session_allows_user_prompt_editing, webui_session_kernel_has_active_turn,
-    webui_shared_prompt_precheck_plan, webui_submit_trace, webui_trace_if_slow,
-    workbench_with_live_pending_question, workspace_path_for_session,
+    validate_provider_tool_selections, webui_session_allows_user_prompt_editing,
+    webui_session_kernel_has_active_turn, webui_shared_prompt_precheck_plan, webui_submit_trace,
+    webui_trace_if_slow, workbench_with_live_pending_question, workspace_path_for_session,
     workspace_user_prompt_message_allows_destructive_edit,
 };
 mod activation;
@@ -79,6 +84,185 @@ pub(super) struct SubmissionModelSelection {
     /// Exact credential connection selected in the composer.
     /// 输入区中选择的精确凭据连接。
     connection_id: String,
+}
+
+/// Captures one tri-state VMM policy pair selected before a conversation exists.
+/// 捕获会话创建前选择的一组 VMM 三态策略。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct SubmissionVmmPolicy {
+    /// Precheck-memory injection mode.
+    /// 预检记忆注入模式。
+    precheck_mode: String,
+    /// Post-turn memory writeback mode.
+    /// 回合后记忆回写模式。
+    memory_writeback_mode: String,
+}
+
+/// Captures one explicit knowledge-library selection for the materialized session.
+/// 捕获用于已物化会话的一份显式知识库选择。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct SubmissionKnowledgeSelection {
+    /// Selection mode, either inherit or explicit.
+    /// 选择模式，仅可为继承或显式。
+    mode: String,
+    /// Exact authorized library identifiers.
+    /// 精确且已授权的知识库标识列表。
+    library_ids: Vec<String>,
+}
+
+/// Captures one initial user goal created before the first prompt is submitted.
+/// 捕获首次提示词提交前创建的初始用户目标。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct SubmissionInitialGoal {
+    /// Human-authored goal objective.
+    /// 用户编写的目标文本。
+    objective: String,
+    /// Optional positive token budget.
+    /// 可选正数 Token 预算。
+    token_budget: Option<i64>,
+}
+
+/// Freezes every draft-only session override required by the first provider turn.
+/// 固定首个 Provider 回合所需的全部草稿会话覆盖项。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct SubmissionSessionSettings {
+    /// Optional explicit VMM policy pair; absence preserves inherited defaults.
+    /// 可选显式 VMM 策略对；缺省时保留继承默认值。
+    vmm_policy: Option<SubmissionVmmPolicy>,
+    /// Optional complete provider-tool override; an empty map explicitly disables all capabilities.
+    /// 可选完整供应商工具覆盖；空映射表示显式关闭全部能力。
+    provider_tool_selections: Option<
+        BTreeMap<
+            vulcan_provider_adapters::ProviderToolCapabilityKind,
+            vulcan_provider_adapters::ProviderToolTargetSelection,
+        >,
+    >,
+    /// Optional knowledge selection; absence preserves project inheritance.
+    /// 可选知识库选择；缺省时保留项目继承。
+    knowledge_selection: Option<SubmissionKnowledgeSelection>,
+    /// Optional initial goal created before the first turn starts.
+    /// 首轮开始前创建的可选初始目标。
+    initial_goal: Option<SubmissionInitialGoal>,
+}
+
+/// Converts one submitted VMM tri-state mode into the persisted optional layer value.
+/// 将一个已提交的 VMM 三态模式转换为持久化可选层取值。
+fn submission_vmm_policy_value(mode: &str) -> Result<Option<bool>, String> {
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "inherit" => Ok(None),
+        "enabled" => Ok(Some(true)),
+        "disabled" => Ok(Some(false)),
+        other => Err(format!("不支持的 VMM 记忆策略模式：{other}")),
+    }
+}
+
+/// Validates and applies draft-only settings before the first precheck or provider request.
+/// 在首次预检或 Provider 请求前校验并应用草稿专属设置。
+async fn apply_submission_session_settings(
+    state: &SharedServiceBridgeState,
+    controller_runtime: &vulcan_workspace_store::data_plane::ControllerRuntimeHandle,
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    execution_mode: Option<&str>,
+    settings: Option<&SubmissionSessionSettings>,
+) -> Result<(), String> {
+    let Some(settings) = settings else {
+        return Ok(());
+    };
+    if settings.initial_goal.is_some()
+        && execution_mode.is_some_and(|mode| mode.eq_ignore_ascii_case("plan"))
+    {
+        return Err(String::from(
+            "目标模式与计划模式互斥，不能在同一首次提交中同时启用。",
+        ));
+    }
+    let configuration = runtime.configuration_snapshot()?;
+    if let Some(selections) = settings.provider_tool_selections.as_ref() {
+        validate_provider_tool_selections(runtime, &configuration, selections)?;
+    }
+    let knowledge_selection = if let Some(selection) = settings.knowledge_selection.as_ref() {
+        let mode = match selection.mode.as_str() {
+            "inherit" => SessionKnowledgeLibrarySelectionMode::Inherit,
+            "explicit" => SessionKnowledgeLibrarySelectionMode::Explicit,
+            other => return Err(format!("未知知识库选择模式：{other}")),
+        };
+        let knowledge_runtime = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?
+            .knowledge_runtime
+            .clone()
+            .ok_or_else(|| {
+                String::from("service is still starting; knowledge runtime is not ready")
+            })?;
+        let project_id = owning_project_id_for_session(workspace_snapshot, session_id)
+            .ok_or_else(|| String::from("当前会话不属于可用项目。"))?;
+        let authorized = knowledge_runtime
+            .authorized_library_ids(&project_id, false)
+            .await?
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        if let Some(denied) = selection
+            .library_ids
+            .iter()
+            .find(|library_id| !authorized.contains(*library_id))
+        {
+            return Err(format!("知识库未授权给当前项目：{denied}"));
+        }
+        Some(
+            SessionKnowledgeLibrarySelection {
+                mode,
+                library_ids: selection.library_ids.clone(),
+            }
+            .normalized(),
+        )
+    } else {
+        None
+    };
+    let updated_at = current_unix_millis_text();
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&session_id)
+        .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
+    if let Some(policy) = settings.vmm_policy.as_ref() {
+        runtime_state.vmm.precheck_enabled = submission_vmm_policy_value(&policy.precheck_mode)?;
+        runtime_state.vmm.memory_writeback_enabled =
+            submission_vmm_policy_value(&policy.memory_writeback_mode)?;
+    }
+    if let Some(selections) = settings.provider_tool_selections.as_ref() {
+        runtime_state.provider_tool_selections = selections
+            .iter()
+            .map(|(capability, selection)| {
+                (
+                    provider_tool_capability_key(*capability),
+                    SessionProviderToolTargetSelection {
+                        connection_id: selection.connection_id.clone(),
+                        target_id: selection.target_id.clone(),
+                    },
+                )
+            })
+            .collect();
+        runtime_state.provider_tool_selections_overridden = true;
+    }
+    if let Some(selection) = knowledge_selection {
+        runtime_state.knowledge_library_selection = selection;
+    }
+    runtime_state.updated_at = updated_at;
+    if let Some(goal) = settings.initial_goal.as_ref() {
+        persist_initial_submission_goal(
+            controller_runtime,
+            session_id,
+            &goal.objective,
+            goal.token_budget,
+        )
+        .await?;
+        advance_session_goal_dispatch_version(state, session_id)?;
+    }
+    Ok(())
 }
 
 /// Validates and applies one submission-scoped model selection to session runtime state.
@@ -170,7 +354,7 @@ mod submission_model_selection_tests {
 
     use vulcan_provider_adapters::{
         CredentialConnection, CredentialMode, PersistedAiConfiguration, PublicAiRuntime,
-        parse_openrouter_model_catalog,
+        UnavailableCredentialSecretResolver, parse_openrouter_model_catalog,
     };
     use vulcan_workbench_model::SessionSummary;
 
@@ -180,7 +364,9 @@ mod submission_model_selection_tests {
     /// Builds one configured runtime whose global active model differs from the submitted model.
     /// 构建一个全局激活模型与本次提交模型不同的已配置运行时。
     fn configured_runtime() -> PublicAiRuntime {
-        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        let runtime =
+            PublicAiRuntime::first_batch(std::sync::Arc::new(UnavailableCredentialSecretResolver))
+                .expect("runtime should initialize");
         let mut configuration = PersistedAiConfiguration::default();
         let connection = CredentialConnection {
             id: String::from("openrouter-account"),
@@ -192,8 +378,8 @@ mod submission_model_selection_tests {
             display_name: String::from("OpenRouter account"),
             secret_reference: String::from("secret-openrouter-account"),
             management_secret_reference: None,
-            verified_protocols: BTreeSet::from([String::from("openai-chat")]),
-            selected_protocol: String::from("openai-chat"),
+            verified_protocols: BTreeSet::from([String::from("openai-chat-completions.v1")]),
+            selected_protocol: String::from("openai-chat-completions.v1"),
             prompt_cache_by_protocol: BTreeMap::new(),
         };
         configuration
@@ -363,6 +549,7 @@ pub(super) async fn service_submit_conversation_prompt(
     execution_mode: Option<String>,
     reasoning_effort: Option<String>,
     model_selection: Option<SubmissionModelSelection>,
+    session_settings: Option<SubmissionSessionSettings>,
     attachments: Option<Vec<ComposerAttachmentSummary>>,
     preauthorized_turn_admission: Option<ExistingSubmissionAdmissionAuthorization>,
     existing_session_hydration_policy: ExistingSessionHydrationPolicy,
@@ -539,6 +726,21 @@ pub(super) async fn service_submit_conversation_prompt(
         materialized_session.session_id,
         model_selection.as_ref(),
     )?;
+    if session_settings.is_some()
+        && materialized_session.kind != PromptSessionMaterializationKind::Created
+    {
+        return Err(String::from("草稿会话设置只能随新会话的首次提交应用。"));
+    }
+    apply_submission_session_settings(
+        &state,
+        &controller_runtime,
+        agent_runtime.public_ai_runtime.as_ref(),
+        &mut workspace_snapshot,
+        materialized_session.session_id,
+        execution_mode.as_deref(),
+        session_settings.as_ref(),
+    )
+    .await?;
     // session_id is copied from the authoritative materialization result after activation consumes its classification.
     // session_id 在激活阶段消费物化分类后，从权威物化结果中复制。
     let session_id = materialized_session.session_id;

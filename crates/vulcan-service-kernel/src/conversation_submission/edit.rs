@@ -399,6 +399,7 @@ pub(crate) async fn service_submit_user_prompt_edit(
         Some(String::from("build")),
         None,
         None,
+        None,
         Some(request.attachments),
         Some(edit_submission_authorization),
         ExistingSessionHydrationPolicy::TrustRetainedSnapshot,

@@ -37,6 +37,15 @@ export interface UseComposerSendControllerOptions {
   // Exact model and account currently rendered by the composer.
   // 输入区当前渲染的精确模型与账号。
   modelSelection: ComposerModelSelectionSnapshot | null;
+  // Captures the latest draft-only session settings at the exact submission boundary.
+  // 在精确提交边界捕获最新草稿专属会话设置。
+  captureSessionSettings: () => ComposerSubmission["sessionSettings"];
+  // Consumes the captured draft settings after the backend accepts the submission.
+  // 在后端接受提交后消费已捕获的草稿设置。
+  clearSessionSettings: () => void;
+  // Flushes pending provider/model configuration writes before submission.
+  // 在提交前刷新仍在进行的供应商/模型配置写入。
+  beforeSubmit?: () => Promise<boolean>;
   // Whether the selected backend conversation currently has an active run.
   // 当前选中的后端会话是否存在活动运行。
   isConversationRunning: boolean;
@@ -109,7 +118,11 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
     executionMode: options.executionMode,
     reasoningEffort: options.reasoningEffort,
     modelSelection: options.modelSelection,
-  }), [options.executionMode, options.modelSelection, options.reasoningEffort]);
+  }), [
+    options.executionMode,
+    options.modelSelection,
+    options.reasoningEffort,
+  ]);
   // canAutoSubmitCreatedGoal reflects current render state while submitCreatedGoal also performs a synchronous guard.
   // canAutoSubmitCreatedGoal 反映当前渲染状态，submitCreatedGoal 同时执行同步门控。
   const canAutoSubmitCreatedGoal = !options.isConversationRunning && !isSubmitting;
@@ -185,20 +198,26 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
     if (!beginSubmission()) {
       return;
     }
-    // submittedDraft binds failure recovery to the exact slot consumed by this send.
-    // submittedDraft 将失败恢复绑定到本次发送消费的精确草稿槽。
-    const submittedDraft = options.clearForSubmission();
     try {
+      if (options.beforeSubmit && !(await options.beforeSubmit())) {
+        return;
+      }
+      // submittedDraft binds failure recovery to the exact slot consumed by this send.
+      // submittedDraft 将失败恢复绑定到本次发送消费的精确草稿槽。
+      const submittedDraft = options.clearForSubmission();
       // sent records whether the workbench runtime accepted this complete submission.
       // sent 记录工作台运行时是否接受本次完整提交。
       const sent = await options.onSubmitPrompt({
         prompt,
         attachments: submittedDraft.attachments,
         ...submissionSettings,
+        sessionSettings: options.captureSessionSettings(),
       });
-      if (!sent) {
-        options.restoreFailedSubmission(submittedDraft);
-      }
+        if (!sent) {
+          options.restoreFailedSubmission(submittedDraft);
+        } else {
+          options.clearSessionSettings();
+        }
     } finally {
       finishSubmission();
     }
@@ -206,6 +225,9 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
     beginSubmission,
     finishSubmission,
     options.attachments.length,
+    options.beforeSubmit,
+    options.captureSessionSettings,
+    options.clearSessionSettings,
     options.clearForSubmission,
     options.draftInput,
     options.isConversationRunning,
@@ -236,15 +258,21 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
     // submissionDraftSlotKey 将失败恢复绑定到目标所属的原始草稿槽。
     const submissionDraftSlotKey = options.draftSlotKey;
     try {
+      if (options.beforeSubmit && !(await options.beforeSubmit())) {
+        return;
+      }
       // sent records whether the workbench runtime accepted the generated first turn.
       // sent 记录工作台运行时是否接受生成的首轮。
       const sent = await options.onSubmitPrompt({
         prompt: objective,
         attachments: [],
         ...submissionSettings,
+        sessionSettings: options.captureSessionSettings(),
       });
       if (!sent) {
         options.restoreInputToSlot(submissionDraftSlotKey, objective);
+      } else {
+        options.clearSessionSettings();
       }
     } finally {
       finishSubmission();
@@ -253,6 +281,9 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
     beginSubmission,
     finishSubmission,
     options.draftSlotKey,
+    options.beforeSubmit,
+    options.captureSessionSettings,
+    options.clearSessionSettings,
     options.onSubmitPrompt,
     options.restoreInputToSlot,
     submissionSettings,

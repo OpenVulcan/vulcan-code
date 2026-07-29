@@ -24,6 +24,9 @@ export interface UseComposerModelSelectionOptions {
   // Exact conversation scope whose persisted model and account are being rendered.
   // 当前渲染其持久化模型与账号的精确会话作用域。
   conversationScopeKey: string;
+  // Whether reasoning changes may be persisted to an already materialized conversation.
+  // 思考档位变更是否可以持久化到已经物化的会话。
+  persistReasoningSelection: boolean;
   // Providers and models projected by the shared workbench service.
   // 共享工作台服务投影出的 Provider 与模型。
   providers: ProviderSummary[];
@@ -161,14 +164,19 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
       && choice.modelId === activeModelChoice.modelId
     ));
   }, [activeModelChoice, availableModelChoices]);
+  // effectiveReasoningSelection uses the selected model contract for drafts and session state after materialization.
+  // effectiveReasoningSelection 对草稿使用已选模型契约，物化后使用会话状态。
+  const effectiveReasoningSelection = options.persistReasoningSelection
+    ? options.reasoningSelection
+    : activeProviderModel?.model.reasoningSelection ?? null;
   // reasoningEffortOptions exposes only levels declared by the active model catalog.
   // reasoningEffortOptions 仅暴露当前模型目录明确声明的档位。
   const reasoningEffortOptions = React.useMemo<ComposerSelectOption[]>(() => {
-    return options.reasoningSelection?.options.map((option) => ({
+    return effectiveReasoningSelection?.options.map((option) => ({
       value: option.value,
       label: option.label,
     })) ?? [];
-  }, [options.reasoningSelection]);
+  }, [effectiveReasoningSelection]);
   // reasoningEffortValuesSignature changes only when the set or order of selectable values changes.
   // reasoningEffortValuesSignature 仅在可选值集合或顺序变化时改变。
   const reasoningEffortValuesSignature = React.useMemo(
@@ -177,18 +185,18 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
   );
   // serviceSelectedReasoningEffort is the authoritative selected effort from the backend snapshot.
   // serviceSelectedReasoningEffort 是后端快照中的权威选中档位。
-  const serviceSelectedReasoningEffort = options.reasoningSelection?.selectedEffort;
+  const serviceSelectedReasoningEffort = effectiveReasoningSelection?.selectedEffort;
   // submittedReasoningEffort is non-null only when backend capabilities explicitly allow the local value.
   // submittedReasoningEffort 仅在后端能力明确允许本地值时非空。
   const submittedReasoningEffort = React.useMemo(() => {
     if (reasoningEffort === "fixed-on" || reasoningEffort === "fixed-off") {
       return null;
     }
-    if (!options.reasoningSelection?.options.some((option) => option.value === reasoningEffort)) {
+    if (!effectiveReasoningSelection?.options.some((option) => option.value === reasoningEffort)) {
       return null;
     }
     return reasoningEffort;
-  }, [options.reasoningSelection, reasoningEffort]);
+  }, [effectiveReasoningSelection, reasoningEffort]);
 
   React.useLayoutEffect(() => {
     modelRequestVersionRef.current += 1;
@@ -198,6 +206,12 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
   React.useLayoutEffect(() => {
     reasoningRequestVersionRef.current += 1;
     setReasoningEffort((current) => {
+      if (
+        !options.persistReasoningSelection
+        && reasoningEffortOptions.some((option) => option.value === current)
+      ) {
+        return current;
+      }
       if (serviceSelectedReasoningEffort) {
         return serviceSelectedReasoningEffort;
       }
@@ -208,6 +222,7 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
     });
   }, [
     options.conversationScopeKey,
+    options.persistReasoningSelection,
     reasoningEffortValuesSignature,
     serviceSelectedReasoningEffort,
   ]);
@@ -245,13 +260,16 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
     const requestVersion = reasoningRequestVersionRef.current + 1;
     reasoningRequestVersionRef.current = requestVersion;
     setReasoningEffort(effort);
+    if (!options.persistReasoningSelection) {
+      return;
+    }
     // saved records whether the service accepted this reasoning selection.
     // saved 记录服务是否接受本次推理选择。
     const saved = await options.onSelectReasoningEffort(effort);
     if (!saved && reasoningRequestVersionRef.current === requestVersion) {
       setReasoningEffort(previousEffort);
     }
-  }, [options.onSelectReasoningEffort, reasoningEffort]);
+  }, [options.onSelectReasoningEffort, options.persistReasoningSelection, reasoningEffort]);
 
   // openModelPicker increments the external open signal consumed by ModelPickerControl.
   // openModelPicker 递增 ModelPickerControl 使用的外部打开信号。

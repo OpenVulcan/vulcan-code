@@ -152,6 +152,9 @@ export interface ProviderModelSummary {
   // Optional reasoning profile JSON text.
   // 可选推理档位配置 JSON 文本。
   reasoningProfileJson?: string | null;
+  // Exact reasoning selector projected from this model's discovered capabilities.
+  // 从该模型已发现能力投影出的精确思考选择器。
+  reasoningSelection?: ReasoningSelectionSummary | null;
   // Whether this provider/model pair supports backend-managed secondary routes.
   // 该 Provider/模型组合是否支持后端管理的二级路由。
   supportsSecondaryRoutes?: boolean;

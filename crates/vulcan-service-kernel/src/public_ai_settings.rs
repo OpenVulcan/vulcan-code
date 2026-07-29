@@ -2518,7 +2518,7 @@ pub(super) fn service_save_public_ai_session_provider_tool_selections(
 
 /// Validates that every selected target belongs to its exact capability.
 /// 校验每个选中目标均属于其精确能力。
-fn validate_provider_tool_selections(
+pub(crate) fn validate_provider_tool_selections(
     runtime: &PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
     selections: &BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
@@ -2595,7 +2595,7 @@ fn session_provider_tool_selections_from_runtime(
 
 /// Serializes one capability key exactly as the public JSON contract.
 /// 按公共 JSON 契约精确序列化一项能力键。
-fn provider_tool_capability_key(capability: ProviderToolCapabilityKind) -> String {
+pub(crate) fn provider_tool_capability_key(capability: ProviderToolCapabilityKind) -> String {
     serde_json::to_value(capability)
         .ok()
         .and_then(|value| value.as_str().map(str::to_string))

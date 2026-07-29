@@ -42,6 +42,7 @@ import type {
 } from "@/types";
 
 import type { ComposerAttachmentPreviewMedia } from "./composer-control-types";
+import type { ComposerKnowledgeSelectionSnapshot } from "./composer-model";
 import { ComposerKnowledgeControl } from "./composer-knowledge-control";
 
 // ComposerAttachmentMenu renders the plus button and attachment submenu.
@@ -58,7 +59,10 @@ export function ComposerAttachmentMenu(props: {
   planModeEnabled: boolean;
   // Current selected-session VMM memory policy state.
   // 当前选中会话的 VMM 记忆策略状态。
-  sessionVmmPolicy: SessionVmmPolicySummary | null;
+  sessionVmmPolicy: Pick<
+    SessionVmmPolicySummary,
+    "precheckMode" | "memoryWritebackMode"
+  > | null;
   // Opens a file picker for one attachment kind or all kinds.
   // 按附件类型或全部类型打开文件选择器。
   onPick: (kind: string | null) => void;
@@ -83,6 +87,12 @@ export function ComposerAttachmentMenu(props: {
   // Opens the project knowledge-library management surface.
   // 打开项目知识库管理界面。
   onOpenKnowledge: () => void;
+  // Optional new-conversation knowledge selection.
+  // 可选的新会话知识库选择。
+  draftKnowledgeSelection?: ComposerKnowledgeSelectionSnapshot | null;
+  // Saves one new-conversation knowledge selection.
+  // 保存一份新会话知识库选择。
+  onDraftKnowledgeSelectionChange?: (selection: ComposerKnowledgeSelectionSnapshot) => void;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -137,6 +147,8 @@ export function ComposerAttachmentMenu(props: {
         </DropdownMenuSub>
         <ComposerKnowledgeControl
           conversationId={props.conversationId}
+          draftSelection={props.draftKnowledgeSelection}
+          onDraftSelectionChange={props.onDraftKnowledgeSelectionChange}
           onOpenKnowledge={props.onOpenKnowledge}
           projectId={props.projectId}
         />

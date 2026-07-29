@@ -9,7 +9,10 @@ import type {
   UserPromptEditDraftSummary,
   WorkbenchSnapshot,
 } from "@/types";
-import type { ComposerModelSelectionSnapshot } from "@/components/composer/composer-model";
+import type {
+  ComposerModelSelectionSnapshot,
+  ComposerSessionSettingsSnapshot,
+} from "@/components/composer/composer-model";
 import {
   hasServiceRuntime,
   serviceClient,
@@ -27,6 +30,7 @@ export async function submitConversationPrompt(
   executionMode: string,
   reasoningEffort: string | null,
   modelSelection: ComposerModelSelectionSnapshot | null,
+  sessionSettings: ComposerSessionSettingsSnapshot | null,
 ): Promise<SubmitConversationPromptAck | null> {
   if (!hasServiceRuntime()) {
     return null;
@@ -40,6 +44,7 @@ export async function submitConversationPrompt(
     executionMode,
     reasoningEffort,
     modelSelection,
+    sessionSettings,
   });
 }
 
