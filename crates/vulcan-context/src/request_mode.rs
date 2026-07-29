@@ -13,6 +13,9 @@ pub struct ContextRequestModeInput<'a> {
     /// Current provider identifier.
     /// 当前 Provider 标识。
     pub provider_id: &'a str,
+    /// Current protocol profile identifier.
+    /// 当前协议配置标识。
+    pub protocol_profile_id: &'a str,
     /// Current model identifier.
     /// 当前模型标识。
     pub model_id: &'a str,
@@ -31,6 +34,9 @@ pub struct ContextRequestModeInput<'a> {
     /// Provider identifier recorded in the continuation cursor.
     /// continuation 游标中记录的 Provider 标识。
     pub continuation_provider_id: Option<&'a str>,
+    /// Protocol profile identifier recorded in the continuation cursor.
+    /// continuation 游标中记录的协议配置标识。
+    pub continuation_protocol_profile_id: Option<&'a str>,
     /// Model identifier recorded in the continuation cursor.
     /// continuation 游标中记录的模型标识。
     pub continuation_model_id: Option<&'a str>,
@@ -104,12 +110,15 @@ pub enum ContextIncrementalDisabledReason {
         /// 预算快照捕获的人类可读失配详情。
         detail: Option<String>,
     },
-    /// The continuation cursor belongs to another provider or model.
-    /// continuation 游标属于另一个 Provider 或模型。
+    /// The continuation cursor belongs to another provider, protocol profile, or model.
+    /// continuation 游标属于另一个 Provider、协议配置或模型。
     ProviderContinuationMismatch {
         /// Provider identifier stored on the continuation cursor.
         /// continuation 游标中保存的 Provider 标识。
         continuation_provider_id: Option<String>,
+        /// Protocol profile identifier stored on the continuation cursor.
+        /// continuation 游标中保存的协议配置标识。
+        continuation_protocol_profile_id: Option<String>,
         /// Model identifier stored on the continuation cursor.
         /// continuation 游标中保存的模型标识。
         continuation_model_id: Option<String>,
@@ -206,10 +215,12 @@ impl ContextIncrementalDisabledReason {
                 .unwrap_or_else(|| String::from("基线失配")),
             Self::ProviderContinuationMismatch {
                 continuation_provider_id,
+                continuation_protocol_profile_id,
                 continuation_model_id,
             } => format!(
-                "continuation 属于 {}/{}",
+                "continuation 属于 {}/{}/{}",
                 continuation_provider_id.as_deref().unwrap_or("?"),
+                continuation_protocol_profile_id.as_deref().unwrap_or("?"),
                 continuation_model_id.as_deref().unwrap_or("?")
             ),
         }
@@ -265,11 +276,15 @@ pub fn resolve_context_request_mode(input: ContextRequestModeInput<'_>) -> Conte
     };
 
     let continuation_matches_provider = input.continuation_provider_id == Some(input.provider_id)
+        && input.continuation_protocol_profile_id == Some(input.protocol_profile_id)
         && input.continuation_model_id == Some(input.model_id);
     if !continuation_matches_provider {
         return ContextRequestMode::IncrementalDisabled {
             reason: ContextIncrementalDisabledReason::ProviderContinuationMismatch {
                 continuation_provider_id: input.continuation_provider_id.map(str::to_string),
+                continuation_protocol_profile_id: input
+                    .continuation_protocol_profile_id
+                    .map(str::to_string),
                 continuation_model_id: input.continuation_model_id.map(str::to_string),
             },
         };
@@ -311,12 +326,14 @@ mod tests {
         ContextRequestModeInput {
             internal_request: false,
             provider_id: "openai",
+            protocol_profile_id: "openai-responses",
             model_id: "gpt-5",
             history_message_count: 2,
             context_assembly: Some(assembly),
             context_baseline: Some(baseline),
             context_budget: budget,
             continuation_provider_id: Some("openai"),
+            continuation_protocol_profile_id: Some("openai-responses"),
             continuation_model_id: Some("gpt-5"),
             continuation_message_id: Some("msg-1"),
         }
@@ -350,6 +367,29 @@ mod tests {
             mode,
             ContextRequestMode::Full {
                 reason: ContextFullRequestReason::ProviderContinuationMissing,
+            }
+        );
+    }
+
+    /// Verifies a protocol-profile switch disables incremental continuation even when provider and model match.
+    /// 验证即使供应商与模型相同，协议配置切换也会禁用增量 continuation。
+    #[test]
+    fn request_mode_disables_incremental_when_protocol_profile_changes() {
+        let assembly = test_assembly();
+        let baseline = ContextBaseline::from_assembly(&assembly);
+        let mut input = test_input(&assembly, &baseline, None);
+        input.protocol_profile_id = "anthropic-messages";
+
+        let mode = resolve_context_request_mode(input);
+
+        assert_eq!(
+            mode,
+            ContextRequestMode::IncrementalDisabled {
+                reason: ContextIncrementalDisabledReason::ProviderContinuationMismatch {
+                    continuation_provider_id: Some(String::from("openai")),
+                    continuation_protocol_profile_id: Some(String::from("openai-responses")),
+                    continuation_model_id: Some(String::from("gpt-5")),
+                },
             }
         );
     }

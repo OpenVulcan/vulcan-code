@@ -1,13 +1,16 @@
 //! OpenAI Chat Completions and Responses stream decoders.
 //! OpenAI Chat Completions 与 Responses 流解码器。
 
-use crate::{ProtocolConversionError, ProtocolStreamDecoder, merge_streamed_tool_name};
+use crate::{
+    ProtocolConversionError, ProtocolStreamDecoder, merge_streamed_tool_name,
+    shared::append_bounded_tool_arguments,
+};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::{
-    AiErrorCategory, AiExecutionError, AiStreamEvent, ContentItem, RequestUsage, ResourceKind,
-    ResourceReference, ResourceTransferState, ToolCall, ToolCallProgress, UsageValue,
-    UsageValueSource,
+    AiContinuationUpdate, AiErrorCategory, AiExecutionError, AiStreamEvent, ContentItem,
+    RequestUsage, ResourceKind, ResourceReference, ResourceTransferState, ToolCall,
+    ToolCallProgress, UsageValue, UsageValueSource, derive_uncached_input,
 };
 
 /// Tracks one OpenAI-compatible streamed tool call.
@@ -247,7 +250,7 @@ impl OpenAiChatStreamDecoder {
             }
         }
         if !argument_delta.is_empty() {
-            state.arguments.push_str(argument_delta);
+            append_bounded_tool_arguments(&mut state.arguments, argument_delta, "OpenAI Chat")?;
             if state.started {
                 events.push(tool_argument_delta(state, argument_delta)?);
             }
@@ -297,6 +300,7 @@ impl OpenAiChatStreamDecoder {
                         id: state.call_id.clone(),
                         name: state.tool_name.clone(),
                         arguments,
+                        signature: None,
                     },
                 }),
                 Err(error) => events.push(AiStreamEvent::ToolCallAborted {
@@ -380,6 +384,9 @@ pub(crate) struct OpenAiResponsesStreamDecoder {
     /// Whether a terminal response event was emitted.
     /// 是否已经发送响应终态事件。
     terminal: bool,
+    /// Stable upstream response identifier used by a later continuation request.
+    /// 后续延续请求使用的稳定上游响应标识。
+    response_id: Option<String>,
     /// Open text items keyed by output index.
     /// 按输出索引保存的打开文本项。
     text_items: BTreeMap<u32, String>,
@@ -418,6 +425,7 @@ impl OpenAiResponsesStreamDecoder {
             execution_id,
             started: false,
             terminal: false,
+            response_id: None,
             text_items: BTreeMap::new(),
             reasoning_items: BTreeMap::new(),
             reasoning_signature: None,
@@ -437,6 +445,46 @@ impl OpenAiResponsesStreamDecoder {
         vec![AiStreamEvent::ResponseStarted {
             execution_id: self.execution_id.clone(),
         }]
+    }
+
+    /// Captures one immutable upstream response identifier and emits it exactly once.
+    /// 捕获一个不可变上游响应标识并且仅发送一次。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `value` is one Responses lifecycle event that may carry `/response/id`.
+    /// `value` 是可能携带 `/response/id` 的 Responses 生命周期事件。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A metadata update for the first identifier, no event for a duplicate, or an error for mutation.
+    /// 首次标识返回元数据更新；重复标识不返回事件；标识变化时返回错误。
+    fn capture_response_id(
+        &mut self,
+        value: &Value,
+    ) -> Result<Vec<AiStreamEvent>, ProtocolConversionError> {
+        let Some(response_id) = value
+            .pointer("/response/id")
+            .or_else(|| value.get("response_id"))
+            .and_then(Value::as_str)
+            .filter(|response_id| !response_id.trim().is_empty())
+        else {
+            return Ok(Vec::new());
+        };
+        if let Some(existing) = self.response_id.as_deref() {
+            if existing != response_id {
+                return Err(ProtocolConversionError::new(
+                    "OpenAI Responses changed response identity during one stream.",
+                ));
+            }
+            return Ok(Vec::new());
+        }
+        self.response_id = Some(response_id.to_string());
+        Ok(vec![AiStreamEvent::ResponseMetadataUpdated {
+            continuation: AiContinuationUpdate {
+                provider_message_id: response_id.to_string(),
+            },
+        }])
     }
 
     /// Returns a required bounded output index.
@@ -528,7 +576,7 @@ impl OpenAiResponsesStreamDecoder {
                 "OpenAI Responses argument delta references unopened index `{index}`."
             ))
         })?;
-        state.arguments.push_str(delta);
+        append_bounded_tool_arguments(&mut state.arguments, delta, "OpenAI Responses")?;
         Ok(vec![tool_argument_delta(state, delta)?])
     }
 
@@ -548,7 +596,8 @@ impl OpenAiResponsesStreamDecoder {
             return Ok(Vec::new());
         }
         if let Some(arguments) = value.get("arguments").and_then(Value::as_str) {
-            state.arguments = arguments.to_string();
+            state.arguments.clear();
+            append_bounded_tool_arguments(&mut state.arguments, arguments, "OpenAI Responses")?;
         }
         state.terminal = true;
         match serde_json::from_str::<Value>(state.arguments.as_str()) {
@@ -558,6 +607,7 @@ impl OpenAiResponsesStreamDecoder {
                     id: state.call_id.clone(),
                     name: state.tool_name.clone(),
                     arguments,
+                    signature: None,
                 },
             }]),
             Err(error) => Ok(vec![AiStreamEvent::ToolCallAborted {
@@ -784,7 +834,9 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
             })?;
         let mut events = self.start_if_needed();
         match wire_type {
-            "response.created" | "response.in_progress" => {}
+            "response.created" | "response.in_progress" => {
+                events.extend(self.capture_response_id(&value)?);
+            }
             "response.output_item.added" => events.extend(self.output_item_added(&value)?),
             "response.output_text.delta" => {
                 let index = Self::output_index(&value)?;
@@ -850,6 +902,7 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
                 events.extend(self.complete_tool(&value)?);
             }
             "response.completed" => {
+                events.extend(self.capture_response_id(&value)?);
                 events.extend(self.close_semantic_items());
                 events.extend(self.abort_incomplete_tools("response.completed"));
                 events.extend(self.fail_incomplete_images("response.completed"));
@@ -865,6 +918,7 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
                 events.push(AiStreamEvent::ResponseCompleted);
             }
             "response.failed" | "response.incomplete" => {
+                events.extend(self.capture_response_id(&value)?);
                 events.extend(self.close_semantic_items());
                 events.extend(self.abort_incomplete_tools(wire_type));
                 events.extend(self.fail_incomplete_images(wire_type));
@@ -999,8 +1053,17 @@ fn tool_argument_delta(
 /// Converts OpenAI usage while preserving unknown fields.
 /// 转换 OpenAI 用量并保留未知字段。
 fn openai_usage(value: &Value) -> RequestUsage {
+    let input_tokens = reported_usage(value, &["input_tokens", "prompt_tokens"]);
+    let cache_read_tokens = reported_pointer_usage(
+        value,
+        &[
+            "/input_tokens_details/cached_tokens",
+            "/prompt_tokens_details/cached_tokens",
+        ],
+    );
     RequestUsage {
-        input_tokens: reported_usage(value, &["input_tokens", "prompt_tokens"]),
+        input_tokens,
+        uncached_input_tokens: derive_uncached_input(input_tokens, cache_read_tokens),
         output_tokens: reported_usage(value, &["output_tokens", "completion_tokens"]),
         reasoning_tokens: reported_pointer_usage(
             value,
@@ -1009,13 +1072,7 @@ fn openai_usage(value: &Value) -> RequestUsage {
                 "/completion_tokens_details/reasoning_tokens",
             ],
         ),
-        cache_read_tokens: reported_pointer_usage(
-            value,
-            &[
-                "/input_tokens_details/cached_tokens",
-                "/prompt_tokens_details/cached_tokens",
-            ],
-        ),
+        cache_read_tokens,
         cache_write_tokens: reported_pointer_usage(
             value,
             &[
@@ -1088,19 +1145,39 @@ fn normalize_openai_error(error: &Value, outer_error_type: Option<&Value>) -> Ai
         }
         _ => AiErrorCategory::Unclassified,
     };
+    let upstream_message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     AiExecutionError {
         category,
-        subcategory: error_type,
+        subcategory: error_type.clone(),
         stage: String::from("stream"),
         http_status: None,
         upstream_code: code,
-        message: error
-            .get("message")
+        upstream_type: error_type,
+        upstream_parameter: error
+            .get("param")
             .and_then(Value::as_str)
+            .map(str::to_string),
+        upstream_message: upstream_message.clone(),
+        request_id: error
+            .get("request_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        provider_id: None,
+        entry_id: None,
+        model_id: error
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        message: upstream_message
+            .as_deref()
             .unwrap_or("OpenAI-compatible stream failed.")
             .to_string(),
         dispatch_outcome: vulcan_ai_contract::DispatchOutcome::Dispatched,
         semantic_output_observed: false,
+        side_effect_observed: false,
         terminal: true,
         retryable: matches!(
             category,
@@ -1109,7 +1186,7 @@ fn normalize_openai_error(error: &Value, outer_error_type: Option<&Value>) -> Ai
                 | AiErrorCategory::ProviderUnavailable
                 | AiErrorCategory::Timeout
         ),
-        retry_after_seconds: None,
+        retry_after: None,
     }
 }
 
@@ -1323,6 +1400,36 @@ mod tests {
             events
                 .iter()
                 .any(|event| matches!(event, AiStreamEvent::ToolCallAborted { .. }))
+        );
+    }
+
+    /// Verifies Responses publishes the immutable upstream response identifier exactly once.
+    /// 验证 Responses 只会发布一次不可变的上游响应标识。
+    #[test]
+    fn responses_publishes_response_identifier_once() {
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        let created = decoder
+            .push_sse(
+                Some("response.created"),
+                r#"{"type":"response.created","response":{"id":"resp_123"}}"#,
+            )
+            .expect("response identity should decode");
+        assert!(created.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ResponseMetadataUpdated { continuation }
+                if continuation.provider_message_id == "resp_123"
+        )));
+
+        let in_progress = decoder
+            .push_sse(
+                Some("response.in_progress"),
+                r#"{"type":"response.in_progress","response":{"id":"resp_123"}}"#,
+            )
+            .expect("stable response identity should decode");
+        assert!(
+            !in_progress
+                .iter()
+                .any(|event| matches!(event, AiStreamEvent::ResponseMetadataUpdated { .. }))
         );
     }
 

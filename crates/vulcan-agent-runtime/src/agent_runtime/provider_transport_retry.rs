@@ -4,6 +4,7 @@
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::provider_config::PersistedProviderRetryConfiguration;
 use std::time::Duration;
+use vulcan_ai_contract::{AiErrorCategory, AiExecutionError};
 use vulcan_core::types::CoreError as VulcanCoreError;
 
 /// Hard safety ceiling for every backend-configured rate-limit retry wait.
@@ -153,7 +154,9 @@ impl ProviderRetryPolicy {
         let delay = if is_rate_limit {
             self.rate_limit_delay(retry_number, retry_after)
         } else {
-            retry_after.unwrap_or_else(|| self.local_delay(retry_number))
+            retry_after
+                .map(|delay| delay.min(self.max_delay))
+                .unwrap_or_else(|| self.local_delay(retry_number))
         };
         Some(ProviderRetryDecision {
             retry_number,
@@ -275,6 +278,106 @@ fn classify_retry_reason(
     error: &VulcanCoreError,
     retry_429: bool,
 ) -> Option<ProviderRetryClassification> {
+    if let VulcanCoreError::ProviderFailure {
+        details: Some(details),
+        ..
+    } = error
+    {
+        return classify_structured_retry_reason(details, retry_429);
+    }
+    classify_legacy_retry_reason(error, retry_429)
+}
+
+/// Classifies one typed public-contract failure without inspecting display text.
+/// 在不检查展示文本的前提下分类一个强类型公共契约失败。
+///
+/// # Parameters
+/// 参数
+/// `error` is the normalized execution failure and `retry_429` controls rate-limit retry.
+/// `error` 是归一化执行失败，`retry_429` 控制是否重试限流。
+///
+/// # Returns
+/// 返回值
+/// A retry classification only when the typed safety and retryability flags permit replay.
+/// 仅当强类型安全标志与可重试标志允许重放时返回重试分类。
+fn classify_structured_retry_reason(
+    error: &AiExecutionError,
+    retry_429: bool,
+) -> Option<ProviderRetryClassification> {
+    if !error.retryable || error.semantic_output_observed || error.side_effect_observed {
+        return None;
+    }
+    match error.category {
+        AiErrorCategory::RateLimited if retry_429 => Some(ProviderRetryClassification {
+            category: ProviderRetryCategory::RateLimit,
+            reason: String::from("Provider rate limit"),
+        }),
+        AiErrorCategory::ProviderOverloaded => Some(ProviderRetryClassification {
+            category: ProviderRetryCategory::Transient,
+            reason: String::from("Provider overloaded"),
+        }),
+        AiErrorCategory::ProviderUnavailable => Some(ProviderRetryClassification {
+            category: ProviderRetryCategory::Transient,
+            reason: String::from("Provider unavailable"),
+        }),
+        AiErrorCategory::Timeout => Some(ProviderRetryClassification {
+            category: ProviderRetryCategory::Transient,
+            reason: String::from("Provider timeout"),
+        }),
+        AiErrorCategory::Unclassified => {
+            classify_structured_http_status(error.http_status, retry_429)
+        }
+        _ => None,
+    }
+}
+
+/// Classifies an exact HTTP status retained by a typed but otherwise unclassified error.
+/// 分类由强类型但尚未归类的错误保留的精确 HTTP 状态。
+///
+/// # Parameters
+/// 参数
+/// `status` is the upstream status and `retry_429` controls rate-limit retry.
+/// `status` 是上游状态码，`retry_429` 控制是否重试限流。
+///
+/// # Returns
+/// 返回值
+/// A rate-limit or transient classification for the registered retryable statuses.
+/// 对已注册的可重试状态返回限流或瞬态分类。
+fn classify_structured_http_status(
+    status: Option<u16>,
+    retry_429: bool,
+) -> Option<ProviderRetryClassification> {
+    match status {
+        Some(429) if retry_429 => Some(ProviderRetryClassification {
+            category: ProviderRetryCategory::RateLimit,
+            reason: String::from("Provider rate limit"),
+        }),
+        Some(status @ (408 | 425 | 500 | 502 | 503 | 504 | 529)) => {
+            Some(ProviderRetryClassification {
+                category: ProviderRetryCategory::Transient,
+                reason: format!("Provider HTTP {status}"),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Classifies a pre-public-contract provider error retained for legacy controller adapters.
+/// 分类为公共契约迁移前控制器适配器保留的旧 Provider 错误。
+///
+/// # Parameters
+/// 参数
+/// `error` is a Core failure without structured details and `retry_429` controls rate limits.
+/// `error` 是不带结构化细节的 Core 失败，`retry_429` 控制限流重试。
+///
+/// # Returns
+/// 返回值
+/// A conservative compatibility classification, or `None`.
+/// 返回保守的兼容分类，否则返回 `None`。
+fn classify_legacy_retry_reason(
+    error: &VulcanCoreError,
+    retry_429: bool,
+) -> Option<ProviderRetryClassification> {
     let text = error.to_string();
     let lower = text.to_ascii_lowercase();
 
@@ -376,6 +479,16 @@ fn contains_status(lower: &str, status: u16) -> bool {
 /// Extracts a retry-after delay from one provider error string when available.
 /// 在可用时从 Provider 错误字符串中提取 retry-after 等待时间。
 fn retry_after_from_error(error: &VulcanCoreError) -> Option<Duration> {
+    if let VulcanCoreError::ProviderFailure {
+        details: Some(details),
+        ..
+    } = error
+    {
+        return details
+            .retry_after
+            .as_ref()
+            .map(|hint| Duration::from_millis(hint.delay_milliseconds));
+    }
     let text = error.to_string();
     let marker = "retry_after_ms=";
     let index = text.find(marker)? + marker.len();
@@ -398,6 +511,9 @@ mod tests {
         PersistedProviderRateLimitRetryConfiguration, PersistedProviderRetryConfiguration,
     };
     use std::time::Duration;
+    use vulcan_ai_contract::{
+        AiErrorCategory, AiExecutionError, DispatchOutcome, RetryAfterHint, RetryAfterSource,
+    };
     use vulcan_core::types::CoreError as VulcanCoreError;
 
     /// Builds a deterministic retry policy for assertions.
@@ -427,6 +543,47 @@ mod tests {
         VulcanCoreError::ProviderFailure {
             provider_id: String::from("test"),
             message: message.to_string(),
+            details: None,
+        }
+    }
+
+    /// Builds one typed public-contract provider failure for retry assertions.
+    /// 构建一条供重试断言使用的强类型公共契约 Provider 失败。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `category` and `retryable` are the authoritative typed retry inputs.
+    /// `category` 与 `retryable` 是权威的强类型重试输入。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A Core provider failure carrying normalized execution details.
+    /// 返回携带归一化执行细节的 Core Provider 失败。
+    fn structured_provider_error(category: AiErrorCategory, retryable: bool) -> VulcanCoreError {
+        VulcanCoreError::ProviderFailure {
+            provider_id: String::from("test"),
+            message: String::from("HTTP 400 misleading display text"),
+            details: Some(Box::new(AiExecutionError {
+                category,
+                subcategory: None,
+                stage: String::from("response_headers"),
+                http_status: None,
+                upstream_code: None,
+                upstream_type: None,
+                upstream_parameter: None,
+                upstream_message: None,
+                request_id: None,
+                provider_id: Some(String::from("test")),
+                entry_id: Some(String::from("global")),
+                model_id: Some(String::from("model")),
+                message: String::from("safe display text"),
+                dispatch_outcome: DispatchOutcome::Dispatched,
+                semantic_output_observed: false,
+                side_effect_observed: false,
+                terminal: true,
+                retryable,
+                retry_after: None,
+            })),
         }
     }
 
@@ -461,6 +618,92 @@ mod tests {
             .expect("429 with retry-after should be retryable");
 
         assert_eq!(decision.delay, Duration::from_millis(2_500));
+    }
+
+    /// Verifies ordinary transient Retry-After hints cannot bypass the configured maximum delay.
+    /// 验证普通瞬态 Retry-After 提示不能绕过已配置的最大等待时间。
+    #[test]
+    fn transient_retry_after_is_capped_by_configured_maximum() {
+        let error = provider_error("HTTP 503 Service Unavailable | retry_after_ms=2500");
+        let decision = policy()
+            .next_retry(&error, 0, false)
+            .expect("503 with retry-after should retry");
+
+        assert_eq!(decision.delay, Duration::from_millis(1_000));
+    }
+
+    /// Verifies typed retry data takes precedence over contradictory display text.
+    /// 验证强类型重试数据优先于相互矛盾的展示文本。
+    #[test]
+    fn structured_errors_never_depend_on_display_text() {
+        let decision = policy()
+            .next_retry(
+                &structured_provider_error(AiErrorCategory::ProviderUnavailable, true),
+                0,
+                false,
+            )
+            .expect("typed provider-unavailable error should retry");
+        assert_eq!(decision.reason, "Provider unavailable");
+
+        assert!(
+            policy()
+                .next_retry(
+                    &structured_provider_error(AiErrorCategory::InvalidRequest, false),
+                    0,
+                    false,
+                )
+                .is_none()
+        );
+    }
+
+    /// Verifies typed retry-after milliseconds flow directly into scheduling.
+    /// 验证强类型 Retry-After 毫秒值直接进入调度。
+    #[test]
+    fn structured_retry_after_preserves_subsecond_precision() {
+        let mut error = structured_provider_error(AiErrorCategory::RateLimited, true);
+        let VulcanCoreError::ProviderFailure {
+            details: Some(details),
+            ..
+        } = &mut error
+        else {
+            panic!("structured error expected");
+        };
+        details.retry_after = Some(RetryAfterHint {
+            delay_milliseconds: 2_501,
+            source: RetryAfterSource::HeaderSeconds,
+        });
+
+        let decision = policy()
+            .next_retry(&error, 0, false)
+            .expect("typed rate-limit error should retry");
+        assert_eq!(decision.delay, Duration::from_millis(2_501));
+    }
+
+    /// Verifies typed semantic output and side effects independently block transparent replay.
+    /// 验证强类型语义输出与副作用分别阻止透明重放。
+    #[test]
+    fn structured_output_and_side_effect_flags_block_retry() {
+        let mut semantic = structured_provider_error(AiErrorCategory::ProviderUnavailable, true);
+        let VulcanCoreError::ProviderFailure {
+            details: Some(details),
+            ..
+        } = &mut semantic
+        else {
+            panic!("structured error expected");
+        };
+        details.semantic_output_observed = true;
+        assert!(policy().next_retry(&semantic, 0, false).is_none());
+
+        let mut side_effect = structured_provider_error(AiErrorCategory::ProviderUnavailable, true);
+        let VulcanCoreError::ProviderFailure {
+            details: Some(details),
+            ..
+        } = &mut side_effect
+        else {
+            panic!("structured error expected");
+        };
+        details.side_effect_observed = true;
+        assert!(policy().next_retry(&side_effect, 0, false).is_none());
     }
 
     /// Verifies Anthropic-compatible structured rate-limit errors remain retryable when the proxy omits HTTP 429 from the formatted message.

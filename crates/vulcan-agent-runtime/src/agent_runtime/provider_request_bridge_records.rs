@@ -16,6 +16,7 @@ pub(crate) fn session_continuation_to_core_continuation(
 ) -> CoreProviderContinuation {
     CoreProviderContinuation {
         provider_id: continuation.provider_id.clone(),
+        protocol_profile_id: continuation.protocol_profile_id.clone(),
         model_id: continuation.model_id.clone(),
         last_provider_message_id: continuation.last_provider_message_id.clone(),
         last_local_message_id: continuation.last_local_message_id.clone(),
@@ -33,6 +34,7 @@ pub(crate) fn core_continuation_to_session_continuation(
 ) -> SessionProviderContinuationState {
     SessionProviderContinuationState {
         provider_id: continuation.provider_id.clone(),
+        protocol_profile_id: continuation.protocol_profile_id.clone(),
         model_id: continuation.model_id.clone(),
         last_provider_message_id: continuation.last_provider_message_id.clone(),
         last_local_message_id: continuation.last_local_message_id.clone(),

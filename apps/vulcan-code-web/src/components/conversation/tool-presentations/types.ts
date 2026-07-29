@@ -544,6 +544,29 @@ export interface ProviderToolExtractPresentation {
   failures: ProviderToolExtractPresentationFailure[];
 }
 
+// ProviderToolStructuredPresentation describes one normalized embedding, rerank, or composite result.
+// ProviderToolStructuredPresentation 描述一个归一化向量、重排或复合结果。
+export interface ProviderToolStructuredPresentation {
+  // Presentation discriminator.
+  // 展示判别字段。
+  kind: "provider_tool_structured";
+  // Stable expansion identifier.
+  // 稳定展开标识。
+  id: string;
+  // Current tool state.
+  // 当前工具状态。
+  state: ToolPresentationDisplayState;
+  // Exact closed unified output kind.
+  // 精确的封闭统一输出类型。
+  outputKind: "embedding" | "rerank" | "composite";
+  // Number of top-level semantic items represented by the payload.
+  // 载荷表示的顶层语义项数量。
+  itemCount: number;
+  // Strict normalized payload for expanded inspection.
+  // 用于展开检查的严格归一化载荷。
+  payload: Record<string, unknown>;
+}
+
 // ToolPresentation is the union of all recognized custom tool displays.
 // ToolPresentation 是所有已识别自定义工具展示的联合类型。
-export type ToolPresentation = CommandExecutionPresentation | FileChangePresentation | MarkdownToolPresentation | LuaExecutionPresentation | AskQuestionPresentation | SubagentOrchestrationPresentation | ProviderToolSearchPresentation | ProviderToolExtractPresentation | ProviderToolTextPresentation;
+export type ToolPresentation = CommandExecutionPresentation | FileChangePresentation | MarkdownToolPresentation | LuaExecutionPresentation | AskQuestionPresentation | SubagentOrchestrationPresentation | ProviderToolSearchPresentation | ProviderToolExtractPresentation | ProviderToolTextPresentation | ProviderToolStructuredPresentation;

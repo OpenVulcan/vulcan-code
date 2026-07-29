@@ -3,13 +3,14 @@
 
 use crate::{
     EncodedWireRequest, ProtocolConversionError, ProtocolProfile, ProtocolStreamDecoder,
-    merge_streamed_tool_name,
+    merge_streamed_tool_name, shared::append_bounded_tool_arguments,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use vulcan_ai_contract::{
-    AiExecutionRequest, AiMessage, AiStreamEvent, ContentItem, MessageRole, PromptCachePolicy,
-    RequestUsage, ToolCall, ToolCallProgress, UsageValue, UsageValueSource,
+    AiExecutionRequest, AiMessage, AiStreamEvent, ContentItem, MessageRole, ParallelToolCallPolicy,
+    PromptCachePolicy, ReasoningOutputPolicy, RequestUsage, StructuredOutputPolicy, ToolCall,
+    ToolCallProgress, ToolChoicePolicy, UsageValue, UsageValueSource,
 };
 
 /// Stable profile identifier for Cohere v2 Chat.
@@ -25,6 +26,12 @@ impl ProtocolProfile for CohereChatProfile {
     /// 返回稳定的 Cohere Profile 标识。
     fn id(&self) -> &'static str {
         COHERE_CHAT_PROFILE_ID
+    }
+
+    /// Returns the bounded Cohere SSE transport declaration.
+    /// 返回有界 Cohere SSE 传输声明。
+    fn transport_profile(&self) -> crate::ProtocolTransportProfile {
+        crate::ProtocolTransportProfile::bounded_sse()
     }
 
     /// Encodes one public request into Cohere v2 Chat JSON.
@@ -75,6 +82,7 @@ impl ProtocolProfile for CohereChatProfile {
         if let Some(limit) = request.output_token_limit {
             body.insert(String::from("max_tokens"), json!(limit));
         }
+        project_cohere_request_controls(request, &mut body)?;
         Ok(EncodedWireRequest {
             path: String::from("/v2/chat"),
             headers: BTreeMap::new(),
@@ -94,6 +102,84 @@ impl ProtocolProfile for CohereChatProfile {
             request.tools.iter().map(|tool| tool.name.clone()).collect(),
         ))
     }
+}
+
+/// Projects provider-neutral controls into Cohere v2 Chat fields.
+/// 将供应商无关控制投影到 Cohere v2 Chat 字段。
+///
+/// # Parameters
+/// 参数
+/// `request` is the exact public request and `body` is the mutable Cohere object.
+/// `request` 是精确公共请求，`body` 是可变 Cohere 对象。
+///
+/// # Returns
+/// 返回值
+/// A controlled conversion error when Cohere v2 has no exact representation.
+/// 当 Cohere v2 没有精确表示时返回受控转换错误。
+fn project_cohere_request_controls(
+    request: &AiExecutionRequest,
+    body: &mut serde_json::Map<String, Value>,
+) -> Result<(), ProtocolConversionError> {
+    match &request.tool_choice {
+        ToolChoicePolicy::Auto => {}
+        ToolChoicePolicy::Required => {
+            body.insert(
+                String::from("tool_choice"),
+                Value::String(String::from("REQUIRED")),
+            );
+        }
+        ToolChoicePolicy::Disabled => {
+            body.insert(
+                String::from("tool_choice"),
+                Value::String(String::from("NONE")),
+            );
+        }
+        ToolChoicePolicy::Specific { .. } => {
+            return Err(ProtocolConversionError::new(
+                "Cohere v2 Chat has no registered specific-tool-choice projector.",
+            ));
+        }
+    }
+    if !matches!(
+        request.parallel_tool_calls,
+        ParallelToolCallPolicy::ProviderDefault
+    ) {
+        return Err(ProtocolConversionError::new(
+            "Cohere v2 Chat has no registered parallel-tool-call projector.",
+        ));
+    }
+    match &request.structured_output {
+        StructuredOutputPolicy::None => {}
+        StructuredOutputPolicy::JsonObject => {
+            body.insert(
+                String::from("response_format"),
+                json!({ "type": "json_object" }),
+            );
+        }
+        StructuredOutputPolicy::JsonSchema { schema, .. } => {
+            body.insert(
+                String::from("response_format"),
+                json!({ "type": "json_object", "schema": schema }),
+            );
+        }
+    }
+    if !request.stop_sequences.is_empty() {
+        body.insert(
+            String::from("stop_sequences"),
+            json!(request.stop_sequences),
+        );
+    }
+    if request.reasoning_effort.is_some()
+        || !matches!(
+            request.reasoning_output,
+            ReasoningOutputPolicy::ProviderDefault
+        )
+    {
+        return Err(ProtocolConversionError::new(
+            "Cohere v2 Chat has no registered public reasoning projector.",
+        ));
+    }
+    Ok(())
 }
 
 /// Encodes one public message into one or more native Cohere messages.
@@ -331,7 +417,7 @@ impl CohereStreamDecoder {
         index: usize,
         fragment: &Value,
         events: &mut Vec<AiStreamEvent>,
-    ) {
+    ) -> Result<(), ProtocolConversionError> {
         let pending = self.tools.entry(index).or_default();
         if let Some(call_id) = fragment.get("id").and_then(Value::as_str) {
             pending.call_id = call_id.to_string();
@@ -342,7 +428,7 @@ impl CohereStreamDecoder {
                     merge_streamed_tool_name(pending.name.as_str(), name, &self.registered_tools);
             }
             if let Some(arguments) = function.get("arguments").and_then(Value::as_str) {
-                pending.arguments.push_str(arguments);
+                append_bounded_tool_arguments(&mut pending.arguments, arguments, "Cohere")?;
             }
         }
         if pending.call_id.is_empty() {
@@ -377,6 +463,7 @@ impl CohereStreamDecoder {
                 });
             }
         }
+        Ok(())
     }
 
     /// Completes one indexed Cohere tool call or emits an explicit truncation event.
@@ -417,6 +504,7 @@ impl CohereStreamDecoder {
                 id: pending.call_id,
                 name: pending.name,
                 arguments,
+                signature: None,
             },
         });
     }
@@ -490,7 +578,7 @@ impl ProtocolStreamDecoder for CohereStreamDecoder {
             "tool-call-start" | "tool-call-delta" => {
                 let index = required_cohere_index(&value)?;
                 if let Some(fragment) = value.pointer("/delta/message/tool_calls") {
-                    self.push_tool_fragment(index, fragment, &mut events);
+                    self.push_tool_fragment(index, fragment, &mut events)?;
                 }
             }
             "tool-call-end" => {
@@ -573,6 +661,7 @@ fn cohere_usage(value: &Value) -> RequestUsage {
     };
     RequestUsage {
         input_tokens,
+        uncached_input_tokens: input_tokens,
         output_tokens,
         total_tokens,
         ..RequestUsage::default()
@@ -624,6 +713,7 @@ mod tests {
                 operation: AiOperation::ConversationRespond,
                 model_id: String::from("command"),
                 cache_scope_id: None,
+                continuation: None,
                 messages: vec![AiMessage {
                     role: MessageRole::User,
                     content: vec![ContentItem::Text {
@@ -636,8 +726,13 @@ mod tests {
                     input_schema: json!({"type":"object"}),
                 }],
                 native_tools: Vec::new(),
+                tool_choice: Default::default(),
+                parallel_tool_calls: Default::default(),
+                structured_output: Default::default(),
+                stop_sequences: Vec::new(),
                 prompt_cache: PromptCachePolicy::ProviderDefault,
                 reasoning_effort: None,
+                reasoning_output: Default::default(),
                 model_parameters: BTreeMap::new(),
                 resources: Vec::new(),
                 output_token_limit: Some(128),

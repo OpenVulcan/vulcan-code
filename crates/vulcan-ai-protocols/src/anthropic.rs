@@ -1,13 +1,18 @@
 //! Anthropic Messages wire profile.
 //! Anthropic Messages Wire Profile。
 
-use crate::{EncodedWireRequest, ProtocolConversionError, ProtocolProfile, ProtocolStreamDecoder};
+use crate::{
+    EncodedWireRequest, ProtocolConversionError, ProtocolProfile, ProtocolStreamDecoder,
+    shared::append_bounded_tool_arguments,
+};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use vulcan_ai_contract::{
-    AiErrorCategory, AiExecutionError, AiExecutionRequest, AiStreamEvent, ContentItem,
-    DispatchOutcome, MessageRole, PromptCachePolicy, PromptCacheTtlSelection, RequestUsage,
-    ToolCall, ToolCallProgress, UsageValue, UsageValueSource,
+    AiContinuationUpdate, AiErrorCategory, AiExecutionError, AiExecutionRequest, AiStreamEvent,
+    ContentItem, DispatchOutcome, MessageRole, NativeToolKind, ParallelToolCallPolicy,
+    PromptCachePolicy, PromptCacheTtlSelection, ReasoningOutputPolicy, RequestUsage,
+    StructuredOutputPolicy, ToolCall, ToolCallProgress, ToolChoicePolicy, UsageValue,
+    UsageValueSource, derive_usage_sum,
 };
 
 /// Stable Anthropic Messages profile identifier.
@@ -52,13 +57,19 @@ impl ProtocolProfile for AnthropicMessagesProfile {
         ANTHROPIC_MESSAGES_PROFILE_ID
     }
 
+    /// Returns the bounded Anthropic SSE transport declaration.
+    /// 返回有界 Anthropic SSE 传输声明。
+    fn transport_profile(&self) -> crate::ProtocolTransportProfile {
+        crate::ProtocolTransportProfile::bounded_sse()
+    }
+
     /// Encodes one public request as Anthropic Messages JSON.
     /// 将一个公共请求编码为 Anthropic Messages JSON。
     fn encode(
         &self,
         request: &AiExecutionRequest,
     ) -> Result<EncodedWireRequest, ProtocolConversionError> {
-        crate::shared::require_no_native_tools(request, self.id())?;
+        require_anthropic_native_tools(request, self.id())?;
         encode_anthropic_request(request, false)
     }
 
@@ -81,6 +92,12 @@ impl ProtocolProfile for AnthropicMessagesVideoProfile {
     /// 返回稳定的视频扩展 Profile 标识。
     fn id(&self) -> &'static str {
         ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
+    }
+
+    /// Returns the bounded Anthropic video SSE transport declaration.
+    /// 返回有界 Anthropic 视频 SSE 传输声明。
+    fn transport_profile(&self) -> crate::ProtocolTransportProfile {
+        crate::ProtocolTransportProfile::bounded_sse()
     }
 
     /// Encodes one request with the explicit video extension enabled.
@@ -114,6 +131,12 @@ impl ProtocolProfile for ClaudeCodeMessagesProfile {
     /// 返回稳定的 Claude Code Profile 标识。
     fn id(&self) -> &'static str {
         CLAUDE_CODE_MESSAGES_PROFILE_ID
+    }
+
+    /// Returns the bounded Claude Code SSE transport declaration.
+    /// 返回有界 Claude Code SSE 传输声明。
+    fn transport_profile(&self) -> crate::ProtocolTransportProfile {
+        crate::ProtocolTransportProfile::bounded_sse()
     }
 
     /// Encodes one request while retaining Claude Code-specific route identity.
@@ -227,6 +250,52 @@ fn remap_claude_code_request_tool_names(
     Ok(())
 }
 
+/// Rejects native tools that have no exact Anthropic Messages projection.
+/// 拒绝没有精确 Anthropic Messages 投影的原生工具。
+///
+/// # Parameters
+/// 参数
+/// `request` contains the closed native-tool selection and `profile_id` identifies the route.
+/// `request` 包含封闭原生工具选择，`profile_id` 标识当前路由。
+///
+/// # Returns
+/// 返回值
+/// Success when every selected native tool is supported by this profile.
+/// 当每个选中的原生工具均受此 Profile 支持时返回成功。
+fn require_anthropic_native_tools(
+    request: &AiExecutionRequest,
+    profile_id: &str,
+) -> Result<(), ProtocolConversionError> {
+    if let Some(unsupported) = request
+        .native_tools
+        .iter()
+        .find(|native_tool| !matches!(native_tool, NativeToolKind::WebSearch))
+    {
+        return Err(ProtocolConversionError::new(format!(
+            "Protocol profile `{profile_id}` cannot represent native tool `{unsupported:?}`."
+        )));
+    }
+    Ok(())
+}
+
+/// Appends exact Anthropic server-tool declarations after client function tools.
+/// 在客户端函数工具之后追加精确的 Anthropic 服务端工具声明。
+///
+/// # Parameters
+/// 参数
+/// `request` owns the native-tool selection and `tools` is the mutable Anthropic tool array.
+/// `request` 持有原生工具选择，`tools` 是可变 Anthropic 工具数组。
+fn append_anthropic_native_tools(request: &AiExecutionRequest, tools: &mut Vec<Value>) {
+    for native_tool in &request.native_tools {
+        if matches!(native_tool, NativeToolKind::WebSearch) {
+            tools.push(json!({
+                "type": "web_search_20250305",
+                "name": "web_search",
+            }));
+        }
+    }
+}
+
 /// Encodes one Anthropic-compatible request with an explicit feature boundary.
 /// 使用显式功能边界编码一个 Anthropic 兼容请求。
 ///
@@ -246,8 +315,19 @@ fn encode_anthropic_request(
 ) -> Result<EncodedWireRequest, ProtocolConversionError> {
     let mut system_blocks = Vec::new();
     let mut message_values = Vec::new();
+    let mut pending_tool_blocks = Vec::new();
     for message in &request.messages {
         let content = encode_content_items(&message.content, allow_video)?;
+        if message.role == MessageRole::Tool {
+            pending_tool_blocks.extend(content);
+            continue;
+        }
+        if !pending_tool_blocks.is_empty() {
+            message_values.push(json!({
+                "role": "user",
+                "content": std::mem::take(&mut pending_tool_blocks),
+            }));
+        }
         match message.role {
             MessageRole::System => system_blocks.extend(content),
             MessageRole::User | MessageRole::Assistant => {
@@ -258,10 +338,14 @@ fn encode_anthropic_request(
                 };
                 message_values.push(json!({ "role": role, "content": content }));
             }
-            MessageRole::Tool => {
-                message_values.push(json!({ "role": "user", "content": content }));
-            }
+            MessageRole::Tool => unreachable!(),
         }
+    }
+    if !pending_tool_blocks.is_empty() {
+        message_values.push(json!({
+            "role": "user",
+            "content": pending_tool_blocks,
+        }));
     }
     let mut body = Map::from_iter([
         (String::from("model"), json!(request.model_id)),
@@ -279,8 +363,8 @@ fn encode_anthropic_request(
     if !system_blocks.is_empty() {
         body.insert(String::from("system"), Value::Array(system_blocks));
     }
-    if !request.tools.is_empty() {
-        let tools = request
+    if !request.tools.is_empty() || !request.native_tools.is_empty() {
+        let mut tools = request
             .tools
             .iter()
             .map(|tool| {
@@ -290,7 +374,8 @@ fn encode_anthropic_request(
                     "input_schema": tool.input_schema,
                 })
             })
-            .collect();
+            .collect::<Vec<_>>();
+        append_anthropic_native_tools(request, &mut tools);
         body.insert(String::from("tools"), Value::Array(tools));
     }
     if let Some(effort) = request.reasoning_effort {
@@ -299,6 +384,7 @@ fn encode_anthropic_request(
             json!({ "effort": effort.as_str() }),
         );
     }
+    project_anthropic_request_controls(request, &mut body)?;
     encode_anthropic_cache_policy(&mut body, &request.prompt_cache)?;
     Ok(EncodedWireRequest {
         path: String::from("/v1/messages"),
@@ -308,6 +394,96 @@ fn encode_anthropic_request(
         )]),
         body: Value::Object(body),
     })
+}
+
+/// Projects provider-neutral controls into the Anthropic Messages request shape.
+/// 将供应商无关控制投影到 Anthropic Messages 请求结构。
+///
+/// # Parameters
+/// 参数
+/// `request` is the exact public request and `body` is the mutable Messages object.
+/// `request` 是精确公共请求，`body` 是可变 Messages 对象。
+///
+/// # Returns
+/// 返回值
+/// A controlled conversion error when Anthropic has no exact representation.
+/// 当 Anthropic 没有精确表示时返回受控转换错误。
+fn project_anthropic_request_controls(
+    request: &AiExecutionRequest,
+    body: &mut Map<String, Value>,
+) -> Result<(), ProtocolConversionError> {
+    let mut tool_choice = match &request.tool_choice {
+        ToolChoicePolicy::Auto => json!({ "type": "auto" }),
+        ToolChoicePolicy::Required => json!({ "type": "any" }),
+        ToolChoicePolicy::Disabled => json!({ "type": "none" }),
+        ToolChoicePolicy::Specific { tool_name } => {
+            require_anthropic_registered_tool(request, tool_name)?;
+            json!({ "type": "tool", "name": tool_name })
+        }
+    };
+    match request.parallel_tool_calls {
+        ParallelToolCallPolicy::ProviderDefault | ParallelToolCallPolicy::Allowed => {}
+        ParallelToolCallPolicy::Disabled => {
+            tool_choice["disable_parallel_tool_use"] = Value::Bool(true);
+        }
+    }
+    body.insert(String::from("tool_choice"), tool_choice);
+    if !request.stop_sequences.is_empty() {
+        body.insert(
+            String::from("stop_sequences"),
+            json!(request.stop_sequences),
+        );
+    }
+    match &request.structured_output {
+        StructuredOutputPolicy::None => {}
+        StructuredOutputPolicy::JsonObject => {
+            return Err(ProtocolConversionError::new(
+                "Anthropic Messages requires an explicit JSON Schema for structured output.",
+            ));
+        }
+        StructuredOutputPolicy::JsonSchema { schema, .. } => {
+            let output_config = body
+                .entry(String::from("output_config"))
+                .or_insert_with(|| Value::Object(Map::new()));
+            output_config["format"] = json!({
+                "type": "json_schema",
+                "schema": schema,
+            });
+        }
+    }
+    if !matches!(
+        request.reasoning_output,
+        ReasoningOutputPolicy::ProviderDefault
+    ) {
+        return Err(ProtocolConversionError::new(
+            "Anthropic Messages has no registered public reasoning-output visibility projector.",
+        ));
+    }
+    Ok(())
+}
+
+/// Verifies an Anthropic specific-tool selection references a registered request tool.
+/// 验证 Anthropic 特定工具选择引用了已注册请求工具。
+///
+/// # Parameters
+/// 参数
+/// `request` owns the registered tools and `tool_name` is the exact selected name.
+/// `request` 拥有已注册工具，`tool_name` 是精确所选名称。
+///
+/// # Returns
+/// 返回值
+/// Success only when the requested tool exists.
+/// 仅当请求工具存在时成功。
+fn require_anthropic_registered_tool(
+    request: &AiExecutionRequest,
+    tool_name: &str,
+) -> Result<(), ProtocolConversionError> {
+    if request.tools.iter().any(|tool| tool.name == tool_name) {
+        return Ok(());
+    }
+    Err(ProtocolConversionError::new(format!(
+        "Anthropic tool choice references unregistered tool `{tool_name}`."
+    )))
 }
 
 /// Decodes Anthropic Messages SSE events without parsing incomplete tool JSON.
@@ -323,6 +499,9 @@ struct AnthropicStreamDecoder {
     /// Whether a terminal event was emitted.
     /// 是否已经发送终态事件。
     terminal: bool,
+    /// Stable upstream message identifier used by a later continuation request.
+    /// 后续延续请求使用的稳定上游消息标识。
+    message_id: Option<String>,
     /// Open content blocks keyed by Anthropic index.
     /// 按 Anthropic 索引保存的打开内容块。
     blocks: BTreeMap<u32, AnthropicBlock>,
@@ -388,6 +567,7 @@ impl AnthropicStreamDecoder {
             execution_id,
             started: false,
             terminal: false,
+            message_id: None,
             blocks: BTreeMap::new(),
             tool_names,
         }
@@ -403,6 +583,45 @@ impl AnthropicStreamDecoder {
         vec![AiStreamEvent::ResponseStarted {
             execution_id: self.execution_id.clone(),
         }]
+    }
+
+    /// Captures the immutable Anthropic message identifier from `message_start`.
+    /// 从 `message_start` 捕获不可变 Anthropic 消息标识。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `value` is the decoded `message_start` payload.
+    /// `value` 是已解码的 `message_start` 载荷。
+    ///
+    /// # Returns
+    /// 返回值
+    /// One metadata update for the first identifier, or an error if the identifier changes.
+    /// 首次标识返回一条元数据更新；标识变化时返回错误。
+    fn capture_message_id(
+        &mut self,
+        value: &Value,
+    ) -> Result<Vec<AiStreamEvent>, ProtocolConversionError> {
+        let Some(message_id) = value
+            .pointer("/message/id")
+            .and_then(Value::as_str)
+            .filter(|message_id| !message_id.trim().is_empty())
+        else {
+            return Ok(Vec::new());
+        };
+        if let Some(existing) = self.message_id.as_deref() {
+            if existing != message_id {
+                return Err(ProtocolConversionError::new(
+                    "Anthropic changed message identity during one stream.",
+                ));
+            }
+            return Ok(Vec::new());
+        }
+        self.message_id = Some(message_id.to_string());
+        Ok(vec![AiStreamEvent::ResponseMetadataUpdated {
+            continuation: AiContinuationUpdate {
+                provider_message_id: message_id.to_string(),
+            },
+        }])
     }
 
     /// Decodes an Anthropic content-block start event.
@@ -534,7 +753,7 @@ impl AnthropicStreamDecoder {
                 "input_json_delta",
             ) => {
                 let partial_json = required_string_from_map(delta, "partial_json")?;
-                arguments.push_str(partial_json.as_str());
+                append_bounded_tool_arguments(arguments, partial_json.as_str(), "Anthropic")?;
                 Ok(vec![AiStreamEvent::ToolCallArgumentsDelta {
                     item_id: item_id.clone(),
                     delta: partial_json,
@@ -602,6 +821,7 @@ impl AnthropicStreamDecoder {
                         id: call_id,
                         name: tool_name,
                         arguments,
+                        signature: None,
                     },
                 }]),
                 Err(error) => Ok(vec![AiStreamEvent::ToolCallAborted {
@@ -646,7 +866,11 @@ impl ProtocolStreamDecoder for AnthropicStreamDecoder {
             .ok_or_else(|| ProtocolConversionError::new("Anthropic SSE event type is missing."))?;
         let mut events = self.start_if_needed();
         let mut decoded = match wire_type {
-            "message_start" => usage_from_anthropic(value.pointer("/message/usage")),
+            "message_start" => {
+                let mut message_events = self.capture_message_id(&value)?;
+                message_events.extend(usage_from_anthropic(value.pointer("/message/usage")));
+                message_events
+            }
             "content_block_start" => self.decode_block_start(&value)?,
             "content_block_delta" => self.decode_block_delta(&value)?,
             "content_block_stop" => self.decode_block_stop(&value)?,
@@ -698,11 +922,19 @@ fn usage_from_anthropic(value: Option<&Value>) -> Vec<AiStreamEvent> {
     let Some(value) = value else {
         return Vec::new();
     };
+    let input_tokens = reported_usage(value, "input_tokens");
+    let cache_write_tokens = reported_usage(value, "cache_creation_input_tokens");
+    let uncached_input_tokens = if matches!(cache_write_tokens, UsageValue::Unknown) {
+        input_tokens
+    } else {
+        derive_usage_sum(input_tokens, cache_write_tokens)
+    };
     let usage = RequestUsage {
-        input_tokens: reported_usage(value, "input_tokens"),
+        input_tokens,
+        uncached_input_tokens,
         output_tokens: reported_usage(value, "output_tokens"),
         cache_read_tokens: reported_usage(value, "cache_read_input_tokens"),
-        cache_write_tokens: reported_usage(value, "cache_creation_input_tokens"),
+        cache_write_tokens,
         cache_write_5m_tokens: reported_usage(value, "cache_creation_5m_input_tokens"),
         cache_write_1h_tokens: reported_usage(value, "cache_creation_1h_input_tokens"),
         ..RequestUsage::default()
@@ -738,19 +970,36 @@ fn anthropic_error(value: &Value) -> AiExecutionError {
         Some("invalid_request_error") => AiErrorCategory::InvalidRequest,
         _ => AiErrorCategory::Unclassified,
     };
+    let upstream_message = value
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     AiExecutionError {
         category,
         subcategory: error_type.clone(),
         stage: String::from("stream"),
         http_status: None,
-        upstream_code: error_type,
-        message: value
-            .pointer("/error/message")
+        upstream_code: error_type.clone(),
+        upstream_type: error_type,
+        upstream_parameter: value
+            .pointer("/error/param")
             .and_then(Value::as_str)
+            .map(str::to_string),
+        upstream_message: upstream_message.clone(),
+        request_id: value
+            .get("request_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        provider_id: None,
+        entry_id: None,
+        model_id: None,
+        message: upstream_message
+            .as_deref()
             .unwrap_or("Anthropic stream failed.")
             .to_string(),
         dispatch_outcome: DispatchOutcome::Dispatched,
         semantic_output_observed: false,
+        side_effect_observed: false,
         terminal: true,
         retryable: matches!(
             category,
@@ -759,7 +1008,7 @@ fn anthropic_error(value: &Value) -> AiExecutionError {
                 | AiErrorCategory::ProviderUnavailable
                 | AiErrorCategory::Timeout
         ),
-        retry_after_seconds: None,
+        retry_after: None,
     }
 }
 
@@ -1052,6 +1301,7 @@ mod tests {
             operation: AiOperation::ConversationRespond,
             model_id: String::from("model"),
             cache_scope_id: None,
+            continuation: None,
             messages: vec![vulcan_ai_contract::AiMessage {
                 role: MessageRole::User,
                 content: vec![ContentItem::Text {
@@ -1060,8 +1310,13 @@ mod tests {
             }],
             tools: Vec::new(),
             native_tools: Vec::new(),
+            tool_choice: Default::default(),
+            parallel_tool_calls: Default::default(),
+            structured_output: Default::default(),
+            stop_sequences: Vec::new(),
             prompt_cache: policy,
             reasoning_effort: None,
+            reasoning_output: Default::default(),
             model_parameters: Default::default(),
             resources: Vec::new(),
             output_token_limit: Some(512),
@@ -1078,6 +1333,31 @@ mod tests {
         assert!(encoded.body.get("cache_control").is_none());
     }
 
+    /// Verifies Anthropic web search is encoded as a versioned server tool.
+    /// 验证 Anthropic 网络搜索会编码为带版本的服务端工具。
+    #[test]
+    fn native_web_search_uses_versioned_server_tool() {
+        let mut public_request = request(PromptCachePolicy::ProviderDefault);
+        public_request.native_tools = vec![NativeToolKind::WebSearch];
+        let encoded = AnthropicMessagesProfile
+            .encode(&public_request)
+            .expect("Anthropic web search should encode");
+        assert_eq!(encoded.body["tools"][0]["type"], "web_search_20250305");
+        assert_eq!(encoded.body["tools"][0]["name"], "web_search");
+    }
+
+    /// Verifies Anthropic rejects a native tool without an exact server-tool projection.
+    /// 验证 Anthropic 会拒绝没有精确服务端工具投影的原生工具。
+    #[test]
+    fn unsupported_native_tool_is_rejected() {
+        let mut public_request = request(PromptCachePolicy::ProviderDefault);
+        public_request.native_tools = vec![NativeToolKind::CodeInterpreter];
+        let error = AnthropicMessagesProfile
+            .encode(&public_request)
+            .expect_err("unsupported Anthropic native tool should fail");
+        assert!(error.to_string().contains("CodeInterpreter"));
+    }
+
     /// Verifies one-hour explicit caching uses the registered TTL.
     /// 验证一小时显式缓存使用已注册 TTL。
     #[test]
@@ -1092,6 +1372,72 @@ mod tests {
         assert_eq!(
             encoded.body["messages"][0]["content"][0]["cache_control"]["ttl"],
             "1h"
+        );
+    }
+
+    /// Verifies adjacent tool results share one Anthropic user message.
+    /// 验证相邻工具结果会共用一条 Anthropic 用户消息。
+    #[test]
+    fn adjacent_tool_results_are_grouped_into_one_user_message() {
+        let mut public_request = request(PromptCachePolicy::ProviderDefault);
+        public_request.messages.extend([
+            vulcan_ai_contract::AiMessage {
+                role: MessageRole::Assistant,
+                content: vec![
+                    ContentItem::ToolCall {
+                        call: vulcan_ai_contract::ToolCall {
+                            id: String::from("call-a"),
+                            name: String::from("read"),
+                            arguments: json!({"path": "a"}),
+                            signature: None,
+                        },
+                    },
+                    ContentItem::ToolCall {
+                        call: vulcan_ai_contract::ToolCall {
+                            id: String::from("call-b"),
+                            name: String::from("read"),
+                            arguments: json!({"path": "b"}),
+                            signature: None,
+                        },
+                    },
+                ],
+            },
+            vulcan_ai_contract::AiMessage {
+                role: MessageRole::Tool,
+                content: vec![ContentItem::ToolResult {
+                    result: vulcan_ai_contract::ToolResult {
+                        call_id: String::from("call-a"),
+                        content: json!("a"),
+                        is_error: false,
+                    },
+                }],
+            },
+            vulcan_ai_contract::AiMessage {
+                role: MessageRole::Tool,
+                content: vec![ContentItem::ToolResult {
+                    result: vulcan_ai_contract::ToolResult {
+                        call_id: String::from("call-b"),
+                        content: json!("b"),
+                        is_error: false,
+                    },
+                }],
+            },
+        ]);
+
+        let encoded = AnthropicMessagesProfile
+            .encode(&public_request)
+            .expect("adjacent tool results should encode");
+        let messages = encoded.body["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[2]["role"], "user");
+        assert_eq!(
+            messages[2]["content"]
+                .as_array()
+                .expect("tool blocks should be an array")
+                .len(),
+            2
         );
     }
 
@@ -1170,6 +1516,24 @@ mod tests {
         assert!(started.iter().any(|event| matches!(
             event,
             AiStreamEvent::ToolCallStarted { tool_name, .. } if tool_name == "skill"
+        )));
+    }
+
+    /// Verifies Anthropic publishes the immutable upstream message identifier.
+    /// 验证 Anthropic 会发布不可变的上游消息标识。
+    #[test]
+    fn message_start_publishes_message_identifier() {
+        let mut decoder = AnthropicStreamDecoder::new(String::from("execution"), BTreeMap::new());
+        let events = decoder
+            .push_sse(
+                Some("message_start"),
+                r#"{"type":"message_start","message":{"id":"msg_123","usage":{}}}"#,
+            )
+            .expect("message identity should decode");
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ResponseMetadataUpdated { continuation }
+                if continuation.provider_message_id == "msg_123"
         )));
     }
 

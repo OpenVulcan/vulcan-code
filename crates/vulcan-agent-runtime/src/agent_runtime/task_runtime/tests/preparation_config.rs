@@ -562,6 +562,7 @@ fn spawn_agent_clone_latest_runtime_preserves_parent_snapshot() {
         }],
         continuation: vulcan_core::types::ProviderContinuation {
             provider_id: Some(String::from("openai")),
+            protocol_profile_id: Some(String::from("openai-responses")),
             model_id: Some(String::from("gpt-test")),
             last_provider_message_id: Some(String::from("resp_1")),
             last_local_message_id: Some(String::from("assistant-1")),
@@ -1611,6 +1612,7 @@ fn task_execution_outcome_from_report_preserves_final_assistant_message_id() {
     let resolved_config = test_resolved_config(&controller_config, &invocation.invocation_config);
     let last_provider_usage = vulcan_core::types::ProviderUsageSnapshot {
         input_tokens: Some(120),
+        uncached_input_tokens: None,
         output_tokens: Some(30),
         reasoning_tokens: Some(10),
         total_tokens: Some(160),
@@ -1619,6 +1621,7 @@ fn task_execution_outcome_from_report_preserves_final_assistant_message_id() {
     };
     let cumulative_provider_usage = vulcan_core::types::ProviderUsageSnapshot {
         input_tokens: Some(220),
+        uncached_input_tokens: None,
         output_tokens: Some(55),
         reasoning_tokens: Some(25),
         total_tokens: Some(300),

@@ -9,6 +9,12 @@ use serde_json::Value;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeToolKind {
+    /// Provider-native web search.
+    /// 供应商原生网络搜索。
+    WebSearch,
+    /// Provider-native managed code execution.
+    /// 供应商原生托管代码执行。
+    CodeInterpreter,
     /// Provider-native image generation.
     /// 供应商原生图片生成。
     ImageGeneration,
@@ -42,6 +48,10 @@ pub struct ToolCall {
     /// Complete decoded argument object.
     /// 完整解码后的参数对象。
     pub arguments: Value,
+    /// Optional provider-scoped continuation signature attached to this exact call.
+    /// 绑定到当前精确调用的可选供应商作用域延续签名。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 /// Carries one tool result returned to the model.

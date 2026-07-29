@@ -5,6 +5,20 @@ import type {
   ComposerSlashCommandSummary,
 } from "@/types";
 
+// ComposerModelSelectionSnapshot freezes the exact provider, model, and credential used by one submission.
+// ComposerModelSelectionSnapshot 固定单次提交使用的精确供应商、模型与凭据。
+export interface ComposerModelSelectionSnapshot {
+  // Stable provider identifier selected in the composer.
+  // 输入区中选择的稳定供应商标识。
+  providerId: string;
+  // Stable model identifier selected in the composer.
+  // 输入区中选择的稳定模型标识。
+  modelId: string;
+  // Exact credential connection selected in the composer.
+  // 输入区中选择的精确凭据连接。
+  connectionId: string;
+}
+
 // ComposerSubmission contains the user prompt and runtime quick-control values.
 // ComposerSubmission 包含用户提示词与运行时快捷控制取值。
 export interface ComposerSubmission {
@@ -23,6 +37,9 @@ export interface ComposerSubmission {
   // Backend-confirmed reasoning effort selected by the user.
   // 用户选择且已由后端确认的思考档位。
   reasoningEffort: string | null;
+  // Exact model selection captured atomically with this submission.
+  // 与本次提交原子捕获的精确模型选择。
+  modelSelection: ComposerModelSelectionSnapshot | null;
 }
 
 // ComposerSlashCommandOpenTarget names existing composer popups opened by slash commands.

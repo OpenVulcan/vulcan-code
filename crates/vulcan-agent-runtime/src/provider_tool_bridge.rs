@@ -391,6 +391,59 @@ async fn render_provider_tool_result(
                 ),
             )
         }
+        ProviderToolNormalizedOutput::Embedding(embedding) => {
+            let payload = json!({
+                "kind": "embedding",
+                "embedding": embedding,
+                "upstream_response_id": result.upstream_response_id
+            });
+            Ok(
+                VulcanToolInvocationResult::from_model_output(payload.clone()).with_host_result(
+                    VulcanToolHostResult {
+                        kind: String::from("provider_tool_output"),
+                        payload,
+                    },
+                ),
+            )
+        }
+        ProviderToolNormalizedOutput::Rerank(rerank) => {
+            let payload = json!({
+                "kind": "rerank",
+                "rerank": rerank,
+                "upstream_response_id": result.upstream_response_id
+            });
+            Ok(
+                VulcanToolInvocationResult::from_model_output(payload.clone()).with_host_result(
+                    VulcanToolHostResult {
+                        kind: String::from("provider_tool_output"),
+                        payload,
+                    },
+                ),
+            )
+        }
+        ProviderToolNormalizedOutput::Composite(composite) => {
+            let resources = stage_provider_resources(workspace_root, composite.resources).await?;
+            let payload = json!({
+                "kind": "composite",
+                "composite": {
+                    "text": composite.text,
+                    "resources": resources,
+                    "embeddings": composite.embeddings,
+                    "reranks": composite.reranks,
+                    "searches": composite.searches,
+                    "extracts": composite.extracts
+                },
+                "upstream_response_id": result.upstream_response_id
+            });
+            Ok(
+                VulcanToolInvocationResult::from_model_output(payload.clone()).with_host_result(
+                    VulcanToolHostResult {
+                        kind: String::from("provider_tool_output"),
+                        payload,
+                    },
+                ),
+            )
+        }
     }
 }
 
@@ -411,6 +464,42 @@ async fn render_provider_resource_result(
     upstream_response_id: Option<String>,
     resources: Vec<vulcan_provider_adapters::ProviderToolGeneratedResource>,
 ) -> Result<VulcanToolInvocationResult, String> {
+    let outputs = stage_provider_resources(workspace_root, resources).await?;
+    let payload = json!({
+        "outputs": outputs,
+        "upstream_response_id": upstream_response_id
+    });
+    let local_files = provider_resource_local_files(outputs.as_slice());
+    Ok(VulcanToolInvocationResult::from_model_output(json!({
+        "resources": {
+            "local_files": local_files
+        }
+    }))
+    .with_host_result(VulcanToolHostResult {
+        kind: String::from("generated_attachments"),
+        payload,
+    }))
+}
+
+/// Stages normalized provider resources and returns unified local descriptors.
+/// 暂存归一化供应商资源并返回统一本地描述。
+///
+/// # Parameters
+/// 参数
+/// `workspace_root` owns managed attachments and `resources` are provider-normalized.
+/// `workspace_root` 持有托管附件，`resources` 已由供应商归一化。
+///
+/// # Returns
+/// 返回值
+/// Ordered local descriptors suitable for model output and host cards.
+/// 返回适用于模型输出与宿主卡片的有序本地描述。
+async fn stage_provider_resources(
+    workspace_root: Option<&Path>,
+    resources: Vec<vulcan_provider_adapters::ProviderToolGeneratedResource>,
+) -> Result<Vec<Value>, String> {
+    if resources.is_empty() {
+        return Ok(Vec::new());
+    }
     let workspace_root = workspace_root.ok_or_else(|| {
         String::from("Provider tools that generate resources require an active workspace root.")
     })?;
@@ -452,26 +541,27 @@ async fn render_provider_resource_result(
             "mime_type": attachment.mime_type
         }));
     }
-    let payload = json!({
-        "outputs": outputs,
-        "upstream_response_id": upstream_response_id
-    });
-    let local_files = payload["outputs"]
-        .as_array()
-        .into_iter()
-        .flatten()
+    Ok(outputs)
+}
+
+/// Collects local file paths from exact normalized resource descriptors.
+/// 从精确的归一化资源描述中收集本地文件路径。
+///
+/// # Parameters
+/// 参数
+/// `resources` are descriptors produced by `stage_provider_resources`.
+/// `resources` 是由 `stage_provider_resources` 产生的描述。
+///
+/// # Returns
+/// 返回值
+/// Ordered local paths registered with the tool invocation result.
+/// 返回注册到工具调用结果中的有序本地路径。
+fn provider_resource_local_files(resources: &[Value]) -> Vec<String> {
+    resources
+        .iter()
         .filter_map(|output| output.get("local_path").and_then(Value::as_str))
         .map(str::to_string)
-        .collect::<Vec<_>>();
-    Ok(VulcanToolInvocationResult::from_model_output(json!({
-        "resources": {
-            "local_files": local_files
-        }
-    }))
-    .with_host_result(VulcanToolHostResult {
-        kind: String::from("generated_attachments"),
-        payload,
-    }))
+        .collect()
 }
 
 /// Downloads one bounded HTTPS provider resource.
@@ -547,10 +637,14 @@ async fn download_provider_resource(
 mod tests {
     use super::{
         apply_session_provider_tool_selections, download_provider_resource,
-        materialize_provider_tool_inputs,
+        materialize_provider_tool_inputs, render_provider_tool_result,
     };
     use serde_json::json;
-    use vulcan_provider_adapters::ProviderToolAdapterKind;
+    use vulcan_provider_adapters::{
+        ProviderToolAdapterKind, ProviderToolCompositeOutput, ProviderToolEmbeddingOutput,
+        ProviderToolEmbeddingVector, ProviderToolExecutionResult, ProviderToolNormalizedOutput,
+        ProviderToolRerankOutput, ProviderToolRerankResult,
+    };
 
     /// Verifies an explicit empty session selection disables every global provider tool.
     /// 验证显式空会话选择会禁用全部全局供应商工具。
@@ -595,5 +689,69 @@ mod tests {
             .await
             .expect_err("insecure URL must be rejected");
         assert!(error.contains("absolute HTTPS"));
+    }
+
+    /// Verifies embedding output remains typed in both model and host payloads.
+    /// 验证向量输出在模型与宿主载荷中均保持强类型。
+    #[tokio::test]
+    async fn embedding_output_preserves_vector_indexes_and_values() {
+        let result = render_provider_tool_result(
+            None,
+            ProviderToolExecutionResult {
+                upstream_response_id: Some(String::from("embedding-response")),
+                output: ProviderToolNormalizedOutput::Embedding(ProviderToolEmbeddingOutput {
+                    model: Some(String::from("embedding-model")),
+                    vectors: vec![ProviderToolEmbeddingVector {
+                        index: 2,
+                        values: vec![0.25, -0.5],
+                    }],
+                }),
+            },
+        )
+        .await
+        .expect("embedding output");
+
+        assert_eq!(result.model_output["kind"], "embedding");
+        assert_eq!(result.model_output["embedding"]["vectors"][0]["index"], 2);
+        assert_eq!(
+            result.host_result.as_ref().expect("host output").payload["embedding"]["vectors"][0]["values"],
+            json!([0.25, -0.5])
+        );
+    }
+
+    /// Verifies a resource-free composite output does not require a workspace.
+    /// 验证不含资源的复合输出不要求工作区。
+    #[tokio::test]
+    async fn resource_free_composite_output_keeps_each_semantic_kind() {
+        let result = render_provider_tool_result(
+            None,
+            ProviderToolExecutionResult {
+                upstream_response_id: None,
+                output: ProviderToolNormalizedOutput::Composite(ProviderToolCompositeOutput {
+                    text: vec![String::from("summary")],
+                    resources: Vec::new(),
+                    embeddings: Vec::new(),
+                    reranks: vec![ProviderToolRerankOutput {
+                        model: None,
+                        results: vec![ProviderToolRerankResult {
+                            index: 1,
+                            score: 0.75,
+                            document: Some(String::from("candidate")),
+                        }],
+                    }],
+                    searches: Vec::new(),
+                    extracts: Vec::new(),
+                }),
+            },
+        )
+        .await
+        .expect("composite output");
+
+        assert_eq!(result.model_output["kind"], "composite");
+        assert_eq!(result.model_output["composite"]["text"], json!(["summary"]));
+        assert_eq!(
+            result.model_output["composite"]["reranks"][0]["results"][0]["score"],
+            0.75
+        );
     }
 }

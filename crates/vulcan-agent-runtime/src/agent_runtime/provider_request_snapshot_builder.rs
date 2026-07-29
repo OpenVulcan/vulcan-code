@@ -62,6 +62,7 @@ pub(crate) async fn build_core_provider_request_snapshot(
     let preview_prompt = provider_request_snapshot_prompt(prompt, provider_visible_agent_messages);
     let adapter = CoreRequestPreviewProviderAdapter::new(
         preparation.model_blueprint.provider_id.clone(),
+        preparation.model_blueprint.protocol_profile_id.clone(),
         preparation.model_blueprint.model_id.clone(),
         preview_prompt,
         None,

@@ -29,6 +29,7 @@ import {
 import {
   resolveProviderToolExtractPresentation,
   resolveProviderToolSearchPresentation,
+  resolveProviderToolStructuredPresentation,
   resolveProviderToolTextPresentation,
 } from "./tool-presentations/provider-tool-presentation";
 import type {
@@ -53,6 +54,7 @@ export type {
   ProviderToolExtractPresentationResult,
   ProviderToolSearchPresentation,
   ProviderToolSearchPresentationResult,
+  ProviderToolStructuredPresentation,
   ProviderToolTextPresentation,
   SubagentOrchestrationAgent,
   SubagentOrchestrationPresentation,
@@ -82,6 +84,7 @@ export function resolveToolPresentation(
 ): ToolPresentation | null {
   return resolveSubagentOrchestrationPresentation(blocks, displayState, detailRef)
     ?? resolveProviderToolTextPresentation(blocks, displayState)
+    ?? resolveProviderToolStructuredPresentation(blocks, displayState)
     ?? resolveProviderToolExtractPresentation(blocks, displayState)
     ?? resolveProviderToolSearchPresentation(blocks, displayState)
     ?? resolveAskQuestionPresentation(blocks, displayState, detailRef)

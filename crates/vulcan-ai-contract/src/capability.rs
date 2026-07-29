@@ -61,6 +61,32 @@ impl ReasoningEffort {
     }
 }
 
+/// Declares how reasoning may be controlled for one exact model route.
+/// 声明一条精确模型路由的推理控制方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningControlMode {
+    /// Reasoning support has not been established.
+    /// 尚未确定推理支持情况。
+    #[default]
+    Unknown,
+    /// Reasoning is always disabled and the UI is read-only.
+    /// 推理始终关闭且 UI 只读。
+    FixedOff,
+    /// Reasoning is always enabled and the UI is read-only.
+    /// 推理始终开启且 UI 只读。
+    FixedOn,
+    /// Reasoning can be enabled or disabled without selectable strength levels.
+    /// 推理可开关但没有可选强度档位。
+    Toggle,
+    /// Reasoning is enabled with one of the declared selectable effort levels.
+    /// 推理启用时从已声明的可选强度档位中选择。
+    EffortSelection,
+    /// The provider controls adaptive reasoning for this exact route.
+    /// 供应商为这条精确路由控制自适应推理。
+    ProviderAdaptive,
+}
+
 /// Describes the fidelity of one supported capability.
 /// 描述一项受支持能力的保真级别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,6 +146,10 @@ pub struct ModelCapabilities {
     /// Reasoning-content support level.
     /// 推理内容支持级别。
     pub reasoning: CapabilitySupport,
+    /// Exact reasoning control behavior.
+    /// 精确推理控制行为。
+    #[serde(default)]
+    pub reasoning_control: ReasoningControlMode,
     /// Exact user-selectable reasoning-effort levels established by provider metadata.
     /// 由供应商元数据确定的用户可选推理强度列表。
     #[serde(default)]
@@ -160,6 +190,7 @@ impl Default for ModelCapabilities {
             tool_calling: CapabilitySupport::Unknown,
             parallel_tool_calling: CapabilitySupport::Unknown,
             reasoning: CapabilitySupport::Unknown,
+            reasoning_control: ReasoningControlMode::Unknown,
             reasoning_efforts: Vec::new(),
             context_limit: None,
             output_limit: None,

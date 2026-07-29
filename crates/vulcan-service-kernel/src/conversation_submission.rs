@@ -12,6 +12,7 @@ use vulcan_service_api::{
 use vulcan_workbench_model::{
     PendingSessionPromptSource, SessionId, SessionRunPhase, SessionState,
 };
+use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
 use super::{
     ExistingSubmissionAdmissionAuthorization, SharedServiceBridgeState,
@@ -64,6 +65,239 @@ pub(super) enum ExistingSessionHydrationPolicy {
     TrustRetainedSnapshot,
 }
 
+/// Freezes the exact provider, model, and credential selected when a prompt is submitted.
+/// 固定提示词提交时选择的精确供应商、模型与凭据。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct SubmissionModelSelection {
+    /// Stable provider identifier selected in the composer.
+    /// 输入区中选择的稳定供应商标识。
+    provider_id: String,
+    /// Stable model identifier selected in the composer.
+    /// 输入区中选择的稳定模型标识。
+    model_id: String,
+    /// Exact credential connection selected in the composer.
+    /// 输入区中选择的精确凭据连接。
+    connection_id: String,
+}
+
+/// Validates and applies one submission-scoped model selection to session runtime state.
+/// 校验并将单次提交范围的模型选择写入会话运行态。
+///
+/// # Parameters
+/// 参数
+/// `runtime` owns the authoritative provider configuration and discovered catalogs.
+/// `runtime` 持有权威供应商配置与已发现目录。
+/// `workspace_snapshot` contains the materialized session runtime state to update.
+/// `workspace_snapshot` 包含待更新的已物化会话运行态。
+/// `session_id` identifies the exact submitted session.
+/// `session_id` 标识本次提交对应的精确会话。
+/// `selection` is absent only when the composer has no available model.
+/// `selection` 仅在输入区没有可用模型时缺失。
+///
+/// # Returns
+/// 返回值
+/// Returns success after an exact configured selection is applied, or a validation error.
+/// 在精确已配置选择写入后返回成功，否则返回校验错误。
+fn apply_submission_model_selection(
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    selection: Option<&SubmissionModelSelection>,
+) -> Result<(), String> {
+    let Some(selection) = selection else {
+        return Ok(());
+    };
+    let configuration = runtime.configuration_snapshot()?;
+    let configured_connection = configuration
+        .connection_graph
+        .connections
+        .get(selection.connection_id.as_str())
+        .ok_or_else(|| {
+            format!(
+                "Connection `{}` is not configured.",
+                selection.connection_id
+            )
+        })?;
+    if configured_connection.provider_id != selection.provider_id {
+        return Err(format!(
+            "Connection `{}` does not belong to provider `{}`.",
+            selection.connection_id, selection.provider_id
+        ));
+    }
+    if !configuration.model_is_enabled(selection.provider_id.as_str(), selection.model_id.as_str())
+    {
+        return Err(format!(
+            "Provider `{}` model `{}` is disabled.",
+            selection.provider_id, selection.model_id
+        ));
+    }
+    let connection_exposes_model = runtime
+        .catalog_snapshot()?
+        .get(selection.connection_id.as_str())
+        .is_some_and(|catalog| {
+            catalog
+                .models
+                .iter()
+                .any(|model| model.id == selection.model_id)
+        });
+    if !connection_exposes_model {
+        return Err(format!(
+            "Connection `{}` does not expose model `{}`.",
+            selection.connection_id, selection.model_id
+        ));
+    }
+    runtime.resolve_connection_model_selection(
+        &configuration,
+        selection.connection_id.as_str(),
+        selection.provider_id.as_str(),
+        selection.model_id.as_str(),
+    )?;
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&session_id)
+        .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
+    runtime_state.active_provider_id = Some(selection.provider_id.clone());
+    runtime_state.active_connection_id = Some(selection.connection_id.clone());
+    runtime_state.active_model_id = Some(selection.model_id.clone());
+    runtime_state.updated_at = current_unix_millis_text();
+    Ok(())
+}
+
+#[cfg(test)]
+mod submission_model_selection_tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use vulcan_provider_adapters::{
+        CredentialConnection, CredentialMode, PersistedAiConfiguration, PublicAiRuntime,
+        parse_openrouter_model_catalog,
+    };
+    use vulcan_workbench_model::SessionSummary;
+
+    use super::*;
+    use crate::ensure_webui_session_runtime_state;
+
+    /// Builds one configured runtime whose global active model differs from the submitted model.
+    /// 构建一个全局激活模型与本次提交模型不同的已配置运行时。
+    fn configured_runtime() -> PublicAiRuntime {
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        let mut configuration = PersistedAiConfiguration::default();
+        let connection = CredentialConnection {
+            id: String::from("openrouter-account"),
+            provider_id: String::from("openrouter"),
+            service_entry_id: String::from("public-api"),
+            credential_profile_id: String::from("api-key"),
+            credential_mode: CredentialMode::Token,
+            credential_id: String::from("credential-openrouter-account"),
+            display_name: String::from("OpenRouter account"),
+            secret_reference: String::from("secret-openrouter-account"),
+            management_secret_reference: None,
+            verified_protocols: BTreeSet::from([String::from("openai-chat")]),
+            selected_protocol: String::from("openai-chat"),
+            prompt_cache_by_protocol: BTreeMap::new(),
+        };
+        configuration
+            .connection_graph
+            .add_connection(runtime.providers(), connection)
+            .expect("connection should register");
+        configuration.set_model_enabled("openrouter", "vendor/previous", true);
+        configuration.set_model_enabled("openrouter", "vendor/submitted", true);
+        configuration.active = Some(vulcan_provider_adapters::ActiveAiModelSelection {
+            provider_id: String::from("openrouter"),
+            model_id: String::from("vendor/previous"),
+            connection_id: String::from("openrouter-account"),
+        });
+        runtime
+            .replace_catalog(
+                parse_openrouter_model_catalog(
+                    "openrouter-account",
+                    1,
+                    r#"{"data":[{"id":"vendor/previous","name":"Previous","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}},{"id":"vendor/submitted","name":"Submitted","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}}]}"#,
+                )
+                .expect("catalog should parse"),
+            )
+            .expect("catalog should install");
+        runtime
+            .replace_configuration(configuration)
+            .expect("configuration should install");
+        runtime
+    }
+
+    /// Verifies a new session uses the model snapshot captured by submit instead of the previous global model.
+    /// 验证新会话使用提交时捕获的模型快照，而不是上一次全局模型。
+    #[test]
+    fn submitted_model_selection_overrides_previous_global_selection() {
+        let runtime = configured_runtime();
+        let session_id = Uuid::new_v4();
+        let mut workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: vec![SessionSummary::new(
+                session_id,
+                Some(String::from("project-a")),
+                "New conversation",
+                "",
+                SessionState::Running,
+                0,
+                0,
+                "now",
+            )],
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        };
+        ensure_webui_session_runtime_state(&mut workspace_snapshot, session_id, None)
+            .expect("session runtime state should initialize");
+        let selection = SubmissionModelSelection {
+            provider_id: String::from("openrouter"),
+            model_id: String::from("vendor/submitted"),
+            connection_id: String::from("openrouter-account"),
+        };
+
+        apply_submission_model_selection(
+            &runtime,
+            &mut workspace_snapshot,
+            session_id,
+            Some(&selection),
+        )
+        .expect("submitted selection should apply");
+
+        let runtime_state = workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .expect("session runtime state should exist");
+        assert_eq!(
+            runtime_state.active_provider_id.as_deref(),
+            Some("openrouter")
+        );
+        assert_eq!(
+            runtime_state.active_connection_id.as_deref(),
+            Some("openrouter-account")
+        );
+        assert_eq!(
+            runtime_state.active_model_id.as_deref(),
+            Some("vendor/submitted")
+        );
+        assert_eq!(
+            runtime
+                .configuration_snapshot()
+                .expect("configuration should remain readable")
+                .active
+                .as_ref()
+                .map(|active| active.model_id.as_str()),
+            Some("vendor/previous")
+        );
+    }
+}
+
 /// Determines whether an existing submission must hydrate missing dialogue from persistence.
 /// 判断已有会话提交是否必须从持久化层水合缺失对话。
 ///
@@ -106,6 +340,8 @@ fn existing_submission_requires_hydration(
 /// `execution_mode` 选择 build 或 plan 执行模式。
 /// `reasoning_effort` optionally overrides model reasoning effort for this turn.
 /// `reasoning_effort` 可选覆盖本回合模型推理强度。
+/// `model_selection` freezes the exact provider, model, and credential shown at submission time.
+/// `model_selection` 固定提交时界面显示的精确供应商、模型与凭据。
 /// `attachments` contains composer attachment summaries to stage into the turn.
 /// `attachments` 包含要加入本回合的输入区附件摘要。
 /// `preauthorized_turn_admission` carries exact ownership from an outer destructive-edit transaction.
@@ -126,6 +362,7 @@ pub(super) async fn service_submit_conversation_prompt(
     hidden_model_guidance: Option<String>,
     execution_mode: Option<String>,
     reasoning_effort: Option<String>,
+    model_selection: Option<SubmissionModelSelection>,
     attachments: Option<Vec<ComposerAttachmentSummary>>,
     preauthorized_turn_admission: Option<ExistingSubmissionAdmissionAuthorization>,
     existing_session_hydration_policy: ExistingSessionHydrationPolicy,
@@ -296,6 +533,12 @@ pub(super) async fn service_submit_conversation_prompt(
     // kernel_reservation_id 将已有会话物化结果绑定到加载前捕获的精确准入所有者。
     let kernel_reservation_id = turn_admission.kernel_reservation_id(&materialized_session)?;
     prepare_materialized_submission_session(&mut workspace_snapshot, &materialized_session)?;
+    apply_submission_model_selection(
+        agent_runtime.public_ai_runtime.as_ref(),
+        &mut workspace_snapshot,
+        materialized_session.session_id,
+        model_selection.as_ref(),
+    )?;
     // session_id is copied from the authoritative materialization result after activation consumes its classification.
     // session_id 在激活阶段消费物化分类后，从权威物化结果中复制。
     let session_id = materialized_session.session_id;

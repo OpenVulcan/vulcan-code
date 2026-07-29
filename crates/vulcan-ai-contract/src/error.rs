@@ -59,6 +59,45 @@ pub enum DispatchOutcome {
     Unknown,
 }
 
+/// Identifies the authoritative source of one provider retry delay.
+/// 标识一项供应商重试延迟的权威来源。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetryAfterSource {
+    /// Standard Retry-After header expressed as seconds.
+    /// 以秒数表达的标准 Retry-After 响应头。
+    HeaderSeconds,
+    /// Standard Retry-After header expressed as an HTTP date.
+    /// 以 HTTP 日期表达的标准 Retry-After 响应头。
+    HeaderHttpDate,
+    /// Provider-registered millisecond response header.
+    /// 供应商已注册的毫秒响应头。
+    HeaderMilliseconds {
+        /// Exact registered header name.
+        /// 精确注册的响应头名称。
+        header_name: String,
+    },
+    /// Provider-registered response-body field.
+    /// 供应商已注册的响应体字段。
+    ResponseBody {
+        /// Exact registered JSON field path.
+        /// 精确注册的 JSON 字段路径。
+        field_path: String,
+    },
+}
+
+/// Carries one normalized retry delay without losing sub-second precision or provenance.
+/// 承载一项归一化重试延迟，且不丢失亚秒精度或来源。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetryAfterHint {
+    /// Delay in milliseconds.
+    /// 延迟毫秒数。
+    pub delay_milliseconds: u64,
+    /// Authoritative source of the delay.
+    /// 延迟的权威来源。
+    pub source: RetryAfterSource,
+}
+
 /// Carries one normalized provider or runtime error.
 /// 承载一个归一化供应商或运行时错误。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,6 +120,34 @@ pub struct AiExecutionError {
     /// 可选上游错误码。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_code: Option<String>,
+    /// Optional upstream error type.
+    /// 可选上游错误类型。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_type: Option<String>,
+    /// Optional upstream parameter associated with the error.
+    /// 与错误关联的可选上游参数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_parameter: Option<String>,
+    /// Optional controlled upstream message retained separately from the display message.
+    /// 与展示消息分开保留的可选受控上游消息。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_message: Option<String>,
+    /// Optional upstream or client request identifier.
+    /// 可选上游或客户端请求编号。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    /// Exact provider identifier when the route has been resolved.
+    /// 路由解析后使用的精确供应商标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+    /// Exact provider entry identifier when the route has been resolved.
+    /// 路由解析后使用的精确供应商入口标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_id: Option<String>,
+    /// Exact model identifier when the route has been resolved.
+    /// 路由解析后使用的精确模型标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
     /// Controlled user-facing message.
     /// 受控的用户可见消息。
     pub message: String,
@@ -90,14 +157,18 @@ pub struct AiExecutionError {
     /// Whether semantic output has already been observed.
     /// 是否已经观察到语义输出。
     pub semantic_output_observed: bool,
+    /// Whether a tool or external side effect has already occurred.
+    /// 是否已经发生工具或外部副作用。
+    #[serde(default)]
+    pub side_effect_observed: bool,
     /// Whether the current execution is terminal.
     /// 当前执行是否终结。
     pub terminal: bool,
     /// Whether a client may create a new execution.
     /// 客户端是否可以创建新执行。
     pub retryable: bool,
-    /// Provider-requested retry delay in seconds when reported.
-    /// 供应商报告时的建议重试秒数。
+    /// Provider-requested retry delay with exact provenance when reported.
+    /// 供应商报告时带精确来源的建议重试延迟。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retry_after_seconds: Option<u64>,
+    pub retry_after: Option<RetryAfterHint>,
 }

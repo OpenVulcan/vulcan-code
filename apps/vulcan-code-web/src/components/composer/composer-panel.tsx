@@ -285,6 +285,13 @@ export function ComposerPanel(props: {
     attachments,
     executionMode,
     reasoningEffort: submittedReasoningEffort,
+    modelSelection: activeModelChoice
+      ? {
+          providerId: activeModelChoice.providerId,
+          modelId: activeModelChoice.modelId,
+          connectionId: activeModelChoice.connectionId,
+        }
+      : null,
     isConversationRunning: props.isConversationRunning,
     clearForSubmission,
     restoreFailedSubmission,

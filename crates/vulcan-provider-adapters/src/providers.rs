@@ -4,7 +4,7 @@
 use crate::{
     AccountUsageQueryKind, AuthenticationProjection, CredentialBillingKind, CredentialMode,
     CredentialProfile, ModelDiscoveryKind, OAuthProviderKind, ProtocolRoute, ProviderDescriptor,
-    ProviderKind, ServiceEntry, ServiceEntryKind,
+    ProviderKind, RequestProjectorKind, ServiceEntry, ServiceEntryKind,
 };
 use std::collections::BTreeMap;
 use vulcan_ai_protocols::{
@@ -29,6 +29,7 @@ pub fn minimax_descriptor() -> ProviderDescriptor {
         service_entries: vec![
             service_entry(ServiceEntrySpec {
                 id: "global",
+                request_projector: RequestProjectorKind::MiniMax,
                 display_name: "International",
                 base_url: "https://api.minimax.io",
                 credential_profiles: minimax_credential_profiles(
@@ -41,6 +42,7 @@ pub fn minimax_descriptor() -> ProviderDescriptor {
             }),
             service_entry(ServiceEntrySpec {
                 id: "cn",
+                request_projector: RequestProjectorKind::MiniMax,
                 display_name: "China",
                 base_url: "https://api.minimaxi.com",
                 credential_profiles: minimax_credential_profiles(
@@ -70,6 +72,7 @@ pub fn kimi_descriptor() -> ProviderDescriptor {
         service_entries: vec![
             service_entry(ServiceEntrySpec {
                 id: "platform-cn",
+                request_projector: RequestProjectorKind::Kimi,
                 display_name: "Kimi Open Platform China",
                 base_url: "https://api.moonshot.cn/v1",
                 credential_profiles: vec![token_profile(
@@ -86,6 +89,7 @@ pub fn kimi_descriptor() -> ProviderDescriptor {
             }),
             service_entry(ServiceEntrySpec {
                 id: "platform-global",
+                request_projector: RequestProjectorKind::Kimi,
                 display_name: "Kimi Open Platform International",
                 base_url: "https://api.moonshot.ai/v1",
                 credential_profiles: vec![token_profile(
@@ -102,6 +106,7 @@ pub fn kimi_descriptor() -> ProviderDescriptor {
             }),
             service_entry(ServiceEntrySpec {
                 id: "coding-plan",
+                request_projector: RequestProjectorKind::Kimi,
                 display_name: "Kimi Code",
                 base_url: "https://api.kimi.com/coding/v1",
                 credential_profiles: vec![
@@ -160,6 +165,7 @@ pub fn deepseek_descriptor() -> ProviderDescriptor {
         kind: ProviderKind::System,
         service_entries: vec![service_entry(ServiceEntrySpec {
             id: "official-api",
+            request_projector: RequestProjectorKind::DeepSeek,
             display_name: "DeepSeek API",
             base_url: "https://api.deepseek.com",
             credential_profiles: vec![token_profile(
@@ -243,6 +249,7 @@ pub fn openrouter_descriptor() -> ProviderDescriptor {
         kind: ProviderKind::System,
         service_entries: vec![service_entry(ServiceEntrySpec {
             id: "public-api",
+            request_projector: RequestProjectorKind::OpenRouter,
             display_name: "Public API",
             base_url: "https://openrouter.ai/api/v1",
             credential_profiles: vec![token_profile(
@@ -295,6 +302,7 @@ pub fn tavily_descriptor() -> ProviderDescriptor {
             authentication: AuthenticationProjection::BearerAuthorization,
             request_headers: BTreeMap::new(),
             model_discovery: ModelDiscoveryKind::ProviderToolsOnly,
+            request_projector: RequestProjectorKind::Direct,
             protocol_routes: Vec::new(),
         }],
     }
@@ -315,6 +323,7 @@ pub fn openai_descriptor() -> ProviderDescriptor {
         service_entries: vec![
             service_entry(ServiceEntrySpec {
                 id: "public-api",
+                request_projector: RequestProjectorKind::Direct,
                 display_name: "OpenAI API",
                 base_url: "https://api.openai.com/v1",
                 credential_profiles: vec![token_profile(
@@ -334,6 +343,7 @@ pub fn openai_descriptor() -> ProviderDescriptor {
             }),
             service_entry(ServiceEntrySpec {
                 id: "codex-subscription",
+                request_projector: RequestProjectorKind::Direct,
                 display_name: "OpenAI Codex Subscription",
                 base_url: "https://chatgpt.com/backend-api/codex",
                 credential_profiles: vec![oauth_profile(
@@ -377,6 +387,7 @@ pub fn anthropic_descriptor() -> ProviderDescriptor {
         service_entries: vec![
             service_entry(ServiceEntrySpec {
                 id: "public-api",
+                request_projector: RequestProjectorKind::Direct,
                 display_name: "Claude API",
                 base_url: "https://api.anthropic.com",
                 credential_profiles: vec![token_profile(
@@ -396,6 +407,7 @@ pub fn anthropic_descriptor() -> ProviderDescriptor {
             }),
             service_entry(ServiceEntrySpec {
                 id: "claude-code-subscription",
+                request_projector: RequestProjectorKind::Direct,
                 display_name: "Claude Code Subscription",
                 base_url: "https://api.anthropic.com",
                 credential_profiles: vec![oauth_profile(
@@ -439,6 +451,7 @@ pub fn google_descriptor() -> ProviderDescriptor {
         service_entries: vec![
             service_entry(ServiceEntrySpec {
                 id: "gemini-api",
+                request_projector: RequestProjectorKind::Google,
                 display_name: "Gemini API Key",
                 base_url: "https://generativelanguage.googleapis.com/v1beta",
                 credential_profiles: vec![token_profile(
@@ -458,6 +471,7 @@ pub fn google_descriptor() -> ProviderDescriptor {
             }),
             service_entry(ServiceEntrySpec {
                 id: "gemini-oauth",
+                request_projector: RequestProjectorKind::Google,
                 display_name: "Gemini OAuth",
                 base_url: "https://generativelanguage.googleapis.com/v1beta",
                 credential_profiles: vec![oauth_profile(
@@ -478,6 +492,7 @@ pub fn google_descriptor() -> ProviderDescriptor {
             }),
             service_entry(ServiceEntrySpec {
                 id: "code-assist",
+                request_projector: RequestProjectorKind::Google,
                 display_name: "Google Code Assist",
                 base_url: "https://cloudcode-pa.googleapis.com",
                 credential_profiles: vec![oauth_profile(
@@ -530,6 +545,7 @@ fn alibaba_token_plan_entry(id: &str, display_name: &str, origin: &str) -> Servi
         authentication: AuthenticationProjection::BearerAuthorization,
         request_headers: BTreeMap::new(),
         model_discovery: ModelDiscoveryKind::OpenAi,
+        request_projector: RequestProjectorKind::Alibaba,
         protocol_routes: vec![
             protocol_route(OPENAI_CHAT_PROFILE_ID, "/chat/completions"),
             protocol_route_with_overrides(
@@ -574,6 +590,7 @@ fn alibaba_model_studio_entry(id: &str, display_name: &str, origin: &str) -> Ser
         authentication: AuthenticationProjection::BearerAuthorization,
         request_headers: BTreeMap::new(),
         model_discovery: ModelDiscoveryKind::OpenAi,
+        request_projector: RequestProjectorKind::Alibaba,
         protocol_routes: vec![
             protocol_route(OPENAI_CHAT_PROFILE_ID, "/chat/completions"),
             protocol_route_with_overrides(
@@ -696,6 +713,9 @@ struct ServiceEntrySpec<const H: usize, P> {
     /// Stable service-entry identifier.
     /// 稳定服务入口标识。
     id: &'static str,
+    /// Registered provider request projector.
+    /// 已注册供应商请求投影器。
+    request_projector: RequestProjectorKind,
     /// User-visible service-entry name.
     /// 用户可见服务入口名称。
     display_name: &'static str,
@@ -747,6 +767,7 @@ where
                 .map(|(name, value)| (name.to_string(), value.to_string())),
         ),
         model_discovery: spec.model_discovery,
+        request_projector: spec.request_projector,
         protocol_routes: spec.protocol_routes.into_iter().collect(),
     }
 }

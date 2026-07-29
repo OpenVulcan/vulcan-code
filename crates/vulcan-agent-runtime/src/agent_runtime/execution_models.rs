@@ -841,7 +841,7 @@ impl ExecutionRunReport {
         session_id: SessionId,
         preparation: ExecutionPreparation,
         thinking_output: Option<String>,
-        assistant_output: String,
+        assistant_output: Option<String>,
         conversation_state: Option<SessionConversationState>,
         provider_request_count: usize,
         mcp_discovery_rows: Vec<String>,
@@ -855,7 +855,7 @@ impl ExecutionRunReport {
         Self {
             session_id,
             preparation: Some(preparation),
-            assistant_output: Some(assistant_output),
+            assistant_output,
             thinking_output,
             conversation_state,
             provider_request_count,

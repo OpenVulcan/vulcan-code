@@ -1392,6 +1392,10 @@ export type TranslationKey =
   | "toolPresentation.providerExtract.failures"
   | "toolPresentation.providerExtract.images"
   | "toolPresentation.providerExtract.empty"
+  | "toolPresentation.providerStructured.embedding"
+  | "toolPresentation.providerStructured.rerank"
+  | "toolPresentation.providerStructured.composite"
+  | "toolPresentation.providerStructured.items"
   | "settings.modelOverrides.disabled"
   | "settings.modelOverrides.cancel"
   | "settings.modelOverrides.save"
@@ -2992,6 +2996,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.providerExtract.failures": "个失败",
     "toolPresentation.providerExtract.images": "张图片",
     "toolPresentation.providerExtract.empty": "供应商未返回提取结果。",
+    "toolPresentation.providerStructured.embedding": "向量结果",
+    "toolPresentation.providerStructured.rerank": "重排结果",
+    "toolPresentation.providerStructured.composite": "复合结果",
+    "toolPresentation.providerStructured.items": "项",
     "settings.modelOverrides.disabled": "停用",
     "settings.modelOverrides.cancel": "取消",
     "settings.modelOverrides.save": "保存更改",
@@ -4589,6 +4597,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.providerExtract.failures": "failures",
     "toolPresentation.providerExtract.images": "images",
     "toolPresentation.providerExtract.empty": "The provider returned no extraction results.",
+    "toolPresentation.providerStructured.embedding": "Embedding result",
+    "toolPresentation.providerStructured.rerank": "Rerank result",
+    "toolPresentation.providerStructured.composite": "Composite result",
+    "toolPresentation.providerStructured.items": "items",
     "settings.modelOverrides.disabled": "Disabled",
     "settings.modelOverrides.cancel": "Cancel",
     "settings.modelOverrides.save": "Save changes",

@@ -81,6 +81,7 @@ fn usage_report(
 ) -> ExecutionRunReport {
     let provider_usage = ProviderUsageSnapshot {
         input_tokens: Some(input_tokens),
+        uncached_input_tokens: None,
         output_tokens: Some(output_tokens),
         reasoning_tokens: Some(reasoning_tokens),
         total_tokens: Some(total_tokens),
@@ -681,6 +682,7 @@ fn terminal_report_does_not_duplicate_multi_message_assistant_output_usage() {
     // firstUsage 是第一次 Provider 响应报告的权威用量。
     let first_usage = ProviderUsageSnapshot {
         input_tokens: Some(100),
+        uncached_input_tokens: None,
         output_tokens: Some(10),
         reasoning_tokens: Some(3),
         total_tokens: Some(110),
@@ -691,6 +693,7 @@ fn terminal_report_does_not_duplicate_multi_message_assistant_output_usage() {
     // finalUsage 是最后一次 Provider 响应报告的权威用量。
     let final_usage = ProviderUsageSnapshot {
         input_tokens: Some(120),
+        uncached_input_tokens: None,
         output_tokens: Some(12),
         reasoning_tokens: Some(4),
         total_tokens: Some(132),
@@ -725,6 +728,7 @@ fn terminal_report_does_not_duplicate_multi_message_assistant_output_usage() {
     // cumulativeUsage 是两次真实 Provider 响应的准确合计。
     let cumulative_usage = ProviderUsageSnapshot {
         input_tokens: Some(220),
+        uncached_input_tokens: None,
         output_tokens: Some(22),
         reasoning_tokens: Some(7),
         total_tokens: Some(242),
@@ -809,6 +813,7 @@ fn terminal_report_backfills_usage_when_checkpoint_messages_lack_usage() {
         provider_request_count: 1,
         last_successful_provider_usage: Some(ProviderUsageSnapshot {
             input_tokens: Some(101),
+            uncached_input_tokens: None,
             output_tokens: Some(3),
             reasoning_tokens: Some(2),
             total_tokens: Some(106),
@@ -873,6 +878,7 @@ fn terminal_report_backfills_multi_call_usage_from_cumulative_snapshot() {
         provider_request_count: 7,
         last_successful_provider_usage: Some(ProviderUsageSnapshot {
             input_tokens: Some(26_442),
+            uncached_input_tokens: None,
             output_tokens: Some(171),
             reasoning_tokens: Some(20),
             total_tokens: Some(26_633),
@@ -881,6 +887,7 @@ fn terminal_report_backfills_multi_call_usage_from_cumulative_snapshot() {
         }),
         cumulative_successful_provider_usage: Some(ProviderUsageSnapshot {
             input_tokens: Some(185_094),
+            uncached_input_tokens: None,
             output_tokens: Some(1_197),
             reasoning_tokens: Some(140),
             total_tokens: Some(186_431),

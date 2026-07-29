@@ -612,6 +612,7 @@ mod tests {
             subagent_prompt_context: None,
             model_blueprint: ProviderRuntimeBlueprint {
                 provider_id: String::from("anthropic"),
+                service_entry_id: String::from("public-api"),
                 connection_id: String::from("test-connection"),
                 provider_name: String::from("Anthropic"),
                 runtime_label: String::from("Anthropic"),
@@ -620,6 +621,7 @@ mod tests {
                 protocol_profile_id: String::from(
                     vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
                 ),
+                secondary_route: Default::default(),
                 public_capabilities: vulcan_ai_contract::ModelCapabilities::default(),
                 base_url: Some(String::from("https://api.anthropic.com")),
                 supports_remote_model_refresh: false,

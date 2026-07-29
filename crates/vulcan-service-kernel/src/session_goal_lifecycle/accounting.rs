@@ -150,11 +150,11 @@ pub(crate) async fn account_session_goal_provider_usage(
     // persistedUsage converts platform-sized counters into the store's saturating integer contract.
     // persistedUsage 将平台大小计数转换为存储层的饱和整数契约。
     let persisted_usage = ThreadGoalProviderUsage {
-        uncached_input_tokens: i64::try_from(usage.uncached_input_tokens).unwrap_or(i64::MAX),
-        cached_input_tokens: i64::try_from(usage.cached_input_tokens).unwrap_or(i64::MAX),
-        output_tokens: i64::try_from(usage.output_tokens).unwrap_or(i64::MAX),
-        reasoning_tokens: i64::try_from(usage.reasoning_tokens).unwrap_or(i64::MAX),
-        total_tokens: i64::try_from(usage.total_tokens).unwrap_or(i64::MAX),
+        uncached_input_tokens: additive_goal_usage_counter(usage.uncached_input_tokens),
+        cached_input_tokens: additive_goal_usage_counter(usage.cached_input_tokens),
+        output_tokens: additive_goal_usage_counter(usage.output_tokens),
+        reasoning_tokens: additive_goal_usage_counter(usage.reasoning_tokens),
+        total_tokens: additive_goal_usage_counter(usage.total_tokens),
     };
     // goalStore applies request usage atomically against the request-bound goal identity.
     // goalStore 针对请求绑定的目标身份原子应用请求用量。
@@ -179,6 +179,24 @@ pub(crate) async fn account_session_goal_provider_usage(
         eprintln!("[webui-service] enqueue goal budget-limited guidance failed: {error}");
     }
     Ok(true)
+}
+
+/// Converts one optional provider counter into a safe additive goal-accounting increment.
+/// 将一个可选 Provider 计数转换为安全的目标累加记账增量。
+///
+/// # Parameters
+/// 参数
+/// `value` is an authoritative provider counter or an unreported value.
+/// `value` 是权威 Provider 计数或未报告值。
+///
+/// # Returns
+/// 返回值
+/// The saturated counter, or zero increment when the provider did not report the field.
+/// 返回饱和后的计数；Provider 未报告该字段时返回零增量。
+fn additive_goal_usage_counter(value: Option<usize>) -> i64 {
+    value
+        .map(|value| i64::try_from(value).unwrap_or(i64::MAX))
+        .unwrap_or_default()
 }
 
 /// Marks an active goal with the terminal status implied by a failed run.

@@ -5,6 +5,7 @@ import type {
   ProviderToolExtractPresentationResult,
   ProviderToolSearchPresentation,
   ProviderToolSearchPresentationResult,
+  ProviderToolStructuredPresentation,
   ProviderToolTextPresentation,
   ToolPresentationDisplayState,
 } from "./types";
@@ -55,6 +56,134 @@ export function resolveProviderToolTextPresentation(
     state: displayState,
     text,
   };
+}
+
+// resolveProviderToolStructuredPresentation projects closed embedding, rerank, and composite host results.
+// resolveProviderToolStructuredPresentation 投影封闭的向量、重排与复合宿主结果。
+//
+// Parameters:
+// `blocks` are the merged tool records and `displayState` is their normalized state.
+// 参数：
+// `blocks` 是合并后的工具记录，`displayState` 是其规范化状态。
+//
+// Returns:
+// A strict structured presentation only for one of the three registered unified output contracts.
+// 返回值：
+// 仅为三种已注册统一输出契约之一返回严格结构化展示。
+export function resolveProviderToolStructuredPresentation(
+  blocks: ToolExecutionConversationBlock[],
+  displayState: ToolPresentationDisplayState,
+): ProviderToolStructuredPresentation | null {
+  if (fixedHostKind(blocks) !== "provider_tool_output") {
+    return null;
+  }
+  const hostPayload = fixedHostPayload(blocks);
+  const outputKind = stringValue(hostPayload?.kind);
+  if (outputKind !== "embedding" && outputKind !== "rerank" && outputKind !== "composite") {
+    return null;
+  }
+  const payload = objectValue(hostPayload?.[outputKind]);
+  if (!payload) {
+    return null;
+  }
+  const projection = providerToolStructuredProjection(outputKind, payload);
+  if (!projection) {
+    return null;
+  }
+  const sourceId = blocks.find((block) => block.toolCallId)?.toolCallId
+    ?? blocks[0]?.id
+    ?? compactHash(JSON.stringify(payload));
+  return {
+    id: `provider-${outputKind}:${sourceId}`,
+    kind: "provider_tool_structured",
+    state: displayState,
+    outputKind,
+    itemCount: projection.itemCount,
+    payload: projection.preview,
+  };
+}
+
+// providerToolStructuredProjection validates the closed shape and builds a bounded card preview.
+// providerToolStructuredProjection 验证封闭形状并构建有界卡片预览。
+function providerToolStructuredProjection(
+  outputKind: ProviderToolStructuredPresentation["outputKind"],
+  payload: Record<string, unknown>,
+): { itemCount: number; preview: Record<string, unknown> } | null {
+  if (outputKind === "embedding") {
+    if (!Array.isArray(payload.vectors)) {
+      return null;
+    }
+    return {
+      itemCount: payload.vectors.length,
+      preview: {
+        model: stringValue(payload.model),
+        vector_count: payload.vectors.length,
+        vectors: payload.vectors.slice(0, 20).map((value) => {
+          const vector = objectValue(value);
+          return {
+            index: numberValue(vector?.index),
+            dimensions: arrayValue(vector?.values).length,
+          };
+        }),
+        truncated: payload.vectors.length > 20,
+      },
+    };
+  }
+  if (outputKind === "rerank") {
+    if (!Array.isArray(payload.results)) {
+      return null;
+    }
+    return {
+      itemCount: payload.results.length,
+      preview: {
+        model: stringValue(payload.model),
+        result_count: payload.results.length,
+        results: payload.results.slice(0, 50).map((value) => {
+          const result = objectValue(value);
+          return {
+            index: numberValue(result?.index),
+            score: finiteNumberValue(result?.score),
+            document: boundedTextValue(result?.document, 500),
+          };
+        }),
+        truncated: payload.results.length > 50,
+      },
+    };
+  }
+  const collections = ["text", "resources", "embeddings", "reranks", "searches", "extracts"];
+  if (!collections.every((key) => Array.isArray(payload[key]))) {
+    return null;
+  }
+  const counts = Object.fromEntries(
+    collections.map((key) => [key, (payload[key] as unknown[]).length]),
+  );
+  return {
+    itemCount: Object.values(counts).reduce((total, count) => total + count, 0),
+    preview: {
+      counts,
+      text_preview: (payload.text as unknown[])
+        .slice(0, 10)
+        .map((value) => boundedTextValue(value, 500)),
+      resources: (payload.resources as unknown[]).slice(0, 20),
+      truncated: collections.some((key) => (payload[key] as unknown[]).length > 20),
+    },
+  };
+}
+
+// finiteNumberValue returns only finite floating-point values from a normalized JSON payload.
+// finiteNumberValue 仅从规范化 JSON 载荷返回有限浮点数值。
+function finiteNumberValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+// boundedTextValue returns one exact string preview within a fixed character limit.
+// boundedTextValue 返回一个位于固定字符上限内的精确字符串预览。
+function boundedTextValue(value: unknown, maximumCharacters: number): string | null {
+  const text = textValue(value);
+  if (text === null || text.length <= maximumCharacters) {
+    return text;
+  }
+  return `${text.slice(0, maximumCharacters)}…`;
 }
 
 // resolveProviderToolExtractPresentation projects the unified provider extraction host result.

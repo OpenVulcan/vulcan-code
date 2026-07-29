@@ -84,6 +84,7 @@ mod tests {
     fn latest_provider_usage_prefers_latest_assistant_message() {
         let first_usage = ProviderUsageSnapshot {
             input_tokens: Some(256),
+            uncached_input_tokens: Some(256),
             output_tokens: Some(64),
             reasoning_tokens: None,
             total_tokens: Some(320),
@@ -92,6 +93,7 @@ mod tests {
         };
         let latest_usage = ProviderUsageSnapshot {
             input_tokens: Some(1024),
+            uncached_input_tokens: Some(512),
             output_tokens: Some(128),
             reasoning_tokens: Some(256),
             total_tokens: Some(1408),
@@ -139,6 +141,7 @@ mod tests {
     fn latest_provider_usage_skips_empty_assistant_placeholder() {
         let valid_usage = ProviderUsageSnapshot {
             input_tokens: Some(1536),
+            uncached_input_tokens: Some(512),
             output_tokens: Some(128),
             reasoning_tokens: Some(64),
             total_tokens: Some(1728),
@@ -186,6 +189,7 @@ mod tests {
     fn provider_usage_json_serialization_skips_empty_snapshots() {
         let usage = ProviderUsageSnapshot {
             input_tokens: Some(2048),
+            uncached_input_tokens: Some(1024),
             output_tokens: Some(256),
             reasoning_tokens: Some(512),
             total_tokens: Some(2816),
@@ -210,6 +214,7 @@ mod tests {
     fn calibrated_input_token_estimate_prefers_observed_input_usage() {
         let usage = ProviderUsageSnapshot {
             input_tokens: Some(4096),
+            uncached_input_tokens: Some(4096),
             output_tokens: Some(512),
             reasoning_tokens: None,
             total_tokens: Some(4608),
@@ -228,6 +233,7 @@ mod tests {
     fn observed_input_tokens_from_usage_derives_from_total_when_needed() {
         let usage = ProviderUsageSnapshot {
             input_tokens: None,
+            uncached_input_tokens: None,
             output_tokens: Some(256),
             reasoning_tokens: Some(128),
             total_tokens: Some(1408),

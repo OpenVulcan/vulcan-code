@@ -213,7 +213,7 @@ impl PublicAiRuntime {
     pub fn first_batch(secrets: Arc<dyn CredentialSecretStore>) -> Result<Self, String> {
         let protocols = ProtocolRegistry::first_batch().map_err(|error| error.to_string())?;
         let protocols = Arc::new(protocols);
-        let http = reqwest::Client::new();
+        let http = build_public_ai_http_client()?;
         Ok(Self {
             providers: ProviderRegistry::first_batch()?,
             execution_client: ProviderExecutionClient::new(http.clone(), Arc::clone(&protocols)),
@@ -1553,6 +1553,22 @@ fn validate_model_overrides(
         }
     }
     Ok(())
+}
+
+/// Builds the shared HTTP client with a closed redirect policy and bounded connection setup.
+/// 构建采用封闭重定向策略与有界连接建立时间的共享 HTTP 客户端。
+///
+/// # Returns
+/// 返回值
+/// A hardened client, or the exact client-construction failure.
+/// 返回加固后的客户端，或精确的客户端构建失败。
+fn build_public_ai_http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(15))
+        .pool_idle_timeout(Duration::from_secs(90))
+        .build()
+        .map_err(|error| format!("Failed to build the public AI HTTP client: {error}"))
 }
 
 #[cfg(test)]

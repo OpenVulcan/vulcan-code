@@ -4,7 +4,8 @@
 use crate::{EncodedWireRequest, ProtocolConversionError, ProtocolProfile, ProtocolStreamDecoder};
 use serde_json::{Value, json};
 use vulcan_ai_contract::{
-    AiExecutionRequest, ContentItem, MessageRole, NativeToolKind, PromptCachePolicy,
+    AiExecutionRequest, ContentItem, MessageRole, NativeToolKind, ParallelToolCallPolicy,
+    PromptCachePolicy, ReasoningOutputPolicy, StructuredOutputPolicy, ToolChoicePolicy,
 };
 
 /// Stable OpenAI Chat Completions profile identifier.
@@ -27,6 +28,12 @@ impl ProtocolProfile for OpenAiChatProfile {
     /// 返回稳定的 Chat Completions Profile 标识。
     fn id(&self) -> &'static str {
         OPENAI_CHAT_PROFILE_ID
+    }
+
+    /// Returns the bounded Chat Completions SSE transport declaration.
+    /// 返回有界 Chat Completions SSE 传输声明。
+    fn transport_profile(&self) -> crate::ProtocolTransportProfile {
+        crate::ProtocolTransportProfile::bounded_sse()
     }
 
     /// Encodes one public request as Chat Completions JSON.
@@ -53,6 +60,7 @@ impl ProtocolProfile for OpenAiChatProfile {
         if let Some(effort) = request.reasoning_effort {
             body["reasoning_effort"] = Value::String(effort.as_str().to_string());
         }
+        project_chat_request_controls(request, &mut body)?;
         Ok(EncodedWireRequest {
             path: String::from("/v1/chat/completions"),
             headers: Default::default(),
@@ -86,15 +94,22 @@ impl ProtocolProfile for OpenAiResponsesProfile {
         OPENAI_RESPONSES_PROFILE_ID
     }
 
+    /// Returns the bounded Responses SSE transport declaration.
+    /// 返回有界 Responses SSE 传输声明。
+    fn transport_profile(&self) -> crate::ProtocolTransportProfile {
+        crate::ProtocolTransportProfile::bounded_sse()
+    }
+
     /// Encodes one public request as Responses JSON.
     /// 将一个公共请求编码为 Responses JSON。
     fn encode(
         &self,
         request: &AiExecutionRequest,
     ) -> Result<EncodedWireRequest, ProtocolConversionError> {
-        crate::shared::require_no_native_tools(request, self.id())?;
         require_default_cache_policy(&request.prompt_cache, self.id())?;
-        let input = encode_responses_input(request, true)?;
+        // Standard Responses keeps store=false; therefore it replays complete public history instead of referencing server-retained state.
+        // 标准 Responses 保持 store=false；因此重放完整公共历史，而不是引用服务端保留状态。
+        let input = encode_responses_input(request, true, None)?;
         let mut body = json!({
             "model": request.model_id,
             "input": input,
@@ -108,9 +123,11 @@ impl ProtocolProfile for OpenAiResponsesProfile {
         if let Some(effort) = request.reasoning_effort {
             body["reasoning"] = json!({
                 "effort": effort.as_str(),
-                "summary": "auto",
             });
+            project_responses_reasoning_output(request.reasoning_output, &mut body["reasoning"])?;
+            body["include"] = json!(["reasoning.encrypted_content"]);
         }
+        project_responses_request_controls(request, &mut body)?;
         Ok(EncodedWireRequest {
             path: String::from("/v1/responses"),
             headers: Default::default(),
@@ -141,6 +158,12 @@ impl ProtocolProfile for OpenAiCodexResponsesProfile {
         OPENAI_CODEX_RESPONSES_PROFILE_ID
     }
 
+    /// Returns the bounded Codex Responses SSE transport declaration.
+    /// 返回有界 Codex Responses SSE 传输声明。
+    fn transport_profile(&self) -> crate::ProtocolTransportProfile {
+        crate::ProtocolTransportProfile::bounded_sse()
+    }
+
     /// Encodes one public request using the isolated Codex request identity.
     /// 使用隔离的 Codex 请求身份编码一个公共请求。
     fn encode(
@@ -148,7 +171,8 @@ impl ProtocolProfile for OpenAiCodexResponsesProfile {
         request: &AiExecutionRequest,
     ) -> Result<EncodedWireRequest, ProtocolConversionError> {
         require_default_cache_policy(&request.prompt_cache, self.id())?;
-        let input = encode_responses_input(request, false)?;
+        let continuation = validated_responses_continuation(request, self.id())?;
+        let input = encode_responses_input(request, false, continuation)?;
         let instructions = encode_codex_instructions(request)?;
         let mut body = json!({
             "model": request.model_id,
@@ -158,15 +182,25 @@ impl ProtocolProfile for OpenAiCodexResponsesProfile {
             "stream": true,
             "store": false,
         });
-        if !request.tools.is_empty() {
-            body["parallel_tool_calls"] = Value::Bool(true);
+        if let Some(continuation) = continuation {
+            body["previous_response_id"] = Value::String(continuation.provider_message_id.clone());
         }
         if let Some(effort) = request.reasoning_effort {
             body["reasoning"] = json!({
                 "effort": effort.as_str(),
-                "summary": "auto",
             });
+            project_responses_reasoning_output(request.reasoning_output, &mut body["reasoning"])?;
+            body["include"] = json!(["reasoning.encrypted_content"]);
         }
+        if !request.tools.is_empty()
+            && matches!(
+                request.parallel_tool_calls,
+                ParallelToolCallPolicy::ProviderDefault
+            )
+        {
+            body["parallel_tool_calls"] = Value::Bool(true);
+        }
+        project_responses_request_controls(request, &mut body)?;
         let mut headers = std::collections::BTreeMap::new();
         if let Some(cache_scope_id) = request.cache_scope_id.as_deref() {
             body["prompt_cache_key"] = Value::String(cache_scope_id.to_string());
@@ -190,6 +224,244 @@ impl ProtocolProfile for OpenAiCodexResponsesProfile {
             execution_id,
         ))
     }
+}
+
+/// Projects public request controls into the OpenAI Chat Completions wire shape.
+/// 将公共请求控制投影到 OpenAI Chat Completions Wire 结构。
+///
+/// # Parameters
+/// 参数
+/// `request` is the provider-neutral request and `body` is the mutable Chat request object.
+/// `request` 是供应商无关请求，`body` 是可变 Chat 请求对象。
+///
+/// # Returns
+/// 返回值
+/// A controlled conversion error when a requested control cannot be represented exactly.
+/// 当请求控制无法精确表示时返回受控转换错误。
+fn project_chat_request_controls(
+    request: &AiExecutionRequest,
+    body: &mut Value,
+) -> Result<(), ProtocolConversionError> {
+    body["tool_choice"] = encode_chat_tool_choice(request)?;
+    match request.parallel_tool_calls {
+        ParallelToolCallPolicy::ProviderDefault => {}
+        ParallelToolCallPolicy::Allowed => body["parallel_tool_calls"] = Value::Bool(true),
+        ParallelToolCallPolicy::Disabled => body["parallel_tool_calls"] = Value::Bool(false),
+    }
+    match &request.structured_output {
+        StructuredOutputPolicy::None => {}
+        StructuredOutputPolicy::JsonObject => {
+            body["response_format"] = json!({ "type": "json_object" });
+        }
+        StructuredOutputPolicy::JsonSchema {
+            name,
+            description,
+            schema,
+            strict,
+        } => {
+            let mut json_schema = json!({
+                "name": name,
+                "schema": schema,
+                "strict": strict,
+            });
+            if let Some(description) = description {
+                json_schema["description"] = Value::String(description.clone());
+            }
+            body["response_format"] = json!({
+                "type": "json_schema",
+                "json_schema": json_schema,
+            });
+        }
+    }
+    if !request.stop_sequences.is_empty() {
+        body["stop"] = json!(request.stop_sequences);
+    }
+    reject_chat_reasoning_output_without_reasoning(request)?;
+    Ok(())
+}
+
+/// Projects public request controls into the OpenAI Responses wire shape.
+/// 将公共请求控制投影到 OpenAI Responses Wire 结构。
+///
+/// # Parameters
+/// 参数
+/// `request` is the provider-neutral request and `body` is the mutable Responses request object.
+/// `request` 是供应商无关请求，`body` 是可变 Responses 请求对象。
+///
+/// # Returns
+/// 返回值
+/// A controlled conversion error when Responses has no exact representation.
+/// 当 Responses 没有精确表示时返回受控转换错误。
+fn project_responses_request_controls(
+    request: &AiExecutionRequest,
+    body: &mut Value,
+) -> Result<(), ProtocolConversionError> {
+    body["tool_choice"] = encode_responses_tool_choice(request)?;
+    match request.parallel_tool_calls {
+        ParallelToolCallPolicy::ProviderDefault => {}
+        ParallelToolCallPolicy::Allowed => body["parallel_tool_calls"] = Value::Bool(true),
+        ParallelToolCallPolicy::Disabled => body["parallel_tool_calls"] = Value::Bool(false),
+    }
+    match &request.structured_output {
+        StructuredOutputPolicy::None => {}
+        StructuredOutputPolicy::JsonObject => {
+            body["text"] = json!({ "format": { "type": "json_object" } });
+        }
+        StructuredOutputPolicy::JsonSchema {
+            name,
+            description,
+            schema,
+            strict,
+        } => {
+            let mut format = json!({
+                "type": "json_schema",
+                "name": name,
+                "schema": schema,
+                "strict": strict,
+            });
+            if let Some(description) = description {
+                format["description"] = Value::String(description.clone());
+            }
+            body["text"] = json!({ "format": format });
+        }
+    }
+    if !request.stop_sequences.is_empty() {
+        return Err(ProtocolConversionError::new(
+            "OpenAI Responses has no registered stop-sequence projector.",
+        ));
+    }
+    reject_chat_reasoning_output_without_reasoning(request)?;
+    Ok(())
+}
+
+/// Encodes one Chat Completions tool-choice policy after validating exact tool ownership.
+/// 在验证精确工具归属后编码 Chat Completions 工具选择策略。
+///
+/// # Parameters
+/// 参数
+/// `request` contains the selected policy and registered public tools.
+/// `request` 包含所选策略与已注册公共工具。
+///
+/// # Returns
+/// 返回值
+/// The exact Chat Completions `tool_choice` value.
+/// 精确的 Chat Completions `tool_choice` 值。
+fn encode_chat_tool_choice(request: &AiExecutionRequest) -> Result<Value, ProtocolConversionError> {
+    Ok(match &request.tool_choice {
+        ToolChoicePolicy::Auto => Value::String(String::from("auto")),
+        ToolChoicePolicy::Required => Value::String(String::from("required")),
+        ToolChoicePolicy::Disabled => Value::String(String::from("none")),
+        ToolChoicePolicy::Specific { tool_name } => {
+            require_registered_tool(request, tool_name)?;
+            json!({ "type": "function", "function": { "name": tool_name } })
+        }
+    })
+}
+
+/// Encodes one Responses tool-choice policy after validating exact tool ownership.
+/// 在验证精确工具归属后编码 Responses 工具选择策略。
+///
+/// # Parameters
+/// 参数
+/// `request` contains the selected policy and registered public tools.
+/// `request` 包含所选策略与已注册公共工具。
+///
+/// # Returns
+/// 返回值
+/// The exact Responses `tool_choice` value.
+/// 精确的 Responses `tool_choice` 值。
+fn encode_responses_tool_choice(
+    request: &AiExecutionRequest,
+) -> Result<Value, ProtocolConversionError> {
+    Ok(match &request.tool_choice {
+        ToolChoicePolicy::Auto => Value::String(String::from("auto")),
+        ToolChoicePolicy::Required => Value::String(String::from("required")),
+        ToolChoicePolicy::Disabled => Value::String(String::from("none")),
+        ToolChoicePolicy::Specific { tool_name } => {
+            require_registered_tool(request, tool_name)?;
+            json!({ "type": "function", "name": tool_name })
+        }
+    })
+}
+
+/// Verifies a specific tool-choice target exists in the exact request tool set.
+/// 验证特定工具选择目标存在于精确请求工具集合中。
+///
+/// # Parameters
+/// 参数
+/// `request` owns the registered tools and `tool_name` is the requested exact name.
+/// `request` 拥有已注册工具，`tool_name` 是请求的精确名称。
+///
+/// # Returns
+/// 返回值
+/// Success only when the tool is registered.
+/// 仅当工具已注册时成功。
+fn require_registered_tool(
+    request: &AiExecutionRequest,
+    tool_name: &str,
+) -> Result<(), ProtocolConversionError> {
+    if request.tools.iter().any(|tool| tool.name == tool_name) {
+        return Ok(());
+    }
+    Err(ProtocolConversionError::new(format!(
+        "Tool choice references unregistered tool `{tool_name}`."
+    )))
+}
+
+/// Projects the public reasoning-output policy into an existing Responses reasoning object.
+/// 将公共思考输出策略投影到现有 Responses reasoning 对象。
+///
+/// # Parameters
+/// 参数
+/// `policy` is the requested visibility and `reasoning` is the mutable wire object.
+/// `policy` 是请求的可见性，`reasoning` 是可变 Wire 对象。
+///
+/// # Returns
+/// 返回值
+/// Success after an exact summary projection.
+/// 精确投影摘要后返回成功。
+fn project_responses_reasoning_output(
+    policy: ReasoningOutputPolicy,
+    reasoning: &mut Value,
+) -> Result<(), ProtocolConversionError> {
+    match policy {
+        ReasoningOutputPolicy::ProviderDefault | ReasoningOutputPolicy::SummaryAuto => {
+            reasoning["summary"] = Value::String(String::from("auto"));
+        }
+        ReasoningOutputPolicy::Hidden => {}
+        ReasoningOutputPolicy::Detailed => {
+            reasoning["summary"] = Value::String(String::from("detailed"));
+        }
+    }
+    Ok(())
+}
+
+/// Rejects explicit reasoning-output controls when no reasoning effort is active.
+/// 当未启用思考强度时拒绝显式思考输出控制。
+///
+/// # Parameters
+/// 参数
+/// `request` is the exact public request being encoded.
+/// `request` 是正在编码的精确公共请求。
+///
+/// # Returns
+/// 返回值
+/// Success for provider default or an active reasoning request.
+/// 供应商默认或已启用思考请求时返回成功。
+fn reject_chat_reasoning_output_without_reasoning(
+    request: &AiExecutionRequest,
+) -> Result<(), ProtocolConversionError> {
+    if request.reasoning_effort.is_none()
+        && !matches!(
+            request.reasoning_output,
+            ReasoningOutputPolicy::ProviderDefault
+        )
+    {
+        return Err(ProtocolConversionError::new(
+            "Reasoning output control requires an active reasoning effort.",
+        ));
+    }
+    Ok(())
 }
 
 /// Requires provider-default caching until an adapter registers a projector.
@@ -316,9 +588,13 @@ fn encode_messages(request: &AiExecutionRequest) -> Result<Vec<Value>, ProtocolC
 fn encode_responses_input(
     request: &AiExecutionRequest,
     include_system_messages: bool,
+    continuation: Option<&vulcan_ai_contract::AiContinuation>,
 ) -> Result<Vec<Value>, ProtocolConversionError> {
     let mut input = Vec::new();
-    for message in &request.messages {
+    let message_start = continuation
+        .map(|continuation| continuation.covered_message_count)
+        .unwrap_or(0);
+    for message in &request.messages[message_start..] {
         match message.role {
             MessageRole::Tool => {
                 for item in &message.content {
@@ -435,6 +711,54 @@ fn encode_responses_input(
         }
     }
     Ok(input)
+}
+
+/// Validates one Responses continuation against the immutable request and protocol profile.
+/// 根据不可变请求和协议配置校验一个 Responses 延续信息。
+///
+/// # Parameters
+/// 参数
+/// `request` carries the optional proven cursor and `profile_id` is the exact active profile.
+/// `request` 携带可选的已证明游标，`profile_id` 是精确的当前协议配置。
+///
+/// # Returns
+/// 返回值
+/// The validated cursor, or a conversion error when a stale or malformed cursor is present.
+/// 返回已校验游标；存在过期或格式错误游标时返回转换错误。
+fn validated_responses_continuation<'a>(
+    request: &'a AiExecutionRequest,
+    profile_id: &str,
+) -> Result<Option<&'a vulcan_ai_contract::AiContinuation>, ProtocolConversionError> {
+    let Some(continuation) = request.continuation.as_ref() else {
+        return Ok(None);
+    };
+    if continuation.protocol_profile_id != profile_id {
+        return Err(ProtocolConversionError::new(format!(
+            "Responses continuation profile `{}` does not match active profile `{profile_id}`.",
+            continuation.protocol_profile_id
+        )));
+    }
+    if continuation.model_id != request.model_id {
+        return Err(ProtocolConversionError::new(format!(
+            "Responses continuation model `{}` does not match request model `{}`.",
+            continuation.model_id, request.model_id
+        )));
+    }
+    if continuation.provider_message_id.trim().is_empty()
+        || continuation.covered_local_message_id.trim().is_empty()
+    {
+        return Err(ProtocolConversionError::new(
+            "Responses continuation requires non-empty provider and local message identifiers.",
+        ));
+    }
+    if continuation.covered_message_count > request.messages.len() {
+        return Err(ProtocolConversionError::new(format!(
+            "Responses continuation covers {} messages but the request contains only {}.",
+            continuation.covered_message_count,
+            request.messages.len()
+        )));
+    }
+    Ok(Some(continuation))
 }
 
 /// Encodes Codex system content into its required top-level instructions field.
@@ -653,7 +977,7 @@ fn encode_openai_tools(request: &AiExecutionRequest) -> Vec<Value> {
 /// The exact tool array accepted by OpenAI Responses and Codex Responses.
 /// 返回 OpenAI Responses 与 Codex Responses 接受的精确工具数组。
 fn encode_responses_tools(request: &AiExecutionRequest) -> Vec<Value> {
-    request
+    let mut tools = request
         .tools
         .iter()
         .map(|tool| {
@@ -664,7 +988,41 @@ fn encode_responses_tools(request: &AiExecutionRequest) -> Vec<Value> {
                 "parameters": tool.input_schema,
             })
         })
-        .collect()
+        .collect::<Vec<_>>();
+    for native_tool in &request.native_tools {
+        tools.push(encode_openai_native_tool(*native_tool));
+    }
+    tools
+}
+
+/// Encodes one provider-neutral native tool into its exact OpenAI Responses shape.
+/// 将一个供应商无关原生工具编码为精确的 OpenAI Responses 结构。
+///
+/// # Parameters
+/// 参数
+/// `native_tool` is the closed native capability selected for this request.
+/// `native_tool` 是本次请求选中的封闭原生能力。
+///
+/// # Returns
+/// 返回值
+/// The exact hosted-tool object accepted by the Responses API.
+/// 返回 Responses API 接受的精确托管工具对象。
+fn encode_openai_native_tool(native_tool: NativeToolKind) -> Value {
+    match native_tool {
+        NativeToolKind::WebSearch => json!({
+            "type": "web_search",
+        }),
+        NativeToolKind::CodeInterpreter => json!({
+            "type": "code_interpreter",
+            "container": {
+                "type": "auto",
+            },
+        }),
+        NativeToolKind::ImageGeneration => json!({
+            "type": "image_generation",
+            "output_format": "png",
+        }),
+    }
 }
 
 /// Encodes Codex function tools plus capability-selected provider-native tools.
@@ -680,22 +1038,20 @@ fn encode_responses_tools(request: &AiExecutionRequest) -> Vec<Value> {
 /// The exact Codex Responses tool array without duplicate image-generation semantics.
 /// 返回不含重复图片生成语义的精确 Codex Responses 工具数组。
 fn encode_codex_responses_tools(request: &AiExecutionRequest) -> Vec<Value> {
-    let mut tools = encode_responses_tools(request);
+    let mut request_without_native_tools = request.clone();
+    request_without_native_tools.native_tools.clear();
+    let mut tools = encode_responses_tools(&request_without_native_tools);
     let has_image_function = request.tools.iter().any(|tool| {
         matches!(
             tool.name.as_str(),
             "image_gen.imagegen" | "image_gen" | "imagegen"
         )
     });
-    if !has_image_function
-        && request
-            .native_tools
-            .contains(&NativeToolKind::ImageGeneration)
-    {
-        tools.push(json!({
-            "type": "image_generation",
-            "output_format": "png",
-        }));
+    for native_tool in &request.native_tools {
+        if matches!(native_tool, NativeToolKind::ImageGeneration) && has_image_function {
+            continue;
+        }
+        tools.push(encode_openai_native_tool(*native_tool));
     }
     tools
 }
@@ -713,6 +1069,7 @@ mod tests {
             operation: AiOperation::ConversationRespond,
             model_id: String::from("gpt-codex"),
             cache_scope_id: Some(String::from("session-stable")),
+            continuation: None,
             messages: vec![
                 AiMessage {
                     role: MessageRole::System,
@@ -740,8 +1097,13 @@ mod tests {
                 input_schema: json!({"type": "object"}),
             }],
             native_tools: Vec::new(),
+            tool_choice: Default::default(),
+            parallel_tool_calls: Default::default(),
+            structured_output: Default::default(),
+            stop_sequences: Vec::new(),
             prompt_cache: PromptCachePolicy::ProviderDefault,
             reasoning_effort: None,
+            reasoning_output: Default::default(),
             model_parameters: BTreeMap::new(),
             resources: Vec::new(),
             output_token_limit: Some(1024),
@@ -782,6 +1144,57 @@ mod tests {
         assert!(encoded.body["tools"][0].get("function").is_none());
         assert_eq!(encoded.body["reasoning"]["effort"], "ultra");
         assert_eq!(encoded.body["reasoning"]["summary"], "auto");
+        assert_eq!(
+            encoded.body["include"],
+            json!(["reasoning.encrypted_content"])
+        );
+    }
+
+    /// Verifies a proven Responses cursor emits `previous_response_id` and only the uncovered suffix.
+    /// 验证已证明安全的 Responses 游标会发出 `previous_response_id` 且仅发送未覆盖后缀。
+    #[test]
+    fn codex_continuation_sends_only_uncovered_messages() {
+        let mut request = codex_request();
+        request.continuation = Some(vulcan_ai_contract::AiContinuation {
+            provider_id: String::from("openai-codex"),
+            protocol_profile_id: String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID),
+            model_id: request.model_id.clone(),
+            provider_message_id: String::from("resp_previous"),
+            covered_local_message_id: String::from("user-1"),
+            covered_message_count: 2,
+        });
+
+        let encoded = OpenAiCodexResponsesProfile
+            .encode(&request)
+            .expect("Codex continuation should encode");
+
+        assert_eq!(encoded.body["previous_response_id"], "resp_previous");
+        let input = encoded.body["input"]
+            .as_array()
+            .expect("input should remain an array");
+        assert_eq!(input.len(), 1);
+        assert_eq!(input[0]["type"], "reasoning");
+    }
+
+    /// Verifies a continuation cannot cross protocol profiles even when the model identifier matches.
+    /// 验证即使模型标识匹配，延续信息也不能跨越协议配置。
+    #[test]
+    fn responses_rejects_cross_profile_continuation() {
+        let mut request = codex_request();
+        request.continuation = Some(vulcan_ai_contract::AiContinuation {
+            provider_id: String::from("openai"),
+            protocol_profile_id: String::from(OPENAI_CHAT_PROFILE_ID),
+            model_id: request.model_id.clone(),
+            provider_message_id: String::from("resp_previous"),
+            covered_local_message_id: String::from("user-1"),
+            covered_message_count: 2,
+        });
+
+        let error = OpenAiCodexResponsesProfile
+            .encode(&request)
+            .expect_err("cross-profile continuation must fail");
+
+        assert!(error.message.contains("does not match active profile"));
     }
 
     /// Verifies capability-selected Codex image generation uses a native tool without duplicating host image tools.
@@ -818,16 +1231,39 @@ mod tests {
         );
     }
 
-    /// Verifies native-tool semantics cannot be silently dropped by an unsupported profile.
-    /// 验证不受支持的 Profile 无法静默丢弃原生工具语义。
+    /// Verifies generic Responses projects every registered hosted-tool shape exactly.
+    /// 验证通用 Responses 会精确投影每个已注册托管工具结构。
     #[test]
-    fn generic_responses_rejects_codex_native_tools() {
+    fn generic_responses_encodes_registered_native_tools() {
         let mut request = codex_request();
-        request.native_tools = vec![NativeToolKind::ImageGeneration];
-        let error = OpenAiResponsesProfile
+        request.native_tools = vec![
+            NativeToolKind::WebSearch,
+            NativeToolKind::CodeInterpreter,
+            NativeToolKind::ImageGeneration,
+        ];
+        let encoded = OpenAiResponsesProfile
             .encode(&request)
-            .expect_err("generic Responses must reject unregistered native tools");
-        assert!(error.to_string().contains(OPENAI_RESPONSES_PROFILE_ID));
+            .expect("registered Responses native tools should encode");
+        let tools = encoded.body["tools"]
+            .as_array()
+            .expect("tools should be an array");
+        assert!(tools.iter().any(|tool| tool["type"] == "web_search"));
+        assert!(tools.iter().any(|tool| {
+            tool["type"] == "code_interpreter" && tool["container"]["type"] == "auto"
+        }));
+        assert!(tools.iter().any(|tool| tool["type"] == "image_generation"));
+    }
+
+    /// Verifies Chat Completions still rejects provider-native hosted tools.
+    /// 验证 Chat Completions 仍会拒绝供应商原生托管工具。
+    #[test]
+    fn chat_completions_rejects_native_tools() {
+        let mut request = codex_request();
+        request.native_tools = vec![NativeToolKind::WebSearch];
+        let error = OpenAiChatProfile
+            .encode(&request)
+            .expect_err("Chat Completions cannot represent hosted tools");
+        assert!(error.to_string().contains(OPENAI_CHAT_PROFILE_ID));
     }
 
     /// Verifies Chat Completions projects a selected public reasoning effort.
@@ -868,11 +1304,27 @@ mod tests {
     /// 验证普通 Responses 请求不会继承 Codex 专属缓存字段或请求头。
     #[test]
     fn standard_responses_omits_codex_cache_identity() {
+        let mut request = codex_request();
+        request.reasoning_effort = Some(vulcan_ai_contract::ReasoningEffort::High);
+        request.continuation = Some(vulcan_ai_contract::AiContinuation {
+            provider_id: String::from("openai"),
+            protocol_profile_id: String::from(OPENAI_RESPONSES_PROFILE_ID),
+            model_id: request.model_id.clone(),
+            provider_message_id: String::from("resp_not_stored"),
+            covered_local_message_id: String::from("assistant-1"),
+            covered_message_count: request.messages.len(),
+        });
         let encoded = OpenAiResponsesProfile
-            .encode(&codex_request())
+            .encode(&request)
             .expect("standard Responses request should encode");
         assert!(encoded.body.get("prompt_cache_key").is_none());
         assert!(!encoded.headers.contains_key("session_id"));
         assert_eq!(encoded.body["input"][0]["role"], "system");
+        assert_eq!(encoded.body["store"], false);
+        assert!(encoded.body.get("previous_response_id").is_none());
+        assert_eq!(
+            encoded.body["include"],
+            json!(["reasoning.encrypted_content"])
+        );
     }
 }

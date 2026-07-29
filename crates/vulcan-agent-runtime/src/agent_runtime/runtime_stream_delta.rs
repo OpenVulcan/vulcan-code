@@ -76,6 +76,9 @@ pub(crate) struct RuntimeStreamDeltaState {
     /// Model-side tool request stream coordinator kept separate from real tool execution.
     /// 与真实工具执行分离保存的模型侧工具请求流协调器。
     tool_request_stream: ToolRequestStreamCoordinator,
+    /// Whether the provider emitted any model-side tool request during this run.
+    /// 当前运行期间 Provider 是否发出过任何模型侧工具请求。
+    observed_tool_request: bool,
 }
 
 impl RuntimeStreamDeltaState {
@@ -111,6 +114,7 @@ impl RuntimeStreamDeltaState {
             terminal_error: None,
             provider_request_telemetry: ProviderRequestTelemetryTracker::default(),
             tool_request_stream: ToolRequestStreamCoordinator::default(),
+            observed_tool_request: false,
         }
     }
 
@@ -189,6 +193,12 @@ impl RuntimeStreamDeltaState {
     /// 返回截至当前流式执行期间已经捕获到的真实 Provider 请求次数。
     pub(crate) const fn provider_request_count(&self) -> usize {
         self.provider_request_count
+    }
+
+    /// Reports whether this run produced at least one provider tool request.
+    /// 返回当前运行是否至少产生过一次 Provider 工具请求。
+    pub(crate) const fn observed_tool_request(&self) -> bool {
+        self.observed_tool_request
     }
 
     /// Returns the normalized visible thinking output accumulated so far.
@@ -482,6 +492,7 @@ pub(crate) fn process_provider_stream_delta(
         Ok(ProviderStreamDelta::Thinking(delta)) => state.process_thinking_delta(session_id, delta),
         Ok(ProviderStreamDelta::Output(delta)) => state.process_output_delta(session_id, delta),
         Ok(ProviderStreamDelta::ToolRequestFragment(fragment)) => {
+            state.observed_tool_request = true;
             // runtimeEvents are safe low-frequency projections produced without raw arguments.
             // runtimeEvents 是在不包含原始参数的前提下生成的安全低频投影。
             let runtime_events = state.tool_request_stream.apply(fragment);
@@ -649,6 +660,7 @@ mod tests {
     ) -> CoreProviderUsageSnapshot {
         CoreProviderUsageSnapshot {
             input_tokens: Some(input_tokens),
+            uncached_input_tokens: Some(input_tokens.saturating_sub(cached_input_tokens)),
             output_tokens: Some(output_tokens),
             reasoning_tokens: Some(reasoning_tokens),
             total_tokens: Some(total_tokens),

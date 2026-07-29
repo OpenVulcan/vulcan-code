@@ -118,6 +118,7 @@ fn run_user_turn_streaming_skips_partial_checkpoint_when_batch_tool_fails() {
                 }),
                 usage: Some(ProviderUsageSnapshot {
                     input_tokens: Some(10),
+                    uncached_input_tokens: Some(10),
                     output_tokens: Some(2),
                     reasoning_tokens: Some(1),
                     total_tokens: Some(13),

@@ -9,8 +9,8 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use vulcan_ai_contract::{
     AiOperation, CapabilitySupport, ModelCapabilities, ModelParameterDefault,
-    ModelParameterDefinition, ModelParameterSchema, PromptCacheCapability, ReasoningEffort,
-    ResourceKind,
+    ModelParameterDefinition, ModelParameterSchema, PromptCacheCapability, ReasoningControlMode,
+    ReasoningEffort, ResourceKind,
 };
 use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
@@ -791,6 +791,13 @@ fn minimax_text_capabilities(model_id: &str, protocol_id: &str) -> ModelCapabili
         ),
     };
     let verified_model = model_family != MiniMaxTextModelFamily::Unknown;
+    let reasoning_support = if reasoning_contract.support == CapabilitySupport::Unknown {
+        reasoning
+    } else {
+        reasoning_contract.support
+    };
+    let reasoning_control =
+        reasoning_control_mode(reasoning_support, reasoning_contract.efforts.as_slice());
     ModelCapabilities {
         operations: vec![AiOperation::ConversationRespond],
         input_resources,
@@ -801,11 +808,8 @@ fn minimax_text_capabilities(model_id: &str, protocol_id: &str) -> ModelCapabili
             CapabilitySupport::Unknown
         },
         parallel_tool_calling: CapabilitySupport::Unknown,
-        reasoning: if reasoning_contract.support == CapabilitySupport::Unknown {
-            reasoning
-        } else {
-            reasoning_contract.support
-        },
+        reasoning: reasoning_support,
+        reasoning_control,
         reasoning_efforts: reasoning_contract.efforts,
         context_limit,
         // MiniMax documents a combined context limit, not a separate output maximum.
@@ -1086,6 +1090,14 @@ fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabi
         } else {
             CapabilitySupport::Unsupported
         },
+        reasoning_control: reasoning_control_mode(
+            if model.reasoning.is_some() || supports("reasoning") {
+                CapabilitySupport::Native
+            } else {
+                CapabilitySupport::Unsupported
+            },
+            reasoning_efforts.as_slice(),
+        ),
         reasoning_efforts,
         context_limit: model.context_length,
         output_limit: model
@@ -1096,6 +1108,43 @@ fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabi
         model_parameters,
         evidence_revision: String::from("openrouter-models-api-2026-07"),
     }
+}
+
+/// Resolves an exact UI control mode from verified reasoning support and effort values.
+/// 从已验证推理支持与档位值解析精确 UI 控制模式。
+///
+/// # Parameters
+/// 参数
+/// `support` is the route's reasoning fidelity and `efforts` is its closed selectable list.
+/// `support` 是路由推理保真度，`efforts` 是其封闭可选列表。
+///
+/// # Returns
+/// 返回值
+/// A deterministic control mode without inventing provider capabilities.
+/// 返回不会虚构供应商能力的确定性控制模式。
+fn reasoning_control_mode(
+    support: CapabilitySupport,
+    efforts: &[ReasoningEffort],
+) -> ReasoningControlMode {
+    if support == CapabilitySupport::Unsupported {
+        return ReasoningControlMode::FixedOff;
+    }
+    if !support.is_supported() {
+        return ReasoningControlMode::Unknown;
+    }
+    if efforts.is_empty() {
+        return ReasoningControlMode::FixedOn;
+    }
+    if efforts == [ReasoningEffort::None] {
+        return ReasoningControlMode::FixedOff;
+    }
+    if efforts == [ReasoningEffort::Adaptive] {
+        return ReasoningControlMode::ProviderAdaptive;
+    }
+    if efforts == [ReasoningEffort::None, ReasoningEffort::Adaptive] {
+        return ReasoningControlMode::Toggle;
+    }
+    ReasoningControlMode::EffortSelection
 }
 
 /// Normalizes provider-declared reasoning labels into the workbench-supported public levels.

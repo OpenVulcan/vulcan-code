@@ -23,6 +23,9 @@ pub(crate) struct CoreRequestPreviewProviderAdapter {
     /// Stable model identifier used by the request-preview provider adapter.
     /// 请求预览 Provider 适配器使用的稳定模型标识。
     model_id: String,
+    /// Stable protocol profile identifier used by the request-preview provider adapter.
+    /// 请求预览 Provider 适配器使用的稳定协议配置标识。
+    protocol_profile_id: String,
     /// Latest outgoing prompt body attached to the snapshot request.
     /// 附着在快照请求中的最新出站提示词正文。
     prompt: String,
@@ -39,6 +42,7 @@ impl CoreRequestPreviewProviderAdapter {
     /// 根据已经解析完成的 Provider 可见请求组成部分创建一份 core 请求预览 Provider 适配器。
     pub(crate) fn new(
         provider_id: String,
+        protocol_profile_id: String,
         model_id: String,
         prompt: String,
         request_headers: Option<Value>,
@@ -46,6 +50,7 @@ impl CoreRequestPreviewProviderAdapter {
     ) -> Self {
         Self {
             provider_id,
+            protocol_profile_id,
             model_id,
             prompt,
             request_headers,
@@ -97,6 +102,7 @@ impl VulcanProviderAdapter for CoreRequestPreviewProviderAdapter {
             continuation: scope_continuation_to_active_provider(
                 &snapshot.continuation,
                 config.provider_id.as_str(),
+                self.protocol_profile_id.as_str(),
                 config.model_id.as_str(),
             ),
         })

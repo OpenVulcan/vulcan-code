@@ -29,6 +29,10 @@ pub struct SessionProviderContinuationState {
     /// Provider identifier that produced the latest canonical runtime result.
     /// 产出最近一次规范运行结果的 Provider 标识。
     pub provider_id: Option<String>,
+    /// Protocol profile identifier that produced the latest canonical runtime result.
+    /// 产出最近一次规范运行结果的协议配置标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_profile_id: Option<String>,
     /// Model identifier that produced the latest canonical runtime result.
     /// 产出最近一次规范运行结果的模型标识。
     pub model_id: Option<String>,

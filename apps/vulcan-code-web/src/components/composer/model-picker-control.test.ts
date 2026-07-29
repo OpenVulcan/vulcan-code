@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   filterModelPickerChoices,
   groupModelPickerChoices,
+  modelPickerChoiceKey,
   modelPickerChoicesFromProviders,
   resolveModelPickerGroupChoice,
 } from "./model-picker-control";
@@ -91,5 +92,21 @@ describe("model picker account grouping", () => {
     };
 
     expect(resolveModelPickerGroupChoice(group, removedChoice).connectionId).toBe("connection-cn");
+  });
+
+  it("keeps same-model conversation accounts as distinct selection keys", () => {
+    // choices exposes two credentials for the same provider model.
+    // choices 暴露同一 Provider 模型的两个凭据。
+    const choices = modelPickerChoicesFromProviders(miniMaxProviders());
+    // firstKey and secondKey prove that conversation restoration includes the connection identity.
+    // firstKey 与 secondKey 证明会话恢复包含连接身份。
+    const firstKey = modelPickerChoiceKey(choices[0]);
+    const secondKey = modelPickerChoiceKey(choices[1]);
+
+    expect(choices[0]?.providerId).toBe(choices[1]?.providerId);
+    expect(choices[0]?.modelId).toBe(choices[1]?.modelId);
+    expect(firstKey).not.toBe(secondKey);
+    expect(JSON.parse(firstKey)[2]).toBe(choices[0]?.connectionId);
+    expect(JSON.parse(secondKey)[2]).toBe(choices[1]?.connectionId);
   });
 });

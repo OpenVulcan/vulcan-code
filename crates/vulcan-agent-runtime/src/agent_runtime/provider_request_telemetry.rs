@@ -41,12 +41,27 @@ pub(crate) struct ProviderRequestTelemetryContext {
     /// Current provider display name from the runtime blueprint.
     /// 来自运行时蓝图的当前 Provider 显示名称。
     provider_name: String,
+    /// Exact service entry selected for this immutable execution.
+    /// 本次不可变执行选中的精确服务入口。
+    service_entry_id: String,
+    /// Exact credential connection selected for this immutable execution.
+    /// 本次不可变执行选中的精确凭据连接。
+    connection_id: String,
     /// Current model display name from the runtime blueprint.
     /// 来自运行时蓝图的当前模型显示名称。
     model_name: String,
     /// Canonical API family that defines whether Provider input already excludes cached tokens.
     /// 定义 Provider 输入是否已经排除缓存 Token 的规范接口族。
     protocol_profile_id: String,
+    /// Optional exact provider-internal route identifier.
+    /// 可选的精确供应商内部路由标识。
+    secondary_route_id: Option<String>,
+    /// Optional provider-reported secondary provider display name.
+    /// 可选的供应商报告二级供应商显示名称。
+    secondary_provider_name: Option<String>,
+    /// Optional provider-reported secondary endpoint display name.
+    /// 可选的供应商报告二级端点显示名称。
+    secondary_endpoint_name: Option<String>,
     /// Stable owner category derived from explicit preparation fields.
     /// 从显式执行准备字段派生的稳定归属类别。
     owner_kind: &'static str,
@@ -83,13 +98,33 @@ impl ProviderRequestTelemetryContext {
             }
             ExecutionPromptPurpose::UserTurn => "main_agent",
         };
+        // Secondary-route fields come only from the validated immutable route snapshot.
+        // 二级路由字段仅来自已校验的不可变路由快照。
+        let (secondary_route_id, secondary_provider_name, secondary_endpoint_name) =
+            match &preparation.model_blueprint.secondary_route {
+                vulcan_provider_adapters::SecondaryRouteSelection::Automatic => (None, None, None),
+                vulcan_provider_adapters::SecondaryRouteSelection::PinnedEndpoint {
+                    route_id,
+                    provider_display_name,
+                    endpoint_display_name,
+                } => (
+                    Some(route_id.clone()),
+                    Some(provider_display_name.clone()),
+                    Some(endpoint_display_name.clone()),
+                ),
+            };
         Self {
             execution_id: Uuid::new_v4().to_string(),
             session_id: preparation.session_id,
             workspace_id: preparation.workspace_path.clone(),
             provider_name: preparation.model_blueprint.provider_name.clone(),
+            service_entry_id: preparation.model_blueprint.service_entry_id.clone(),
+            connection_id: preparation.model_blueprint.connection_id.clone(),
             model_name: preparation.model_blueprint.model_name.clone(),
             protocol_profile_id: preparation.model_blueprint.protocol_profile_id.clone(),
+            secondary_route_id,
+            secondary_provider_name,
+            secondary_endpoint_name,
             owner_kind,
             owner_id: preparation.agent_id.clone(),
             owner_name: preparation.agent_name.clone(),
@@ -157,19 +192,19 @@ pub struct ProviderRequestTelemetryEvent {
 pub struct ProviderRequestCompletedUsage {
     /// Input tokens that were not served from cache.
     /// 未由缓存提供的输入 Token 数。
-    pub uncached_input_tokens: usize,
+    pub uncached_input_tokens: Option<usize>,
     /// Input tokens served from cache.
     /// 由缓存提供的输入 Token 数。
-    pub cached_input_tokens: usize,
+    pub cached_input_tokens: Option<usize>,
     /// Complete output tokens, including reasoning when reported as an output subset.
     /// 完整输出 Token 数；当思考作为输出子集报告时已包含思考。
-    pub output_tokens: usize,
+    pub output_tokens: Option<usize>,
     /// Reasoning tokens reported as an output detail.
     /// 作为输出明细报告的思考 Token 数。
-    pub reasoning_tokens: usize,
+    pub reasoning_tokens: Option<usize>,
     /// Provider-reported total tokens.
     /// Provider 报告的总 Token 数。
-    pub total_tokens: usize,
+    pub total_tokens: Option<usize>,
 }
 
 /// Service-edge tracker that closes an in-flight request when its consumer stream is dropped.
@@ -307,11 +342,11 @@ impl ProviderRequestTelemetryCancellationTracker {
             "output_tokens",
             "reasoning_tokens",
             "total_tokens",
+            "cached_input_tokens",
+            "cache_creation_input_tokens",
         ] {
-            payload_object.insert(String::from(token_field), Value::from(0));
+            payload_object.insert(String::from(token_field), Value::Null);
         }
-        payload_object.insert(String::from("cached_input_tokens"), Value::Null);
-        payload_object.insert(String::from("cache_creation_input_tokens"), Value::Null);
         payload_object.insert(String::from("finish_reason"), Value::Null);
         payload_object.insert(
             String::from("error_category"),
@@ -627,6 +662,24 @@ struct ProviderTelemetryIdentityPayload<'a> {
     /// Current Provider display name.
     /// 当前 Provider 显示名称。
     provider_name: &'a str,
+    /// Exact provider service-entry identifier.
+    /// 精确供应商服务入口标识。
+    service_entry_id: &'a str,
+    /// Exact credential connection identifier.
+    /// 精确凭据连接标识。
+    connection_id: &'a str,
+    /// Exact protocol profile identifier.
+    /// 精确协议 Profile 标识。
+    protocol_profile_id: &'a str,
+    /// Optional exact provider-internal route identifier.
+    /// 可选的精确供应商内部路由标识。
+    secondary_route_id: Option<&'a str>,
+    /// Optional provider-reported secondary provider display name.
+    /// 可选的供应商报告二级供应商显示名称。
+    secondary_provider_name: Option<&'a str>,
+    /// Optional provider-reported secondary endpoint display name.
+    /// 可选的供应商报告二级端点显示名称。
+    secondary_endpoint_name: Option<&'a str>,
     /// Stable model key.
     /// 稳定模型键。
     model_key: &'a str,
@@ -673,6 +726,12 @@ fn identity_payload<'a>(
         owner_name: &context.owner_name,
         provider_key: &request.provider_key,
         provider_name: &context.provider_name,
+        service_entry_id: &context.service_entry_id,
+        connection_id: &context.connection_id,
+        protocol_profile_id: &context.protocol_profile_id,
+        secondary_route_id: context.secondary_route_id.as_deref(),
+        secondary_provider_name: context.secondary_provider_name.as_deref(),
+        secondary_endpoint_name: context.secondary_endpoint_name.as_deref(),
         model_key: &request.model_key,
         model_name: &context.model_name,
         attempt_index: request.attempt_index,
@@ -732,8 +791,8 @@ fn build_completed_event(
     // completedAt is captured once for all terminal durations.
     // completedAt 为全部终态时长捕获同一时间戳。
     let completed_at_ms = current_unix_millis();
-    // normalizedUsage uses provider facts when available and zeros only for absent numeric facts.
-    // normalizedUsage 在可用时使用 Provider 事实，仅对缺失数字事实使用零值。
+    // normalizedUsage uses provider facts when available and preserves absent numeric facts as unknown.
+    // normalizedUsage 在可用时使用 Provider 事实，并将缺失数字事实保留为未知。
     let normalized_usage = usage.cloned().unwrap_or_default();
     // uncachedInputTokens converts protocol-specific input semantics into the statistics contract once at the telemetry boundary.
     // uncachedInputTokens 在遥测边界一次性把协议专属输入语义转换为统计契约。
@@ -747,10 +806,10 @@ fn build_completed_event(
         && usage.is_some())
     .then_some(ProviderRequestCompletedUsage {
         uncached_input_tokens,
-        cached_input_tokens: normalized_usage.cached_input_tokens.unwrap_or(0),
-        output_tokens,
-        reasoning_tokens: normalized_usage.reasoning_tokens.unwrap_or(0),
-        total_tokens: normalized_usage.total_tokens.unwrap_or(0),
+        cached_input_tokens: normalized_usage.cached_input_tokens,
+        output_tokens: normalized_usage.output_tokens.map(|_| output_tokens),
+        reasoning_tokens: normalized_usage.reasoning_tokens,
+        total_tokens: normalized_usage.total_tokens,
     });
     ProviderRequestTelemetryEvent {
         kind: ProviderRequestTelemetryEventKind::Completed,
@@ -769,11 +828,11 @@ fn build_completed_event(
                 .first_token_at_ms
                 .map(|value| elapsed_millis(request.started_at_ms, value)),
             duration_ms: elapsed_millis(request.started_at_ms, completed_at_ms),
-            input_tokens: normalized_usage.input_tokens.unwrap_or(0),
+            input_tokens: normalized_usage.input_tokens,
             uncached_input_tokens,
-            output_tokens: normalized_usage.output_tokens.unwrap_or(0),
-            reasoning_tokens: normalized_usage.reasoning_tokens.unwrap_or(0),
-            total_tokens: normalized_usage.total_tokens.unwrap_or(0),
+            output_tokens: normalized_usage.output_tokens.map(|_| output_tokens),
+            reasoning_tokens: normalized_usage.reasoning_tokens,
+            total_tokens: normalized_usage.total_tokens,
             cached_input_tokens: normalized_usage.cached_input_tokens,
             cache_creation_input_tokens: normalized_usage.cache_creation_input_tokens,
             finish_reason: None,
@@ -795,16 +854,22 @@ fn build_completed_event(
 /// `usage` 包含最终规范化 Provider 用量快照。
 /// Returns the non-cached input-token count without changing the Provider-reported fields.
 /// 返回非缓存输入 Token 数量，且不修改 Provider 原始报告字段。
-fn uncached_input_tokens(protocol_profile_id: &str, usage: &ProviderUsageSnapshot) -> usize {
+fn uncached_input_tokens(
+    protocol_profile_id: &str,
+    usage: &ProviderUsageSnapshot,
+) -> Option<usize> {
+    if let Some(uncached_input_tokens) = usage.uncached_input_tokens {
+        return Some(uncached_input_tokens);
+    }
     // inputTokens preserves the Provider-reported input value before statistics normalization.
     // inputTokens 在统计归一化前保留 Provider 报告的输入值。
-    let input_tokens = usage.input_tokens.unwrap_or_default();
+    let input_tokens = usage.input_tokens?;
     if protocol_profile_id == vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID {
         // Anthropic reports cache writes separately from both uncached input and cache reads.
         // Anthropic 将缓存写入与非缓存输入、缓存读取分别报告。
-        input_tokens.saturating_add(usage.cache_creation_input_tokens.unwrap_or_default())
+        input_tokens.checked_add(usage.cache_creation_input_tokens.unwrap_or_default())
     } else {
-        input_tokens.saturating_sub(usage.cached_input_tokens.unwrap_or_default())
+        input_tokens.checked_sub(usage.cached_input_tokens.unwrap_or_default())
     }
 }
 
@@ -921,21 +986,21 @@ struct CompletedPayload<'a> {
     /// Total request duration.
     /// 请求总时长。
     duration_ms: u64,
-    /// Provider-reported input tokens or zero when absent.
-    /// Provider 报告的输入 Token，缺失时为零。
-    input_tokens: usize,
+    /// Provider-reported input tokens, or unknown when absent.
+    /// Provider 报告的输入 Token，缺失时保持未知。
+    input_tokens: Option<usize>,
     /// Protocol-normalized non-cached input tokens.
     /// 按协议规范化后的非缓存输入 Token。
-    uncached_input_tokens: usize,
-    /// Provider-reported output tokens or zero when absent.
-    /// Provider 报告的输出 Token，缺失时为零。
-    output_tokens: usize,
-    /// Provider-reported reasoning tokens or zero when absent.
-    /// Provider 报告的推理 Token，缺失时为零。
-    reasoning_tokens: usize,
-    /// Provider-reported total tokens or zero when absent.
-    /// Provider 报告的总 Token，缺失时为零。
-    total_tokens: usize,
+    uncached_input_tokens: Option<usize>,
+    /// Provider-reported output tokens, or unknown when absent.
+    /// Provider 报告的输出 Token，缺失时保持未知。
+    output_tokens: Option<usize>,
+    /// Provider-reported reasoning tokens, or unknown when absent.
+    /// Provider 报告的推理 Token，缺失时保持未知。
+    reasoning_tokens: Option<usize>,
+    /// Provider-reported total tokens, or unknown when absent.
+    /// Provider 报告的总 Token，缺失时保持未知。
+    total_tokens: Option<usize>,
     /// Optional provider-reported cache-hit input tokens.
     /// 可选 Provider 报告缓存命中输入 Token。
     cached_input_tokens: Option<usize>,
@@ -1060,8 +1125,13 @@ mod tests {
             session_id: SessionId::nil(),
             workspace_id: String::from("workspace-1"),
             provider_name: String::from("Provider Name"),
+            service_entry_id: String::from("public-api"),
             model_name: String::from("Model Name"),
             protocol_profile_id: String::from(vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID),
+            secondary_route_id: Some(String::from("route-1")),
+            secondary_provider_name: Some(String::from("DeepInfra")),
+            secondary_endpoint_name: Some(String::from("DeepInfra endpoint")),
+            connection_id: String::from("connection-1"),
             owner_kind: "main_agent",
             owner_id: String::from("agent-1"),
             owner_name: String::from("Agent One"),
@@ -1099,12 +1169,25 @@ mod tests {
         assert_eq!(started.len(), 1);
         assert_eq!(started[0].kind, ProviderRequestTelemetryEventKind::Started);
         assert_eq!(started[0].payload["provider_key"], "provider-key");
+        assert_eq!(started[0].payload["service_entry_id"], "public-api");
+        assert_eq!(started[0].payload["connection_id"], "connection-1");
+        assert_eq!(
+            started[0].payload["protocol_profile_id"],
+            vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
+        );
+        assert_eq!(started[0].payload["secondary_route_id"], "route-1");
+        assert_eq!(started[0].payload["secondary_provider_name"], "DeepInfra");
+        assert_eq!(
+            started[0].payload["secondary_endpoint_name"],
+            "DeepInfra endpoint"
+        );
         assert_eq!(started[0].payload["model_key"], "model-key");
         assert!(tracker.observe_first_token().is_some());
         assert!(tracker.observe_first_token().is_none());
         let completed = tracker
             .complete_success(Some(&ProviderUsageSnapshot {
                 input_tokens: Some(10),
+                uncached_input_tokens: Some(10),
                 output_tokens: Some(5),
                 reasoning_tokens: Some(2),
                 total_tokens: Some(18),
@@ -1119,14 +1202,43 @@ mod tests {
         assert_eq!(
             completed.completed_usage,
             Some(ProviderRequestCompletedUsage {
-                uncached_input_tokens: 10,
-                cached_input_tokens: 3,
-                output_tokens: 5,
-                reasoning_tokens: 2,
-                total_tokens: 18,
+                uncached_input_tokens: Some(10),
+                cached_input_tokens: Some(3),
+                output_tokens: Some(5),
+                reasoning_tokens: Some(2),
+                total_tokens: Some(18),
             })
         );
         assert!(tracker.complete_success(None).is_none());
+    }
+
+    /// Verifies absent provider accounting remains unknown instead of becoming fabricated zero usage.
+    /// 验证缺失的 Provider 计量保持未知，而不会被伪造成零用量。
+    #[test]
+    fn missing_usage_serializes_as_unknown_values() {
+        // tracker owns one physical request whose provider returned no accounting fields.
+        // tracker 持有一次 Provider 未返回任何计量字段的物理请求。
+        let mut tracker = test_tracker();
+        tracker.start_request(&test_request_snapshot());
+        let completed = tracker
+            .complete_success(Some(&ProviderUsageSnapshot::default()))
+            .expect("active request should complete");
+
+        assert!(completed.payload["uncached_input_tokens"].is_null());
+        assert!(completed.payload["cached_input_tokens"].is_null());
+        assert!(completed.payload["output_tokens"].is_null());
+        assert!(completed.payload["reasoning_tokens"].is_null());
+        assert!(completed.payload["total_tokens"].is_null());
+        assert_eq!(
+            completed.completed_usage,
+            Some(ProviderRequestCompletedUsage {
+                uncached_input_tokens: None,
+                cached_input_tokens: None,
+                output_tokens: None,
+                reasoning_tokens: None,
+                total_tokens: None,
+            })
+        );
     }
 
     /// Verifies cache reads are excluded while Anthropic cache writes remain new input.
@@ -1137,6 +1249,7 @@ mod tests {
         // anthropicUsage 模拟 Kimi Anthropic 兼容接口的缓存分离计量。
         let anthropic_usage = ProviderUsageSnapshot {
             input_tokens: Some(2_509),
+            uncached_input_tokens: None,
             output_tokens: Some(330),
             reasoning_tokens: None,
             total_tokens: Some(66_870),
@@ -1155,22 +1268,39 @@ mod tests {
                 vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
                 &anthropic_usage,
             ),
-            2_540
+            Some(2_540)
         );
         assert_eq!(
             uncached_input_tokens(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID, &openai_usage,),
-            2_509
+            Some(2_509)
         );
     }
 
-    /// Verifies Gemini adds disjoint thoughts to output while OpenAI-compatible output already includes reasoning.
-    /// 验证 Gemini 将独立思考加入输出，而 OpenAI 兼容输出已经包含思考。
+    /// Verifies inconsistent cache totals remain unknown instead of becoming a fabricated zero.
+    /// 验证不一致的缓存总量保持未知，而不会被伪造为零。
+    #[test]
+    fn inconsistent_cache_totals_do_not_fabricate_uncached_zero() {
+        let usage = ProviderUsageSnapshot {
+            input_tokens: Some(10),
+            cached_input_tokens: Some(11),
+            ..ProviderUsageSnapshot::default()
+        };
+
+        assert_eq!(
+            uncached_input_tokens(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID, &usage),
+            None
+        );
+    }
+
+    /// Verifies enabled public profiles retain output counts that already include reasoning details.
+    /// 验证已启用公共协议保留已经包含推理明细的输出计数。
     #[test]
     fn normalizes_complete_output_by_provider_api_family() {
-        // usage models the same reported visible output and reasoning detail under two protocol contracts.
-        // usage 模拟两种协议契约下相同的可见输出与思考明细报告。
+        // usage models one reported output count with a separately reported reasoning detail subset.
+        // usage 模拟一个带单独推理明细子集的已报告输出计数。
         let usage = ProviderUsageSnapshot {
             input_tokens: Some(1_000),
+            uncached_input_tokens: None,
             output_tokens: Some(200),
             reasoning_tokens: Some(50),
             total_tokens: Some(1_250),
@@ -1234,7 +1364,7 @@ mod tests {
             .expect("emit cancelled terminal event");
         assert_eq!(cancelled.kind, ProviderRequestTelemetryEventKind::Completed);
         assert_eq!(cancelled.payload["status"], "cancelled");
-        assert_eq!(cancelled.payload["total_tokens"], 0);
+        assert!(cancelled.payload["total_tokens"].is_null());
         assert!(cancelled.payload["first_token_at_ms"].is_number());
         assert_eq!(cancelled.payload.get("prompt"), None);
         assert!(cancellation.take_cancelled_event().is_none());

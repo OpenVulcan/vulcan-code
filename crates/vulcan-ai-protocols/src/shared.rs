@@ -6,6 +6,41 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use vulcan_ai_contract::{AiExecutionRequest, AiStreamEvent};
 
+/// Appends one streamed tool-argument fragment under the registered public limit.
+/// 在已注册公共上限内追加一个流式工具参数分片。
+///
+/// # Parameters
+/// 参数
+/// `arguments` is the accumulated JSON text, `fragment` is the next exact wire fragment,
+/// and `protocol_label` identifies the failing decoder in diagnostics.
+/// `arguments` 是累计 JSON 文本，`fragment` 是下一个精确 Wire 分片，
+/// `protocol_label` 在诊断中标识失败的解码器。
+///
+/// # Returns
+/// 返回值
+/// Success after append, or a deterministic size-limit failure before allocation.
+/// 追加后返回成功；分配前超过尺寸上限则返回确定性失败。
+pub(crate) fn append_bounded_tool_arguments(
+    arguments: &mut String,
+    fragment: &str,
+    protocol_label: &str,
+) -> Result<(), ProtocolConversionError> {
+    let next_len = arguments.len().checked_add(fragment.len()).ok_or_else(|| {
+        ProtocolConversionError::new(format!(
+            "{protocol_label} tool arguments exceeded the registered {} byte limit.",
+            crate::MAX_STREAMED_TOOL_ARGUMENT_BYTES
+        ))
+    })?;
+    if next_len > crate::MAX_STREAMED_TOOL_ARGUMENT_BYTES {
+        return Err(ProtocolConversionError::new(format!(
+            "{protocol_label} tool arguments exceeded the registered {} byte limit.",
+            crate::MAX_STREAMED_TOOL_ARGUMENT_BYTES
+        )));
+    }
+    arguments.push_str(fragment);
+    Ok(())
+}
+
 /// Rejects provider-native tool semantics for a profile that has not registered them.
 /// 为尚未注册供应商原生工具语义的 Profile 拒绝此类工具。
 ///
@@ -115,3 +150,27 @@ impl std::fmt::Display for ProtocolConversionError {
 }
 
 impl std::error::Error for ProtocolConversionError {}
+
+#[cfg(test)]
+mod tests {
+    //! Bounded public protocol helper tests.
+    //! 有界公共协议辅助函数测试。
+
+    use super::append_bounded_tool_arguments;
+
+    /// Verifies streamed tool arguments accept the exact limit and reject one extra byte.
+    /// 验证流式工具参数接受精确上限并拒绝额外一个字节。
+    #[test]
+    fn streamed_tool_argument_limit_is_exact() {
+        let mut arguments = "x".repeat(crate::MAX_STREAMED_TOOL_ARGUMENT_BYTES);
+        append_bounded_tool_arguments(&mut arguments, "", "Test")
+            .expect("exact limit should remain valid");
+        let error = append_bounded_tool_arguments(&mut arguments, "x", "Test")
+            .expect_err("one extra byte should fail");
+        assert!(
+            error
+                .message
+                .contains(crate::MAX_STREAMED_TOOL_ARGUMENT_BYTES.to_string().as_str())
+        );
+    }
+}

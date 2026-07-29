@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
   Bot,
+  Braces,
   ChevronDown,
   ChevronRight,
   Code2,
@@ -44,6 +45,7 @@ import {
   type MarkdownToolPresentationIcon,
   type ProviderToolExtractPresentation,
   type ProviderToolSearchPresentation,
+  type ProviderToolStructuredPresentation,
   type ProviderToolTextPresentation,
   type SubagentOrchestrationAgent,
   type SubagentOrchestrationPresentation,
@@ -186,7 +188,90 @@ export function ToolPresentationCard(props: {
       />
     );
   }
+  if (props.presentation.kind === "provider_tool_structured") {
+    return (
+      <ProviderToolStructuredPresentationCard
+        expanded={props.expanded}
+        presentation={props.presentation}
+        requestProgress={props.requestProgress}
+        onExpandedChange={props.onExpandedChange}
+      />
+    );
+  }
   return null;
+}
+
+// ProviderToolStructuredPresentationCard renders unified embedding, rerank, and composite output.
+// ProviderToolStructuredPresentationCard 渲染统一向量、重排与复合输出。
+function ProviderToolStructuredPresentationCard(props: {
+  // Whether the card is expanded.
+  // 卡片是否展开。
+  expanded: boolean;
+  // Normalized structured provider-tool presentation.
+  // 归一化结构化供应商工具展示。
+  presentation: ProviderToolStructuredPresentation;
+  // Optional request stream state.
+  // 可选请求流状态。
+  requestProgress: ToolRequestCardProgress | null;
+  // Updates the surface expansion state.
+  // 更新界面展开状态。
+  onExpandedChange: (presentationId: string, expanded: boolean) => void;
+}) {
+  const { t } = useI18n();
+  const handleToggle = React.useCallback(() => {
+    dispatchConversationManualViewportInteraction();
+    props.onExpandedChange(props.presentation.id, !props.expanded);
+  }, [props]);
+  const status = props.requestProgress?.statusLabel
+    ?? markdownToolStatusLabel(props.presentation.state, t);
+  const titleKey = providerToolStructuredTitleKey(props.presentation.outputKind);
+  return (
+    <div className={cn("tool-presentation-card markdown-tool", props.expanded && "expanded")}>
+      <button
+        aria-expanded={props.expanded}
+        className="tool-presentation-summary markdown-tool-summary"
+        onClick={handleToggle}
+        type="button"
+      >
+        <Braces className="markdown-tool-icon" size={15} />
+        <span className={cn("tool-presentation-state", (props.requestProgress || props.presentation.state === "running") && "shimmer")}>{status}</span>
+        <span className="tool-presentation-command">
+          <span className="tool-presentation-command-text">{t(titleKey)}</span>
+          <ToolRequestInlineProgress progress={props.requestProgress} />
+        </span>
+        <span className="text-muted-foreground text-xs">
+          {props.presentation.itemCount} {t("toolPresentation.providerStructured.items")}
+        </span>
+        {props.expanded ? (
+          <ChevronDown className="tool-presentation-toggle" size={15} />
+        ) : (
+          <ChevronRight className="tool-presentation-toggle" size={15} />
+        )}
+      </button>
+      <ConversationMeasuredCollapse collapseId={`provider-structured:${props.presentation.id}`} expanded={props.expanded}>
+        <div className="min-w-0 px-3 pb-3">
+          <pre className="max-h-80 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md border bg-muted/30 p-2 text-xs">
+            {JSON.stringify(props.presentation.payload, null, 2)}
+          </pre>
+        </div>
+      </ConversationMeasuredCollapse>
+    </div>
+  );
+}
+
+// providerToolStructuredTitleKey maps one closed output kind to its exact localized title.
+// providerToolStructuredTitleKey 将一个封闭输出类型映射为精确本地化标题。
+function providerToolStructuredTitleKey(
+  outputKind: ProviderToolStructuredPresentation["outputKind"],
+): TranslationKey {
+  switch (outputKind) {
+    case "embedding":
+      return "toolPresentation.providerStructured.embedding";
+    case "rerank":
+      return "toolPresentation.providerStructured.rerank";
+    case "composite":
+      return "toolPresentation.providerStructured.composite";
+  }
 }
 
 // ProviderToolTextPresentationCard renders unified provider-generated text.

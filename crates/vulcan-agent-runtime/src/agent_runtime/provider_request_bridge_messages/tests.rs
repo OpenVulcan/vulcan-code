@@ -577,8 +577,8 @@ fn provider_visible_history_downgrades_unanswered_tool_batch() {
     assert!(text.contains("provider-call-1"));
 }
 
-/// Verifies the plain-text canonical fixture keeps user and assistant turns in deterministic order.
-/// 验证普通文本 canonical fixture 会以确定顺序保留用户与助手回合。
+/// Verifies the plain-text canonical fixture keeps ordered turns and assistant reasoning.
+/// 验证普通文本 canonical fixture 会保留有序回合与助手推理。
 #[test]
 fn canonical_fixture_plain_text_history_projects_stably() {
     let messages = vec![
@@ -593,7 +593,7 @@ fn canonical_fixture_plain_text_history_projects_stably() {
             id: String::from("assistant-1"),
             payload: CoreConversationPayload::Assistant {
                 text: String::from("你好，我在。"),
-                reasoning: String::from("internal reasoning should be stripped"),
+                reasoning: String::from("preserved reasoning"),
                 provider_message_id: Some(String::from("provider-1")),
                 provider_message_state: None,
                 usage: None,
@@ -629,7 +629,7 @@ fn canonical_fixture_plain_text_history_projects_stably() {
         panic!("second projected message should be assistant text");
     };
     assert_eq!(text, "你好，我在。");
-    assert!(reasoning.is_empty());
+    assert_eq!(reasoning, "preserved reasoning");
     assert!(tool_calls.is_empty());
 }
 

@@ -1,12 +1,17 @@
 //! Google Gemini Interactions wire profile.
 //! Google Gemini Interactions 线级协议 Profile。
 
-use crate::{EncodedWireRequest, ProtocolConversionError, ProtocolProfile, ProtocolStreamDecoder};
+use crate::{
+    EncodedWireRequest, ProtocolConversionError, ProtocolProfile, ProtocolStreamDecoder,
+    shared::append_bounded_tool_arguments,
+};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use vulcan_ai_contract::{
-    AiExecutionRequest, AiMessage, AiStreamEvent, ContentItem, MessageRole, PromptCachePolicy,
-    RequestUsage, ToolCall, ToolCallProgress, UsageValue, UsageValueSource,
+    AiExecutionRequest, AiMessage, AiStreamEvent, ContentItem, MessageRole, NativeToolKind,
+    ParallelToolCallPolicy, PromptCachePolicy, ReasoningOutputPolicy, RequestUsage,
+    StructuredOutputPolicy, ToolCall, ToolCallProgress, ToolChoicePolicy, UsageValue,
+    UsageValueSource, derive_uncached_input,
 };
 
 /// Stable Google Gemini Interactions profile identifier.
@@ -29,13 +34,18 @@ impl ProtocolProfile for GeminiInteractionsProfile {
         GEMINI_INTERACTIONS_PROFILE_ID
     }
 
+    /// Returns the bounded Interactions SSE transport declaration.
+    /// 返回有界 Interactions SSE 传输声明。
+    fn transport_profile(&self) -> crate::ProtocolTransportProfile {
+        crate::ProtocolTransportProfile::bounded_sse()
+    }
+
     /// Encodes one public request into the revised Interactions schema.
     /// 将一个公共请求编码为修订后的 Interactions 结构。
     fn encode(
         &self,
         request: &AiExecutionRequest,
     ) -> Result<EncodedWireRequest, ProtocolConversionError> {
-        crate::shared::require_no_native_tools(request, self.id())?;
         if !matches!(request.prompt_cache, PromptCachePolicy::ProviderDefault) {
             return Err(ProtocolConversionError::new(
                 "Gemini Interactions explicit cache projection is not registered.",
@@ -45,7 +55,7 @@ impl ProtocolProfile for GeminiInteractionsProfile {
         let mut body = json!({
             "model": request.model_id,
             "input": input,
-            "tools": encode_interactions_tools(request),
+            "tools": encode_interactions_tools(request)?,
             "stream": true,
             "store": false,
         });
@@ -72,8 +82,8 @@ impl ProtocolProfile for GeminiInteractionsProfile {
                 String::from("thinking_level"),
                 Value::String(thinking_level.to_string()),
             );
-            generation_config.insert(String::from("thinking_summaries"), json!("auto"));
         }
+        project_interactions_request_controls(request, &mut body)?;
         Ok(EncodedWireRequest {
             path: String::from("/interactions"),
             headers: BTreeMap::from([(
@@ -93,6 +103,102 @@ impl ProtocolProfile for GeminiInteractionsProfile {
     ) -> Box<dyn ProtocolStreamDecoder> {
         Box::new(GeminiInteractionsStreamDecoder::new(execution_id))
     }
+}
+
+/// Projects public controls into the revised Gemini Interactions schema.
+/// 将公共控制投影到修订后的 Gemini Interactions 结构。
+///
+/// # Parameters
+/// 参数
+/// `request` is the exact public request and `body` is the mutable Interactions object.
+/// `request` 是精确公共请求，`body` 是可变 Interactions 对象。
+///
+/// # Returns
+/// 返回值
+/// A controlled conversion error when the revised API has no exact representation.
+/// 当修订版 API 没有精确表示时返回受控转换错误。
+fn project_interactions_request_controls(
+    request: &AiExecutionRequest,
+    body: &mut Value,
+) -> Result<(), ProtocolConversionError> {
+    let generation_config = body
+        .as_object_mut()
+        .expect("Interactions request body is always an object")
+        .entry(String::from("generation_config"))
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    match &request.tool_choice {
+        ToolChoicePolicy::Auto => {}
+        ToolChoicePolicy::Required => generation_config["tool_choice"] = json!("any"),
+        ToolChoicePolicy::Disabled => generation_config["tool_choice"] = json!("none"),
+        ToolChoicePolicy::Specific { tool_name } => {
+            require_interactions_registered_tool(request, tool_name)?;
+            generation_config["tool_choice"] = json!({
+                "allowed_tools": {
+                    "mode": "any",
+                    "tools": [tool_name],
+                }
+            });
+        }
+    }
+    if matches!(
+        request.parallel_tool_calls,
+        ParallelToolCallPolicy::Disabled
+    ) {
+        return Err(ProtocolConversionError::new(
+            "Gemini Interactions has no registered serial-tool-call projector.",
+        ));
+    }
+    if !request.stop_sequences.is_empty() {
+        generation_config["stop_sequences"] = json!(request.stop_sequences);
+    }
+    generation_config["thinking_summaries"] = match request.reasoning_output {
+        ReasoningOutputPolicy::ProviderDefault | ReasoningOutputPolicy::SummaryAuto => {
+            json!("auto")
+        }
+        ReasoningOutputPolicy::Hidden => json!("none"),
+        ReasoningOutputPolicy::Detailed => json!("auto"),
+    };
+    match &request.structured_output {
+        StructuredOutputPolicy::None => {}
+        StructuredOutputPolicy::JsonObject => {
+            body["response_format"] = json!({
+                "type": "text",
+                "mime_type": "application/json",
+            });
+        }
+        StructuredOutputPolicy::JsonSchema { schema, .. } => {
+            body["response_format"] = json!({
+                "type": "text",
+                "mime_type": "application/json",
+                "schema": schema,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Verifies an Interactions specific-tool selection references a registered request tool.
+/// 验证 Interactions 特定工具选择引用了已注册请求工具。
+///
+/// # Parameters
+/// 参数
+/// `request` owns the registered tools and `tool_name` is the exact selected name.
+/// `request` 拥有已注册工具，`tool_name` 是精确所选名称。
+///
+/// # Returns
+/// 返回值
+/// Success only when the exact tool is registered.
+/// 仅当精确工具已注册时成功。
+fn require_interactions_registered_tool(
+    request: &AiExecutionRequest,
+    tool_name: &str,
+) -> Result<(), ProtocolConversionError> {
+    if request.tools.iter().any(|tool| tool.name == tool_name) {
+        return Ok(());
+    }
+    Err(ProtocolConversionError::new(format!(
+        "Gemini Interactions tool choice references unregistered tool `{tool_name}`."
+    )))
 }
 
 /// Maps only Interactions-supported public effort values into a native thinking level.
@@ -283,10 +389,22 @@ fn encode_interactions_resource(
     }))
 }
 
-/// Encodes public function tools into the native Interactions tool shape.
-/// 将公共函数工具编码为原生 Interactions 工具结构。
-fn encode_interactions_tools(request: &AiExecutionRequest) -> Vec<Value> {
-    request
+/// Encodes public function and native tools into the Interactions tool shape.
+/// 将公共函数工具和原生工具编码为 Interactions 工具结构。
+///
+/// # Parameters
+/// 参数
+/// `request` contains the immutable function and native tool selections.
+/// `request` 包含不可变函数工具与原生工具选择。
+///
+/// # Returns
+/// 返回值
+/// The exact Interactions tool array, or a controlled unsupported-capability error.
+/// 返回精确 Interactions 工具数组，或受控的不支持能力错误。
+fn encode_interactions_tools(
+    request: &AiExecutionRequest,
+) -> Result<Vec<Value>, ProtocolConversionError> {
+    let mut tools = request
         .tools
         .iter()
         .map(|tool| {
@@ -297,7 +415,19 @@ fn encode_interactions_tools(request: &AiExecutionRequest) -> Vec<Value> {
                 "parameters": tool.input_schema,
             })
         })
-        .collect()
+        .collect::<Vec<_>>();
+    for native_tool in &request.native_tools {
+        tools.push(match native_tool {
+            NativeToolKind::WebSearch => json!({ "type": "google_search" }),
+            NativeToolKind::CodeInterpreter => json!({ "type": "code_execution" }),
+            NativeToolKind::ImageGeneration => {
+                return Err(ProtocolConversionError::new(
+                    "Gemini Interactions has no registered native image-generation tool projector.",
+                ));
+            }
+        });
+    }
+    Ok(tools)
 }
 
 /// Tracks one active streamed Interactions step.
@@ -413,6 +543,7 @@ impl GeminiInteractionsStreamDecoder {
                         id: call_id,
                         name,
                         arguments,
+                        signature: None,
                     },
                 }]),
                 Err(error) => Ok(vec![AiStreamEvent::ToolCallAborted {
@@ -619,7 +750,7 @@ impl ProtocolStreamDecoder for GeminiInteractionsStreamDecoder {
                                         "Gemini Interactions argument delta is missing arguments.",
                                     )
                                 })?;
-                        arguments.push_str(fragment);
+                        append_bounded_tool_arguments(arguments, fragment, "Gemini Interactions")?;
                         events.push(AiStreamEvent::ToolCallArgumentsDelta {
                             item_id: item_id.clone(),
                             delta: fragment.to_string(),
@@ -677,15 +808,38 @@ impl ProtocolStreamDecoder for GeminiInteractionsStreamDecoder {
                             .pointer("/interaction/error/code")
                             .and_then(Value::as_str)
                             .map(str::to_string),
+                        upstream_type: value
+                            .pointer("/interaction/error/type")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        upstream_parameter: value
+                            .pointer("/interaction/error/param")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        upstream_message: value
+                            .pointer("/interaction/error/message")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        request_id: value
+                            .pointer("/interaction/id")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        provider_id: None,
+                        entry_id: None,
+                        model_id: value
+                            .pointer("/interaction/model")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
                         message: value
                             .pointer("/interaction/error/message")
                             .and_then(Value::as_str)
                             .unwrap_or("Gemini Interactions execution failed.")
                             .to_string(),
                         retryable: false,
-                        retry_after_seconds: None,
+                        retry_after: None,
                         dispatch_outcome: vulcan_ai_contract::DispatchOutcome::Dispatched,
                         semantic_output_observed: false,
+                        side_effect_observed: false,
                         terminal: true,
                     },
                 });
@@ -732,11 +886,14 @@ fn required_u32(value: &Value, field: &str) -> Result<u32, ProtocolConversionErr
 /// Normalizes Interactions usage without deriving uncached input from cached totals.
 /// 归一化 Interactions 用量，且不从缓存总量推导非缓存输入。
 fn interactions_usage(value: &Value) -> RequestUsage {
+    let input_tokens = reported_usage(value, "total_input_tokens");
+    let cache_read_tokens = reported_usage(value, "total_cached_tokens");
     RequestUsage {
-        input_tokens: reported_usage(value, "total_input_tokens"),
+        input_tokens,
+        uncached_input_tokens: derive_uncached_input(input_tokens, cache_read_tokens),
         output_tokens: reported_usage(value, "total_output_tokens"),
         reasoning_tokens: reported_usage(value, "total_thought_tokens"),
-        cache_read_tokens: reported_usage(value, "total_cached_tokens"),
+        cache_read_tokens,
         total_tokens: reported_usage(value, "total_tokens"),
         ..RequestUsage::default()
     }
@@ -767,6 +924,7 @@ mod tests {
             operation: AiOperation::ConversationRespond,
             model_id: String::from("gemini-test"),
             cache_scope_id: None,
+            continuation: None,
             messages: vec![
                 AiMessage {
                     role: MessageRole::System,
@@ -787,6 +945,7 @@ mod tests {
                             id: String::from("call"),
                             name: String::from("lookup"),
                             arguments: json!({"q": "x"}),
+                            signature: None,
                         },
                     }],
                 },
@@ -807,8 +966,13 @@ mod tests {
                 input_schema: json!({"type": "object"}),
             }],
             native_tools: Vec::new(),
+            tool_choice: Default::default(),
+            parallel_tool_calls: Default::default(),
+            structured_output: Default::default(),
+            stop_sequences: Vec::new(),
             prompt_cache: PromptCachePolicy::ProviderDefault,
             reasoning_effort: None,
+            reasoning_output: Default::default(),
             model_parameters: BTreeMap::new(),
             resources: Vec::new(),
             output_token_limit: Some(256),
@@ -839,6 +1003,21 @@ mod tests {
             encoded.headers.get("api-revision").map(String::as_str),
             Some(GEMINI_INTERACTIONS_API_REVISION)
         );
+    }
+
+    /// Verifies Interactions projects its native search and code-execution tool identifiers.
+    /// 验证 Interactions 会投影其原生搜索与代码执行工具标识。
+    #[test]
+    fn encodes_interactions_native_tools() {
+        let mut request = request();
+        request.native_tools = vec![NativeToolKind::WebSearch, NativeToolKind::CodeInterpreter];
+        let encoded = GeminiInteractionsProfile
+            .encode(&request)
+            .expect("Interactions native tools should encode");
+        assert!(encoded.body["tools"].as_array().is_some_and(|tools| {
+            tools.iter().any(|tool| tool["type"] == "google_search")
+                && tools.iter().any(|tool| tool["type"] == "code_execution")
+        }));
     }
 
     /// Verifies Interactions rejects a public effort that has no native wire value.

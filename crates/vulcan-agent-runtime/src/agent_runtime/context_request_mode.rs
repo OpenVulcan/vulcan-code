@@ -38,12 +38,17 @@ pub(crate) fn resolve_preparation_context_request_mode(
     resolve_context_request_mode(ContextRequestModeInput {
         internal_request: preparation.prompt_purpose.disables_provider_tools(),
         provider_id: &request_snapshot.provider_id,
+        protocol_profile_id: &preparation.model_blueprint.protocol_profile_id,
         model_id: &request_snapshot.model_id,
         history_message_count: request_snapshot.history.len(),
         context_assembly: preparation.context_assembly.as_ref(),
         context_baseline: preparation.context_baseline.as_ref(),
         context_budget: preparation.context_budget.as_ref(),
         continuation_provider_id: request_snapshot.continuation.provider_id.as_deref(),
+        continuation_protocol_profile_id: request_snapshot
+            .continuation
+            .protocol_profile_id
+            .as_deref(),
         continuation_model_id: request_snapshot.continuation.model_id.as_deref(),
         continuation_message_id,
     })

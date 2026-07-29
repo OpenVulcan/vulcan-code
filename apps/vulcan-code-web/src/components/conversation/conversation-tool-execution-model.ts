@@ -126,8 +126,8 @@ export function toolRequestProgress(blocks: ToolExecutionConversationBlock[]): T
   return latest;
 }
 
-// toolRequestProgressLabel formats one compact localized request-state and Token label.
-// toolRequestProgressLabel 格式化一条紧凑的本地化请求状态与 Token 标签。
+// toolRequestProgressLabel formats one compact localized request-state and receive-progress label.
+// toolRequestProgressLabel 格式化一条紧凑的本地化请求状态与接收进度标签。
 export function toolRequestProgressLabel(
   progress: ToolRequestProgress,
   t?: (key: TranslationKey) => string,

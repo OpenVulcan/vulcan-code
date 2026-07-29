@@ -170,6 +170,7 @@ impl VulcanCoreController {
             .map_err(|error| CoreError::ProviderFailure {
                 provider_id: adapter.provider_id().to_string(),
                 message: error.to_string(),
+                details: None,
             })?;
         self.last_request_snapshot = serde_json::to_value(&request).ok();
         Ok(request)

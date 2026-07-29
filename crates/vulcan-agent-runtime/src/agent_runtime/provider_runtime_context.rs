@@ -1308,12 +1308,14 @@ mod tests {
     fn sample_model_blueprint() -> crate::agent_runtime::provider::ProviderRuntimeBlueprint {
         crate::agent_runtime::provider::ProviderRuntimeBlueprint {
             provider_id: String::from("openrouter"),
+            service_entry_id: String::from("public-api"),
             connection_id: String::from("test-connection"),
             provider_name: String::from("OpenRouter"),
             runtime_label: String::from("Vulcan Public AI Contract"),
             model_id: String::from("vendor/model"),
             model_name: String::from("Model"),
             protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+            secondary_route: Default::default(),
             public_capabilities: vulcan_ai_contract::ModelCapabilities::default(),
             base_url: Some(String::from("https://openrouter.ai/api/v1")),
             supports_remote_model_refresh: true,

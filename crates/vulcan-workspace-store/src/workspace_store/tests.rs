@@ -117,6 +117,8 @@ fn session_addon_state_write_does_not_rewrite_segmented_state_document() {
             active_model_id: Some(String::from("new-model")),
             active_reasoning_effort: None,
             active_temperature: None,
+            provider_tool_selections: Default::default(),
+            provider_tool_selections_overridden: false,
         },
         String::from("300"),
     );
@@ -727,6 +729,7 @@ fn runtime_state_rebuild_from_recent_messages_preserves_continuation() {
         conversation_state: SessionConversationState {
             continuation: SessionProviderContinuationState {
                 provider_id: Some(String::from("openai")),
+                protocol_profile_id: Some(String::from("openai-responses.v1")),
                 model_id: Some(String::from("gpt-test")),
                 last_provider_message_id: Some(String::from("resp-1")),
                 last_local_message_id: Some(String::from("assistant-1")),

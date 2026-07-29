@@ -17,11 +17,13 @@ use async_trait::async_trait;
 use base64::Engine;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use vulcan_ai_contract::{
-    AiExecutionRequest, AiMessage, AiOperation, AiStreamEvent, ContentItem, MessageRole,
-    ModelParameterValue, NativeToolKind, PromptCachePolicy, ReasoningEffort, RequestUsage,
-    ResourceKind, ResourceReference, ToolCall as PublicToolCall, ToolDefinition, ToolResult,
-    UsageValue,
+    AiContinuation, AiExecutionRequest, AiMessage, AiOperation, AiStreamEvent, ContentItem,
+    MessageRole, ModelParameterValue, NativeToolKind, ParallelToolCallPolicy, PromptCachePolicy,
+    ProviderReplayEnvelope, ReasoningEffort, ReasoningOutputPolicy, RequestUsage, ResourceKind,
+    ResourceReference, StructuredOutputPolicy, ToolCall as PublicToolCall, ToolChoicePolicy,
+    ToolDefinition, ToolResult, UsageValue,
 };
 use vulcan_core::provider::{
     VulcanProviderAdapter, VulcanProviderDeltaSink, VulcanStreamingProviderAdapter,
@@ -38,6 +40,10 @@ use vulcan_core::types::{
 use vulcan_provider_adapters::{
     CredentialExecutionSecret, ProviderExecutionClient, ProviderExecutionRoute,
     ResolvedPublicAiExecution,
+};
+use vulcan_tools_manager::{
+    VulcanToolSchemaProjectionContext, project_tool_parameters_schema,
+    resolve_tool_schema_projection_profile,
 };
 
 /// Vulcan-owned default output budget used when the provider reports no independent output limit.
@@ -286,6 +292,20 @@ impl VulcanPublicContractAdapter {
         workspace_path: String,
         live_sender: ProviderLiveDeltaSender,
     ) -> Self {
+        // schema_projection_context freezes the exact provider, protocol family, and model before any tool definition enters the public request.
+        // schema_projection_context 在任何工具定义进入公共请求前冻结精确供应商、协议族与模型。
+        let schema_projection_context = VulcanToolSchemaProjectionContext {
+            provider_id: route.provider.id.as_str(),
+            api_family_key: tool_schema_api_family_key(
+                route.protocol_route.protocol_profile_id.as_str(),
+            ),
+            model_id: model_id.as_str(),
+            additional_params: None,
+        };
+        // schema_projection_profile reuses the host-owned compatibility policy instead of duplicating provider schema rewrites in each protocol encoder.
+        // schema_projection_profile 复用宿主自有兼容策略，避免在每个协议编码器中重复供应商 Schema 改写。
+        let schema_projection_profile =
+            resolve_tool_schema_projection_profile(&schema_projection_context);
         Self {
             route,
             model_id,
@@ -297,7 +317,10 @@ impl VulcanPublicContractAdapter {
                 .map(|tool| ToolDefinition {
                     name: tool.name,
                     description: tool.description,
-                    input_schema: tool.parameters,
+                    input_schema: project_tool_parameters_schema(
+                        &tool.parameters,
+                        schema_projection_profile,
+                    ),
                 })
                 .collect(),
             output_token_limit,
@@ -309,6 +332,34 @@ impl VulcanPublicContractAdapter {
             workspace_path,
             live_sender,
         }
+    }
+}
+
+/// Maps one public protocol profile to the stable API-family key consumed by the shared tool-schema projector.
+/// 将一个公共协议配置映射为共享工具 Schema 投影器使用的稳定 API 族键。
+///
+/// # Parameters
+/// 参数
+/// `protocol_profile_id` is the immutable protocol profile selected for the execution route.
+/// `protocol_profile_id` 是执行路由选定的不可变协议配置标识。
+///
+/// # Returns
+/// 返回值
+/// The exact compatibility family key used by `vulcan-tools-manager`.
+/// 返回 `vulcan-tools-manager` 使用的精确兼容族键。
+fn tool_schema_api_family_key(protocol_profile_id: &str) -> &'static str {
+    match protocol_profile_id {
+        vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID
+        | vulcan_ai_protocols::GOOGLE_CODE_ASSIST_PROFILE_ID => "google-gemini-generate-content",
+        vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID
+        | vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID => "openai-responses-compatible",
+        vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID => "openai-chat-compatible",
+        vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
+        | vulcan_ai_protocols::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
+        | vulcan_ai_protocols::CLAUDE_CODE_MESSAGES_PROFILE_ID => "anthropic-messages",
+        vulcan_ai_protocols::GEMINI_INTERACTIONS_PROFILE_ID => "gemini-interactions",
+        vulcan_ai_protocols::COHERE_CHAT_PROFILE_ID => "cohere-chat",
+        _ => "unknown",
     }
 }
 
@@ -343,7 +394,12 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
             });
         }
         for message in &snapshot.messages {
-            let mut public_message = core_message_to_public(message)?;
+            let mut public_message = core_message_to_public(
+                message,
+                self.provider_id(),
+                self.route.protocol_route.protocol_profile_id.as_str(),
+                self.model_id(),
+            )?;
             resolve_public_message_resources(
                 &mut public_message,
                 &self.route,
@@ -353,10 +409,21 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
             .await?;
             messages.push(public_message);
         }
+        // continuation is emitted only after the Core configuration proves the exact append-only boundary.
+        // continuation 仅在 Core 配置证明精确追加边界后才会发出。
+        let continuation = build_public_continuation(
+            snapshot,
+            config,
+            self.route.provider.id.as_str(),
+            self.route.protocol_route.protocol_profile_id.as_str(),
+            self.model_id.as_str(),
+            usize::from(!system_prompt.is_empty()),
+        );
         let public = AiExecutionRequest {
             operation: AiOperation::ConversationRespond,
             model_id: config.model_id.clone(),
             cache_scope_id: Some(self.cache_scope_id.clone()),
+            continuation,
             messages,
             tools: self.tools.clone(),
             native_tools: if self.route.protocol_route.protocol_profile_id
@@ -367,8 +434,13 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
             } else {
                 Vec::new()
             },
+            tool_choice: ToolChoicePolicy::Auto,
+            parallel_tool_calls: ParallelToolCallPolicy::ProviderDefault,
+            structured_output: StructuredOutputPolicy::None,
+            stop_sequences: Vec::new(),
             prompt_cache: self.prompt_cache.clone(),
             reasoning_effort: self.reasoning_effort,
+            reasoning_output: ReasoningOutputPolicy::ProviderDefault,
             model_parameters: self.model_parameters.clone(),
             resources: Vec::new(),
             output_token_limit: Some(self.output_token_limit),
@@ -417,6 +489,71 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
     }
 }
 
+/// Builds one public continuation only when the exact local boundary and context mutation proof both succeed.
+/// 仅在精确本地边界与上下文变更证明同时成功时构建公共延续信息。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` and `config` are the Core-owned canonical state and safety policy; route identifiers
+/// freeze continuation ownership; `system_message_count` accounts for the synthetic public system message.
+/// `snapshot` 与 `config` 是 Core 持有的规范状态和安全策略；路由标识冻结延续归属；
+/// `system_message_count` 计入合成的公共系统消息。
+///
+/// # Returns
+/// 返回值
+/// A proven public continuation, or `None` when any ownership, boundary, or mutation proof fails.
+/// 返回已证明安全的公共延续；任一归属、边界或变更证明失败时返回 `None`。
+fn build_public_continuation(
+    snapshot: &CoreConversationSnapshot,
+    config: &CoreControllerConfig,
+    provider_id: &str,
+    protocol_profile_id: &str,
+    model_id: &str,
+    system_message_count: usize,
+) -> Option<AiContinuation> {
+    let continuation = &snapshot.continuation;
+    if continuation.provider_id.as_deref() != Some(provider_id)
+        || continuation.protocol_profile_id.as_deref() != Some(protocol_profile_id)
+        || continuation.model_id.as_deref() != Some(model_id)
+    {
+        return None;
+    }
+    let provider_message_id = continuation
+        .last_provider_message_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())?;
+    let covered_local_message_id = continuation
+        .last_local_message_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())?;
+    let mut matching_indices = snapshot
+        .messages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| (message.id == covered_local_message_id).then_some(index));
+    let covered_index = matching_indices.next()?;
+    if matching_indices.next().is_some() {
+        return None;
+    }
+    let uncovered_message_ids = snapshot.messages[covered_index + 1..]
+        .iter()
+        .map(|message| message.id.as_str())
+        .collect::<Vec<_>>();
+    if !config.continuation_reuse_is_proven(continuation, &uncovered_message_ids) {
+        return None;
+    }
+    Some(AiContinuation {
+        provider_id: provider_id.to_string(),
+        protocol_profile_id: protocol_profile_id.to_string(),
+        model_id: model_id.to_string(),
+        provider_message_id: provider_message_id.to_string(),
+        covered_local_message_id: covered_local_message_id.to_string(),
+        covered_message_count: system_message_count
+            .saturating_add(covered_index)
+            .saturating_add(1),
+    })
+}
+
 #[async_trait]
 impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
     async fn execute_request_streaming<S>(
@@ -443,28 +580,84 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
             self.secret.clone(),
             execution_id,
         );
-        let mut response = PublicTurnAccumulator::default();
+        let mut response = PublicTurnAccumulator::new(
+            self.provider_id(),
+            self.route.protocol_route.protocol_profile_id.as_str(),
+            self.model_id(),
+        );
         while let Some(item) = stream.next().await {
-            let event = item.map_err(|failure| {
-                provider_failure(
+            let event = item.map_err(|mut failure| {
+                attach_execution_route_context(
+                    &mut failure.error,
                     self.provider_id(),
-                    public_execution_failure_message(&failure.error).as_str(),
-                )
+                    self.route.entry.id.as_str(),
+                    self.model_id(),
+                );
+                public_execution_failure(self.provider_id(), *failure.error)
             })?;
-            let event = materialize_provider_resource_event(
+            let mut event = materialize_provider_resource_event(
                 self.provider_id(),
                 self.workspace_path.as_str(),
                 event,
             )
             .await?;
+            if let AiStreamEvent::ResponseFailed { error } = &mut event {
+                attach_execution_route_context(
+                    error,
+                    self.provider_id(),
+                    self.route.entry.id.as_str(),
+                    self.model_id(),
+                );
+            }
             response.apply_event(self.provider_id(), &self.live_sender, sink, event)?;
         }
-        response.finish(self.provider_id(), self.model_id())
+        response.finish()
     }
 }
 
-/// Formats one public execution error for the temporary controller error boundary.
-/// 为临时控制器错误边界格式化一个公共执行错误。
+/// Attaches the exact resolved route to one structured execution failure.
+/// 为一个结构化执行失败附加精确解析后的执行路由。
+///
+/// # Parameters
+/// 参数
+/// `error` is the normalized failure; the remaining values identify the immutable physical route.
+/// `error` 是归一化失败；其余值标识不可变的物理执行路由。
+fn attach_execution_route_context(
+    error: &mut vulcan_ai_contract::AiExecutionError,
+    provider_id: &str,
+    entry_id: &str,
+    model_id: &str,
+) {
+    error.provider_id = Some(provider_id.to_string());
+    error.entry_id = Some(entry_id.to_string());
+    error.model_id = Some(model_id.to_string());
+}
+
+/// Builds a Core provider failure that retains the normalized public error.
+/// 构建一项保留归一化公共错误的 Core Provider 失败。
+///
+/// # Parameters
+/// 参数
+/// `provider_id` identifies the controller route and `error` is the structured failure.
+/// `provider_id` 标识控制器路由，`error` 是结构化失败。
+///
+/// # Returns
+/// 返回值
+/// A Core error carrying both display text and typed details.
+/// 返回同时承载展示文本与强类型细节的 Core 错误。
+fn public_execution_failure(
+    provider_id: &str,
+    error: vulcan_ai_contract::AiExecutionError,
+) -> VulcanCoreError {
+    VulcanCoreError::ProviderFailure {
+        provider_id: provider_id.to_string(),
+        message: public_execution_failure_message(&error),
+        details: Some(Box::new(error)),
+    }
+}
+
+/// Formats one public execution error for user-facing diagnostics only.
+/// 仅为面向用户的诊断格式化一个公共执行错误。
 fn public_execution_failure_message(error: &vulcan_ai_contract::AiExecutionError) -> String {
     let mut fields = vec![
         format!("category={:?}", error.category),
@@ -485,37 +678,211 @@ fn public_execution_failure_message(error: &vulcan_ai_contract::AiExecutionError
     if let Some(code) = &error.upstream_code {
         fields.push(format!("upstream_code={code}"));
     }
-    if let Some(seconds) = error.retry_after_seconds {
-        fields.push(format!("retry_after_ms={}", seconds.saturating_mul(1_000)));
+    if let Some(retry_after) = &error.retry_after {
+        fields.push(format!("retry_after_ms={}", retry_after.delay_milliseconds));
     }
     format!("{} | {}", fields.join(" | "), error.message)
 }
 
 /// Accumulates public stream events into the controller's completed-turn shape.
 /// 将公共流事件累积为控制器的完整回合结构。
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct PublicTurnAccumulator {
+    /// Exact provider definition scope for durable replay.
+    /// 可持久化重放使用的精确供应商定义作用域。
+    provider_id: String,
+    /// Exact protocol profile scope for provider-specific replay signatures.
+    /// 供应商专属重放签名使用的精确协议 Profile 作用域。
+    protocol_profile_id: String,
+    /// Exact model scope for durable replay.
+    /// 可持久化重放使用的精确模型作用域。
+    model_id: String,
     /// Flattened visible assistant output.
     /// 扁平化的可见助手输出。
     text: String,
     /// Flattened reasoning output.
     /// 扁平化的推理输出。
     reasoning: String,
-    /// Last continuation signature emitted by the protocol.
-    /// 协议发出的最后一个延续签名。
-    reasoning_signature: Option<String>,
+    /// Latest provider response or assistant-message identifier.
+    /// 最新供应商响应或助手消息标识。
+    provider_message_id: Option<String>,
     /// Complete tool calls.
     /// 完整工具调用。
     tool_calls: Vec<ConversationToolCall>,
     /// Last public usage update.
     /// 最后一个公共用量更新。
     usage: Option<RequestUsage>,
+    /// Stream item lookup keyed by stable public item identifiers.
+    /// 按稳定公共项目标识索引的流项目查找表。
+    replay_item_indices: BTreeMap<String, usize>,
+    /// Assistant items retained in original stream order.
+    /// 按原始流顺序保留的助手项目。
+    replay_items: Vec<ReplayAccumulatorItem>,
     /// Whether a successful terminal response event was observed.
     /// 是否已经观察到成功响应终态事件。
     completed: bool,
 }
 
+/// Stores one in-progress assistant item for deterministic replay assembly.
+/// 为确定性重放组装保存一个进行中的助手项目。
+#[derive(Debug)]
+struct ReplayAccumulatorItem {
+    /// Stable public stream item identifier.
+    /// 稳定公共流项目标识。
+    item_id: String,
+    /// Current semantic item state.
+    /// 当前语义项目状态。
+    state: ReplayAccumulatorItemState,
+}
+
+/// Represents the closed set of assistant item states assembled from stream events.
+/// 表示从流事件组装出的封闭助手项目状态集合。
+#[derive(Debug)]
+enum ReplayAccumulatorItemState {
+    /// Incrementally assembled visible text.
+    /// 增量组装的可见文本。
+    Text(String),
+    /// Incrementally assembled reasoning and its optional replay signature.
+    /// 增量组装的推理及其可选重放签名。
+    Reasoning {
+        /// Visible reasoning summary or thinking text.
+        /// 可见推理摘要或思考文本。
+        text: String,
+        /// Provider-specific opaque continuation signature.
+        /// 供应商专属不透明延续签名。
+        signature: Option<String>,
+    },
+    /// Complete non-incremental public content.
+    /// 完整的非增量公共内容。
+    Complete(ContentItem),
+    /// Tool identity is known but its arguments are still incomplete.
+    /// 工具身份已知但参数仍不完整。
+    PendingTool,
+}
+
 impl PublicTurnAccumulator {
+    /// Creates one accumulator bound to an immutable execution route.
+    /// 创建一个绑定到不可变执行路由的累积器。
+    ///
+    /// # Parameters
+    /// 参数
+    /// The identifiers are the provider definition, protocol profile, and model selected for
+    /// this physical request.
+    /// 三个标识分别是本次物理请求选定的供应商定义、协议 Profile 与模型。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A new empty turn accumulator.
+    /// 返回一个新的空回合累积器。
+    fn new(provider_id: &str, protocol_profile_id: &str, model_id: &str) -> Self {
+        Self {
+            provider_id: provider_id.to_string(),
+            protocol_profile_id: protocol_profile_id.to_string(),
+            model_id: model_id.to_string(),
+            text: String::new(),
+            reasoning: String::new(),
+            provider_message_id: None,
+            tool_calls: Vec::new(),
+            usage: None,
+            replay_item_indices: BTreeMap::new(),
+            replay_items: Vec::new(),
+            completed: false,
+        }
+    }
+
+    /// Registers one stream item exactly once while preserving arrival order.
+    /// 精确注册一次流项目并保留到达顺序。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `item_id` is the stable public identifier and `state` is its initial semantic state.
+    /// `item_id` 是稳定公共标识，`state` 是其初始语义状态。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success when the identifier is new; duplicate identifiers are controlled failures.
+    /// 标识为新值时成功；重复标识会产生受控失败。
+    fn register_replay_item(
+        &mut self,
+        item_id: String,
+        state: ReplayAccumulatorItemState,
+    ) -> Result<(), VulcanCoreError> {
+        if self.replay_item_indices.contains_key(item_id.as_str()) {
+            return Err(provider_failure(
+                self.provider_id.as_str(),
+                format!("Public stream item `{item_id}` started more than once.").as_str(),
+            ));
+        }
+        let index = self.replay_items.len();
+        self.replay_item_indices.insert(item_id.clone(), index);
+        self.replay_items
+            .push(ReplayAccumulatorItem { item_id, state });
+        Ok(())
+    }
+
+    /// Resolves the mutable semantic state for one previously started item.
+    /// 解析一个已启动项目的可变语义状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `item_id` is the stable identifier from a delta or completion event.
+    /// `item_id` 是增量或完成事件携带的稳定标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The exact registered state, or a controlled ordering failure.
+    /// 返回精确注册状态；事件顺序无效时返回受控失败。
+    fn replay_item_state_mut(
+        &mut self,
+        item_id: &str,
+    ) -> Result<&mut ReplayAccumulatorItemState, VulcanCoreError> {
+        let index = self
+            .replay_item_indices
+            .get(item_id)
+            .copied()
+            .ok_or_else(|| {
+                provider_failure(
+                    self.provider_id.as_str(),
+                    format!("Public stream item `{item_id}` was updated before it started.")
+                        .as_str(),
+                )
+            })?;
+        Ok(&mut self.replay_items[index].state)
+    }
+
+    /// Materializes all completed assistant items in original stream order.
+    /// 按原始流顺序实体化所有已完成助手项目。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Ordered public content, or a controlled failure when a tool remains incomplete.
+    /// 返回有序公共内容；工具仍不完整时返回受控失败。
+    fn replay_content(&self) -> Result<Vec<ContentItem>, VulcanCoreError> {
+        self.replay_items
+            .iter()
+            .map(|item| match &item.state {
+                ReplayAccumulatorItemState::Text(text) => {
+                    Ok(ContentItem::Text { text: text.clone() })
+                }
+                ReplayAccumulatorItemState::Reasoning { text, signature } => {
+                    Ok(ContentItem::Reasoning {
+                        text: text.clone(),
+                        signature: signature.clone(),
+                    })
+                }
+                ReplayAccumulatorItemState::Complete(content) => Ok(content.clone()),
+                ReplayAccumulatorItemState::PendingTool => Err(provider_failure(
+                    self.provider_id.as_str(),
+                    format!(
+                        "Public tool stream item `{}` remained incomplete at response completion.",
+                        item.item_id
+                    )
+                    .as_str(),
+                )),
+            })
+            .collect()
+    }
+
     /// Applies one public stream event.
     /// 应用一个公共流事件。
     fn apply_event<S>(
@@ -529,7 +896,27 @@ impl PublicTurnAccumulator {
         S: VulcanProviderDeltaSink,
     {
         match event {
-            AiStreamEvent::ResponseTextDelta { delta, .. } => {
+            AiStreamEvent::ResponseMetadataUpdated { continuation } => {
+                if let Some(existing) = self.provider_message_id.as_deref()
+                    && existing != continuation.provider_message_id
+                {
+                    return Err(provider_failure(
+                        provider_id,
+                        "Provider response identity changed during one physical request.",
+                    ));
+                }
+                self.provider_message_id = Some(continuation.provider_message_id);
+            }
+            AiStreamEvent::ResponseTextDelta { item_id, delta } => {
+                let ReplayAccumulatorItemState::Text(text) =
+                    self.replay_item_state_mut(item_id.as_str())?
+                else {
+                    return Err(provider_failure(
+                        provider_id,
+                        "Public text delta targeted a non-text item.",
+                    ));
+                };
+                text.push_str(delta.as_str());
                 self.text.push_str(delta.as_str());
                 // liveDelta preserves the same decoded text for the workbench stream while Core keeps its canonical copy.
                 // liveDelta 在 Core 保留规范副本的同时，将同一段已解码文本投影到工作台流。
@@ -537,42 +924,64 @@ impl PublicTurnAccumulator {
                 sink.push_delta(ProviderTurnDelta::Output { delta });
                 let _ = live_sender.send(Ok(ProviderStreamDelta::Output(live_delta)));
             }
-            AiStreamEvent::ResponseItemStarted {
-                item:
-                    ContentItem::Resource {
-                        resource:
-                            ResourceReference {
-                                kind: ResourceKind::Image,
-                                local_path,
-                                url,
-                                ..
-                            },
-                    },
-                ..
-            } => {
-                let location = local_path.or(url).ok_or_else(|| {
-                    provider_failure(
-                        provider_id,
-                        "Provider-generated image has no local path or user-safe URL.",
-                    )
-                })?;
-                let markdown = format!(
-                    "{}![Generated image](<{}>)",
-                    if self.text.ends_with('\n') || self.text.is_empty() {
-                        ""
-                    } else {
-                        "\n\n"
-                    },
-                    location
-                );
-                self.text.push_str(markdown.as_str());
-                // liveMarkdown keeps generated-resource output visible before the terminal checkpoint.
-                // liveMarkdown 让生成资源输出在终态检查点到达前即可见。
-                let live_markdown = markdown.clone();
-                sink.push_delta(ProviderTurnDelta::Output { delta: markdown });
-                let _ = live_sender.send(Ok(ProviderStreamDelta::Output(live_markdown)));
+            AiStreamEvent::ResponseItemStarted { item_id, item } => {
+                let replay_state = match &item {
+                    ContentItem::Text { text } => ReplayAccumulatorItemState::Text(text.clone()),
+                    _ => ReplayAccumulatorItemState::Complete(item.clone()),
+                };
+                self.register_replay_item(item_id, replay_state)?;
+                if let ContentItem::Resource {
+                    resource:
+                        ResourceReference {
+                            kind: ResourceKind::Image,
+                            local_path,
+                            url,
+                            ..
+                        },
+                } = item
+                {
+                    let location = local_path.or(url).ok_or_else(|| {
+                        provider_failure(
+                            provider_id,
+                            "Provider-generated image has no local path or user-safe URL.",
+                        )
+                    })?;
+                    let markdown = format!(
+                        "{}![Generated image](<{}>)",
+                        if self.text.ends_with('\n') || self.text.is_empty() {
+                            ""
+                        } else {
+                            "\n\n"
+                        },
+                        location
+                    );
+                    self.text.push_str(markdown.as_str());
+                    // liveMarkdown keeps generated-resource output visible before the terminal checkpoint.
+                    // liveMarkdown 让生成资源输出在终态检查点到达前即可见。
+                    let live_markdown = markdown.clone();
+                    sink.push_delta(ProviderTurnDelta::Output { delta: markdown });
+                    let _ = live_sender.send(Ok(ProviderStreamDelta::Output(live_markdown)));
+                }
             }
-            AiStreamEvent::ReasoningDelta { delta, .. } => {
+            AiStreamEvent::ReasoningStarted { item_id } => {
+                self.register_replay_item(
+                    item_id,
+                    ReplayAccumulatorItemState::Reasoning {
+                        text: String::new(),
+                        signature: None,
+                    },
+                )?;
+            }
+            AiStreamEvent::ReasoningDelta { item_id, delta } => {
+                let ReplayAccumulatorItemState::Reasoning { text, .. } =
+                    self.replay_item_state_mut(item_id.as_str())?
+                else {
+                    return Err(provider_failure(
+                        provider_id,
+                        "Public reasoning delta targeted a non-reasoning item.",
+                    ));
+                };
+                text.push_str(delta.as_str());
                 self.reasoning.push_str(delta.as_str());
                 // liveDelta projects provider reasoning without removing it from Core's canonical response.
                 // liveDelta 投影 Provider 推理内容，同时不从 Core 规范响应中移除该内容。
@@ -580,10 +989,18 @@ impl PublicTurnAccumulator {
                 sink.push_delta(ProviderTurnDelta::Thinking { delta });
                 let _ = live_sender.send(Ok(ProviderStreamDelta::Thinking(live_delta)));
             }
-            AiStreamEvent::ReasoningCompleted { signature, .. } => {
-                if signature.is_some() {
-                    self.reasoning_signature = signature;
-                }
+            AiStreamEvent::ReasoningCompleted { item_id, signature } => {
+                let ReplayAccumulatorItemState::Reasoning {
+                    signature: current_signature,
+                    ..
+                } = self.replay_item_state_mut(item_id.as_str())?
+                else {
+                    return Err(provider_failure(
+                        provider_id,
+                        "Public reasoning completion targeted a non-reasoning item.",
+                    ));
+                };
+                *current_signature = signature;
             }
             AiStreamEvent::ToolCallStarted {
                 item_id,
@@ -591,6 +1008,10 @@ impl PublicTurnAccumulator {
                 tool_name,
                 ..
             } => {
+                self.register_replay_item(
+                    item_id.clone(),
+                    ReplayAccumulatorItemState::PendingTool,
+                )?;
                 let _ = live_sender.send(Ok(ProviderStreamDelta::ToolRequestFragment(
                     ToolRequestFragment::Detected {
                         request_stream_id: item_id,
@@ -610,6 +1031,16 @@ impl PublicTurnAccumulator {
                 )));
             }
             AiStreamEvent::ToolCallCompleted { item_id, call } => {
+                let replay_state = self.replay_item_state_mut(item_id.as_str())?;
+                if !matches!(replay_state, ReplayAccumulatorItemState::PendingTool) {
+                    return Err(provider_failure(
+                        provider_id,
+                        "Public tool completion targeted a non-tool item.",
+                    ));
+                }
+                *replay_state = ReplayAccumulatorItemState::Complete(ContentItem::ToolCall {
+                    call: call.clone(),
+                });
                 let final_arguments = serde_json::to_string(&call.arguments).map_err(|error| {
                     provider_failure(
                         provider_id,
@@ -640,13 +1071,17 @@ impl PublicTurnAccumulator {
                 return Err(provider_failure(provider_id, message.as_str()));
             }
             AiStreamEvent::UsageUpdated { usage } => {
-                merge_usage_update(&mut self.usage, usage);
+                if let Some(current) = self.usage.as_mut() {
+                    current.merge_update(usage);
+                } else {
+                    self.usage = Some(usage);
+                }
             }
             AiStreamEvent::ResponseCompleted => {
                 self.completed = true;
             }
             AiStreamEvent::ResponseFailed { error } => {
-                return Err(provider_failure(provider_id, error.message.as_str()));
+                return Err(public_execution_failure(provider_id, error));
             }
             AiStreamEvent::ResponseCancelled => {
                 return Err(provider_failure(
@@ -655,8 +1090,6 @@ impl PublicTurnAccumulator {
                 ));
             }
             AiStreamEvent::ResponseStarted { .. }
-            | AiStreamEvent::ResponseItemStarted { .. }
-            | AiStreamEvent::ReasoningStarted { .. }
             | AiStreamEvent::ResourceProgress { .. }
             | AiStreamEvent::ResponseItemCompleted { .. } => {}
         }
@@ -665,83 +1098,39 @@ impl PublicTurnAccumulator {
 
     /// Finishes the controller response after a public terminal event.
     /// 在公共终态事件后完成控制器响应。
-    fn finish(
-        self,
-        provider_id: &str,
-        model_id: &str,
-    ) -> Result<CoreProviderTurnResponse, VulcanCoreError> {
+    fn finish(self) -> Result<CoreProviderTurnResponse, VulcanCoreError> {
         if !self.completed {
             return Err(provider_failure(
-                provider_id,
+                self.provider_id.as_str(),
                 "Provider stream ended without a successful terminal response event.",
             ));
         }
-        let provider_message_state = self.reasoning_signature.map(|signature| {
-            json!({
-                "vulcan_ai": {
-                    "reasoning_signature": signature,
-                }
-            })
-        });
+        let replay_content = self.replay_content()?;
+        let provider_message_state = Some(json!({
+            "vulcan_ai": {
+                "replay": ProviderReplayEnvelope::new(
+                    self.provider_id.clone(),
+                    self.protocol_profile_id.clone(),
+                    self.model_id.clone(),
+                    replay_content,
+                ),
+            }
+        }));
         Ok(CoreProviderTurnResponse {
             assistant_text: self.text,
             assistant_reasoning: self.reasoning,
-            provider_message_id: None,
+            provider_message_id: self.provider_message_id.clone(),
             provider_message_state,
             usage: self.usage.as_ref().map(public_usage_to_core),
             tool_calls: self.tool_calls,
             continuation: Some(ProviderContinuation {
-                provider_id: Some(provider_id.to_string()),
-                model_id: Some(model_id.to_string()),
+                provider_id: Some(self.provider_id),
+                protocol_profile_id: Some(self.protocol_profile_id),
+                model_id: Some(self.model_id),
+                last_provider_message_id: self.provider_message_id,
                 ..ProviderContinuation::default()
             }),
         })
-    }
-}
-
-/// Merges one partial provider usage update without erasing fields reported by earlier events.
-/// 合并一条供应商局部用量更新，同时避免抹除先前事件已经报告的字段。
-///
-/// # Parameters
-/// 参数
-/// `current` stores the accumulated request usage and `update` is the next protocol event.
-/// `current` 保存累计请求用量，`update` 是下一条协议事件。
-fn merge_usage_update(current: &mut Option<RequestUsage>, update: RequestUsage) {
-    let Some(current) = current.as_mut() else {
-        *current = Some(update);
-        return;
-    };
-    merge_usage_value(&mut current.input_tokens, update.input_tokens);
-    merge_usage_value(&mut current.output_tokens, update.output_tokens);
-    merge_usage_value(&mut current.reasoning_tokens, update.reasoning_tokens);
-    merge_usage_value(&mut current.cache_read_tokens, update.cache_read_tokens);
-    merge_usage_value(&mut current.cache_write_tokens, update.cache_write_tokens);
-    merge_usage_value(
-        &mut current.cache_write_5m_tokens,
-        update.cache_write_5m_tokens,
-    );
-    merge_usage_value(
-        &mut current.cache_write_1h_tokens,
-        update.cache_write_1h_tokens,
-    );
-    merge_usage_value(&mut current.audio_input_tokens, update.audio_input_tokens);
-    merge_usage_value(&mut current.audio_output_tokens, update.audio_output_tokens);
-    merge_usage_value(&mut current.total_tokens, update.total_tokens);
-    if update.cost.is_some() {
-        current.cost = update.cost;
-    }
-}
-
-/// Replaces one accumulated usage value only when the new event reports an exact value.
-/// 仅当新事件报告精确值时替换一项累计用量。
-///
-/// # Parameters
-/// 参数
-/// `current` is the accumulated field and `update` is the next partial field.
-/// `current` 是累计字段，`update` 是下一条局部字段。
-fn merge_usage_value(current: &mut UsageValue, update: UsageValue) {
-    if !matches!(update, UsageValue::Unknown) {
-        *current = update;
     }
 }
 
@@ -1187,6 +1576,9 @@ fn minimax_local_resource_byte_limit(
 /// 将一条规范控制器消息转换为公共契约。
 fn core_message_to_public(
     message: &vulcan_core::types::ConversationMessage,
+    provider_id: &str,
+    protocol_profile_id: &str,
+    model_id: &str,
 ) -> Result<AiMessage, VulcanCoreError> {
     match &message.payload {
         CoreConversationPayload::UserText { text, attachments } => {
@@ -1225,15 +1617,22 @@ fn core_message_to_public(
             tool_calls,
             ..
         } => {
+            if let Some(content) = replay_content_for_route(
+                provider_message_state.as_ref(),
+                provider_id,
+                protocol_profile_id,
+                model_id,
+            )? {
+                return Ok(AiMessage {
+                    role: MessageRole::Assistant,
+                    content,
+                });
+            }
             let mut content = Vec::new();
             if !reasoning.is_empty() {
                 content.push(ContentItem::Reasoning {
                     text: reasoning.clone(),
-                    signature: provider_message_state
-                        .as_ref()
-                        .and_then(|state| state.pointer("/vulcan_ai/reasoning_signature"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
+                    signature: None,
                 });
             }
             if !text.is_empty() {
@@ -1244,6 +1643,7 @@ fn core_message_to_public(
                     id: call.tool_call_id.clone().unwrap_or_else(|| call.id.clone()),
                     name: call.tool_name.clone(),
                     arguments: call.arguments.clone(),
+                    signature: None,
                 },
             }));
             Ok(AiMessage {
@@ -1285,6 +1685,44 @@ fn core_message_to_public(
     }
 }
 
+/// Reads durable ordered replay content only for the exact active execution route.
+/// 仅为当前精确执行路由读取可持久化的有序重放内容。
+///
+/// # Parameters
+/// 参数
+/// `provider_message_state` is the Core-persisted assistant extension; the remaining identifiers
+/// define the currently selected execution route.
+/// `provider_message_state` 是 Core 持久化的助手扩展；其余标识定义当前选定执行路由。
+///
+/// # Returns
+/// 返回值
+/// Exact ordered content for a matching route, no replay for a different route, or a controlled
+/// error when a declared replay envelope is malformed.
+/// 路由匹配时返回精确有序内容；路由不同时不重放；已声明封套损坏时返回受控错误。
+fn replay_content_for_route(
+    provider_message_state: Option<&Value>,
+    provider_id: &str,
+    protocol_profile_id: &str,
+    model_id: &str,
+) -> Result<Option<Vec<ContentItem>>, VulcanCoreError> {
+    let Some(replay_value) =
+        provider_message_state.and_then(|state| state.pointer("/vulcan_ai/replay"))
+    else {
+        return Ok(None);
+    };
+    let envelope: ProviderReplayEnvelope =
+        serde_json::from_value(replay_value.clone()).map_err(|error| {
+            provider_failure(
+                provider_id,
+                format!("Persisted public replay envelope is invalid: {error}").as_str(),
+            )
+        })?;
+    if !envelope.matches_route(provider_id, protocol_profile_id, model_id) {
+        return Ok(None);
+    }
+    Ok(Some(envelope.content))
+}
+
 /// Returns the model-visible text of one canonical controller message.
 /// 返回一条规范控制器消息的模型可见文本。
 fn core_message_text(
@@ -1306,6 +1744,7 @@ fn core_message_text(
 fn public_usage_to_core(usage: &RequestUsage) -> ProviderUsageSnapshot {
     ProviderUsageSnapshot {
         input_tokens: known_usage(&usage.input_tokens),
+        uncached_input_tokens: known_usage(&usage.uncached_input_tokens),
         output_tokens: known_usage(&usage.output_tokens),
         reasoning_tokens: known_usage(&usage.reasoning_tokens),
         total_tokens: known_usage(&usage.total_tokens),
@@ -1329,6 +1768,7 @@ fn provider_failure(provider_id: &str, message: &str) -> VulcanCoreError {
     VulcanCoreError::ProviderFailure {
         provider_id: provider_id.to_string(),
         message: message.to_string(),
+        details: None,
     }
 }
 
@@ -1367,23 +1807,19 @@ mod tests {
             value,
             source: vulcan_ai_contract::UsageValueSource::Reported,
         };
-        let mut usage = Some(RequestUsage {
+        let mut usage = RequestUsage {
             input_tokens: reported(1_000),
             cache_read_tokens: reported(800),
             cache_write_tokens: reported(120),
             ..RequestUsage::default()
+        };
+
+        usage.merge_update(RequestUsage {
+            output_tokens: reported(75),
+            total_tokens: reported(1_075),
+            ..RequestUsage::default()
         });
 
-        merge_usage_update(
-            &mut usage,
-            RequestUsage {
-                output_tokens: reported(75),
-                total_tokens: reported(1_075),
-                ..RequestUsage::default()
-            },
-        );
-
-        let usage = usage.expect("merged usage should exist");
         assert_eq!(usage.input_tokens, reported(1_000));
         assert_eq!(usage.cache_read_tokens, reported(800));
         assert_eq!(usage.cache_write_tokens, reported(120));
@@ -1397,8 +1833,22 @@ mod tests {
     fn public_turn_deltas_are_forwarded_to_live_workbench_stream() {
         let (live_sender, mut live_receiver) = tokio::sync::mpsc::unbounded_channel();
         let mut sink = RecordingProviderDeltaSink::default();
-        let mut accumulator = PublicTurnAccumulator::default();
+        let mut accumulator =
+            PublicTurnAccumulator::new("minimax", "anthropic-messages", "MiniMax-M3");
 
+        accumulator
+            .apply_event(
+                "minimax",
+                &live_sender,
+                &mut sink,
+                AiStreamEvent::ResponseItemStarted {
+                    item_id: String::from("text-item"),
+                    item: ContentItem::Text {
+                        text: String::new(),
+                    },
+                },
+            )
+            .expect("text item should start");
         accumulator
             .apply_event(
                 "minimax",
@@ -1410,6 +1860,16 @@ mod tests {
                 },
             )
             .expect("text delta should be accepted");
+        accumulator
+            .apply_event(
+                "minimax",
+                &live_sender,
+                &mut sink,
+                AiStreamEvent::ReasoningStarted {
+                    item_id: String::from("reasoning-item"),
+                },
+            )
+            .expect("reasoning item should start");
         accumulator
             .apply_event(
                 "minimax",
@@ -1556,6 +2016,53 @@ mod tests {
         assert_eq!(
             resolved_public_output_token_limit(Some(500_000), Some(393_216)),
             393_216
+        );
+    }
+
+    /// Verifies a cursor produced by another protocol profile is never relabeled and reused.
+    /// 验证由其他协议配置产生的游标绝不会被重新标记并复用。
+    #[test]
+    fn continuation_rejects_protocol_profile_switch() {
+        let config = CoreControllerConfig {
+            provider_id: String::from("minimax"),
+            model_id: String::from("MiniMax-M3"),
+            system_prompt: String::from("system"),
+            ..CoreControllerConfig::default()
+        };
+        let snapshot = CoreConversationSnapshot {
+            messages: vec![vulcan_core::types::ConversationMessage {
+                id: String::from("assistant-1"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::from("answer"),
+                    reasoning: String::new(),
+                    provider_message_id: Some(String::from("response-1")),
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: Vec::new(),
+                },
+            }],
+            continuation: ProviderContinuation {
+                provider_id: Some(String::from("minimax")),
+                protocol_profile_id: Some(String::from("anthropic-messages")),
+                model_id: Some(String::from("MiniMax-M3")),
+                last_provider_message_id: Some(String::from("response-1")),
+                last_local_message_id: Some(String::from("assistant-1")),
+                context_rewrite_fingerprint: Some(config.provider_rewrite_fingerprint()),
+                ..ProviderContinuation::default()
+            },
+            ..CoreConversationSnapshot::default()
+        };
+
+        assert!(
+            build_public_continuation(
+                &snapshot,
+                &config,
+                "minimax",
+                "openai-chat",
+                "MiniMax-M3",
+                1,
+            )
+            .is_none()
         );
     }
 }

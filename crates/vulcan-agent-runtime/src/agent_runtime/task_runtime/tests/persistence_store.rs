@@ -1553,6 +1553,7 @@ fn store_task_outcome_persists_segmented_task_session_artifacts() {
     let resolved_config = test_resolved_config(&controller_config, &invocation.invocation_config);
     let provider_usage = vulcan_core::types::ProviderUsageSnapshot {
         input_tokens: Some(100),
+        uncached_input_tokens: None,
         output_tokens: Some(25),
         reasoning_tokens: Some(5),
         total_tokens: Some(130),
@@ -1950,6 +1951,7 @@ fn store_task_outcome_scopes_cloned_display_records_to_task_prompt() {
     let resolved_config = test_resolved_config(&controller_config, &invocation.invocation_config);
     let provider_usage = vulcan_core::types::ProviderUsageSnapshot {
         input_tokens: Some(20),
+        uncached_input_tokens: None,
         output_tokens: Some(5),
         reasoning_tokens: Some(1),
         total_tokens: Some(26),
@@ -1958,6 +1960,7 @@ fn store_task_outcome_scopes_cloned_display_records_to_task_prompt() {
     };
     let parent_provider_usage = vulcan_core::types::ProviderUsageSnapshot {
         input_tokens: Some(9_000),
+        uncached_input_tokens: None,
         output_tokens: Some(900),
         reasoning_tokens: Some(90),
         total_tokens: Some(9_990),
@@ -2179,6 +2182,7 @@ fn store_task_outcome_scopes_resumed_stats_to_inter_agent_delivery() {
     let resolved_config = test_resolved_config(&controller_config, &invocation.invocation_config);
     let provider_usage = vulcan_core::types::ProviderUsageSnapshot {
         input_tokens: Some(30),
+        uncached_input_tokens: None,
         output_tokens: Some(6),
         reasoning_tokens: Some(0),
         total_tokens: Some(36),
@@ -2395,6 +2399,7 @@ fn store_task_outcome_merges_explicit_usage_without_losing_record_calls() {
     let resolved_config = test_resolved_config(&controller_config, &invocation.invocation_config);
     let provider_usage = vulcan_core::types::ProviderUsageSnapshot {
         input_tokens: Some(42),
+        uncached_input_tokens: None,
         output_tokens: Some(7),
         reasoning_tokens: Some(3),
         total_tokens: Some(52),

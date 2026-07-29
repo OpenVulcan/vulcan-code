@@ -3,14 +3,14 @@
 
 use vulcan_core::types::ProviderContinuation;
 
-/// Scopes one persisted continuation to the exact active provider and model.
-/// 将一条持久化延续状态限定到精确的当前供应商与模型。
+/// Scopes one persisted continuation to the exact active provider, protocol profile, and model.
+/// 将一条持久化延续状态限定到精确的当前供应商、协议配置与模型。
 ///
 /// # Parameters
 /// 参数
-/// `continuation` is the saved cursor, while `provider_id` and `model_id` identify
-/// the immutable execution route.
-/// `continuation` 是已保存游标，`provider_id` 与 `model_id` 标识不可变执行路由。
+/// `continuation` is the saved cursor, while the three route identifiers freeze the immutable
+/// execution route.
+/// `continuation` 是已保存游标，三个路由标识共同冻结不可变执行路由。
 ///
 /// # Returns
 /// 返回值
@@ -19,15 +19,18 @@ use vulcan_core::types::ProviderContinuation;
 pub(crate) fn scope_continuation_to_active_provider(
     continuation: &ProviderContinuation,
     provider_id: &str,
+    protocol_profile_id: &str,
     model_id: &str,
 ) -> ProviderContinuation {
     if continuation.provider_id.as_deref() != Some(provider_id)
+        || continuation.protocol_profile_id.as_deref() != Some(protocol_profile_id)
         || continuation.model_id.as_deref() != Some(model_id)
     {
         return ProviderContinuation::default();
     }
     ProviderContinuation {
         provider_id: Some(provider_id.to_string()),
+        protocol_profile_id: Some(protocol_profile_id.to_string()),
         model_id: Some(model_id.to_string()),
         last_provider_message_id: continuation
             .last_provider_message_id

@@ -4,8 +4,8 @@
 use crate::{
     AuthenticationProjection, CredentialConnection, CredentialExecutionSecret,
     MINIMAX_REASONING_SPLIT_PARAMETER_ID, OPENROUTER_REASONING_MAX_TOKENS_PARAMETER_ID,
-    ProtocolRoute, ProviderDescriptor, ProviderToolTarget, SAMPLING_TEMPERATURE_PARAMETER_ID,
-    SecondaryRouteSelection, ServiceEntry,
+    ProtocolRoute, ProviderDescriptor, ProviderToolTarget, RequestProjectorKind,
+    SAMPLING_TEMPERATURE_PARAMETER_ID, SecondaryRouteSelection, ServiceEntry,
 };
 use async_stream::try_stream;
 use futures_util::{Stream, StreamExt};
@@ -14,13 +14,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 use vulcan_ai_contract::{
-    AiErrorCategory, AiExecutionError, AiExecutionRequest, AiStreamEvent, DispatchOutcome,
-    InputTokenCount, ModelParameterValue, PromptCachePolicy, ReasoningEffort,
+    AiErrorCategory, AiExecutionError, AiExecutionRequest, AiStreamEvent, AiStreamStateMachine,
+    DispatchOutcome, InputTokenCount, ModelParameterValue, PromptCachePolicy, ReasoningEffort,
+    RetryAfterHint, RetryAfterSource,
 };
 use vulcan_ai_protocols::{
-    EncodedWireRequest, ProtocolConversionError, ProtocolRegistry,
-    decode_gemini_count_tokens_response, encode_gemini_count_tokens_request,
+    EncodedWireRequest, ProtocolConversionError, ProtocolRegistry, ProtocolStreamFraming,
+    ProtocolTransportProfile, decode_gemini_count_tokens_response,
+    encode_gemini_count_tokens_request,
 };
 
 /// MiniMax documented maximum JSON request-body size.
@@ -272,9 +275,84 @@ pub struct ProviderToolExtractOutput {
     pub failures: Vec<ProviderToolExtractFailure>,
 }
 
+/// One normalized embedding vector and its source index.
+/// 一条归一化向量及其来源索引。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderToolEmbeddingVector {
+    /// Zero-based input index associated with this vector.
+    /// 与该向量关联的从零开始输入索引。
+    pub index: usize,
+    /// Ordered floating-point vector values returned by the provider.
+    /// 供应商返回的有序浮点向量值。
+    pub values: Vec<f64>,
+}
+
+/// Unified embedding output independent of provider wire fields.
+/// 与供应商线级字段无关的统一向量输出。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderToolEmbeddingOutput {
+    /// Optional exact embedding model reported by the provider.
+    /// 供应商报告的可选精确向量模型。
+    pub model: Option<String>,
+    /// Ordered vectors matched to their original input indexes.
+    /// 与原始输入索引匹配的有序向量。
+    pub vectors: Vec<ProviderToolEmbeddingVector>,
+}
+
+/// One normalized reranked candidate.
+/// 一条归一化重排候选项。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderToolRerankResult {
+    /// Original zero-based candidate index.
+    /// 原始的从零开始候选项索引。
+    pub index: usize,
+    /// Provider-reported relevance score.
+    /// 供应商报告的相关性分数。
+    pub score: f64,
+    /// Optional provider-returned candidate text.
+    /// 供应商可选返回的候选文本。
+    pub document: Option<String>,
+}
+
+/// Unified rerank output independent of provider wire fields.
+/// 与供应商线级字段无关的统一重排输出。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderToolRerankOutput {
+    /// Optional exact rerank model reported by the provider.
+    /// 供应商报告的可选精确重排模型。
+    pub model: Option<String>,
+    /// Ordered candidates in provider-ranked order.
+    /// 按供应商排序顺序排列的候选项。
+    pub results: Vec<ProviderToolRerankResult>,
+}
+
+/// Flat composite output used when one provider operation returns multiple semantic kinds.
+/// 当一个供应商操作返回多种语义类型时使用的扁平复合输出。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderToolCompositeOutput {
+    /// Ordered text fragments.
+    /// 有序文本片段。
+    pub text: Vec<String>,
+    /// Ordered generated resources.
+    /// 有序生成资源。
+    pub resources: Vec<ProviderToolGeneratedResource>,
+    /// Ordered embedding result groups.
+    /// 有序向量结果组。
+    pub embeddings: Vec<ProviderToolEmbeddingOutput>,
+    /// Ordered rerank result groups.
+    /// 有序重排结果组。
+    pub reranks: Vec<ProviderToolRerankOutput>,
+    /// Ordered search result groups.
+    /// 有序搜索结果组。
+    pub searches: Vec<ProviderToolSearchOutput>,
+    /// Ordered extraction result groups.
+    /// 有序提取结果组。
+    pub extracts: Vec<ProviderToolExtractOutput>,
+}
+
 /// Closed normalized output returned by provider-native tools.
 /// 供应商原生工具返回的封闭归一化输出。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ProviderToolNormalizedOutput {
     /// Provider-generated plain text.
     /// 供应商生成的纯文本。
@@ -288,11 +366,20 @@ pub enum ProviderToolNormalizedOutput {
     /// Structured web-extraction content and per-URL failures.
     /// 结构化网页提取内容与逐 URL 失败。
     Extract(ProviderToolExtractOutput),
+    /// Embedding vectors with stable source indexes.
+    /// 带稳定来源索引的向量结果。
+    Embedding(ProviderToolEmbeddingOutput),
+    /// Ranked candidates with provider relevance scores.
+    /// 带供应商相关性分数的重排候选项。
+    Rerank(ProviderToolRerankOutput),
+    /// Multiple normalized semantic output kinds from one invocation.
+    /// 一次调用返回的多种归一化语义输出。
+    Composite(ProviderToolCompositeOutput),
 }
 
 /// Unified typed result produced by one provider tool adapter.
 /// 一个供应商工具适配器产生的统一强类型结果。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProviderToolExecutionResult {
     /// Optional provider trace or task identifier.
     /// 可选供应商追踪或任务标识。
@@ -461,21 +548,13 @@ impl ProviderExecutionClient {
             })?;
         let status = response.status();
         if !status.is_success() {
-            let retry_after_seconds = response
-                .headers()
-                .get(reqwest::header::RETRY_AFTER)
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.trim().parse::<u64>().ok());
+            let retry_after = parse_retry_after_headers(response.headers(), SystemTime::now());
             let body = response.text().await.map_err(|error| {
                 transport_failure(format!(
                     "Provider CountTokens error response from `{url}` could not be read: {error}"
                 ))
             })?;
-            return Err(http_failure(
-                status.as_u16(),
-                retry_after_seconds,
-                body.as_str(),
-            ));
+            return Err(http_failure(status.as_u16(), retry_after, body.as_str()));
         }
         let body = response.json::<Value>().await.map_err(|error| {
             protocol_failure(ProtocolConversionError::new(format!(
@@ -509,81 +588,130 @@ impl ProviderExecutionClient {
         let client = self.clone();
         Box::pin(try_stream! {
             let encoded = client.encode_request_with_credential(&route, &request, &secret)?;
-            let url = route.request_url(encoded.path.as_str());
-            let headers = execution_headers(&route, &encoded.headers, &secret)?;
-            let response = client
-                .http
-                .post(url.as_str())
-                .headers(headers)
-                .json(&encoded.body)
-                .send()
-                .await
-                .map_err(|error| transport_failure(format!(
-                    "Provider request to `{url}` failed: {error}"
-                )))?;
-            let status = response.status();
-            let response = if status.is_success() {
-                response
-            } else {
-                let retry_after_seconds = response
-                    .headers()
-                    .get(reqwest::header::RETRY_AFTER)
-                    .and_then(|value| value.to_str().ok())
-                    .and_then(|value| value.trim().parse::<u64>().ok());
-                let body = response
-                    .text()
-                    .await
-                    .map_err(|error| transport_failure(format!(
-                        "Provider error response from `{url}` could not be read: {error}"
-                    )))?;
-                Err(http_failure(
-                    status.as_u16(),
-                    retry_after_seconds,
-                    body.as_str(),
-                ))?
-            };
             let profile = client
                 .protocols
                 .require(route.protocol_route.protocol_profile_id.as_str())
                 .map_err(protocol_failure)?;
+            let transport = profile.transport_profile();
+            let url = route.request_url(encoded.path.as_str());
+            let headers = execution_headers(&route, &encoded.headers, &secret)?;
+            let response = tokio::time::timeout(
+                Duration::from_millis(transport.response_headers_timeout_ms),
+                client
+                    .http
+                    .post(url.as_str())
+                    .headers(headers)
+                    .json(&encoded.body)
+                    .send(),
+            )
+            .await
+            .map_err(|_| {
+                transport_failure(format!(
+                    "Provider request to `{url}` exceeded the registered {} ms response-header timeout.",
+                    transport.response_headers_timeout_ms
+                ))
+            })?
+            .map_err(|error| transport_failure(format!(
+                "Provider request to `{url}` failed: {error}"
+            )))?;
+            let status = response.status();
+            let response = if status.is_success() {
+                response
+            } else {
+                let retry_after =
+                    parse_retry_after_headers(response.headers(), SystemTime::now());
+                let body = read_bounded_response_text(
+                    response,
+                    transport.max_error_body_bytes,
+                    url.as_str(),
+                    status.as_u16(),
+                    retry_after.clone(),
+                )
+                .await?;
+                Err(http_failure(
+                    status.as_u16(),
+                    retry_after,
+                    body.as_str(),
+                ))?
+            };
+            validate_response_content_type(
+                response.headers(),
+                &transport,
+                url.as_str(),
+            )?;
             let mut decoder = profile.create_stream_decoder(execution_id, &request);
-            let mut parser = SseFrameParser::default();
+            let mut parser = IncrementalFrameParser::new(transport);
             let mut bytes = response.bytes_stream();
             let mut semantic_output_observed = false;
-            while let Some(chunk) = bytes.next().await {
-                let chunk = chunk.map_err(|error| transport_failure(format!(
-                    "Provider stream from `{url}` failed: {error}"
-                )))?;
-                for frame in parser.push(chunk.as_ref())? {
+            let mut stream_state = AiStreamStateMachine::default();
+            loop {
+                let next_chunk = tokio::time::timeout(
+                    Duration::from_millis(transport.stream_idle_timeout_ms),
+                    bytes.next(),
+                )
+                .await
+                .map_err(|_| {
+                    stream_transport_failure(
+                        format!(
+                            "Provider stream from `{url}` exceeded the registered {} ms idle timeout.",
+                            transport.stream_idle_timeout_ms
+                        ),
+                        semantic_output_observed,
+                    )
+                })?;
+                let Some(chunk) = next_chunk else {
+                    break;
+                };
+                let chunk = chunk.map_err(|error| {
+                    stream_transport_failure(
+                        format!("Provider stream from `{url}` failed: {error}"),
+                        semantic_output_observed,
+                    )
+                })?;
+                for frame in parser
+                    .push(chunk.as_ref())
+                    .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?
+                {
                     for mut event in decoder
                         .push_sse(frame.event_name.as_deref(), frame.data.as_str())
-                        .map_err(protocol_failure)?
+                        .map_err(|error| {
+                            stream_protocol_failure(error, semantic_output_observed)
+                        })?
                     {
                         update_semantic_output_observation(
                             &mut semantic_output_observed,
                             &mut event,
                         );
+                        validate_stream_event(&mut stream_state, &event, semantic_output_observed)?;
                         yield event;
                     }
                 }
             }
-            for frame in parser.finish()? {
+            for frame in parser
+                .finish()
+                .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?
+            {
                 for mut event in decoder
                     .push_sse(frame.event_name.as_deref(), frame.data.as_str())
-                    .map_err(protocol_failure)?
+                    .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?
                 {
                     update_semantic_output_observation(
                         &mut semantic_output_observed,
                         &mut event,
                     );
+                    validate_stream_event(&mut stream_state, &event, semantic_output_observed)?;
                     yield event;
                 }
             }
-            for mut event in decoder.finish().map_err(protocol_failure)? {
+            for mut event in decoder
+                .finish()
+                .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?
+            {
                 update_semantic_output_observation(
                     &mut semantic_output_observed,
                     &mut event,
                 );
+                validate_stream_event(&mut stream_state, &event, semantic_output_observed)?;
                 yield event;
             }
         })
@@ -607,6 +735,30 @@ fn update_semantic_output_observation(observed: &mut bool, event: &mut AiStreamE
     }
 }
 
+/// Applies the production stream state machine and preserves the physical request state on failure.
+/// 应用生产流状态机，并在失败时保留物理请求状态。
+///
+/// # Parameters
+/// 参数
+/// `state` owns lifecycle validation, `event` is the next normalized event, and `observed`
+/// records whether semantic output has already escaped the transport boundary.
+/// `state` 持有生命周期校验，`event` 是下一条规范化事件，`observed`
+/// 记录语义输出是否已经越过传输边界。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` for a valid transition or a structured dispatched protocol failure.
+/// 有效转换返回 `Ok(())`，否则返回结构化的已分派协议失败。
+fn validate_stream_event(
+    state: &mut AiStreamStateMachine,
+    event: &AiStreamEvent,
+    observed: bool,
+) -> Result<(), ProviderExecutionFailure> {
+    state
+        .apply(event)
+        .map_err(|message| stream_protocol_failure(ProtocolConversionError::new(message), observed))
+}
+
 /// Applies route-scoped request policy before encoding.
 /// 在编码前应用路由作用域请求策略。
 fn validate_request_policy(
@@ -615,21 +767,21 @@ fn validate_request_policy(
 ) -> Result<(), ProviderExecutionFailure> {
     for parameter_id in request.model_parameters.keys() {
         let registered_temperature_route = parameter_id == SAMPLING_TEMPERATURE_PARAMETER_ID
-            && ((route.provider.id == "minimax"
+            && ((route.entry.request_projector == RequestProjectorKind::MiniMax
                 && matches!(
                     route.protocol_route.protocol_profile_id.as_str(),
                     vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
                         | vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID
                 ))
-                || route.provider.id == "openrouter");
+                || route.entry.request_projector == RequestProjectorKind::OpenRouter);
         let registered_minimax_reasoning_split = parameter_id
             == MINIMAX_REASONING_SPLIT_PARAMETER_ID
-            && route.provider.id == "minimax"
+            && route.entry.request_projector == RequestProjectorKind::MiniMax
             && route.protocol_route.protocol_profile_id
                 == vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID;
         let registered_openrouter_reasoning_budget = parameter_id
             == OPENROUTER_REASONING_MAX_TOKENS_PARAMETER_ID
-            && route.provider.id == "openrouter";
+            && route.entry.request_projector == RequestProjectorKind::OpenRouter;
         if !registered_temperature_route
             && !registered_minimax_reasoning_split
             && !registered_openrouter_reasoning_budget
@@ -640,7 +792,7 @@ fn validate_request_policy(
         }
     }
     if !matches!(request.prompt_cache, PromptCachePolicy::ProviderDefault)
-        && route.provider.id == "openrouter"
+        && route.entry.request_projector == RequestProjectorKind::OpenRouter
     {
         return Err(pre_dispatch_failure(
             "OpenRouter explicit prompt caching requires a verified model-endpoint capability.",
@@ -668,49 +820,146 @@ fn project_provider_request(
     if let Some(endpoint_path) = route.protocol_route.endpoint_path.as_ref() {
         encoded.path = endpoint_path.clone();
     }
-    if let Some(value) = request
+    project_sampling_temperature(request, &mut encoded)?;
+    match route.entry.request_projector {
+        RequestProjectorKind::Direct | RequestProjectorKind::Google => {}
+        RequestProjectorKind::MiniMax => {
+            project_minimax_request(route, request, &mut encoded)?;
+        }
+        RequestProjectorKind::OpenRouter => {
+            project_openrouter_request(route, request, &mut encoded)?;
+        }
+        RequestProjectorKind::Kimi => {
+            project_kimi_request(route, request, &mut encoded)?;
+        }
+        RequestProjectorKind::DeepSeek => {
+            project_deepseek_request(route, request, &mut encoded)?;
+        }
+        RequestProjectorKind::Alibaba => {
+            project_alibaba_request(route, request, &mut encoded)?;
+        }
+    }
+    Ok(encoded)
+}
+
+/// Projects the shared sampling-temperature parameter into one registered provider body.
+/// 将共享采样温度参数投影到一个已注册供应商请求体。
+///
+/// # Parameters
+/// 参数
+/// `request` contains the typed parameter and `encoded` is the mutable wire request.
+/// `request` 包含强类型参数，`encoded` 是可变 Wire 请求。
+///
+/// # Returns
+/// 返回值
+/// Success when absent or projected without conflict.
+/// 缺失或无冲突投影时返回成功。
+fn project_sampling_temperature(
+    request: &AiExecutionRequest,
+    encoded: &mut EncodedWireRequest,
+) -> Result<(), ProviderExecutionFailure> {
+    let Some(value) = request
         .model_parameters
         .get(SAMPLING_TEMPERATURE_PARAMETER_ID)
-    {
-        let ModelParameterValue::Decimal(decimal) = value else {
-            return Err(pre_dispatch_failure(
-                "The registered sampling temperature value must be a decimal string.",
-            ));
-        };
-        let temperature = serde_json::from_str::<Value>(decimal).map_err(|error| {
-            pre_dispatch_failure(format!(
-                "Sampling temperature could not be projected as JSON: {error}"
-            ))
-        })?;
-        let body = encoded
-            .body
-            .as_object_mut()
-            .ok_or_else(|| pre_dispatch_failure("Protocol request body must be a JSON object."))?;
-        if body.contains_key("temperature") {
-            return Err(pre_dispatch_failure(
-                "Sampling temperature projection conflicts with an existing protocol field.",
-            ));
-        }
-        body.insert(String::from("temperature"), temperature);
+    else {
+        return Ok(());
+    };
+    let ModelParameterValue::Decimal(decimal) = value else {
+        return Err(pre_dispatch_failure(
+            "The registered sampling temperature value must be a decimal string.",
+        ));
+    };
+    let temperature = serde_json::from_str::<Value>(decimal).map_err(|error| {
+        pre_dispatch_failure(format!(
+            "Sampling temperature could not be projected as JSON: {error}"
+        ))
+    })?;
+    let body = request_body_mut(encoded, "Protocol")?;
+    if body.contains_key("temperature") {
+        return Err(pre_dispatch_failure(
+            "Sampling temperature projection conflicts with an existing protocol field.",
+        ));
+    }
+    body.insert(String::from("temperature"), temperature);
+    Ok(())
+}
+
+/// Applies MiniMax-only request fields and request-size policy.
+/// 应用 MiniMax 专属请求字段与请求尺寸策略。
+///
+/// # Parameters
+/// 参数
+/// `route` freezes the selected protocol, `request` carries typed model parameters,
+/// and `encoded` is the protocol request.
+/// `route` 冻结所选协议，`request` 承载强类型模型参数，`encoded` 是协议请求。
+///
+/// # Returns
+/// 返回值
+/// Success for the documented provider-controlled reasoning shape.
+/// 对文档化的供应商控制思考形态返回成功。
+fn project_minimax_request(
+    route: &ProviderExecutionRoute,
+    request: &AiExecutionRequest,
+    encoded: &mut EncodedWireRequest,
+) -> Result<(), ProviderExecutionFailure> {
+    if request.reasoning_effort.is_some() {
+        return Err(pre_dispatch_failure(
+            "MiniMax reasoning is model-controlled and does not expose a reasoning effort selector.",
+        ));
     }
     if let Some(value) = request
         .model_parameters
         .get(MINIMAX_REASONING_SPLIT_PARAMETER_ID)
     {
+        if route.protocol_route.protocol_profile_id != vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID {
+            return Err(pre_dispatch_failure(
+                "MiniMax reasoning_split is registered only for OpenAI Chat.",
+            ));
+        }
         let ModelParameterValue::Boolean(reasoning_split) = value else {
             return Err(pre_dispatch_failure(
                 "The registered MiniMax reasoning split value must be boolean.",
             ));
         };
-        let body = encoded
-            .body
-            .as_object_mut()
-            .ok_or_else(|| pre_dispatch_failure("Protocol request body must be a JSON object."))?;
-        body.insert(
+        request_body_mut(encoded, "MiniMax")?.insert(
             String::from("reasoning_split"),
             Value::Bool(*reasoning_split),
         );
     }
+    let body_size = serde_json::to_vec(&encoded.body)
+        .map_err(|error| {
+            pre_dispatch_failure(format!(
+                "MiniMax request body could not be measured before dispatch: {error}"
+            ))
+        })?
+        .len();
+    if body_size > MINIMAX_REQUEST_BODY_BYTE_LIMIT {
+        return Err(pre_dispatch_failure(format!(
+            "MiniMax request body is {body_size} bytes and exceeds the documented {MINIMAX_REQUEST_BODY_BYTE_LIMIT}-byte limit."
+        )));
+    }
+    Ok(())
+}
+
+/// Applies OpenRouter reasoning and pinned secondary-provider fields.
+/// 应用 OpenRouter 思考与固定二级供应商字段。
+///
+/// # Parameters
+/// 参数
+/// `route` contains the frozen protocol and endpoint selection, `request` contains typed
+/// reasoning controls, and `encoded` is the protocol request.
+/// `route` 包含冻结协议与端点选择，`request` 包含强类型思考控制，
+/// `encoded` 是协议请求。
+///
+/// # Returns
+/// 返回值
+/// Success when every requested field has an exact registered projection.
+/// 每个请求字段都有精确注册投影时返回成功。
+fn project_openrouter_request(
+    route: &ProviderExecutionRoute,
+    request: &AiExecutionRequest,
+    encoded: &mut EncodedWireRequest,
+) -> Result<(), ProviderExecutionFailure> {
     if let Some(value) = request
         .model_parameters
         .get(OPENROUTER_REASONING_MAX_TOKENS_PARAMETER_ID)
@@ -720,24 +969,17 @@ fn project_provider_request(
                 "The registered OpenRouter reasoning token budget must be an integer.",
             ));
         };
-        let body = encoded
-            .body
-            .as_object_mut()
-            .ok_or_else(|| pre_dispatch_failure("Protocol request body must be a JSON object."))?;
-        let reasoning = body
+        let reasoning = request_body_mut(encoded, "OpenRouter")?
             .entry(String::from("reasoning"))
-            .or_insert_with(|| json!({}));
-        let reasoning = reasoning.as_object_mut().ok_or_else(|| {
-            pre_dispatch_failure("OpenRouter reasoning projection must be a JSON object.")
-        })?;
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .ok_or_else(|| {
+                pre_dispatch_failure("OpenRouter reasoning projection must be a JSON object.")
+            })?;
         reasoning.insert(String::from("max_tokens"), json!(max_tokens));
     }
-    if route.provider.id == "openrouter"
-        && let Some(effort) = request.reasoning_effort
-    {
-        let body = encoded.body.as_object_mut().ok_or_else(|| {
-            pre_dispatch_failure("OpenRouter request body must be a JSON object.")
-        })?;
+    if let Some(effort) = request.reasoning_effort {
+        let body = request_body_mut(encoded, "OpenRouter")?;
         match route.protocol_route.protocol_profile_id.as_str() {
             vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID => {
                 body.remove("reasoning_effort");
@@ -754,18 +996,15 @@ fn project_provider_request(
         }
         let reasoning = body
             .entry(String::from("reasoning"))
-            .or_insert_with(|| json!({}));
-        let reasoning = reasoning.as_object_mut().ok_or_else(|| {
-            pre_dispatch_failure("OpenRouter reasoning projection must be a JSON object.")
-        })?;
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .ok_or_else(|| {
+                pre_dispatch_failure("OpenRouter reasoning projection must be a JSON object.")
+            })?;
         reasoning.insert(String::from("effort"), json!(effort.as_str()));
     }
-    if route.provider.id == "openrouter"
-        && let SecondaryRouteSelection::PinnedEndpoint { route_id, .. } = &route.secondary_route
-    {
-        let body = encoded.body.as_object_mut().ok_or_else(|| {
-            pre_dispatch_failure("OpenRouter request body must be a JSON object.")
-        })?;
+    if let SecondaryRouteSelection::PinnedEndpoint { route_id, .. } = &route.secondary_route {
+        let body = request_body_mut(encoded, "OpenRouter")?;
         if body.contains_key("provider") {
             return Err(pre_dispatch_failure(
                 "OpenRouter secondary-route projection conflicts with an existing provider field.",
@@ -779,160 +1018,175 @@ fn project_provider_request(
             }),
         );
     }
-    if route.provider.id == "minimax"
-        && route.protocol_route.protocol_profile_id
-            == vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
-        && let Some(effort) = request.reasoning_effort
-    {
-        let thinking_type = match effort {
-            ReasoningEffort::None => "disabled",
-            ReasoningEffort::Adaptive => "adaptive",
-            unsupported => {
-                return Err(pre_dispatch_failure(format!(
-                    "MiniMax Anthropic-compatible thinking does not expose reasoning effort `{}`.",
-                    unsupported.as_str()
-                )));
-            }
-        };
-        let body = encoded
-            .body
-            .as_object_mut()
-            .ok_or_else(|| pre_dispatch_failure("MiniMax request body must be a JSON object."))?;
-        body.remove("output_config");
-        body.insert(String::from("thinking"), json!({ "type": thinking_type }));
+    Ok(())
+}
+
+/// Applies Kimi Coding Plan thinking controls.
+/// 应用 Kimi Coding Plan 思考控制。
+///
+/// # Parameters
+/// 参数
+/// `route`, `request`, and `encoded` are the immutable route, public semantics, and wire request.
+/// `route`、`request` 与 `encoded` 分别是不可变路由、公共语义和 Wire 请求。
+///
+/// # Returns
+/// 返回值
+/// Success for the exact registered Chat projection.
+/// 对精确注册的 Chat 投影返回成功。
+fn project_kimi_request(
+    route: &ProviderExecutionRoute,
+    request: &AiExecutionRequest,
+    encoded: &mut EncodedWireRequest,
+) -> Result<(), ProviderExecutionFailure> {
+    if route.protocol_route.protocol_profile_id != vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID {
+        return Ok(());
     }
-    if route.provider.id == "minimax"
-        && route.protocol_route.protocol_profile_id == vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID
-        && let Some(effort) = request.reasoning_effort
-    {
-        let thinking_type = match effort {
-            ReasoningEffort::None => "disabled",
-            ReasoningEffort::Adaptive => "adaptive",
-            unsupported => {
-                return Err(pre_dispatch_failure(format!(
-                    "MiniMax OpenAI-compatible thinking does not expose reasoning effort `{}`.",
-                    unsupported.as_str()
-                )));
-            }
-        };
-        let body = encoded
-            .body
-            .as_object_mut()
-            .ok_or_else(|| pre_dispatch_failure("MiniMax request body must be a JSON object."))?;
-        body.remove("reasoning_effort");
-        body.insert(String::from("thinking"), json!({ "type": thinking_type }));
-    }
-    if route.provider.id == "kimi"
-        && route.protocol_route.protocol_profile_id == vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID
-    {
-        let force_k27_route = matches!(
-            request.model_id.as_str(),
-            "kimi-for-coding" | "kimi-for-coding-highspeed"
-        );
-        let reasoning_requested = request
-            .reasoning_effort
-            .is_some_and(|effort| effort != ReasoningEffort::None);
-        let body = encoded
-            .body
-            .as_object_mut()
-            .ok_or_else(|| pre_dispatch_failure("Kimi request body must be a JSON object."))?;
-        body.remove("reasoning_effort");
-        if force_k27_route || reasoning_requested {
-            body.insert(String::from("thinking"), json!({ "type": "enabled" }));
-        }
-    }
-    if route.provider.id == "deepseek"
-        && route.protocol_route.protocol_profile_id == vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID
-        && let Some(effort) = request.reasoning_effort
-    {
-        let body = encoded
-            .body
-            .as_object_mut()
-            .ok_or_else(|| pre_dispatch_failure("DeepSeek request body must be a JSON object."))?;
-        match effort {
-            ReasoningEffort::High | ReasoningEffort::Max => {
-                body.insert(String::from("thinking"), json!({ "type": "enabled" }));
-            }
-            unsupported => {
-                return Err(pre_dispatch_failure(format!(
-                    "DeepSeek does not expose reasoning effort `{}`.",
-                    unsupported.as_str()
-                )));
-            }
-        }
-    }
-    if route.provider.id == "deepseek"
-        && route.protocol_route.protocol_profile_id
-            == vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
-        && let Some(effort) = request.reasoning_effort
-    {
-        let effort = match effort {
-            ReasoningEffort::High => "high",
-            ReasoningEffort::Max => "max",
-            unsupported => {
-                return Err(pre_dispatch_failure(format!(
-                    "DeepSeek Anthropic does not expose reasoning effort `{}`.",
-                    unsupported.as_str()
-                )));
-            }
-        };
-        let body = encoded.body.as_object_mut().ok_or_else(|| {
-            pre_dispatch_failure("DeepSeek Anthropic request body must be a JSON object.")
-        })?;
+    let force_coding_model = matches!(
+        request.model_id.as_str(),
+        "kimi-for-coding" | "kimi-for-coding-highspeed"
+    );
+    let reasoning_requested = request
+        .reasoning_effort
+        .is_some_and(|effort| effort != ReasoningEffort::None);
+    let body = request_body_mut(encoded, "Kimi")?;
+    body.remove("reasoning_effort");
+    if force_coding_model || reasoning_requested {
         body.insert(String::from("thinking"), json!({ "type": "enabled" }));
-        body.insert(String::from("output_config"), json!({ "effort": effort }));
     }
-    if route.provider.id == "alibaba"
-        && let Some(effort) = request.reasoning_effort
-    {
-        let enabled = match effort {
-            ReasoningEffort::None => false,
-            ReasoningEffort::Adaptive => true,
-            unsupported => {
-                return Err(pre_dispatch_failure(format!(
-                    "Alibaba compatible routes do not expose reasoning effort `{}`.",
-                    unsupported.as_str()
-                )));
-            }
-        };
-        let body = encoded
-            .body
-            .as_object_mut()
-            .ok_or_else(|| pre_dispatch_failure("Alibaba request body must be a JSON object."))?;
-        match route.protocol_route.protocol_profile_id.as_str() {
-            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID => {
-                body.remove("reasoning_effort");
-                body.insert(String::from("enable_thinking"), Value::Bool(enabled));
-            }
-            vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID => {
-                body.remove("output_config");
-                body.insert(
-                    String::from("thinking"),
-                    json!({ "type": if enabled { "enabled" } else { "disabled" } }),
-                );
-            }
-            protocol_id => {
-                return Err(pre_dispatch_failure(format!(
-                    "Alibaba reasoning projection is not registered for protocol `{protocol_id}`."
-                )));
+    Ok(())
+}
+
+/// Applies DeepSeek protocol-specific reasoning controls.
+/// 应用 DeepSeek 协议专属思考控制。
+///
+/// # Parameters
+/// 参数
+/// `route`, `request`, and `encoded` are the frozen route, public request, and wire request.
+/// `route`、`request` 与 `encoded` 是冻结路由、公共请求与 Wire 请求。
+///
+/// # Returns
+/// 返回值
+/// Success for one exact documented effort mapping.
+/// 对一个精确文档化档位映射返回成功。
+fn project_deepseek_request(
+    route: &ProviderExecutionRoute,
+    request: &AiExecutionRequest,
+    encoded: &mut EncodedWireRequest,
+) -> Result<(), ProviderExecutionFailure> {
+    let Some(effort) = request.reasoning_effort else {
+        return Ok(());
+    };
+    match route.protocol_route.protocol_profile_id.as_str() {
+        vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID => {
+            let body = request_body_mut(encoded, "DeepSeek")?;
+            match effort {
+                ReasoningEffort::High | ReasoningEffort::Max => {
+                    body.insert(String::from("thinking"), json!({ "type": "enabled" }));
+                }
+                unsupported => {
+                    return Err(pre_dispatch_failure(format!(
+                        "DeepSeek does not expose reasoning effort `{}`.",
+                        unsupported.as_str()
+                    )));
+                }
             }
         }
-    }
-    if route.provider.id == "minimax" {
-        let body_size = serde_json::to_vec(&encoded.body)
-            .map_err(|error| {
-                pre_dispatch_failure(format!(
-                    "MiniMax request body could not be measured before dispatch: {error}"
-                ))
-            })?
-            .len();
-        if body_size > MINIMAX_REQUEST_BODY_BYTE_LIMIT {
+        vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID => {
+            let effort = match effort {
+                ReasoningEffort::High => "high",
+                ReasoningEffort::Max => "max",
+                unsupported => {
+                    return Err(pre_dispatch_failure(format!(
+                        "DeepSeek Anthropic does not expose reasoning effort `{}`.",
+                        unsupported.as_str()
+                    )));
+                }
+            };
+            let body = request_body_mut(encoded, "DeepSeek Anthropic")?;
+            body.insert(String::from("thinking"), json!({ "type": "enabled" }));
+            body.insert(String::from("output_config"), json!({ "effort": effort }));
+        }
+        protocol_id => {
             return Err(pre_dispatch_failure(format!(
-                "MiniMax request body is {body_size} bytes and exceeds the documented {MINIMAX_REQUEST_BODY_BYTE_LIMIT}-byte limit."
+                "DeepSeek reasoning projection is not registered for protocol `{protocol_id}`."
             )));
         }
     }
-    Ok(encoded)
+    Ok(())
+}
+
+/// Applies Alibaba protocol-specific thinking controls.
+/// 应用阿里云协议专属思考控制。
+///
+/// # Parameters
+/// 参数
+/// `route`, `request`, and `encoded` are the frozen route, public request, and wire request.
+/// `route`、`request` 与 `encoded` 是冻结路由、公共请求与 Wire 请求。
+///
+/// # Returns
+/// 返回值
+/// Success for disabled or adaptive provider thinking.
+/// 对关闭或供应商自适应思考返回成功。
+fn project_alibaba_request(
+    route: &ProviderExecutionRoute,
+    request: &AiExecutionRequest,
+    encoded: &mut EncodedWireRequest,
+) -> Result<(), ProviderExecutionFailure> {
+    let Some(effort) = request.reasoning_effort else {
+        return Ok(());
+    };
+    let enabled = match effort {
+        ReasoningEffort::None => false,
+        ReasoningEffort::Adaptive => true,
+        unsupported => {
+            return Err(pre_dispatch_failure(format!(
+                "Alibaba compatible routes do not expose reasoning effort `{}`.",
+                unsupported.as_str()
+            )));
+        }
+    };
+    let body = request_body_mut(encoded, "Alibaba")?;
+    match route.protocol_route.protocol_profile_id.as_str() {
+        vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID => {
+            body.remove("reasoning_effort");
+            body.insert(String::from("enable_thinking"), Value::Bool(enabled));
+        }
+        vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID => {
+            body.remove("output_config");
+            body.insert(
+                String::from("thinking"),
+                json!({ "type": if enabled { "enabled" } else { "disabled" } }),
+            );
+        }
+        protocol_id => {
+            return Err(pre_dispatch_failure(format!(
+                "Alibaba reasoning projection is not registered for protocol `{protocol_id}`."
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Borrows one encoded request body as a JSON object with a provider-specific diagnostic.
+/// 以供应商专属诊断把编码请求体借用为 JSON 对象。
+///
+/// # Parameters
+/// 参数
+/// `encoded` is the mutable wire request and `label` identifies its projector.
+/// `encoded` 是可变 Wire 请求，`label` 标识其投影器。
+///
+/// # Returns
+/// 返回值
+/// The mutable JSON object, or a controlled pre-dispatch failure.
+/// 返回可变 JSON 对象，或受控分派前失败。
+fn request_body_mut<'a>(
+    encoded: &'a mut EncodedWireRequest,
+    label: &str,
+) -> Result<&'a mut serde_json::Map<String, Value>, ProviderExecutionFailure> {
+    encoded
+        .body
+        .as_object_mut()
+        .ok_or_else(|| pre_dispatch_failure(format!("{label} request body must be a JSON object.")))
 }
 
 /// Applies credential-bound non-secret identity fields immediately before dispatch.
@@ -1218,90 +1472,319 @@ fn execution_headers(
     Ok(headers)
 }
 
-/// One parsed SSE event and data record.
-/// 一条解析后的 SSE event 与 data 记录。
+/// One parsed transport frame and its optional SSE event name.
+/// 一条解析后的传输帧及其可选 SSE 事件名称。
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SseFrame {
+struct StreamFrame {
     /// Optional event name.
     /// 可选事件名称。
     event_name: Option<String>,
-    /// Joined data lines.
-    /// 合并后的数据行。
+    /// Complete frame data.
+    /// 完整帧数据。
     data: String,
 }
 
-/// Incrementally frames arbitrary byte chunks as complete SSE records.
-/// 将任意字节分片增量组装为完整 SSE 记录。
-#[derive(Debug, Default)]
-struct SseFrameParser {
+/// Incrementally frames arbitrary chunks with bounded retained memory.
+/// 使用有界保留内存对任意分片进行增量分帧。
+#[derive(Debug)]
+struct IncrementalFrameParser {
+    /// Registered framing dialect.
+    /// 已注册的分帧方言。
+    framing: ProtocolStreamFraming,
+    /// Maximum complete frame size.
+    /// 完整帧最大尺寸。
+    max_frame_bytes: usize,
+    /// Maximum unconsumed buffer size.
+    /// 未消费缓冲区最大尺寸。
+    max_buffer_bytes: usize,
     /// Unprocessed bytes retained across transport chunks.
     /// 在传输分片间保留的未处理字节。
     buffer: Vec<u8>,
+    /// First unconsumed byte.
+    /// 首个未消费字节位置。
+    consumed: usize,
 }
 
-impl SseFrameParser {
+impl IncrementalFrameParser {
+    /// Creates a bounded parser from one immutable transport profile.
+    /// 根据一个不可变传输 Profile 创建有界解析器。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `profile` provides the exact framing and byte limits.
+    /// `profile` 提供精确分帧方式与字节上限。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A new empty parser.
+    /// 返回一个新的空解析器。
+    fn new(profile: ProtocolTransportProfile) -> Self {
+        Self {
+            framing: profile.framing,
+            max_frame_bytes: profile.max_frame_bytes,
+            max_buffer_bytes: profile.max_buffer_bytes,
+            buffer: Vec::new(),
+            consumed: 0,
+        }
+    }
+
     /// Pushes arbitrary transport bytes.
     /// 推入任意传输字节。
-    fn push(&mut self, chunk: &[u8]) -> Result<Vec<SseFrame>, ProviderExecutionFailure> {
-        self.buffer.extend_from_slice(chunk);
-        self.drain_frames(false)
+    ///
+    /// # Parameters
+    /// 参数
+    /// `chunk` is one arbitrary network byte chunk.
+    /// `chunk` 是一个任意网络字节分片。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Complete frames, or a deterministic framing limit/encoding error.
+    /// 返回完整帧，或确定性的分帧上限/编码错误。
+    fn push(&mut self, mut chunk: &[u8]) -> Result<Vec<StreamFrame>, ProtocolConversionError> {
+        let mut frames = Vec::new();
+        while !chunk.is_empty() {
+            self.compact_if_worthwhile();
+            let retained = self.retained_len();
+            if retained >= self.max_buffer_bytes {
+                return Err(self.buffer_limit_error());
+            }
+            let capacity = self.max_buffer_bytes - retained;
+            let take = capacity.min(chunk.len());
+            self.buffer.extend_from_slice(&chunk[..take]);
+            chunk = &chunk[take..];
+            frames.extend(self.drain_frames(false)?);
+            if self.retained_len() >= self.max_buffer_bytes && !chunk.is_empty() {
+                return Err(self.buffer_limit_error());
+            }
+        }
+        Ok(frames)
     }
 
     /// Finishes framing and includes a final non-empty record.
     /// 完成分帧并包含最后一条非空记录。
-    fn finish(&mut self) -> Result<Vec<SseFrame>, ProviderExecutionFailure> {
+    ///
+    /// # Returns
+    /// 返回值
+    /// Final complete frames, or a deterministic truncation/encoding error.
+    /// 返回最终完整帧，或确定性的截断/编码错误。
+    fn finish(&mut self) -> Result<Vec<StreamFrame>, ProtocolConversionError> {
         self.drain_frames(true)
     }
 
     /// Drains complete records from the internal byte buffer.
     /// 从内部字节缓冲区提取完整记录。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `include_tail` controls whether the final unterminated record is accepted.
+    /// `include_tail` 控制是否接受最后一条未带分隔符的记录。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Complete frames in transport order.
+    /// 返回按传输顺序排列的完整帧。
     fn drain_frames(
         &mut self,
         include_tail: bool,
-    ) -> Result<Vec<SseFrame>, ProviderExecutionFailure> {
+    ) -> Result<Vec<StreamFrame>, ProtocolConversionError> {
         let mut frames = Vec::new();
-        while let Some((record_end, delimiter_len)) = find_sse_record_end(&self.buffer) {
-            let record = self.buffer[..record_end].to_vec();
-            self.buffer.drain(..record_end + delimiter_len);
-            if let Some(frame) = parse_sse_record(&record)? {
+        while let Some((record_end, delimiter_len)) = find_record_end(self.framing, self.retained())
+        {
+            self.validate_frame_size(record_end)?;
+            let start = self.consumed;
+            let end = start + record_end;
+            let record = &self.buffer[start..end];
+            if let Some(frame) = parse_stream_record(self.framing, record)? {
                 frames.push(frame);
             }
+            self.consumed = end + delimiter_len;
         }
-        if include_tail && !self.buffer.is_empty() {
-            let record = std::mem::take(&mut self.buffer);
-            if let Some(frame) = parse_sse_record(&record)? {
+        if include_tail && self.retained_len() > 0 {
+            let record_len = self.retained_len();
+            self.validate_frame_size(record_len)?;
+            let record = self.retained();
+            if let Some(frame) = parse_stream_record(self.framing, record)? {
                 frames.push(frame);
             }
+            self.consumed = self.buffer.len();
         }
+        self.compact_if_worthwhile();
         Ok(frames)
+    }
+
+    /// Returns the unconsumed suffix.
+    /// 返回未消费的后缀。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Borrowed pending bytes.
+    /// 返回借用的待处理字节。
+    fn retained(&self) -> &[u8] {
+        &self.buffer[self.consumed..]
+    }
+
+    /// Returns the number of unconsumed bytes.
+    /// 返回未消费字节数。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Pending byte count.
+    /// 返回待处理字节数。
+    fn retained_len(&self) -> usize {
+        self.buffer.len().saturating_sub(self.consumed)
+    }
+
+    /// Compacts only after consumed storage is materially large.
+    /// 仅在已消费存储达到显著规模后执行压缩。
+    fn compact_if_worthwhile(&mut self) {
+        if self.consumed == self.buffer.len() {
+            self.buffer.clear();
+            self.consumed = 0;
+        } else if self.consumed >= 64 * 1024 && self.consumed >= self.buffer.len() / 2 {
+            self.buffer.copy_within(self.consumed.., 0);
+            self.buffer.truncate(self.buffer.len() - self.consumed);
+            self.consumed = 0;
+        }
+    }
+
+    /// Rejects one oversized complete or pending frame.
+    /// 拒绝一个过大的完整帧或待处理帧。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `frame_bytes` is the exact candidate frame size.
+    /// `frame_bytes` 是候选帧的精确尺寸。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success within the profile limit, otherwise a controlled error.
+    /// 在 Profile 上限内返回成功，否则返回受控错误。
+    fn validate_frame_size(&self, frame_bytes: usize) -> Result<(), ProtocolConversionError> {
+        if frame_bytes <= self.max_frame_bytes {
+            return Ok(());
+        }
+        Err(ProtocolConversionError::new(format!(
+            "Provider stream frame exceeded the registered {} byte limit.",
+            self.max_frame_bytes
+        )))
+    }
+
+    /// Builds one controlled pending-buffer limit error.
+    /// 构建一个受控的待处理缓冲区上限错误。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A deterministic protocol conversion failure.
+    /// 返回确定性的协议转换失败。
+    fn buffer_limit_error(&self) -> ProtocolConversionError {
+        ProtocolConversionError::new(format!(
+            "Provider stream buffer exceeded the registered {} byte limit.",
+            self.max_buffer_bytes
+        ))
     }
 }
 
-/// Finds the first SSE blank-line delimiter.
-/// 查找第一个 SSE 空行分隔符。
-fn find_sse_record_end(buffer: &[u8]) -> Option<(usize, usize)> {
-    for index in 0..buffer.len() {
-        if buffer.get(index..index + 2) == Some(b"\n\n") {
-            return Some((index, 2));
+/// Finds the first complete delimiter for one registered framing dialect.
+/// 查找一种已注册分帧方言的首个完整分隔符。
+///
+/// # Parameters
+/// 参数
+/// `framing` is the exact dialect and `buffer` is the unconsumed suffix.
+/// `framing` 是精确方言，`buffer` 是未消费后缀。
+///
+/// # Returns
+/// 返回值
+/// Record-end offset and delimiter length, or `None`.
+/// 返回记录结束偏移与分隔符长度，否则返回 `None`。
+fn find_record_end(framing: ProtocolStreamFraming, buffer: &[u8]) -> Option<(usize, usize)> {
+    match framing {
+        ProtocolStreamFraming::Sse => {
+            for index in 0..buffer.len() {
+                let Some(first_len) = sse_line_ending_len(buffer, index) else {
+                    continue;
+                };
+                let second_start = index + first_len;
+                if let Some(second_len) = sse_line_ending_len(buffer, second_start) {
+                    return Some((index, first_len + second_len));
+                }
+            }
+            None
         }
-        if buffer.get(index..index + 4) == Some(b"\r\n\r\n") {
-            return Some((index, 4));
-        }
+        ProtocolStreamFraming::JsonLines | ProtocolStreamFraming::Ndjson => buffer
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map(|index| (index, 1)),
+        ProtocolStreamFraming::SingleJson => None,
     }
-    None
+}
+
+/// Returns the byte length of one SSE line ending at an exact offset.
+/// 返回精确偏移处一项 SSE 行结束符的字节长度。
+///
+/// # Parameters
+/// 参数
+/// `buffer` is the pending transport data and `index` is the candidate line-ending offset.
+/// `buffer` 是待处理传输数据，`index` 是候选行结束符偏移。
+///
+/// # Returns
+/// 返回值
+/// Two bytes for CRLF, one byte for CR or LF, otherwise `None`.
+/// CRLF 返回两个字节，CR 或 LF 返回一个字节，否则返回 `None`。
+fn sse_line_ending_len(buffer: &[u8], index: usize) -> Option<usize> {
+    match buffer.get(index) {
+        Some(b'\r') if buffer.get(index + 1) == Some(&b'\n') => Some(2),
+        Some(b'\r' | b'\n') => Some(1),
+        _ => None,
+    }
+}
+
+/// Parses one complete record according to its registered framing.
+/// 根据已注册分帧方式解析一条完整记录。
+///
+/// # Parameters
+/// 参数
+/// `framing` is the exact dialect and `record` contains one complete frame.
+/// `framing` 是精确方言，`record` 包含一个完整帧。
+///
+/// # Returns
+/// 返回值
+/// A decoded frame, no frame for heartbeat/blank records, or a controlled error.
+/// 返回解码帧；心跳/空记录返回空；编码错误返回受控错误。
+fn parse_stream_record(
+    framing: ProtocolStreamFraming,
+    record: &[u8],
+) -> Result<Option<StreamFrame>, ProtocolConversionError> {
+    match framing {
+        ProtocolStreamFraming::Sse => parse_sse_record(record),
+        ProtocolStreamFraming::JsonLines | ProtocolStreamFraming::Ndjson => {
+            parse_json_line_record(record)
+        }
+        ProtocolStreamFraming::SingleJson => parse_single_json_record(record),
+    }
 }
 
 /// Parses one complete SSE record.
 /// 解析一条完整 SSE 记录。
-fn parse_sse_record(record: &[u8]) -> Result<Option<SseFrame>, ProviderExecutionFailure> {
+///
+/// # Parameters
+/// 参数
+/// `record` contains one complete SSE record without its blank-line delimiter.
+/// `record` 包含一条不带空行分隔符的完整 SSE 记录。
+///
+/// # Returns
+/// 返回值
+/// A semantic data frame, no frame for comments, or a controlled UTF-8 error.
+/// 返回语义数据帧；注释返回空；UTF-8 错误返回受控错误。
+fn parse_sse_record(record: &[u8]) -> Result<Option<StreamFrame>, ProtocolConversionError> {
     let text = std::str::from_utf8(record).map_err(|error| {
-        protocol_failure(ProtocolConversionError::new(format!(
-            "Provider SSE record is not valid UTF-8: {error}"
-        )))
+        ProtocolConversionError::new(format!("Provider SSE record is not valid UTF-8: {error}"))
     })?;
     let mut event_name = None;
     let mut data_lines = Vec::new();
-    for line in text.lines() {
+    // SSE permits CR, LF, and CRLF independently, so normalize all three before field parsing.
+    // SSE 独立允许 CR、LF 与 CRLF，因此在字段解析前统一三种换行。
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    for line in normalized.lines() {
         if line.starts_with(':') || line.is_empty() {
             continue;
         }
@@ -1314,9 +1797,69 @@ fn parse_sse_record(record: &[u8]) -> Result<Option<SseFrame>, ProviderExecution
     if data_lines.is_empty() {
         return Ok(None);
     }
-    Ok(Some(SseFrame {
+    Ok(Some(StreamFrame {
         event_name,
         data: data_lines.join("\n"),
+    }))
+}
+
+/// Parses one JSONL or NDJSON record.
+/// 解析一条 JSONL 或 NDJSON 记录。
+///
+/// # Parameters
+/// 参数
+/// `record` is one line without its LF delimiter.
+/// `record` 是不带 LF 分隔符的一行。
+///
+/// # Returns
+/// 返回值
+/// A trimmed JSON frame, no frame for a blank line, or a controlled UTF-8 error.
+/// 返回去除首尾空白的 JSON 帧；空行返回空；UTF-8 错误返回受控错误。
+fn parse_json_line_record(record: &[u8]) -> Result<Option<StreamFrame>, ProtocolConversionError> {
+    let text = std::str::from_utf8(record).map_err(|error| {
+        ProtocolConversionError::new(format!("Provider JSON line is not valid UTF-8: {error}"))
+    })?;
+    let data = text.trim_end_matches('\r').trim();
+    if data.is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str::<Value>(data).map_err(|error| {
+        ProtocolConversionError::new(format!("Provider JSON line is invalid: {error}"))
+    })?;
+    Ok(Some(StreamFrame {
+        event_name: None,
+        data: data.to_string(),
+    }))
+}
+
+/// Parses one complete single-JSON response.
+/// 解析一份完整的单 JSON 响应。
+///
+/// # Parameters
+/// 参数
+/// `record` is the complete response body.
+/// `record` 是完整响应体。
+///
+/// # Returns
+/// 返回值
+/// A validated JSON frame, no frame for an empty body, or a controlled error.
+/// 返回已校验 JSON 帧；空响应体返回空；错误返回受控结果。
+fn parse_single_json_record(record: &[u8]) -> Result<Option<StreamFrame>, ProtocolConversionError> {
+    let text = std::str::from_utf8(record).map_err(|error| {
+        ProtocolConversionError::new(format!(
+            "Provider JSON response is not valid UTF-8: {error}"
+        ))
+    })?;
+    let data = text.trim();
+    if data.is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str::<Value>(data).map_err(|error| {
+        ProtocolConversionError::new(format!("Provider JSON response is invalid: {error}"))
+    })?;
+    Ok(Some(StreamFrame {
+        event_name: None,
+        data: data.to_string(),
     }))
 }
 
@@ -1340,12 +1883,20 @@ fn pre_dispatch_failure(message: impl Into<String>) -> ProviderExecutionFailure 
             stage: String::from("prepare"),
             http_status: None,
             upstream_code: None,
+            upstream_type: None,
+            upstream_parameter: None,
+            upstream_message: None,
+            request_id: None,
+            provider_id: None,
+            entry_id: None,
+            model_id: None,
             message: message.into(),
             dispatch_outcome: DispatchOutcome::NotDispatched,
             semantic_output_observed: false,
+            side_effect_observed: false,
             terminal: true,
             retryable: false,
-            retry_after_seconds: None,
+            retry_after: None,
         }),
     }
 }
@@ -1360,12 +1911,63 @@ fn protocol_failure(error: ProtocolConversionError) -> ProviderExecutionFailure 
             stage: String::from("protocol"),
             http_status: None,
             upstream_code: None,
+            upstream_type: None,
+            upstream_parameter: None,
+            upstream_message: None,
+            request_id: None,
+            provider_id: None,
+            entry_id: None,
+            model_id: None,
             message: error.message,
             dispatch_outcome: DispatchOutcome::NotDispatched,
             semantic_output_observed: false,
+            side_effect_observed: false,
             terminal: true,
             retryable: false,
-            retry_after_seconds: None,
+            retry_after: None,
+        }),
+    }
+}
+
+/// Converts one protocol failure observed after the upstream request was dispatched.
+/// 转换一项在上游请求已经分派后观察到的协议失败。
+///
+/// # Parameters
+/// 参数
+/// `error` is the decoder or lifecycle failure and `semantic_output_observed` records whether
+/// user-visible or tool-visible semantic output was already emitted.
+/// `error` 是解码器或生命周期失败，`semantic_output_observed` 记录是否已经发出
+/// 用户可见或工具可见的语义输出。
+///
+/// # Returns
+/// 返回值
+/// A terminal, non-retryable protocol failure with exact dispatch state.
+/// 返回携带精确分派状态的终态、不可重试协议失败。
+fn stream_protocol_failure(
+    error: ProtocolConversionError,
+    semantic_output_observed: bool,
+) -> ProviderExecutionFailure {
+    ProviderExecutionFailure {
+        error: Box::new(AiExecutionError {
+            category: AiErrorCategory::InvalidRequest,
+            subcategory: Some(String::from("protocol_conversion")),
+            stage: String::from("response_stream"),
+            http_status: None,
+            upstream_code: None,
+            upstream_type: None,
+            upstream_parameter: None,
+            upstream_message: None,
+            request_id: None,
+            provider_id: None,
+            entry_id: None,
+            model_id: None,
+            message: error.message,
+            dispatch_outcome: DispatchOutcome::Dispatched,
+            semantic_output_observed,
+            side_effect_observed: false,
+            terminal: true,
+            retryable: false,
+            retry_after: None,
         }),
     }
 }
@@ -1380,21 +1982,269 @@ fn transport_failure(message: impl Into<String>) -> ProviderExecutionFailure {
             stage: String::from("transport"),
             http_status: None,
             upstream_code: None,
+            upstream_type: None,
+            upstream_parameter: None,
+            upstream_message: None,
+            request_id: None,
+            provider_id: None,
+            entry_id: None,
+            model_id: None,
             message: message.into(),
             dispatch_outcome: DispatchOutcome::Unknown,
             semantic_output_observed: false,
+            side_effect_observed: false,
             terminal: true,
             retryable: true,
-            retry_after_seconds: None,
+            retry_after: None,
         }),
     }
+}
+
+/// Creates one transport failure after response dispatch while preserving semantic-output safety.
+/// 创建一项响应分派后的传输失败，并保留语义输出安全状态。
+///
+/// # Parameters
+/// 参数
+/// `message` is the controlled transport diagnostic and `semantic_output_observed` records
+/// whether transparent replay would duplicate visible semantics.
+/// `message` 是受控传输诊断，`semantic_output_observed` 记录透明重放是否会重复可见语义。
+///
+/// # Returns
+/// 返回值
+/// A structured transport failure retryable only before semantic output.
+/// 返回仅在语义输出前可重试的结构化传输失败。
+fn stream_transport_failure(
+    message: impl Into<String>,
+    semantic_output_observed: bool,
+) -> ProviderExecutionFailure {
+    ProviderExecutionFailure {
+        error: Box::new(AiExecutionError {
+            category: AiErrorCategory::ProviderUnavailable,
+            subcategory: Some(String::from("transport")),
+            stage: String::from("response_stream"),
+            http_status: None,
+            upstream_code: None,
+            upstream_type: None,
+            upstream_parameter: None,
+            upstream_message: None,
+            request_id: None,
+            provider_id: None,
+            entry_id: None,
+            model_id: None,
+            message: message.into(),
+            dispatch_outcome: DispatchOutcome::Dispatched,
+            semantic_output_observed,
+            side_effect_observed: false,
+            terminal: true,
+            retryable: !semantic_output_observed,
+            retry_after: None,
+        }),
+    }
+}
+
+/// Validates a successful response content type against the immutable protocol profile.
+/// 根据不可变协议 Profile 校验成功响应的内容类型。
+///
+/// # Parameters
+/// 参数
+/// `headers` are the exact upstream headers, `profile` is the registered transport declaration,
+/// and `url` is used only in the controlled diagnostic.
+/// `headers` 是精确上游响应头，`profile` 是已注册传输声明，`url` 仅用于受控诊断。
+///
+/// # Returns
+/// 返回值
+/// Success for an exact accepted media type, otherwise a dispatched protocol failure.
+/// 精确匹配允许媒体类型时返回成功，否则返回已分派协议失败。
+fn validate_response_content_type(
+    headers: &HeaderMap,
+    profile: &ProtocolTransportProfile,
+    url: &str,
+) -> Result<(), ProviderExecutionFailure> {
+    let value = headers
+        .get(reqwest::header::CONTENT_TYPE)
+        .ok_or_else(|| {
+            response_headers_protocol_failure(format!(
+                "Provider response from `{url}` omitted the required Content-Type header."
+            ))
+        })?
+        .to_str()
+        .map_err(|_| {
+            response_headers_protocol_failure(format!(
+                "Provider response from `{url}` contained a non-ASCII Content-Type header."
+            ))
+        })?;
+    let media_type = value.split(';').next().map(str::trim).unwrap_or_default();
+    if profile
+        .accepted_response_content_types
+        .iter()
+        .any(|accepted| media_type.eq_ignore_ascii_case(accepted))
+    {
+        return Ok(());
+    }
+    Err(response_headers_protocol_failure(format!(
+        "Provider response from `{url}` used unregistered Content-Type `{media_type}`; expected one of [{}].",
+        profile.accepted_response_content_types.join(", ")
+    )))
+}
+
+/// Creates a dispatched protocol failure for invalid successful response headers.
+/// 为无效的成功响应头创建已分派协议失败。
+///
+/// # Parameters
+/// 参数
+/// `message` is the controlled diagnostic.
+/// `message` 是受控诊断。
+///
+/// # Returns
+/// 返回值
+/// A terminal non-retryable protocol failure.
+/// 返回终结且不可重试的协议失败。
+fn response_headers_protocol_failure(message: impl Into<String>) -> ProviderExecutionFailure {
+    ProviderExecutionFailure {
+        error: Box::new(AiExecutionError {
+            category: AiErrorCategory::InvalidRequest,
+            subcategory: Some(String::from("response_content_type")),
+            stage: String::from("response_headers"),
+            http_status: Some(200),
+            upstream_code: None,
+            upstream_type: None,
+            upstream_parameter: None,
+            upstream_message: None,
+            request_id: None,
+            provider_id: None,
+            entry_id: None,
+            model_id: None,
+            message: message.into(),
+            dispatch_outcome: DispatchOutcome::Dispatched,
+            semantic_output_observed: false,
+            side_effect_observed: false,
+            terminal: true,
+            retryable: false,
+            retry_after: None,
+        }),
+    }
+}
+
+/// Reads a non-success response body without exceeding the registered memory limit.
+/// 在不超过已注册内存上限的情况下读取非成功响应体。
+///
+/// # Parameters
+/// 参数
+/// `response` is the exact response, `max_bytes` is the profile limit, `url` is diagnostic
+/// context, and `status` plus `retry_after` preserve typed retry semantics on overflow.
+/// `response` 是精确响应，`max_bytes` 是 Profile 上限，`url` 是诊断上下文，
+/// `status` 与 `retry_after` 在溢出时保留强类型重试语义。
+///
+/// # Returns
+/// 返回值
+/// The complete UTF-8-lossy body within the limit, or a structured failure.
+/// 返回上限内完整的 UTF-8 宽容解码正文，或结构化失败。
+async fn read_bounded_response_text(
+    response: reqwest::Response,
+    max_bytes: usize,
+    url: &str,
+    status: u16,
+    retry_after: Option<RetryAfterHint>,
+) -> Result<String, ProviderExecutionFailure> {
+    let mut bytes = response.bytes_stream();
+    let mut body = Vec::new();
+    while let Some(chunk) = bytes.next().await {
+        let chunk = chunk.map_err(|error| {
+            stream_transport_failure(
+                format!("Provider error response from `{url}` could not be read: {error}"),
+                false,
+            )
+        })?;
+        if body.len().saturating_add(chunk.len()) > max_bytes {
+            let mut failure = http_failure(status, retry_after, "");
+            failure.error.subcategory = Some(String::from("error_body_too_large"));
+            failure.error.stage = String::from("error_response_body");
+            failure.error.message = format!(
+                "Provider error response from `{url}` exceeded the registered {max_bytes} byte limit."
+            );
+            return Err(failure);
+        }
+        body.extend_from_slice(chunk.as_ref());
+    }
+    Ok(String::from_utf8_lossy(body.as_slice()).into_owned())
+}
+
+/// Parses the standard Retry-After header without discarding fractional precision or provenance.
+/// 解析标准 Retry-After 响应头，且不丢弃小数精度或来源。
+///
+/// # Parameters
+/// 参数
+/// `headers` is the exact upstream response header map and `now` is the comparison instant for
+/// HTTP-date values.
+/// `headers` 是精确上游响应头集合，`now` 是 HTTP 日期值使用的比较时刻。
+///
+/// # Returns
+/// 返回值
+/// A normalized retry hint for valid seconds, fractional seconds, or HTTP dates.
+/// 对合法秒数、小数秒或 HTTP 日期返回归一化重试提示。
+fn parse_retry_after_headers(headers: &HeaderMap, now: SystemTime) -> Option<RetryAfterHint> {
+    let value = headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim();
+    if let Some(delay_milliseconds) = parse_decimal_seconds_milliseconds(value) {
+        return Some(RetryAfterHint {
+            delay_milliseconds,
+            source: RetryAfterSource::HeaderSeconds,
+        });
+    }
+    let retry_at = httpdate::parse_http_date(value).ok()?;
+    let delay_milliseconds = retry_at
+        .duration_since(now)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX);
+    Some(RetryAfterHint {
+        delay_milliseconds,
+        source: RetryAfterSource::HeaderHttpDate,
+    })
+}
+
+/// Converts a non-negative decimal seconds string into milliseconds without floating-point rounding.
+/// 将非负十进制秒数字符串转换为毫秒，且不进行浮点舍入。
+///
+/// # Parameters
+/// 参数
+/// `value` is the trimmed Retry-After header value.
+/// `value` 是去除首尾空白后的 Retry-After 响应头值。
+///
+/// # Returns
+/// 返回值
+/// Exact milliseconds rounded up to the next millisecond for sub-millisecond fractions.
+/// 对亚毫秒小数向上取整后的精确毫秒数。
+fn parse_decimal_seconds_milliseconds(value: &str) -> Option<u64> {
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    if whole.is_empty()
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let whole_milliseconds = whole.parse::<u64>().ok()?.checked_mul(1_000)?;
+    if fraction.is_empty() {
+        return Some(whole_milliseconds);
+    }
+    let mut digits = fraction.bytes();
+    let hundreds = u64::from(digits.next().unwrap_or(b'0') - b'0');
+    let tens = u64::from(digits.next().unwrap_or(b'0') - b'0');
+    let ones = u64::from(digits.next().unwrap_or(b'0') - b'0');
+    let rounded_fraction =
+        hundreds * 100 + tens * 10 + ones + u64::from(digits.any(|digit| digit != b'0'));
+    whole_milliseconds.checked_add(rounded_fraction)
 }
 
 /// Converts one non-success HTTP response.
 /// 转换一个非成功 HTTP 响应。
 fn http_failure(
     status: u16,
-    retry_after_seconds: Option<u64>,
+    retry_after: Option<RetryAfterHint>,
     body: &str,
 ) -> ProviderExecutionFailure {
     let parsed = serde_json::from_str::<Value>(body).ok();
@@ -1463,6 +2313,28 @@ fn http_failure(
             stage: String::from("response_headers"),
             http_status: Some(status),
             upstream_code,
+            upstream_type: error_type.map(str::to_string),
+            upstream_parameter: error
+                .and_then(|value| value.get("param").and_then(Value::as_str))
+                .map(str::to_string),
+            upstream_message: error
+                .and_then(|value| value.get("message").and_then(Value::as_str))
+                .map(str::to_string),
+            request_id: parsed.as_ref().and_then(|value| {
+                value
+                    .get("request_id")
+                    .and_then(Value::as_str)
+                    .or_else(|| value.pointer("/error/request_id").and_then(Value::as_str))
+                    .map(str::to_string)
+            }),
+            provider_id: None,
+            entry_id: None,
+            model_id: parsed.as_ref().and_then(|value| {
+                value
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }),
             message: error
                 .and_then(|value| value.get("message").and_then(Value::as_str))
                 .unwrap_or(if body.is_empty() {
@@ -1475,6 +2347,7 @@ fn http_failure(
                 .collect(),
             dispatch_outcome: DispatchOutcome::Dispatched,
             semantic_output_observed: false,
+            side_effect_observed: false,
             terminal: true,
             retryable: matches!(
                 category,
@@ -1483,7 +2356,7 @@ fn http_failure(
                     | AiErrorCategory::ProviderUnavailable
                     | AiErrorCategory::Timeout
             ),
-            retry_after_seconds,
+            retry_after,
         }),
     }
 }
@@ -1496,6 +2369,7 @@ mod tests {
         providers::{kimi_descriptor, minimax_descriptor, openrouter_descriptor},
     };
     use std::collections::{BTreeMap, BTreeSet};
+    use std::time::Duration;
     use vulcan_ai_contract::{AiMessage, AiOperation, ContentItem, MessageRole};
     use vulcan_ai_protocols::{
         ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
@@ -1508,6 +2382,7 @@ mod tests {
             operation: AiOperation::ConversationRespond,
             model_id: String::from("openai/gpt-4.1"),
             cache_scope_id: None,
+            continuation: None,
             messages: vec![AiMessage {
                 role: MessageRole::User,
                 content: vec![ContentItem::Text {
@@ -1516,8 +2391,13 @@ mod tests {
             }],
             tools: Vec::new(),
             native_tools: Vec::new(),
+            tool_choice: Default::default(),
+            parallel_tool_calls: Default::default(),
+            structured_output: Default::default(),
+            stop_sequences: Vec::new(),
             prompt_cache: PromptCachePolicy::ProviderDefault,
             reasoning_effort: None,
+            reasoning_output: Default::default(),
             model_parameters: BTreeMap::new(),
             resources: Vec::new(),
             output_token_limit: Some(512),
@@ -1656,7 +2536,7 @@ mod tests {
             .position(|window| window == "你".as_bytes())
             .expect("UTF-8 text must exist")
             + 1;
-        let mut parser = SseFrameParser::default();
+        let mut parser = IncrementalFrameParser::new(ProtocolTransportProfile::bounded_sse());
         assert!(
             parser
                 .push(&bytes[..split])
@@ -1669,6 +2549,170 @@ mod tests {
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].event_name.as_deref(), Some("delta"));
         assert!(frames[0].data.contains("你好"));
+    }
+
+    /// Verifies SSE framing accepts CR-only and mixed line endings permitted by the event-stream grammar.
+    /// 验证 SSE 分帧接受事件流语法允许的单 CR 与混合行结束符。
+    #[test]
+    fn sse_parser_accepts_cr_only_and_mixed_line_endings() {
+        for bytes in [
+            b"event: delta\rdata: {\"one\":1}\r\r".as_slice(),
+            b"event: delta\r\ndata: {\"two\":2}\r\n\n".as_slice(),
+            b"event: delta\ndata: {\"three\":3}\n\r\n".as_slice(),
+        ] {
+            let mut parser = IncrementalFrameParser::new(ProtocolTransportProfile::bounded_sse());
+            let split = bytes.len() - 1;
+            let mut frames = parser
+                .push(&bytes[..split])
+                .expect("first mixed-ending chunk should parse or buffer");
+            frames.extend(
+                parser
+                    .push(&bytes[split..])
+                    .expect("second mixed-ending chunk should parse"),
+            );
+            frames.extend(parser.finish().expect("mixed-ending stream should finish"));
+            assert_eq!(frames.len(), 1);
+            assert_eq!(frames[0].event_name.as_deref(), Some("delta"));
+            assert!(frames[0].data.starts_with('{'));
+        }
+    }
+
+    /// Verifies every registered non-SSE framing handles arbitrary chunk boundaries.
+    /// 验证每种已注册非 SSE 分帧方式都能处理任意分片边界。
+    #[test]
+    fn bounded_parser_supports_json_lines_ndjson_and_single_json() {
+        for framing in [
+            ProtocolStreamFraming::JsonLines,
+            ProtocolStreamFraming::Ndjson,
+        ] {
+            let mut profile = ProtocolTransportProfile::bounded_sse();
+            profile.framing = framing;
+            let mut parser = IncrementalFrameParser::new(profile);
+            let mut frames = parser
+                .push(b"{\"one\":1}\n\n{\"two\"")
+                .expect("first lines should parse");
+            frames.extend(parser.push(b":2}\r\n").expect("split line should complete"));
+            frames.extend(parser.finish().expect("line parser should finish"));
+            assert_eq!(
+                frames
+                    .iter()
+                    .map(|frame| frame.data.as_str())
+                    .collect::<Vec<_>>(),
+                vec![r#"{"one":1}"#, r#"{"two":2}"#]
+            );
+        }
+
+        let mut profile = ProtocolTransportProfile::bounded_sse();
+        profile.framing = ProtocolStreamFraming::SingleJson;
+        let mut parser = IncrementalFrameParser::new(profile);
+        assert!(
+            parser
+                .push(b"{\"complete\"")
+                .expect("single JSON should buffer")
+                .is_empty()
+        );
+        assert!(
+            parser
+                .push(b":true}")
+                .expect("single JSON should remain buffered")
+                .is_empty()
+        );
+        assert_eq!(
+            parser.finish().expect("single JSON should finish")[0].data,
+            r#"{"complete":true}"#
+        );
+    }
+
+    /// Verifies frame and pending-buffer limits fail deterministically.
+    /// 验证帧与待处理缓冲区上限会确定性失败。
+    #[test]
+    fn bounded_parser_rejects_oversized_frames_and_buffers() {
+        let mut frame_profile = ProtocolTransportProfile::bounded_sse();
+        frame_profile.max_frame_bytes = 4;
+        frame_profile.max_buffer_bytes = 32;
+        let mut frame_parser = IncrementalFrameParser::new(frame_profile);
+        let frame_error = frame_parser
+            .push(b"data: {}\n\n")
+            .expect_err("oversized frame should fail");
+        assert!(frame_error.message.contains("4 byte limit"));
+
+        let mut buffer_profile = ProtocolTransportProfile::bounded_sse();
+        buffer_profile.max_frame_bytes = 32;
+        buffer_profile.max_buffer_bytes = 8;
+        let mut buffer_parser = IncrementalFrameParser::new(buffer_profile);
+        let buffer_error = buffer_parser
+            .push(b"123456789")
+            .expect_err("unterminated buffer should fail");
+        assert!(buffer_error.message.contains("8 byte limit"));
+    }
+
+    /// Verifies successful responses require one exact registered media type.
+    /// 验证成功响应必须使用一个精确注册的媒体类型。
+    #[test]
+    fn response_content_type_is_strict_and_parameter_tolerant() {
+        let profile = ProtocolTransportProfile::bounded_sse();
+        let mut valid = HeaderMap::new();
+        valid.insert(
+            reqwest::header::CONTENT_TYPE,
+            HeaderValue::from_static("text/event-stream; charset=utf-8"),
+        );
+        validate_response_content_type(&valid, &profile, "https://example.test")
+            .expect("registered media type should pass");
+
+        let mut invalid = HeaderMap::new();
+        invalid.insert(
+            reqwest::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        let failure = validate_response_content_type(&invalid, &profile, "https://example.test")
+            .expect_err("JSON must not enter the SSE decoder");
+        assert_eq!(
+            failure.error.subcategory.as_deref(),
+            Some("response_content_type")
+        );
+        assert_eq!(failure.error.dispatch_outcome, DispatchOutcome::Dispatched);
+    }
+
+    /// Verifies numeric Retry-After values retain fractional-second precision.
+    /// 验证数值型 Retry-After 保留小数秒精度。
+    #[test]
+    fn retry_after_numeric_values_preserve_milliseconds() {
+        assert_eq!(parse_decimal_seconds_milliseconds("5"), Some(5_000));
+        assert_eq!(parse_decimal_seconds_milliseconds("2.5"), Some(2_500));
+        assert_eq!(parse_decimal_seconds_milliseconds("0.0001"), Some(1));
+        assert_eq!(parse_decimal_seconds_milliseconds("1.0019"), Some(1_002));
+        assert_eq!(parse_decimal_seconds_milliseconds("-1"), None);
+        assert_eq!(parse_decimal_seconds_milliseconds("1.2.3"), None);
+    }
+
+    /// Verifies Retry-After HTTP dates preserve their source and exact relative delay.
+    /// 验证 Retry-After HTTP 日期保留来源与精确相对延迟。
+    #[test]
+    fn retry_after_http_date_preserves_source() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let retry_at = now + Duration::from_secs(17);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            HeaderValue::from_str(httpdate::fmt_http_date(retry_at).as_str())
+                .expect("valid HTTP date"),
+        );
+
+        let hint = parse_retry_after_headers(&headers, now).expect("valid retry hint");
+        assert_eq!(hint.delay_milliseconds, 17_000);
+        assert_eq!(hint.source, RetryAfterSource::HeaderHttpDate);
+    }
+
+    /// Verifies malformed Retry-After values are rejected instead of guessed.
+    /// 验证畸形 Retry-After 值会被拒绝而不是被猜测。
+    #[test]
+    fn retry_after_malformed_value_is_rejected() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            HeaderValue::from_static("later"),
+        );
+        assert!(parse_retry_after_headers(&headers, SystemTime::now()).is_none());
     }
 
     /// Verifies capture encoding includes provider-specific secondary routing.
@@ -1744,17 +2788,16 @@ mod tests {
         );
     }
 
-    /// Verifies MiniMax Chat maps the public adaptive switch to its documented thinking object.
-    /// 验证 MiniMax Chat 将公共自适应开关映射为文档规定的 thinking 对象。
+    /// Verifies MiniMax Chat leaves model-owned reasoning enabled and projects only reasoning_split.
+    /// 验证 MiniMax Chat 保持模型自有思考开启且仅投影 reasoning_split。
     #[test]
-    fn minimax_openai_chat_projects_adaptive_thinking() {
+    fn minimax_openai_chat_uses_provider_controlled_reasoning() {
         let client = ProviderExecutionClient::new(
             reqwest::Client::new(),
             Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
         );
         let mut request = minimal_request();
         request.model_id = String::from("MiniMax-M3");
-        request.reasoning_effort = Some(ReasoningEffort::Adaptive);
         request.model_parameters.insert(
             MINIMAX_REASONING_SPLIT_PARAMETER_ID.to_string(),
             ModelParameterValue::Boolean(true),
@@ -1764,10 +2807,33 @@ mod tests {
             .encode_request(&minimax_route(OPENAI_CHAT_PROFILE_ID), &request)
             .expect("MiniMax Chat request should encode");
 
-        assert_eq!(encoded.body["thinking"]["type"], "adaptive");
         assert_eq!(encoded.body["reasoning_split"], true);
         assert_eq!(encoded.body["stream_options"]["include_usage"], true);
+        assert!(encoded.body.get("thinking").is_none());
         assert!(encoded.body.get("reasoning_effort").is_none());
+    }
+
+    /// Verifies MiniMax rejects undocumented effort controls before dispatch.
+    /// 验证 MiniMax 在分派前拒绝未文档化的思考档位控制。
+    #[test]
+    fn minimax_rejects_undocumented_reasoning_effort() {
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let mut request = minimal_request();
+        request.model_id = String::from("MiniMax-M3");
+        request.reasoning_effort = Some(ReasoningEffort::Adaptive);
+
+        let failure = client
+            .encode_request(&minimax_route(OPENAI_CHAT_PROFILE_ID), &request)
+            .expect_err("MiniMax adaptive effort is not documented");
+        assert!(
+            failure
+                .error
+                .message
+                .contains("does not expose a reasoning effort selector")
+        );
     }
 
     /// Verifies every OpenRouter protocol route converges on the unified reasoning object.

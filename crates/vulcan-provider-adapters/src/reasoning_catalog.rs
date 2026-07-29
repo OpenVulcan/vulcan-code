@@ -198,11 +198,6 @@ const MINIMAL_HIGH: &[ReasoningEffort] = &[ReasoningEffort::Minimal, ReasoningEf
 /// An empty effort set means provider-controlled reasoning without a user-selectable strength.
 /// 空档位集合表示由供应商控制思考且用户不可选择强度。
 const PROVIDER_DEFAULT_ONLY: &[ReasoningEffort] = &[];
-/// MiniMax M3 exposes an exact disabled-or-adaptive thinking switch.
-/// MiniMax M3 公开精确的关闭或自适应思考开关。
-const DISABLED_OR_ADAPTIVE: &[ReasoningEffort] =
-    &[ReasoningEffort::None, ReasoningEffort::Adaptive];
-
 /// Exact overrides precede broader Anthropic family defaults.
 /// Anthropic 精确覆盖位于更宽泛模型族默认值之前。
 const ANTHROPIC_REASONING_RULES: &[ModelReasoningRule] = &[
@@ -290,7 +285,7 @@ const GOOGLE_REASONING_RULES: &[ModelReasoningRule] = &[
 const MINIMAX_REASONING_RULES: &[ModelReasoningRule] = &[
     ModelReasoningRule {
         matcher: ModelRuleMatcher::Prefix("MiniMax-M3"),
-        efforts: DISABLED_OR_ADAPTIVE,
+        efforts: PROVIDER_DEFAULT_ONLY,
     },
     ModelReasoningRule {
         matcher: ModelRuleMatcher::Prefix("MiniMax-M2"),
@@ -361,13 +356,14 @@ mod tests {
         assert!(capabilities.efforts.is_empty());
     }
 
-    /// Verifies MiniMax M3 exposes only its documented disabled/adaptive switch.
-    /// 验证 MiniMax M3 仅公开文档规定的关闭与自适应开关。
+    /// Verifies MiniMax M3 stays on provider-controlled reasoning without inventing an effort selector.
+    /// 验证 MiniMax M3 保持供应商控制的思考且不虚构强度选择器。
     #[test]
-    fn minimax_m3_reasoning_exposes_disabled_or_adaptive() {
+    fn minimax_m3_reasoning_is_provider_default_only() {
         let capabilities =
             fixed_reasoning_capabilities(FixedReasoningProvider::MiniMax, "MiniMax-M3");
-        assert_eq!(capabilities.efforts, DISABLED_OR_ADAPTIVE);
+        assert_eq!(capabilities.support, CapabilitySupport::Native);
+        assert!(capabilities.efforts.is_empty());
     }
 
     /// Verifies unknown discovered models stay conservative instead of inheriting guessed controls.

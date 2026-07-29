@@ -97,7 +97,7 @@ fn project_core_messages_to_provider_visible_history_for_model(
                         id: message.id.clone(),
                         payload: CoreConversationPayload::Assistant {
                             text: text.clone(),
-                            reasoning: String::new(),
+                            reasoning: reasoning.clone(),
                             provider_message_id: provider_message_id.clone(),
                             provider_message_state: provider_message_state.clone(),
                             usage: usage.clone(),
@@ -125,7 +125,7 @@ fn project_core_messages_to_provider_visible_history_for_model(
                             id: message.id.clone(),
                             payload: CoreConversationPayload::Assistant {
                                 text: text.clone(),
-                                reasoning: String::new(),
+                                reasoning: reasoning.clone(),
                                 provider_message_id: provider_message_id.clone(),
                                 provider_message_state: provider_message_state.clone(),
                                 usage: usage.clone(),

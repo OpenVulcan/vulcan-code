@@ -27,6 +27,9 @@ pub enum CoreError {
         /// Human-readable failure detail.
         /// 人类可读的失败细节。
         message: String,
+        /// Structured execution error retained without parsing the display message.
+        /// 无需解析展示消息即可保留的结构化执行错误。
+        details: Option<Box<vulcan_ai_contract::AiExecutionError>>,
     },
     /// The tool executor failed while running a host-side tool invocation.
     /// 工具执行器在运行宿主侧工具调用时失败。
@@ -47,6 +50,7 @@ impl Display for CoreError {
             CoreError::ProviderFailure {
                 provider_id,
                 message,
+                ..
             } => write!(f, "provider `{provider_id}` failure: {message}"),
             CoreError::ToolFailure { tool_name, message } => {
                 write!(f, "tool `{tool_name}` failure: {message}")
@@ -408,6 +412,10 @@ pub struct ProviderContinuation {
     /// Provider identifier that produced the latest cursor state.
     /// 产出最新游标状态的 Provider 标识。
     pub provider_id: Option<String>,
+    /// Protocol profile identifier that produced the latest cursor state.
+    /// 产出最新游标状态的协议配置标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_profile_id: Option<String>,
     /// Model identifier that produced the latest cursor state.
     /// 产出最新游标状态的模型标识。
     pub model_id: Option<String>,
@@ -812,6 +820,10 @@ pub struct ProviderUsageSnapshot {
     /// Provider 报告的可选输入 Token 数量。
     #[serde(default)]
     pub input_tokens: Option<usize>,
+    /// Optional normalized input token count not served from cache.
+    /// 可选的规范化非缓存输入 Token 数量。
+    #[serde(default)]
+    pub uncached_input_tokens: Option<usize>,
     /// Optional provider-reported output token count.
     /// Provider 报告的可选输出 Token 数量。
     #[serde(default)]

@@ -152,6 +152,7 @@ fn task_runtime_publishes_subagent_mailbox_events() {
         1,
         Some(&vulcan_core::types::ProviderUsageSnapshot {
             input_tokens: Some(120),
+            uncached_input_tokens: None,
             output_tokens: Some(30),
             reasoning_tokens: Some(10),
             total_tokens: Some(160),
@@ -1534,6 +1535,7 @@ async fn wait_agent_returns_consumed_child_feedback() {
         1,
         Some(&vulcan_core::types::ProviderUsageSnapshot {
             input_tokens: Some(120),
+            uncached_input_tokens: None,
             output_tokens: Some(30),
             reasoning_tokens: Some(10),
             total_tokens: Some(160),
@@ -1942,6 +1944,7 @@ fn task_invocation_result_omits_embedded_conversation_state() {
         1,
         Some(&vulcan_core::types::ProviderUsageSnapshot {
             input_tokens: Some(120),
+            uncached_input_tokens: None,
             output_tokens: Some(30),
             reasoning_tokens: Some(10),
             total_tokens: Some(160),

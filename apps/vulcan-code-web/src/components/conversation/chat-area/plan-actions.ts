@@ -54,6 +54,7 @@ export function useChatAreaPlanActions(options: UseChatAreaPlanActionsOptions) {
       attachments: [],
       executionMode: "build",
       reasoningEffort: options.reasoningEffort,
+      modelSelection: null,
     });
   }, [options]);
 
@@ -72,6 +73,7 @@ export function useChatAreaPlanActions(options: UseChatAreaPlanActionsOptions) {
       attachments: [],
       executionMode: "plan",
       reasoningEffort: options.reasoningEffort,
+      modelSelection: null,
     });
   }, [options]);
 

@@ -159,6 +159,7 @@ impl CustomProviderDefinition {
                 authentication: self.authentication.projection(),
                 request_headers: BTreeMap::new(),
                 model_discovery,
+                request_projector: crate::RequestProjectorKind::Direct,
                 protocol_routes,
             }],
         })

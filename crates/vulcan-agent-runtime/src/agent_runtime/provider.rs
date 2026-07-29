@@ -11,6 +11,9 @@ pub struct ProviderRuntimeBlueprint {
     /// Stable provider identifier.
     /// 稳定供应商标识。
     pub provider_id: String,
+    /// Exact provider service-entry identifier selected for execution.
+    /// 执行选择的精确供应商服务入口标识。
+    pub service_entry_id: String,
     /// Exact credential connection identifier selected for execution.
     /// 执行选择的精确凭据连接标识。
     pub connection_id: String,
@@ -31,6 +34,9 @@ pub struct ProviderRuntimeBlueprint {
     /// Exact provider-neutral wire protocol profile selected for this immutable execution.
     /// 为本次不可变执行选定的精确供应商无关 Wire 协议 Profile。
     pub protocol_profile_id: String,
+    /// Exact provider-internal secondary route selected for this immutable execution.
+    /// 为本次不可变执行选定的精确供应商内部二级路由。
+    pub secondary_route: vulcan_provider_adapters::SecondaryRouteSelection,
     /// Exact public model capability snapshot captured for this immutable execution.
     /// 为本次不可变执行捕获的精确公共模型能力快照。
     pub public_capabilities: vulcan_ai_contract::ModelCapabilities,
@@ -160,12 +166,14 @@ pub fn resolve_public_ai_provider_blueprint(
     }
     Ok(ProviderRuntimeBlueprint {
         provider_id: selection.route.provider.id.clone(),
+        service_entry_id: selection.route.entry.id.clone(),
         connection_id: selection.route.connection.id.clone(),
         provider_name: selection.route.provider.display_name.clone(),
         runtime_label: String::from("Vulcan Public AI Contract"),
         model_id: selection.model.id.clone(),
         model_name: selection.model.display_name.clone(),
         protocol_profile_id: protocol_id.to_string(),
+        secondary_route: selection.route.secondary_route.clone(),
         public_capabilities: capabilities,
         base_url: Some(selection.route.entry.base_url.clone()),
         supports_remote_model_refresh: true,

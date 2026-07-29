@@ -2,7 +2,8 @@
 //! 供应商无关的流式事件与生命周期校验。
 
 use crate::{
-    AiExecutionError, ContentItem, RequestUsage, ResourceTransferState, ToolCall, ToolCallProgress,
+    AiContinuationUpdate, AiExecutionError, ContentItem, RequestUsage, ResourceTransferState,
+    ToolCall, ToolCallProgress, UsageUpdateKind,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -18,6 +19,13 @@ pub enum AiStreamEvent {
         /// Stable execution identifier.
         /// 稳定执行标识。
         execution_id: String,
+    },
+    /// Provider continuation metadata became available.
+    /// 供应商延续元数据已经可用。
+    ResponseMetadataUpdated {
+        /// Latest upstream response or assistant-message identifier.
+        /// 最新上游响应或助手消息标识。
+        continuation: AiContinuationUpdate,
     },
     /// A semantic response item has started.
     /// 一个语义响应项已经开始。
@@ -165,6 +173,9 @@ pub struct AiStreamStateMachine {
     /// Whether a terminal response event was observed.
     /// 是否已经观察到响应终态事件。
     terminal: bool,
+    /// Whether the one permitted final usage event was observed.
+    /// 是否已经观察到唯一允许的最终用量事件。
+    final_usage_observed: bool,
     /// Open response item identifiers.
     /// 尚未完成的响应项标识。
     open_items: BTreeSet<String>,
@@ -202,7 +213,21 @@ impl AiStreamStateMachine {
     /// `Ok(())` when the transition is valid.
     /// 转换有效时返回 `Ok(())`。
     pub fn apply(&mut self, event: &AiStreamEvent) -> Result<(), String> {
+        if self.final_usage_observed && matches!(event, AiStreamEvent::UsageUpdated { .. }) {
+            return Err(String::from(
+                "A usage event was emitted after the authoritative final usage snapshot.",
+            ));
+        }
         if self.terminal {
+            if matches!(
+                event,
+                AiStreamEvent::UsageUpdated { usage }
+                    if matches!(usage.update_kind, UsageUpdateKind::Final)
+            ) && !self.final_usage_observed
+            {
+                self.final_usage_observed = true;
+                return Ok(());
+            }
             return Err(String::from(
                 "A stream event was emitted after the response reached a terminal state.",
             ));
@@ -214,6 +239,7 @@ impl AiStreamStateMachine {
                 }
                 self.started = true;
             }
+            AiStreamEvent::ResponseMetadataUpdated { .. } => {}
             event if !self.started => {
                 return Err(format!(
                     "Stream event `{}` was emitted before the response start event.",
@@ -286,6 +312,16 @@ impl AiStreamStateMachine {
                 }
                 self.terminal = true;
             }
+            AiStreamEvent::UsageUpdated { usage }
+                if matches!(usage.update_kind, UsageUpdateKind::Final) =>
+            {
+                if self.final_usage_observed {
+                    return Err(String::from(
+                        "The final usage event was emitted more than once.",
+                    ));
+                }
+                self.final_usage_observed = true;
+            }
             AiStreamEvent::ResourceProgress { .. } | AiStreamEvent::UsageUpdated { .. } => {}
         }
         Ok(())
@@ -332,6 +368,7 @@ impl AiStreamEvent {
     fn kind(&self) -> &'static str {
         match self {
             Self::ResponseStarted { .. } => "response_started",
+            Self::ResponseMetadataUpdated { .. } => "response_metadata_updated",
             Self::ResponseItemStarted { .. } => "response_item_started",
             Self::ResponseTextDelta { .. } => "response_text_delta",
             Self::ReasoningStarted { .. } => "reasoning_started",
@@ -396,6 +433,7 @@ mod tests {
                     id: String::from("call"),
                     name: String::from("file_write"),
                     arguments: json!({"text": "你好"}),
+                    signature: None,
                 },
             })
             .expect("complete tool should be valid");
@@ -424,5 +462,93 @@ mod tests {
             })
             .expect("tool start should be valid");
         assert!(state.apply(&AiStreamEvent::ResponseCompleted).is_err());
+    }
+
+    /// Verifies only an explicitly final usage snapshot may arrive after a terminal event.
+    /// 验证终态事件后仅允许显式标记为最终快照的用量事件到达。
+    #[test]
+    fn terminal_event_accepts_only_explicit_final_usage() {
+        let mut state = AiStreamStateMachine::default();
+        state
+            .apply(&AiStreamEvent::ResponseStarted {
+                execution_id: String::from("execution"),
+            })
+            .expect("start should be valid");
+        state
+            .apply(&AiStreamEvent::ResponseCompleted)
+            .expect("terminal event should be valid");
+
+        let snapshot = AiStreamEvent::UsageUpdated {
+            usage: RequestUsage::default(),
+        };
+        assert!(state.apply(&snapshot).is_err());
+
+        let final_usage = AiStreamEvent::UsageUpdated {
+            usage: RequestUsage {
+                update_kind: UsageUpdateKind::Final,
+                ..RequestUsage::default()
+            },
+        };
+        state
+            .apply(&final_usage)
+            .expect("explicit final usage should be accepted after terminal");
+        assert!(state.apply(&final_usage).is_err());
+    }
+
+    /// Verifies a final usage event emitted before completion cannot be repeated after completion.
+    /// 验证在完成事件前发出的最终用量不能在完成后重复。
+    #[test]
+    fn pre_terminal_final_usage_cannot_be_repeated_after_completion() {
+        let mut state = AiStreamStateMachine::default();
+        state
+            .apply(&AiStreamEvent::ResponseStarted {
+                execution_id: String::from("execution"),
+            })
+            .expect("start should be valid");
+        let final_usage = AiStreamEvent::UsageUpdated {
+            usage: RequestUsage {
+                update_kind: UsageUpdateKind::Final,
+                ..RequestUsage::default()
+            },
+        };
+        state
+            .apply(&final_usage)
+            .expect("first final usage should be valid");
+        state
+            .apply(&AiStreamEvent::ResponseCompleted)
+            .expect("terminal event should be valid");
+
+        assert!(state.apply(&final_usage).is_err());
+    }
+
+    /// Verifies no later snapshot or delta may overwrite an authoritative final usage event.
+    /// 验证后续快照或增量都不能覆盖权威最终用量事件。
+    #[test]
+    fn final_usage_rejects_later_non_final_usage_before_completion() {
+        let mut state = AiStreamStateMachine::default();
+        state
+            .apply(&AiStreamEvent::ResponseStarted {
+                execution_id: String::from("execution"),
+            })
+            .expect("start should be valid");
+        state
+            .apply(&AiStreamEvent::UsageUpdated {
+                usage: RequestUsage {
+                    update_kind: UsageUpdateKind::Final,
+                    ..RequestUsage::default()
+                },
+            })
+            .expect("first final usage should be valid");
+
+        assert!(
+            state
+                .apply(&AiStreamEvent::UsageUpdated {
+                    usage: RequestUsage {
+                        update_kind: UsageUpdateKind::Delta,
+                        ..RequestUsage::default()
+                    },
+                })
+                .is_err()
+        );
     }
 }

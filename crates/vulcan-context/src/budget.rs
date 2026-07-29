@@ -600,6 +600,7 @@ mod tests {
     fn calibrated_input_token_estimate_prefers_observed_usage() {
         let usage = ProviderUsageSnapshot {
             input_tokens: Some(128),
+            uncached_input_tokens: Some(128),
             output_tokens: Some(8),
             reasoning_tokens: Some(4),
             total_tokens: Some(140),
@@ -616,6 +617,7 @@ mod tests {
     fn observed_input_tokens_include_anthropic_split_cache_usage() {
         let usage = ProviderUsageSnapshot {
             input_tokens: Some(399),
+            uncached_input_tokens: Some(399),
             output_tokens: Some(380),
             reasoning_tokens: None,
             total_tokens: Some(112_395),
@@ -639,6 +641,7 @@ mod tests {
     fn observed_input_tokens_do_not_duplicate_cached_input_subset() {
         let usage = ProviderUsageSnapshot {
             input_tokens: Some(112_015),
+            uncached_input_tokens: Some(399),
             output_tokens: Some(380),
             reasoning_tokens: None,
             total_tokens: Some(112_395),

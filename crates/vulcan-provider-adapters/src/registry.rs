@@ -1,7 +1,7 @@
 //! Strict provider adapter registry.
 //! 严格供应商适配器注册表。
 
-use crate::ServiceEntry;
+use crate::{RequestProjectorKind, ServiceEntry};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -124,6 +124,7 @@ impl ProviderRegistry {
                 provider.id
             ));
         }
+        validate_request_projector_registration(&provider)?;
         self.providers.insert(provider.id.clone(), provider);
         Ok(())
     }
@@ -153,5 +154,68 @@ impl ProviderRegistry {
     /// 返回已注册的供应商描述。
     pub fn provider(&self, provider_id: &str) -> Option<&ProviderDescriptor> {
         self.providers.get(provider_id)
+    }
+}
+
+/// Verifies every provider entry references the one registered projector owned by its definition.
+/// 验证每个供应商入口引用其定义唯一持有的已注册投影器。
+///
+/// # Parameters
+/// 参数
+/// `provider` is the complete descriptor before registry insertion.
+/// `provider` 是注册表插入前的完整描述。
+///
+/// # Returns
+/// 返回值
+/// Success when every entry matches the closed projector registry.
+/// 每个入口匹配封闭投影器注册表时返回成功。
+fn validate_request_projector_registration(provider: &ProviderDescriptor) -> Result<(), String> {
+    let expected = match provider.kind {
+        ProviderKind::Custom => RequestProjectorKind::Direct,
+        ProviderKind::System => match provider.id.as_str() {
+            "minimax" => RequestProjectorKind::MiniMax,
+            "openrouter" => RequestProjectorKind::OpenRouter,
+            "kimi" => RequestProjectorKind::Kimi,
+            "deepseek" => RequestProjectorKind::DeepSeek,
+            "alibaba" => RequestProjectorKind::Alibaba,
+            "google" => RequestProjectorKind::Google,
+            "tavily" | "openai" | "anthropic" => RequestProjectorKind::Direct,
+            provider_id => {
+                return Err(format!(
+                    "System provider `{provider_id}` has no registered request projector owner."
+                ));
+            }
+        },
+    };
+    for entry in &provider.service_entries {
+        if entry.request_projector != expected {
+            return Err(format!(
+                "Provider `{}` entry `{}` declares projector `{:?}` but registry owner is `{:?}`.",
+                provider.id, entry.id, entry.request_projector, expected
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    //! Strict request-projector registration tests.
+    //! 严格请求投影器注册测试。
+
+    use super::ProviderRegistry;
+    use crate::RequestProjectorKind;
+
+    /// Verifies a mismatched built-in projector is rejected before runtime dispatch.
+    /// 验证不匹配的内置投影器会在运行时分派前被拒绝。
+    #[test]
+    fn rejects_mismatched_system_projector() {
+        let mut provider = crate::providers::minimax_descriptor();
+        provider.service_entries[0].request_projector = RequestProjectorKind::OpenRouter;
+        let mut registry = ProviderRegistry::default();
+        let error = registry
+            .register(provider)
+            .expect_err("mismatched projector must fail");
+        assert!(error.contains("registry owner"));
     }
 }

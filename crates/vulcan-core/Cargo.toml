@@ -12,6 +12,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 uuid = { workspace = true }
+vulcan-ai-contract = { workspace = true }
 
 [dev-dependencies]
 tokio = { version = "1.48.0", features = ["rt-multi-thread", "time"] }

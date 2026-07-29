@@ -1060,6 +1060,7 @@ fn task_session_execution_report_fast_path_projects_live_usage_stats() {
     )));
     let provider_usage = ProviderUsageSnapshot {
         input_tokens: Some(31_295),
+        uncached_input_tokens: None,
         output_tokens: Some(16),
         reasoning_tokens: Some(14),
         total_tokens: Some(31_311),

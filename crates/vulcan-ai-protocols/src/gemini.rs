@@ -6,8 +6,9 @@ use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use vulcan_ai_contract::{
     AiExecutionRequest, AiMessage, AiStreamEvent, ContentItem, InputTokenCount, MessageRole,
-    ModalityTokenCount, PromptCachePolicy, RequestUsage, ToolCall, ToolCallProgress, UsageValue,
-    UsageValueSource,
+    ModalityTokenCount, NativeToolKind, ParallelToolCallPolicy, PromptCachePolicy,
+    ReasoningOutputPolicy, RequestUsage, StructuredOutputPolicy, ToolCall, ToolCallProgress,
+    ToolChoicePolicy, UsageValue, UsageValueSource, derive_uncached_input,
 };
 
 /// Stable profile identifier for Gemini GenerateContent.
@@ -165,13 +166,18 @@ impl ProtocolProfile for GeminiGenerateContentProfile {
         GEMINI_GENERATE_CONTENT_PROFILE_ID
     }
 
+    /// Returns the bounded Gemini SSE transport declaration.
+    /// 返回有界 Gemini SSE 传输声明。
+    fn transport_profile(&self) -> crate::ProtocolTransportProfile {
+        crate::ProtocolTransportProfile::bounded_sse()
+    }
+
     /// Encodes one public request into Gemini GenerateContent JSON.
     /// 将一个公共请求编码为 Gemini GenerateContent JSON。
     fn encode(
         &self,
         request: &AiExecutionRequest,
     ) -> Result<EncodedWireRequest, ProtocolConversionError> {
-        crate::shared::require_no_native_tools(request, self.id())?;
         if request.prompt_cache != PromptCachePolicy::ProviderDefault {
             return Err(ProtocolConversionError::new(
                 "Gemini explicit prompt-cache projection is not registered.",
@@ -213,21 +219,29 @@ impl ProtocolProfile for GeminiGenerateContentProfile {
                 json!({ "parts": system_parts }),
             );
         }
+        let mut tools = Vec::new();
         if !request.tools.is_empty() {
-            body.insert(
-                String::from("tools"),
-                json!([{
-                    "functionDeclarations": request.tools.iter().map(|tool| json!({
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": tool.input_schema,
-                    })).collect::<Vec<_>>()
-                }]),
-            );
-            body.insert(
-                String::from("toolConfig"),
-                json!({ "functionCallingConfig": { "mode": "AUTO" } }),
-            );
+            tools.push(json!({
+                "functionDeclarations": request.tools.iter().map(|tool| json!({
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.input_schema,
+                })).collect::<Vec<_>>()
+            }));
+        }
+        for native_tool in &request.native_tools {
+            tools.push(match native_tool {
+                NativeToolKind::WebSearch => json!({ "googleSearch": {} }),
+                NativeToolKind::CodeInterpreter => json!({ "codeExecution": {} }),
+                NativeToolKind::ImageGeneration => {
+                    return Err(ProtocolConversionError::new(
+                        "Gemini GenerateContent has no registered native image-generation tool projector.",
+                    ));
+                }
+            });
+        }
+        if !tools.is_empty() {
+            body.insert(String::from("tools"), Value::Array(tools));
         }
         if let Some(limit) = request.output_token_limit {
             body.insert(
@@ -251,6 +265,7 @@ impl ProtocolProfile for GeminiGenerateContentProfile {
                 }),
             );
         }
+        project_gemini_request_controls(request, &mut body)?;
         Ok(EncodedWireRequest {
             path: format!("/models/{}:streamGenerateContent?alt=sse", request.model_id),
             headers: BTreeMap::new(),
@@ -267,6 +282,107 @@ impl ProtocolProfile for GeminiGenerateContentProfile {
     ) -> Box<dyn ProtocolStreamDecoder> {
         Box::new(GeminiStreamDecoder::new(execution_id))
     }
+}
+
+/// Projects provider-neutral request controls into Gemini GenerateContent fields.
+/// 将供应商无关请求控制投影到 Gemini GenerateContent 字段。
+///
+/// # Parameters
+/// 参数
+/// `request` is the exact public request and `body` is the mutable Gemini object.
+/// `request` 是精确公共请求，`body` 是可变 Gemini 对象。
+///
+/// # Returns
+/// 返回值
+/// A controlled conversion error when Gemini cannot represent a requested policy.
+/// 当 Gemini 无法表示请求策略时返回受控转换错误。
+fn project_gemini_request_controls(
+    request: &AiExecutionRequest,
+    body: &mut Map<String, Value>,
+) -> Result<(), ProtocolConversionError> {
+    if !request.tools.is_empty() || !matches!(request.tool_choice, ToolChoicePolicy::Auto) {
+        let function_calling_config = match &request.tool_choice {
+            ToolChoicePolicy::Auto => json!({ "mode": "AUTO" }),
+            ToolChoicePolicy::Required => json!({ "mode": "ANY" }),
+            ToolChoicePolicy::Disabled => json!({ "mode": "NONE" }),
+            ToolChoicePolicy::Specific { tool_name } => {
+                require_gemini_registered_tool(request, tool_name)?;
+                json!({
+                    "mode": "ANY",
+                    "allowedFunctionNames": [tool_name],
+                })
+            }
+        };
+        body.insert(
+            String::from("toolConfig"),
+            json!({ "functionCallingConfig": function_calling_config }),
+        );
+    }
+    if matches!(
+        request.parallel_tool_calls,
+        ParallelToolCallPolicy::Disabled
+    ) {
+        return Err(ProtocolConversionError::new(
+            "Gemini GenerateContent has no registered serial-tool-call projector.",
+        ));
+    }
+    let generation_config = body
+        .entry(String::from("generationConfig"))
+        .or_insert_with(|| Value::Object(Map::new()));
+    match &request.structured_output {
+        StructuredOutputPolicy::None => {}
+        StructuredOutputPolicy::JsonObject => {
+            generation_config["responseMimeType"] = Value::String(String::from("application/json"));
+        }
+        StructuredOutputPolicy::JsonSchema { schema, .. } => {
+            generation_config["responseMimeType"] = Value::String(String::from("application/json"));
+            generation_config["responseJsonSchema"] = schema.clone();
+        }
+    }
+    if !request.stop_sequences.is_empty() {
+        generation_config["stopSequences"] = json!(request.stop_sequences);
+    }
+    match request.reasoning_output {
+        ReasoningOutputPolicy::ProviderDefault | ReasoningOutputPolicy::Detailed => {}
+        ReasoningOutputPolicy::Hidden => {
+            if request.reasoning_effort.is_none() {
+                return Err(ProtocolConversionError::new(
+                    "Gemini hidden reasoning output requires an active reasoning effort.",
+                ));
+            }
+            generation_config["thinkingConfig"]["includeThoughts"] = Value::Bool(false);
+        }
+        ReasoningOutputPolicy::SummaryAuto => {
+            return Err(ProtocolConversionError::new(
+                "Gemini GenerateContent has no registered automatic reasoning-summary projector.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Verifies a Gemini specific-tool selection references a registered request tool.
+/// 验证 Gemini 特定工具选择引用了已注册请求工具。
+///
+/// # Parameters
+/// 参数
+/// `request` owns the registered tools and `tool_name` is the exact selected name.
+/// `request` 拥有已注册工具，`tool_name` 是精确所选名称。
+///
+/// # Returns
+/// 返回值
+/// Success only when the tool exists in this request.
+/// 仅当工具存在于本次请求时成功。
+fn require_gemini_registered_tool(
+    request: &AiExecutionRequest,
+    tool_name: &str,
+) -> Result<(), ProtocolConversionError> {
+    if request.tools.iter().any(|tool| tool.name == tool_name) {
+        return Ok(());
+    }
+    Err(ProtocolConversionError::new(format!(
+        "Gemini tool choice references unregistered tool `{tool_name}`."
+    )))
 }
 
 /// Maps only Gemini-supported public effort values into a native thinking level.
@@ -295,6 +411,12 @@ impl ProtocolProfile for GoogleCodeAssistProfile {
     /// 返回隔离的 Google Code Assist Profile 标识。
     fn id(&self) -> &'static str {
         GOOGLE_CODE_ASSIST_PROFILE_ID
+    }
+
+    /// Returns the bounded Google Code Assist SSE transport declaration.
+    /// 返回有界 Google Code Assist SSE 传输声明。
+    fn transport_profile(&self) -> crate::ProtocolTransportProfile {
+        crate::ProtocolTransportProfile::bounded_sse()
     }
 
     /// Encodes one public request while leaving credential-bound project injection to the adapter.
@@ -409,13 +531,26 @@ fn encode_gemini_parts(
                 );
                 Ok(Value::Object(part))
             }
-            ContentItem::ToolCall { call } => Ok(json!({
-                "functionCall": {
-                    "id": call.id,
-                    "name": call.name,
-                    "args": call.arguments,
+            ContentItem::ToolCall { call } => {
+                // part preserves a Gemini-owned function signature only when its provider scope is valid.
+                // part 仅在供应商作用域有效时保留 Gemini 自有的函数签名。
+                let mut part = json!({
+                    "functionCall": {
+                        "id": call.id,
+                        "name": call.name,
+                        "args": call.arguments,
+                    }
+                });
+                if let Some(signature) = call.signature.as_deref().and_then(|signature| {
+                    crate::compatible_provider_signature(
+                        crate::SIGNATURE_PROVIDER_GEMINI,
+                        signature,
+                    )
+                }) {
+                    part["thoughtSignature"] = Value::String(signature.to_string());
                 }
-            })),
+                Ok(part)
+            }
             ContentItem::ToolResult { result } => {
                 let tool_name = tool_names.get(result.call_id.as_str()).ok_or_else(|| {
                     ProtocolConversionError::new(format!(
@@ -496,12 +631,12 @@ struct GeminiStreamDecoder {
     /// Whether the public response-start event was emitted.
     /// 是否已经发出公共响应开始事件。
     started: bool,
-    /// Whether visible text is currently open.
-    /// 可见文本是否当前处于打开状态。
-    text_open: bool,
-    /// Whether reasoning is currently open.
-    /// 推理是否当前处于打开状态。
-    reasoning_open: bool,
+    /// Stable identifier of the currently open visible-text item.
+    /// 当前打开的可见文本项目稳定标识。
+    text_item_id: Option<String>,
+    /// Stable identifier of the currently open reasoning item.
+    /// 当前打开的推理项目稳定标识。
+    reasoning_item_id: Option<String>,
     /// Latest reasoning continuation signature.
     /// 最新推理延续签名。
     reasoning_signature: Option<String>,
@@ -511,6 +646,9 @@ struct GeminiStreamDecoder {
     /// Stable generated tool ordinal.
     /// 稳定生成工具序号。
     tool_index: u32,
+    /// Stable ordinal shared by ordered text and reasoning items.
+    /// 由有序文本与推理项目共享的稳定序号。
+    content_item_index: u32,
 }
 
 impl GeminiStreamDecoder {
@@ -520,11 +658,12 @@ impl GeminiStreamDecoder {
         Self {
             execution_id,
             started: false,
-            text_open: false,
-            reasoning_open: false,
+            text_item_id: None,
+            reasoning_item_id: None,
             reasoning_signature: None,
             completed: false,
             tool_index: 0,
+            content_item_index: 0,
         }
     }
 
@@ -539,19 +678,30 @@ impl GeminiStreamDecoder {
         }
     }
 
-    /// Closes all currently open text/reasoning items.
-    /// 关闭当前全部打开的文本/推理项目。
-    fn close_open_items(&mut self, events: &mut Vec<AiStreamEvent>) {
-        if self.text_open {
-            self.text_open = false;
-            events.push(AiStreamEvent::ResponseItemCompleted {
-                item_id: String::from("gemini:text"),
-            });
+    /// Closes the currently open visible-text item.
+    /// 关闭当前打开的可见文本项目。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `events` receives the matching completion event when a text item is open.
+    /// `events` 在存在打开文本项目时接收匹配的完成事件。
+    fn close_text_item(&mut self, events: &mut Vec<AiStreamEvent>) {
+        if let Some(item_id) = self.text_item_id.take() {
+            events.push(AiStreamEvent::ResponseItemCompleted { item_id });
         }
-        if self.reasoning_open {
-            self.reasoning_open = false;
+    }
+
+    /// Closes the currently open reasoning item with its own continuation signature.
+    /// 使用其自有延续签名关闭当前打开的推理项目。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `events` receives the matching signed completion event when reasoning is open.
+    /// `events` 在存在打开推理项目时接收匹配的带签名完成事件。
+    fn close_reasoning_item(&mut self, events: &mut Vec<AiStreamEvent>) {
+        if let Some(item_id) = self.reasoning_item_id.take() {
             events.push(AiStreamEvent::ReasoningCompleted {
-                item_id: String::from("gemini:reasoning"),
+                item_id,
                 signature: self.reasoning_signature.take().and_then(|signature| {
                     crate::wrap_provider_signature(
                         crate::SIGNATURE_PROVIDER_GEMINI,
@@ -560,6 +710,18 @@ impl GeminiStreamDecoder {
                 }),
             });
         }
+    }
+
+    /// Closes all currently open text and reasoning items in stream order.
+    /// 按流顺序关闭当前全部打开的文本与推理项目。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `events` receives any required completion events.
+    /// `events` 接收所有必要的完成事件。
+    fn close_open_items(&mut self, events: &mut Vec<AiStreamEvent>) {
+        self.close_text_item(events);
+        self.close_reasoning_item(events);
     }
 
     /// Normalizes one Gemini content part.
@@ -571,26 +733,40 @@ impl GeminiStreamDecoder {
     ) -> Result<(), ProtocolConversionError> {
         if let Some(text) = part.get("text").and_then(Value::as_str) {
             if part.get("thought").and_then(Value::as_bool) == Some(true) {
-                if !self.reasoning_open {
-                    self.reasoning_open = true;
-                    events.push(AiStreamEvent::ReasoningStarted {
-                        item_id: String::from("gemini:reasoning"),
-                    });
+                self.close_text_item(events);
+                let incoming_signature = part.get("thoughtSignature").and_then(Value::as_str);
+                if self.reasoning_item_id.is_some()
+                    && incoming_signature.is_some()
+                    && self.reasoning_signature.as_deref() != incoming_signature
+                {
+                    self.close_reasoning_item(events);
                 }
-                if let Some(signature) = part.get("thoughtSignature").and_then(Value::as_str) {
+                if self.reasoning_item_id.is_none() {
+                    let item_id = format!("gemini:reasoning:{}", self.content_item_index);
+                    self.content_item_index = self.content_item_index.saturating_add(1);
+                    self.reasoning_item_id = Some(item_id.clone());
+                    events.push(AiStreamEvent::ReasoningStarted { item_id });
+                }
+                if let Some(signature) = incoming_signature {
                     self.reasoning_signature = Some(signature.to_string());
                 }
                 if !text.is_empty() {
                     events.push(AiStreamEvent::ReasoningDelta {
-                        item_id: String::from("gemini:reasoning"),
+                        item_id: self
+                            .reasoning_item_id
+                            .clone()
+                            .expect("reasoning item must be open before its delta"),
                         delta: text.to_string(),
                     });
                 }
             } else {
-                if !self.text_open {
-                    self.text_open = true;
+                self.close_reasoning_item(events);
+                if self.text_item_id.is_none() {
+                    let item_id = format!("gemini:text:{}", self.content_item_index);
+                    self.content_item_index = self.content_item_index.saturating_add(1);
+                    self.text_item_id = Some(item_id.clone());
                     events.push(AiStreamEvent::ResponseItemStarted {
-                        item_id: String::from("gemini:text"),
+                        item_id,
                         item: ContentItem::Text {
                             text: String::new(),
                         },
@@ -598,13 +774,17 @@ impl GeminiStreamDecoder {
                 }
                 if !text.is_empty() {
                     events.push(AiStreamEvent::ResponseTextDelta {
-                        item_id: String::from("gemini:text"),
+                        item_id: self
+                            .text_item_id
+                            .clone()
+                            .expect("text item must be open before its delta"),
                         delta: text.to_string(),
                     });
                 }
             }
         }
         if let Some(call) = part.get("functionCall").and_then(Value::as_object) {
+            self.close_open_items(events);
             let name = call.get("name").and_then(Value::as_str).ok_or_else(|| {
                 ProtocolConversionError::new("Gemini functionCall is missing `name`.")
             })?;
@@ -614,11 +794,25 @@ impl GeminiStreamDecoder {
                 .map(str::to_string)
                 .unwrap_or_else(|| format!("gemini-call-{}", self.tool_index));
             let arguments = call.get("args").cloned().unwrap_or_else(|| json!({}));
+            // signature belongs to this exact function-call part and must remain positionally attached.
+            // signature 属于当前精确函数调用 Part，必须保持位置绑定。
+            let signature = part
+                .get("thoughtSignature")
+                .and_then(Value::as_str)
+                .and_then(|signature| {
+                    crate::wrap_provider_signature(crate::SIGNATURE_PROVIDER_GEMINI, signature)
+                });
             let argument_text = serde_json::to_string(&arguments).map_err(|error| {
                 ProtocolConversionError::new(format!(
                     "Gemini function arguments could not be encoded: {error}"
                 ))
             })?;
+            if argument_text.len() > crate::MAX_STREAMED_TOOL_ARGUMENT_BYTES {
+                return Err(ProtocolConversionError::new(format!(
+                    "Gemini tool arguments exceeded the registered {} byte limit.",
+                    crate::MAX_STREAMED_TOOL_ARGUMENT_BYTES
+                )));
+            }
             let item_id = format!("gemini:tool:{}", self.tool_index);
             events.push(AiStreamEvent::ToolCallStarted {
                 item_id: item_id.clone(),
@@ -643,6 +837,7 @@ impl GeminiStreamDecoder {
                     id: call_id,
                     name: name.to_string(),
                     arguments,
+                    signature,
                 },
             });
             self.tool_index = self.tool_index.saturating_add(1);
@@ -719,6 +914,7 @@ fn gemini_usage(value: &Value) -> RequestUsage {
     let total = reported_usage(value.get("totalTokenCount"));
     RequestUsage {
         input_tokens: input,
+        uncached_input_tokens: derive_uncached_input(input, cache_read),
         output_tokens: output,
         reasoning_tokens: reasoning,
         cache_read_tokens: cache_read,
@@ -753,6 +949,7 @@ mod tests {
                 operation: AiOperation::ConversationRespond,
                 model_id: String::from("gemini-model"),
                 cache_scope_id: None,
+                continuation: None,
                 messages: vec![AiMessage {
                     role: MessageRole::User,
                     content: vec![ContentItem::Text {
@@ -765,8 +962,13 @@ mod tests {
                     input_schema: json!({"type":"object"}),
                 }],
                 native_tools: Vec::new(),
+                tool_choice: Default::default(),
+                parallel_tool_calls: Default::default(),
+                structured_output: Default::default(),
+                stop_sequences: Vec::new(),
                 prompt_cache: PromptCachePolicy::ProviderDefault,
                 reasoning_effort: Some(vulcan_ai_contract::ReasoningEffort::Minimal),
+                reasoning_output: Default::default(),
                 model_parameters: BTreeMap::new(),
                 resources: Vec::new(),
                 output_token_limit: Some(128),
@@ -787,6 +989,47 @@ mod tests {
         );
     }
 
+    /// Verifies GenerateContent projects native search and managed code execution separately.
+    /// 验证 GenerateContent 会分别投影原生搜索与托管代码执行。
+    #[test]
+    fn encodes_native_search_and_code_execution() {
+        let mut request = AiExecutionRequest {
+            operation: AiOperation::ConversationRespond,
+            model_id: String::from("gemini-model"),
+            cache_scope_id: None,
+            continuation: None,
+            messages: vec![AiMessage {
+                role: MessageRole::User,
+                content: vec![ContentItem::Text {
+                    text: String::from("research and calculate"),
+                }],
+            }],
+            tools: Vec::new(),
+            native_tools: vec![NativeToolKind::WebSearch, NativeToolKind::CodeInterpreter],
+            tool_choice: Default::default(),
+            parallel_tool_calls: Default::default(),
+            structured_output: Default::default(),
+            stop_sequences: Vec::new(),
+            prompt_cache: PromptCachePolicy::ProviderDefault,
+            reasoning_effort: None,
+            reasoning_output: Default::default(),
+            model_parameters: BTreeMap::new(),
+            resources: Vec::new(),
+            output_token_limit: Some(128),
+        };
+        let encoded = GeminiGenerateContentProfile
+            .encode(&request)
+            .expect("Gemini native tools should encode");
+        assert_eq!(encoded.body["tools"][0]["googleSearch"], json!({}));
+        assert_eq!(encoded.body["tools"][1]["codeExecution"], json!({}));
+
+        request.native_tools = vec![NativeToolKind::ImageGeneration];
+        let error = GeminiGenerateContentProfile
+            .encode(&request)
+            .expect_err("unregistered native image generation should fail");
+        assert!(error.to_string().contains("image-generation"));
+    }
+
     /// Verifies CountTokens preserves the complete GenerateContent input inside its exact envelope.
     /// 验证 CountTokens 会在精确封装中保留完整 GenerateContent 输入。
     #[test]
@@ -795,6 +1038,7 @@ mod tests {
             operation: AiOperation::ConversationRespond,
             model_id: String::from("gemini-model"),
             cache_scope_id: None,
+            continuation: None,
             messages: vec![
                 AiMessage {
                     role: MessageRole::System,
@@ -815,8 +1059,13 @@ mod tests {
                 input_schema: json!({"type":"object"}),
             }],
             native_tools: Vec::new(),
+            tool_choice: Default::default(),
+            parallel_tool_calls: Default::default(),
+            structured_output: Default::default(),
+            stop_sequences: Vec::new(),
             prompt_cache: PromptCachePolicy::ProviderDefault,
             reasoning_effort: None,
+            reasoning_output: Default::default(),
             model_parameters: BTreeMap::new(),
             resources: Vec::new(),
             output_token_limit: Some(128),
@@ -887,6 +1136,87 @@ mod tests {
         ));
     }
 
+    /// Verifies a function-call thought signature stays attached to the exact call during replay.
+    /// 验证函数调用思考签名在重放期间始终绑定到精确调用。
+    #[test]
+    fn preserves_function_call_thought_signature() {
+        let mut decoder = GeminiStreamDecoder::new(String::from("execution"));
+        let events = decoder
+            .push_sse(
+                None,
+                r#"{"candidates":[{"content":{"parts":[{"functionCall":{"id":"call","name":"lookup","args":{"q":"x"}},"thoughtSignature":"signed-call"}]},"finishReason":"STOP"}]}"#,
+            )
+            .expect("signed function call should decode");
+        let call = events
+            .iter()
+            .find_map(|event| match event {
+                AiStreamEvent::ToolCallCompleted { call, .. } => Some(call.clone()),
+                _ => None,
+            })
+            .expect("tool call should be emitted");
+        assert_eq!(call.signature.as_deref(), Some("gemini#signed-call"));
+
+        let request = AiExecutionRequest {
+            operation: AiOperation::ConversationRespond,
+            model_id: String::from("gemini-model"),
+            cache_scope_id: None,
+            continuation: None,
+            messages: vec![AiMessage {
+                role: MessageRole::Assistant,
+                content: vec![ContentItem::ToolCall { call }],
+            }],
+            tools: Vec::new(),
+            native_tools: Vec::new(),
+            tool_choice: Default::default(),
+            parallel_tool_calls: Default::default(),
+            structured_output: Default::default(),
+            stop_sequences: Vec::new(),
+            prompt_cache: PromptCachePolicy::ProviderDefault,
+            reasoning_effort: None,
+            reasoning_output: Default::default(),
+            model_parameters: BTreeMap::new(),
+            resources: Vec::new(),
+            output_token_limit: None,
+        };
+        let encoded = GeminiGenerateContentProfile
+            .encode(&request)
+            .expect("signed function call should encode");
+        assert_eq!(
+            encoded.body["contents"][0]["parts"][0]["thoughtSignature"],
+            "signed-call"
+        );
+    }
+
+    /// Verifies interleaved Gemini reasoning blocks retain separate signatures and item order.
+    /// 验证交错的 Gemini 推理块保留独立签名与项目顺序。
+    #[test]
+    fn preserves_multiple_interleaved_reasoning_signatures() {
+        let mut decoder = GeminiStreamDecoder::new(String::from("execution"));
+        let events = decoder
+            .push_sse(
+                None,
+                r#"{"candidates":[{"content":{"parts":[{"text":"first","thought":true,"thoughtSignature":"sig-a"},{"text":"visible"},{"text":"second","thought":true,"thoughtSignature":"sig-b"}]},"finishReason":"STOP"}]}"#,
+            )
+            .expect("interleaved signed reasoning should decode");
+        let completed = events
+            .iter()
+            .filter_map(|event| match event {
+                AiStreamEvent::ReasoningCompleted { item_id, signature } => {
+                    Some((item_id.as_str(), signature.as_deref()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            completed,
+            vec![
+                ("gemini:reasoning:0", Some("gemini#sig-a")),
+                ("gemini:reasoning:2", Some("gemini#sig-b")),
+            ]
+        );
+    }
+
     /// Verifies Code Assist wraps Gemini requests and unwraps its response envelope.
     /// 验证 Code Assist 会封装 Gemini 请求并解开其响应信封。
     #[test]
@@ -895,6 +1225,7 @@ mod tests {
             operation: AiOperation::ConversationRespond,
             model_id: String::from("gemini-code-assist"),
             cache_scope_id: None,
+            continuation: None,
             messages: vec![AiMessage {
                 role: MessageRole::User,
                 content: vec![ContentItem::Text {
@@ -903,8 +1234,13 @@ mod tests {
             }],
             tools: Vec::new(),
             native_tools: Vec::new(),
+            tool_choice: Default::default(),
+            parallel_tool_calls: Default::default(),
+            structured_output: Default::default(),
+            stop_sequences: Vec::new(),
             prompt_cache: PromptCachePolicy::ProviderDefault,
             reasoning_effort: None,
+            reasoning_output: Default::default(),
             model_parameters: BTreeMap::new(),
             resources: Vec::new(),
             output_token_limit: Some(128),

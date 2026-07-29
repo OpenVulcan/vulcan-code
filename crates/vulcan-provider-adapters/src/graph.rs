@@ -99,9 +99,40 @@ pub struct ServiceEntry {
     /// Exact model-discovery implementation for this entry.
     /// 此入口使用的精确模型发现实现。
     pub model_discovery: ModelDiscoveryKind,
+    /// Exact registered request projector for this provider product entry.
+    /// 当前供应商产品入口使用的精确已注册请求投影器。
+    pub request_projector: RequestProjectorKind,
     /// Verified protocol routes available through this entry.
     /// 此入口可用的已验证协议路由。
     pub protocol_routes: Vec<ProtocolRoute>,
+}
+
+/// Identifies one closed provider request projector implementation.
+/// 标识一个封闭的供应商请求投影器实现。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestProjectorKind {
+    /// No provider-only mutation beyond the selected wire protocol.
+    /// 除所选 Wire 协议外不执行供应商专属变更。
+    Direct,
+    /// MiniMax regional API and Token Plan projection.
+    /// MiniMax 区域 API 与 Token Plan 投影。
+    MiniMax,
+    /// OpenRouter routing and reasoning projection.
+    /// OpenRouter 路由与思考投影。
+    OpenRouter,
+    /// Kimi public API and Coding Plan projection.
+    /// Kimi 开放平台与 Coding Plan 投影。
+    Kimi,
+    /// DeepSeek official API projection.
+    /// DeepSeek 官方 API 投影。
+    DeepSeek,
+    /// Alibaba Token Plan and Model Studio projection.
+    /// 阿里云 Token Plan 与百炼投影。
+    Alibaba,
+    /// Google public API and Code Assist projection.
+    /// Google 公共 API 与 Code Assist 投影。
+    Google,
 }
 
 /// Identifies the execution surface owned by one service entry.

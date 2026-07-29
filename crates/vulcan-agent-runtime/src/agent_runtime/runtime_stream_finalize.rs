@@ -139,7 +139,7 @@ pub(crate) fn build_success_execution_report(
     session_id: SessionId,
     preparation: ExecutionPreparation,
     thinking_output: Option<String>,
-    assistant_output: String,
+    assistant_output: Option<String>,
     conversation_state: Option<SessionConversationState>,
     provider_request_count: usize,
     mcp_discovery_rows: Vec<String>,
@@ -237,20 +237,29 @@ pub(crate) fn build_success_terminal_events(
     );
     apply_latest_wire_request_json(&mut preparation, stream_state.latest_wire_request_json());
 
-    let normalized_output = normalize_assistant_output(stream_state.take_assistant_output());
+    // visibleOutput preserves a genuinely absent assistant message when the run only requested tools.
+    // visibleOutput 在本次运行仅请求工具时保留助手消息确实缺失的事实。
+    let raw_output = stream_state.take_assistant_output();
+    let visible_output = if raw_output.trim().is_empty() && stream_state.observed_tool_request() {
+        None
+    } else {
+        Some(normalize_assistant_output(raw_output))
+    };
     let last_successful_provider_usage = stream_state.take_last_successful_provider_usage();
     let cumulative_successful_provider_usage =
         stream_state.take_cumulative_successful_provider_usage();
-    events.push(ExecutionStreamEvent::RuntimeEvent {
-        session_id,
-        event: build_output_completed_event(&normalized_output),
-    });
+    if let Some(visible_output) = visible_output.as_deref() {
+        events.push(ExecutionStreamEvent::RuntimeEvent {
+            session_id,
+            event: build_output_completed_event(visible_output),
+        });
+    }
     events.push(ExecutionStreamEvent::Finished(
         build_success_execution_report(
             session_id,
             preparation,
             normalize_optional_stream_output(stream_state.thinking_visible_output().to_string()),
-            normalized_output,
+            visible_output,
             stream_state.take_final_conversation_state(),
             stream_state.provider_request_count(),
             mcp_discovery_rows,
@@ -275,6 +284,7 @@ mod tests {
     use crate::agent_runtime::runtime_stream_delta::{
         RuntimeStreamDeltaState, process_provider_stream_delta,
     };
+    use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
     use crate::context_budget::ContextBudgetSnapshot;
     use uuid::Uuid;
     use vulcan_core::controller::VulcanCoreController;
@@ -296,12 +306,14 @@ mod tests {
             subagent_prompt_context: None,
             model_blueprint: ProviderRuntimeBlueprint {
                 provider_id: String::from("openai"),
+                service_entry_id: String::from("public-api"),
                 connection_id: String::from("test-connection"),
                 provider_name: String::from("OpenAI"),
                 runtime_label: String::from("OpenAI"),
                 model_id: String::from("gpt-test"),
                 model_name: String::from("GPT Test"),
                 protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+                secondary_route: Default::default(),
                 public_capabilities: vulcan_ai_contract::ModelCapabilities::default(),
                 base_url: Some(String::from("https://api.example.test/v1")),
                 supports_remote_model_refresh: true,
@@ -393,6 +405,7 @@ mod tests {
             request_headers: None,
             continuation: CoreProviderContinuation {
                 provider_id: Some(String::from("openai")),
+                protocol_profile_id: Some(String::from("openai-responses")),
                 model_id: Some(String::from("gpt-test")),
                 last_provider_message_id: Some(String::from("resp-prev")),
                 last_local_message_id: Some(String::from("assistant-1")),
@@ -435,6 +448,7 @@ mod tests {
                 SessionConversationState::default(),
                 Some(ProviderUsageSnapshot {
                     input_tokens: Some(100),
+                    uncached_input_tokens: None,
                     output_tokens: Some(20),
                     reasoning_tokens: None,
                     total_tokens: Some(120),
@@ -469,6 +483,43 @@ mod tests {
                     .and_then(|usage| usage.total_tokens) == Some(120)
                 && report.mcp_discovery_rows == vec![String::from("mcp-row")]
                 && report.warnings == vec![String::from("warning")]
+        ));
+    }
+
+    /// Preserves tool-only completion without inventing an assistant placeholder message.
+    /// 在仅有工具请求的完成场景中不伪造助手占位消息。
+    #[test]
+    fn tool_only_success_omits_assistant_output_event() {
+        let session_id = Uuid::nil();
+        let mut stream_state = build_stream_state();
+        let _ = process_provider_stream_delta(
+            session_id,
+            &mut stream_state,
+            Ok(ProviderStreamDelta::ToolRequestFragment(
+                ToolRequestFragment::Detected {
+                    request_stream_id: String::from("request-1"),
+                    tool_call_id: String::from("call-1"),
+                    tool_name: String::from("shell-command"),
+                    initial_arguments: String::new(),
+                    argument_assembler: None,
+                },
+            )),
+        );
+
+        let events = build_success_terminal_events(
+            session_id,
+            build_test_preparation(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            &mut stream_state,
+            None,
+        );
+
+        assert!(matches!(
+            events.as_slice(),
+            [ExecutionStreamEvent::Finished(report)]
+                if report.is_success() && report.assistant_output.is_none()
         ));
     }
 
@@ -531,6 +582,7 @@ mod tests {
     fn apply_latest_request_snapshot_preserves_observed_usage() {
         let observed_usage = ProviderUsageSnapshot {
             input_tokens: Some(4096),
+            uncached_input_tokens: None,
             output_tokens: Some(256),
             reasoning_tokens: Some(128),
             total_tokens: Some(4480),

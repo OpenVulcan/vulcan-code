@@ -12,6 +12,7 @@ async-stream = "0.3.6"
 base64.workspace = true
 futures-util = "0.3.31"
 reqwest = { workspace = true, features = ["stream", "gzip", "brotli", "deflate", "zstd"] }
+httpdate.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

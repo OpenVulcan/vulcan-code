@@ -165,6 +165,7 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
       submission.attachments,
       submission.executionMode,
       submission.reasoningEffort,
+      submission.modelSelection,
     );
     if (!ack) {
       toast.info(translate("conversationActions.previewCannotSend"));

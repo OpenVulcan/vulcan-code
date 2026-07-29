@@ -96,6 +96,7 @@ pub(super) async fn dispatch(
                 rpc_optional_param(params, "hiddenModelGuidance")?,
                 rpc_optional_param(params, "executionMode")?,
                 rpc_optional_param(params, "reasoningEffort")?,
+                rpc_optional_param(params, "modelSelection")?,
                 rpc_optional_param(params, "attachments")?,
                 None,
                 ExistingSessionHydrationPolicy::HydrateIfEmpty,
