@@ -450,6 +450,7 @@ export type TranslationKey =
   | "composer.capability.saveHint.saving"
   | "composer.capability.saveHint.unsaved"
   | "composer.capability.saveHint.clean"
+  | "composer.capability.sessionRequired"
   | "composer.capability.useDefaults"
   | "composer.capability.save.saving"
   | "composer.capability.save.saved"
@@ -1277,6 +1278,7 @@ export type TranslationKey =
   | "settings.tools.description"
   | "settings.diagnostics.description"
   | "settings.group.models"
+  | "settings.group.aiCapabilities"
   | "settings.modelProviders"
   | "settings.credentialManagement"
   | "settings.modelList"
@@ -1350,6 +1352,46 @@ export type TranslationKey =
   | "settings.modelOverrides.noParameters"
   | "settings.modelOverrides.unsupportedParameter"
   | "settings.modelOverrides.enabled"
+  | "settings.models.enabled"
+  | "settings.models.disabled"
+  | "settings.models.toggle"
+  | "settings.providerTools.title"
+  | "settings.providerTools.description"
+  | "settings.providerTools.select"
+  | "settings.providerTools.disabled"
+  | "settings.providerTools.unavailable"
+  | "settings.providerTools.imageGenerate"
+  | "settings.providerTools.mediaAnalyze"
+  | "settings.providerTools.musicGenerate"
+  | "settings.providerTools.speechSynthesize"
+  | "settings.providerTools.videoGenerate"
+  | "settings.providerTools.webSearch"
+  | "settings.providerTools.webExtract"
+  | "settings.providerTools.loading"
+  | "settings.providerTools.enabled"
+  | "settings.providerTools.default"
+  | "settings.providerTools.setDefault"
+  | "settings.providerTools.noTargets"
+  | "settings.providerTools.change"
+  | "settings.providerTools.noSelection"
+  | "settings.providerTools.configure"
+  | "settings.providerTools.dialogTitle"
+  | "settings.providerTools.dialogDescription"
+  | "settings.providerTools.providers"
+  | "settings.providerTools.targets"
+  | "settings.providerTools.disable"
+  | "settings.providerTools.cancel"
+  | "settings.providerTools.save"
+  | "toolPresentation.providerText.title"
+  | "toolPresentation.providerText.empty"
+  | "toolPresentation.providerSearch.title"
+  | "toolPresentation.providerSearch.results"
+  | "toolPresentation.providerSearch.empty"
+  | "toolPresentation.providerExtract.title"
+  | "toolPresentation.providerExtract.results"
+  | "toolPresentation.providerExtract.failures"
+  | "toolPresentation.providerExtract.images"
+  | "toolPresentation.providerExtract.empty"
   | "settings.modelOverrides.disabled"
   | "settings.modelOverrides.cancel"
   | "settings.modelOverrides.save"
@@ -1997,7 +2039,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.capability.tooltipTitle": "点击设置扩展能力",
     "composer.capability.tooltipEmpty": "暂无已启用模块",
     "composer.capability.dialogTitle": "当前会话能力设置",
-    "composer.capability.dialogDescription": "调整排序与勾选后需要点击保存，保存后会写入当前会话的独立配置，并影响下一次对话的缓存命中。",
+    "composer.capability.dialogDescription": "每项能力只选择一个目标；点击保存后写入当前会话，并从下一次对话开始生效。",
     "composer.capability.source.nativeWithTargets": "模型原生 + {count} 个目标",
     "composer.capability.source.native": "模型原生",
     "composer.capability.source.targets": "{count} 个目标",
@@ -2008,6 +2050,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.capability.saveHint.saving": "正在保存到当前会话...",
     "composer.capability.saveHint.unsaved": "有未保存变更。",
     "composer.capability.saveHint.clean": "当前没有未保存变更。",
+    "composer.capability.sessionRequired": "发送首条消息创建会话后，可保存会话级能力选择。",
     "composer.capability.useDefaults": "使用默认配置",
     "composer.capability.save.saving": "保存中",
     "composer.capability.save.saved": "已保存",
@@ -2835,6 +2878,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.tools.description": "工具调用、命令会话与输出",
     "settings.diagnostics.description": "启动日志、错误与运行时事件",
     "settings.group.models": "模型设置",
+    "settings.group.aiCapabilities": "AI 能力",
     "settings.modelProviders": "供应商管理",
     "settings.credentialManagement": "凭据管理",
     "settings.modelList": "模型列表",
@@ -2908,6 +2952,46 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.modelOverrides.noParameters": "当前协议没有额外模型参数。",
     "settings.modelOverrides.unsupportedParameter": "该复杂参数尚未注册可视化编辑器",
     "settings.modelOverrides.enabled": "启用",
+    "settings.models.enabled": "已启用",
+    "settings.models.disabled": "已关闭",
+    "settings.models.toggle": "切换模型启用状态",
+    "settings.providerTools.title": "AI 扩展能力",
+    "settings.providerTools.description": "每项能力只能选择一个实际模型；AI 将收到该模型的原生参数 Schema。",
+    "settings.providerTools.select": "选择模型",
+    "settings.providerTools.disabled": "不启用",
+    "settings.providerTools.unavailable": "已选目标不可用",
+    "settings.providerTools.imageGenerate": "图片生成",
+    "settings.providerTools.mediaAnalyze": "图片理解",
+    "settings.providerTools.musicGenerate": "音乐生成",
+    "settings.providerTools.speechSynthesize": "语音合成",
+    "settings.providerTools.videoGenerate": "视频生成",
+    "settings.providerTools.webSearch": "网页搜索",
+    "settings.providerTools.webExtract": "网页提取",
+    "settings.providerTools.loading": "正在读取能力目标…",
+    "settings.providerTools.enabled": "已启用",
+    "settings.providerTools.default": "默认目标",
+    "settings.providerTools.setDefault": "设为默认",
+    "settings.providerTools.noTargets": "当前没有支持此能力的模型。",
+    "settings.providerTools.change": "更改目标",
+    "settings.providerTools.noSelection": "该能力尚未选择目标。",
+    "settings.providerTools.configure": "配置目标",
+    "settings.providerTools.dialogTitle": "配置能力目标",
+    "settings.providerTools.dialogDescription": "左侧选择供应商，右侧为当前能力选择唯一目标。",
+    "settings.providerTools.providers": "供应商",
+    "settings.providerTools.targets": "目标列表",
+    "settings.providerTools.disable": "不启用",
+    "settings.providerTools.cancel": "取消",
+    "settings.providerTools.save": "保存",
+    "toolPresentation.providerText.title": "AI 分析",
+    "toolPresentation.providerText.empty": "供应商未返回文本结果。",
+    "toolPresentation.providerSearch.title": "网页搜索",
+    "toolPresentation.providerSearch.results": "条结果",
+    "toolPresentation.providerSearch.empty": "供应商未返回搜索结果。",
+    "toolPresentation.providerExtract.title": "网页提取",
+    "toolPresentation.providerExtract.results": "个页面",
+    "toolPresentation.providerExtract.failures": "个失败",
+    "toolPresentation.providerExtract.images": "张图片",
+    "toolPresentation.providerExtract.empty": "供应商未返回提取结果。",
     "settings.modelOverrides.disabled": "停用",
     "settings.modelOverrides.cancel": "取消",
     "settings.modelOverrides.save": "保存更改",
@@ -3563,6 +3647,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.capability.saveHint.saving": "Saving to this session...",
     "composer.capability.saveHint.unsaved": "Unsaved changes.",
     "composer.capability.saveHint.clean": "No unsaved changes.",
+    "composer.capability.sessionRequired": "Send the first message to create the conversation before saving session capability choices.",
     "composer.capability.useDefaults": "Use defaults",
     "composer.capability.save.saving": "Saving",
     "composer.capability.save.saved": "Saved",
@@ -4390,6 +4475,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.tools.description": "Tool calls, command sessions, and output",
     "settings.diagnostics.description": "Startup logs, errors, and runtime events",
     "settings.group.models": "Model settings",
+    "settings.group.aiCapabilities": "AI capabilities",
     "settings.modelProviders": "Provider management",
     "settings.credentialManagement": "Credential management",
     "settings.modelList": "Model list",
@@ -4463,6 +4549,46 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.modelOverrides.noParameters": "This protocol has no additional model parameters.",
     "settings.modelOverrides.unsupportedParameter": "No visual editor is registered for this complex parameter",
     "settings.modelOverrides.enabled": "Enabled",
+    "settings.models.enabled": "Enabled",
+    "settings.models.disabled": "Disabled",
+    "settings.models.toggle": "Toggle model availability",
+    "settings.providerTools.title": "AI extension capabilities",
+    "settings.providerTools.description": "Each capability selects exactly one model and exposes that model's native parameter schema.",
+    "settings.providerTools.select": "Select model",
+    "settings.providerTools.disabled": "Disabled",
+    "settings.providerTools.unavailable": "Selected target unavailable",
+    "settings.providerTools.imageGenerate": "Image generation",
+    "settings.providerTools.mediaAnalyze": "Image understanding",
+    "settings.providerTools.musicGenerate": "Music generation",
+    "settings.providerTools.speechSynthesize": "Speech synthesis",
+    "settings.providerTools.videoGenerate": "Video generation",
+    "settings.providerTools.webSearch": "Web search",
+    "settings.providerTools.webExtract": "Web extraction",
+    "settings.providerTools.loading": "Loading capability targets…",
+    "settings.providerTools.enabled": "Enabled",
+    "settings.providerTools.default": "Default target",
+    "settings.providerTools.setDefault": "Set as default",
+    "settings.providerTools.noTargets": "No current model supports this capability.",
+    "settings.providerTools.change": "Change target",
+    "settings.providerTools.noSelection": "No target is selected for this capability.",
+    "settings.providerTools.configure": "Configure target",
+    "settings.providerTools.dialogTitle": "Configure capability target",
+    "settings.providerTools.dialogDescription": "Choose a provider on the left and one target for this capability on the right.",
+    "settings.providerTools.providers": "Providers",
+    "settings.providerTools.targets": "Targets",
+    "settings.providerTools.disable": "Disable",
+    "settings.providerTools.cancel": "Cancel",
+    "settings.providerTools.save": "Save",
+    "toolPresentation.providerText.title": "AI analysis",
+    "toolPresentation.providerText.empty": "The provider returned no text result.",
+    "toolPresentation.providerSearch.title": "Web search",
+    "toolPresentation.providerSearch.results": "results",
+    "toolPresentation.providerSearch.empty": "The provider returned no search results.",
+    "toolPresentation.providerExtract.title": "Web extraction",
+    "toolPresentation.providerExtract.results": "pages",
+    "toolPresentation.providerExtract.failures": "failures",
+    "toolPresentation.providerExtract.images": "images",
+    "toolPresentation.providerExtract.empty": "The provider returned no extraction results.",
     "settings.modelOverrides.disabled": "Disabled",
     "settings.modelOverrides.cancel": "Cancel",
     "settings.modelOverrides.save": "Save changes",

@@ -21,6 +21,9 @@ export interface ComposerActiveProviderModel {
 // UseComposerModelSelectionOptions defines authoritative snapshots and persistence callbacks for model selection.
 // UseComposerModelSelectionOptions 定义模型选择的权威快照与持久化回调。
 export interface UseComposerModelSelectionOptions {
+  // Exact conversation scope whose persisted model and account are being rendered.
+  // 当前渲染其持久化模型与账号的精确会话作用域。
+  conversationScopeKey: string;
   // Providers and models projected by the shared workbench service.
   // 共享工作台服务投影出的 Provider 与模型。
   providers: ProviderSummary[];
@@ -178,19 +181,22 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
   // submittedReasoningEffort is non-null only when backend capabilities explicitly allow the local value.
   // submittedReasoningEffort 仅在后端能力明确允许本地值时非空。
   const submittedReasoningEffort = React.useMemo(() => {
+    if (reasoningEffort === "fixed-on" || reasoningEffort === "fixed-off") {
+      return null;
+    }
     if (!options.reasoningSelection?.options.some((option) => option.value === reasoningEffort)) {
       return null;
     }
     return reasoningEffort;
   }, [options.reasoningSelection, reasoningEffort]);
 
-  React.useEffect(() => {
-    if (activeModelChoiceKey) {
-      setModelChoice(activeModelChoiceKey);
-    }
-  }, [activeModelChoiceKey, availableModelChoices]);
+  React.useLayoutEffect(() => {
+    modelRequestVersionRef.current += 1;
+    setModelChoice(activeModelChoiceKey);
+  }, [activeModelChoiceKey, options.conversationScopeKey]);
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
+    reasoningRequestVersionRef.current += 1;
     setReasoningEffort((current) => {
       if (serviceSelectedReasoningEffort) {
         return serviceSelectedReasoningEffort;
@@ -200,7 +206,11 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
       }
       return reasoningEffortOptions[0]?.value ?? "";
     });
-  }, [reasoningEffortValuesSignature, serviceSelectedReasoningEffort]);
+  }, [
+    options.conversationScopeKey,
+    reasoningEffortValuesSignature,
+    serviceSelectedReasoningEffort,
+  ]);
 
   // selectModel applies an optimistic model value and only lets the latest failed request roll it back.
   // selectModel 应用乐观模型值，仅允许最新失败请求执行回滚。

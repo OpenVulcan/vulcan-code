@@ -415,6 +415,7 @@ fn canonical_attachment_token_estimate(attachment: &ConversationAttachment) -> u
         vulcan_core::types::ConversationAttachmentKind::Image => 384usize,
         vulcan_core::types::ConversationAttachmentKind::Video => 1024usize,
         vulcan_core::types::ConversationAttachmentKind::Pdf => 768usize,
+        vulcan_core::types::ConversationAttachmentKind::File => 768usize,
     };
     kind_reserve
         + estimate_compaction_text_tokens(&attachment.file_name)

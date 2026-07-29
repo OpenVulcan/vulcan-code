@@ -216,10 +216,11 @@ fn openrouter_model_display_name(reported_name: Option<&str>, model_id: &str) ->
     let Some(normalized_name) = reported_name.map(str::trim).filter(|name| !name.is_empty()) else {
         return model_id.to_string();
     };
-    if let Some((publisher, model_name)) = normalized_name.split_once(':') {
-        if !publisher.trim().is_empty() && !model_name.trim().is_empty() {
-            return model_name.trim().to_string();
-        }
+    if let Some((publisher, model_name)) = normalized_name.split_once(':')
+        && !publisher.trim().is_empty()
+        && !model_name.trim().is_empty()
+    {
+        return model_name.trim().to_string();
     }
     normalized_name.to_string()
 }
@@ -272,6 +273,221 @@ pub fn parse_openai_model_catalog(
         models,
         generation,
     })
+}
+
+/// Applies code-owned capabilities to models returned by one compatible provider.
+/// 为某个兼容供应商返回的模型应用代码持有的能力契约。
+///
+/// # Parameters
+/// 参数
+/// `provider_id`, `service_entry_id`, and `protocol_id` identify the exact route;
+/// `catalog` is the already parsed credential-visible model list.
+/// `provider_id`、`service_entry_id` 与 `protocol_id` 标识精确路由；
+/// `catalog` 是已解析且对当前凭据可见的模型列表。
+pub fn enrich_compatible_model_catalog(
+    provider_id: &str,
+    service_entry_id: &str,
+    protocol_id: &str,
+    catalog: &mut ConnectionModelCatalog,
+) {
+    for model in &mut catalog.models {
+        match provider_id {
+            "kimi" => enrich_kimi_model(service_entry_id, protocol_id, model),
+            "deepseek" => enrich_deepseek_model(model),
+            "alibaba" => enrich_alibaba_model(model),
+            _ => {}
+        }
+    }
+}
+
+/// Applies the closed Kimi capability mapping copied from the verified Model Core catalog.
+/// 应用从已验证 Model Core 目录同步的封闭 Kimi 能力映射。
+///
+/// # Parameters
+/// 参数
+/// `service_entry_id` and `protocol_id` identify the product route; `model` is mutated in place.
+/// `service_entry_id` 与 `protocol_id` 标识产品路由；`model` 会被原位更新。
+fn enrich_kimi_model(service_entry_id: &str, protocol_id: &str, model: &mut ConnectionModel) {
+    let (display_name, context_limit, reasoning, reasoning_efforts, input_resources) =
+        match (service_entry_id, model.id.as_str()) {
+            ("coding-plan", "kimi-for-coding") => (
+                "Kimi K2.7 Code",
+                Some(262_144),
+                CapabilitySupport::Native,
+                Vec::new(),
+                Vec::new(),
+            ),
+            ("coding-plan", "kimi-for-coding-highspeed") => (
+                "Kimi K2.7 Code HighSpeed",
+                Some(262_144),
+                CapabilitySupport::Native,
+                Vec::new(),
+                Vec::new(),
+            ),
+            ("coding-plan", "k3") => (
+                "Kimi K3",
+                Some(1_048_576),
+                CapabilitySupport::Native,
+                vec![
+                    ReasoningEffort::Low,
+                    ReasoningEffort::High,
+                    ReasoningEffort::Max,
+                ],
+                Vec::new(),
+            ),
+            (_, "kimi-k3") => (
+                "Kimi K3",
+                Some(1_048_576),
+                CapabilitySupport::Native,
+                vec![
+                    ReasoningEffort::Low,
+                    ReasoningEffort::High,
+                    ReasoningEffort::Max,
+                ],
+                vec![ResourceKind::Image, ResourceKind::Video],
+            ),
+            (_, "kimi-k2.7-code") => (
+                "Kimi K2.7 Code",
+                Some(262_144),
+                CapabilitySupport::Native,
+                Vec::new(),
+                vec![ResourceKind::Image, ResourceKind::Video],
+            ),
+            (_, "kimi-k2.7-code-highspeed") => (
+                "Kimi K2.7 Code HighSpeed",
+                Some(262_144),
+                CapabilitySupport::Native,
+                Vec::new(),
+                vec![ResourceKind::Image, ResourceKind::Video],
+            ),
+            (_, "kimi-k2.6") => (
+                "Kimi K2.6",
+                Some(262_144),
+                CapabilitySupport::Unknown,
+                Vec::new(),
+                vec![ResourceKind::Image],
+            ),
+            (_, "kimi-k2.5") => (
+                "Kimi K2.5",
+                Some(262_144),
+                CapabilitySupport::Unknown,
+                Vec::new(),
+                vec![ResourceKind::Image],
+            ),
+            (_, "moonshot-v1-8k") => (
+                "Moonshot V1 8K",
+                Some(8_192),
+                CapabilitySupport::Unsupported,
+                Vec::new(),
+                Vec::new(),
+            ),
+            (_, "moonshot-v1-32k") => (
+                "Moonshot V1 32K",
+                Some(32_768),
+                CapabilitySupport::Unsupported,
+                Vec::new(),
+                Vec::new(),
+            ),
+            (_, "moonshot-v1-128k") => (
+                "Moonshot V1 128K",
+                Some(131_072),
+                CapabilitySupport::Unsupported,
+                Vec::new(),
+                Vec::new(),
+            ),
+            (_, "moonshot-v1-8k-vision-preview") => (
+                "Moonshot V1 8K Vision",
+                Some(8_192),
+                CapabilitySupport::Unsupported,
+                Vec::new(),
+                vec![ResourceKind::Image],
+            ),
+            (_, "moonshot-v1-32k-vision-preview") => (
+                "Moonshot V1 32K Vision",
+                Some(32_768),
+                CapabilitySupport::Unsupported,
+                Vec::new(),
+                vec![ResourceKind::Image],
+            ),
+            (_, "moonshot-v1-128k-vision-preview") => (
+                "Moonshot V1 128K Vision",
+                Some(131_072),
+                CapabilitySupport::Unsupported,
+                Vec::new(),
+                vec![ResourceKind::Image],
+            ),
+            _ => return,
+        };
+    model.display_name = display_name.to_string();
+    model.capabilities.context_limit = context_limit;
+    model.capabilities.input_resources = input_resources;
+    model.capabilities.tool_calling = CapabilitySupport::Native;
+    model.capabilities.parallel_tool_calling = CapabilitySupport::Native;
+    model.capabilities.reasoning = reasoning;
+    model.capabilities.reasoning_efforts = reasoning_efforts;
+    model.capabilities.evidence_revision = format!("model-core.kimi.2026-07-29.{protocol_id}");
+}
+
+/// Applies the exact current DeepSeek official text-model capability contract.
+/// 应用当前 DeepSeek 官方文本模型的精确能力契约。
+///
+/// # Parameters
+/// 参数
+/// `model` is one provider-returned model mutated only when its identity is known.
+/// `model` 是供应商返回的单个模型，仅在身份已知时原位更新。
+fn enrich_deepseek_model(model: &mut ConnectionModel) {
+    let display_name = match model.id.as_str() {
+        "deepseek-v4-flash" => "DeepSeek V4 Flash",
+        "deepseek-v4-pro" => "DeepSeek V4 Pro",
+        _ => return,
+    };
+    model.display_name = display_name.to_string();
+    model.capabilities.context_limit = Some(1_000_000);
+    model.capabilities.output_limit = Some(393_216);
+    model.capabilities.tool_calling = CapabilitySupport::Native;
+    model.capabilities.parallel_tool_calling = CapabilitySupport::Native;
+    model.capabilities.reasoning = CapabilitySupport::Native;
+    model.capabilities.reasoning_efforts = vec![ReasoningEffort::High, ReasoningEffort::Max];
+    model.capabilities.evidence_revision = String::from("deepseek.api-docs.2026-07-29");
+}
+
+/// Applies Alibaba reasoning contracts only to exact model identities present in Model Core.
+/// 仅对 Model Core 中存在的精确模型身份应用阿里云推理契约。
+///
+/// # Parameters
+/// 参数
+/// `model` is one provider-returned model whose unknown identities remain conservative.
+/// `model` 是供应商返回的单个模型，未知身份保持保守能力。
+fn enrich_alibaba_model(model: &mut ConnectionModel) {
+    let reasoning_efforts = match model.id.as_str() {
+        "qwen3.7-plus"
+        | "qwen3.6-plus"
+        | "qwen3.5-plus"
+        | "qwen3.5-flash"
+        | "qwen3.7-max"
+        | "qwen3.7-max-2026-06-08"
+        | "qwen3.6-flash"
+        | "glm-5.2"
+        | "glm-5.1"
+        | "glm-5"
+        | "glm-4.7"
+        | "glm-5.2-fast-preview"
+        | "ZHIPU/GLM-5.2"
+        | "xiaomi/mimo-v2.5-pro"
+        | "stepfun/step-3.7-flash"
+        | "deepseek-v4-pro"
+        | "deepseek-v4-flash"
+        | "deepseek-v3.2"
+        | "kimi-k2.5"
+        | "kimi-k2.6" => vec![ReasoningEffort::None, ReasoningEffort::Adaptive],
+        "kimi-k2.7-code" => vec![ReasoningEffort::Adaptive],
+        _ => return,
+    };
+    model.capabilities.tool_calling = CapabilitySupport::Native;
+    model.capabilities.parallel_tool_calling = CapabilitySupport::Native;
+    model.capabilities.reasoning = CapabilitySupport::Equivalent;
+    model.capabilities.reasoning_efforts = reasoning_efforts;
+    model.capabilities.evidence_revision = String::from("model-core.alibaba.2026-07-29");
 }
 
 /// Parses the OpenAI Codex subscription model catalog without local model guesses.

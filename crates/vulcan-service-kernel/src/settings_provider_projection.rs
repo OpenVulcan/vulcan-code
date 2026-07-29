@@ -99,7 +99,7 @@ pub(crate) fn public_ai_provider_rows_for_selection(
         let provider = providers
             .provider(connection.provider_id.as_str())
             .ok_or_else(|| format!("Provider `{}` is not registered.", connection.provider_id))?;
-        let models = catalogs
+        let catalog_models = catalogs
             .get(connection.id.as_str())
             .map(|catalog| {
                 catalog
@@ -135,12 +135,16 @@ pub(crate) fn public_ai_provider_rows_for_selection(
                             )?
                             .id
                             == connection.id;
+                        let enabled = configuration.model_is_enabled(
+                            connection.provider_id.as_str(),
+                            model.id.as_str(),
+                        );
                         Ok(ProviderModelSummary {
                             id: model.id.clone(),
                             name: model.display_name.clone(),
                             active,
                             preferred_connection,
-                            enabled: true,
+                            enabled,
                             status: None,
                             family: None,
                             context_limit: model
@@ -175,6 +179,11 @@ pub(crate) fn public_ai_provider_rows_for_selection(
             })
             .transpose()?
             .unwrap_or_default();
+        let models = catalog_models
+            .iter()
+            .filter(|model| model.enabled)
+            .cloned()
+            .collect::<Vec<_>>();
         let active = models.iter().any(|model| model.active);
         let status = errors
             .get(connection.id.as_str())
@@ -196,7 +205,7 @@ pub(crate) fn public_ai_provider_rows_for_selection(
             status,
             configured: true,
             active,
-            catalog_models: models.clone(),
+            catalog_models,
             models,
             fields: Vec::new(),
         });

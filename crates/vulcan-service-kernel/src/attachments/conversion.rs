@@ -69,6 +69,12 @@ fn composer_attachment_kind_metadata(
             label: "PDF",
             accept: "application/pdf",
         },
+        ConversationAttachmentKind::File => ComposerAttachmentKindMetadata {
+            key: "file",
+            aliases: &[],
+            label: "文件",
+            accept: "application/json,text/plain",
+        },
     }
 }
 

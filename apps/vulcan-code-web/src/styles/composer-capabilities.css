@@ -132,28 +132,18 @@
 
 .composer-capability-target-row {
   display: grid;
-  grid-template-columns: 14px 18px minmax(0, 1fr);
+  grid-template-columns: 15px minmax(0, 1fr);
   align-items: center;
   gap: 9px;
   border: 1px solid var(--border);
   border-radius: 0;
   padding: 7px 8px;
   background: var(--background);
-  cursor: grab;
-  touch-action: none;
+  cursor: pointer;
 }
 
 .composer-capability-target-row:hover {
   background: var(--accent);
-}
-
-.composer-capability-target-row.dragging {
-  opacity: 0.68;
-  cursor: grabbing;
-}
-
-.composer-capability-target-handle {
-  color: var(--muted-foreground);
 }
 
 .composer-capability-target-row.disabled {

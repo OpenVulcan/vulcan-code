@@ -4,6 +4,8 @@ import type {
   PublicAiConnectionUpdateRequest,
   PublicAiCustomProviderSaveRequest,
   PublicAiModelOverrides,
+  PublicAiProviderToolCapabilityKind,
+  PublicAiProviderToolTargetSelection,
   PublicAiOAuthChallenge,
   PublicAiOAuthCommitRequest,
   PublicAiOAuthStartRequest,
@@ -157,6 +159,69 @@ export async function savePublicAiModelOverrides(request: {
   overrides: PublicAiModelOverrides;
 }): Promise<PublicAiSettingsSnapshot> {
   return serviceClient.request<PublicAiSettingsSnapshot>("service_save_public_ai_model_overrides", { request });
+}
+
+// savePublicAiModelEnabled persists one provider-model access choice.
+// savePublicAiModelEnabled 持久化一个供应商模型访问选择。
+export async function savePublicAiModelEnabled(request: {
+  providerId: string;
+  modelId: string;
+  enabled: boolean;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_model_enabled",
+    { request },
+  );
+}
+
+// savePublicAiProviderToolSelection replaces the sole target for one semantic capability.
+// savePublicAiProviderToolSelection 替换一项语义能力唯一的目标。
+export async function savePublicAiProviderToolSelection(request: {
+  capability: PublicAiProviderToolCapabilityKind;
+  selection: PublicAiProviderToolTargetSelection | null;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_provider_tool_selection",
+    { request },
+  );
+}
+
+// savePublicAiProviderToolTargetEnabled changes whether one current target is available to sessions.
+// savePublicAiProviderToolTargetEnabled 修改一个当前目标是否可供会话使用。
+export async function savePublicAiProviderToolTargetEnabled(request: {
+  capability: PublicAiProviderToolCapabilityKind;
+  selection: PublicAiProviderToolTargetSelection;
+  enabled: boolean;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_provider_tool_target_enabled",
+    { request },
+  );
+}
+
+// loadPublicAiSessionProviderToolSelections loads the effective single-select targets for one session.
+// loadPublicAiSessionProviderToolSelections 加载单个会话生效的单选目标。
+export async function loadPublicAiSessionProviderToolSelections(
+  conversationId: string,
+): Promise<Partial<Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>>> {
+  return serviceClient.request(
+    "service_public_ai_session_provider_tool_selections",
+    { conversationId },
+  );
+}
+
+// savePublicAiSessionProviderToolSelections replaces all session-level single-select targets.
+// savePublicAiSessionProviderToolSelections 替换全部会话级单选目标。
+export async function savePublicAiSessionProviderToolSelections(request: {
+  conversationId: string;
+  selections: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
+  >;
+}): Promise<Partial<Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>>> {
+  return serviceClient.request(
+    "service_save_public_ai_session_provider_tool_selections",
+    { request },
+  );
 }
 
 // savePublicAiDefaultConnection changes the explicit initial account for one provider.

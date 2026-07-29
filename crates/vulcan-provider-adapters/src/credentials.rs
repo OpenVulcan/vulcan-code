@@ -114,6 +114,16 @@ pub enum CredentialSecretMaterial {
         /// MiniMax 返回的精确可信 API 资源 URL。
         resource_url: String,
     },
+    /// Renewable Kimi Coding Plan device authorization.
+    /// 可续期的 Kimi Coding Plan 设备授权。
+    KimiCodingPlanOAuth {
+        /// Shared OAuth token set.
+        /// 共享 OAuth Token 集合。
+        tokens: OAuthTokenSet,
+        /// Stable provider-visible identity required by refresh and usage requests.
+        /// 刷新与用量请求所需的稳定供应商可见身份。
+        device_id: String,
+    },
 }
 
 /// Stores common renewable OAuth token fields without provider guesses.
@@ -181,6 +191,9 @@ pub struct CredentialExecutionSecret {
     /// Optional Google Code Assist project required in the exact upstream request body.
     /// 精确上游请求正文所需的可选 Google Code Assist 项目。
     project_id: Option<String>,
+    /// Optional provider-visible device identity required by account metadata requests.
+    /// 账号元数据请求所需的可选供应商可见设备身份。
+    provider_device_id: Option<String>,
 }
 
 impl CredentialSecretEnvelope {
@@ -317,7 +330,8 @@ impl CredentialSecretEnvelope {
             CredentialSecretMaterial::OpenAiCodexOAuth { .. }
             | CredentialSecretMaterial::ClaudeCodeOAuth { .. }
             | CredentialSecretMaterial::GoogleOAuth { .. }
-            | CredentialSecretMaterial::MiniMaxOAuth { .. } => CredentialMode::Auth,
+            | CredentialSecretMaterial::MiniMaxOAuth { .. }
+            | CredentialSecretMaterial::KimiCodingPlanOAuth { .. } => CredentialMode::Auth,
         }
     }
 
@@ -330,57 +344,72 @@ impl CredentialSecretEnvelope {
     /// 返回不可调试输出的秘密值及其冻结修订号。
     pub fn execution_secret(&self) -> Result<CredentialExecutionSecret, String> {
         self.validate()?;
-        let (kind, value, account_id, quota_project_id, project_id) = match &self.material {
-            CredentialSecretMaterial::ApiKey { value } => (
-                CredentialExecutionSecretKind::ApiKey,
-                value.clone(),
-                None,
-                None,
-                None,
-            ),
-            CredentialSecretMaterial::StaticBearer { access_token } => (
-                CredentialExecutionSecretKind::Bearer,
-                access_token.clone(),
-                None,
-                None,
-                None,
-            ),
-            CredentialSecretMaterial::OpenAiCodexOAuth {
-                tokens, account_id, ..
-            } => (
-                CredentialExecutionSecretKind::Bearer,
-                tokens.access_token.clone(),
-                account_id.clone(),
-                None,
-                None,
-            ),
-            CredentialSecretMaterial::ClaudeCodeOAuth { tokens } => (
-                CredentialExecutionSecretKind::Bearer,
-                tokens.access_token.clone(),
-                None,
-                None,
-                None,
-            ),
-            CredentialSecretMaterial::GoogleOAuth {
-                tokens,
-                project_id,
-                quota_project_id,
-                ..
-            } => (
-                CredentialExecutionSecretKind::Bearer,
-                tokens.access_token.clone(),
-                None,
-                quota_project_id.clone(),
-                project_id.clone(),
-            ),
-            CredentialSecretMaterial::MiniMaxOAuth { tokens, .. } => (
-                CredentialExecutionSecretKind::Bearer,
-                tokens.access_token.clone(),
-                None,
-                None,
-                None,
-            ),
-        };
+        let (kind, value, account_id, quota_project_id, project_id, provider_device_id) =
+            match &self.material {
+                CredentialSecretMaterial::ApiKey { value } => (
+                    CredentialExecutionSecretKind::ApiKey,
+                    value.clone(),
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                CredentialSecretMaterial::StaticBearer { access_token } => (
+                    CredentialExecutionSecretKind::Bearer,
+                    access_token.clone(),
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                CredentialSecretMaterial::OpenAiCodexOAuth {
+                    tokens, account_id, ..
+                } => (
+                    CredentialExecutionSecretKind::Bearer,
+                    tokens.access_token.clone(),
+                    account_id.clone(),
+                    None,
+                    None,
+                    None,
+                ),
+                CredentialSecretMaterial::ClaudeCodeOAuth { tokens } => (
+                    CredentialExecutionSecretKind::Bearer,
+                    tokens.access_token.clone(),
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                CredentialSecretMaterial::GoogleOAuth {
+                    tokens,
+                    project_id,
+                    quota_project_id,
+                    ..
+                } => (
+                    CredentialExecutionSecretKind::Bearer,
+                    tokens.access_token.clone(),
+                    None,
+                    quota_project_id.clone(),
+                    project_id.clone(),
+                    None,
+                ),
+                CredentialSecretMaterial::MiniMaxOAuth { tokens, .. } => (
+                    CredentialExecutionSecretKind::Bearer,
+                    tokens.access_token.clone(),
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                CredentialSecretMaterial::KimiCodingPlanOAuth { tokens, device_id } => (
+                    CredentialExecutionSecretKind::Bearer,
+                    tokens.access_token.clone(),
+                    None,
+                    None,
+                    None,
+                    Some(device_id.clone()),
+                ),
+            };
         Ok(CredentialExecutionSecret {
             revision: self.revision,
             kind,
@@ -388,6 +417,7 @@ impl CredentialSecretEnvelope {
             account_id,
             quota_project_id,
             project_id,
+            provider_device_id,
         })
     }
 
@@ -410,7 +440,10 @@ impl CredentialSecretEnvelope {
             CredentialSecretMaterial::OpenAiCodexOAuth { tokens, .. }
             | CredentialSecretMaterial::ClaudeCodeOAuth { tokens }
             | CredentialSecretMaterial::GoogleOAuth { tokens, .. }
-            | CredentialSecretMaterial::MiniMaxOAuth { tokens, .. } => tokens.expires_at_unix_ms,
+            | CredentialSecretMaterial::MiniMaxOAuth { tokens, .. }
+            | CredentialSecretMaterial::KimiCodingPlanOAuth { tokens, .. } => {
+                tokens.expires_at_unix_ms
+            }
             CredentialSecretMaterial::ApiKey { .. }
             | CredentialSecretMaterial::StaticBearer { .. } => return false,
         };
@@ -468,8 +501,40 @@ impl CredentialSecretEnvelope {
                 tokens.validate()?;
                 validate_minimax_resource_url(*region, resource_url)
             }
+            CredentialSecretMaterial::KimiCodingPlanOAuth { tokens, device_id } => {
+                tokens.validate()?;
+                validate_kimi_device_id(device_id)
+            }
         }
     }
+}
+
+/// Validates the persisted RFC 4122-shaped Kimi device identifier.
+/// 校验持久化的 RFC 4122 形态 Kimi 设备标识。
+///
+/// # Parameters
+/// 参数
+/// `device_id` is the exact identity sent during Kimi authorization, refresh, and usage.
+/// `device_id` 是 Kimi 授权、刷新与用量请求期间发送的精确身份。
+///
+/// # Returns
+/// 返回值
+/// Success only for a lowercase hexadecimal UUID shape.
+/// 仅对小写十六进制 UUID 形态返回成功。
+fn validate_kimi_device_id(device_id: &str) -> Result<(), String> {
+    let bytes = device_id.as_bytes();
+    if bytes.len() != 36 {
+        return Err(String::from("Kimi OAuth device identifier is invalid."));
+    }
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        let separator = matches!(index, 8 | 13 | 18 | 23);
+        if (separator && byte != b'-')
+            || (!separator && !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
+        {
+            return Err(String::from("Kimi OAuth device identifier is invalid."));
+        }
+    }
+    Ok(())
 }
 
 impl OAuthTokenSet {
@@ -560,6 +625,17 @@ impl CredentialExecutionSecret {
     /// 仅当授权验证提供时返回借用的项目标识。
     pub fn project_id(&self) -> Option<&str> {
         self.project_id.as_deref()
+    }
+
+    /// Returns the provider-visible device identity required by exact metadata routes.
+    /// 返回精确元数据路由所需的供应商可见设备身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The frozen device identity when the credential contract declares one.
+    /// 凭据契约声明设备身份时返回冻结值。
+    pub fn provider_device_id(&self) -> Option<&str> {
+        self.provider_device_id.as_deref()
     }
 }
 

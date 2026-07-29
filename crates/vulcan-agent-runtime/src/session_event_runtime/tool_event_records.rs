@@ -733,6 +733,8 @@ pub(super) fn raw_host_result_kind_is_visible(kind: Option<&str>) -> bool {
                 | "ask"
                 | "command_run"
                 | "plan_artifact"
+                | "generated_attachments"
+                | "provider_tool_output"
                 | "lua_execution"
                 | "lua_runtime_session"
         )

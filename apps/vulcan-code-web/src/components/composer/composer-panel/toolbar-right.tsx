@@ -72,6 +72,7 @@ export function ComposerPanelToolbarRight(props: ComposerPanelToolbarRightProps)
         <ComposerSelectControl
           ariaLabel={props.reasoningAriaLabel}
           className="reasoning no-indicator"
+          disabled={props.reasoningEffortOptions.length === 1}
           fallbackLabel={props.selectFallbackLabel}
           hideTriggerSubtitle
           icon={<Brain size={15} />}

@@ -296,6 +296,7 @@ mod tests {
             subagent_prompt_context: None,
             model_blueprint: ProviderRuntimeBlueprint {
                 provider_id: String::from("openai"),
+                connection_id: String::from("test-connection"),
                 provider_name: String::from("OpenAI"),
                 runtime_label: String::from("OpenAI"),
                 model_id: String::from("gpt-test"),

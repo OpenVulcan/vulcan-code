@@ -134,6 +134,7 @@ fn attachment_resource_kind(kind: ConversationAttachmentKind) -> ResourceKind {
         ConversationAttachmentKind::Audio => ResourceKind::Audio,
         ConversationAttachmentKind::Video => ResourceKind::Video,
         ConversationAttachmentKind::Pdf => ResourceKind::File,
+        ConversationAttachmentKind::File => ResourceKind::File,
     }
 }
 

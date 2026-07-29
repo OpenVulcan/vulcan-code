@@ -26,6 +26,11 @@ import {
   hydrateSubagentOrchestrationPresentation,
   resolveSubagentOrchestrationPresentation,
 } from "./tool-presentations/subagent-orchestration-presentation";
+import {
+  resolveProviderToolExtractPresentation,
+  resolveProviderToolSearchPresentation,
+  resolveProviderToolTextPresentation,
+} from "./tool-presentations/provider-tool-presentation";
 import type {
   ToolPresentation,
   ToolPresentationDisplayState,
@@ -43,6 +48,12 @@ export type {
   LuaExecutionPresentation,
   MarkdownToolPresentation,
   MarkdownToolPresentationIcon,
+  ProviderToolExtractPresentation,
+  ProviderToolExtractPresentationFailure,
+  ProviderToolExtractPresentationResult,
+  ProviderToolSearchPresentation,
+  ProviderToolSearchPresentationResult,
+  ProviderToolTextPresentation,
   SubagentOrchestrationAgent,
   SubagentOrchestrationPresentation,
   SubagentUsageSummary,
@@ -70,6 +81,9 @@ export function resolveToolPresentation(
   options: ToolPresentationResolveOptions = {},
 ): ToolPresentation | null {
   return resolveSubagentOrchestrationPresentation(blocks, displayState, detailRef)
+    ?? resolveProviderToolTextPresentation(blocks, displayState)
+    ?? resolveProviderToolExtractPresentation(blocks, displayState)
+    ?? resolveProviderToolSearchPresentation(blocks, displayState)
     ?? resolveAskQuestionPresentation(blocks, displayState, detailRef)
     ?? resolveFileChangePresentation(blocks, displayState, options)
     ?? resolveLuaExecutionPresentation(blocks, displayState, detailRef)

@@ -6,7 +6,10 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use vulcan_provider_config::config::ReasoningEffortLevel;
 
-use crate::{SessionId, SessionPlanModeState, SessionRuntimeStateEntry, SessionTodolistState};
+use crate::{
+    SessionId, SessionPlanModeState, SessionProviderToolTargetSelection, SessionRuntimeStateEntry,
+    SessionTodolistState,
+};
 
 /// Current schema version for the durable session addon document.
 /// 当前持久化会话附属状态文档的结构版本。
@@ -806,6 +809,14 @@ pub struct SessionRuntimeControls {
     /// 最近一次该会话激活时选择的可选温度覆盖。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_temperature: Option<f32>,
+    /// Session-selected provider tool targets keyed by semantic capability.
+    /// 按语义能力索引的会话级供应商工具目标选择。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub provider_tool_selections: BTreeMap<String, SessionProviderToolTargetSelection>,
+    /// Whether the session explicitly overrides global provider tool selections.
+    /// 会话是否显式覆盖全局供应商工具选择。
+    #[serde(default)]
+    pub provider_tool_selections_overridden: bool,
 }
 
 impl SessionRuntimeControls {
@@ -829,6 +840,8 @@ impl SessionRuntimeControls {
             active_model_id: runtime_state.active_model_id.clone(),
             active_reasoning_effort: runtime_state.active_reasoning_effort,
             active_temperature: runtime_state.active_temperature,
+            provider_tool_selections: runtime_state.provider_tool_selections.clone(),
+            provider_tool_selections_overridden: runtime_state.provider_tool_selections_overridden,
         };
         controls.has_any_value().then_some(controls)
     }
@@ -847,6 +860,9 @@ impl SessionRuntimeControls {
         runtime_state.active_model_id = self.active_model_id.clone();
         runtime_state.active_reasoning_effort = self.active_reasoning_effort;
         runtime_state.active_temperature = self.active_temperature;
+        runtime_state.provider_tool_selections = self.provider_tool_selections.clone();
+        runtime_state.provider_tool_selections_overridden =
+            self.provider_tool_selections_overridden;
     }
 
     /// Returns whether any controlled value has been recorded.
@@ -863,6 +879,8 @@ impl SessionRuntimeControls {
             || self.active_model_id.is_some()
             || self.active_reasoning_effort.is_some()
             || self.active_temperature.is_some()
+            || !self.provider_tool_selections.is_empty()
+            || self.provider_tool_selections_overridden
     }
 }
 

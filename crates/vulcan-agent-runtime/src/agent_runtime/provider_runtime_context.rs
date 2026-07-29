@@ -1308,6 +1308,7 @@ mod tests {
     fn sample_model_blueprint() -> crate::agent_runtime::provider::ProviderRuntimeBlueprint {
         crate::agent_runtime::provider::ProviderRuntimeBlueprint {
             provider_id: String::from("openrouter"),
+            connection_id: String::from("test-connection"),
             provider_name: String::from("OpenRouter"),
             runtime_label: String::from("Vulcan Public AI Contract"),
             model_id: String::from("vendor/model"),

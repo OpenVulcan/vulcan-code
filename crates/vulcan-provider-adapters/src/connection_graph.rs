@@ -300,6 +300,15 @@ fn validate_connection(
             credential_profile.id
         ));
     }
+    if entry.kind == crate::ServiceEntryKind::ProviderTools {
+        if !connection.selected_protocol.is_empty() || !connection.verified_protocols.is_empty() {
+            return Err(format!(
+                "Provider-tools service entry `{}` cannot bind a conversation protocol.",
+                entry.id
+            ));
+        }
+        return Ok(());
+    }
     let route = entry
         .protocol_routes
         .iter()

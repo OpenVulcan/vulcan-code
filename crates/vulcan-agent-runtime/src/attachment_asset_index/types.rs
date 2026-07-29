@@ -144,6 +144,9 @@ pub struct AttachmentCleanupSelection {
     /// Whether PDF assets should participate in cleanup preview or execution.
     /// PDF 资产是否应参与清理预览或执行。
     pub pdf: bool,
+    /// Whether generic file assets should participate in cleanup preview or execution.
+    /// 通用文件资产是否应参与清理预览或执行。
+    pub file: bool,
 }
 
 impl AttachmentCleanupSelection {
@@ -155,6 +158,7 @@ impl AttachmentCleanupSelection {
             audio: true,
             video: true,
             pdf: true,
+            file: true,
         }
     }
 
@@ -166,6 +170,7 @@ impl AttachmentCleanupSelection {
             ConversationAttachmentKind::Audio => self.audio,
             ConversationAttachmentKind::Video => self.video,
             ConversationAttachmentKind::Pdf => self.pdf,
+            ConversationAttachmentKind::File => self.file,
         }
     }
 }

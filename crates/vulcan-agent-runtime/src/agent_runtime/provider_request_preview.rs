@@ -612,6 +612,7 @@ mod tests {
             subagent_prompt_context: None,
             model_blueprint: ProviderRuntimeBlueprint {
                 provider_id: String::from("anthropic"),
+                connection_id: String::from("test-connection"),
                 provider_name: String::from("Anthropic"),
                 runtime_label: String::from("Anthropic"),
                 model_id: String::from("claude-sonnet-4-6"),

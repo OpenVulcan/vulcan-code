@@ -28,6 +28,7 @@ pub mod data_plane {
 pub mod luaskills_runtime;
 pub mod mcp;
 pub mod provider_input_normalizer;
+mod provider_tool_bridge;
 pub mod session_event_runtime;
 pub mod skills;
 pub mod tooling;

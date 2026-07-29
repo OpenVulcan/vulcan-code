@@ -13,6 +13,7 @@ import {
   type ComposerSubmission,
 } from "@/components/composer/composer-model";
 import {
+  ComposerAiCapabilityControl,
   ComposerAttachmentMenu,
   ComposerSlashCommandPanel,
   PendingPromptQueueStrip,
@@ -257,6 +258,7 @@ export function ComposerPanel(props: {
     openModelPicker,
     openReasoningPicker,
   } = useComposerModelSelection({
+    conversationScopeKey: draftSlotKey,
     providers: props.providers,
     reasoningSelection: props.reasoningSelection,
     onSelectModel: props.onSelectWorkbenchModel,
@@ -485,6 +487,10 @@ export function ComposerPanel(props: {
               ariaLabel={t("composer.aria.account")}
               onValueChange={(choice) => void handleModelChoiceChange(choice)}
               value={activeModelChoice?.connectionId ?? ""}
+            />
+            <ComposerAiCapabilityControl
+              ariaLabel={t("composer.aria.capability")}
+              conversationId={props.conversationId}
             />
             {activeProviderModelSummary?.model.supportsSecondaryRoutes && secondaryRouteProviderId ? (
               <ModelSecondaryRouteControl

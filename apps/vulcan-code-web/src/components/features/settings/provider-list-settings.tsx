@@ -690,6 +690,7 @@ function PublicAiConnectionDialog(props: {
   const credentialProfile = entry?.credential_profiles.find((item) => item.id === credentialProfileId)
     ?? entry?.credential_profiles[0]
   const availableProtocols = entry?.protocol_routes.filter((route) => route.verified) ?? []
+  const isProviderToolEntry = entry?.kind === "provider_tools"
 
   React.useEffect(() => {
     if (!props.open) {
@@ -804,7 +805,14 @@ function PublicAiConnectionDialog(props: {
         || props.connection.credential_mode !== "token"
         || props.connection.credential_profile_id !== credentialProfile?.id
       )
-    if (!provider || !entry || !credentialProfile || !displayName.trim() || !protocolId || (requiresToken && !secret)) {
+    if (
+      !provider
+      || !entry
+      || !credentialProfile
+      || !displayName.trim()
+      || (!isProviderToolEntry && !protocolId)
+      || (requiresToken && !secret)
+    ) {
       setError("请完整填写连接信息。")
       return
     }
@@ -880,6 +888,7 @@ function PublicAiConnectionDialog(props: {
     credentialProfile,
     displayName,
     entry,
+    isProviderToolEntry,
     oauthClientId,
     oauthClientSecret,
     oauthProjectId,
@@ -917,8 +926,16 @@ function PublicAiConnectionDialog(props: {
     >
       <DialogContent className="settings-dialog">
         <DialogHeader>
-          <DialogTitle>{props.connection ? "编辑模型账号" : "添加模型账号"}</DialogTitle>
-          <DialogDescription>协议绑定在当前账号上，模型调用期间不会切换协议或账号。</DialogDescription>
+          <DialogTitle>
+            {props.connection
+              ? isProviderToolEntry ? "编辑工具服务凭据" : "编辑模型账号"
+              : isProviderToolEntry ? "添加工具服务凭据" : "添加模型账号"}
+          </DialogTitle>
+          <DialogDescription>
+            {isProviderToolEntry
+              ? "该凭据只用于所选供应商的原生 AI 工具，不会创建虚假的对话模型。"
+              : "协议绑定在当前账号上，模型调用期间不会切换协议或账号。"}
+          </DialogDescription>
         </DialogHeader>
         <div className="settings-form-grid">
           <label className="settings-form-field">
@@ -965,7 +982,7 @@ function PublicAiConnectionDialog(props: {
             <span>账号显示名</span>
             <input className="settings-input" onChange={(event) => setDisplayName(event.target.value)} value={displayName} />
           </label>
-          {availableProtocols.length > 1 ? (
+          {isProviderToolEntry ? null : availableProtocols.length > 1 ? (
             <label className="settings-form-field">
               <span>调用协议</span>
               <select className="settings-input" onChange={(event) => setProtocolId(event.target.value)} value={protocolId}>

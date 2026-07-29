@@ -461,25 +461,44 @@ pub(crate) fn reasoning_selection(
 ) -> Option<ReasoningSelectionSummary> {
     let capabilities = capabilities?;
     if capabilities.reasoning_efforts.is_empty() {
-        return None;
+        let enabled = capabilities.reasoning.is_supported();
+        return Some(ReasoningSelectionSummary {
+            options: vec![ReasoningSelectionOptionSummary {
+                value: String::from(if enabled { "fixed-on" } else { "fixed-off" }),
+                label: String::from(if enabled { "开启" } else { "关闭" }),
+            }],
+            selected_effort: String::from(if enabled { "fixed-on" } else { "fixed-off" }),
+            note: None,
+        });
     }
-    let mut options = vec![ReasoningSelectionOptionSummary {
-        value: String::from("off"),
-        label: String::from("默认"),
-    }];
-    options.extend(
-        capabilities
-            .reasoning_efforts
-            .iter()
-            .copied()
-            .map(|effort| {
-                let level = reasoning_effort_level_from_public(effort);
-                ReasoningSelectionOptionSummary {
-                    value: reasoning_effort_wire_value(level).to_string(),
-                    label: level.compact_label().to_string(),
-                }
-            }),
-    );
+    if capabilities.reasoning_efforts.len() == 1 {
+        let effort = capabilities.reasoning_efforts[0];
+        let level = reasoning_effort_level_from_public(effort);
+        return Some(ReasoningSelectionSummary {
+            options: vec![ReasoningSelectionOptionSummary {
+                value: reasoning_effort_wire_value(level).to_string(),
+                label: String::from(if effort == vulcan_ai_contract::ReasoningEffort::None {
+                    "关闭"
+                } else {
+                    "开启"
+                }),
+            }],
+            selected_effort: reasoning_effort_wire_value(level).to_string(),
+            note: None,
+        });
+    }
+    let options = capabilities
+        .reasoning_efforts
+        .iter()
+        .copied()
+        .map(|effort| {
+            let level = reasoning_effort_level_from_public(effort);
+            ReasoningSelectionOptionSummary {
+                value: reasoning_effort_wire_value(level).to_string(),
+                label: level.compact_label().to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
     let configured = provider_configuration
         .workbench_reasoning_effort
         .unwrap_or(ReasoningEffortLevel::Off);
@@ -490,12 +509,16 @@ pub(crate) fn reasoning_selection(
     {
         configured_value.to_string()
     } else {
-        String::from("off")
+        reasoning_effort_wire_value(default_enabled_reasoning_effort(
+            &capabilities.reasoning_efforts,
+        )?)
+        .to_string()
     };
     let note = (selected_effort != configured_value).then(|| {
         format!(
-            "当前模型不支持已保存的推理档位“{}”，本次使用模型默认值。",
-            configured.compact_label()
+            "当前模型不支持已保存的推理档位“{}”，已切换到该模型的启用档位“{}”。",
+            configured.compact_label(),
+            selected_effort
         )
     });
     Some(ReasoningSelectionSummary {
@@ -503,6 +526,27 @@ pub(crate) fn reasoning_selection(
         selected_effort,
         note,
     })
+}
+
+/// Selects one concrete enabled default from the active model's exact effort contract.
+/// 从当前模型的精确档位契约中选择一个具体的默认启用档位。
+fn default_enabled_reasoning_effort(
+    efforts: &[vulcan_ai_contract::ReasoningEffort],
+) -> Option<ReasoningEffortLevel> {
+    let preferred = [
+        vulcan_ai_contract::ReasoningEffort::Adaptive,
+        vulcan_ai_contract::ReasoningEffort::Medium,
+    ];
+    preferred
+        .into_iter()
+        .find(|candidate| efforts.contains(candidate))
+        .or_else(|| {
+            efforts
+                .iter()
+                .copied()
+                .find(|effort| *effort != vulcan_ai_contract::ReasoningEffort::None)
+        })
+        .map(reasoning_effort_level_from_public)
 }
 
 /// Converts one public reasoning level into the shared workbench preference.
@@ -907,10 +951,75 @@ mod tests {
                 .iter()
                 .map(|option| option.value.as_str())
                 .collect::<Vec<_>>(),
-            vec!["off", "minimal", "high"]
+            vec!["minimal", "high"]
         );
-        assert_eq!(selection.selected_effort, "off");
+        assert_eq!(selection.selected_effort, "minimal");
         assert!(selection.note.is_some());
+    }
+
+    /// Verifies MiniMax exposes only its exact switch values and defaults to enabled adaptive thinking.
+    /// 验证 MiniMax 仅暴露精确开关值，并默认启用自适应思考。
+    #[test]
+    fn reasoning_selector_removes_duplicate_default_and_enables_minimax() {
+        let configuration = ProviderConfigurationFile::default();
+        let capabilities = vulcan_ai_contract::ModelCapabilities {
+            reasoning_efforts: vec![
+                vulcan_ai_contract::ReasoningEffort::None,
+                vulcan_ai_contract::ReasoningEffort::Adaptive,
+            ],
+            ..vulcan_ai_contract::ModelCapabilities::default()
+        };
+
+        let selection = reasoning_selection(&configuration, Some(&capabilities))
+            .expect("MiniMax reasoning switch should create a selector");
+
+        assert_eq!(
+            selection
+                .options
+                .iter()
+                .map(|option| option.value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["none", "adaptive"]
+        );
+        assert_eq!(selection.selected_effort, "adaptive");
+    }
+
+    /// Verifies models without adjustable levels remain visible as a fixed enabled state.
+    /// 验证没有可调档位的思考模型仍以固定开启状态显示。
+    #[test]
+    fn reasoning_selector_shows_fixed_enabled_models() {
+        let capabilities = vulcan_ai_contract::ModelCapabilities {
+            reasoning: vulcan_ai_contract::CapabilitySupport::Native,
+            ..vulcan_ai_contract::ModelCapabilities::default()
+        };
+
+        let selection =
+            reasoning_selection(&ProviderConfigurationFile::default(), Some(&capabilities))
+                .expect("fixed reasoning support should remain visible");
+
+        assert_eq!(selection.options.len(), 1);
+        assert_eq!(selection.options[0].value, "fixed-on");
+        assert_eq!(selection.options[0].label, "开启");
+        assert_eq!(selection.selected_effort, "fixed-on");
+    }
+
+    /// Verifies models without reasoning support remain visible as a fixed disabled state.
+    /// 验证不支持思考的模型仍以固定关闭状态显示。
+    #[test]
+    fn reasoning_selector_shows_fixed_disabled_models() {
+        let capabilities = vulcan_ai_contract::ModelCapabilities {
+            reasoning: vulcan_ai_contract::CapabilitySupport::Unsupported,
+            ..vulcan_ai_contract::ModelCapabilities::default()
+        };
+
+        let selection =
+            reasoning_selection(&ProviderConfigurationFile::default(), Some(&capabilities))
+                .expect("unsupported reasoning should remain visible");
+
+        assert_eq!(selection.options.len(), 1);
+        assert_eq!(selection.options[0].value, "fixed-off");
+        assert_eq!(selection.options[0].label, "关闭");
+        assert_eq!(selection.selected_effort, "fixed-off");
     }
 
     /// No-op shell host used to construct isolated persistence-version state.

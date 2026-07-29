@@ -644,6 +644,7 @@ fn build_prompt_compaction_launch_request(
         provider_id_override: None,
         model_id_override: None,
         connection_id_override: None,
+        provider_tool_selections_override: Default::default(),
         subagent_prompt_context: None,
         task_session_store_root: None,
         session_title: session_title.to_string(),

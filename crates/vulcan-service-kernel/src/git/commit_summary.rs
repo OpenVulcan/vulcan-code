@@ -541,6 +541,7 @@ async fn run_git_commit_summary_model(
         provider_id_override: None,
         model_id_override: None,
         connection_id_override: None,
+        provider_tool_selections_override: Default::default(),
         subagent_prompt_context: None,
         task_session_store_root: None,
         session_title: String::from("Git commit summary"),

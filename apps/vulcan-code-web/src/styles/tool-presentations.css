@@ -145,6 +145,18 @@
   width: min(100%, 860px);
 }
 
+.tool-presentation-card.provider-search-tool {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.provider-search-tool .conversation-collapsible-motion,
+.provider-search-tool .conversation-collapsible-motion-inner {
+  width: 100%;
+  max-width: 100%;
+}
+
 .markdown-tool-icon {
   color: color-mix(in oklch, var(--primary) 78%, var(--foreground));
 }

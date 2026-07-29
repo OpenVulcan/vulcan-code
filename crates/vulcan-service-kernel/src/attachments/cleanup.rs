@@ -237,6 +237,9 @@ fn webui_attachment_cleanup_selection(
         audio: selection.audio,
         video: selection.video,
         pdf: selection.pdf,
+        // Generic generated documents share the current WebUI document cleanup switch.
+        // 通用生成文档共享当前 WebUI 文档清理开关。
+        file: selection.pdf,
     }
 }
 
@@ -405,6 +408,7 @@ mod tests {
         assert!(!selection.audio);
         assert!(selection.video);
         assert!(!selection.pdf);
+        assert!(!selection.file);
     }
 
     /// Verifies cleanup kind summaries are formatted in stable key order.

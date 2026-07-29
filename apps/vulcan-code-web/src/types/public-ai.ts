@@ -10,7 +10,8 @@ export type OAuthProviderKind =
   | "google_code_assist"
   | "google_gemini"
   | "mini_max_global_token_plan"
-  | "mini_max_china_token_plan";
+  | "mini_max_china_token_plan"
+  | "kimi_coding_plan";
 
 // CredentialBillingKind identifies the exact billing semantics of one credential profile.
 // CredentialBillingKind 标识一个凭据配置档的精确计费语义。
@@ -24,7 +25,7 @@ export interface PublicAiCredentialProfile {
   credential_mode: CredentialMode;
   oauth_provider?: OAuthProviderKind;
   billing_kind: CredentialBillingKind;
-  account_usage_query: "unsupported" | "mini_max_token_plan" | "open_router_current_key";
+  account_usage_query: "unsupported" | "mini_max_token_plan" | "open_router_credits" | "tavily_credits";
   authentication?: string;
   key_prefix?: string;
 }
@@ -42,6 +43,7 @@ export interface PublicAiProtocolRoute {
 export interface PublicAiServiceEntry {
   id: string;
   display_name: string;
+  kind: "conversation" | "provider_tools";
   base_url: string;
   credential_profiles: PublicAiCredentialProfile[];
   authentication: string;
@@ -84,7 +86,7 @@ export interface PublicAiConnection {
   service_entry_id: string;
   credential_profile_id: string;
   billing_kind: CredentialBillingKind;
-  usage_capability: "unsupported" | "mini_max_token_plan" | "open_router_credits";
+  usage_capability: "unsupported" | "mini_max_token_plan" | "open_router_credits" | "tavily_credits";
   has_management_key: boolean;
   credential_mode: CredentialMode;
   credential_id: string;
@@ -171,6 +173,75 @@ export interface PublicAiModelOverrideRecord {
   overrides: PublicAiModelOverrides;
 }
 
+// PublicAiModelAccessRecord carries one provider-model effective and default access state.
+// PublicAiModelAccessRecord 承载一个供应商模型的有效及默认访问状态。
+export interface PublicAiModelAccessRecord {
+  providerId: string;
+  modelId: string;
+  enabled: boolean;
+  defaultEnabled: boolean;
+}
+
+// PublicAiProviderToolCapabilityKind identifies one single-select semantic provider tool.
+// PublicAiProviderToolCapabilityKind 标识一种单选语义供应商工具。
+export type PublicAiProviderToolCapabilityKind =
+  | "web_search"
+  | "web_extract"
+  | "media_analyze"
+  | "image_generate"
+  | "image_edit"
+  | "video_generate"
+  | "speech_synthesize"
+  | "speech_transcribe"
+  | "music_generate"
+  | "music_cover"
+  | "embedding_create"
+  | "rerank_documents";
+
+// PublicAiProviderToolContract carries one selected-model-native schema and unified output contract.
+// PublicAiProviderToolContract 承载一个选定模型原生 Schema 与统一输出契约。
+export interface PublicAiProviderToolContract {
+  tool_id: string;
+  description: string;
+  capability: PublicAiProviderToolCapabilityKind;
+  input_schema: Record<string, unknown>;
+  output: {
+    kind: "text" | "resources" | "embedding" | "rerank" | "search" | "extract" | "composite";
+    source_path: string;
+    normalized_result_path: string;
+    resource_kind?: string;
+    mime_types?: string[];
+  };
+}
+
+// PublicAiProviderToolTarget describes one exact model or service target.
+// PublicAiProviderToolTarget 描述一个精确模型或服务目标。
+export interface PublicAiProviderToolTarget {
+  target_id: string;
+  provider_id: string;
+  service_entry_id: string;
+  credential_profile_ids: string[];
+  upstream_target_id: string;
+  display_name: string;
+  contract: PublicAiProviderToolContract;
+}
+
+// PublicAiProviderToolTargetSnapshot pairs one target with one configured credential.
+// PublicAiProviderToolTargetSnapshot 将一个目标与一个已配置凭据配对。
+export interface PublicAiProviderToolTargetSnapshot {
+  connectionId: string;
+  connectionDisplayName: string;
+  target: PublicAiProviderToolTarget;
+  enabled: boolean;
+}
+
+// PublicAiProviderToolTargetSelection stores the one selected target for one capability.
+// PublicAiProviderToolTargetSelection 保存某项能力唯一选中的目标。
+export interface PublicAiProviderToolTargetSelection {
+  connection_id: string;
+  target_id: string;
+}
+
 // PublicAiSettingsSnapshot combines persisted and process-local settings state.
 // PublicAiSettingsSnapshot 组合持久化设置状态与进程内设置状态。
 export interface PublicAiSettingsSnapshot {
@@ -184,6 +255,11 @@ export interface PublicAiSettingsSnapshot {
   catalogErrors: Record<string, string>;
   modelOverrides: Record<string, PublicAiModelOverrides>;
   modelOverrideRecords: PublicAiModelOverrideRecord[];
+  modelAccessRecords: PublicAiModelAccessRecord[];
+  providerToolTargets: PublicAiProviderToolTargetSnapshot[];
+  providerToolSelections: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
+  >;
 }
 
 // PublicAiAccountUsage carries one credential-scoped observation.

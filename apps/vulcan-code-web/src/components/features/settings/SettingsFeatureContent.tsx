@@ -14,10 +14,12 @@ import {
 } from "@/components/features/settings/provider-list-settings";
 import { ProviderManagementArea } from "@/components/features/settings/provider-management-settings";
 import { ProviderRetrySettingsArea } from "@/components/features/settings/provider-retry-settings";
+import { ProviderToolSelectionSettingsArea } from "@/components/features/settings/provider-tool-selection-settings";
 import { NotificationSettingsArea } from "@/components/features/settings/notification-settings-area";
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types";
 import {
   activeSettingsHeaderSummary,
+  settingsSubAreaProviderToolCapability,
 } from "@/components/features/settings/settings-navigation";
 import type {
   SettingsSubAreaId,
@@ -67,6 +69,12 @@ export interface SettingsFeatureContentProps {
 // SettingsFeatureContent routes settings sub pages to their specialized modules.
 // SettingsFeatureContent 将设置子页面路由到专用模块。
 export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
+  const providerToolCapability = settingsSubAreaProviderToolCapability(
+    props.activeSettingsSubArea,
+  );
+  if (providerToolCapability) {
+    return <ProviderToolSelectionSettingsArea capability={providerToolCapability} />;
+  }
   if (props.activeSettingsSubArea === "model-providers") {
     return <ProviderManagementArea />;
   }

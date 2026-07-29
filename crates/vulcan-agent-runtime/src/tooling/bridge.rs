@@ -71,6 +71,7 @@ pub fn build_vulcan_tools_manager(
     native_catalog: NativeToolCatalog,
     vulcan_plugin_runtime: Option<VulcanPluginRuntimeManager>,
     candidate_vulcan_plugin_tools: Vec<VulcanPluginToolDescriptor>,
+    candidate_provider_tools: Vec<VulcanToolCandidate>,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     workspace_root: Option<PathBuf>,
     controller_runtime: Option<ControllerRuntimeHandle>,
@@ -104,6 +105,13 @@ pub fn build_vulcan_tools_manager(
     let ask_candidate = build_question_tool_candidate(question_runtime, "ask");
     occupied_public_tool_ids.insert(ask_candidate.descriptor.id.clone());
     candidates.push(ask_candidate);
+
+    for candidate in candidate_provider_tools {
+        let tool_id = candidate.descriptor.id.clone();
+        if occupied_public_tool_ids.insert(tool_id.clone()) {
+            candidates.push(candidate);
+        }
+    }
 
     for tool_id in candidate_native_tool_ids {
         if native_tool_id_is_vmm_memory_tool(&tool_id) && !vmm_ai_tools_enabled {

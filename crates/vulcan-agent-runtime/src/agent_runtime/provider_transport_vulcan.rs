@@ -43,6 +43,29 @@ use vulcan_provider_adapters::{
 /// Vulcan-owned default output budget used when the provider reports no independent output limit.
 /// 当供应商未报告独立输出上限时使用的 Vulcan 本地默认输出预算。
 const DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT: u64 = 32_000;
+
+/// Resolves the requested output budget while treating catalog output limits as upper bounds.
+/// 在将目录输出限制视为上限的前提下解析请求输出预算。
+///
+/// # Parameters
+/// 参数
+/// `configured_limit` is the optional user narrowing and `catalog_limit` is the provider-reported
+/// model maximum.
+/// `configured_limit` 是可选的用户收窄值，`catalog_limit` 是供应商报告的模型最大值。
+///
+/// # Returns
+/// 返回值
+/// The configured or default request budget capped by the catalog maximum when present.
+/// 返回配置值或默认请求预算；存在目录最大值时以其封顶。
+fn resolved_public_output_token_limit(
+    configured_limit: Option<u64>,
+    catalog_limit: Option<u64>,
+) -> u64 {
+    let requested_limit = configured_limit.unwrap_or(DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT);
+    catalog_limit
+        .map(|maximum| requested_limit.min(maximum))
+        .unwrap_or(requested_limit)
+}
 /// MiniMax M3 maximum local image payload size documented for one request resource.
 /// MiniMax M3 针对单个请求资源文档化的本地图像载荷上限。
 const MINIMAX_M3_IMAGE_BYTE_LIMIT: u64 = 10_000_000;
@@ -70,11 +93,10 @@ pub(crate) fn execute_vulcan_public_stream(
 ) -> ProviderDeltaStream {
     let cache_scope_id = request.session_id.to_string();
     let workspace_path = request.workspace_path.clone();
-    let output_token_limit = resolved
-        .overrides
-        .output_limit
-        .or(resolved.model.capabilities.output_limit)
-        .unwrap_or(DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT);
+    let output_token_limit = resolved_public_output_token_limit(
+        resolved.overrides.output_limit,
+        resolved.model.capabilities.output_limit,
+    );
     let prompt_cache = resolved.overrides.prompt_cache.clone().unwrap_or_default();
     let PreparedProviderTransportStreamLaunch {
         runtime_inputs,
@@ -126,11 +148,10 @@ pub(crate) fn capture_vulcan_public_stream(
 ) -> ProviderDeltaStream {
     let cache_scope_id = request.session_id.to_string();
     let workspace_path = request.workspace_path.clone();
-    let output_token_limit = resolved
-        .overrides
-        .output_limit
-        .or(resolved.model.capabilities.output_limit)
-        .unwrap_or(DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT);
+    let output_token_limit = resolved_public_output_token_limit(
+        resolved.overrides.output_limit,
+        resolved.model.capabilities.output_limit,
+    );
     Box::pin(try_stream! {
         let prompt_cache = resolved.overrides.prompt_cache.clone().unwrap_or_default();
         let prepared = prepare_provider_transport_stream_launch(request);
@@ -406,10 +427,19 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
     where
         S: VulcanProviderDeltaSink,
     {
+        let VulcanPublicContractRequest { public, budget } = request;
+        self.live_sender
+            .send(Ok(ProviderStreamDelta::RequestSnapshot(budget)))
+            .map_err(|_| {
+                provider_failure(
+                    self.provider_id(),
+                    "The provider request stream closed before dispatch.",
+                )
+            })?;
         let execution_id = uuid::Uuid::new_v4().to_string();
         let mut stream = self.client.execute(
             self.route.clone(),
-            request.public,
+            public,
             self.secret.clone(),
             execution_id,
         );
@@ -610,7 +640,7 @@ impl PublicTurnAccumulator {
                 return Err(provider_failure(provider_id, message.as_str()));
             }
             AiStreamEvent::UsageUpdated { usage } => {
-                self.usage = Some(usage);
+                merge_usage_update(&mut self.usage, usage);
             }
             AiStreamEvent::ResponseCompleted => {
                 self.completed = true;
@@ -666,6 +696,52 @@ impl PublicTurnAccumulator {
                 ..ProviderContinuation::default()
             }),
         })
+    }
+}
+
+/// Merges one partial provider usage update without erasing fields reported by earlier events.
+/// 合并一条供应商局部用量更新，同时避免抹除先前事件已经报告的字段。
+///
+/// # Parameters
+/// 参数
+/// `current` stores the accumulated request usage and `update` is the next protocol event.
+/// `current` 保存累计请求用量，`update` 是下一条协议事件。
+fn merge_usage_update(current: &mut Option<RequestUsage>, update: RequestUsage) {
+    let Some(current) = current.as_mut() else {
+        *current = Some(update);
+        return;
+    };
+    merge_usage_value(&mut current.input_tokens, update.input_tokens);
+    merge_usage_value(&mut current.output_tokens, update.output_tokens);
+    merge_usage_value(&mut current.reasoning_tokens, update.reasoning_tokens);
+    merge_usage_value(&mut current.cache_read_tokens, update.cache_read_tokens);
+    merge_usage_value(&mut current.cache_write_tokens, update.cache_write_tokens);
+    merge_usage_value(
+        &mut current.cache_write_5m_tokens,
+        update.cache_write_5m_tokens,
+    );
+    merge_usage_value(
+        &mut current.cache_write_1h_tokens,
+        update.cache_write_1h_tokens,
+    );
+    merge_usage_value(&mut current.audio_input_tokens, update.audio_input_tokens);
+    merge_usage_value(&mut current.audio_output_tokens, update.audio_output_tokens);
+    merge_usage_value(&mut current.total_tokens, update.total_tokens);
+    if update.cost.is_some() {
+        current.cost = update.cost;
+    }
+}
+
+/// Replaces one accumulated usage value only when the new event reports an exact value.
+/// 仅当新事件报告精确值时替换一项累计用量。
+///
+/// # Parameters
+/// 参数
+/// `current` is the accumulated field and `update` is the next partial field.
+/// `current` 是累计字段，`update` 是下一条局部字段。
+fn merge_usage_value(current: &mut UsageValue, update: UsageValue) {
+    if !matches!(update, UsageValue::Unknown) {
+        *current = update;
     }
 }
 
@@ -1125,6 +1201,7 @@ fn core_message_to_public(
                     ConversationAttachmentKind::Image => ResourceKind::Image,
                     ConversationAttachmentKind::Video => ResourceKind::Video,
                     ConversationAttachmentKind::Pdf => ResourceKind::File,
+                    ConversationAttachmentKind::File => ResourceKind::File,
                 };
                 content.push(ContentItem::Resource {
                     resource: ResourceReference {
@@ -1282,6 +1359,38 @@ mod tests {
         }
     }
 
+    /// Verifies split Anthropic usage events retain start-event cache fields and terminal output fields.
+    /// 验证拆分的 Anthropic 用量事件会同时保留开始事件的缓存字段与终态输出字段。
+    #[test]
+    fn partial_usage_updates_merge_without_erasing_known_fields() {
+        let reported = |value| UsageValue::Known {
+            value,
+            source: vulcan_ai_contract::UsageValueSource::Reported,
+        };
+        let mut usage = Some(RequestUsage {
+            input_tokens: reported(1_000),
+            cache_read_tokens: reported(800),
+            cache_write_tokens: reported(120),
+            ..RequestUsage::default()
+        });
+
+        merge_usage_update(
+            &mut usage,
+            RequestUsage {
+                output_tokens: reported(75),
+                total_tokens: reported(1_075),
+                ..RequestUsage::default()
+            },
+        );
+
+        let usage = usage.expect("merged usage should exist");
+        assert_eq!(usage.input_tokens, reported(1_000));
+        assert_eq!(usage.cache_read_tokens, reported(800));
+        assert_eq!(usage.cache_write_tokens, reported(120));
+        assert_eq!(usage.output_tokens, reported(75));
+        assert_eq!(usage.total_tokens, reported(1_075));
+    }
+
     /// Verifies public text and reasoning deltas reach both Core and the live workbench stream.
     /// 验证公共文本与推理增量同时到达 Core 和实时工作台流。
     #[test]
@@ -1423,6 +1532,30 @@ mod tests {
         assert_eq!(
             safe_generated_resource_stem("../../image:item"),
             "------image-item"
+        );
+    }
+
+    /// Verifies a catalog maximum does not become the default request output budget.
+    /// 验证目录最大值不会变成默认请求输出预算。
+    #[test]
+    fn public_output_limit_uses_default_below_catalog_maximum() {
+        assert_eq!(
+            resolved_public_output_token_limit(None, Some(393_216)),
+            DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT
+        );
+    }
+
+    /// Verifies user narrowing remains authoritative and cannot exceed the catalog maximum.
+    /// 验证用户收窄值保持权威且不能超过目录最大值。
+    #[test]
+    fn public_output_limit_honors_user_narrowing_and_catalog_cap() {
+        assert_eq!(
+            resolved_public_output_token_limit(Some(16_000), Some(393_216)),
+            16_000
+        );
+        assert_eq!(
+            resolved_public_output_token_limit(Some(500_000), Some(393_216)),
+            393_216
         );
     }
 }

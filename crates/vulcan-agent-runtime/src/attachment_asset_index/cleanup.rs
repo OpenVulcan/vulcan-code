@@ -363,6 +363,7 @@ pub(super) fn attachment_kind_directory_name(kind: &ConversationAttachmentKind) 
         ConversationAttachmentKind::Audio => "audio",
         ConversationAttachmentKind::Video => "video",
         ConversationAttachmentKind::Pdf => "pdf",
+        ConversationAttachmentKind::File => "files",
     }
 }
 pub(super) fn kind_summary_key(kind: ConversationAttachmentKind) -> String {
@@ -371,5 +372,6 @@ pub(super) fn kind_summary_key(kind: ConversationAttachmentKind) -> String {
         ConversationAttachmentKind::Audio => String::from("audio"),
         ConversationAttachmentKind::Video => String::from("video"),
         ConversationAttachmentKind::Pdf => String::from("pdf"),
+        ConversationAttachmentKind::File => String::from("file"),
     }
 }

@@ -3,6 +3,7 @@
 
 use crate::OAuthProviderKind;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::{ModelCapabilities, PromptCachePolicy};
 
@@ -78,6 +79,10 @@ pub struct ServiceEntry {
     /// User-visible name.
     /// 用户可见名称。
     pub display_name: String,
+    /// Whether this entry exposes conversation models or provider-native tools only.
+    /// 当前入口暴露对话模型，还是仅暴露供应商原生工具。
+    #[serde(default)]
+    pub kind: ServiceEntryKind,
     /// Base URL.
     /// 基础 URL。
     pub base_url: String,
@@ -97,6 +102,20 @@ pub struct ServiceEntry {
     /// Verified protocol routes available through this entry.
     /// 此入口可用的已验证协议路由。
     pub protocol_routes: Vec<ProtocolRoute>,
+}
+
+/// Identifies the execution surface owned by one service entry.
+/// 标识一个服务入口持有的执行界面。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceEntryKind {
+    /// The entry exposes conversation models and wire protocols.
+    /// 当前入口暴露对话模型与 Wire 协议。
+    #[default]
+    Conversation,
+    /// The entry exposes provider-native AI tools without a chat model.
+    /// 当前入口暴露不依赖聊天模型的供应商原生 AI 工具。
+    ProviderTools,
 }
 
 impl ServiceEntry {
@@ -124,6 +143,9 @@ impl ServiceEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelDiscoveryKind {
+    /// No conversation-model discovery exists for provider-tools-only entries.
+    /// 仅供应商工具入口不存在对话模型发现。
+    ProviderToolsOnly,
     /// MiniMax Anthropic-compatible paginated models.
     /// MiniMax Anthropic 兼容分页模型。
     MiniMaxAnthropic,
@@ -192,6 +214,15 @@ pub enum AccountUsageQueryKind {
     /// OpenRouter account credits endpoint using an optional management key.
     /// 使用可选管理密钥的 OpenRouter 账号余额端点。
     OpenRouterCredits,
+    /// Tavily API-key and account credit usage endpoint.
+    /// Tavily API Key 与账号 Credit 用量端点。
+    TavilyCredits,
+    /// DeepSeek official account balance endpoint.
+    /// DeepSeek 官方账号余额端点。
+    DeepSeekBalance,
+    /// Kimi Coding Plan membership and rolling usage endpoint.
+    /// Kimi Coding Plan 会员与滚动用量端点。
+    KimiCodingPlan,
 }
 
 /// Describes one verified protocol route.
@@ -205,6 +236,14 @@ pub struct ProtocolRoute {
     /// 可选供应商端点覆盖；缺失时保留协议编码路径。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint_path: Option<String>,
+    /// Optional protocol-specific base URL used when one product exposes protocols on different roots.
+    /// 当一个产品在不同根地址暴露协议时使用的可选协议专属基础 URL。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url_override: Option<String>,
+    /// Fixed non-secret headers scoped only to this protocol route.
+    /// 仅作用于当前协议路由的固定非敏感请求头。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub request_headers: BTreeMap<String, String>,
     /// Optional route-specific authentication projection.
     /// 可选的路由专属鉴权投影。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -213,12 +252,67 @@ pub struct ProtocolRoute {
     /// 可选的路由专属模型发现实现。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_discovery: Option<ModelDiscoveryKind>,
+    /// Optional protocol-specific model-discovery path relative to the resolved base URL.
+    /// 相对于已解析基础 URL 的可选协议专属模型发现路径。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_discovery_path: Option<String>,
+    /// Optional model-discovery base URL when metadata and execution use different protocol roots.
+    /// 当元数据发现与执行使用不同协议根地址时采用的可选模型发现基础 URL。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_discovery_base_url_override: Option<String>,
     /// Whether this route has completed real verification.
     /// 此路由是否已完成真实验证。
     pub verified: bool,
 }
 
 impl ProtocolRoute {
+    /// Resolves the protocol-specific base URL or the service-entry default.
+    /// 解析协议专属基础 URL，缺失时返回服务入口默认值。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `entry` is the exact service entry owning this protocol route.
+    /// `entry` 是拥有当前协议路由的精确服务入口。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The exact base URL used for request and metadata routing.
+    /// 返回请求与元数据路由使用的精确基础 URL。
+    pub fn resolved_base_url<'a>(&'a self, entry: &'a ServiceEntry) -> &'a str {
+        self.base_url_override
+            .as_deref()
+            .unwrap_or(entry.base_url.as_str())
+    }
+
+    /// Builds the exact model-discovery URL for this protocol route.
+    /// 为当前协议路由构建精确模型发现 URL。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `entry` owns the default base URL and `default_path` belongs to the discovery implementation.
+    /// `entry` 持有默认基础 URL，`default_path` 属于发现实现。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The complete discovery URL.
+    /// 返回完整发现 URL。
+    pub fn model_discovery_url(&self, entry: &ServiceEntry, default_path: &str) -> String {
+        let path = self.model_discovery_path.as_deref().unwrap_or(default_path);
+        let base_url = self
+            .model_discovery_base_url_override
+            .as_deref()
+            .unwrap_or_else(|| self.resolved_base_url(entry));
+        format!(
+            "{}{}",
+            base_url.trim_end_matches('/'),
+            if path.starts_with('/') {
+                path.to_string()
+            } else {
+                format!("/{path}")
+            }
+        )
+    }
+
     /// Resolves the exact authentication projection for this protocol route.
     /// 解析当前协议路由的精确鉴权投影。
     ///
@@ -335,6 +429,212 @@ pub struct ConnectionModelCatalog {
     /// Monotonic in-process refresh generation.
     /// 进程内单调刷新代次。
     pub generation: u64,
+}
+
+/// Identifies one semantic provider tool capability.
+/// 标识一种语义化供应商工具能力。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderToolCapabilityKind {
+    /// Searches public web content.
+    /// 搜索公开网页内容。
+    WebSearch,
+    /// Extracts structured content from public web pages.
+    /// 从公开网页提取结构化内容。
+    WebExtract,
+    /// Analyzes one or more media resources.
+    /// 分析一个或多个媒体资源。
+    MediaAnalyze,
+    /// Generates images.
+    /// 生成图片。
+    ImageGenerate,
+    /// Edits images.
+    /// 编辑图片。
+    ImageEdit,
+    /// Generates video.
+    /// 生成视频。
+    VideoGenerate,
+    /// Synthesizes speech.
+    /// 合成语音。
+    SpeechSynthesize,
+    /// Transcribes speech or audio.
+    /// 转录语音或音频。
+    SpeechTranscribe,
+    /// Generates music.
+    /// 生成音乐。
+    MusicGenerate,
+    /// Produces a music cover from an input recording.
+    /// 根据输入录音生成音乐翻唱。
+    MusicCover,
+    /// Creates embeddings.
+    /// 创建向量嵌入。
+    EmbeddingCreate,
+    /// Reranks candidate documents.
+    /// 对候选文档重新排序。
+    RerankDocuments,
+}
+
+/// Identifies the closed unified output shape used by provider tool cards.
+/// 标识供应商工具卡片使用的封闭统一输出形态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderToolOutputKind {
+    /// Plain text output.
+    /// 纯文本输出。
+    Text,
+    /// Downloaded or remotely referenced resources.
+    /// 已下载或远程引用的资源。
+    Resources,
+    /// Embedding vectors.
+    /// 向量嵌入结果。
+    Embedding,
+    /// Ranked candidates.
+    /// 排序后的候选项。
+    Rerank,
+    /// Structured search evidence.
+    /// 结构化搜索证据。
+    Search,
+    /// Structured extracted pages.
+    /// 结构化网页提取结果。
+    Extract,
+    /// A bounded combination of typed outputs.
+    /// 有界的多种强类型输出组合。
+    Composite,
+}
+
+/// Describes how one provider-native response is normalized for model output and tool cards.
+/// 描述如何将一个供应商原生响应归一化为模型输出与工具卡片数据。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderToolOutputContract {
+    /// Closed normalized output kind.
+    /// 封闭的归一化输出类别。
+    pub kind: ProviderToolOutputKind,
+    /// Exact provider-response path consumed by the adapter.
+    /// 适配器消费的精确供应商响应路径。
+    pub source_path: String,
+    /// Stable normalized result field exposed to the model and card renderer.
+    /// 暴露给模型与卡片渲染器的稳定归一化结果字段。
+    pub normalized_result_path: String,
+    /// Optional exact resource kind for resource outputs.
+    /// 资源输出使用的可选精确资源类别。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_kind: Option<String>,
+    /// Optional exact MIME types accepted from the provider response.
+    /// 供应商响应允许的可选精确 MIME 类型。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mime_types: Vec<String>,
+}
+
+/// Declares one exact AI-visible tool contract owned by a provider model or service.
+/// 声明由一个供应商模型或服务持有的精确 AI 可见工具契约。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderToolContract {
+    /// Stable public tool identifier.
+    /// 稳定公开工具标识。
+    pub tool_id: String,
+    /// English model-facing tool description.
+    /// 面向模型的英文工具说明。
+    pub description: String,
+    /// Semantic capability controlled by the single-target selector.
+    /// 由单目标选择器控制的语义能力。
+    pub capability: ProviderToolCapabilityKind,
+    /// Exact model-native JSON Schema registered for this selected target.
+    /// 为当前选定目标注册的精确模型原生 JSON Schema。
+    pub input_schema: Value,
+    /// Closed provider-response normalization contract.
+    /// 封闭的供应商响应归一化契约。
+    pub output: ProviderToolOutputContract,
+}
+
+/// Identifies one closed provider-native tool request/response adapter.
+/// 标识一种封闭的供应商原生工具请求与响应适配器。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderToolAdapterKind {
+    /// MiniMax synchronous image generation.
+    /// MiniMax 同步图片生成。
+    MiniMaxImageGenerate,
+    /// MiniMax Coding Plan image understanding.
+    /// MiniMax Coding Plan 图片理解。
+    MiniMaxCodingPlanVision,
+    /// MiniMax synchronous speech synthesis.
+    /// MiniMax 同步语音合成。
+    MiniMaxSpeechSynthesize,
+    /// MiniMax synchronous music generation.
+    /// MiniMax 同步音乐生成。
+    MiniMaxMusicGenerate,
+    /// MiniMax asynchronous video generation with host polling.
+    /// MiniMax 异步视频生成与宿主轮询。
+    MiniMaxVideoGenerate,
+    /// MiniMax Coding Plan structured web search.
+    /// MiniMax Coding Plan 结构化网页搜索。
+    MiniMaxCodingPlanSearch,
+    /// Alibaba Model Studio MCP WebSearch.
+    /// 阿里云百炼 Model Studio MCP 网页搜索。
+    AlibabaModelStudioSearch,
+    /// Tavily structured web search.
+    /// Tavily 结构化网页搜索。
+    TavilySearch,
+    /// Tavily structured web extraction.
+    /// Tavily 结构化网页提取。
+    TavilyExtract,
+}
+
+/// Describes the exact execution route for one provider-native tool target.
+/// 描述一个供应商原生工具目标的精确执行路由。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderToolExecutionContract {
+    /// Relative endpoint path below the owning service entry.
+    /// 所属服务入口下的相对端点路径。
+    pub endpoint_path: String,
+    /// Exact authentication projection for this provider tool route.
+    /// 当前供应商工具路由的精确鉴权投影。
+    pub authentication: AuthenticationProjection,
+    /// Closed request and response adapter implementation.
+    /// 封闭的请求与响应适配器实现。
+    pub adapter: ProviderToolAdapterKind,
+}
+
+/// Describes one provider tool target without merging it with other model contracts.
+/// 描述一个供应商工具目标，且不会把它与其他模型契约合并。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderToolTarget {
+    /// Stable target identifier scoped to one provider.
+    /// 作用域限定在一个供应商内的稳定目标标识。
+    pub target_id: String,
+    /// Provider identifier.
+    /// 供应商标识。
+    pub provider_id: String,
+    /// Service-entry identifier.
+    /// 服务入口标识。
+    pub service_entry_id: String,
+    /// Credential profile identifiers allowed to execute this target.
+    /// 允许执行当前目标的凭据配置档标识。
+    pub credential_profile_ids: BTreeSet<String>,
+    /// Exact upstream model or service identifier.
+    /// 精确的上游模型或服务标识。
+    pub upstream_target_id: String,
+    /// User-visible target name.
+    /// 用户可见目标名称。
+    pub display_name: String,
+    /// Exact AI-visible tool contract for this target only.
+    /// 仅属于当前目标的精确 AI 可见工具契约。
+    pub contract: ProviderToolContract,
+    /// Exact provider execution contract for this target.
+    /// 当前目标的精确供应商执行契约。
+    pub execution: ProviderToolExecutionContract,
+}
+
+/// Stores the one explicit target selected for a semantic capability.
+/// 保存一个语义能力唯一显式选中的目标。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ProviderToolTargetSelection {
+    /// Credential connection used by this capability.
+    /// 当前能力使用的凭据连接。
+    pub connection_id: String,
+    /// Exact provider-owned tool target.
+    /// 精确的供应商自有工具目标。
+    pub target_id: String,
 }
 
 /// Stores account-selection preferences without enabling runtime failover.

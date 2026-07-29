@@ -56,7 +56,11 @@ impl ProviderRegistry {
     pub fn first_batch() -> Result<Self, String> {
         let mut registry = Self::default();
         registry.register(crate::providers::minimax_descriptor())?;
+        registry.register(crate::providers::kimi_descriptor())?;
+        registry.register(crate::providers::deepseek_descriptor())?;
+        registry.register(crate::providers::alibaba_descriptor())?;
         registry.register(crate::providers::openrouter_descriptor())?;
+        registry.register(crate::providers::tavily_descriptor())?;
         registry.register(crate::providers::openai_descriptor())?;
         registry.register(crate::providers::anthropic_descriptor())?;
         registry.register(crate::providers::google_descriptor())?;

@@ -10,10 +10,12 @@ use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::conversation_protocol::collect_host_visible_attachments;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::provider_config::ProviderConfigurationFile;
+use crate::provider_tool_bridge::build_provider_tool_candidates;
 use crate::tooling::native::SUBMIT_PLAN_TOOL_ID;
 use crate::vulcan_tools_bridge::build_vulcan_tools_manager;
 use crate::workspace_path::normalize_workspace_path_text;
 use std::path::PathBuf;
+use std::sync::Arc;
 use vulcan_core::types::ConversationPayload as CoreConversationPayload;
 use vulcan_luaskills_prompt::{LuaSkillPromptEntry, render_luaskills_prompt_segment};
 use vulcan_prompt_skills::{
@@ -159,6 +161,14 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     } else {
         Vec::new()
     };
+    let workspace_root =
+        (!workspace_path.is_empty()).then(|| PathBuf::from(workspace_path.clone()));
+    let provider_tool_candidates = build_provider_tool_candidates(
+        Arc::clone(&public_ai_runtime),
+        public_ai_runtime.configuration_snapshot()?,
+        workspace_root.clone(),
+        &request.provider_tool_selections_override,
+    )?;
     let tools_manager = build_vulcan_tools_manager(
         foundation.task_runtime(),
         foundation.question_runtime(),
@@ -168,8 +178,9 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
             foundation.resolved_vulcan_plugin_tools_for_agent(&active_agent.id),
             &tool_exposure,
         ),
+        provider_tool_candidates,
         luaskills_runtime,
-        (!workspace_path.is_empty()).then(|| PathBuf::from(workspace_path.clone())),
+        workspace_root,
         request.controller_runtime.clone(),
         request.knowledge_access.clone(),
         tool_exposure.native_tool_ids.clone(),

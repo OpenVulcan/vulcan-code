@@ -626,6 +626,7 @@ fn test_runtime_foundation(config: &ProviderConfigurationFile) -> RuntimeFoundat
             prompt_cache_by_protocol: BTreeMap::new(),
         },
     );
+    public_configuration.set_model_enabled("openrouter", "vendor/model", true);
     runtime
         .replace_configuration(public_configuration)
         .expect("test public AI configuration should install");
@@ -712,6 +713,7 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         provider_id_override: None,
         model_id_override: None,
         connection_id_override: None,
+        provider_tool_selections_override: Default::default(),
         subagent_prompt_context: None,
         task_session_store_root: None,
         session_title: String::from("测试会话"),

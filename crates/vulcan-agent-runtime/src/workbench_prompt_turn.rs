@@ -927,6 +927,9 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         provider_id_override: None,
         model_id_override: None,
         connection_id_override: None,
+        provider_tool_selections_override: runtime_state
+            .provider_tool_selections_overridden
+            .then(|| runtime_state.provider_tool_selections.clone()),
         subagent_prompt_context: None,
         task_session_store_root: None,
         session_title: input.start.session_title,

@@ -26,6 +26,7 @@ pub(crate) fn composer_attachment_capabilities(
                 ConversationAttachmentKind::Audio => vulcan_ai_contract::ResourceKind::Audio,
                 ConversationAttachmentKind::Video => vulcan_ai_contract::ResourceKind::Video,
                 ConversationAttachmentKind::Pdf => vulcan_ai_contract::ResourceKind::File,
+                ConversationAttachmentKind::File => vulcan_ai_contract::ResourceKind::File,
             };
             let native = capabilities
                 .is_some_and(|capabilities| capabilities.input_resources.contains(&resource_kind));

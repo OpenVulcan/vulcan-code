@@ -207,6 +207,14 @@ pub struct ExecutionPreparationRequest {
     /// Optional request-scoped exact credential connection selected by the session.
     /// 会话选择的可选请求级精确凭据连接。
     pub connection_id_override: Option<String>,
+    /// Optional session-selected provider tool targets keyed by semantic capability.
+    /// 按语义能力索引的可选会话级供应商工具目标选择。
+    pub provider_tool_selections_override: Option<
+        std::collections::BTreeMap<
+            String,
+            vulcan_workbench_model::SessionProviderToolTargetSelection,
+        >,
+    >,
     /// Optional child-agent prompt context routed through the shared prompt composer.
     /// 通过共享提示词组合器路由的可选子智能体提示词上下文。
     pub subagent_prompt_context: Option<ExecutionSubagentPromptContext>,

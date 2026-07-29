@@ -10,10 +10,12 @@ pub mod discovery;
 pub mod execution;
 pub mod graph;
 pub mod oauth;
+mod provider_tool_execution;
 pub mod providers;
 mod reasoning_catalog;
 pub mod registry;
 pub mod runtime;
+pub mod tool_catalog;
 
 pub use client::*;
 pub use configuration::*;
@@ -26,3 +28,4 @@ pub use graph::*;
 pub use oauth::*;
 pub use registry::*;
 pub use runtime::*;
+pub use tool_catalog::*;

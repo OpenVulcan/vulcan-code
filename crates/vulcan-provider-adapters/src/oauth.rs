@@ -1,9 +1,12 @@
 //! Provider authorization-code and PKCE runtime.
 //! 供应商授权码与 PKCE 运行时。
 
-use crate::{CredentialSecretMaterial, MiniMaxRegion, OAuthTokenSet};
+use crate::{CredentialSecretEnvelope, CredentialSecretMaterial, MiniMaxRegion, OAuthTokenSet};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use reqwest::{Client, Url};
+use reqwest::{
+    Client, Url,
+    header::{HeaderMap, HeaderValue},
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -44,6 +47,12 @@ const MINIMAX_GLOBAL_API_URL: &str = "https://api.minimax.io";
 const MINIMAX_CHINA_API_URL: &str = "https://api.minimaxi.com";
 const MINIMAX_OAUTH_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const MINIMAX_OAUTH_MAX_REQUEST_ATTEMPTS: usize = 3;
+const KIMI_CODING_CLIENT_ID: &str = "17e5f671-d194-4dfb-9706-5516cb48c098";
+const KIMI_DEVICE_AUTHORIZATION_URL: &str = "https://auth.kimi.com/api/oauth/device_authorization";
+const KIMI_TOKEN_URL: &str = "https://auth.kimi.com/api/oauth/token";
+const KIMI_DEVICE_FLOW_MAX_LIFETIME: Duration = Duration::from_secs(15 * 60);
+const KIMI_DEVICE_FLOW_DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(5);
+const KIMI_OAUTH_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Identifies one exact renewable provider authorization flow.
 /// 标识一个精确的可续期供应商授权流程。
@@ -68,6 +77,9 @@ pub enum OAuthProviderKind {
     /// MiniMax China Token Plan Device Authorization Grant.
     /// MiniMax 中国版 Token Plan 设备授权流程。
     MiniMaxChinaTokenPlan,
+    /// Kimi Coding Plan Device Authorization Grant.
+    /// Kimi Coding Plan 设备授权流程。
+    KimiCodingPlan,
 }
 
 /// Carries user-owned OAuth client configuration without exposing it in snapshots.
@@ -304,6 +316,78 @@ struct MiniMaxDeviceFlow {
     poll_interval_ms: u64,
 }
 
+/// Decodes one exact Kimi RFC 8628 device authorization response.
+/// 解码一份精确的 Kimi RFC 8628 设备授权响应。
+#[derive(Deserialize)]
+struct KimiDeviceCodeResponse {
+    /// Secret device code retained only by the process-local transaction.
+    /// 仅由进程内事务保留的秘密设备码。
+    device_code: String,
+    /// Short code displayed to the user.
+    /// 向用户显示的短代码。
+    user_code: String,
+    /// Browser verification page.
+    /// 浏览器验证页面。
+    verification_uri: String,
+    /// Optional browser page with the code prefilled.
+    /// 可选的预填代码浏览器页面。
+    #[serde(default)]
+    verification_uri_complete: Option<String>,
+    /// Provider-reported lifetime in seconds.
+    /// 供应商报告的有效秒数。
+    expires_in: u64,
+    /// Provider-reported minimum polling interval in seconds.
+    /// 供应商报告的最小轮询间隔秒数。
+    interval: u64,
+}
+
+/// Decodes Kimi device exchange and refresh responses.
+/// 解码 Kimi 设备交换与刷新响应。
+#[derive(Deserialize)]
+struct KimiTokenResponse {
+    /// Stable OAuth error identifier.
+    /// 稳定 OAuth 错误标识。
+    #[serde(default)]
+    error: String,
+    /// Controlled OAuth error description.
+    /// 受控 OAuth 错误描述。
+    #[serde(default)]
+    error_description: String,
+    /// Access token returned on success.
+    /// 成功时返回的 Access Token。
+    #[serde(default)]
+    access_token: String,
+    /// Refresh token returned or rotated on success.
+    /// 成功时返回或轮换的 Refresh Token。
+    #[serde(default)]
+    refresh_token: String,
+    /// Provider lifetime in seconds.
+    /// 供应商有效秒数。
+    #[serde(default)]
+    expires_in: f64,
+    /// Exact granted OAuth scope string.
+    /// 精确授予的 OAuth Scope 字符串。
+    #[serde(default)]
+    scope: String,
+}
+
+/// Retains the secret and device identity needed while polling Kimi.
+/// 保留轮询 Kimi 所需的秘密与设备身份。
+struct KimiDeviceFlow {
+    /// Provider-issued device secret.
+    /// 供应商签发的设备秘密。
+    device_code: String,
+    /// Stable provider-visible device identifier.
+    /// 稳定的供应商可见设备标识。
+    device_id: String,
+    /// Absolute challenge expiration in Unix milliseconds.
+    /// 挑战的 Unix 毫秒绝对过期时间。
+    expires_at_unix_ms: u64,
+    /// Provider-safe polling interval in milliseconds.
+    /// 供应商安全的轮询间隔毫秒数。
+    poll_interval_ms: u64,
+}
+
 /// Parses a provider OAuth error without retaining its potentially sensitive description.
 /// 解析供应商 OAuth 错误且不保留其可能包含敏感信息的描述。
 #[derive(Deserialize)]
@@ -400,6 +484,9 @@ impl OAuthAuthorizationRuntime {
             OAuthProviderKind::MiniMaxGlobalTokenPlan | OAuthProviderKind::MiniMaxChinaTokenPlan
         ) {
             return self.start_minimax_device_flow(provider_kind).await;
+        }
+        if provider_kind == OAuthProviderKind::KimiCodingPlan {
+            return self.start_kimi_device_flow().await;
         }
         let transaction_id = format!("oauth_{}", Uuid::new_v4().simple());
         let state = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
@@ -584,6 +671,124 @@ impl OAuthAuthorizationRuntime {
                 .remove(transaction_id.as_str());
             return Err(String::from(
                 "MiniMax Device Flow polling task stopped before registration.",
+            ));
+        }
+        Ok(OAuthAuthorizationChallenge {
+            transaction: snapshot,
+            authorization_url,
+            flow_kind: OAuthAuthorizationFlowKind::DeviceCode,
+            user_code: Some(device.user_code),
+            poll_interval_ms: Some(poll_interval_ms),
+        })
+    }
+
+    /// Starts one Kimi Coding Plan RFC 8628 Device Authorization Grant.
+    /// 启动一个 Kimi Coding Plan RFC 8628 设备授权流程。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A browser-safe challenge while the process polls with the retained device identity.
+    /// 返回浏览器安全挑战，同时进程使用保留的设备身份进行轮询。
+    async fn start_kimi_device_flow(&self) -> Result<OAuthAuthorizationChallenge, String> {
+        let transaction_id = format!("oauth_{}", Uuid::new_v4().simple());
+        let device_id = Uuid::new_v4().hyphenated().to_string();
+        let response = self
+            .client
+            .post(KIMI_DEVICE_AUTHORIZATION_URL)
+            .form(&[("client_id", KIMI_CODING_CLIENT_ID)])
+            .headers(kimi_device_headers(device_id.as_str())?)
+            .timeout(KIMI_OAUTH_REQUEST_TIMEOUT)
+            .send()
+            .await
+            .map_err(|error| format!("Kimi Device Flow request failed: {error}"))?;
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|error| format!("Kimi Device Flow response failed: {error}"))?;
+        if !status.is_success() {
+            return Err(format!(
+                "Kimi Device Flow request returned HTTP {}.",
+                status.as_u16()
+            ));
+        }
+        let device: KimiDeviceCodeResponse = serde_json::from_str(body.as_str())
+            .map_err(|_| String::from("Kimi Device Flow response was invalid."))?;
+        if device.device_code.trim().is_empty()
+            || device.user_code.trim().is_empty()
+            || device.verification_uri.trim().is_empty()
+        {
+            return Err(String::from(
+                "Kimi Device Flow response omitted its user challenge.",
+            ));
+        }
+        let authorization_url = validate_kimi_verification_uri(
+            device
+                .verification_uri_complete
+                .as_deref()
+                .unwrap_or(device.verification_uri.as_str()),
+        )?;
+        let now_unix_ms = unix_millis()?;
+        let provider_lifetime_ms = device.expires_in.saturating_mul(1_000);
+        let bounded_lifetime_ms = provider_lifetime_ms.min(
+            KIMI_DEVICE_FLOW_MAX_LIFETIME
+                .as_millis()
+                .try_into()
+                .unwrap_or(u64::MAX),
+        );
+        if bounded_lifetime_ms == 0 {
+            return Err(String::from(
+                "Kimi Device Flow response returned an invalid expiration.",
+            ));
+        }
+        let expires_at_unix_ms = now_unix_ms
+            .checked_add(bounded_lifetime_ms)
+            .ok_or_else(|| String::from("Kimi Device Flow expiration overflowed."))?;
+        let poll_interval_ms = if device.interval == 0 {
+            KIMI_DEVICE_FLOW_DEFAULT_POLL_INTERVAL.as_millis() as u64
+        } else {
+            device.interval.saturating_mul(1_000)
+        };
+        let snapshot = OAuthTransactionSnapshot {
+            transaction_id: transaction_id.clone(),
+            provider_kind: OAuthProviderKind::KimiCodingPlan,
+            phase: OAuthTransactionPhase::WaitingForUserAuthorization,
+            expires_at_unix_ms,
+            message: None,
+        };
+        let flow = KimiDeviceFlow {
+            device_code: device.device_code,
+            device_id,
+            expires_at_unix_ms,
+            poll_interval_ms,
+        };
+        let transactions = Arc::clone(&self.transactions);
+        let transactions_for_task = Arc::clone(&transactions);
+        let transaction_id_for_task = transaction_id.clone();
+        let http = self.client.clone();
+        let (start_sender, start_receiver) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            if start_receiver.await.is_err() {
+                return;
+            }
+            let result = poll_kimi_device_flow(
+                &http,
+                &flow,
+                &transactions_for_task,
+                transaction_id_for_task.as_str(),
+            )
+            .await;
+            finish_transaction(transactions, transaction_id_for_task.as_str(), result).await;
+        });
+        self.register_transaction(transaction_id.as_str(), snapshot.clone(), &task)
+            .await?;
+        if start_sender.send(()).is_err() {
+            self.transactions
+                .lock()
+                .await
+                .remove(transaction_id.as_str());
+            return Err(String::from(
+                "Kimi Device Flow polling task stopped before registration.",
             ));
         }
         Ok(OAuthAuthorizationChallenge {
@@ -821,6 +1026,14 @@ impl OAuthAuthorizationRuntime {
                     resource_url: refreshed_resource_url,
                 })
             }
+            CredentialSecretMaterial::KimiCodingPlanOAuth { tokens, device_id } => {
+                let refreshed =
+                    refresh_kimi_oauth_token(&self.client, tokens, device_id.as_str()).await?;
+                Ok(CredentialSecretMaterial::KimiCodingPlanOAuth {
+                    tokens: merge_kimi_token_set(tokens, &refreshed)?,
+                    device_id: device_id.clone(),
+                })
+            }
         }
     }
 }
@@ -983,6 +1196,268 @@ async fn poll_minimax_device_flow(
         return build_minimax_credential_material(flow.region, token);
     }
     Err(String::from("MiniMax Device Flow authorization timed out."))
+}
+
+/// Polls the Kimi token endpoint until authorization completes or expires.
+/// 轮询 Kimi Token 端点，直到授权完成或过期。
+///
+/// # Parameters
+/// 参数
+/// `client` owns HTTP execution, `flow` owns the provider secret and device identity,
+/// and the transaction arguments expose progress without exposing credentials.
+/// `client` 持有 HTTP 执行，`flow` 持有供应商秘密与设备身份，
+/// 事务参数用于公开进度而不公开凭据。
+///
+/// # Returns
+/// 返回值
+/// Complete renewable Kimi Coding Plan credential material.
+/// 返回完整可续期 Kimi Coding Plan 凭据材料。
+async fn poll_kimi_device_flow(
+    client: &Client,
+    flow: &KimiDeviceFlow,
+    transactions: &Arc<Mutex<BTreeMap<String, OAuthTransaction>>>,
+    transaction_id: &str,
+) -> Result<CredentialSecretMaterial, String> {
+    while unix_millis()? < flow.expires_at_unix_ms {
+        sleep(Duration::from_millis(flow.poll_interval_ms)).await;
+        set_transaction_phase(
+            transactions,
+            transaction_id,
+            OAuthTransactionPhase::WaitingForUserAuthorization,
+        )
+        .await;
+        let response = client
+            .post(KIMI_TOKEN_URL)
+            .form(&[
+                ("client_id", KIMI_CODING_CLIENT_ID),
+                ("device_code", flow.device_code.as_str()),
+                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+            ])
+            .headers(kimi_device_headers(flow.device_id.as_str())?)
+            .timeout(KIMI_OAUTH_REQUEST_TIMEOUT)
+            .send()
+            .await
+            .map_err(|error| format!("Kimi Device Flow polling failed: {error}"))?;
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|error| format!("Kimi Device Flow token response failed: {error}"))?;
+        let token: KimiTokenResponse = serde_json::from_str(body.as_str())
+            .map_err(|_| String::from("Kimi Device Flow token response was invalid."))?;
+        match token.error.as_str() {
+            "authorization_pending" | "slow_down" => continue,
+            "expired_token" => {
+                return Err(String::from("Kimi Device Flow authorization expired."));
+            }
+            "access_denied" => {
+                return Err(String::from("Kimi Device Flow authorization was denied."));
+            }
+            "" => {}
+            _ => {
+                return Err(format!(
+                    "Kimi Device Flow token exchange failed with `{}`: {}",
+                    token.error,
+                    controlled_oauth_error(token.error_description.as_str())
+                ));
+            }
+        }
+        if !status.is_success() {
+            return Err(format!(
+                "Kimi Device Flow token exchange returned HTTP {}.",
+                status.as_u16()
+            ));
+        }
+        set_transaction_phase(
+            transactions,
+            transaction_id,
+            OAuthTransactionPhase::ExchangingToken,
+        )
+        .await;
+        return build_kimi_credential_material(token, flow.device_id.as_str());
+    }
+    Err(String::from("Kimi Device Flow authorization timed out."))
+}
+
+/// Builds validated Kimi Coding Plan secret material from one successful exchange.
+/// 从一次成功交换构建已校验的 Kimi Coding Plan 秘密材料。
+///
+/// # Parameters
+/// 参数
+/// `token` is the provider response and `device_id` is the identity bound to this flow.
+/// `token` 是供应商响应，`device_id` 是绑定到本次流程的身份。
+///
+/// # Returns
+/// 返回值
+/// Complete material retaining the device identity required by subsequent calls.
+/// 返回保留后续调用所需设备身份的完整材料。
+fn build_kimi_credential_material(
+    token: KimiTokenResponse,
+    device_id: &str,
+) -> Result<CredentialSecretMaterial, String> {
+    if token.access_token.trim().is_empty() || token.refresh_token.trim().is_empty() {
+        return Err(String::from(
+            "Kimi OAuth response omitted renewable token material.",
+        ));
+    }
+    let issued_at_unix_ms = unix_millis()?;
+    let expires_at_unix_ms = kimi_token_expiration(issued_at_unix_ms, token.expires_in)?;
+    let tokens = OAuthTokenSet {
+        access_token: token.access_token,
+        refresh_token: token.refresh_token,
+        issued_at_unix_ms,
+        expires_at_unix_ms,
+        scopes: token
+            .scope
+            .split_ascii_whitespace()
+            .map(str::to_string)
+            .collect(),
+        account_subject: None,
+        email: None,
+    };
+    tokens.validate()?;
+    let material = CredentialSecretMaterial::KimiCodingPlanOAuth {
+        tokens,
+        device_id: device_id.to_string(),
+    };
+    CredentialSecretEnvelope::new(material.clone())?;
+    Ok(material)
+}
+
+/// Refreshes one Kimi Coding Plan token with its original device identity.
+/// 使用原始设备身份刷新一个 Kimi Coding Plan Token。
+async fn refresh_kimi_oauth_token(
+    client: &Client,
+    tokens: &OAuthTokenSet,
+    device_id: &str,
+) -> Result<KimiTokenResponse, String> {
+    let response = client
+        .post(KIMI_TOKEN_URL)
+        .form(&[
+            ("client_id", KIMI_CODING_CLIENT_ID),
+            ("refresh_token", tokens.refresh_token.as_str()),
+            ("grant_type", "refresh_token"),
+        ])
+        .headers(kimi_device_headers(device_id)?)
+        .timeout(KIMI_OAUTH_REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|error| format!("Kimi OAuth refresh failed: {error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("Kimi OAuth refresh response failed: {error}"))?;
+    let token: KimiTokenResponse = serde_json::from_str(body.as_str())
+        .map_err(|_| String::from("Kimi OAuth refresh response was invalid."))?;
+    if !status.is_success() || !token.error.is_empty() || token.access_token.trim().is_empty() {
+        return Err(String::from(
+            "Kimi OAuth session cannot be refreshed; reauthorization is required.",
+        ));
+    }
+    Ok(token)
+}
+
+/// Merges a Kimi refresh response while preserving an unrotated refresh token and account metadata.
+/// 合并 Kimi 刷新响应，同时保留未轮换的 Refresh Token 与账号元数据。
+fn merge_kimi_token_set(
+    current: &OAuthTokenSet,
+    refreshed: &KimiTokenResponse,
+) -> Result<OAuthTokenSet, String> {
+    let issued_at_unix_ms = unix_millis()?;
+    let merged = OAuthTokenSet {
+        access_token: refreshed.access_token.clone(),
+        refresh_token: if refreshed.refresh_token.trim().is_empty() {
+            current.refresh_token.clone()
+        } else {
+            refreshed.refresh_token.clone()
+        },
+        issued_at_unix_ms,
+        expires_at_unix_ms: kimi_token_expiration(issued_at_unix_ms, refreshed.expires_in)?,
+        scopes: if refreshed.scope.trim().is_empty() {
+            current.scopes.clone()
+        } else {
+            refreshed
+                .scope
+                .split_ascii_whitespace()
+                .map(str::to_string)
+                .collect()
+        },
+        account_subject: current.account_subject.clone(),
+        email: current.email.clone(),
+    };
+    merged.validate()?;
+    Ok(merged)
+}
+
+/// Converts Kimi's positive fractional lifetime to a checked Unix-millisecond deadline.
+/// 将 Kimi 的正小数有效期转换为经过检查的 Unix 毫秒截止时间。
+fn kimi_token_expiration(issued_at_unix_ms: u64, expires_in: f64) -> Result<u64, String> {
+    if !expires_in.is_finite() || expires_in <= 0.0 {
+        return Err(String::from("Kimi OAuth token expiration is invalid."));
+    }
+    let lifetime_ms = (expires_in * 1_000.0).trunc();
+    if lifetime_ms > u64::MAX as f64 {
+        return Err(String::from("Kimi OAuth token expiration overflowed."));
+    }
+    issued_at_unix_ms
+        .checked_add(lifetime_ms as u64)
+        .ok_or_else(|| String::from("Kimi OAuth token expiration overflowed."))
+}
+
+/// Builds Kimi's verified device identity headers.
+/// 构建 Kimi 已验证的设备身份请求头。
+fn kimi_device_headers(device_id: &str) -> Result<HeaderMap, String> {
+    let mut headers = HeaderMap::new();
+    let hostname = std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| String::from("unknown"));
+    let device_model = kimi_device_model();
+    for (name, value) in [
+        ("x-msh-platform", "CLIProxyAPI"),
+        ("x-msh-version", "dev"),
+        ("x-msh-device-name", hostname.as_str()),
+        ("x-msh-device-model", device_model.as_str()),
+        ("x-msh-device-id", device_id),
+    ] {
+        headers.insert(
+            reqwest::header::HeaderName::from_static(name),
+            HeaderValue::from_str(value)
+                .map_err(|_| String::from("Kimi OAuth device identity is invalid."))?,
+        );
+    }
+    Ok(headers)
+}
+
+/// Preserves the operating-system labels accepted by Kimi's device flow.
+/// 保留 Kimi 设备授权流程接受的操作系统标签。
+fn kimi_device_model() -> String {
+    let operating_system = match std::env::consts::OS {
+        "darwin" => "macOS",
+        "windows" => "Windows",
+        "linux" => "Linux",
+        other => other,
+    };
+    format!("{operating_system} {}", std::env::consts::ARCH)
+}
+
+/// Accepts only the exact HTTPS Kimi authorization authority.
+/// 仅接受精确的 HTTPS Kimi 授权域。
+fn validate_kimi_verification_uri(value: &str) -> Result<String, String> {
+    let url = Url::parse(value)
+        .map_err(|_| String::from("Kimi Device Flow returned an invalid verification URL."))?;
+    if url.scheme() != "https" || url.host_str() != Some("auth.kimi.com") {
+        return Err(String::from(
+            "Kimi Device Flow returned an untrusted verification URL.",
+        ));
+    }
+    Ok(url.to_string())
+}
+
+/// Bounds one provider OAuth error detail before displaying it.
+/// 在显示供应商 OAuth 错误详情前限制其长度。
+fn controlled_oauth_error(value: &str) -> String {
+    value.chars().take(240).collect()
 }
 
 /// Builds validated MiniMax secret material from a successful token response.
@@ -1177,6 +1652,11 @@ async fn bind_callback_listener(provider_kind: OAuthProviderKind) -> Result<TcpL
                 "MiniMax Device Flow does not use a loopback listener.",
             ));
         }
+        OAuthProviderKind::KimiCodingPlan => {
+            return Err(String::from(
+                "Kimi Device Flow does not use a loopback listener.",
+            ));
+        }
     };
     TcpListener::bind(address)
         .await
@@ -1202,6 +1682,9 @@ fn callback_redirect_uri(
                 "MiniMax Device Flow does not use a callback redirect URI.",
             ))
         }
+        OAuthProviderKind::KimiCodingPlan => Err(String::from(
+            "Kimi Device Flow does not use a callback redirect URI.",
+        )),
     }
 }
 
@@ -1283,6 +1766,11 @@ fn build_oauth_flow(
                 "MiniMax Device Flow must be constructed by its dedicated runtime.",
             ));
         }
+        OAuthProviderKind::KimiCodingPlan => {
+            return Err(String::from(
+                "Kimi Device Flow must be constructed by its dedicated runtime.",
+            ));
+        }
     };
     let mut authorization_url = Url::parse(authorization_endpoint)
         .map_err(|error| format!("Invalid OAuth authorization endpoint: {error}"))?;
@@ -1321,6 +1809,11 @@ fn build_oauth_flow(
             | OAuthProviderKind::MiniMaxChinaTokenPlan => {
                 return Err(String::from(
                     "MiniMax Device Flow cannot use an authorization-code URL.",
+                ));
+            }
+            OAuthProviderKind::KimiCodingPlan => {
+                return Err(String::from(
+                    "Kimi Device Flow cannot use an authorization-code URL.",
                 ));
             }
         }
@@ -1657,6 +2150,11 @@ async fn exchange_authorization_code(
                 "MiniMax Device Flow cannot use callback token exchange.",
             ));
         }
+        OAuthProviderKind::KimiCodingPlan => {
+            return Err(String::from(
+                "Kimi Device Flow cannot use callback token exchange.",
+            ));
+        }
     })
 }
 
@@ -1914,11 +2412,12 @@ fn unix_millis() -> Result<u64, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        MiniMaxTokenResponse, OAuthAuthorizationRuntime, OAuthClientConfiguration,
-        OAuthProviderKind, OAuthTokenResponse, OAuthTransaction, OAuthTransactionPhase,
-        OAuthTransactionSnapshot, build_minimax_credential_material, build_oauth_flow,
-        build_pkce_challenge, build_pkce_verifier, merge_refreshed_token_set,
-        parse_callback_request, unix_millis, validate_callback_state,
+        KimiTokenResponse, MiniMaxTokenResponse, OAuthAuthorizationRuntime,
+        OAuthClientConfiguration, OAuthProviderKind, OAuthTokenResponse, OAuthTransaction,
+        OAuthTransactionPhase, OAuthTransactionSnapshot, build_kimi_credential_material,
+        build_minimax_credential_material, build_oauth_flow, build_pkce_challenge,
+        build_pkce_verifier, kimi_device_model, merge_refreshed_token_set, parse_callback_request,
+        unix_millis, validate_callback_state, validate_kimi_verification_uri,
         validate_minimax_verification_uri,
     };
     use crate::{CredentialSecretMaterial, MiniMaxRegion, OAuthTokenSet};
@@ -2003,6 +2502,53 @@ mod tests {
         .err()
         .expect("public Gemini OAuth without project must fail");
         assert!(error.contains("project id"));
+    }
+
+    /// Verifies Kimi login retains the exact device identity and rejects foreign browser origins.
+    /// 验证 Kimi 登录保留精确设备身份并拒绝外部浏览器 Origin。
+    #[test]
+    fn kimi_material_retains_device_identity() {
+        let material = build_kimi_credential_material(
+            KimiTokenResponse {
+                error: String::new(),
+                error_description: String::new(),
+                access_token: String::from("access"),
+                refresh_token: String::from("refresh"),
+                expires_in: 3600.0,
+                scope: String::from("coding"),
+            },
+            "123e4567-e89b-42d3-a456-426614174000",
+        )
+        .expect("Kimi material should validate");
+        assert!(matches!(
+            material,
+            CredentialSecretMaterial::KimiCodingPlanOAuth {
+                device_id,
+                ..
+            } if device_id == "123e4567-e89b-42d3-a456-426614174000"
+        ));
+        assert!(
+            validate_kimi_verification_uri("https://auth.kimi.com/device")
+                .expect("Kimi authority")
+                .starts_with("https://auth.kimi.com/")
+        );
+        assert!(validate_kimi_verification_uri("https://example.com/device").is_err());
+    }
+
+    /// Verifies Kimi receives the provider-observed operating-system label.
+    /// 验证 Kimi 收到供应商已验证的操作系统标签。
+    #[test]
+    fn kimi_device_model_uses_provider_operating_system_label() {
+        let expected_operating_system = match std::env::consts::OS {
+            "darwin" => "macOS",
+            "windows" => "Windows",
+            "linux" => "Linux",
+            other => other,
+        };
+        assert_eq!(
+            kimi_device_model(),
+            format!("{expected_operating_system} {}", std::env::consts::ARCH)
+        );
     }
 
     /// Verifies providers may rotate only the access token during refresh.

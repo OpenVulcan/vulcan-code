@@ -270,6 +270,7 @@ mod tests {
             subagent_prompt_context: None,
             model_blueprint: ProviderRuntimeBlueprint {
                 provider_id: String::from("openai"),
+                connection_id: String::from("test-connection"),
                 provider_name: String::from("OpenAI"),
                 runtime_label: String::from("OpenAI"),
                 model_id: String::from("gpt-test"),
@@ -339,6 +340,7 @@ mod tests {
             provider_id_override: None,
             model_id_override: None,
             connection_id_override: None,
+            provider_tool_selections_override: Default::default(),
             subagent_prompt_context: None,
             task_session_store_root: None,
             session_title: String::from("测试会话"),

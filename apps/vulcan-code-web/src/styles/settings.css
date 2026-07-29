@@ -429,6 +429,12 @@
   background: var(--accent);
 }
 
+.settings-capability-route-row.provider-tool-settings-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  cursor: default;
+  touch-action: auto;
+}
+
 .settings-capability-route-row.dragging {
   opacity: 0.68;
   cursor: grabbing;

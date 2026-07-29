@@ -47,6 +47,9 @@ pub(crate) struct OpenAiChatStreamDecoder {
     /// Whether a terminal response event was emitted.
     /// 是否已经发送响应终态事件。
     terminal: bool,
+    /// Whether a provider finish reason already established semantic completion.
+    /// 供应商结束原因是否已经建立语义完成状态。
+    finish_signal_seen: bool,
     /// Whether the text item is currently open.
     /// 文本项当前是否打开。
     text_open: bool,
@@ -87,6 +90,7 @@ impl OpenAiChatStreamDecoder {
             execution_id,
             started: false,
             terminal: false,
+            finish_signal_seen: false,
             text_open: false,
             reasoning_open: false,
             reasoning_details_text: String::new(),
@@ -164,6 +168,7 @@ impl OpenAiChatStreamDecoder {
             .get("finish_reason")
             .is_some_and(|value| !value.is_null())
         {
+            self.finish_signal_seen = true;
             events.extend(self.close_open_items());
             events.extend(self.complete_tools());
         }
@@ -351,6 +356,10 @@ impl ProtocolStreamDecoder for OpenAiChatStreamDecoder {
     fn finish(&mut self) -> Result<Vec<AiStreamEvent>, ProtocolConversionError> {
         if self.terminal {
             return Ok(Vec::new());
+        }
+        if self.finish_signal_seen {
+            self.terminal = true;
+            return Ok(vec![AiStreamEvent::ResponseCompleted]);
         }
         Err(ProtocolConversionError::new(
             "OpenAI Chat stream ended before the [DONE] terminal record.",
@@ -993,16 +1002,29 @@ fn openai_usage(value: &Value) -> RequestUsage {
     RequestUsage {
         input_tokens: reported_usage(value, &["input_tokens", "prompt_tokens"]),
         output_tokens: reported_usage(value, &["output_tokens", "completion_tokens"]),
-        reasoning_tokens: value
-            .pointer("/output_tokens_details/reasoning_tokens")
-            .and_then(Value::as_u64)
-            .map(reported)
-            .unwrap_or(UsageValue::Unknown),
-        cache_read_tokens: value
-            .pointer("/input_tokens_details/cached_tokens")
-            .and_then(Value::as_u64)
-            .map(reported)
-            .unwrap_or(UsageValue::Unknown),
+        reasoning_tokens: reported_pointer_usage(
+            value,
+            &[
+                "/output_tokens_details/reasoning_tokens",
+                "/completion_tokens_details/reasoning_tokens",
+            ],
+        ),
+        cache_read_tokens: reported_pointer_usage(
+            value,
+            &[
+                "/input_tokens_details/cached_tokens",
+                "/prompt_tokens_details/cached_tokens",
+            ],
+        ),
+        cache_write_tokens: reported_pointer_usage(
+            value,
+            &[
+                "/input_tokens_details/cache_creation_tokens",
+                "/input_tokens_details/cache_write_tokens",
+                "/prompt_tokens_details/cache_creation_tokens",
+                "/prompt_tokens_details/cache_write_tokens",
+            ],
+        ),
         total_tokens: reported_usage(value, &["total_tokens"]),
         ..RequestUsage::default()
     }
@@ -1014,6 +1036,16 @@ fn reported_usage(value: &Value, fields: &[&str]) -> UsageValue {
     fields
         .iter()
         .find_map(|field| value.get(*field).and_then(Value::as_u64))
+        .map(reported)
+        .unwrap_or(UsageValue::Unknown)
+}
+
+/// Reads the first reported usage field from explicit protocol-specific JSON pointers.
+/// 从显式的协议专属 JSON 指针列表读取第一个已报告用量字段。
+fn reported_pointer_usage(value: &Value, pointers: &[&str]) -> UsageValue {
+    pointers
+        .iter()
+        .find_map(|pointer| value.pointer(pointer).and_then(Value::as_u64))
         .map(reported)
         .unwrap_or(UsageValue::Unknown)
 }
@@ -1084,6 +1116,7 @@ fn normalize_openai_error(error: &Value, outer_error_type: Option<&Value>) -> Ai
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     /// Verifies Chat tool arguments remain streaming until the finish signal.
     /// 验证 Chat 工具参数在结束信号前保持流式接收。
@@ -1138,6 +1171,65 @@ mod tests {
             event,
             AiStreamEvent::ReasoningDelta { delta, .. } if delta == "，再验证"
         )));
+    }
+
+    /// Verifies Chat Completions usage reads MiniMax reasoning-token details.
+    /// 验证 Chat Completions 用量会读取 MiniMax 推理 Token 明细。
+    #[test]
+    fn chat_minimax_usage_reads_completion_reasoning_tokens() {
+        let usage = openai_usage(&json!({
+            "prompt_tokens": 123,
+            "completion_tokens": 45,
+            "total_tokens": 168,
+            "completion_tokens_details": {
+                "reasoning_tokens": 30
+            }
+        }));
+
+        assert_eq!(usage.input_tokens, reported(123));
+        assert_eq!(usage.output_tokens, reported(45));
+        assert_eq!(usage.reasoning_tokens, reported(30));
+        assert_eq!(usage.total_tokens, reported(168));
+    }
+
+    /// Verifies Chat Completions usage reads cache-read and cache-write prompt tokens from Chat-specific details fields.
+    /// 验证 Chat Completions 用量会从 Chat 专属明细字段读取缓存读取与缓存写入 Token。
+    #[test]
+    fn chat_usage_reads_cached_prompt_tokens() {
+        let usage = openai_usage(&json!({
+            "prompt_tokens": 123,
+            "completion_tokens": 45,
+            "total_tokens": 168,
+            "prompt_tokens_details": {
+                "cached_tokens": 96,
+                "cache_creation_tokens": 27
+            }
+        }));
+
+        assert_eq!(usage.input_tokens, reported(123));
+        assert_eq!(usage.cache_read_tokens, reported(96));
+        assert_eq!(usage.cache_write_tokens, reported(27));
+    }
+
+    /// Verifies a documented finish reason can terminate providers that close without `[DONE]`.
+    /// 验证文档化结束原因可终止未发送 `[DONE]` 即关闭的供应商流。
+    #[test]
+    fn chat_finish_reason_allows_transport_close_without_done_record() {
+        let mut decoder = OpenAiChatStreamDecoder::with_registered_tools(
+            String::from("execution"),
+            BTreeSet::new(),
+        );
+        decoder
+            .push_sse(
+                None,
+                r#"{"choices":[{"delta":{"content":"完成"},"finish_reason":"stop"}]}"#,
+            )
+            .expect("finish-reason chunk should decode");
+
+        let terminal = decoder
+            .finish()
+            .expect("transport close after finish reason should complete");
+        assert_eq!(terminal, vec![AiStreamEvent::ResponseCompleted]);
     }
 
     /// Verifies arguments received before identity are published after the tool card can start.

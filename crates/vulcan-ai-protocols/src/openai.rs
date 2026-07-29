@@ -43,6 +43,9 @@ impl ProtocolProfile for OpenAiChatProfile {
             "messages": messages,
             "tools": encode_openai_tools(request),
             "stream": true,
+            "stream_options": {
+                "include_usage": true,
+            },
         });
         if let Some(limit) = request.output_token_limit {
             body["max_completion_tokens"] = json!(limit);
@@ -837,6 +840,7 @@ mod tests {
             .encode(&request)
             .expect("Chat request should encode");
         assert_eq!(encoded.body["reasoning_effort"], "minimal");
+        assert_eq!(encoded.body["stream_options"]["include_usage"], true);
     }
 
     /// Verifies Responses drops reasoning history signed by another provider family.

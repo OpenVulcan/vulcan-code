@@ -2,7 +2,12 @@ import * as React from "react"
 import { FileText } from "lucide-react"
 
 import { PublicAiModelOverridesDialog } from "@/components/features/settings/public-ai-model-overrides-dialog"
-import { loadPublicAiSettings } from "@/service/settings-actions-service"
+import { Switch } from "@/components/ui/switch"
+import { useI18n } from "@/i18n"
+import {
+  loadPublicAiSettings,
+  savePublicAiModelEnabled,
+} from "@/service/settings-actions-service"
 import type {
   PublicAiModel,
   PublicAiProviderDescriptor,
@@ -37,10 +42,12 @@ interface PublicProviderModels {
 // ModelListSettingsArea renders the process-local public AI model catalog.
 // ModelListSettingsArea 渲染进程内公共 AI 模型目录。
 export function ModelListSettingsArea() {
+  const { t } = useI18n()
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [selectedProviderId, setSelectedProviderId] = React.useState<string | null>(null)
   const [editingRoute, setEditingRoute] = React.useState<PublicModelProtocolRoute | null>(null)
+  const [pendingModelKeys, setPendingModelKeys] = React.useState<Set<string>>(() => new Set())
 
   React.useEffect(() => {
     let active = true
@@ -86,7 +93,8 @@ export function ModelListSettingsArea() {
       {!snapshot ? (
         <p className="settings-muted-line">正在读取实时模型目录…</p>
       ) : (
-        <div className="settings-split-layout">
+        <>
+          <div className="settings-split-layout">
           <aside className="settings-provider-nav" aria-label="供应商">
             <div className="settings-split-column-title">供应商</div>
             {groupedProviders.map((group) => (
@@ -122,6 +130,13 @@ export function ModelListSettingsArea() {
                   (total, route) => total + route.accountCount,
                   0,
                 )
+                const modelKey = `${selectedGroup.provider.id}/${modelId}`
+                const access = snapshot.modelAccessRecords.find((record) => (
+                  record.providerId === selectedGroup.provider.id
+                  && record.modelId === modelId
+                ))
+                const enabled = access?.enabled ?? true
+                const pending = pendingModelKeys.has(modelKey)
                 return (
                   <article className="settings-model-row" key={`${selectedGroup.provider.id}/${modelId}`}>
                     <div>
@@ -143,12 +158,45 @@ export function ModelListSettingsArea() {
                         })}
                       </div>
                     </div>
+                    <div className="ml-auto flex shrink-0 items-center gap-2">
+                      <span className="text-xs text-muted-foreground">
+                        {enabled ? t("settings.models.enabled") : t("settings.models.disabled")}
+                      </span>
+                      <Switch
+                        aria-label={`${t("settings.models.toggle")} ${representative.model.display_name}`}
+                        checked={enabled}
+                        disabled={pending}
+                        onCheckedChange={(checked) => {
+                          setPendingModelKeys((current) => new Set(current).add(modelKey))
+                          void savePublicAiModelEnabled({
+                            providerId: selectedGroup.provider.id,
+                            modelId,
+                            enabled: checked,
+                          })
+                            .then((next) => {
+                              setSnapshot(next)
+                              setError(null)
+                            })
+                            .catch((reason) => {
+                              setError(errorMessage(reason))
+                            })
+                            .finally(() => {
+                              setPendingModelKeys((current) => {
+                                const next = new Set(current)
+                                next.delete(modelKey)
+                                return next
+                              })
+                            })
+                        }}
+                      />
+                    </div>
                   </article>
                 )
               })}
             </div>
           </section>
-        </div>
+          </div>
+        </>
       )}
       <PublicAiModelOverridesDialog
         model={editingRoute?.model ?? null}

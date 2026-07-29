@@ -25,6 +25,14 @@ pub struct SessionRuntimeStateEntry {
     /// 最近一次该会话激活时选择的可选温度覆盖。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_temperature: Option<f32>,
+    /// Session-selected provider tool targets keyed by semantic capability.
+    /// 按语义能力索引的会话级供应商工具目标选择。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub provider_tool_selections: BTreeMap<String, SessionProviderToolTargetSelection>,
+    /// Whether this session explicitly overrides the global provider tool selections.
+    /// 当前会话是否显式覆盖全局供应商工具选择。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub provider_tool_selections_overridden: bool,
     /// Last user-selected work mode key for this session.
     /// 该会话最近一次选择的工作模式键。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -135,4 +143,16 @@ pub struct SessionRuntimeStateEntry {
     /// Unix-millis text capturing when the runtime state was last refreshed.
     /// 捕获运行时状态最近刷新时间的 Unix 毫秒文本。
     pub updated_at: String,
+}
+
+/// Identifies one exact provider tool target selected for a session.
+/// 标识会话选中的一个精确供应商工具目标。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionProviderToolTargetSelection {
+    /// Credential connection that exposes the target.
+    /// 暴露该目标的凭据连接。
+    pub connection_id: String,
+    /// Provider-declared target identifier.
+    /// 供应商声明的目标标识。
+    pub target_id: String,
 }

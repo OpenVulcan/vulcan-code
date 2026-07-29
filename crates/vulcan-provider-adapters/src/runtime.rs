@@ -5,8 +5,10 @@ use crate::{
     ActiveAiModelSelection, ConnectionModelCatalog, CredentialConnection,
     CredentialExecutionSecret, CredentialSecretEnvelope, HttpProviderMetadataClient,
     OAuthAuthorizationRuntime, PersistedAiConfiguration, ProviderExecutionClient,
-    ProviderExecutionRoute, ProviderMetadataClient, ProviderRegistry, RuntimeConnectionCatalogs,
-    SecondaryRouteOption, SecondaryRouteSelection,
+    ProviderExecutionRoute, ProviderMetadataClient, ProviderRegistry, ProviderToolCapabilityKind,
+    ProviderToolExecutionResult, ProviderToolTarget, ProviderToolTargetSelection,
+    RuntimeConnectionCatalogs, SecondaryRouteOption, SecondaryRouteSelection,
+    built_in_provider_tool_targets,
 };
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
@@ -372,6 +374,9 @@ impl PublicAiRuntime {
         provider_id: &str,
         model_id: &str,
     ) -> Result<bool, String> {
+        if !configuration.model_is_enabled(provider_id, model_id) {
+            return Ok(false);
+        }
         let catalogs = self
             .catalogs
             .read()
@@ -423,6 +428,10 @@ impl PublicAiRuntime {
                 catalog
                     .models
                     .iter()
+                    .filter(|model| {
+                        configuration
+                            .model_is_enabled(connection.provider_id.as_str(), model.id.as_str())
+                    })
                     .map(move |model| format!("{}/{}", connection.provider_id, model.id))
             })
             .collect())
@@ -556,9 +565,10 @@ impl PublicAiRuntime {
                     )
                 })?,
             crate::AccountUsageQueryKind::Unsupported
-            | crate::AccountUsageQueryKind::MiniMaxTokenPlan => {
-                connection.secret_reference.as_str()
-            }
+            | crate::AccountUsageQueryKind::MiniMaxTokenPlan
+            | crate::AccountUsageQueryKind::TavilyCredits
+            | crate::AccountUsageQueryKind::DeepSeekBalance
+            | crate::AccountUsageQueryKind::KimiCodingPlan => connection.secret_reference.as_str(),
         };
         let secret = self
             .resolve_fresh_execution_secret(connection.id.as_str(), secret_reference)
@@ -613,6 +623,9 @@ impl PublicAiRuntime {
             let should_refresh = match profile.account_usage_query {
                 crate::AccountUsageQueryKind::Unsupported => false,
                 crate::AccountUsageQueryKind::MiniMaxTokenPlan => true,
+                crate::AccountUsageQueryKind::TavilyCredits => true,
+                crate::AccountUsageQueryKind::DeepSeekBalance => true,
+                crate::AccountUsageQueryKind::KimiCodingPlan => true,
                 crate::AccountUsageQueryKind::OpenRouterCredits => {
                     connection.management_secret_reference.is_some()
                 }
@@ -732,6 +745,174 @@ impl PublicAiRuntime {
                     "No cached secondary routes exist for connection `{connection_id}` and model `{model_id}`. Open or refresh the secondary provider list first."
                 )
             })
+    }
+
+    /// Returns every provider tool target usable by currently configured credentials.
+    /// 返回当前已配置凭据能够使用的全部供应商工具目标。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration` is the authoritative connection graph.
+    /// `configuration` 是权威连接图。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Exact targets paired with eligible credential connection identifiers.
+    /// 返回与合格凭据连接标识配对的精确目标。
+    pub fn available_provider_tool_targets(
+        &self,
+        configuration: &PersistedAiConfiguration,
+    ) -> Result<Vec<AvailableProviderToolTarget>, String> {
+        let registry = self.effective_providers(configuration)?;
+        let mut available = Vec::new();
+        for connection in configuration.connection_graph.connections.values() {
+            let provider = registry
+                .provider(connection.provider_id.as_str())
+                .ok_or_else(|| {
+                    format!("Provider `{}` is not registered.", connection.provider_id)
+                })?;
+            let entry = provider
+                .service_entries
+                .iter()
+                .find(|entry| entry.id == connection.service_entry_id)
+                .ok_or_else(|| {
+                    format!(
+                        "Service entry `{}` is not registered for provider `{}`.",
+                        connection.service_entry_id, provider.id
+                    )
+                })?;
+            for target in built_in_provider_tool_targets(provider.id.as_str()) {
+                if target.service_entry_id == entry.id
+                    && target
+                        .credential_profile_ids
+                        .contains(connection.credential_profile_id.as_str())
+                {
+                    available.push(AvailableProviderToolTarget {
+                        connection_id: connection.id.clone(),
+                        connection_display_name: connection.display_name.clone(),
+                        target,
+                    });
+                }
+            }
+        }
+        available.sort_by(|left, right| {
+            left.target
+                .contract
+                .capability
+                .cmp(&right.target.contract.capability)
+                .then_with(|| left.target.display_name.cmp(&right.target.display_name))
+                .then_with(|| left.connection_id.cmp(&right.connection_id))
+        });
+        Ok(available)
+    }
+
+    /// Executes the one exact target selected for a semantic capability.
+    /// 执行某项语义能力唯一选中的精确目标。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration`, `capability`, and `arguments` are frozen invocation inputs.
+    /// `configuration`、`capability` 与 `arguments` 是冻结的调用输入。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A unified typed provider tool result.
+    /// 返回统一强类型供应商工具结果。
+    pub async fn execute_selected_provider_tool(
+        &self,
+        configuration: &PersistedAiConfiguration,
+        capability: ProviderToolCapabilityKind,
+        arguments: serde_json::Value,
+    ) -> Result<ProviderToolExecutionResult, String> {
+        let selection = configuration
+            .provider_tool_selections
+            .get(&capability)
+            .cloned()
+            .ok_or_else(|| {
+                format!("No provider tool target is selected for capability `{capability:?}`.")
+            })?;
+        let resolved = self.resolve_provider_tool_target(configuration, capability, &selection)?;
+        let secret = self
+            .resolve_fresh_execution_secret(
+                resolved.connection.id.as_str(),
+                resolved.connection.secret_reference.as_str(),
+            )
+            .await?;
+        self.execution_client
+            .execute_provider_tool(&resolved.entry, &resolved.target, arguments, &secret)
+            .await
+    }
+
+    /// Resolves one persisted single-target selection without fallback.
+    /// 解析一份持久化单目标选择且不执行回退。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration`, `capability`, and `selection` identify the exact target.
+    /// `configuration`、`capability` 与 `selection` 标识精确目标。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Frozen connection, entry, and target snapshots.
+    /// 返回冻结的连接、入口与目标快照。
+    fn resolve_provider_tool_target(
+        &self,
+        configuration: &PersistedAiConfiguration,
+        capability: ProviderToolCapabilityKind,
+        selection: &ProviderToolTargetSelection,
+    ) -> Result<ResolvedProviderToolTarget, String> {
+        let registry = self.effective_providers(configuration)?;
+        let connection = configuration
+            .connection_graph
+            .connections
+            .get(selection.connection_id.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "Provider tool connection `{}` no longer exists.",
+                    selection.connection_id
+                )
+            })?;
+        let provider = registry
+            .provider(connection.provider_id.as_str())
+            .cloned()
+            .ok_or_else(|| format!("Provider `{}` is not registered.", connection.provider_id))?;
+        let entry = provider
+            .service_entries
+            .iter()
+            .find(|entry| entry.id == connection.service_entry_id)
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "Provider tool service entry `{}` no longer exists.",
+                    connection.service_entry_id
+                )
+            })?;
+        let target = built_in_provider_tool_targets(provider.id.as_str())
+            .into_iter()
+            .find(|target| target.target_id == selection.target_id)
+            .ok_or_else(|| {
+                format!(
+                    "Provider tool target `{}` is not registered.",
+                    selection.target_id
+                )
+            })?;
+        if target.contract.capability != capability
+            || target.service_entry_id != entry.id
+            || !target
+                .credential_profile_ids
+                .contains(connection.credential_profile_id.as_str())
+        {
+            return Err(format!(
+                "Provider tool target `{}` is not eligible for connection `{}`.",
+                target.target_id, connection.id
+            ));
+        }
+        Ok(ResolvedProviderToolTarget {
+            connection,
+            entry,
+            target,
+        })
     }
 
     /// Resolves immutable provider metadata for one configured connection.
@@ -1033,6 +1214,11 @@ impl PublicAiRuntime {
         provider_id: &str,
         model_id: &str,
     ) -> Result<ResolvedPublicAiSelection, String> {
+        if !configuration.model_is_enabled(provider_id, model_id) {
+            return Err(format!(
+                "Model `{model_id}` is disabled for provider `{provider_id}`."
+            ));
+        }
         let model = self
             .catalogs
             .read()
@@ -1190,6 +1376,35 @@ pub struct ResolvedPublicAiExecution {
     /// Shared public execution client.
     /// 共享公共执行客户端。
     pub client: ProviderExecutionClient,
+}
+
+/// One provider tool target paired with an eligible configured credential.
+/// 与一个合格已配置凭据配对的供应商工具目标。
+#[derive(Debug, Clone, PartialEq)]
+pub struct AvailableProviderToolTarget {
+    /// Exact credential connection identifier.
+    /// 精确凭据连接标识。
+    pub connection_id: String,
+    /// User-visible credential name.
+    /// 用户可见凭据名称。
+    pub connection_display_name: String,
+    /// Exact model- or service-specific target contract.
+    /// 精确的模型或服务专属目标契约。
+    pub target: ProviderToolTarget,
+}
+
+/// Frozen internal provider tool route resolved before secret loading.
+/// 秘密加载前解析的冻结内部供应商工具路由。
+struct ResolvedProviderToolTarget {
+    /// Exact configured credential.
+    /// 精确已配置凭据。
+    connection: CredentialConnection,
+    /// Exact regional or product entry.
+    /// 精确区域或产品入口。
+    entry: crate::ServiceEntry,
+    /// Exact model-native tool target.
+    /// 精确模型原生工具目标。
+    target: ProviderToolTarget,
 }
 
 /// Returns the current Unix wall-clock time in milliseconds for token-expiry decisions.
@@ -1401,6 +1616,7 @@ mod tests {
         runtime
             .replace_catalog(catalog("two"))
             .expect("second catalog should install");
+        configuration.set_model_enabled("openrouter", "vendor/model", true);
         (runtime, configuration)
     }
 

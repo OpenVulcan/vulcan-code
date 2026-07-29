@@ -4,7 +4,7 @@
 use crate::{
     AccountUsageQueryKind, AuthenticationProjection, CredentialBillingKind, CredentialMode,
     CredentialProfile, ModelDiscoveryKind, OAuthProviderKind, ProtocolRoute, ProviderDescriptor,
-    ProviderKind, ServiceEntry,
+    ProviderKind, ServiceEntry, ServiceEntryKind,
 };
 use std::collections::BTreeMap;
 use vulcan_ai_protocols::{
@@ -55,6 +55,180 @@ pub fn minimax_descriptor() -> ProviderDescriptor {
     }
 }
 
+/// Creates the Kimi public-platform and Coding Plan provider descriptor.
+/// 创建 Kimi 开放平台与 Coding Plan 供应商描述。
+///
+/// # Returns
+/// 返回值
+/// A provider whose product entries expose only their independently supported wire protocols.
+/// 返回仅暴露各产品已独立支持 Wire 协议的供应商。
+pub fn kimi_descriptor() -> ProviderDescriptor {
+    ProviderDescriptor {
+        id: String::from("kimi"),
+        display_name: String::from("Kimi"),
+        kind: ProviderKind::System,
+        service_entries: vec![
+            service_entry(ServiceEntrySpec {
+                id: "platform-cn",
+                display_name: "Kimi Open Platform China",
+                base_url: "https://api.moonshot.cn/v1",
+                credential_profiles: vec![token_profile(
+                    "api-key",
+                    "API Key",
+                    CredentialBillingKind::PayAsYouGo,
+                    AccountUsageQueryKind::Unsupported,
+                    Some("sk-"),
+                )],
+                authentication: AuthenticationProjection::BearerAuthorization,
+                request_headers: [],
+                model_discovery: ModelDiscoveryKind::OpenAi,
+                protocol_routes: [protocol_route(OPENAI_CHAT_PROFILE_ID, "/chat/completions")],
+            }),
+            service_entry(ServiceEntrySpec {
+                id: "platform-global",
+                display_name: "Kimi Open Platform International",
+                base_url: "https://api.moonshot.ai/v1",
+                credential_profiles: vec![token_profile(
+                    "api-key",
+                    "API Key",
+                    CredentialBillingKind::PayAsYouGo,
+                    AccountUsageQueryKind::Unsupported,
+                    Some("sk-"),
+                )],
+                authentication: AuthenticationProjection::BearerAuthorization,
+                request_headers: [],
+                model_discovery: ModelDiscoveryKind::OpenAi,
+                protocol_routes: [protocol_route(OPENAI_CHAT_PROFILE_ID, "/chat/completions")],
+            }),
+            service_entry(ServiceEntrySpec {
+                id: "coding-plan",
+                display_name: "Kimi Code",
+                base_url: "https://api.kimi.com/coding/v1",
+                credential_profiles: vec![
+                    token_profile(
+                        "coding-api-key",
+                        "Coding API Key",
+                        CredentialBillingKind::TokenPlan,
+                        AccountUsageQueryKind::KimiCodingPlan,
+                        None,
+                    ),
+                    oauth_profile(
+                        "coding-plan-login",
+                        "Coding Plan Login",
+                        OAuthProviderKind::KimiCodingPlan,
+                        CredentialBillingKind::TokenPlan,
+                        AccountUsageQueryKind::KimiCodingPlan,
+                        Some(AuthenticationProjection::BearerAuthorization),
+                    ),
+                ],
+                authentication: AuthenticationProjection::BearerAuthorization,
+                request_headers: [],
+                model_discovery: ModelDiscoveryKind::OpenAi,
+                protocol_routes: [
+                    protocol_route(OPENAI_CHAT_PROFILE_ID, "/chat/completions"),
+                    protocol_route_with_overrides(
+                        ANTHROPIC_MESSAGES_PROFILE_ID,
+                        "/messages",
+                        None,
+                        Some(AuthenticationProjection::BearerAuthorization),
+                        [
+                            ("anthropic-version", "2023-06-01"),
+                            (
+                                "anthropic-beta",
+                                "oauth-2025-04-20,interleaved-thinking-2025-05-14",
+                            ),
+                        ],
+                        None,
+                    ),
+                ],
+            }),
+        ],
+    }
+}
+
+/// Creates the DeepSeek official API provider descriptor.
+/// 创建 DeepSeek 官方 API 供应商描述。
+///
+/// # Returns
+/// 返回值
+/// A provider using the verified OpenAI Chat-compatible route and official model catalog endpoint.
+/// 返回使用已验证 OpenAI Chat 兼容路由与官方模型目录端点的供应商。
+pub fn deepseek_descriptor() -> ProviderDescriptor {
+    ProviderDescriptor {
+        id: String::from("deepseek"),
+        display_name: String::from("DeepSeek"),
+        kind: ProviderKind::System,
+        service_entries: vec![service_entry(ServiceEntrySpec {
+            id: "official-api",
+            display_name: "DeepSeek API",
+            base_url: "https://api.deepseek.com",
+            credential_profiles: vec![token_profile(
+                "api-key",
+                "API Key",
+                CredentialBillingKind::PayAsYouGo,
+                AccountUsageQueryKind::DeepSeekBalance,
+                Some("sk-"),
+            )],
+            authentication: AuthenticationProjection::BearerAuthorization,
+            request_headers: [],
+            model_discovery: ModelDiscoveryKind::OpenAi,
+            protocol_routes: [
+                protocol_route(OPENAI_CHAT_PROFILE_ID, "/chat/completions"),
+                protocol_route_with_overrides(
+                    ANTHROPIC_MESSAGES_PROFILE_ID,
+                    "/anthropic/v1/messages",
+                    None,
+                    Some(AuthenticationProjection::XApiKey),
+                    [("anthropic-version", "2023-06-01")],
+                    None,
+                ),
+            ],
+        })],
+    }
+}
+
+/// Creates the Alibaba Token Plan and Model Studio provider descriptor.
+/// 创建阿里云 Token Plan 与百炼 Model Studio 供应商描述。
+///
+/// # Returns
+/// 返回值
+/// A provider that keeps OpenAI, Anthropic, and supported Responses routes independently selectable.
+/// 返回可独立选择 OpenAI、Anthropic 及已支持 Responses 路由的供应商。
+pub fn alibaba_descriptor() -> ProviderDescriptor {
+    ProviderDescriptor {
+        id: String::from("alibaba"),
+        display_name: String::from("Alibaba Cloud Model Studio"),
+        kind: ProviderKind::System,
+        service_entries: vec![
+            alibaba_token_plan_entry(
+                "token-plan-personal-cn",
+                "Token Plan Personal China",
+                "https://token-plan.cn-beijing.maas.aliyuncs.com",
+            ),
+            alibaba_token_plan_entry(
+                "token-plan-team-cn",
+                "Token Plan Team China",
+                "https://token-plan.cn-beijing.maas.aliyuncs.com",
+            ),
+            alibaba_token_plan_entry(
+                "token-plan-team-global",
+                "Token Plan Team International",
+                "https://token-plan.ap-southeast-1.maas.aliyuncs.com",
+            ),
+            alibaba_model_studio_entry(
+                "model-studio-cn",
+                "Model Studio China",
+                "https://dashscope.aliyuncs.com",
+            ),
+            alibaba_model_studio_entry(
+                "model-studio-singapore",
+                "Model Studio Singapore",
+                "https://dashscope-intl.aliyuncs.com",
+            ),
+        ],
+    }
+}
+
 /// Creates the first-batch OpenRouter provider descriptor.
 /// 创建首批 OpenRouter 供应商描述。
 ///
@@ -91,6 +265,38 @@ pub fn openrouter_descriptor() -> ProviderDescriptor {
                 protocol_route(OPENAI_RESPONSES_PROFILE_ID, "/responses"),
             ],
         })],
+    }
+}
+
+/// Creates the Tavily provider-tools-only descriptor.
+/// 创建仅包含供应商工具的 Tavily 描述。
+///
+/// # Returns
+/// 返回值
+/// One API-key entry that exposes no conversation protocol or model catalog.
+/// 返回一个不暴露对话协议或模型目录的 API Key 入口。
+pub fn tavily_descriptor() -> ProviderDescriptor {
+    ProviderDescriptor {
+        id: String::from("tavily"),
+        display_name: String::from("Tavily"),
+        kind: ProviderKind::System,
+        service_entries: vec![ServiceEntry {
+            id: String::from("public-api"),
+            display_name: String::from("Tavily API"),
+            kind: ServiceEntryKind::ProviderTools,
+            base_url: String::from("https://api.tavily.com"),
+            credential_profiles: vec![token_profile(
+                "api-key",
+                "API Key",
+                CredentialBillingKind::ProviderManaged,
+                AccountUsageQueryKind::TavilyCredits,
+                Some("tvly-"),
+            )],
+            authentication: AuthenticationProjection::BearerAuthorization,
+            request_headers: BTreeMap::new(),
+            model_discovery: ModelDiscoveryKind::ProviderToolsOnly,
+            protocol_routes: Vec::new(),
+        }],
     }
 }
 
@@ -294,6 +500,94 @@ pub fn google_descriptor() -> ProviderDescriptor {
     }
 }
 
+/// Creates one Alibaba Token Plan entry with independently rooted protocol routes.
+/// 创建一个具有独立协议根地址的阿里云 Token Plan 入口。
+///
+/// # Parameters
+/// 参数
+/// `id`, `display_name`, and `origin` identify the exact regional product.
+/// `id`、`display_name` 与 `origin` 标识精确的区域产品。
+///
+/// # Returns
+/// 返回值
+/// A Token Plan service entry exposing Chat, Anthropic Messages, and provider-hosted Responses.
+/// 返回暴露 Chat、Anthropic Messages 与供应商托管 Responses 的 Token Plan 服务入口。
+fn alibaba_token_plan_entry(id: &str, display_name: &str, origin: &str) -> ServiceEntry {
+    let openai_base_url = format!("{}/compatible-mode/v1", origin.trim_end_matches('/'));
+    let anthropic_base_url = format!("{}/apps/anthropic", origin.trim_end_matches('/'));
+    ServiceEntry {
+        id: id.to_string(),
+        display_name: display_name.to_string(),
+        kind: ServiceEntryKind::Conversation,
+        base_url: openai_base_url.clone(),
+        credential_profiles: vec![token_profile(
+            "token-plan-api-key",
+            "Token Plan API Key",
+            CredentialBillingKind::TokenPlan,
+            AccountUsageQueryKind::Unsupported,
+            Some("sk-"),
+        )],
+        authentication: AuthenticationProjection::BearerAuthorization,
+        request_headers: BTreeMap::new(),
+        model_discovery: ModelDiscoveryKind::OpenAi,
+        protocol_routes: vec![
+            protocol_route(OPENAI_CHAT_PROFILE_ID, "/chat/completions"),
+            protocol_route_with_overrides(
+                ANTHROPIC_MESSAGES_PROFILE_ID,
+                "/v1/messages",
+                Some(anthropic_base_url.as_str()),
+                Some(AuthenticationProjection::XApiKey),
+                [("anthropic-version", "2023-06-01")],
+                Some(openai_base_url.as_str()),
+            ),
+        ],
+    }
+}
+
+/// Creates one Alibaba Model Studio API entry with OpenAI and Anthropic compatibility.
+/// 创建一个同时兼容 OpenAI 与 Anthropic 的阿里云百炼 API 入口。
+///
+/// # Parameters
+/// 参数
+/// `id`, `display_name`, and `origin` identify the exact regional API product.
+/// `id`、`display_name` 与 `origin` 标识精确的区域 API 产品。
+///
+/// # Returns
+/// 返回值
+/// A pay-as-you-go service entry with protocol-specific roots and authentication.
+/// 返回具有协议专属根地址与鉴权方式的按量计费服务入口。
+fn alibaba_model_studio_entry(id: &str, display_name: &str, origin: &str) -> ServiceEntry {
+    let openai_base_url = format!("{}/compatible-mode/v1", origin.trim_end_matches('/'));
+    let anthropic_base_url = format!("{}/apps/anthropic", origin.trim_end_matches('/'));
+    ServiceEntry {
+        id: id.to_string(),
+        display_name: display_name.to_string(),
+        kind: ServiceEntryKind::Conversation,
+        base_url: openai_base_url.clone(),
+        credential_profiles: vec![token_profile(
+            "api-key",
+            "API Key",
+            CredentialBillingKind::PayAsYouGo,
+            AccountUsageQueryKind::Unsupported,
+            Some("sk-"),
+        )],
+        authentication: AuthenticationProjection::BearerAuthorization,
+        request_headers: BTreeMap::new(),
+        model_discovery: ModelDiscoveryKind::OpenAi,
+        protocol_routes: vec![
+            protocol_route(OPENAI_CHAT_PROFILE_ID, "/chat/completions"),
+            protocol_route_with_overrides(
+                ANTHROPIC_MESSAGES_PROFILE_ID,
+                "/v1/messages",
+                Some(anthropic_base_url.as_str()),
+                Some(AuthenticationProjection::XApiKey),
+                [("anthropic-version", "2023-06-01")],
+                Some(openai_base_url.as_str()),
+            ),
+        ],
+    }
+}
+
 /// Creates the three MiniMax credential profiles shared by one regional entry.
 /// 创建一个 MiniMax 区域入口共享的三种凭据配置档。
 ///
@@ -444,6 +738,7 @@ where
     ServiceEntry {
         id: spec.id.to_string(),
         display_name: spec.display_name.to_string(),
+        kind: ServiceEntryKind::Conversation,
         base_url: spec.base_url.to_string(),
         credential_profiles: spec.credential_profiles,
         authentication: spec.authentication,
@@ -472,8 +767,47 @@ fn protocol_route(protocol_profile_id: &str, endpoint_path: &str) -> ProtocolRou
     ProtocolRoute {
         protocol_profile_id: protocol_profile_id.to_string(),
         endpoint_path: Some(endpoint_path.to_string()),
+        base_url_override: None,
+        request_headers: BTreeMap::new(),
         authentication: None,
         model_discovery: None,
+        model_discovery_path: None,
+        model_discovery_base_url_override: None,
+        verified: true,
+    }
+}
+
+/// Creates one verified protocol route with exact per-protocol overrides.
+/// 创建一个具有精确协议级覆盖项的已验证路由。
+///
+/// # Parameters
+/// 参数
+/// The arguments declare endpoint, base URL, authentication, headers, and discovery base.
+/// 参数声明端点、基础 URL、鉴权、请求头与模型发现基础地址。
+///
+/// # Returns
+/// 返回值
+/// A complete protocol route whose fields have a single declared source.
+/// 返回字段均具有唯一声明来源的完整协议路由。
+fn protocol_route_with_overrides<const H: usize>(
+    protocol_profile_id: &str,
+    endpoint_path: &str,
+    base_url_override: Option<&str>,
+    authentication: Option<AuthenticationProjection>,
+    request_headers: [(&str, &str); H],
+    model_discovery_base_url_override: Option<&str>,
+) -> ProtocolRoute {
+    ProtocolRoute {
+        protocol_profile_id: protocol_profile_id.to_string(),
+        endpoint_path: Some(endpoint_path.to_string()),
+        base_url_override: base_url_override.map(str::to_string),
+        request_headers: BTreeMap::from(
+            request_headers.map(|(name, value)| (name.to_string(), value.to_string())),
+        ),
+        authentication,
+        model_discovery: Some(ModelDiscoveryKind::OpenAi),
+        model_discovery_path: None,
+        model_discovery_base_url_override: model_discovery_base_url_override.map(str::to_string),
         verified: true,
     }
 }
@@ -494,8 +828,12 @@ fn protocol_profile_route(protocol_profile_id: &str) -> ProtocolRoute {
     ProtocolRoute {
         protocol_profile_id: protocol_profile_id.to_string(),
         endpoint_path: None,
+        base_url_override: None,
+        request_headers: BTreeMap::new(),
         authentication: None,
         model_discovery: None,
+        model_discovery_path: None,
+        model_discovery_base_url_override: None,
         verified: true,
     }
 }
@@ -513,8 +851,12 @@ fn minimax_protocol_routes() -> [ProtocolRoute; 2] {
         ProtocolRoute {
             protocol_profile_id: String::from(OPENAI_CHAT_PROFILE_ID),
             endpoint_path: Some(String::from("/v1/chat/completions")),
+            base_url_override: None,
+            request_headers: BTreeMap::new(),
             authentication: Some(AuthenticationProjection::BearerAuthorization),
             model_discovery: Some(ModelDiscoveryKind::MiniMaxOpenAi),
+            model_discovery_path: None,
+            model_discovery_base_url_override: None,
             verified: true,
         },
     ]
@@ -522,7 +864,7 @@ fn minimax_protocol_routes() -> [ProtocolRoute; 2] {
 
 #[cfg(test)]
 mod tests {
-    use super::minimax_descriptor;
+    use super::{kimi_descriptor, minimax_descriptor};
     use crate::{
         AccountUsageQueryKind, AuthenticationProjection, CredentialMode, OAuthProviderKind,
     };
@@ -582,6 +924,37 @@ mod tests {
                 .credential_profile("token-plan-oauth")
                 .and_then(|profile| profile.oauth_provider),
             Some(OAuthProviderKind::MiniMaxChinaTokenPlan)
+        );
+    }
+
+    /// Verifies Kimi Coding Plan exposes both static keys and renewable browser login.
+    /// 验证 Kimi Coding Plan 同时暴露静态 Key 与可续期浏览器登录。
+    #[test]
+    fn kimi_coding_plan_registers_login_and_usage() {
+        let descriptor = kimi_descriptor();
+        let entry = descriptor
+            .service_entries
+            .iter()
+            .find(|entry| entry.id == "coding-plan")
+            .expect("Kimi Coding Plan entry");
+        let api_key = entry
+            .credential_profile("coding-api-key")
+            .expect("Kimi Coding API key");
+        assert_eq!(
+            api_key.account_usage_query,
+            AccountUsageQueryKind::KimiCodingPlan
+        );
+        let login = entry
+            .credential_profile("coding-plan-login")
+            .expect("Kimi Coding Plan login");
+        assert_eq!(login.credential_mode, CredentialMode::Auth);
+        assert_eq!(
+            login.oauth_provider,
+            Some(OAuthProviderKind::KimiCodingPlan)
+        );
+        assert_eq!(
+            login.account_usage_query,
+            AccountUsageQueryKind::KimiCodingPlan
         );
     }
 }

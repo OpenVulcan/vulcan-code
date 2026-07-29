@@ -4,12 +4,13 @@
 use crate::{
     AuthenticationProjection, CredentialConnection, CredentialExecutionSecret,
     MINIMAX_REASONING_SPLIT_PARAMETER_ID, OPENROUTER_REASONING_MAX_TOKENS_PARAMETER_ID,
-    ProtocolRoute, ProviderDescriptor, SAMPLING_TEMPERATURE_PARAMETER_ID, SecondaryRouteSelection,
-    ServiceEntry,
+    ProtocolRoute, ProviderDescriptor, ProviderToolTarget, SAMPLING_TEMPERATURE_PARAMETER_ID,
+    SecondaryRouteSelection, ServiceEntry,
 };
 use async_stream::try_stream;
 use futures_util::{Stream, StreamExt};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -141,7 +142,9 @@ impl ProviderExecutionRoute {
     pub fn request_url(&self, encoded_path: &str) -> String {
         format!(
             "{}{}",
-            self.entry.base_url.trim_end_matches('/'),
+            self.protocol_route
+                .resolved_base_url(&self.entry)
+                .trim_end_matches('/'),
             ensure_leading_slash(encoded_path)
         )
     }
@@ -171,6 +174,134 @@ impl std::error::Error for ProviderExecutionFailure {}
 pub type ProviderExecutionStream =
     Pin<Box<dyn Stream<Item = Result<AiStreamEvent, ProviderExecutionFailure>> + Send>>;
 
+/// One normalized generated resource returned by a provider tool.
+/// 供应商工具返回的一项归一化生成资源。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderToolGeneratedResource {
+    /// Stable output identifier scoped to this invocation.
+    /// 作用域限定在当前调用内的稳定输出标识。
+    pub output_id: String,
+    /// Unified semantic resource kind.
+    /// 统一语义资源类别。
+    pub kind: String,
+    /// Exact MIME type.
+    /// 精确 MIME 类型。
+    pub mime_type: String,
+    /// Private provider bytes when returned inline.
+    /// 供应商以内联形式返回的私有字节。
+    pub bytes: Option<Vec<u8>>,
+    /// Public provider download URL when returned by reference.
+    /// 供应商以引用形式返回的公开下载 URL。
+    pub download_url: Option<String>,
+}
+
+/// One normalized provider web-search result.
+/// 一条归一化供应商网页搜索结果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderToolSearchResult {
+    /// One-based provider result rank.
+    /// 从一开始的供应商结果排名。
+    pub rank: usize,
+    /// Provider-returned result title.
+    /// 供应商返回的结果标题。
+    pub title: String,
+    /// Validated absolute HTTP(S) result URL.
+    /// 已校验的绝对 HTTP(S) 结果地址。
+    pub url: String,
+    /// Normalized source hostname.
+    /// 归一化来源主机名。
+    pub source_domain: String,
+    /// Provider-returned result excerpt.
+    /// 供应商返回的结果摘要。
+    pub snippet: String,
+}
+
+/// Unified structured provider web-search output.
+/// 统一结构化供应商网页搜索输出。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderToolSearchOutput {
+    /// Exact submitted query.
+    /// 精确提交的查询。
+    pub query: String,
+    /// Ordered normalized results.
+    /// 有序归一化结果。
+    pub results: Vec<ProviderToolSearchResult>,
+}
+
+/// Closed normalized output returned by provider-native tools.
+/// 供应商原生工具返回的封闭归一化输出。
+/// One normalized successfully extracted web page.
+/// 一条归一化的成功网页提取结果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderToolExtractResult {
+    /// Validated absolute HTTPS source URL.
+    /// 已验证的绝对 HTTPS 来源地址。
+    pub url: String,
+    /// Provider-returned Markdown or plain-text content.
+    /// 供应商返回的 Markdown 或纯文本内容。
+    pub content: String,
+    /// Validated absolute HTTPS image URLs returned for this page.
+    /// 当前页面返回的已验证绝对 HTTPS 图片地址。
+    pub images: Vec<String>,
+    /// Optional validated absolute HTTPS favicon URL.
+    /// 可选的已验证绝对 HTTPS 站点图标地址。
+    pub favicon: Option<String>,
+}
+
+/// One normalized provider-reported extraction failure.
+/// 一条归一化的供应商报告提取失败。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderToolExtractFailure {
+    /// Validated absolute HTTPS source URL.
+    /// 已验证的绝对 HTTPS 来源地址。
+    pub url: String,
+    /// Controlled provider failure message.
+    /// 受控的供应商失败消息。
+    pub error: String,
+}
+
+/// Unified structured provider web-extraction output.
+/// 统一结构化供应商网页提取输出。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderToolExtractOutput {
+    /// Ordered successful extraction results.
+    /// 有序的成功提取结果。
+    pub results: Vec<ProviderToolExtractResult>,
+    /// Ordered per-URL failures retained for user visibility.
+    /// 为用户可见性保留的有序逐 URL 失败。
+    pub failures: Vec<ProviderToolExtractFailure>,
+}
+
+/// Closed normalized output returned by provider-native tools.
+/// 供应商原生工具返回的封闭归一化输出。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderToolNormalizedOutput {
+    /// Provider-generated plain text.
+    /// 供应商生成的纯文本。
+    Text(String),
+    /// Ordered generated resources.
+    /// 有序生成资源。
+    Resources(Vec<ProviderToolGeneratedResource>),
+    /// Structured web-search evidence.
+    /// 结构化网页搜索证据。
+    Search(ProviderToolSearchOutput),
+    /// Structured web-extraction content and per-URL failures.
+    /// 结构化网页提取内容与逐 URL 失败。
+    Extract(ProviderToolExtractOutput),
+}
+
+/// Unified typed result produced by one provider tool adapter.
+/// 一个供应商工具适配器产生的统一强类型结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderToolExecutionResult {
+    /// Optional provider trace or task identifier.
+    /// 可选供应商追踪或任务标识。
+    pub upstream_response_id: Option<String>,
+    /// Closed normalized output independent of the provider wire shape.
+    /// 与供应商 Wire 结构无关的封闭归一化输出。
+    pub output: ProviderToolNormalizedOutput,
+}
+
 /// Executes immutable provider routes through public protocol profiles.
 /// 通过公共协议 Profile 执行不可变供应商路由。
 #[derive(Clone)]
@@ -198,6 +329,39 @@ impl ProviderExecutionClient {
     /// 返回可复用执行客户端。
     pub fn new(http: reqwest::Client, protocols: Arc<ProtocolRegistry>) -> Self {
         Self { http, protocols }
+    }
+
+    /// Executes one frozen provider-native tool target and normalizes its output.
+    /// 执行一个已冻结的供应商原生工具目标并归一化其输出。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `entry`, `target`, and `secret` are immutable snapshots resolved before invocation;
+    /// `arguments` already match the selected target's exact AI-visible schema.
+    /// `entry`、`target` 与 `secret` 是调用前解析的不可变快照；
+    /// `arguments` 已符合选定目标的精确 AI 可见 Schema。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A unified typed result or an explicit provider/contract failure.
+    /// 返回统一强类型结果或明确的供应商与契约错误。
+    pub async fn execute_provider_tool(
+        &self,
+        entry: &ServiceEntry,
+        target: &ProviderToolTarget,
+        arguments: Value,
+        secret: &CredentialExecutionSecret,
+    ) -> Result<ProviderToolExecutionResult, String> {
+        if target.service_entry_id != entry.id {
+            return Err(format!(
+                "Provider tool target `{}` does not belong to service entry `{}`.",
+                target.target_id, entry.id
+            ));
+        }
+        crate::provider_tool_execution::execute_provider_tool(
+            &self.http, entry, target, arguments, secret,
+        )
+        .await
     }
 
     /// Encodes one immutable execution request without dispatching it.
@@ -637,6 +801,123 @@ fn project_provider_request(
         body.remove("output_config");
         body.insert(String::from("thinking"), json!({ "type": thinking_type }));
     }
+    if route.provider.id == "minimax"
+        && route.protocol_route.protocol_profile_id == vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID
+        && let Some(effort) = request.reasoning_effort
+    {
+        let thinking_type = match effort {
+            ReasoningEffort::None => "disabled",
+            ReasoningEffort::Adaptive => "adaptive",
+            unsupported => {
+                return Err(pre_dispatch_failure(format!(
+                    "MiniMax OpenAI-compatible thinking does not expose reasoning effort `{}`.",
+                    unsupported.as_str()
+                )));
+            }
+        };
+        let body = encoded
+            .body
+            .as_object_mut()
+            .ok_or_else(|| pre_dispatch_failure("MiniMax request body must be a JSON object."))?;
+        body.remove("reasoning_effort");
+        body.insert(String::from("thinking"), json!({ "type": thinking_type }));
+    }
+    if route.provider.id == "kimi"
+        && route.protocol_route.protocol_profile_id == vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID
+    {
+        let force_k27_route = matches!(
+            request.model_id.as_str(),
+            "kimi-for-coding" | "kimi-for-coding-highspeed"
+        );
+        let reasoning_requested = request
+            .reasoning_effort
+            .is_some_and(|effort| effort != ReasoningEffort::None);
+        let body = encoded
+            .body
+            .as_object_mut()
+            .ok_or_else(|| pre_dispatch_failure("Kimi request body must be a JSON object."))?;
+        body.remove("reasoning_effort");
+        if force_k27_route || reasoning_requested {
+            body.insert(String::from("thinking"), json!({ "type": "enabled" }));
+        }
+    }
+    if route.provider.id == "deepseek"
+        && route.protocol_route.protocol_profile_id == vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID
+        && let Some(effort) = request.reasoning_effort
+    {
+        let body = encoded
+            .body
+            .as_object_mut()
+            .ok_or_else(|| pre_dispatch_failure("DeepSeek request body must be a JSON object."))?;
+        match effort {
+            ReasoningEffort::High | ReasoningEffort::Max => {
+                body.insert(String::from("thinking"), json!({ "type": "enabled" }));
+            }
+            unsupported => {
+                return Err(pre_dispatch_failure(format!(
+                    "DeepSeek does not expose reasoning effort `{}`.",
+                    unsupported.as_str()
+                )));
+            }
+        }
+    }
+    if route.provider.id == "deepseek"
+        && route.protocol_route.protocol_profile_id
+            == vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
+        && let Some(effort) = request.reasoning_effort
+    {
+        let effort = match effort {
+            ReasoningEffort::High => "high",
+            ReasoningEffort::Max => "max",
+            unsupported => {
+                return Err(pre_dispatch_failure(format!(
+                    "DeepSeek Anthropic does not expose reasoning effort `{}`.",
+                    unsupported.as_str()
+                )));
+            }
+        };
+        let body = encoded.body.as_object_mut().ok_or_else(|| {
+            pre_dispatch_failure("DeepSeek Anthropic request body must be a JSON object.")
+        })?;
+        body.insert(String::from("thinking"), json!({ "type": "enabled" }));
+        body.insert(String::from("output_config"), json!({ "effort": effort }));
+    }
+    if route.provider.id == "alibaba"
+        && let Some(effort) = request.reasoning_effort
+    {
+        let enabled = match effort {
+            ReasoningEffort::None => false,
+            ReasoningEffort::Adaptive => true,
+            unsupported => {
+                return Err(pre_dispatch_failure(format!(
+                    "Alibaba compatible routes do not expose reasoning effort `{}`.",
+                    unsupported.as_str()
+                )));
+            }
+        };
+        let body = encoded
+            .body
+            .as_object_mut()
+            .ok_or_else(|| pre_dispatch_failure("Alibaba request body must be a JSON object."))?;
+        match route.protocol_route.protocol_profile_id.as_str() {
+            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID => {
+                body.remove("reasoning_effort");
+                body.insert(String::from("enable_thinking"), Value::Bool(enabled));
+            }
+            vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID => {
+                body.remove("output_config");
+                body.insert(
+                    String::from("thinking"),
+                    json!({ "type": if enabled { "enabled" } else { "disabled" } }),
+                );
+            }
+            protocol_id => {
+                return Err(pre_dispatch_failure(format!(
+                    "Alibaba reasoning projection is not registered for protocol `{protocol_id}`."
+                )));
+            }
+        }
+    }
     if route.provider.id == "minimax" {
         let body_size = serde_json::to_vec(&encoded.body)
             .map_err(|error| {
@@ -775,6 +1056,31 @@ fn execution_headers(
         })?;
         headers.insert(name, value);
     }
+    for (name, value) in &route.protocol_route.request_headers {
+        let name = HeaderName::from_bytes(name.as_bytes()).map_err(|_| {
+            pre_dispatch_failure(format!(
+                "Protocol route produced invalid header name `{name}`."
+            ))
+        })?;
+        if name == reqwest::header::AUTHORIZATION
+            || name == HeaderName::from_static("x-api-key")
+            || name == HeaderName::from_static("x-goog-api-key")
+            || name == HeaderName::from_static("chatgpt-account-id")
+            || name == HeaderName::from_static("x-goog-user-project")
+            || name == reqwest::header::ACCEPT_ENCODING
+            || name == reqwest::header::CONTENT_TYPE
+        {
+            return Err(pre_dispatch_failure(format!(
+                "Protocol route must not override reserved header `{name}`."
+            )));
+        }
+        let value = HeaderValue::from_str(value).map_err(|_| {
+            pre_dispatch_failure(format!(
+                "Protocol route produced invalid value for header `{name}`."
+            ))
+        })?;
+        headers.insert(name, value);
+    }
     let credential_profile = route
         .entry
         .credential_profile(route.connection.credential_profile_id.as_str())
@@ -879,6 +1185,32 @@ fn execution_headers(
                 HeaderName::from_static("x-goog-api-key"),
                 HeaderValue::from_str(secret.expose_value()).map_err(|_| {
                     pre_dispatch_failure("Google API key contains invalid header characters.")
+                })?,
+            );
+        }
+    }
+    if route.provider.id == "kimi" && route.entry.id == "coding-plan" {
+        let device_name = std::env::var("COMPUTERNAME")
+            .or_else(|_| std::env::var("HOSTNAME"))
+            .unwrap_or_else(|_| String::from("unknown"));
+        let device_model = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
+        for (name, value) in [
+            ("user-agent", "CLIProxyAPI/dev"),
+            ("x-msh-platform", "CLIProxyAPI"),
+            ("x-msh-version", "dev"),
+            ("x-msh-device-name", device_name.as_str()),
+            ("x-msh-device-model", device_model.as_str()),
+            (
+                "x-msh-device-id",
+                secret
+                    .provider_device_id()
+                    .unwrap_or("cli-proxy-api-device"),
+            ),
+        ] {
+            headers.insert(
+                HeaderName::from_static(name),
+                HeaderValue::from_str(value).map_err(|_| {
+                    pre_dispatch_failure("Kimi execution device identity is invalid.")
                 })?,
             );
         }
@@ -1161,7 +1493,7 @@ mod tests {
     use super::*;
     use crate::{
         CredentialMode,
-        providers::{minimax_descriptor, openrouter_descriptor},
+        providers::{kimi_descriptor, minimax_descriptor, openrouter_descriptor},
     };
     use std::collections::{BTreeMap, BTreeSet};
     use vulcan_ai_contract::{AiMessage, AiOperation, ContentItem, MessageRole};
@@ -1281,6 +1613,39 @@ mod tests {
         .expect("MiniMax route should resolve")
     }
 
+    /// Resolves one exact Kimi Coding Plan route.
+    /// 解析一条精确 Kimi Coding Plan 路由。
+    fn kimi_coding_route() -> ProviderExecutionRoute {
+        let provider = kimi_descriptor();
+        let entry = provider
+            .service_entries
+            .iter()
+            .find(|entry| entry.id == "coding-plan")
+            .expect("Kimi Coding Plan entry")
+            .clone();
+        let connection = CredentialConnection {
+            id: String::from("connection"),
+            provider_id: provider.id.clone(),
+            service_entry_id: entry.id.clone(),
+            credential_profile_id: String::from("coding-plan-login"),
+            credential_mode: CredentialMode::Auth,
+            credential_id: String::from("credential"),
+            display_name: String::from("Kimi"),
+            secret_reference: String::from("secret"),
+            management_secret_reference: None,
+            verified_protocols: BTreeSet::from([String::from(OPENAI_CHAT_PROFILE_ID)]),
+            selected_protocol: String::from(OPENAI_CHAT_PROFILE_ID),
+            prompt_cache_by_protocol: BTreeMap::new(),
+        };
+        ProviderExecutionRoute::resolve(
+            provider,
+            entry,
+            connection,
+            SecondaryRouteSelection::Automatic,
+        )
+        .expect("Kimi route should resolve")
+    }
+
     /// Verifies SSE framing survives arbitrary UTF-8 and record chunk boundaries.
     /// 验证 SSE 分帧可以跨越任意 UTF-8 与记录分片边界。
     #[test]
@@ -1328,6 +1693,81 @@ mod tests {
             assert_eq!(encoded.body["provider"]["order"], json!(["anthropic"]));
             assert_eq!(encoded.body["provider"]["allow_fallbacks"], false);
         }
+    }
+
+    /// Verifies Kimi Coding projection uses thinking.type and the OAuth-bound device identity.
+    /// 验证 Kimi Coding 投影使用 thinking.type 与 OAuth 绑定设备身份。
+    #[test]
+    fn kimi_coding_projection_uses_thinking_and_device_identity() {
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let mut request = minimal_request();
+        request.model_id = String::from("kimi-for-coding");
+        request.reasoning_effort = Some(ReasoningEffort::High);
+        let route = kimi_coding_route();
+        let encoded = client
+            .encode_request(&route, &request)
+            .expect("Kimi request should encode");
+        assert_eq!(encoded.body["thinking"]["type"], "enabled");
+        assert!(encoded.body.get("reasoning_effort").is_none());
+        let secret = crate::CredentialSecretEnvelope::new(
+            crate::CredentialSecretMaterial::KimiCodingPlanOAuth {
+                tokens: crate::OAuthTokenSet {
+                    access_token: String::from("access"),
+                    refresh_token: String::from("refresh"),
+                    issued_at_unix_ms: 1,
+                    expires_at_unix_ms: 2,
+                    scopes: BTreeSet::new(),
+                    account_subject: None,
+                    email: None,
+                },
+                device_id: String::from("123e4567-e89b-42d3-a456-426614174000"),
+            },
+        )
+        .expect("Kimi material")
+        .execution_secret()
+        .expect("Kimi execution secret");
+        let headers = execution_headers(&route, &encoded.headers, &secret).expect("Kimi headers");
+        assert_eq!(
+            headers
+                .get("x-msh-device-id")
+                .and_then(|value| value.to_str().ok()),
+            Some("123e4567-e89b-42d3-a456-426614174000")
+        );
+        assert_eq!(
+            headers
+                .get("x-msh-platform")
+                .and_then(|value| value.to_str().ok()),
+            Some("CLIProxyAPI")
+        );
+    }
+
+    /// Verifies MiniMax Chat maps the public adaptive switch to its documented thinking object.
+    /// 验证 MiniMax Chat 将公共自适应开关映射为文档规定的 thinking 对象。
+    #[test]
+    fn minimax_openai_chat_projects_adaptive_thinking() {
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let mut request = minimal_request();
+        request.model_id = String::from("MiniMax-M3");
+        request.reasoning_effort = Some(ReasoningEffort::Adaptive);
+        request.model_parameters.insert(
+            MINIMAX_REASONING_SPLIT_PARAMETER_ID.to_string(),
+            ModelParameterValue::Boolean(true),
+        );
+
+        let encoded = client
+            .encode_request(&minimax_route(OPENAI_CHAT_PROFILE_ID), &request)
+            .expect("MiniMax Chat request should encode");
+
+        assert_eq!(encoded.body["thinking"]["type"], "adaptive");
+        assert_eq!(encoded.body["reasoning_split"], true);
+        assert_eq!(encoded.body["stream_options"]["include_usage"], true);
+        assert!(encoded.body.get("reasoning_effort").is_none());
     }
 
     /// Verifies every OpenRouter protocol route converges on the unified reasoning object.

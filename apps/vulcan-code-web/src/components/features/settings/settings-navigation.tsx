@@ -2,13 +2,19 @@ import React from "react";
 import {
   Archive,
   Bot,
+  BrainCircuit,
   FileText,
   FolderTree,
   GitCommitHorizontal,
+  Image,
+  Music,
   Bell,
   RefreshCw,
+  Search,
   ScrollText,
   Settings,
+  Video,
+  Volume2,
 } from "lucide-react";
 import { useI18n } from "@/i18n";
 import type { SettingsSubAreaId } from "@/types";
@@ -22,6 +28,25 @@ export interface SettingsHeaderSummary {
   // Compact description shown on the second line.
   // 第二行展示的紧凑说明。
   detail: string;
+}
+
+// settingsSubAreaProviderToolCapability maps capability pages to the unified provider tool contract.
+// settingsSubAreaProviderToolCapability 将能力页面映射到统一供应商工具契约。
+export function settingsSubAreaProviderToolCapability(
+  area: SettingsSubAreaId,
+): import("@/types").PublicAiProviderToolCapabilityKind | null {
+  const mapping: Partial<
+    Record<SettingsSubAreaId, import("@/types").PublicAiProviderToolCapabilityKind>
+  > = {
+    "ai-web-search": "web_search",
+    "ai-understand-image": "media_analyze",
+    "ai-image-generation": "image_generate",
+    "ai-video-generation": "video_generate",
+    "ai-speech-synthesis": "speech_synthesize",
+    "ai-music-generation": "music_generate",
+    "ai-music-cover": "music_cover",
+  };
+  return mapping[area] ?? null;
 }
 
 // SettingsSubAreaEntry describes one leaf page in the settings navigation tree.
@@ -88,6 +113,20 @@ export function settingsSubAreaGroups(t: ReturnType<typeof useI18n>["t"]): Setti
         { id: "credential-management", label: t("settings.credentialManagement"), icon: <FileText size={16} />, description: t("settings.credentialManagement.description") },
         { id: "model-list", label: t("settings.modelList"), icon: <FileText size={16} />, description: t("settings.modelList.description") },
         { id: "provider-retry", label: t("settings.providerRetry"), icon: <RefreshCw size={16} />, description: t("settings.providerRetry.description") },
+      ],
+    },
+    {
+      id: "ai-capabilities",
+      label: t("settings.group.aiCapabilities"),
+      icon: <BrainCircuit size={16} />,
+      items: [
+        { id: "ai-web-search", label: t("settings.aiWebSearch"), icon: <Search size={16} />, description: t("settings.aiWebSearch.description") },
+        { id: "ai-understand-image", label: t("settings.aiUnderstandImage"), icon: <Image size={16} />, description: t("settings.aiUnderstandImage.description") },
+        { id: "ai-image-generation", label: t("settings.aiImageGeneration"), icon: <Image size={16} />, description: t("settings.aiImageGeneration.description") },
+        { id: "ai-video-generation", label: t("settings.aiVideoGeneration"), icon: <Video size={16} />, description: t("settings.aiVideoGeneration.description") },
+        { id: "ai-speech-synthesis", label: t("settings.aiSpeechSynthesis"), icon: <Volume2 size={16} />, description: t("settings.aiSpeechSynthesis.description") },
+        { id: "ai-music-generation", label: t("settings.aiMusicGeneration"), icon: <Music size={16} />, description: t("settings.aiMusicGeneration.description") },
+        { id: "ai-music-cover", label: t("settings.aiMusicCover"), icon: <Music size={16} />, description: t("settings.aiMusicCover.description") },
       ],
     },
     {

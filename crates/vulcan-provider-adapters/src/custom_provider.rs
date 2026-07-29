@@ -129,8 +129,12 @@ impl CustomProviderDefinition {
         let protocol_routes = vec![ProtocolRoute {
             protocol_profile_id: self.protocol.profile_id().to_string(),
             endpoint_path: Some(self.protocol.endpoint_path().to_string()),
+            base_url_override: None,
+            request_headers: BTreeMap::new(),
             authentication: None,
             model_discovery: Some(model_discovery),
+            model_discovery_path: None,
+            model_discovery_base_url_override: None,
             verified: true,
         }];
         Ok(ProviderDescriptor {
@@ -140,6 +144,7 @@ impl CustomProviderDefinition {
             service_entries: vec![ServiceEntry {
                 id: String::from("default"),
                 display_name: String::from("Compatible API"),
+                kind: crate::ServiceEntryKind::Conversation,
                 base_url,
                 credential_profiles: vec![CredentialProfile {
                     id: String::from("api-key"),

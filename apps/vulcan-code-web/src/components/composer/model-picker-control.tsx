@@ -281,8 +281,8 @@ export function ModelPickerControl(props: {
 // value identifies the selected connection, and onValueChange persists the chosen account.
 // 参数：ariaLabel 描述控件，accounts 包含精确凭据选项，value 标识当前连接，
 // onValueChange 持久化选中的账号。
-// Returns: a compact account selector, or null when the model has no alternative account.
-// 返回值：紧凑账号选择器；模型没有备选账号时返回 null。
+// Returns: a compact account control whenever the active model has an available account.
+// 返回值：当前模型存在可用账号时返回紧凑账号控件。
 export function ModelAccountPickerControl(props: {
   // Accessible label for the credential selector.
   // 凭据选择器的无障碍标签。
@@ -396,9 +396,12 @@ export function ModelAccountPickerControl(props: {
     setDetailsError(null);
   }, [props.value]);
 
-  if (props.accounts.length <= 1 || !selectedAccount) {
+  if (!selectedAccount) {
     return null;
   }
+  // hasAlternativeAccounts controls whether the account control opens a selector.
+  // hasAlternativeAccounts 控制账号控件是否打开选择器。
+  const hasAlternativeAccounts = props.accounts.length > 1;
   return (
     <HoverCard
       closeDelay={250}
@@ -414,43 +417,59 @@ export function ModelAccountPickerControl(props: {
       open={detailsOpen}
       openDelay={500}
     >
-      <Select
-        disabled={props.disabled}
-        onOpenChange={(open) => {
-          setSelectorOpen(open);
-          if (open) {
-            setDetailsOpen(false);
-          }
-        }}
-        onValueChange={(connectionId) => {
-          // account is the exact model account selected by its stable connection id.
-          // account 是通过稳定连接标识选中的精确模型账号。
-          const account = props.accounts.find((choice) => choice.connectionId === connectionId);
-          if (account) {
-            props.onValueChange(account);
-          }
-        }}
-        open={selectorOpen}
-        value={props.value}
-      >
+      {hasAlternativeAccounts ? (
+        <Select
+          disabled={props.disabled}
+          onOpenChange={(open) => {
+            setSelectorOpen(open);
+            if (open) {
+              setDetailsOpen(false);
+            }
+          }}
+          onValueChange={(connectionId) => {
+            // account is the exact model account selected by its stable connection id.
+            // account 是通过稳定连接标识选中的精确模型账号。
+            const account = props.accounts.find((choice) => choice.connectionId === connectionId);
+            if (account) {
+              props.onValueChange(account);
+            }
+          }}
+          open={selectorOpen}
+          value={props.value}
+        >
+          <HoverCardTrigger asChild>
+            <SelectTrigger
+              aria-label={props.ariaLabel}
+              className="composer-select-trigger model-account"
+              size="sm"
+            >
+              <span className="composer-select-icon"><UserRound size={15} /></span>
+              <SelectValue />
+            </SelectTrigger>
+          </HoverCardTrigger>
+          <SelectContent align="start" className="model-picker-account-content" position="popper">
+            {props.accounts.map((account) => (
+              <SelectItem key={account.connectionId} value={account.connectionId}>
+                {account.accountName}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : (
         <HoverCardTrigger asChild>
-          <SelectTrigger
+          <Button
             aria-label={props.ariaLabel}
             className="composer-select-trigger model-account"
+            disabled={props.disabled}
             size="sm"
+            type="button"
+            variant="ghost"
           >
             <span className="composer-select-icon"><UserRound size={15} /></span>
-            <SelectValue />
-          </SelectTrigger>
+            <span data-slot="select-value">{selectedAccount.accountName}</span>
+          </Button>
         </HoverCardTrigger>
-        <SelectContent align="start" className="model-picker-account-content" position="popper">
-          {props.accounts.map((account) => (
-            <SelectItem key={account.connectionId} value={account.connectionId}>
-              {account.accountName}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      )}
       <HoverCardContent align="start" className="w-[22rem] p-0" side="top" sideOffset={8}>
         <Card className="w-full gap-0 border-0 ring-0 shadow-none" size="sm">
           <CardHeader>

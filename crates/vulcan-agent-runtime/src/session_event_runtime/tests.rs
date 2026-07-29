@@ -1386,6 +1386,12 @@ fn tool_result_projection_preserves_raw_change_set_host_result() {
 fn lua_host_result_kinds_are_visible() {
     assert!(raw_host_result_kind_is_visible(Some("lua_execution")));
     assert!(raw_host_result_kind_is_visible(Some("lua_runtime_session")));
+    assert!(raw_host_result_kind_is_visible(Some(
+        "generated_attachments"
+    )));
+    assert!(raw_host_result_kind_is_visible(Some(
+        "provider_tool_output"
+    )));
 }
 
 /// Verifies wait_agent keeps child usage metadata on the visible tool row without copying child output text.

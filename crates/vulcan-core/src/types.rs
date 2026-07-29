@@ -528,6 +528,9 @@ pub enum ConversationAttachmentKind {
     /// PDF attachment backed by one local file path.
     /// 由本地文件路径支撑的 PDF 附件。
     Pdf,
+    /// Generic document attachment backed by one local file path.
+    /// 由本地文件路径支撑的通用文档附件。
+    File,
 }
 
 impl ConversationAttachmentKind {
@@ -539,6 +542,7 @@ impl ConversationAttachmentKind {
             Self::Image => "image",
             Self::Video => "video",
             Self::Pdf => "pdf",
+            Self::File => "file",
         }
     }
 
@@ -550,6 +554,7 @@ impl ConversationAttachmentKind {
             Self::Image => "图片",
             Self::Video => "视频",
             Self::Pdf => "PDF",
+            Self::File => "文件",
         }
     }
 }

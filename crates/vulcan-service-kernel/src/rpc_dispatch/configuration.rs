@@ -28,6 +28,11 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_public_ai_usage_refresh_settings",
     "service_select_public_ai_model",
     "service_save_public_ai_model_overrides",
+    "service_save_public_ai_model_enabled",
+    "service_save_public_ai_provider_tool_selection",
+    "service_save_public_ai_provider_tool_target_enabled",
+    "service_public_ai_session_provider_tool_selections",
+    "service_save_public_ai_session_provider_tool_selections",
     "service_save_public_ai_default_connection",
     "service_save_git_commit_settings",
     "service_generate_git_commit_message",
@@ -186,6 +191,43 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
+        "service_save_public_ai_model_enabled" => rpc_json_result(
+            service_save_public_ai_model_enabled(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_save_public_ai_provider_tool_selection" => rpc_json_result(
+            service_save_public_ai_provider_tool_selection(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_save_public_ai_provider_tool_target_enabled" => rpc_json_result(
+            service_save_public_ai_provider_tool_target_enabled(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_public_ai_session_provider_tool_selections" => {
+            rpc_json_result(service_public_ai_session_provider_tool_selections(
+                state,
+                rpc_required_param(params, "conversationId")?,
+            ))
+        }
+        "service_save_public_ai_session_provider_tool_selections" => {
+            rpc_json_result(service_save_public_ai_session_provider_tool_selections(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            ))
+        }
         "service_save_public_ai_default_connection" => rpc_json_result(
             service_save_public_ai_default_connection(
                 app,

@@ -22,7 +22,7 @@ export function normalizeGeneratedMediaKind(kind: string): GeneratedMediaKind | 
   if (kind === "image") return "image";
   if (kind === "audio") return "audio";
   if (kind === "video") return "video";
-  if (kind === "pdf" || kind === "document") return "document";
+  if (kind === "pdf" || kind === "document" || kind === "file") return "document";
   return null;
 }
 

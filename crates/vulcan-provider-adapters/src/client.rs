@@ -5,8 +5,8 @@ use crate::{
     AccountUsageQueryKind, AuthenticationProjection, ConnectionModel, ConnectionModelCatalog,
     CredentialConnection, CredentialExecutionSecret, ModelDiscoveryKind, ProviderDescriptor,
     SecondaryRouteOption, ServiceEntry, build_anthropic_model_catalog, build_gemini_model_catalog,
-    build_minimax_model_catalog, parse_anthropic_model_page, parse_gemini_model_page,
-    parse_google_code_assist_model_catalog, parse_minimax_model_page,
+    build_minimax_model_catalog, enrich_compatible_model_catalog, parse_anthropic_model_page,
+    parse_gemini_model_page, parse_google_code_assist_model_catalog, parse_minimax_model_page,
     parse_minimax_openai_model_catalog, parse_openai_codex_model_catalog,
     parse_openai_model_catalog, parse_openrouter_model_catalog,
 };
@@ -39,7 +39,7 @@ pub trait ProviderMetadataClient: Send + Sync {
     /// 返回不持久化的连接模型目录。
     async fn discover_models(
         &self,
-        _provider: &ProviderDescriptor,
+        provider: &ProviderDescriptor,
         entry: &ServiceEntry,
         connection: &CredentialConnection,
         secret: &CredentialExecutionSecret,
@@ -82,7 +82,7 @@ pub trait ProviderMetadataClient: Send + Sync {
     /// 返回供应商报告的路由选项，或显式的不支持/发现错误。
     async fn discover_secondary_routes(
         &self,
-        _provider: &ProviderDescriptor,
+        provider: &ProviderDescriptor,
         entry: &ServiceEntry,
         connection: &CredentialConnection,
         model_id: &str,
@@ -249,7 +249,7 @@ async fn probe_minimax_region(
 impl ProviderMetadataClient for HttpProviderMetadataClient {
     async fn discover_models(
         &self,
-        _provider: &ProviderDescriptor,
+        provider: &ProviderDescriptor,
         entry: &ServiceEntry,
         connection: &CredentialConnection,
         secret: &CredentialExecutionSecret,
@@ -276,6 +276,10 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
         let authentication = protocol_route
             .resolved_authentication(entry.authentication, credential_profile.authentication);
         match protocol_route.resolved_model_discovery(entry.model_discovery) {
+            ModelDiscoveryKind::ProviderToolsOnly => Err(format!(
+                "Provider-tools service entry `{}` does not expose a conversation model catalog.",
+                entry.id
+            )),
             ModelDiscoveryKind::MiniMaxAnthropic => {
                 discover_minimax_models(
                     &self.http,
@@ -288,7 +292,7 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
                 .await
             }
             ModelDiscoveryKind::MiniMaxOpenAi => {
-                let url = format!("{}/v1/models", entry.base_url.trim_end_matches('/'));
+                let url = protocol_route.model_discovery_url(entry, "/v1/models");
                 let body = send_metadata_get_with_authentication(
                     &self.http,
                     entry,
@@ -305,7 +309,7 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
                 )
             }
             ModelDiscoveryKind::OpenRouter => {
-                let url = format!("{}/models", entry.base_url.trim_end_matches('/'));
+                let url = protocol_route.model_discovery_url(entry, "/models");
                 let body = send_metadata_get_with_authentication(
                     &self.http,
                     entry,
@@ -318,7 +322,7 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
                 parse_openrouter_model_catalog(connection.id.as_str(), generation, body.as_str())
             }
             ModelDiscoveryKind::OpenAi => {
-                let url = format!("{}/models", entry.base_url.trim_end_matches('/'));
+                let url = protocol_route.model_discovery_url(entry, "/models");
                 let body = send_metadata_get_with_authentication(
                     &self.http,
                     entry,
@@ -328,13 +332,19 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
                     "model discovery",
                 )
                 .await?;
-                parse_openai_model_catalog(connection.id.as_str(), generation, body.as_str())
+                let mut catalog =
+                    parse_openai_model_catalog(connection.id.as_str(), generation, body.as_str())?;
+                enrich_compatible_model_catalog(
+                    provider.id.as_str(),
+                    entry.id.as_str(),
+                    connection.selected_protocol.as_str(),
+                    &mut catalog,
+                );
+                Ok(catalog)
             }
             ModelDiscoveryKind::OpenAiCodex => {
-                let url = format!(
-                    "{}/models?client_version=0.144.1",
-                    entry.base_url.trim_end_matches('/')
-                );
+                let url =
+                    protocol_route.model_discovery_url(entry, "/models?client_version=0.144.1");
                 let body = send_metadata_get_with_authentication(
                     &self.http,
                     entry,
@@ -403,6 +413,20 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
             }
             AccountUsageQueryKind::OpenRouterCredits => {
                 query_openrouter_credits(&self.http, entry, secret.expose_value()).await
+            }
+            AccountUsageQueryKind::TavilyCredits => {
+                query_tavily_credits(&self.http, entry, secret.expose_value()).await
+            }
+            AccountUsageQueryKind::DeepSeekBalance => {
+                query_deepseek_balance(&self.http, entry, secret.expose_value()).await
+            }
+            AccountUsageQueryKind::KimiCodingPlan => {
+                query_kimi_coding_plan(
+                    &self.http,
+                    secret.expose_value(),
+                    secret.provider_device_id(),
+                )
+                .await
             }
         };
         match result {
@@ -935,8 +959,354 @@ async fn query_minimax_token_plan(
     })
 }
 
-/// Queries the documented OpenRouter credits endpoint with a management key.
+/// Queries Kimi Coding Plan membership and rolling usage with the verified CLI identity.
+/// 使用已验证 CLI 身份查询 Kimi Coding Plan 会员与滚动用量。
+async fn query_kimi_coding_plan(
+    http: &reqwest::Client,
+    secret: &str,
+    device_id: Option<&str>,
+) -> Result<AccountUsageSnapshot, String> {
+    let response = http
+        .get("https://api.kimi.com/coding/v1/usages")
+        .bearer_auth(secret)
+        .header("user-agent", "KimiCLI/1.10.6")
+        .header("x-msh-platform", "kimi_cli")
+        .header("x-msh-version", "1.10.6")
+        .header("x-msh-device-name", kimi_device_name())
+        .header(
+            "x-msh-device-model",
+            format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+        )
+        .header(
+            "x-msh-device-id",
+            device_id.unwrap_or("cli-proxy-api-device"),
+        )
+        .timeout(PROVIDER_METADATA_REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|error| format!("Kimi Coding Plan usage request failed: {error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("Kimi Coding Plan usage response failed: {error}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "Kimi Coding Plan usage returned HTTP {}: {}",
+            status.as_u16(),
+            controlled_error_body(body.as_str())
+        ));
+    }
+    decode_kimi_coding_plan_usage(body.as_str())
+}
+
+/// Decodes one exact Kimi Coding Plan usage response into provider-neutral windows.
+/// 将一份精确 Kimi Coding Plan 用量响应解码为供应商无关窗口。
+fn decode_kimi_coding_plan_usage(body: &str) -> Result<AccountUsageSnapshot, String> {
+    let response: KimiUsageResponse = serde_json::from_str(body)
+        .map_err(|error| format!("Kimi Coding Plan usage JSON is invalid: {error}"))?;
+    let mut windows =
+        Vec::with_capacity(response.limits.len() + usize::from(response.usage.is_some()));
+    if let Some(usage) = response.usage
+        && let Some(window) = kimi_usage_window("weekly_usage", "Weekly usage", usage, None)?
+    {
+        windows.push(window);
+    }
+    for (index, item) in response.limits.into_iter().enumerate() {
+        let name = [
+            item.name.as_deref(),
+            item.title.as_deref(),
+            item.scope.as_deref(),
+            item.detail
+                .as_ref()
+                .and_then(|detail| detail.name.as_deref()),
+            item.detail
+                .as_ref()
+                .and_then(|detail| detail.title.as_deref()),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("Limit {}", index + 1));
+        let id = format!("kimi_{}", normalize_usage_identifier(name.as_str(), index));
+        let detail = item.detail.unwrap_or(item.inline);
+        if let Some(window) = kimi_usage_window(id.as_str(), name.as_str(), detail, item.window)? {
+            windows.push(window);
+        }
+    }
+    Ok(AccountUsageSnapshot {
+        credential_id: String::new(),
+        availability: AccountUsageAvailability::Supported,
+        plan_name: response
+            .user
+            .membership
+            .level
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| Some(String::from("Kimi Coding Plan"))),
+        used_amount: None,
+        remaining_amount: None,
+        currency: None,
+        balance_amount: None,
+        quota_windows: windows,
+        observed_at: current_unix_milliseconds(),
+        refresh_message: None,
+    })
+}
+
+/// Converts one Kimi counter into a neutral window without inventing absent limits.
+/// 将一个 Kimi 计数转换为中立窗口且不臆造缺失上限。
+fn kimi_usage_window(
+    id: &str,
+    display_name: &str,
+    detail: KimiUsageDetail,
+    window: Option<KimiUsageWindow>,
+) -> Result<Option<AccountUsageWindow>, String> {
+    let used = detail.used.map(KimiDecimal::exact).transpose()?;
+    let total = detail.limit.map(KimiDecimal::exact).transpose()?;
+    let remaining = match detail.remaining.map(KimiDecimal::exact).transpose()? {
+        Some(value) => Some(value),
+        None => match (total.as_deref(), used.as_deref()) {
+            (Some(total), Some(used)) => Some(subtract_non_negative_decimal(total, used)?),
+            _ => None,
+        },
+    };
+    if used.is_none() && total.is_none() && remaining.is_none() {
+        return Ok(None);
+    }
+    let reset = [
+        detail.reset_at,
+        detail.reset_at_snake,
+        detail.reset_time,
+        detail.reset_time_snake,
+    ]
+    .into_iter()
+    .flatten()
+    .find(|value| !value.trim().is_empty());
+    let bucket_name = window.map(|window| {
+        format!(
+            "{} {}",
+            window
+                .duration
+                .map_or_else(String::new, KimiDecimal::lossless),
+            window.time_unit.unwrap_or_default()
+        )
+        .trim()
+        .to_string()
+    });
+    Ok(Some(AccountUsageWindow {
+        id: id.to_string(),
+        display_name: display_name.to_string(),
+        bucket_name: bucket_name.filter(|value| !value.is_empty()),
+        used,
+        remaining,
+        total,
+        remaining_percent: None,
+        unit: String::from("provider_defined"),
+        starts_at: None,
+        resets_at: reset,
+        unlimited: false,
+        available: true,
+    }))
+}
+
+/// Returns a stable UI-safe identifier from one provider metric label.
+/// 从一个供应商指标标签返回稳定且适合 UI 的标识。
+fn normalize_usage_identifier(value: &str, fallback_index: usize) -> String {
+    let normalized = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string();
+    if normalized.is_empty() {
+        format!("limit_{}", fallback_index + 1)
+    } else {
+        normalized
+    }
+}
+
+/// Resolves the exact current device name used in Kimi metadata headers.
+/// 解析 Kimi 元数据请求头使用的精确当前设备名称。
+fn kimi_device_name() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| String::from("unknown"))
+}
+
 /// 使用管理密钥查询文档化的 OpenRouter 余额端点。
+/// Queries the documented Tavily account and API-key credit usage endpoint.
+/// 查询 Tavily 官方文档定义的账号与 API Key Credit 用量端点。
+///
+/// # Parameters
+/// 参数
+/// `http` is the shared metadata client, `entry` owns the exact service endpoint,
+/// and `secret` is the credential being validated.
+/// `http` 是共享元数据客户端，`entry` 持有精确服务端点，`secret` 是待验证凭据。
+///
+/// # Returns
+/// 返回值
+/// A provider-neutral usage snapshot that preserves Tavily's integer credit accounting.
+/// 返回保留 Tavily 整数 Credit 计量语义的供应商无关用量快照。
+async fn query_tavily_credits(
+    http: &reqwest::Client,
+    entry: &ServiceEntry,
+    secret: &str,
+) -> Result<AccountUsageSnapshot, String> {
+    let url = format!("{}/usage", entry.base_url.trim_end_matches('/'));
+    let response = http
+        .get(url.as_str())
+        .bearer_auth(secret)
+        .timeout(PROVIDER_METADATA_REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|error| format!("Tavily account usage request failed: {error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("Tavily account usage response failed: {error}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "Tavily account usage returned HTTP {}: {}",
+            status.as_u16(),
+            controlled_error_body(body.as_str())
+        ));
+    }
+    let response: TavilyUsageResponse = serde_json::from_str(body.as_str())
+        .map_err(|error| format!("Tavily account usage JSON is invalid: {error}"))?;
+    let account_plan = tavily_usage_window(
+        "tavily-account-plan",
+        "Account plan",
+        response.account.plan_usage,
+        response.account.plan_limit,
+        false,
+    )?;
+    let account_paygo = tavily_usage_window(
+        "tavily-account-paygo",
+        "Pay as you go",
+        response.account.paygo_usage,
+        response.account.paygo_limit,
+        response.account.paygo_limit.is_none(),
+    )?;
+    let key_total = tavily_usage_window(
+        "tavily-api-key",
+        "API key",
+        response.key.usage,
+        response.key.limit,
+        false,
+    )?;
+    let account_remaining = account_plan.remaining.clone();
+    Ok(AccountUsageSnapshot {
+        credential_id: String::new(),
+        availability: AccountUsageAvailability::Supported,
+        plan_name: Some(response.account.current_plan),
+        used_amount: Some(response.account.plan_usage.to_string()),
+        remaining_amount: account_remaining,
+        currency: None,
+        balance_amount: None,
+        quota_windows: vec![
+            key_total,
+            account_plan,
+            account_paygo,
+            tavily_usage_window(
+                "tavily-key-search",
+                "API key search",
+                response.key.search_usage,
+                None,
+                false,
+            )?,
+            tavily_usage_window(
+                "tavily-key-extract",
+                "API key extract",
+                response.key.extract_usage,
+                None,
+                false,
+            )?,
+            tavily_usage_window(
+                "tavily-account-search",
+                "Account search",
+                response.account.search_usage,
+                None,
+                false,
+            )?,
+            tavily_usage_window(
+                "tavily-account-extract",
+                "Account extract",
+                response.account.extract_usage,
+                None,
+                false,
+            )?,
+        ],
+        observed_at: current_unix_milliseconds(),
+        refresh_message: None,
+    })
+}
+
+/// Builds one strict Tavily credit window without interpreting a missing limit as zero.
+/// 构建一个严格的 Tavily Credit 窗口，且不会把缺失上限解释为零。
+///
+/// # Parameters
+/// 参数
+/// The identifiers describe the UI row, `used` and `limit` are provider counters,
+/// and `unlimited` is true only for the documented unbounded PAYGO case.
+/// 标识描述 UI 行，`used` 与 `limit` 是供应商计数，`unlimited` 仅用于文档明确的无界 PAYGO 情况。
+///
+/// # Returns
+/// 返回值
+/// A normalized usage window or an error when usage exceeds a reported finite limit.
+/// 返回归一化用量窗口；若用量超过供应商报告的有限上限则返回错误。
+fn tavily_usage_window(
+    id: &str,
+    display_name: &str,
+    used: u64,
+    limit: Option<u64>,
+    unlimited: bool,
+) -> Result<AccountUsageWindow, String> {
+    let remaining = match limit {
+        Some(limit) if used <= limit => Some((limit - used).to_string()),
+        Some(limit) => {
+            return Err(format!(
+                "Tavily usage `{id}` reports used credits {used} above limit {limit}."
+            ));
+        }
+        None => None,
+    };
+    Ok(AccountUsageWindow {
+        id: id.to_string(),
+        display_name: display_name.to_string(),
+        bucket_name: None,
+        used: Some(used.to_string()),
+        remaining,
+        total: limit.map(|value| value.to_string()),
+        remaining_percent: None,
+        unit: String::from("credits"),
+        starts_at: None,
+        resets_at: None,
+        unlimited,
+        available: true,
+    })
+}
+
+/// Queries the documented OpenRouter credits endpoint with a management key.
+/// 使用管理密钥查询 OpenRouter 官方文档定义的余额端点。
+///
+/// # Parameters
+/// 参数
+/// `http` is the shared metadata client, `entry` owns the exact service endpoint,
+/// and `secret` is the management credential used by the credits API.
+/// `http` 是共享元数据客户端，`entry` 持有精确服务端点，`secret` 是余额 API 使用的管理凭据。
+///
+/// # Returns
+/// 返回值
+/// A provider-neutral account balance snapshot that retains decimal precision.
+/// 返回保留十进制精度的供应商无关账号余额快照。
 async fn query_openrouter_credits(
     http: &reqwest::Client,
     entry: &ServiceEntry,
@@ -979,6 +1349,129 @@ async fn query_openrouter_credits(
         observed_at: current_unix_milliseconds(),
         refresh_message: None,
     })
+}
+
+/// Queries the official DeepSeek account-balance endpoint.
+/// 查询 DeepSeek 官方账号余额端点。
+///
+/// # Parameters
+/// 参数
+/// `http` is the shared metadata client, `entry` owns the official origin, and
+/// `secret` is the exact API key being observed.
+/// `http` 是共享元数据客户端，`entry` 持有官方 Origin，`secret` 是被观测的精确 API Key。
+///
+/// # Returns
+/// 返回值
+/// A lossless provider-neutral snapshot retaining every provider-reported currency.
+/// 返回保留供应商报告全部币种的无损供应商无关快照。
+async fn query_deepseek_balance(
+    http: &reqwest::Client,
+    entry: &ServiceEntry,
+    secret: &str,
+) -> Result<AccountUsageSnapshot, String> {
+    let url = format!("{}/user/balance", entry.base_url.trim_end_matches('/'));
+    let response = http
+        .get(url.as_str())
+        .bearer_auth(secret)
+        .timeout(PROVIDER_METADATA_REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|error| format!("DeepSeek account balance request failed: {error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("DeepSeek account balance response failed: {error}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "DeepSeek account balance returned HTTP {}: {}",
+            status.as_u16(),
+            controlled_error_body(body.as_str())
+        ));
+    }
+    decode_deepseek_balance(body.as_str())
+}
+
+/// Decodes one DeepSeek balance response without losing currency or decimal precision.
+/// 解码一份 DeepSeek 余额响应且不丢失币种或十进制精度。
+///
+/// # Parameters
+/// 参数
+/// `body` is the complete successful provider JSON response.
+/// `body` 是完整的供应商成功 JSON 响应。
+///
+/// # Returns
+/// 返回值
+/// One provider-neutral balance snapshot.
+/// 返回一份供应商无关余额快照。
+fn decode_deepseek_balance(body: &str) -> Result<AccountUsageSnapshot, String> {
+    let response: DeepSeekBalanceResponse = serde_json::from_str(body)
+        .map_err(|error| format!("DeepSeek account balance JSON is invalid: {error}"))?;
+    if response.balance_infos.is_empty() {
+        return Err(String::from(
+            "DeepSeek account balance omitted its currency balances.",
+        ));
+    }
+    for balance in &response.balance_infos {
+        validate_deepseek_decimal(balance.total_balance.as_str())?;
+        validate_deepseek_decimal(balance.granted_balance.as_str())?;
+        validate_deepseek_decimal(balance.topped_up_balance.as_str())?;
+        if !matches!(balance.currency.as_str(), "CNY" | "USD") {
+            return Err(String::from(
+                "DeepSeek account balance returned an unsupported currency.",
+            ));
+        }
+    }
+    let single_balance = (response.balance_infos.len() == 1).then(|| &response.balance_infos[0]);
+    let quota_windows = response
+        .balance_infos
+        .iter()
+        .map(|balance| AccountUsageWindow {
+            id: format!("balance_{}", balance.currency.to_ascii_lowercase()),
+            display_name: format!("{} balance", balance.currency),
+            bucket_name: Some(String::from("Account balance")),
+            used: None,
+            remaining: Some(balance.total_balance.clone()),
+            total: None,
+            remaining_percent: None,
+            unit: balance.currency.clone(),
+            starts_at: None,
+            resets_at: None,
+            unlimited: false,
+            available: response.is_available,
+        })
+        .collect();
+    Ok(AccountUsageSnapshot {
+        credential_id: String::new(),
+        availability: AccountUsageAvailability::Supported,
+        plan_name: Some(String::from("DeepSeek Balance")),
+        used_amount: None,
+        remaining_amount: single_balance.map(|balance| balance.total_balance.clone()),
+        currency: single_balance.map(|balance| balance.currency.clone()),
+        balance_amount: single_balance.map(|balance| balance.total_balance.clone()),
+        quota_windows,
+        observed_at: current_unix_milliseconds(),
+        refresh_message: (!response.is_available)
+            .then(|| String::from("DeepSeek reports that the account balance is unavailable.")),
+    })
+}
+
+/// Validates one non-negative DeepSeek decimal string without converting it to floating point.
+/// 在不转换为浮点数的情况下验证一个非负 DeepSeek 十进制字符串。
+///
+/// # Parameters
+/// 参数
+/// `value` is one provider-reported exact balance component.
+/// `value` 是供应商报告的一个精确余额分量。
+///
+/// # Returns
+/// 返回值
+/// Success for one canonical non-negative decimal string.
+/// 对规范非负十进制字符串返回成功。
+fn validate_deepseek_decimal(value: &str) -> Result<(), String> {
+    normalized_unsigned_decimal_digits(value)
+        .map(|_| ())
+        .map_err(|_| String::from("DeepSeek account balance contains an invalid decimal value."))
 }
 
 /// Discovers every MiniMax model page through the documented `after_id` cursor.
@@ -1221,6 +1714,93 @@ fn current_unix_milliseconds() -> Option<String> {
 /// 在向调用方展示前限制上游错误正文长度。
 fn controlled_error_body(body: &str) -> String {
     body.chars().take(2_000).collect()
+}
+
+/// DeepSeek official account balance response.
+/// DeepSeek 官方账号余额响应。
+#[derive(Debug, Deserialize)]
+struct DeepSeekBalanceResponse {
+    /// Whether the provider reports usable account balance.
+    /// 供应商是否报告账号余额可用。
+    is_available: bool,
+    /// Exact balances grouped by provider currency.
+    /// 按供应商币种分组的精确余额。
+    balance_infos: Vec<DeepSeekBalanceInfo>,
+}
+
+/// One DeepSeek currency balance.
+/// 一项 DeepSeek 币种余额。
+#[derive(Debug, Deserialize)]
+struct DeepSeekBalanceInfo {
+    /// Provider currency code.
+    /// 供应商币种代码。
+    currency: String,
+    /// Total available balance.
+    /// 总可用余额。
+    total_balance: String,
+    /// Unexpired granted balance.
+    /// 未过期赠金余额。
+    granted_balance: String,
+    /// Topped-up balance.
+    /// 充值余额。
+    topped_up_balance: String,
+}
+
+/// Tavily usage response containing API-key and account-level credit counters.
+/// Tavily 用量响应，包含 API Key 与账号级 Credit 计数。
+#[derive(Debug, Deserialize)]
+struct TavilyUsageResponse {
+    /// Usage counters scoped to the validated API key.
+    /// 绑定到待验证 API Key 的用量计数。
+    key: TavilyKeyUsage,
+    /// Usage counters and plan metadata scoped to the owning account.
+    /// 绑定到所属账号的用量计数与套餐元数据。
+    account: TavilyAccountUsage,
+}
+
+/// Tavily API-key credit counters required by the public usage card.
+/// 公共用量卡片所需的 Tavily API Key Credit 计数。
+#[derive(Debug, Deserialize)]
+struct TavilyKeyUsage {
+    /// Credits consumed by this API key.
+    /// 此 API Key 已消耗的 Credit。
+    usage: u64,
+    /// Credit limit assigned to this API key.
+    /// 分配给此 API Key 的 Credit 上限。
+    limit: Option<u64>,
+    /// Search credits consumed by this API key.
+    /// 此 API Key 已消耗的搜索 Credit。
+    search_usage: u64,
+    /// Extraction credits consumed by this API key.
+    /// 此 API Key 已消耗的提取 Credit。
+    extract_usage: u64,
+}
+
+/// Tavily account plan metadata required by the public usage card.
+/// 公共用量卡片所需的 Tavily 账号套餐元数据。
+#[derive(Debug, Deserialize)]
+struct TavilyAccountUsage {
+    /// Current provider plan display name.
+    /// 当前供应商套餐显示名称。
+    current_plan: String,
+    /// Credits consumed from the current plan.
+    /// 当前套餐已经消耗的 Credit。
+    plan_usage: u64,
+    /// Total credits provided by the current plan.
+    /// 当前套餐提供的 Credit 总量。
+    plan_limit: Option<u64>,
+    /// Pay-as-you-go credits consumed by the account.
+    /// 账号已消耗的按量付费 Credit。
+    paygo_usage: u64,
+    /// Optional provider-reported pay-as-you-go limit.
+    /// 供应商可选报告的按量付费上限。
+    paygo_limit: Option<u64>,
+    /// Search credits consumed by the account.
+    /// 账号已消耗的搜索 Credit。
+    search_usage: u64,
+    /// Extraction credits consumed by the account.
+    /// 账号已消耗的提取 Credit。
+    extract_usage: u64,
 }
 
 /// OpenRouter credits response.
@@ -1474,11 +2054,169 @@ struct MiniMaxQuotaModelRemain {
     weekly_end_time: u64,
 }
 
+/// Accepts Kimi's exact number-or-string decimal representation.
+/// 接受 Kimi 精确的数字或字符串十进制表示。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum KimiDecimal {
+    /// JSON number representation.
+    /// JSON 数字表示。
+    Number(serde_json::Number),
+    /// JSON string representation.
+    /// JSON 字符串表示。
+    String(String),
+}
+
+impl KimiDecimal {
+    /// Returns one validated non-negative exact decimal string.
+    /// 返回一个经过校验的非负精确十进制字符串。
+    fn exact(self) -> Result<String, String> {
+        let value = self.lossless();
+        normalized_unsigned_decimal_digits(value.as_str())
+            .map(|_| value)
+            .map_err(|_| String::from("Kimi Coding Plan usage contains an invalid decimal value."))
+    }
+
+    /// Preserves the provider's lossless decimal spelling.
+    /// 保留供应商无损十进制拼写。
+    fn lossless(self) -> String {
+        match self {
+            Self::Number(value) => value.to_string(),
+            Self::String(value) => value,
+        }
+    }
+}
+
+/// Mirrors one exact Kimi usage-counter subset.
+/// 镜像一组精确的 Kimi 用量计数字段子集。
+#[derive(Debug, Default, Deserialize)]
+struct KimiUsageDetail {
+    /// Consumed provider quantity.
+    /// 已消费供应商数量。
+    #[serde(default)]
+    used: Option<KimiDecimal>,
+    /// Maximum provider quantity.
+    /// 供应商数量上限。
+    #[serde(default)]
+    limit: Option<KimiDecimal>,
+    /// Provider-reported available quantity.
+    /// 供应商报告的可用数量。
+    #[serde(default)]
+    remaining: Option<KimiDecimal>,
+    /// Optional metric name.
+    /// 可选指标名称。
+    #[serde(default)]
+    name: Option<String>,
+    /// Optional display title.
+    /// 可选显示标题。
+    #[serde(default)]
+    title: Option<String>,
+    /// Camel-case absolute reset time.
+    /// 驼峰形式绝对重置时间。
+    #[serde(default, rename = "resetAt")]
+    reset_at: Option<String>,
+    /// Snake-case absolute reset time.
+    /// 下划线形式绝对重置时间。
+    #[serde(default, rename = "reset_at")]
+    reset_at_snake: Option<String>,
+    /// Alternate camel-case reset time.
+    /// 备用驼峰形式重置时间。
+    #[serde(default, rename = "resetTime")]
+    reset_time: Option<String>,
+    /// Alternate snake-case reset time.
+    /// 备用下划线形式重置时间。
+    #[serde(default, rename = "reset_time")]
+    reset_time_snake: Option<String>,
+}
+
+/// Mirrors one Kimi rolling-window descriptor.
+/// 镜像一个 Kimi 滚动窗口描述。
+#[derive(Debug, Deserialize)]
+struct KimiUsageWindow {
+    /// Positive duration magnitude.
+    /// 正数时长数值。
+    #[serde(default)]
+    duration: Option<KimiDecimal>,
+    /// Provider duration unit.
+    /// 供应商时长单位。
+    #[serde(default, rename = "timeUnit", alias = "time_unit")]
+    time_unit: Option<String>,
+}
+
+/// Mirrors one named Kimi usage limit.
+/// 镜像一个具名 Kimi 用量限制。
+#[derive(Debug, Deserialize)]
+struct KimiUsageLimit {
+    /// Inline legacy counter fields.
+    /// 内联旧版计数字段。
+    #[serde(flatten)]
+    inline: KimiUsageDetail,
+    /// Optional fallback scope name.
+    /// 可选备用 Scope 名称。
+    #[serde(default)]
+    scope: Option<String>,
+    /// Optional nested counter fields.
+    /// 可选嵌套计数字段。
+    #[serde(default)]
+    detail: Option<KimiUsageDetail>,
+    /// Optional explicit rolling-window descriptor.
+    /// 可选显式滚动窗口描述。
+    #[serde(default)]
+    window: Option<KimiUsageWindow>,
+    /// Optional inline name copied before nested-detail selection.
+    /// 在嵌套 Detail 选择前复制的可选内联名称。
+    #[serde(default)]
+    name: Option<String>,
+    /// Optional inline title copied before nested-detail selection.
+    /// 在嵌套 Detail 选择前复制的可选内联标题。
+    #[serde(default)]
+    title: Option<String>,
+}
+
+/// Mirrors the exact Kimi account usage response.
+/// 镜像精确的 Kimi 账号用量响应。
+#[derive(Debug, Deserialize)]
+struct KimiUsageResponse {
+    /// Optional account-summary counter.
+    /// 可选账号汇总计数。
+    #[serde(default)]
+    usage: Option<KimiUsageDetail>,
+    /// Detailed usage windows.
+    /// 详细用量窗口。
+    #[serde(default)]
+    limits: Vec<KimiUsageLimit>,
+    /// Account membership observation.
+    /// 账号会员观测。
+    #[serde(default)]
+    user: KimiUsageUser,
+}
+
+/// Mirrors the exact Kimi account user subset.
+/// 镜像精确的 Kimi 账号用户字段子集。
+#[derive(Debug, Default, Deserialize)]
+struct KimiUsageUser {
+    /// Current membership facts.
+    /// 当前会员事实。
+    #[serde(default)]
+    membership: KimiUsageMembership,
+}
+
+/// Mirrors the exact Kimi membership subset.
+/// 镜像精确的 Kimi 会员字段子集。
+#[derive(Debug, Default, Deserialize)]
+struct KimiUsageMembership {
+    /// Provider-owned membership level.
+    /// 供应商拥有的会员等级。
+    #[serde(default)]
+    level: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        MiniMaxQuotaModelRemain, minimax_key_profile_id, minimax_quota_windows,
-        resolve_minimax_region, subtract_non_negative_decimal,
+        MiniMaxQuotaModelRemain, decode_deepseek_balance, decode_kimi_coding_plan_usage,
+        minimax_key_profile_id, minimax_quota_windows, resolve_minimax_region,
+        subtract_non_negative_decimal, tavily_usage_window,
     };
 
     /// Verifies MiniMax billing profiles are selected only from reviewed literal prefixes.
@@ -1495,6 +2233,47 @@ mod tests {
         );
         assert!(minimax_key_profile_id("sk-example").is_err());
         assert!(minimax_key_profile_id("SK-CP-example").is_err());
+    }
+
+    /// Verifies DeepSeek balances preserve every currency and exact decimal string.
+    /// 验证 DeepSeek 余额会保留每种币种及精确十进制字符串。
+    #[test]
+    fn deepseek_balance_preserves_multiple_currencies() {
+        let snapshot = decode_deepseek_balance(
+            r#"{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"110.00","granted_balance":"10.00","topped_up_balance":"100.00"},{"currency":"USD","total_balance":"2.50","granted_balance":"0","topped_up_balance":"2.50"}]}"#,
+        )
+        .expect("valid DeepSeek balance");
+        assert_eq!(snapshot.quota_windows.len(), 2);
+        assert_eq!(
+            snapshot.quota_windows[0].remaining.as_deref(),
+            Some("110.00")
+        );
+        assert_eq!(snapshot.quota_windows[1].unit, "USD");
+        assert!(snapshot.balance_amount.is_none());
+        assert!(snapshot.currency.is_none());
+    }
+
+    /// Verifies Kimi preserves membership, nested counters, exact decimals, and reset evidence.
+    /// 验证 Kimi 保留会员、嵌套计数、精确十进制及重置证据。
+    #[test]
+    fn kimi_usage_preserves_membership_and_nested_windows() {
+        let snapshot = decode_kimi_coding_plan_usage(
+            r#"{"usage":{"used":"1.25","limit":"10"},"limits":[{"name":"5 hour usage","detail":{"used":2,"limit":8,"remaining":6,"resetAt":"2026-07-29T10:00:00Z"},"window":{"duration":5,"timeUnit":"HOURS"}}],"user":{"membership":{"level":"moderato"}}}"#,
+        )
+        .expect("valid Kimi usage");
+        assert_eq!(snapshot.plan_name.as_deref(), Some("moderato"));
+        assert_eq!(snapshot.quota_windows.len(), 2);
+        assert_eq!(snapshot.quota_windows[0].remaining.as_deref(), Some("8.75"));
+        assert_eq!(snapshot.quota_windows[1].used.as_deref(), Some("2"));
+        assert_eq!(snapshot.quota_windows[1].remaining.as_deref(), Some("6"));
+        assert_eq!(
+            snapshot.quota_windows[1].resets_at.as_deref(),
+            Some("2026-07-29T10:00:00Z")
+        );
+        assert_eq!(
+            snapshot.quota_windows[1].bucket_name.as_deref(),
+            Some("5 HOURS")
+        );
     }
 
     /// Verifies regional registration rejects ambiguous and fully rejected probe outcomes.
@@ -1582,5 +2361,28 @@ mod tests {
             "97.5"
         );
         assert!(subtract_non_negative_decimal("1", "2").is_err());
+    }
+
+    /// Verifies a missing Tavily limit remains unknown rather than becoming zero.
+    /// 验证缺失的 Tavily 上限保持未知而不会被转换为零。
+    #[test]
+    fn tavily_missing_limit_is_not_zero() {
+        let window = tavily_usage_window("search", "Search", 12, None, false)
+            .expect("unbounded provider counter");
+        assert_eq!(window.used.as_deref(), Some("12"));
+        assert!(window.total.is_none());
+        assert!(window.remaining.is_none());
+        assert!(!window.unlimited);
+    }
+
+    /// Verifies only the documented Tavily PAYGO null limit is represented as unlimited.
+    /// 验证仅文档明确的 Tavily PAYGO 空上限会表示为无限。
+    #[test]
+    fn tavily_paygo_null_limit_is_unlimited() {
+        let window =
+            tavily_usage_window("paygo", "PAYGO", 3, None, true).expect("unlimited paygo counter");
+        assert!(window.unlimited);
+        assert!(window.total.is_none());
+        assert!(window.remaining.is_none());
     }
 }

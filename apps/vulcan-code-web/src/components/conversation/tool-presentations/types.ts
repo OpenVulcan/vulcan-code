@@ -439,6 +439,111 @@ export interface SubagentUsageSummary {
   cachedInputTokens: number;
 }
 
+// ProviderToolSearchPresentationResult describes one unified provider search row.
+// ProviderToolSearchPresentationResult 描述一条统一供应商搜索行。
+export interface ProviderToolSearchPresentationResult {
+  // One-based result rank.
+  // 从一开始的结果排名。
+  rank: number;
+  // Result title.
+  // 结果标题。
+  title: string;
+  // Validated result URL.
+  // 已校验的结果地址。
+  url: string;
+  // Normalized source hostname.
+  // 归一化来源主机名。
+  sourceDomain: string;
+  // Result excerpt.
+  // 结果摘要。
+  snippet: string;
+}
+
+// ProviderToolSearchPresentation describes one normalized provider web-search card.
+// ProviderToolSearchPresentation 描述一张归一化供应商网页搜索卡片。
+export interface ProviderToolSearchPresentation {
+  // Presentation discriminator.
+  // 展示判别字段。
+  kind: "provider_tool_search";
+  // Stable expansion identifier.
+  // 稳定展开标识。
+  id: string;
+  // Current tool state.
+  // 当前工具状态。
+  state: ToolPresentationDisplayState;
+  // Exact submitted query.
+  // 精确提交的查询。
+  query: string;
+  // Ordered normalized results.
+  // 有序归一化结果。
+  results: ProviderToolSearchPresentationResult[];
+}
+
+// ProviderToolTextPresentation describes one normalized provider text card.
+// ProviderToolTextPresentation 描述一张归一化供应商文本卡片。
+export interface ProviderToolTextPresentation {
+  // Presentation discriminator.
+  // 展示判别字段。
+  kind: "provider_tool_text";
+  // Stable expansion identifier.
+  // 稳定展开标识。
+  id: string;
+  // Current tool state.
+  // 当前工具状态。
+  state: ToolPresentationDisplayState;
+  // Provider-generated Markdown or plain text.
+  // 供应商生成的 Markdown 或纯文本。
+  text: string;
+}
+
+// ProviderToolExtractPresentationResult describes one unified extracted page.
+// ProviderToolExtractPresentationResult 描述一个统一提取页面。
+export interface ProviderToolExtractPresentationResult {
+  // Extracted HTTPS page URL.
+  // 已提取 HTTPS 页面地址。
+  url: string;
+  // Provider-returned Markdown or text.
+  // 供应商返回的 Markdown 或文本。
+  content: string;
+  // Extracted image URLs.
+  // 已提取图片地址。
+  images: string[];
+  // Optional page favicon.
+  // 可选页面站点图标。
+  favicon: string | null;
+}
+
+// ProviderToolExtractPresentationFailure describes one provider-reported page failure.
+// ProviderToolExtractPresentationFailure 描述一个供应商报告的页面失败。
+export interface ProviderToolExtractPresentationFailure {
+  // Failed HTTPS page URL.
+  // 失败 HTTPS 页面地址。
+  url: string;
+  // Controlled provider error.
+  // 受控供应商错误。
+  error: string;
+}
+
+// ProviderToolExtractPresentation describes one normalized provider extraction card.
+// ProviderToolExtractPresentation 描述一张归一化供应商网页提取卡片。
+export interface ProviderToolExtractPresentation {
+  // Presentation discriminator.
+  // 展示判别字段。
+  kind: "provider_tool_extract";
+  // Stable expansion identifier.
+  // 稳定展开标识。
+  id: string;
+  // Current tool state.
+  // 当前工具状态。
+  state: ToolPresentationDisplayState;
+  // Successful extraction results.
+  // 成功提取结果。
+  results: ProviderToolExtractPresentationResult[];
+  // Provider-reported per-page failures.
+  // 供应商报告的逐页面失败。
+  failures: ProviderToolExtractPresentationFailure[];
+}
+
 // ToolPresentation is the union of all recognized custom tool displays.
 // ToolPresentation 是所有已识别自定义工具展示的联合类型。
-export type ToolPresentation = CommandExecutionPresentation | FileChangePresentation | MarkdownToolPresentation | LuaExecutionPresentation | AskQuestionPresentation | SubagentOrchestrationPresentation;
+export type ToolPresentation = CommandExecutionPresentation | FileChangePresentation | MarkdownToolPresentation | LuaExecutionPresentation | AskQuestionPresentation | SubagentOrchestrationPresentation | ProviderToolSearchPresentation | ProviderToolExtractPresentation | ProviderToolTextPresentation;

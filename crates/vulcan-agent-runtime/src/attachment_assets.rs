@@ -41,6 +41,9 @@ const VIDEO_ATTACHMENT_DIR_NAME: &str = "video";
 /// Stable PDF category directory name used below the managed attachment root.
 /// 宿主管理附件根目录下用于 PDF 分类的稳定目录名称。
 const PDF_ATTACHMENT_DIR_NAME: &str = "pdf";
+/// Stable generic-file category directory name used below the managed attachment root.
+/// 宿主管理附件根目录下用于通用文件分类的稳定目录名称。
+const FILE_ATTACHMENT_DIR_NAME: &str = "files";
 
 /// Structured descriptor resolved from one supported attachment file path or MIME type.
 /// 从受支持附件文件路径或 MIME 类型解析得到的结构化描述信息。
@@ -152,6 +155,26 @@ pub fn attachment_descriptor_from_mime_type(mime_type: &str) -> Option<Attachmen
             mime_type: "audio/ogg",
             extension: "ogg",
         }),
+        "audio/pcm" => Some(AttachmentDescriptor {
+            kind: ConversationAttachmentKind::Audio,
+            mime_type: "audio/pcm",
+            extension: "pcm",
+        }),
+        "audio/l16" => Some(AttachmentDescriptor {
+            kind: ConversationAttachmentKind::Audio,
+            mime_type: "audio/L16",
+            extension: "pcm",
+        }),
+        "audio/basic" => Some(AttachmentDescriptor {
+            kind: ConversationAttachmentKind::Audio,
+            mime_type: "audio/basic",
+            extension: "ulaw",
+        }),
+        "audio/opus" => Some(AttachmentDescriptor {
+            kind: ConversationAttachmentKind::Audio,
+            mime_type: "audio/opus",
+            extension: "opus",
+        }),
         "video/mp4" => Some(AttachmentDescriptor {
             kind: ConversationAttachmentKind::Video,
             mime_type: "video/mp4",
@@ -181,6 +204,11 @@ pub fn attachment_descriptor_from_mime_type(mime_type: &str) -> Option<Attachmen
             kind: ConversationAttachmentKind::Pdf,
             mime_type: "application/pdf",
             extension: "pdf",
+        }),
+        "application/json" => Some(AttachmentDescriptor {
+            kind: ConversationAttachmentKind::File,
+            mime_type: "application/json",
+            extension: "json",
         }),
         _ => None,
     }
@@ -430,6 +458,7 @@ fn attachment_kind_directory_name(kind: &ConversationAttachmentKind) -> &'static
         ConversationAttachmentKind::Audio => AUDIO_ATTACHMENT_DIR_NAME,
         ConversationAttachmentKind::Video => VIDEO_ATTACHMENT_DIR_NAME,
         ConversationAttachmentKind::Pdf => PDF_ATTACHMENT_DIR_NAME,
+        ConversationAttachmentKind::File => FILE_ATTACHMENT_DIR_NAME,
     }
 }
 
