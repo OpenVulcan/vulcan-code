@@ -2,7 +2,7 @@ use super::*;
 
 /// Browser-facing service discovery snapshot shared by health checks and clients.
 /// 健康检查与客户端共享的浏览器侧服务发现快照。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WebuiServiceDiscoverySnapshot {
     /// Human-readable service status.
@@ -26,6 +26,33 @@ pub struct WebuiServiceDiscoverySnapshot {
     /// Instance access token for loopback browser clients.
     /// 提供给回环浏览器客户端的实例访问令牌。
     pub service_token: String,
+}
+
+impl std::fmt::Debug for WebuiServiceDiscoverySnapshot {
+    /// Formats browser discovery metadata while redacting the service token.
+    /// 格式化浏览器发现元数据，同时脱敏服务令牌。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `formatter` receives only non-secret discovery fields and one redaction marker.
+    /// `formatter` 仅接收非秘密发现字段与一个脱敏标记。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Standard debug formatting completion.
+    /// 标准调试格式化完成结果。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WebuiServiceDiscoverySnapshot")
+            .field("status", &self.status)
+            .field("base_url", &self.base_url)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("pid", &self.pid)
+            .field("started_at", &self.started_at)
+            .field("service_token", &"<redacted>")
+            .finish()
+    }
 }
 
 /// Service discovery status used while the HTTP bridge is bound but startup is still running.

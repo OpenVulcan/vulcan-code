@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
   BrainCircuit,
+  Database,
 } from "lucide-react";
 import {
   MemoryArea,
@@ -103,6 +104,12 @@ function memoryMenuRows(workbench: WorkbenchSnapshot, t: ReturnType<typeof useI1
       icon: <BrainCircuit size={15} />,
       id: "status",
       label: t("workspaceToolPanel.status"),
+    },
+    {
+      detail: t("settings.inference.subtitle"),
+      icon: <Database size={15} />,
+      id: "inference",
+      label: t("settings.inference.title"),
     },
     ...workbench.vmmMemory.sections.map((section) => ({
       detail: section.description,

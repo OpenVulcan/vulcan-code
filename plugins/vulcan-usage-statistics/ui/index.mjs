@@ -683,7 +683,7 @@ export function createPluginPanel(sdk) {
             ariaLabel: text("owner.label", "Request owner"),
             className: "plugin-statistics-toolbar-select",
             value: ownerKind ?? "all",
-            options: ["all", "main_agent", "subagent", "context_compaction", "git_commit_summary"].map((value) => ({ value, label: text(`owner.${value}`, value) })),
+            options: ["all", "main_agent", "subagent", "context_compaction", "git_commit_summary", "internal_llm", "internal_embedding", "internal_rerank", "internal_multimodal"].map((value) => ({ value, label: text(`owner.${value}`, value) })),
             onValueChange: (value) => setOwnerKind(value === "all" ? null : value),
           }),
         ),

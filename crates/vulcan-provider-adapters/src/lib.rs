@@ -1,6 +1,7 @@
 //! Strongly typed provider adapters and executable connection graphs.
 //! 强类型供应商适配器与可执行连接图。
 
+mod alibaba_provider_tools;
 pub mod client;
 pub mod configuration;
 pub mod connection_graph;
@@ -9,7 +10,9 @@ pub mod custom_provider;
 pub mod discovery;
 pub mod execution;
 pub mod graph;
+mod native_inference;
 pub mod oauth;
+mod provider_task;
 mod provider_tool_execution;
 pub mod providers;
 mod reasoning_catalog;
@@ -25,7 +28,9 @@ pub use custom_provider::*;
 pub use discovery::*;
 pub use execution::*;
 pub use graph::*;
+pub use native_inference::registered_native_action_binding_id;
 pub use oauth::*;
+pub use provider_task::{ProviderAsyncTaskPhase, ProviderAsyncTaskRecord};
 pub use registry::*;
 pub use runtime::*;
 pub use tool_catalog::*;

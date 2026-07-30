@@ -381,6 +381,7 @@ mod submission_model_selection_tests {
             verified_protocols: BTreeSet::from([String::from("openai-chat-completions.v1")]),
             selected_protocol: String::from("openai-chat-completions.v1"),
             prompt_cache_by_protocol: BTreeMap::new(),
+            usage_scope_override: None,
         };
         configuration
             .connection_graph

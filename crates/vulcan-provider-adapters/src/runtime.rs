@@ -1,20 +1,32 @@
 //! Process-local provider catalogs, clients, and credential access.
 //! 进程内供应商目录、客户端与凭据访问。
 
+use crate::provider_task::{
+    ProviderAsyncTaskPhase, ProviderAsyncTaskPoll, ProviderAsyncTaskRecord,
+    ProviderAsyncTaskRecoveryContext, ProviderAsyncTaskRoute, ProviderTaskRecoveryStore,
+};
 use crate::{
     ActiveAiModelSelection, ConnectionModelCatalog, CredentialConnection,
     CredentialExecutionSecret, CredentialSecretEnvelope, HttpProviderMetadataClient,
-    OAuthAuthorizationRuntime, PersistedAiConfiguration, ProviderExecutionClient,
-    ProviderExecutionRoute, ProviderMetadataClient, ProviderRegistry, ProviderToolCapabilityKind,
-    ProviderToolExecutionResult, ProviderToolTarget, ProviderToolTargetSelection,
-    RuntimeConnectionCatalogs, SecondaryRouteOption, SecondaryRouteSelection,
-    built_in_provider_tool_targets,
+    InferenceRouteBinding, InferenceRouteConfiguration, OAuthAuthorizationRuntime,
+    PersistedAiConfiguration, ProviderExecutionClient, ProviderExecutionFailure,
+    ProviderExecutionRoute, ProviderExecutionStream, ProviderMetadataClient, ProviderRegistry,
+    ProviderToolCapabilityKind, ProviderToolExecutionResult, ProviderToolTarget,
+    ProviderToolTargetSelection, RuntimeConnectionCatalogs, SecondaryRouteOption,
+    SecondaryRouteSelection, built_in_provider_tool_targets,
+    native_inference::validate_native_action_binding,
 };
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::path::Path;
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex as AsyncMutex;
-use vulcan_ai_contract::{AccountUsageSnapshot, PromptCachePolicy};
+use uuid::Uuid;
+use vulcan_ai_contract::{
+    AccountUsageSnapshot, AiExecutionRequest, AiOperation, EmbeddingRequest, EmbeddingResponse,
+    InferenceUsageScope, PromptCachePolicy, RerankRequest, RerankResponse,
+};
 use vulcan_ai_protocols::ProtocolRegistry;
 
 /// Refreshes renewable tokens this long before their declared expiration.
@@ -24,6 +36,47 @@ const OAUTH_REFRESH_SKEW_MS: u64 = 5 * 60 * 1_000;
 /// Keeps provider endpoint discovery results fresh for six hours by default.
 /// 默认将供应商端点发现结果保鲜六小时。
 const SECONDARY_ROUTE_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// Maximum retained provider-native asynchronous task duration.
+/// 供应商原生异步任务的最长保留执行时长。
+const PROVIDER_ASYNC_TASK_TIMEOUT_MS: u64 = 30 * 60 * 1_000;
+
+/// Poll cadence for provider-native asynchronous task workers.
+/// 供应商原生异步任务工作器的轮询节奏。
+const PROVIDER_ASYNC_TASK_POLL_INTERVAL: Duration = Duration::from_secs(15);
+
+/// Maximum wall time for one provider task poll or cancellation observation.
+/// 单次供应商任务轮询或取消观测的最大墙钟时间。
+const PROVIDER_ASYNC_TASK_OBSERVATION_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Awaits one provider-task network operation without allowing it to block the recovery scheduler forever.
+/// 等待一次供应商任务网络操作，同时避免其永久阻塞恢复调度器。
+///
+/// # Parameters
+/// 参数
+/// `timeout` is the exact host limit, `operation` is a controlled diagnostic label, and
+/// `future` is one non-replayed provider operation.
+/// `timeout` 是精确宿主限制，`operation` 是受控诊断标签，`future` 是一次不重放的供应商操作。
+///
+/// # Returns
+/// 返回值
+/// The exact operation result, or a controlled timeout diagnostic after dropping the in-flight future.
+/// 返回精确操作结果，或在丢弃进行中 Future 后返回受控超时诊断。
+async fn await_bounded_provider_task_operation<T, F>(
+    timeout: Duration,
+    operation: &str,
+    future: F,
+) -> Result<T, String>
+where
+    F: Future<Output = Result<T, String>>,
+{
+    tokio::time::timeout(timeout, future).await.map_err(|_| {
+        format!(
+            "{operation} exceeded its {} millisecond host timeout.",
+            timeout.as_millis()
+        )
+    })?
+}
 
 /// Stores one process-local secondary-route discovery result.
 /// 保存一份进程内二级路由发现结果。
@@ -195,6 +248,9 @@ pub struct PublicAiRuntime {
     /// Authoritative standalone public AI configuration snapshot.
     /// 权威独立公共 AI 配置快照。
     configuration: Arc<RwLock<PersistedAiConfiguration>>,
+    /// Durable non-secret asynchronous provider-task recovery registry.
+    /// 可持久化非秘密异步供应商任务恢复注册表。
+    provider_tasks: ProviderTaskRecoveryStore,
 }
 
 impl PublicAiRuntime {
@@ -227,6 +283,7 @@ impl PublicAiRuntime {
             refresh_locks: Arc::new(StdMutex::new(BTreeMap::new())),
             secrets,
             configuration: Arc::new(RwLock::new(PersistedAiConfiguration::default())),
+            provider_tasks: ProviderTaskRecoveryStore::default(),
         })
     }
 
@@ -782,7 +839,8 @@ impl PublicAiRuntime {
                     )
                 })?;
             for target in built_in_provider_tool_targets(provider.id.as_str()) {
-                if target.service_entry_id == entry.id
+                if target.contract.capability.is_ai_visible()
+                    && target.service_entry_id == entry.id
                     && target
                         .credential_profile_ids
                         .contains(connection.credential_profile_id.as_str())
@@ -824,6 +882,31 @@ impl PublicAiRuntime {
         capability: ProviderToolCapabilityKind,
         arguments: serde_json::Value,
     ) -> Result<ProviderToolExecutionResult, String> {
+        self.execute_selected_provider_tool_for_owner(configuration, capability, arguments, None)
+            .await
+    }
+
+    /// Executes one selected provider tool while retaining its optional session ownership.
+    /// 执行一个已选供应商工具，同时保留其可选会话所有权。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration`, `capability`, and `arguments` are frozen invocation inputs;
+    /// `owner_session_id` is retained only in non-secret asynchronous task recovery metadata.
+    /// `configuration`、`capability` 与 `arguments` 是冻结调用输入；
+    /// `owner_session_id` 仅保留在非秘密异步任务恢复元数据中。
+    ///
+    /// # Returns
+    /// 返回值
+    /// One normalized terminal result, including recovered asynchronous completion.
+    /// 返回一个归一化终态结果，包括恢复后的异步完成结果。
+    pub async fn execute_selected_provider_tool_for_owner(
+        &self,
+        configuration: &PersistedAiConfiguration,
+        capability: ProviderToolCapabilityKind,
+        arguments: serde_json::Value,
+        owner_session_id: Option<String>,
+    ) -> Result<ProviderToolExecutionResult, String> {
         let selection = configuration
             .provider_tool_selections
             .get(&capability)
@@ -831,16 +914,582 @@ impl PublicAiRuntime {
             .ok_or_else(|| {
                 format!("No provider tool target is selected for capability `{capability:?}`.")
             })?;
-        let resolved = self.resolve_provider_tool_target(configuration, capability, &selection)?;
+        self.execute_provider_tool_target_for_owner(
+            configuration,
+            capability,
+            &selection,
+            arguments,
+            owner_session_id,
+        )
+        .await
+    }
+
+    /// Executes one exact provider-tool target without changing the persisted default selection.
+    /// 在不修改持久化默认选择的情况下执行一个精确供应商工具目标。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration` owns the current connection graph, `capability` and `selection` freeze the
+    /// exact target, `arguments` match that target's schema, and `owner_session_id` optionally binds
+    /// a recoverable asynchronous task to one session.
+    /// `configuration` 持有当前连接图，`capability` 与 `selection` 固定精确目标，
+    /// `arguments` 匹配该目标的 Schema，`owner_session_id` 可选地把可恢复异步任务绑定到会话。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The normalized provider-tool result or an explicit resolution, credential, or execution error.
+    /// 返回规范化供应商工具结果，或明确的解析、凭据与执行错误。
+    pub async fn execute_provider_tool_target_for_owner(
+        &self,
+        configuration: &PersistedAiConfiguration,
+        capability: ProviderToolCapabilityKind,
+        selection: &ProviderToolTargetSelection,
+        arguments: serde_json::Value,
+        owner_session_id: Option<String>,
+    ) -> Result<ProviderToolExecutionResult, String> {
+        if !capability.is_ai_visible() {
+            return Err(format!(
+                "Capability `{capability:?}` is internal inference and cannot execute as an AI-visible provider tool."
+            ));
+        }
+        let resolved = self.resolve_provider_tool_target(configuration, capability, selection)?;
         let secret = self
             .resolve_fresh_execution_secret(
                 resolved.connection.id.as_str(),
                 resolved.connection.secret_reference.as_str(),
             )
             .await?;
+        if crate::provider_tool_execution::is_provider_async_task_adapter(
+            resolved.target.execution.adapter,
+        ) {
+            let execution_id = self
+                .start_provider_async_task(
+                    resolved,
+                    selection.clone(),
+                    arguments,
+                    secret,
+                    owner_session_id,
+                )
+                .await?;
+            return self
+                .await_provider_async_task(configuration, execution_id.as_str())
+                .await;
+        }
         self.execution_client
             .execute_provider_tool(&resolved.entry, &resolved.target, arguments, &secret)
             .await
+    }
+
+    /// Configures durable provider-task recovery and seals interrupted dispatch intents.
+    /// 配置持久化供应商任务恢复并封闭中断的分派意图。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `directory` stores only versioned non-secret provider-task snapshots.
+    /// `directory` 仅存储带版本的非秘密供应商任务快照。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The loaded records after every interrupted dispatch is marked outcome-unknown.
+    /// 返回加载后的记录，其中每个中断分派都已标记为结果不确定。
+    pub fn configure_provider_task_recovery(
+        &self,
+        directory: &Path,
+    ) -> Result<Vec<ProviderAsyncTaskRecord>, String> {
+        let records = self.provider_tasks.configure(directory)?;
+        for mut record in records {
+            if record.phase == ProviderAsyncTaskPhase::Dispatching {
+                record.phase = ProviderAsyncTaskPhase::DispatchOutcomeUnknown;
+                record.updated_at_unix_ms = current_unix_millis()?;
+                record.error = Some(String::from(
+                    "Provider dispatch was interrupted before a task identifier was confirmed; automatic replay is forbidden.",
+                ));
+                self.provider_tasks.replace(record)?;
+            }
+        }
+        self.provider_tasks.snapshot()
+    }
+
+    /// Returns one stable provider-task status snapshot.
+    /// 返回一份稳定供应商任务状态快照。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `execution_id` is the host-owned stable task identifier.
+    /// `execution_id` 是宿主持有的稳定任务标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The exact retained non-secret record.
+    /// 返回精确保留的非秘密记录。
+    pub fn provider_task_status(
+        &self,
+        execution_id: &str,
+    ) -> Result<ProviderAsyncTaskRecord, String> {
+        self.provider_tasks.require(execution_id)
+    }
+
+    /// Performs one recovery observation for every active retained provider task.
+    /// 对每个活动保留供应商任务执行一次恢复观测。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration` supplies current credential material for exact retained connection IDs.
+    /// `configuration` 为精确保留连接标识提供当前凭据材料。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Updated records; transient observation failures remain non-terminal diagnostics.
+    /// 返回更新记录；瞬时观测失败保留为非终态诊断。
+    pub async fn recover_provider_tasks(
+        &self,
+        configuration: &PersistedAiConfiguration,
+    ) -> Result<Vec<ProviderAsyncTaskRecord>, String> {
+        let records = self.provider_tasks.snapshot()?;
+        for record in records {
+            // A completed task without a process-local result came from durable recovery and
+            // must be observed once more to mint a fresh provider result without replaying work.
+            // 缺少进程内结果的完成任务来自持久恢复，必须再次观测以获取新的供应商结果且不重放任务。
+            let needs_completed_result_recovery =
+                record.phase == ProviderAsyncTaskPhase::Completed && record.result.is_none();
+            if record.phase.is_terminal() && !needs_completed_result_recovery {
+                continue;
+            }
+            if record.phase == ProviderAsyncTaskPhase::CancellationRequested {
+                if let Err(error) = self
+                    .cancel_provider_task_internal(configuration, record.execution_id.as_str())
+                    .await
+                {
+                    self.record_provider_task_observation_error(
+                        record.execution_id.as_str(),
+                        error,
+                    )?;
+                }
+                continue;
+            }
+            if let Err(error) = self
+                .poll_provider_async_task_once(configuration, record.execution_id.as_str())
+                .await
+            {
+                self.record_provider_task_observation_error(record.execution_id.as_str(), error)?;
+            }
+        }
+        self.provider_tasks.snapshot()
+    }
+
+    /// Requests provider cancellation while durably recording intent first.
+    /// 请求供应商取消，并首先持久化记录取消意图。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration`, `execution_id`, and optional `owner_session_id` identify one exact task.
+    /// `configuration`、`execution_id` 与可选 `owner_session_id` 标识一个精确任务。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A provider-confirmed cancelled record; uncertain cancellation remains recoverable.
+    /// 返回供应商确认取消的记录；不确定取消保持可恢复。
+    pub async fn cancel_provider_task(
+        &self,
+        configuration: &PersistedAiConfiguration,
+        execution_id: &str,
+        owner_session_id: Option<&str>,
+    ) -> Result<ProviderAsyncTaskRecord, String> {
+        let mut record = self.provider_tasks.require(execution_id)?;
+        if let Some(expected_owner) = record.owner_session_id.as_deref()
+            && Some(expected_owner) != owner_session_id
+        {
+            return Err(format!(
+                "Provider task execution `{execution_id}` is owned by another session."
+            ));
+        }
+        if record.phase.is_terminal() {
+            return Err(format!(
+                "Provider task execution `{execution_id}` is already terminal."
+            ));
+        }
+        if !record.cancellation_supported {
+            return Err(format!(
+                "Provider task execution `{execution_id}` does not support provider cancellation."
+            ));
+        }
+        record.phase = ProviderAsyncTaskPhase::CancellationRequested;
+        record.updated_at_unix_ms = current_unix_millis()?;
+        record.error = None;
+        self.provider_tasks.replace(record)?;
+        self.cancel_provider_task_internal(configuration, execution_id)
+            .await
+    }
+
+    /// Durably records cancellation intent for every active provider task owned by one session.
+    /// 为某个会话拥有的全部活动供应商任务持久化记录取消意图。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `owner_session_id` is the exact conversation identity supplied when the tool started.
+    /// `owner_session_id` 是工具启动时提供的精确会话身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The number of records changed before the caller's asynchronous future is dropped.
+    /// 返回调用方异步 Future 被丢弃前已变更的记录数量。
+    pub fn request_provider_task_cancellation_for_owner(
+        &self,
+        owner_session_id: &str,
+    ) -> Result<usize, String> {
+        let mut changed = 0usize;
+        for mut record in self.provider_tasks.snapshot()? {
+            if record.owner_session_id.as_deref() != Some(owner_session_id)
+                || record.phase.is_terminal()
+            {
+                continue;
+            }
+            if record.provider_task_id.is_none() {
+                // A dropped dispatch without a confirmed task identity must never be replayed.
+                // 未确认任务身份的已丢弃分派绝不能被重放。
+                record.phase = ProviderAsyncTaskPhase::DispatchOutcomeUnknown;
+                record.error = Some(String::from(
+                    "The owning conversation stopped before provider dispatch confirmed a task identifier; automatic replay is forbidden.",
+                ));
+            } else if record.cancellation_supported {
+                record.phase = ProviderAsyncTaskPhase::CancellationRequested;
+                record.error = None;
+            } else {
+                // Non-cancellable provider work remains observable in the background until terminal.
+                // 不支持取消的供应商任务继续由后台观测直至终态。
+                record.error = Some(String::from(
+                    "The owning conversation stopped, but this provider task has no cancellation endpoint; background observation continues.",
+                ));
+            }
+            record.updated_at_unix_ms = current_unix_millis()?;
+            self.provider_tasks.replace(record)?;
+            changed = changed.saturating_add(1);
+        }
+        Ok(changed)
+    }
+
+    /// Starts one durable task after the route and credential are already frozen.
+    /// 在路由与凭据已冻结后启动一个可持久化任务。
+    async fn start_provider_async_task(
+        &self,
+        resolved: ResolvedProviderToolTarget,
+        selection: ProviderToolTargetSelection,
+        arguments: serde_json::Value,
+        secret: CredentialExecutionSecret,
+        owner_session_id: Option<String>,
+    ) -> Result<String, String> {
+        let now = current_unix_millis()?;
+        let execution_id = Uuid::new_v4().to_string();
+        let mut record = ProviderAsyncTaskRecord {
+            execution_id: execution_id.clone(),
+            owner_session_id,
+            route: ProviderAsyncTaskRoute {
+                provider_id: resolved.connection.provider_id.clone(),
+                service_entry_id: resolved.entry.id.clone(),
+                connection_id: resolved.connection.id.clone(),
+                selection,
+                adapter: resolved.target.execution.adapter,
+            },
+            provider_task_id: None,
+            recovery: ProviderAsyncTaskRecoveryContext::None,
+            phase: ProviderAsyncTaskPhase::Dispatching,
+            created_at_unix_ms: now,
+            updated_at_unix_ms: now,
+            deadline_unix_ms: now.saturating_add(PROVIDER_ASYNC_TASK_TIMEOUT_MS),
+            cancellation_supported: matches!(
+                resolved.target.execution.adapter,
+                crate::ProviderToolAdapterKind::AlibabaHappyHorseVideoGenerate
+                    | crate::ProviderToolAdapterKind::AlibabaHappyHorseVideoEdit
+                    | crate::ProviderToolAdapterKind::AlibabaWanVideoGenerate
+            ),
+            error: None,
+            result: None,
+        };
+        self.provider_tasks.replace(record.clone())?;
+        let started = match await_bounded_provider_task_operation(
+            Duration::from_millis(PROVIDER_ASYNC_TASK_TIMEOUT_MS),
+            "Provider asynchronous task start",
+            crate::provider_tool_execution::start_provider_async_task(
+                &self.execution_client.http,
+                &resolved.entry,
+                &resolved.target,
+                arguments,
+                &secret,
+            ),
+        )
+        .await
+        {
+            Ok(started) => started,
+            Err(error) => {
+                record.phase = ProviderAsyncTaskPhase::DispatchOutcomeUnknown;
+                record.updated_at_unix_ms = current_unix_millis()?;
+                record.error = Some(format!(
+                    "Provider task start did not confirm a task identifier; automatic replay is forbidden: {error}"
+                ));
+                self.provider_tasks.replace(record)?;
+                return Err(error);
+            }
+        };
+        record.provider_task_id = Some(started.provider_task_id);
+        record.recovery = started.recovery;
+        record.phase = ProviderAsyncTaskPhase::Queued;
+        record.cancellation_supported = started.cancellation_supported;
+        record.updated_at_unix_ms = current_unix_millis()?;
+        self.provider_tasks.replace(record)?;
+        Ok(execution_id)
+    }
+
+    /// Waits for one durable task while polling only the same provider task identifier.
+    /// 等待一个可持久化任务，同时仅轮询同一个供应商任务标识。
+    async fn await_provider_async_task(
+        &self,
+        configuration: &PersistedAiConfiguration,
+        execution_id: &str,
+    ) -> Result<ProviderToolExecutionResult, String> {
+        loop {
+            let record = self.provider_tasks.require(execution_id)?;
+            match record.phase {
+                ProviderAsyncTaskPhase::Completed => {
+                    if let Some(result) = record.result {
+                        return Ok(result);
+                    }
+                    // Durable snapshots intentionally omit generated bytes and temporary URLs.
+                    // 持久快照有意省略生成字节与临时 URL。
+                    self.poll_provider_async_task_once(configuration, execution_id)
+                        .await?;
+                    continue;
+                }
+                ProviderAsyncTaskPhase::Failed
+                | ProviderAsyncTaskPhase::Cancelled
+                | ProviderAsyncTaskPhase::DispatchOutcomeUnknown => {
+                    return Err(record.error.unwrap_or_else(|| {
+                        format!(
+                            "Provider task execution `{execution_id}` ended without a diagnostic."
+                        )
+                    }));
+                }
+                ProviderAsyncTaskPhase::Dispatching
+                | ProviderAsyncTaskPhase::Queued
+                | ProviderAsyncTaskPhase::Running
+                | ProviderAsyncTaskPhase::CancellationRequested => {}
+            }
+            if current_unix_millis()? >= record.deadline_unix_ms {
+                let mut timed_out = record;
+                timed_out.phase = ProviderAsyncTaskPhase::Failed;
+                timed_out.updated_at_unix_ms = current_unix_millis()?;
+                timed_out.error = Some(String::from(
+                    "Provider asynchronous task exceeded its 30 minute deadline.",
+                ));
+                self.provider_tasks.replace(timed_out.clone())?;
+                return Err(timed_out.error.expect("timeout diagnostic is present"));
+            }
+            tokio::time::sleep(PROVIDER_ASYNC_TASK_POLL_INTERVAL).await;
+            if let Err(error) = self
+                .poll_provider_async_task_once(configuration, execution_id)
+                .await
+            {
+                self.record_provider_task_observation_error(execution_id, error)?;
+            }
+        }
+    }
+
+    /// Observes one retained provider task once and persists every confirmed transition.
+    /// 单次观测一个保留供应商任务并持久化每个已确认转换。
+    async fn poll_provider_async_task_once(
+        &self,
+        configuration: &PersistedAiConfiguration,
+        execution_id: &str,
+    ) -> Result<ProviderAsyncTaskRecord, String> {
+        let mut record = self.provider_tasks.require(execution_id)?;
+        let needs_completed_result_recovery =
+            record.phase == ProviderAsyncTaskPhase::Completed && record.result.is_none();
+        if record.phase.is_terminal() && !needs_completed_result_recovery {
+            return Ok(record);
+        }
+        if record.phase == ProviderAsyncTaskPhase::CancellationRequested {
+            return self
+                .cancel_provider_task_internal(configuration, execution_id)
+                .await;
+        }
+        let provider_task_id = record.provider_task_id.clone().ok_or_else(|| {
+            format!(
+                "Provider task execution `{execution_id}` has no confirmed provider task identifier."
+            )
+        })?;
+        let resolved = self.resolve_recovered_provider_task(configuration, &record)?;
+        let secret = self
+            .resolve_fresh_execution_secret(
+                resolved.connection.id.as_str(),
+                resolved.connection.secret_reference.as_str(),
+            )
+            .await?;
+        match await_bounded_provider_task_operation(
+            PROVIDER_ASYNC_TASK_OBSERVATION_TIMEOUT,
+            "Provider asynchronous task observation",
+            crate::provider_tool_execution::poll_provider_async_task(
+                &self.execution_client.http,
+                &resolved.entry,
+                &resolved.target,
+                provider_task_id.as_str(),
+                &record.recovery,
+                &secret,
+            ),
+        )
+        .await?
+        {
+            ProviderAsyncTaskPoll::Pending(phase) => {
+                record.phase = phase;
+                record.error = None;
+            }
+            ProviderAsyncTaskPoll::Completed(result) => {
+                record.phase = ProviderAsyncTaskPhase::Completed;
+                record.result = Some(result);
+                record.error = None;
+            }
+            ProviderAsyncTaskPoll::Failed(error) => {
+                record.phase = ProviderAsyncTaskPhase::Failed;
+                record.error = Some(error);
+            }
+            ProviderAsyncTaskPoll::Cancelled => {
+                record.phase = ProviderAsyncTaskPhase::Cancelled;
+                record.error = Some(String::from("Provider task was cancelled."));
+            }
+        }
+        record.updated_at_unix_ms = current_unix_millis()?;
+        self.provider_tasks.replace(record.clone())?;
+        Ok(record)
+    }
+
+    /// Sends one cancellation request for a previously persisted intent.
+    /// 为先前已持久化的意图发送一次取消请求。
+    async fn cancel_provider_task_internal(
+        &self,
+        configuration: &PersistedAiConfiguration,
+        execution_id: &str,
+    ) -> Result<ProviderAsyncTaskRecord, String> {
+        let mut record = self.provider_tasks.require(execution_id)?;
+        if record.phase != ProviderAsyncTaskPhase::CancellationRequested {
+            return Err(format!(
+                "Provider task execution `{execution_id}` has no durable cancellation intent."
+            ));
+        }
+        let provider_task_id = record.provider_task_id.clone().ok_or_else(|| {
+            format!(
+                "Provider task execution `{execution_id}` has no confirmed provider task identifier."
+            )
+        })?;
+        let resolved = self.resolve_recovered_provider_task(configuration, &record)?;
+        let secret = self
+            .resolve_fresh_execution_secret(
+                resolved.connection.id.as_str(),
+                resolved.connection.secret_reference.as_str(),
+            )
+            .await?;
+        await_bounded_provider_task_operation(
+            PROVIDER_ASYNC_TASK_OBSERVATION_TIMEOUT,
+            "Provider asynchronous task cancellation",
+            crate::provider_tool_execution::cancel_provider_async_task(
+                &self.execution_client.http,
+                &resolved.entry,
+                &resolved.target,
+                provider_task_id.as_str(),
+                &secret,
+            ),
+        )
+        .await?;
+        record.phase = ProviderAsyncTaskPhase::Cancelled;
+        record.updated_at_unix_ms = current_unix_millis()?;
+        record.error = Some(String::from("Provider cancellation was confirmed."));
+        self.provider_tasks.replace(record.clone())?;
+        Ok(record)
+    }
+
+    /// Resolves the exact retained route without consulting current tool selections.
+    /// 解析精确保留路由且不查询当前工具选择。
+    fn resolve_recovered_provider_task(
+        &self,
+        configuration: &PersistedAiConfiguration,
+        record: &ProviderAsyncTaskRecord,
+    ) -> Result<ResolvedProviderToolTarget, String> {
+        let registry = self.effective_providers(configuration)?;
+        let connection = configuration
+            .connection_graph
+            .connections
+            .get(record.route.connection_id.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "Provider task connection `{}` no longer exists.",
+                    record.route.connection_id
+                )
+            })?;
+        if connection.provider_id != record.route.provider_id
+            || connection.service_entry_id != record.route.service_entry_id
+            || record.route.selection.connection_id != connection.id
+        {
+            return Err(String::from(
+                "Provider task route affinity no longer matches its retained connection.",
+            ));
+        }
+        let provider = registry
+            .provider(record.route.provider_id.as_str())
+            .ok_or_else(|| {
+                format!(
+                    "Provider task provider `{}` is not registered.",
+                    record.route.provider_id
+                )
+            })?;
+        let entry = provider
+            .service_entries
+            .iter()
+            .find(|entry| entry.id == record.route.service_entry_id)
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "Provider task service entry `{}` is not registered.",
+                    record.route.service_entry_id
+                )
+            })?;
+        let target = built_in_provider_tool_targets(provider.id.as_str())
+            .into_iter()
+            .find(|target| target.target_id == record.route.selection.target_id)
+            .ok_or_else(|| {
+                format!(
+                    "Provider task target `{}` is not registered.",
+                    record.route.selection.target_id
+                )
+            })?;
+        if target.service_entry_id != entry.id
+            || target.execution.adapter != record.route.adapter
+            || !target
+                .credential_profile_ids
+                .contains(connection.credential_profile_id.as_str())
+        {
+            return Err(String::from(
+                "Provider task target no longer matches its immutable route affinity.",
+            ));
+        }
+        Ok(ResolvedProviderToolTarget {
+            connection,
+            entry,
+            target,
+        })
+    }
+
+    /// Retains one transient poll or cancellation diagnostic without making it terminal.
+    /// 保留一个瞬时轮询或取消诊断，但不将其设为终态。
+    fn record_provider_task_observation_error(
+        &self,
+        execution_id: &str,
+        error: String,
+    ) -> Result<(), String> {
+        let mut record = self.provider_tasks.require(execution_id)?;
+        if !record.phase.is_terminal() {
+            record.updated_at_unix_ms = current_unix_millis()?;
+            record.error = Some(error);
+            self.provider_tasks.replace(record)?;
+        }
+        Ok(())
     }
 
     /// Resolves one persisted single-target selection without fallback.
@@ -861,6 +1510,11 @@ impl PublicAiRuntime {
         capability: ProviderToolCapabilityKind,
         selection: &ProviderToolTargetSelection,
     ) -> Result<ResolvedProviderToolTarget, String> {
+        if !capability.is_ai_visible() {
+            return Err(format!(
+                "Capability `{capability:?}` is internal inference and cannot resolve as an AI-visible provider tool."
+            ));
+        }
         let registry = self.effective_providers(configuration)?;
         let connection = configuration
             .connection_graph
@@ -1124,6 +1778,7 @@ impl PublicAiRuntime {
             connection,
             active.provider_id.as_str(),
             active.model_id.as_str(),
+            None,
         )
     }
 
@@ -1157,7 +1812,13 @@ impl PublicAiRuntime {
             .resolve_connection(provider_id, model_id, &catalogs)?
             .clone();
         drop(catalogs);
-        self.resolve_selection_for_connection(configuration, connection, provider_id, model_id)
+        self.resolve_selection_for_connection(
+            configuration,
+            connection,
+            provider_id,
+            model_id,
+            None,
+        )
     }
 
     /// Resolves one exact credential connection and model selected by a persisted session.
@@ -1189,7 +1850,217 @@ impl PublicAiRuntime {
             .get(connection_id)
             .cloned()
             .ok_or_else(|| format!("Connection `{connection_id}` is not configured."))?;
-        self.resolve_selection_for_connection(configuration, connection, provider_id, model_id)
+        self.resolve_selection_for_connection(
+            configuration,
+            connection,
+            provider_id,
+            model_id,
+            None,
+        )
+    }
+
+    /// Resolves one exact configured internal inference route without applying workbench access.
+    /// 解析一条精确已配置内部推理路由且不应用工作台访问状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration` owns the internal enable switch and `inference_route` freezes provider,
+    /// product, credential, model, action, and usage scope.
+    /// `configuration` 拥有内部启用开关，`inference_route` 冻结供应商、产品、凭据、
+    /// 模型、动作与用途范围。
+    ///
+    /// # Returns
+    /// 返回值
+    /// An immutable selection whose operation and account usage scope are explicitly authorized.
+    /// 返回操作与账号用途范围均已显式授权的不可变选择。
+    pub fn resolve_internal_inference_selection(
+        &self,
+        configuration: &PersistedAiConfiguration,
+        inference_route: &InferenceRouteConfiguration,
+    ) -> Result<ResolvedPublicAiSelection, String> {
+        let connection = configuration
+            .connection_graph
+            .connections
+            .get(inference_route.connection_id.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "Internal inference connection `{}` is not configured.",
+                    inference_route.connection_id
+                )
+            })?;
+        if connection.provider_id != inference_route.provider_id
+            || connection.service_entry_id != inference_route.service_entry_id
+        {
+            return Err(format!(
+                "Internal inference route `{}/{}` does not own connection `{}`.",
+                inference_route.provider_id,
+                inference_route.service_entry_id,
+                inference_route.connection_id
+            ));
+        }
+        let selection = self.resolve_selection_for_connection(
+            configuration,
+            connection,
+            inference_route.provider_id.as_str(),
+            inference_route.model_id.as_str(),
+            Some(inference_route.operation),
+        )?;
+        let usage_scopes = selection
+            .route
+            .entry
+            .effective_usage_scopes(&selection.route.connection)?;
+        if !usage_scopes.contains(&inference_route.usage_scope) {
+            return Err(format!(
+                "Credential connection `{}` does not authorize usage scope `{:?}`.",
+                inference_route.connection_id, inference_route.usage_scope
+            ));
+        }
+        match (&inference_route.binding, inference_route.operation) {
+            (
+                InferenceRouteBinding::Protocol {
+                    protocol_profile_id,
+                },
+                AiOperation::ConversationRespond,
+            ) if protocol_profile_id == &selection.route.connection.selected_protocol => {}
+            (
+                InferenceRouteBinding::Action { action_binding_id },
+                AiOperation::EmbeddingCreate | AiOperation::RerankDocuments,
+            ) => validate_native_action_binding(
+                &selection.route,
+                inference_route.operation,
+                action_binding_id.as_str(),
+            )
+            .map_err(|failure| failure.error.message.clone())?,
+            _ => {
+                return Err(format!(
+                    "Internal inference binding does not match operation `{}`.",
+                    inference_route.operation.as_str()
+                ));
+            }
+        }
+        Ok(selection)
+    }
+
+    /// Executes one resolved internal embedding selection with fresh credential material.
+    /// 使用新鲜凭据材料执行一项已解析内部向量选择。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `selection`, `request`, and `usage_scope` are already authorized immutable facts.
+    /// `selection`、`request` 与 `usage_scope` 是已授权不可变事实。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A normalized complete embedding batch or a structured execution failure.
+    /// 返回归一化完整向量批次或结构化执行失败。
+    pub async fn execute_internal_embedding(
+        &self,
+        selection: &ResolvedPublicAiSelection,
+        request: &EmbeddingRequest,
+        usage_scope: InferenceUsageScope,
+    ) -> Result<EmbeddingResponse, ProviderExecutionFailure> {
+        let secret = self
+            .resolve_fresh_execution_secret(
+                selection.route.connection.id.as_str(),
+                selection.route.connection.secret_reference.as_str(),
+            )
+            .await
+            .map_err(crate::execution::pre_dispatch_failure)?;
+        self.execution_client
+            .execute_embedding(
+                &selection.route,
+                &selection.model,
+                request,
+                usage_scope,
+                selection.catalog_revision.as_str(),
+                &secret,
+            )
+            .await
+    }
+
+    /// Executes one resolved internal rerank selection with fresh credential material.
+    /// 使用新鲜凭据材料执行一项已解析内部重排选择。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `selection`, `request`, and `usage_scope` are already authorized immutable facts.
+    /// `selection`、`request` 与 `usage_scope` 是已授权不可变事实。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A normalized ranked result or a structured execution failure.
+    /// 返回归一化排序结果或结构化执行失败。
+    pub async fn execute_internal_rerank(
+        &self,
+        selection: &ResolvedPublicAiSelection,
+        request: &RerankRequest,
+        usage_scope: InferenceUsageScope,
+    ) -> Result<RerankResponse, ProviderExecutionFailure> {
+        let secret = self
+            .resolve_fresh_execution_secret(
+                selection.route.connection.id.as_str(),
+                selection.route.connection.secret_reference.as_str(),
+            )
+            .await
+            .map_err(crate::execution::pre_dispatch_failure)?;
+        self.execution_client
+            .execute_rerank(
+                &selection.route,
+                &selection.model,
+                request,
+                usage_scope,
+                selection.catalog_revision.as_str(),
+                &secret,
+            )
+            .await
+    }
+
+    /// Executes one resolved restricted internal LLM request with fresh credential material.
+    /// 使用新鲜凭据材料执行一项已解析的受限内部 LLM 请求。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `selection` is the exact pre-authorized route, while `request` contains no tools,
+    /// resources, continuation, or account-routing instructions.
+    /// `selection` 是精确预授权路由，`request` 不包含工具、资源、延续信息或账号路由指令。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A normalized provider event stream or a structured pre-dispatch failure.
+    /// 返回归一化供应商事件流或结构化分派前失败。
+    pub async fn execute_internal_llm(
+        &self,
+        selection: &ResolvedPublicAiSelection,
+        request: AiExecutionRequest,
+        execution_id: String,
+    ) -> Result<ProviderExecutionStream, ProviderExecutionFailure> {
+        if request.operation != AiOperation::ConversationRespond
+            || !request.tools.is_empty()
+            || !request.native_tools.is_empty()
+            || !request.resources.is_empty()
+            || request.continuation.is_some()
+        {
+            return Err(crate::execution::pre_dispatch_failure(
+                "Restricted internal LLM execution rejects tools, resources, continuation, and non-conversation operations.",
+            ));
+        }
+        if request.model_id != selection.model.id {
+            return Err(crate::execution::pre_dispatch_failure(format!(
+                "Restricted internal LLM request model `{}` does not match resolved model `{}`.",
+                request.model_id, selection.model.id
+            )));
+        }
+        let secret = self
+            .resolve_fresh_execution_secret(
+                selection.route.connection.id.as_str(),
+                selection.route.connection.secret_reference.as_str(),
+            )
+            .await
+            .map_err(crate::execution::pre_dispatch_failure)?;
+        Ok(self
+            .execution_client
+            .execute(selection.route.clone(), request, secret, execution_id))
     }
 
     /// Resolves one exact connection and model into an immutable public selection.
@@ -1213,30 +2084,55 @@ impl PublicAiRuntime {
         connection: CredentialConnection,
         provider_id: &str,
         model_id: &str,
+        required_internal_operation: Option<AiOperation>,
     ) -> Result<ResolvedPublicAiSelection, String> {
-        if !configuration.model_is_enabled(provider_id, model_id) {
+        if let Some(operation) = required_internal_operation {
+            if !configuration.internal_model_is_enabled(provider_id, model_id, operation) {
+                return Err(format!(
+                    "Model `{model_id}` is disabled for internal operation `{}` on provider `{provider_id}`.",
+                    operation.as_str()
+                ));
+            }
+        } else if !configuration.model_is_enabled(provider_id, model_id) {
             return Err(format!(
                 "Model `{model_id}` is disabled for provider `{provider_id}`."
             ));
         }
-        let model = self
-            .catalogs
-            .read()
-            .map_err(|_| String::from("The AI model catalog lock is poisoned."))?
-            .get(connection.id.as_str())
-            .and_then(|catalog| {
-                catalog
-                    .models
-                    .iter()
-                    .find(|model| model.id == model_id)
-                    .cloned()
-            })
-            .ok_or_else(|| {
+        let (model, catalog_revision) = {
+            let catalogs = self
+                .catalogs
+                .read()
+                .map_err(|_| String::from("The AI model catalog lock is poisoned."))?;
+            let catalog = catalogs.get(connection.id.as_str()).ok_or_else(|| {
                 format!(
-                    "Model `{}` is not present in the in-memory catalog for connection `{}`.",
-                    model_id, connection.id
+                    "No in-memory catalog exists for connection `{}`.",
+                    connection.id
                 )
             })?;
+            let model = catalog
+                .models
+                .iter()
+                .find(|model| model.id == model_id)
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "Model `{}` is not present in the in-memory catalog for connection `{}`.",
+                        model_id, connection.id
+                    )
+                })?;
+            (
+                model,
+                format!("{}:{}", catalog.connection_id, catalog.generation),
+            )
+        };
+        if let Some(operation) = required_internal_operation
+            && !model.capabilities.operations.contains(&operation)
+        {
+            return Err(format!(
+                "Model `{model_id}` does not expose internal operation `{}`.",
+                operation.as_str()
+            ));
+        }
         let provider = self
             .providers
             .provider(provider_id)
@@ -1291,6 +2187,7 @@ impl PublicAiRuntime {
             route,
             model,
             overrides,
+            catalog_revision,
         })
     }
 }
@@ -1356,6 +2253,9 @@ pub struct ResolvedPublicAiSelection {
     /// Local model execution overrides.
     /// 本地模型执行覆盖。
     pub overrides: crate::ModelExecutionOverrides,
+    /// Runtime catalog revision frozen with this selection.
+    /// 与此选择一同冻结的运行时目录修订。
+    pub catalog_revision: String,
 }
 
 /// Carries all immutable public execution inputs resolved before controller dispatch.
@@ -1599,6 +2499,7 @@ mod tests {
             verified_protocols: BTreeSet::from([OPENAI_CHAT_PROFILE_ID.to_string()]),
             selected_protocol: OPENAI_CHAT_PROFILE_ID.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),
+            usage_scope_override: None,
         }
     }
 
@@ -1634,6 +2535,22 @@ mod tests {
             .expect("second catalog should install");
         configuration.set_model_enabled("openrouter", "vendor/model", true);
         (runtime, configuration)
+    }
+
+    /// Verifies a provider-task network future cannot block its caller beyond the exact host limit.
+    /// 验证供应商任务网络 Future 无法阻塞调用方超过精确宿主限制。
+    #[tokio::test]
+    async fn provider_task_network_operation_has_a_controlled_timeout() {
+        let error = await_bounded_provider_task_operation(
+            Duration::from_millis(1),
+            "Test provider task observation",
+            std::future::pending::<Result<(), String>>(),
+        )
+        .await
+        .expect_err("pending provider operation should time out");
+
+        assert!(error.contains("Test provider task observation"));
+        assert!(error.contains("1 millisecond"));
     }
 
     /// Verifies provider default selection is used until a model-specific account is remembered.

@@ -13,6 +13,24 @@ const EXTERNAL_URL_OPENED: &str = "opened";
 /// 请求可信界面进行明确用户确认时返回的稳定服务结果。
 const EXTERNAL_URL_CONFIRMATION_REQUIRED: &str = "confirmation_required";
 
+/// Lifetime of one protected VMM inference access grant.
+/// 一项受保护 VMM 推理访问授权的生存期。
+const VMM_INFERENCE_GRANT_LIFETIME: std::time::Duration =
+    std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Successful VMM inference access rotation interval.
+/// VMM 推理访问授权成功轮换间隔。
+const VMM_INFERENCE_ROTATION_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(12 * 60 * 60);
+
+/// Grace period during which the previous VMM token remains accepted.
+/// 旧 VMM 令牌继续被接受的宽限期。
+const VMM_INFERENCE_ROTATION_GRACE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// Retry interval after a VMM inference access rotation failure.
+/// VMM 推理访问授权轮换失败后的重试间隔。
+const VMM_INFERENCE_ROTATION_RETRY: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Opens a trusted external URL with the system default browser.
 /// 使用系统默认浏览器打开可信外部链接。
 pub(crate) fn service_open_external_url(
@@ -243,17 +261,251 @@ pub(crate) async fn run_webui_service_http_bridge(
         let state = rpc_state.clone();
         Box::pin(async move { dispatch_service_rpc(event_emitter, state, method, params).await })
     });
+    let inference_consumer_profile_id = String::from("vmm");
+    let inference_access_registry =
+        Arc::new(crate::inference_access::InferenceAccessRegistry::new());
+    let inference_grant_spec =
+        match vmm_inference_grant_spec(inference_consumer_profile_id.as_str()) {
+            Ok(spec) => spec,
+            Err(error) => {
+                eprintln!("[inference-service] failed to prepare VMM access grant: {error}");
+                return;
+            }
+        };
+    let inference_grant = match inference_access_registry.issue(inference_grant_spec) {
+        Ok(grant) => grant,
+        Err(error) => {
+            eprintln!("[inference-service] failed to issue VMM access grant: {error}");
+            return;
+        }
+    };
+    let inference_grant_id = inference_grant.grant_id.clone();
+    let inference_discovery = vulcan_service_api::InferenceServiceDiscoverySnapshot {
+        api_version: vulcan_service_api::INFERENCE_SERVICE_API_VERSION,
+        status: String::from("ready"),
+        base_url: format!("http://{address}"),
+        process_id: std::process::id(),
+        caller_id: String::from("vmm-local"),
+        consumer_profile_id: inference_consumer_profile_id.clone(),
+        access_token: inference_grant.access_token,
+        expires_at_unix_ms: inference_grant.expires_at_unix_ms,
+        started_at_unix_ms: discovery.started_at.clone(),
+    };
+    if let Err(error) = vulcan_service_host::write_inference_service_discovery_snapshot(
+        &inference_discovery,
+        dirs::home_dir(),
+        std::env::temp_dir(),
+    ) {
+        eprintln!("[inference-service] protected discovery write failed: {error}");
+        return;
+    }
+    let shared_inference_discovery = Arc::new(Mutex::new(inference_discovery));
+    spawn_vmm_inference_access_rotation(
+        Arc::clone(&inference_access_registry),
+        Arc::clone(&shared_inference_discovery),
+        inference_consumer_profile_id.clone(),
+        inference_grant_id,
+    );
+    let inference_dispatcher = crate::inference_service::inference_service_dispatcher(
+        state.clone(),
+        Arc::clone(&inference_access_registry),
+        inference_consumer_profile_id.clone(),
+    );
+    let inference_event_subscriber = crate::inference_service::inference_service_event_subscriber(
+        state,
+        inference_access_registry,
+        inference_consumer_profile_id,
+    );
     let service_config = WebuiServiceHttpConfig {
         discovery: shared_discovery,
         service_token,
         event_bus,
         static_root: webui_static_root(),
         rpc_dispatcher,
+        inference_discovery: shared_inference_discovery,
+        inference_dispatcher,
+        inference_event_subscriber,
     };
     eprintln!("[webui-service] browser service bridge listening on http://{address}");
     if let Err(error) = serve_webui_service_http_listener(listener, service_config).await {
         eprintln!("[webui-service] browser service bridge stopped: {error}");
     }
+}
+
+/// Builds the exact least-privilege grant specification for the VMM consumer profile.
+/// 为 VMM 消费者配置档构建精确最小权限授权规格。
+///
+/// # Parameters
+/// 参数
+/// `consumer_profile_id` is the only profile the protected discovery document may access.
+/// `consumer_profile_id` 是受保护发现文档唯一可访问的配置档。
+///
+/// # Returns
+/// 返回值
+/// A fresh host-owned grant specification or a controlled clock failure.
+/// 返回新的宿主拥有授权规格或受控时钟失败。
+fn vmm_inference_grant_spec(
+    consumer_profile_id: &str,
+) -> Result<crate::inference_access::InferenceAccessGrantSpec, String> {
+    let lifetime_millis = u64::try_from(VMM_INFERENCE_GRANT_LIFETIME.as_millis())
+        .map_err(|_| String::from("VMM inference grant lifetime exceeds the supported range."))?;
+    let expires_at_unix_ms = current_unix_millis()?
+        .checked_add(lifetime_millis)
+        .ok_or_else(|| String::from("VMM inference grant expiration overflowed."))?;
+    Ok(crate::inference_access::InferenceAccessGrantSpec {
+        caller_id: String::from("vmm-local"),
+        consumer_profile_ids: BTreeSet::from([consumer_profile_id.to_string()]),
+        permissions: BTreeSet::from([
+            vulcan_ai_contract::InferencePermission::Llm,
+            vulcan_ai_contract::InferencePermission::Embedding,
+            vulcan_ai_contract::InferencePermission::Rerank,
+            vulcan_ai_contract::InferencePermission::Status,
+            vulcan_ai_contract::InferencePermission::Cancel,
+        ]),
+        llm_purpose_ids: BTreeSet::from([
+            String::from("precheck_l1"),
+            String::from("precheck_l2"),
+            String::from("postaction_l1"),
+            String::from("postaction_l2"),
+            String::from("profile_instruction"),
+            String::from("reserve"),
+        ]),
+        usage_scopes: BTreeSet::from([vulcan_ai_contract::InferenceUsageScope::ExternalService]),
+        budget: vulcan_ai_contract::InferenceCallerBudget {
+            max_concurrent_executions: 16,
+            max_input_units_per_request: Some(2_000_000),
+            max_output_tokens_per_request: Some(131_072),
+            max_requests_per_minute: Some(600),
+            max_input_units_per_minute: Some(16_000_000),
+            max_execution_duration_ms: Some(10 * 60 * 1_000),
+        },
+        expires_at_unix_ms,
+    })
+}
+
+/// Spawns periodic protected VMM access rotation with a bounded overlap window.
+/// 启动带有限重叠窗口的周期性受保护 VMM 访问授权轮换。
+///
+/// # Parameters
+/// 参数
+/// `registry`, `discovery`, `consumer_profile_id`, and `current_grant_id` own the rotation state.
+/// `registry`、`discovery`、`consumer_profile_id` 与 `current_grant_id` 持有轮换状态。
+fn spawn_vmm_inference_access_rotation(
+    registry: Arc<crate::inference_access::InferenceAccessRegistry>,
+    discovery: vulcan_service_host::SharedInferenceServiceDiscoverySnapshot,
+    consumer_profile_id: String,
+    mut current_grant_id: String,
+) {
+    tokio::spawn(async move {
+        let mut delay = VMM_INFERENCE_ROTATION_INTERVAL;
+        loop {
+            tokio::time::sleep(delay).await;
+            let spec = match vmm_inference_grant_spec(consumer_profile_id.as_str()) {
+                Ok(spec) => spec,
+                Err(error) => {
+                    eprintln!("[inference-service] access rotation preparation failed: {error}");
+                    delay = VMM_INFERENCE_ROTATION_RETRY;
+                    continue;
+                }
+            };
+            let replacement = match registry.issue(spec) {
+                Ok(replacement) => replacement,
+                Err(error) => {
+                    eprintln!("[inference-service] access rotation issuance failed: {error}");
+                    delay = VMM_INFERENCE_ROTATION_RETRY;
+                    continue;
+                }
+            };
+            let publication = publish_vmm_inference_access_replacement(
+                registry.as_ref(),
+                &discovery,
+                &replacement,
+                |next_snapshot| {
+                    vulcan_service_host::write_inference_service_discovery_snapshot(
+                        next_snapshot,
+                        dirs::home_dir(),
+                        std::env::temp_dir(),
+                    )
+                    .map_err(|error| format!("access rotation discovery write failed: {error}"))
+                },
+            );
+            if let Err(error) = publication {
+                eprintln!("[inference-service] {error}");
+                delay = VMM_INFERENCE_ROTATION_RETRY;
+                continue;
+            }
+            tokio::time::sleep(VMM_INFERENCE_ROTATION_GRACE).await;
+            if let Err(error) = registry.revoke(current_grant_id.as_str()) {
+                eprintln!("[inference-service] previous access grant revocation failed: {error}");
+            }
+            current_grant_id = replacement.grant_id;
+            delay = VMM_INFERENCE_ROTATION_INTERVAL;
+        }
+    });
+}
+
+/// Publishes one replacement VMM grant without invalidating the previously published grant.
+/// 发布一项替代 VMM 授权，同时不使先前已发布的授权失效。
+///
+/// # Parameters
+/// 参数
+/// `registry` owns both grants, `discovery` owns the current atomic snapshot,
+/// `replacement` is the newly issued grant, and `publish` performs durable publication.
+/// `registry` 持有新旧授权，`discovery` 持有当前原子快照，`replacement` 是新签发授权，
+/// `publish` 负责持久发布。
+///
+/// # Returns
+/// 返回值
+/// Success only after the replacement snapshot is durably published and installed in memory.
+/// 仅在替代快照持久发布并安装到内存后返回成功。
+fn publish_vmm_inference_access_replacement<F>(
+    registry: &crate::inference_access::InferenceAccessRegistry,
+    discovery: &vulcan_service_host::SharedInferenceServiceDiscoverySnapshot,
+    replacement: &crate::inference_access::IssuedInferenceAccessGrant,
+    publish: F,
+) -> Result<(), String>
+where
+    F: FnOnce(&vulcan_service_api::InferenceServiceDiscoverySnapshot) -> Result<(), String>,
+{
+    let publication = match discovery.lock() {
+        Ok(mut snapshot) => {
+            let next_snapshot = vulcan_service_api::InferenceServiceDiscoverySnapshot {
+                access_token: replacement.access_token.clone(),
+                expires_at_unix_ms: replacement.expires_at_unix_ms,
+                ..snapshot.clone()
+            };
+            match publish(&next_snapshot) {
+                Ok(()) => {
+                    *snapshot = next_snapshot;
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            }
+        }
+        Err(_) => Err(String::from(
+            "access rotation discovery publication lock is poisoned",
+        )),
+    };
+    if publication.is_err() {
+        let _ = registry.revoke(replacement.grant_id.as_str());
+    }
+    publication
+}
+
+/// Returns current Unix time in milliseconds for protected access expiry.
+/// 返回受保护访问过期时间使用的当前 Unix 毫秒时间。
+///
+/// # Returns
+/// 返回值
+/// A supported Unix timestamp or a controlled clock-range error.
+/// 返回受支持 Unix 时间戳或受控时钟范围错误。
+fn current_unix_millis() -> Result<u64, String> {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| String::from("System clock is earlier than the Unix epoch."))?
+        .as_millis();
+    u64::try_from(millis)
+        .map_err(|_| String::from("System time exceeds the supported inference range."))
 }
 
 /// Marks the browser-facing service discovery snapshot with a terminal bootstrap status.
@@ -384,6 +636,126 @@ pub(crate) fn service_workbench_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Builds one protected discovery snapshot backed by an issued test grant.
+    /// 构建一份由已签发测试授权支撑的受保护发现快照。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `grant` supplies the exact access token and expiration installed in the snapshot.
+    /// `grant` 提供安装到快照中的精确访问令牌与过期时间。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A ready loopback discovery snapshot for the fixed VMM consumer profile.
+    /// 返回固定 VMM 消费者配置档的就绪回环发现快照。
+    fn inference_discovery_fixture(
+        grant: &crate::inference_access::IssuedInferenceAccessGrant,
+    ) -> vulcan_service_api::InferenceServiceDiscoverySnapshot {
+        vulcan_service_api::InferenceServiceDiscoverySnapshot {
+            api_version: vulcan_service_api::INFERENCE_SERVICE_API_VERSION,
+            status: String::from("ready"),
+            base_url: String::from("http://127.0.0.1:17601"),
+            process_id: 42,
+            caller_id: String::from("vmm-local"),
+            consumer_profile_id: String::from("vmm"),
+            access_token: grant.access_token.clone(),
+            expires_at_unix_ms: grant.expires_at_unix_ms,
+            started_at_unix_ms: String::from("1000"),
+        }
+    }
+
+    /// Verifies failed durable publication revokes only the unpublished replacement grant.
+    /// 验证持久发布失败时仅撤销尚未发布的替代授权。
+    #[test]
+    fn failed_vmm_access_publication_preserves_current_grant() {
+        let registry = crate::inference_access::InferenceAccessRegistry::new();
+        let spec = vmm_inference_grant_spec("vmm").expect("test grant spec should be valid");
+        let current = registry
+            .issue(spec.clone())
+            .expect("current test grant should be issued");
+        let replacement = registry
+            .issue(spec)
+            .expect("replacement test grant should be issued");
+        let discovery = Arc::new(Mutex::new(inference_discovery_fixture(&current)));
+
+        let error =
+            publish_vmm_inference_access_replacement(&registry, &discovery, &replacement, |_| {
+                Err(String::from("simulated durable publication failure"))
+            })
+            .expect_err("failed durable publication must fail rotation");
+
+        assert_eq!("simulated durable publication failure", error);
+        registry
+            .authorize(
+                current.access_token.as_str(),
+                "vmm",
+                vulcan_ai_contract::InferencePermission::Status,
+                None,
+                vulcan_ai_contract::InferenceUsageScope::ExternalService,
+            )
+            .expect("currently published grant must remain authorized");
+        assert!(
+            registry
+                .authorize(
+                    replacement.access_token.as_str(),
+                    "vmm",
+                    vulcan_ai_contract::InferencePermission::Status,
+                    None,
+                    vulcan_ai_contract::InferenceUsageScope::ExternalService,
+                )
+                .is_err(),
+            "unpublished replacement grant must be revoked"
+        );
+        assert_eq!(
+            current.access_token,
+            discovery
+                .lock()
+                .expect("test discovery lock should remain healthy")
+                .access_token
+        );
+    }
+
+    /// Verifies successful publication keeps old and replacement grants valid during overlap.
+    /// 验证发布成功后新旧授权会在重叠窗口内同时保持有效。
+    #[test]
+    fn successful_vmm_access_publication_starts_grant_overlap() {
+        let registry = crate::inference_access::InferenceAccessRegistry::new();
+        let spec = vmm_inference_grant_spec("vmm").expect("test grant spec should be valid");
+        let current = registry
+            .issue(spec.clone())
+            .expect("current test grant should be issued");
+        let replacement = registry
+            .issue(spec)
+            .expect("replacement test grant should be issued");
+        let discovery = Arc::new(Mutex::new(inference_discovery_fixture(&current)));
+        let mut published = None;
+
+        publish_vmm_inference_access_replacement(&registry, &discovery, &replacement, |snapshot| {
+            published = Some(snapshot.clone());
+            Ok(())
+        })
+        .expect("successful durable publication should install replacement");
+
+        for access_token in [&current.access_token, &replacement.access_token] {
+            registry
+                .authorize(
+                    access_token.as_str(),
+                    "vmm",
+                    vulcan_ai_contract::InferencePermission::Status,
+                    None,
+                    vulcan_ai_contract::InferenceUsageScope::ExternalService,
+                )
+                .expect("both grants must remain authorized during overlap");
+        }
+        let installed = discovery
+            .lock()
+            .expect("test discovery lock should remain healthy")
+            .clone();
+        assert_eq!(Some(installed.clone()), published);
+        assert_eq!(replacement.access_token, installed.access_token);
+        assert_eq!(replacement.expires_at_unix_ms, installed.expires_at_unix_ms);
+    }
 
     /// Verifies GitHub HTTPS URLs are allowed for provenance links.
     /// 验证 GitHub HTTPS 链接允许作为来源链接打开。

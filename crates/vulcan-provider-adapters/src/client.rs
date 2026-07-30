@@ -4,11 +4,13 @@
 use crate::{
     AccountUsageQueryKind, AuthenticationProjection, ConnectionModel, ConnectionModelCatalog,
     CredentialConnection, CredentialExecutionSecret, ModelDiscoveryKind, ProviderDescriptor,
-    SecondaryRouteOption, ServiceEntry, build_anthropic_model_catalog, build_gemini_model_catalog,
-    build_minimax_model_catalog, enrich_compatible_model_catalog, parse_anthropic_model_page,
-    parse_gemini_model_page, parse_google_code_assist_model_catalog, parse_minimax_model_page,
+    SecondaryRouteOption, ServiceEntry, build_alibaba_coding_plan_catalog,
+    build_alibaba_model_studio_catalog, build_alibaba_token_plan_catalog,
+    build_anthropic_model_catalog, build_gemini_model_catalog, build_minimax_model_catalog,
+    enrich_compatible_model_catalog, parse_anthropic_model_page, parse_gemini_model_page,
+    parse_google_code_assist_model_catalog, parse_minimax_model_page,
     parse_minimax_openai_model_catalog, parse_openai_codex_model_catalog,
-    parse_openai_model_catalog, parse_openrouter_model_catalog,
+    parse_openai_model_catalog, parse_openrouter_complete_model_catalog,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -309,18 +311,62 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
                 )
             }
             ModelDiscoveryKind::OpenRouter => {
-                let url = protocol_route.model_discovery_url(entry, "/models");
-                let body = send_metadata_get_with_authentication(
+                let conversation_url = protocol_route.model_discovery_url(entry, "/models/user");
+                let conversation_body = send_metadata_get_with_authentication(
                     &self.http,
                     entry,
                     authentication,
-                    url.as_str(),
+                    conversation_url.as_str(),
                     secret,
-                    "model discovery",
+                    "account-visible model discovery",
                 )
                 .await?;
-                parse_openrouter_model_catalog(connection.id.as_str(), generation, body.as_str())
+                let embedding_url = protocol_route.model_discovery_url(entry, "/embeddings/models");
+                let embedding_body = send_metadata_get_with_authentication(
+                    &self.http,
+                    entry,
+                    authentication,
+                    embedding_url.as_str(),
+                    secret,
+                    "embedding model discovery",
+                )
+                .await?;
+                let complete_url =
+                    protocol_route.model_discovery_url(entry, "/models?output_modalities=all");
+                let complete_body = send_metadata_get_with_authentication(
+                    &self.http,
+                    entry,
+                    authentication,
+                    complete_url.as_str(),
+                    secret,
+                    "complete model discovery",
+                )
+                .await?;
+                parse_openrouter_complete_model_catalog(
+                    connection.id.as_str(),
+                    generation,
+                    conversation_body.as_str(),
+                    embedding_body.as_str(),
+                    complete_body.as_str(),
+                )
             }
+            ModelDiscoveryKind::AlibabaCodingPlanStatic => build_alibaba_coding_plan_catalog(
+                connection.id.as_str(),
+                entry.id.as_str(),
+                generation,
+            ),
+            ModelDiscoveryKind::AlibabaTokenPlanStatic => build_alibaba_token_plan_catalog(
+                connection.id.as_str(),
+                entry.id.as_str(),
+                connection.selected_protocol.as_str(),
+                generation,
+            ),
+            ModelDiscoveryKind::AlibabaModelStudioStatic => build_alibaba_model_studio_catalog(
+                connection.id.as_str(),
+                entry.id.as_str(),
+                connection.selected_protocol.as_str(),
+                generation,
+            ),
             ModelDiscoveryKind::OpenAi => {
                 let url = protocol_route.model_discovery_url(entry, "/models");
                 let body = send_metadata_get_with_authentication(

@@ -13,6 +13,10 @@ pub(crate) struct AgentRuntimeBridge {
     /// Process-local public AI runtime shared by model synchronization and execution.
     /// 由模型同步与执行共享的进程内公共 AI 运行时。
     pub(crate) public_ai_runtime: Arc<vulcan_provider_adapters::PublicAiRuntime>,
+    /// Host-authorized configured inference service for internal and restricted RPC callers.
+    /// 面向内部与受限 RPC 调用方的宿主授权已配置推理服务。
+    pub(crate) configured_inference_service:
+        Arc<crate::configured_inference::ConfiguredInferenceService>,
     /// Request-scoped provider override retained only by a queued prompt runtime clone.
     /// 仅由排队提示词运行时克隆保留的请求级供应商覆盖。
     pub(crate) provider_id_override: Option<String>,

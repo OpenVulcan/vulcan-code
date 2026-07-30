@@ -3,6 +3,7 @@ import {
   Archive,
   Bot,
   BrainCircuit,
+  FileSearch,
   FileText,
   FolderTree,
   GitCommitHorizontal,
@@ -39,6 +40,7 @@ export function settingsSubAreaProviderToolCapability(
     Record<SettingsSubAreaId, import("@/types").PublicAiProviderToolCapabilityKind>
   > = {
     "ai-web-search": "web_search",
+    "ai-web-extract": "web_extract",
     "ai-understand-image": "media_analyze",
     "ai-image-generation": "image_generate",
     "ai-video-generation": "video_generate",
@@ -121,6 +123,7 @@ export function settingsSubAreaGroups(t: ReturnType<typeof useI18n>["t"]): Setti
       icon: <BrainCircuit size={16} />,
       items: [
         { id: "ai-web-search", label: t("settings.aiWebSearch"), icon: <Search size={16} />, description: t("settings.aiWebSearch.description") },
+        { id: "ai-web-extract", label: t("settings.aiWebExtract"), icon: <FileSearch size={16} />, description: t("settings.aiWebExtract.description") },
         { id: "ai-understand-image", label: t("settings.aiUnderstandImage"), icon: <Image size={16} />, description: t("settings.aiUnderstandImage.description") },
         { id: "ai-image-generation", label: t("settings.aiImageGeneration"), icon: <Image size={16} />, description: t("settings.aiImageGeneration.description") },
         { id: "ai-video-generation", label: t("settings.aiVideoGeneration"), icon: <Video size={16} />, description: t("settings.aiVideoGeneration.description") },

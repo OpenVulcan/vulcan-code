@@ -7,6 +7,7 @@ use crate::{
     ProviderKind, RequestProjectorKind, ServiceEntry, ServiceEntryKind,
 };
 use std::collections::BTreeMap;
+use vulcan_ai_contract::InferenceUsageScope;
 use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_PROFILE_ID, CLAUDE_CODE_MESSAGES_PROFILE_ID,
     GEMINI_GENERATE_CONTENT_PROFILE_ID, GEMINI_INTERACTIONS_PROFILE_ID,
@@ -206,6 +207,16 @@ pub fn alibaba_descriptor() -> ProviderDescriptor {
         display_name: String::from("Alibaba Cloud Model Studio"),
         kind: ProviderKind::System,
         service_entries: vec![
+            alibaba_coding_plan_entry(
+                "coding-plan-cn",
+                "Coding Plan China",
+                "https://coding.dashscope.aliyuncs.com",
+            ),
+            alibaba_coding_plan_entry(
+                "coding-plan-global",
+                "Coding Plan International",
+                "https://coding-intl.dashscope.aliyuncs.com",
+            ),
             alibaba_token_plan_entry(
                 "token-plan-personal-cn",
                 "Token Plan Personal China",
@@ -289,7 +300,7 @@ pub fn tavily_descriptor() -> ProviderDescriptor {
         kind: ProviderKind::System,
         service_entries: vec![ServiceEntry {
             id: String::from("public-api"),
-            display_name: String::from("Tavily API"),
+            display_name: String::from("Tavily Search API"),
             kind: ServiceEntryKind::ProviderTools,
             base_url: String::from("https://api.tavily.com"),
             credential_profiles: vec![token_profile(
@@ -304,6 +315,7 @@ pub fn tavily_descriptor() -> ProviderDescriptor {
             model_discovery: ModelDiscoveryKind::ProviderToolsOnly,
             request_projector: RequestProjectorKind::Direct,
             protocol_routes: Vec::new(),
+            allowed_usage_scopes: all_usage_scopes(),
         }],
     }
 }
@@ -515,6 +527,54 @@ pub fn google_descriptor() -> ProviderDescriptor {
     }
 }
 
+/// Creates one Alibaba Coding Plan entry with the verified Chat route and static catalog.
+/// 创建一个带已验证 Chat 路由与静态目录的阿里云 Coding Plan 入口。
+///
+/// # Parameters
+/// 参数
+/// `id`, `display_name`, and `base_url` identify one exact regional subscription product.
+/// `id`、`display_name` 与 `base_url` 标识一个精确区域订阅产品。
+///
+/// # Returns
+/// 返回值
+/// An interactive-only Coding Plan service entry.
+/// 返回仅允许交互使用的 Coding Plan 服务入口。
+fn alibaba_coding_plan_entry(id: &str, display_name: &str, base_url: &str) -> ServiceEntry {
+    let allowed_usage_scopes = [InferenceUsageScope::InteractiveAgent]
+        .into_iter()
+        .collect();
+    let anthropic_base_url = format!("{}/apps/anthropic", base_url.trim_end_matches('/'));
+    ServiceEntry {
+        id: id.to_string(),
+        display_name: display_name.to_string(),
+        kind: ServiceEntryKind::Conversation,
+        base_url: base_url.to_string(),
+        credential_profiles: vec![token_profile(
+            "coding-plan-api-key",
+            "Coding Plan API Key",
+            CredentialBillingKind::TokenPlan,
+            AccountUsageQueryKind::Unsupported,
+            Some("sk-sp-"),
+        )],
+        authentication: AuthenticationProjection::BearerAuthorization,
+        request_headers: BTreeMap::new(),
+        model_discovery: ModelDiscoveryKind::AlibabaCodingPlanStatic,
+        request_projector: RequestProjectorKind::Alibaba,
+        protocol_routes: vec![
+            protocol_route(OPENAI_CHAT_PROFILE_ID, "/v1/chat/completions"),
+            protocol_route_with_overrides(
+                ANTHROPIC_MESSAGES_PROFILE_ID,
+                "/v1/messages",
+                Some(anthropic_base_url.as_str()),
+                Some(AuthenticationProjection::XApiKey),
+                [("anthropic-version", "2023-06-01")],
+                Some(base_url),
+            ),
+        ],
+        allowed_usage_scopes,
+    }
+}
+
 /// Creates one Alibaba Token Plan entry with independently rooted protocol routes.
 /// 创建一个具有独立协议根地址的阿里云 Token Plan 入口。
 ///
@@ -540,14 +600,15 @@ fn alibaba_token_plan_entry(id: &str, display_name: &str, origin: &str) -> Servi
             "Token Plan API Key",
             CredentialBillingKind::TokenPlan,
             AccountUsageQueryKind::Unsupported,
-            Some("sk-"),
+            Some("sk-sp-"),
         )],
         authentication: AuthenticationProjection::BearerAuthorization,
         request_headers: BTreeMap::new(),
-        model_discovery: ModelDiscoveryKind::OpenAi,
+        model_discovery: ModelDiscoveryKind::AlibabaTokenPlanStatic,
         request_projector: RequestProjectorKind::Alibaba,
         protocol_routes: vec![
             protocol_route(OPENAI_CHAT_PROFILE_ID, "/chat/completions"),
+            protocol_route(OPENAI_RESPONSES_PROFILE_ID, "/responses"),
             protocol_route_with_overrides(
                 ANTHROPIC_MESSAGES_PROFILE_ID,
                 "/v1/messages",
@@ -557,6 +618,9 @@ fn alibaba_token_plan_entry(id: &str, display_name: &str, origin: &str) -> Servi
                 Some(openai_base_url.as_str()),
             ),
         ],
+        allowed_usage_scopes: [InferenceUsageScope::InteractiveAgent]
+            .into_iter()
+            .collect(),
     }
 }
 
@@ -589,7 +653,7 @@ fn alibaba_model_studio_entry(id: &str, display_name: &str, origin: &str) -> Ser
         )],
         authentication: AuthenticationProjection::BearerAuthorization,
         request_headers: BTreeMap::new(),
-        model_discovery: ModelDiscoveryKind::OpenAi,
+        model_discovery: ModelDiscoveryKind::AlibabaModelStudioStatic,
         request_projector: RequestProjectorKind::Alibaba,
         protocol_routes: vec![
             protocol_route(OPENAI_CHAT_PROFILE_ID, "/chat/completions"),
@@ -602,6 +666,7 @@ fn alibaba_model_studio_entry(id: &str, display_name: &str, origin: &str) -> Ser
                 Some(openai_base_url.as_str()),
             ),
         ],
+        allowed_usage_scopes: all_usage_scopes(),
     }
 }
 
@@ -672,6 +737,7 @@ fn token_profile(
         account_usage_query,
         authentication: None,
         key_prefix: key_prefix.map(str::to_string),
+        allowed_usage_scopes: usage_scopes_for_billing(billing_kind),
     }
 }
 
@@ -704,7 +770,51 @@ fn oauth_profile(
         account_usage_query,
         authentication,
         key_prefix: None,
+        allowed_usage_scopes: [InferenceUsageScope::InteractiveAgent]
+            .into_iter()
+            .collect(),
     }
+}
+
+/// Resolves product-level usage scopes from explicit billing semantics.
+/// 根据显式计费语义解析产品级使用场景。
+///
+/// # Parameters
+/// 参数
+/// `billing_kind` is the exact billing contract declared by the credential profile.
+/// `billing_kind` 是凭据配置档声明的精确计费契约。
+///
+/// # Returns
+/// 返回值
+/// Subscription plans are interactive-only, while metered API credentials permit every scope.
+/// 订阅套餐仅允许交互使用，按量 API 凭据允许全部场景。
+fn usage_scopes_for_billing(
+    billing_kind: CredentialBillingKind,
+) -> std::collections::BTreeSet<InferenceUsageScope> {
+    if billing_kind == CredentialBillingKind::TokenPlan {
+        [InferenceUsageScope::InteractiveAgent]
+            .into_iter()
+            .collect()
+    } else {
+        all_usage_scopes()
+    }
+}
+
+/// Returns every supported inference usage scope.
+/// 返回全部受支持的推理使用场景。
+///
+/// # Returns
+/// 返回值
+/// The complete closed usage-scope set.
+/// 完整的封闭使用场景集合。
+fn all_usage_scopes() -> std::collections::BTreeSet<InferenceUsageScope> {
+    [
+        InferenceUsageScope::InteractiveAgent,
+        InferenceUsageScope::InternalBackground,
+        InferenceUsageScope::ExternalService,
+    ]
+    .into_iter()
+    .collect()
 }
 
 /// Carries one complete declarative provider service-entry specification.
@@ -755,6 +865,11 @@ fn service_entry<const H: usize, P>(spec: ServiceEntrySpec<H, P>) -> ServiceEntr
 where
     P: IntoIterator<Item = ProtocolRoute>,
 {
+    let allowed_usage_scopes = spec
+        .credential_profiles
+        .iter()
+        .flat_map(|profile| profile.allowed_usage_scopes.iter().copied())
+        .collect();
     ServiceEntry {
         id: spec.id.to_string(),
         display_name: spec.display_name.to_string(),
@@ -769,6 +884,7 @@ where
         model_discovery: spec.model_discovery,
         request_projector: spec.request_projector,
         protocol_routes: spec.protocol_routes.into_iter().collect(),
+        allowed_usage_scopes,
     }
 }
 
@@ -885,10 +1001,13 @@ fn minimax_protocol_routes() -> [ProtocolRoute; 2] {
 
 #[cfg(test)]
 mod tests {
-    use super::{kimi_descriptor, minimax_descriptor};
+    use super::{
+        ANTHROPIC_MESSAGES_PROFILE_ID, alibaba_descriptor, kimi_descriptor, minimax_descriptor,
+    };
     use crate::{
         AccountUsageQueryKind, AuthenticationProjection, CredentialMode, OAuthProviderKind,
     };
+    use vulcan_ai_contract::InferenceUsageScope;
 
     /// Verifies MiniMax regions own shared credential profiles instead of duplicated product entries.
     /// 验证 MiniMax 区域持有共享凭据配置档而不是重复产品入口。
@@ -977,5 +1096,76 @@ mod tests {
             login.account_usage_query,
             AccountUsageQueryKind::KimiCodingPlan
         );
+    }
+
+    /// Verifies Alibaba exposes seven distinct product and regional service entries.
+    /// 验证阿里云暴露七个相互独立的产品与区域服务入口。
+    #[test]
+    fn alibaba_descriptor_preserves_complete_product_matrix() {
+        let descriptor = alibaba_descriptor();
+        assert_eq!(
+            descriptor
+                .service_entries
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "coding-plan-cn",
+                "coding-plan-global",
+                "token-plan-personal-cn",
+                "token-plan-team-cn",
+                "token-plan-team-global",
+                "model-studio-cn",
+                "model-studio-singapore",
+            ]
+        );
+        for entry in descriptor.service_entries.iter().take(5) {
+            assert_eq!(
+                entry.allowed_usage_scopes,
+                [InferenceUsageScope::InteractiveAgent]
+                    .into_iter()
+                    .collect()
+            );
+        }
+        for entry in descriptor.service_entries.iter().take(2) {
+            assert_eq!(entry.protocol_routes.len(), 2);
+            let anthropic = entry
+                .protocol_routes
+                .iter()
+                .find(|route| route.protocol_profile_id == ANTHROPIC_MESSAGES_PROFILE_ID)
+                .expect("Coding Plan Anthropic route");
+            assert_eq!(anthropic.endpoint_path.as_deref(), Some("/v1/messages"));
+            assert_eq!(
+                anthropic.authentication,
+                Some(AuthenticationProjection::XApiKey)
+            );
+        }
+        for entry in descriptor.service_entries.iter().skip(2).take(3) {
+            assert_eq!(
+                entry
+                    .credential_profile("token-plan-api-key")
+                    .expect("Token Plan API key")
+                    .key_prefix
+                    .as_deref(),
+                Some("sk-sp-")
+            );
+        }
+        for entry in descriptor.service_entries.iter().skip(5) {
+            assert!(
+                entry
+                    .allowed_usage_scopes
+                    .contains(&InferenceUsageScope::InteractiveAgent)
+            );
+            assert!(
+                entry
+                    .allowed_usage_scopes
+                    .contains(&InferenceUsageScope::InternalBackground)
+            );
+            assert!(
+                entry
+                    .allowed_usage_scopes
+                    .contains(&InferenceUsageScope::ExternalService)
+            );
+        }
     }
 }

@@ -36,6 +36,10 @@ messages:
   owner.subagent: Subagent
   owner.context_compaction: Context compaction
   owner.git_commit_summary: Git commit summary
+  owner.internal_llm: Internal LLM
+  owner.internal_embedding: Internal embedding
+  owner.internal_rerank: Internal rerank
+  owner.internal_multimodal: Internal multimodal
   metric.total_tokens: Token usage
   metric.input_tokens: Input tokens
   metric.output_tokens: Output tokens

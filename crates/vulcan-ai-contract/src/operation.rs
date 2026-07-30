@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// Identifies one provider-neutral AI operation.
 /// 标识一个供应商无关的 AI 操作。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AiOperation {
     /// Produces one conversational model response.
@@ -68,4 +68,38 @@ pub enum AiOperation {
     /// Extracts structured content.
     /// 抽取结构化内容。
     WebExtract,
+}
+
+impl AiOperation {
+    /// Returns the exact stable operation label used by configuration keys and diagnostics.
+    /// 返回配置键与诊断使用的精确稳定操作标签。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The provider-neutral snake-case operation label.
+    /// 返回供应商无关的蛇形命名操作标签。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ConversationRespond => "conversation_respond",
+            Self::ImageUnderstand => "image_understand",
+            Self::ImageGenerate => "image_generate",
+            Self::ImageEdit => "image_edit",
+            Self::VideoUnderstand => "video_understand",
+            Self::VideoGenerate => "video_generate",
+            Self::VideoEdit => "video_edit",
+            Self::VideoExtend => "video_extend",
+            Self::AudioUnderstand => "audio_understand",
+            Self::SpeechSynthesize => "speech_synthesize",
+            Self::SpeechTranscribe => "speech_transcribe",
+            Self::VoiceClone => "voice_clone",
+            Self::VoiceDesign => "voice_design",
+            Self::MusicGenerate => "music_generate",
+            Self::MusicCover => "music_cover",
+            Self::LyricsGenerate => "lyrics_generate",
+            Self::EmbeddingCreate => "embedding_create",
+            Self::RerankDocuments => "rerank_documents",
+            Self::WebSearch => "web_search",
+            Self::WebExtract => "web_extract",
+        }
+    }
 }

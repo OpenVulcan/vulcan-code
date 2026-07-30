@@ -29,7 +29,12 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_select_public_ai_model",
     "service_save_public_ai_model_overrides",
     "service_save_public_ai_model_enabled",
+    "service_save_public_ai_internal_model_enabled",
+    "service_save_public_ai_internal_model_overrides",
+    "service_save_public_ai_inference_route",
+    "service_test_public_ai_inference_route",
     "service_save_public_ai_provider_tool_selection",
+    "service_test_public_ai_provider_tool",
     "service_save_public_ai_provider_tool_target_enabled",
     "service_public_ai_session_provider_tool_selections",
     "service_save_public_ai_session_provider_tool_selections",
@@ -199,6 +204,34 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
+        "service_save_public_ai_internal_model_enabled" => rpc_json_result(
+            service_save_public_ai_internal_model_enabled(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_save_public_ai_internal_model_overrides" => rpc_json_result(
+            service_save_public_ai_internal_model_overrides(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_save_public_ai_inference_route" => rpc_json_result(
+            service_save_public_ai_inference_route(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_test_public_ai_inference_route" => rpc_json_result(
+            service_test_public_ai_inference_route(state, rpc_required_param(params, "request")?)
+                .await,
+        ),
         "service_save_public_ai_provider_tool_selection" => rpc_json_result(
             service_save_public_ai_provider_tool_selection(
                 app,
@@ -206,6 +239,10 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "request")?,
             )
             .await,
+        ),
+        "service_test_public_ai_provider_tool" => rpc_json_result(
+            service_test_public_ai_provider_tool(state, rpc_required_param(params, "request")?)
+                .await,
         ),
         "service_save_public_ai_provider_tool_target_enabled" => rpc_json_result(
             service_save_public_ai_provider_tool_target_enabled(

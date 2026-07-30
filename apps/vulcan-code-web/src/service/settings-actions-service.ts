@@ -4,7 +4,12 @@ import type {
   PublicAiConnectionUpdateRequest,
   PublicAiCustomProviderSaveRequest,
   PublicAiModelOverrides,
+  PublicAiInferenceRoute,
+  PublicAiInferenceTestResult,
+  PublicAiInternalModelOverrides,
+  PublicAiOperation,
   PublicAiProviderToolCapabilityKind,
+  PublicAiProviderToolTestResult,
   PublicAiProviderToolTargetSelection,
   PublicAiOAuthChallenge,
   PublicAiOAuthCommitRequest,
@@ -174,6 +179,60 @@ export async function savePublicAiModelEnabled(request: {
   );
 }
 
+// savePublicAiInternalModelEnabled persists one operation-scoped internal model switch.
+// savePublicAiInternalModelEnabled 持久化一个操作作用域内部模型开关。
+export async function savePublicAiInternalModelEnabled(request: {
+  providerId: string;
+  modelId: string;
+  operation: PublicAiOperation;
+  enabled: boolean;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_internal_model_enabled",
+    { request },
+  );
+}
+
+// savePublicAiInternalModelOverrides replaces one operation-scoped internal default set.
+// savePublicAiInternalModelOverrides 替换一组操作作用域内部默认值。
+export async function savePublicAiInternalModelOverrides(request: {
+  providerId: string;
+  modelId: string;
+  operation: PublicAiOperation;
+  overrides: PublicAiInternalModelOverrides;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_internal_model_overrides",
+    { request },
+  );
+}
+
+// savePublicAiInferenceRoute replaces one exact consumer-profile inference route.
+// savePublicAiInferenceRoute 替换一条精确消费者配置档推理路由。
+export async function savePublicAiInferenceRoute(request: {
+  consumerProfileId: string;
+  purposeId?: string;
+  operation: PublicAiOperation;
+  route: PublicAiInferenceRoute | null;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_inference_route",
+    { request },
+  );
+}
+
+// testPublicAiInferenceRoute executes one real embedding or rerank request through its saved route.
+// testPublicAiInferenceRoute 通过已保存路由执行一次真实向量或重排请求。
+export async function testPublicAiInferenceRoute(request: {
+  consumerProfileId: string;
+  operation: "embedding_create" | "rerank_documents";
+}): Promise<PublicAiInferenceTestResult> {
+  return serviceClient.request<PublicAiInferenceTestResult>(
+    "service_test_public_ai_inference_route",
+    { request },
+  );
+}
+
 // savePublicAiProviderToolSelection replaces the sole target for one semantic capability.
 // savePublicAiProviderToolSelection 替换一项语义能力唯一的目标。
 export async function savePublicAiProviderToolSelection(request: {
@@ -182,6 +241,25 @@ export async function savePublicAiProviderToolSelection(request: {
 }): Promise<PublicAiSettingsSnapshot> {
   return serviceClient.request<PublicAiSettingsSnapshot>(
     "service_save_public_ai_provider_tool_selection",
+    { request },
+  );
+}
+
+// testPublicAiProviderTool executes one exact settings-row diagnostic without changing defaults.
+// testPublicAiProviderTool 在不修改默认项的情况下执行一个精确设置行诊断。
+export async function testPublicAiProviderTool(request: {
+  // capability selects the closed search or extraction diagnostic.
+  // capability 选择封闭的搜索或网页抓取诊断。
+  capability: PublicAiProviderToolCapabilityKind;
+  // selection freezes the exact credential connection and provider target.
+  // selection 固定精确凭据连接与供应商目标。
+  selection: PublicAiProviderToolTargetSelection;
+  // arguments follow the selected target's declared provider-native schema.
+  // arguments 遵循所选目标声明的供应商原生 Schema。
+  arguments: Record<string, unknown>;
+}): Promise<PublicAiProviderToolTestResult> {
+  return serviceClient.request<PublicAiProviderToolTestResult>(
+    "service_test_public_ai_provider_tool",
     { request },
   );
 }

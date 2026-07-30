@@ -7,7 +7,8 @@ use crate::{
     ServiceEntry,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use vulcan_ai_contract::InferenceUsageScope;
 use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
@@ -155,12 +156,22 @@ impl CustomProviderDefinition {
                     account_usage_query: AccountUsageQueryKind::Unsupported,
                     authentication: None,
                     key_prefix: None,
+                    allowed_usage_scopes: BTreeSet::from([
+                        InferenceUsageScope::InteractiveAgent,
+                        InferenceUsageScope::InternalBackground,
+                        InferenceUsageScope::ExternalService,
+                    ]),
                 }],
                 authentication: self.authentication.projection(),
                 request_headers: BTreeMap::new(),
                 model_discovery,
                 request_projector: crate::RequestProjectorKind::Direct,
                 protocol_routes,
+                allowed_usage_scopes: BTreeSet::from([
+                    InferenceUsageScope::InteractiveAgent,
+                    InferenceUsageScope::InternalBackground,
+                    InferenceUsageScope::ExternalService,
+                ]),
             }],
         })
     }

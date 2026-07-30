@@ -646,11 +646,48 @@ fn run_service_bootstrap(
     public_ai_runtime
         .replace_configuration(public_ai_configuration.clone())
         .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
+    public_ai_runtime
+        .configure_provider_task_recovery(
+            &vulcan_workspace_store::data_plane::application_data_root()
+                .join("provider-task-recovery"),
+        )
+        .map_err(|error| {
+            ServiceBootstrapError::new(
+                "workspace",
+                "Workspace",
+                format!("供应商异步任务恢复状态加载失败：{error}"),
+            )
+        })?;
     refresh_public_ai_catalogs_at_startup(
         public_ai_runtime.as_ref(),
         &public_ai_configuration,
         &mut logs,
     )?;
+    // providerTaskRecoveryRuntime resumes only confirmed task identifiers and never replays
+    // interrupted dispatch intents.
+    // providerTaskRecoveryRuntime 仅恢复已确认任务标识，绝不重放中断的分派意图。
+    let provider_task_recovery_runtime = Arc::clone(&public_ai_runtime);
+    runtime.spawn(async move {
+        loop {
+            let configuration = match provider_task_recovery_runtime.configuration_snapshot() {
+                Ok(configuration) => configuration,
+                Err(error) => {
+                    eprintln!(
+                        "[webui-service] provider task recovery skipped because configuration is unavailable: {error}"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                    continue;
+                }
+            };
+            if let Err(error) = provider_task_recovery_runtime
+                .recover_provider_tasks(&configuration)
+                .await
+            {
+                eprintln!("[webui-service] provider task recovery observation failed: {error}");
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+        }
+    });
     // usageRefreshRuntime owns the memory-only allowance cache and observes interval changes.
     // usageRefreshRuntime 持有仅内存用量缓存并观测刷新间隔变更。
     let usage_refresh_runtime = Arc::clone(&public_ai_runtime);
@@ -678,9 +715,19 @@ fn run_service_bootstrap(
             .await;
         }
     });
+    // configuredInferenceService shares the authoritative runtime while owning isolated execution state.
+    // configuredInferenceService 共享权威运行时，同时拥有隔离的执行状态。
+    let configured_inference_service = Arc::new(
+        crate::configured_inference::ConfiguredInferenceService::new(Arc::clone(
+            &public_ai_runtime,
+        ))
+        .with_retry_configuration(&provider_configuration.retry)
+        .with_plugin_telemetry(vulcan_plugin_runtime.clone()),
+    );
     let agent_runtime = AgentRuntimeBridge {
         provider_configuration: provider_configuration.clone(),
         public_ai_runtime,
+        configured_inference_service,
         provider_id_override: None,
         model_id_override: None,
         agent_profile_catalog,

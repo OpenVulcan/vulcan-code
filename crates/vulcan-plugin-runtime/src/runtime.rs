@@ -8293,7 +8293,7 @@ return M
             .expect("resolve usage statistics completed Hook");
         // completedPayload contains every host-owned field required by schema version one.
         // completedPayload 包含 Schema 版本一要求的全部宿主持有字段。
-        let completed_payload = json!({
+        let mut completed_payload = json!({
             "schema_version": 1,
             "request_id": "request-1",
             "execution_id": "execution-1",
@@ -8305,6 +8305,12 @@ return M
             "owner_name": "Main Agent",
             "provider_key": "provider-1",
             "provider_name": "Provider One",
+            "service_entry_id": "entry-1",
+            "connection_id": "connection-1",
+            "protocol_profile_id": "openai-chat",
+            "secondary_route_id": "route-1",
+            "secondary_provider_name": "Secondary Provider",
+            "secondary_endpoint_name": "Secondary Endpoint",
             "model_key": "model-1",
             "model_name": "Model One",
             "attempt_index": 0,
@@ -8330,6 +8336,25 @@ return M
             "calendar_date": "2026-07-14",
             "timezone_offset_minutes": 480
         });
+        let completed_object = completed_payload
+            .as_object_mut()
+            .expect("completed Provider telemetry payload must be an object");
+        completed_object.insert(
+            String::from("operation"),
+            Value::String(String::from("embedding_create")),
+        );
+        completed_object.insert(
+            String::from("capability_revision"),
+            Value::String(String::from("capability-1")),
+        );
+        completed_object.insert(
+            String::from("catalog_revision"),
+            Value::String(String::from("catalog-1")),
+        );
+        completed_object.insert(String::from("input_item_count"), Value::from(2));
+        completed_object.insert(String::from("output_item_count"), Value::from(2));
+        completed_object.insert(String::from("vector_dimensions"), Value::from(1024));
+        completed_object.insert(String::from("cost"), Value::String(String::from("0.0004")));
         // completedInvocation uses the exact runtime context expected by a session-scoped effect Hook.
         // completedInvocation 使用会话作用域 Effect Hook 期望的精确运行时上下文。
         let completed_invocation = HookInvocation {
@@ -8537,14 +8562,14 @@ return M
             fact_insert.payload["sql"]
                 .as_str()
                 .expect("request fact insert SQL text")
-                .contains("?31")
+                .contains("?43")
         );
         assert_eq!(
             fact_insert.payload["params"]
                 .as_array()
                 .expect("request fact insert parameters")
                 .len(),
-            31
+            43
         );
         // summaryQuery must retain only the date-range parameter after recent-get appends its limit.
         // summaryQuery 在 recent-get 追加 limit 后仍必须只保留日期范围参数。

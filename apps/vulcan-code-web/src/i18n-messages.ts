@@ -553,6 +553,8 @@ export type TranslationKey =
   | "composer.accountCard.reset"
   | "composer.accountCard.notIncluded"
   | "composer.accountCard.unlimited"
+  | "composer.accountCard.tavilyPlanQuota"
+  | "composer.accountCard.used"
   | "composer.accountCard.general"
   | "composer.accountCard.video"
   | "composer.accountCard.billingTokenPlan"
@@ -1285,6 +1287,7 @@ export type TranslationKey =
   | "settings.providerRetry"
   | "settings.aiVendors"
   | "settings.aiWebSearch"
+  | "settings.aiWebExtract"
   | "settings.aiUnderstandImage"
   | "settings.aiUnderstandVideo"
   | "settings.aiUnderstandAudio"
@@ -1305,6 +1308,7 @@ export type TranslationKey =
   | "settings.providerRetry.description"
   | "settings.aiVendors.description"
   | "settings.aiWebSearch.description"
+  | "settings.aiWebExtract.description"
   | "settings.aiUnderstandImage.description"
   | "settings.aiUnderstandVideo.description"
   | "settings.aiUnderstandAudio.description"
@@ -1355,6 +1359,60 @@ export type TranslationKey =
   | "settings.models.enabled"
   | "settings.models.disabled"
   | "settings.models.toggle"
+  | "settings.models.loadingCatalog"
+  | "settings.models.provider"
+  | "settings.models.liveModels"
+  | "settings.models.noProviderSelected"
+  | "settings.models.catalogSummary"
+  | "settings.models.memoryOnly"
+  | "settings.models.emptyCatalog"
+  | "settings.models.availableAccounts"
+  | "settings.models.additionalConditions"
+  | "settings.inference.title"
+  | "settings.inference.subtitle"
+  | "settings.inference.vmmReasoningNotice"
+  | "settings.inference.profileVmm"
+  | "settings.inference.llm"
+  | "settings.inference.embedding"
+  | "settings.inference.rerank"
+  | "settings.inference.noRoute"
+  | "settings.inference.modelRegion"
+  | "settings.inference.accountRegion"
+  | "settings.inference.selectModel"
+  | "settings.inference.selectAccount"
+  | "settings.inference.selectModelFirst"
+  | "settings.inference.accountFilter"
+  | "settings.inference.noAccountMatches"
+  | "settings.inference.unavailable"
+  | "settings.inference.unavailableReason"
+  | "settings.inference.testConnection"
+  | "settings.inference.testEmbeddingSuccess"
+  | "settings.inference.testRerankSuccess"
+  | "settings.inference.credentialAvailable"
+  | "settings.inference.catalogGeneration"
+  | "settings.inference.capabilityRevision"
+  | "settings.inference.scopeInteractive"
+  | "settings.inference.scopeBackground"
+  | "settings.inference.scopeExternal"
+  | "settings.inference.internalToggle"
+  | "settings.inference.configureDefaults"
+  | "settings.inference.overridesTitle"
+  | "settings.inference.overridesDescription"
+  | "settings.inference.inheritModelDefault"
+  | "settings.inference.reasoningEffort"
+  | "settings.inference.embeddingTask"
+  | "settings.inference.embeddingDimensions"
+  | "settings.inference.embeddingOutputKind"
+  | "settings.inference.embeddingEncoding"
+  | "settings.inference.rerankTopN"
+  | "settings.inference.rerankTruncation"
+  | "settings.inference.rerankReturnContent"
+  | "settings.inference.purpose.precheckL1"
+  | "settings.inference.purpose.precheckL2"
+  | "settings.inference.purpose.postactionL1"
+  | "settings.inference.purpose.postactionL2"
+  | "settings.inference.purpose.profileInstruction"
+  | "settings.inference.purpose.reserve"
   | "settings.providerTools.title"
   | "settings.providerTools.description"
   | "settings.providerTools.select"
@@ -1365,6 +1423,7 @@ export type TranslationKey =
   | "settings.providerTools.musicGenerate"
   | "settings.providerTools.speechSynthesize"
   | "settings.providerTools.videoGenerate"
+  | "settings.providerTools.videoEdit"
   | "settings.providerTools.webSearch"
   | "settings.providerTools.webExtract"
   | "settings.providerTools.loading"
@@ -1382,6 +1441,37 @@ export type TranslationKey =
   | "settings.providerTools.disable"
   | "settings.providerTools.cancel"
   | "settings.providerTools.save"
+  | "settings.providerTools.test"
+  | "settings.providerTools.testSearchTitle"
+  | "settings.providerTools.testExtractTitle"
+  | "settings.providerTools.testSearchDescription"
+  | "settings.providerTools.testExtractDescription"
+  | "settings.providerTools.testQuery"
+  | "settings.providerTools.testQueryPlaceholder"
+  | "settings.providerTools.testMaxResults"
+  | "settings.providerTools.testIncludeDomains"
+  | "settings.providerTools.testExcludeDomains"
+  | "settings.providerTools.testDomainsPlaceholder"
+  | "settings.providerTools.testUrls"
+  | "settings.providerTools.testUrlsPlaceholder"
+  | "settings.providerTools.testExtractQuery"
+  | "settings.providerTools.testChunksPerSource"
+  | "settings.providerTools.testDepth"
+  | "settings.providerTools.testDepthBasic"
+  | "settings.providerTools.testDepthAdvanced"
+  | "settings.providerTools.testFormat"
+  | "settings.providerTools.testFormatMarkdown"
+  | "settings.providerTools.testFormatText"
+  | "settings.providerTools.testTimeoutSeconds"
+  | "settings.providerTools.testIncludeImages"
+  | "settings.providerTools.testIncludeFavicon"
+  | "settings.providerTools.testConsumesQuota"
+  | "settings.providerTools.testRunning"
+  | "settings.providerTools.testResults"
+  | "settings.providerTools.testNoResults"
+  | "settings.providerTools.testSucceeded"
+  | "settings.providerTools.testFailed"
+  | "settings.providerTools.testProviderRequestId"
   | "toolPresentation.providerText.title"
   | "toolPresentation.providerText.empty"
   | "toolPresentation.providerSearch.title"
@@ -2157,6 +2247,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.accountCard.reset": "重置",
     "composer.accountCard.notIncluded": "不包含",
     "composer.accountCard.unlimited": "无限",
+    "composer.accountCard.tavilyPlanQuota": "套餐",
+    "composer.accountCard.used": "已用",
     "composer.accountCard.general": "通用",
     "composer.accountCard.video": "视频",
     "composer.accountCard.billingTokenPlan": "套餐",
@@ -2889,6 +2981,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerRetry": "请求重试",
     "settings.aiVendors": "能力供应商",
     "settings.aiWebSearch": "网页搜索",
+    "settings.aiWebExtract": "网页抓取",
     "settings.aiUnderstandImage": "图片理解",
     "settings.aiUnderstandVideo": "视频理解",
     "settings.aiUnderstandAudio": "音频理解",
@@ -2909,6 +3002,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerRetry.description": "配置普通错误与 429 限流的重试次数、等待间隔和递增规则。",
     "settings.aiVendors.description": "多个语义 AI 工具共用的能力供应商与路由目标。",
     "settings.aiWebSearch.description": "网页搜索能力的启用状态与可用目标。",
+    "settings.aiWebExtract.description": "网页抓取能力的启用状态与可用目标。",
     "settings.aiUnderstandImage.description": "图片理解能力的启用状态与可用目标。",
     "settings.aiUnderstandVideo.description": "视频理解能力入口与接入状态。",
     "settings.aiUnderstandAudio.description": "音频理解能力入口与接入状态。",
@@ -2959,6 +3053,60 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.models.enabled": "已启用",
     "settings.models.disabled": "已关闭",
     "settings.models.toggle": "切换模型启用状态",
+    "settings.models.loadingCatalog": "正在读取实时模型目录…",
+    "settings.models.provider": "供应商",
+    "settings.models.liveModels": "实时模型",
+    "settings.models.noProviderSelected": "未选择供应商",
+    "settings.models.catalogSummary": "{provider} · 总计 {count}",
+    "settings.models.memoryOnly": "仅保存在内存；启动和手动同步后更新",
+    "settings.models.emptyCatalog": "当前没有已同步的模型。请先在“模型供应商”中添加账号并同步。",
+    "settings.models.availableAccounts": "{model} · {count} 个可用账号",
+    "settings.models.additionalConditions": "{protocol} · 附加条件",
+    "settings.inference.title": "内部推理",
+    "settings.inference.subtitle": "为 VMM 等内部消费者选择精确模型、协议和凭据，不跟随当前会话模型。",
+    "settings.inference.vmmReasoningNotice": "为保证记忆处理效率，VMM 的全部 LLM 请求都会强制关闭思考；模型列表仅显示明确支持关闭思考的模型。",
+    "settings.inference.profileVmm": "VMM 配置档",
+    "settings.inference.llm": "受限 LLM",
+    "settings.inference.embedding": "向量",
+    "settings.inference.rerank": "重排",
+    "settings.inference.noRoute": "未配置",
+    "settings.inference.modelRegion": "模型",
+    "settings.inference.accountRegion": "账号",
+    "settings.inference.selectModel": "选择模型",
+    "settings.inference.selectAccount": "选择账号",
+    "settings.inference.selectModelFirst": "请先选择模型",
+    "settings.inference.accountFilter": "输入账号、服务入口或协议过滤",
+    "settings.inference.noAccountMatches": "当前模型没有匹配账号。",
+    "settings.inference.unavailable": "当前不可用",
+    "settings.inference.unavailableReason": "当前路由不可执行：{reason}",
+    "settings.inference.testConnection": "执行真实连接测试",
+    "settings.inference.testEmbeddingSuccess": "测试通过：{count} 项 · {dimensions} 维 · {duration} 毫秒",
+    "settings.inference.testRerankSuccess": "测试通过：{count} 项排序结果 · {duration} 毫秒",
+    "settings.inference.credentialAvailable": "凭据可用",
+    "settings.inference.catalogGeneration": "目录代次 {generation}",
+    "settings.inference.capabilityRevision": "能力修订 {revision}",
+    "settings.inference.scopeInteractive": "交互式智能体",
+    "settings.inference.scopeBackground": "内部后台",
+    "settings.inference.scopeExternal": "外部服务",
+    "settings.inference.internalToggle": "切换内部推理能力",
+    "settings.inference.configureDefaults": "配置内部默认参数",
+    "settings.inference.overridesTitle": "内部推理默认参数",
+    "settings.inference.overridesDescription": "这些设置属于供应商模型和操作，不绑定具体账号；保存时会校验全部精确可用路由。",
+    "settings.inference.inheritModelDefault": "使用模型默认值",
+    "settings.inference.reasoningEffort": "思考档位",
+    "settings.inference.embeddingTask": "向量任务",
+    "settings.inference.embeddingDimensions": "向量维度",
+    "settings.inference.embeddingOutputKind": "向量输出类型",
+    "settings.inference.embeddingEncoding": "向量编码",
+    "settings.inference.rerankTopN": "默认返回数量",
+    "settings.inference.rerankTruncation": "截断策略",
+    "settings.inference.rerankReturnContent": "返回候选正文",
+    "settings.inference.purpose.precheckL1": "预检 L1",
+    "settings.inference.purpose.precheckL2": "预检 L2",
+    "settings.inference.purpose.postactionL1": "后处理 L1",
+    "settings.inference.purpose.postactionL2": "后处理 L2",
+    "settings.inference.purpose.profileInstruction": "画像指令",
+    "settings.inference.purpose.reserve": "预留路由",
     "settings.providerTools.title": "AI 扩展能力",
     "settings.providerTools.description": "每项能力只能选择一个实际模型；AI 将收到该模型的原生参数 Schema。",
     "settings.providerTools.select": "选择模型",
@@ -2969,8 +3117,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerTools.musicGenerate": "音乐生成",
     "settings.providerTools.speechSynthesize": "语音合成",
     "settings.providerTools.videoGenerate": "视频生成",
+    "settings.providerTools.videoEdit": "视频编辑",
     "settings.providerTools.webSearch": "网页搜索",
-    "settings.providerTools.webExtract": "网页提取",
+    "settings.providerTools.webExtract": "网页抓取",
     "settings.providerTools.loading": "正在读取能力目标…",
     "settings.providerTools.enabled": "已启用",
     "settings.providerTools.default": "默认目标",
@@ -2986,6 +3135,37 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerTools.disable": "不启用",
     "settings.providerTools.cancel": "取消",
     "settings.providerTools.save": "保存",
+    "settings.providerTools.test": "测试",
+    "settings.providerTools.testSearchTitle": "测试网页搜索",
+    "settings.providerTools.testExtractTitle": "测试网页抓取",
+    "settings.providerTools.testSearchDescription": "使用当前凭据和目标执行一次真实搜索，不会修改默认目标。",
+    "settings.providerTools.testExtractDescription": "使用当前凭据和目标执行一次真实网页抓取，不会修改默认目标。",
+    "settings.providerTools.testQuery": "搜索内容",
+    "settings.providerTools.testQueryPlaceholder": "输入要搜索的内容",
+    "settings.providerTools.testMaxResults": "结果数量",
+    "settings.providerTools.testIncludeDomains": "仅包含域名",
+    "settings.providerTools.testExcludeDomains": "排除域名",
+    "settings.providerTools.testDomainsPlaceholder": "每行一个域名",
+    "settings.providerTools.testUrls": "网页地址",
+    "settings.providerTools.testUrlsPlaceholder": "每行一个 HTTPS 地址",
+    "settings.providerTools.testExtractQuery": "相关内容",
+    "settings.providerTools.testChunksPerSource": "每页片段数",
+    "settings.providerTools.testDepth": "抓取深度",
+    "settings.providerTools.testDepthBasic": "基础",
+    "settings.providerTools.testDepthAdvanced": "高级",
+    "settings.providerTools.testFormat": "内容格式",
+    "settings.providerTools.testFormatMarkdown": "Markdown",
+    "settings.providerTools.testFormatText": "纯文本",
+    "settings.providerTools.testTimeoutSeconds": "超时秒数",
+    "settings.providerTools.testIncludeImages": "包含图片",
+    "settings.providerTools.testIncludeFavicon": "包含站点图标",
+    "settings.providerTools.testConsumesQuota": "该操作会调用真实供应商接口并消耗账号额度。",
+    "settings.providerTools.testRunning": "测试中…",
+    "settings.providerTools.testResults": "测试结果",
+    "settings.providerTools.testNoResults": "供应商没有返回可显示结果。",
+    "settings.providerTools.testSucceeded": "成功",
+    "settings.providerTools.testFailed": "失败",
+    "settings.providerTools.testProviderRequestId": "供应商请求 ID",
     "toolPresentation.providerText.title": "AI 分析",
     "toolPresentation.providerText.empty": "供应商未返回文本结果。",
     "toolPresentation.providerSearch.title": "网页搜索",
@@ -3758,6 +3938,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.accountCard.reset": "Reset",
     "composer.accountCard.notIncluded": "Not included",
     "composer.accountCard.unlimited": "Unlimited",
+    "composer.accountCard.tavilyPlanQuota": "Plan",
+    "composer.accountCard.used": "Used",
     "composer.accountCard.general": "General",
     "composer.accountCard.video": "Video",
     "composer.accountCard.billingTokenPlan": "Token plan",
@@ -4490,6 +4672,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerRetry": "Request retry",
     "settings.aiVendors": "Capability vendors",
     "settings.aiWebSearch": "Web search",
+    "settings.aiWebExtract": "Web extract",
     "settings.aiUnderstandImage": "Image understanding",
     "settings.aiUnderstandVideo": "Video understanding",
     "settings.aiUnderstandAudio": "Audio understanding",
@@ -4510,6 +4693,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerRetry.description": "Configure retry counts, wait intervals, and backoff rules for ordinary failures and 429 rate limits.",
     "settings.aiVendors.description": "Capability vendors and route targets shared by semantic AI tools.",
     "settings.aiWebSearch.description": "Web-search capability state and available targets.",
+    "settings.aiWebExtract.description": "Web-extraction capability state and available targets.",
     "settings.aiUnderstandImage.description": "Image-understanding capability state and available targets.",
     "settings.aiUnderstandVideo.description": "Video-understanding capability entry and connection status.",
     "settings.aiUnderstandAudio.description": "Audio-understanding capability entry and connection status.",
@@ -4560,6 +4744,60 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.models.enabled": "Enabled",
     "settings.models.disabled": "Disabled",
     "settings.models.toggle": "Toggle model availability",
+    "settings.models.loadingCatalog": "Loading the live model catalog…",
+    "settings.models.provider": "Provider",
+    "settings.models.liveModels": "Live models",
+    "settings.models.noProviderSelected": "No provider selected",
+    "settings.models.catalogSummary": "{provider} · {count} total",
+    "settings.models.memoryOnly": "Memory only; updated at startup and after manual synchronization",
+    "settings.models.emptyCatalog": "No synchronized models are available. Add an account under Model Providers and synchronize it first.",
+    "settings.models.availableAccounts": "{model} · {count} available accounts",
+    "settings.models.additionalConditions": "{protocol} · Additional conditions",
+    "settings.inference.title": "Internal inference",
+    "settings.inference.subtitle": "Select exact models, protocols, and credentials for VMM and other internal consumers independently from the active conversation model.",
+    "settings.inference.vmmReasoningNotice": "To keep memory processing efficient, every VMM LLM request forces reasoning off; the model list shows only models that explicitly support disabled reasoning.",
+    "settings.inference.profileVmm": "VMM profile",
+    "settings.inference.llm": "Restricted LLM",
+    "settings.inference.embedding": "Embeddings",
+    "settings.inference.rerank": "Rerank",
+    "settings.inference.noRoute": "Not configured",
+    "settings.inference.modelRegion": "Model",
+    "settings.inference.accountRegion": "Account",
+    "settings.inference.selectModel": "Select model",
+    "settings.inference.selectAccount": "Select account",
+    "settings.inference.selectModelFirst": "Select a model first",
+    "settings.inference.accountFilter": "Filter by account, service entry, or protocol",
+    "settings.inference.noAccountMatches": "No accounts match this model.",
+    "settings.inference.unavailable": "Currently unavailable",
+    "settings.inference.unavailableReason": "This route cannot execute: {reason}",
+    "settings.inference.testConnection": "Run a real connection test",
+    "settings.inference.testEmbeddingSuccess": "Test passed: {count} result(s) · {dimensions} dimensions · {duration} ms",
+    "settings.inference.testRerankSuccess": "Test passed: {count} ranked result(s) · {duration} ms",
+    "settings.inference.credentialAvailable": "Credential available",
+    "settings.inference.catalogGeneration": "Catalog generation {generation}",
+    "settings.inference.capabilityRevision": "Capability revision {revision}",
+    "settings.inference.scopeInteractive": "Interactive agent",
+    "settings.inference.scopeBackground": "Internal background",
+    "settings.inference.scopeExternal": "External service",
+    "settings.inference.internalToggle": "Toggle internal inference capability",
+    "settings.inference.configureDefaults": "Configure internal defaults",
+    "settings.inference.overridesTitle": "Internal inference defaults",
+    "settings.inference.overridesDescription": "These settings belong to a provider model and operation rather than an account; every exact route is validated on save.",
+    "settings.inference.inheritModelDefault": "Use model default",
+    "settings.inference.reasoningEffort": "Reasoning effort",
+    "settings.inference.embeddingTask": "Embedding task",
+    "settings.inference.embeddingDimensions": "Embedding dimensions",
+    "settings.inference.embeddingOutputKind": "Embedding output kind",
+    "settings.inference.embeddingEncoding": "Embedding encoding",
+    "settings.inference.rerankTopN": "Default result count",
+    "settings.inference.rerankTruncation": "Truncation policy",
+    "settings.inference.rerankReturnContent": "Return candidate content",
+    "settings.inference.purpose.precheckL1": "Pre-check L1",
+    "settings.inference.purpose.precheckL2": "Pre-check L2",
+    "settings.inference.purpose.postactionL1": "Post-action L1",
+    "settings.inference.purpose.postactionL2": "Post-action L2",
+    "settings.inference.purpose.profileInstruction": "Profile instruction",
+    "settings.inference.purpose.reserve": "Reserve route",
     "settings.providerTools.title": "AI extension capabilities",
     "settings.providerTools.description": "Each capability selects exactly one model and exposes that model's native parameter schema.",
     "settings.providerTools.select": "Select model",
@@ -4570,6 +4808,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerTools.musicGenerate": "Music generation",
     "settings.providerTools.speechSynthesize": "Speech synthesis",
     "settings.providerTools.videoGenerate": "Video generation",
+    "settings.providerTools.videoEdit": "Video editing",
     "settings.providerTools.webSearch": "Web search",
     "settings.providerTools.webExtract": "Web extraction",
     "settings.providerTools.loading": "Loading capability targets…",
@@ -4587,6 +4826,37 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerTools.disable": "Disable",
     "settings.providerTools.cancel": "Cancel",
     "settings.providerTools.save": "Save",
+    "settings.providerTools.test": "Test",
+    "settings.providerTools.testSearchTitle": "Test web search",
+    "settings.providerTools.testExtractTitle": "Test web extraction",
+    "settings.providerTools.testSearchDescription": "Run one real search with this credential and target without changing the default.",
+    "settings.providerTools.testExtractDescription": "Run one real extraction with this credential and target without changing the default.",
+    "settings.providerTools.testQuery": "Search query",
+    "settings.providerTools.testQueryPlaceholder": "Enter a query to search",
+    "settings.providerTools.testMaxResults": "Result count",
+    "settings.providerTools.testIncludeDomains": "Include domains",
+    "settings.providerTools.testExcludeDomains": "Exclude domains",
+    "settings.providerTools.testDomainsPlaceholder": "One domain per line",
+    "settings.providerTools.testUrls": "Page URLs",
+    "settings.providerTools.testUrlsPlaceholder": "One HTTPS URL per line",
+    "settings.providerTools.testExtractQuery": "Relevant content",
+    "settings.providerTools.testChunksPerSource": "Chunks per page",
+    "settings.providerTools.testDepth": "Extraction depth",
+    "settings.providerTools.testDepthBasic": "Basic",
+    "settings.providerTools.testDepthAdvanced": "Advanced",
+    "settings.providerTools.testFormat": "Content format",
+    "settings.providerTools.testFormatMarkdown": "Markdown",
+    "settings.providerTools.testFormatText": "Plain text",
+    "settings.providerTools.testTimeoutSeconds": "Timeout seconds",
+    "settings.providerTools.testIncludeImages": "Include images",
+    "settings.providerTools.testIncludeFavicon": "Include favicon",
+    "settings.providerTools.testConsumesQuota": "This action calls the real provider API and consumes account quota.",
+    "settings.providerTools.testRunning": "Testing…",
+    "settings.providerTools.testResults": "Test results",
+    "settings.providerTools.testNoResults": "The provider returned no displayable result.",
+    "settings.providerTools.testSucceeded": "Succeeded",
+    "settings.providerTools.testFailed": "Failed",
+    "settings.providerTools.testProviderRequestId": "Provider request ID",
     "toolPresentation.providerText.title": "AI analysis",
     "toolPresentation.providerText.empty": "The provider returned no text result.",
     "toolPresentation.providerSearch.title": "Web search",

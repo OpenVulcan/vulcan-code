@@ -7,7 +7,7 @@ local M = {}
 
 -- SCHEMA_VERSION is the current isolated plugin database schema version.
 -- SCHEMA_VERSION 是当前插件隔离数据库的 Schema 版本。
-local SCHEMA_VERSION = 2
+local SCHEMA_VERSION = 3
 
 -- EMPTY_ARRAY preserves JSON array semantics when a query has no rows.
 -- EMPTY_ARRAY 在查询无结果时保留 JSON 数组语义。
@@ -171,6 +171,18 @@ local function ensure_schema(applied_at_ms)
                 timezone_offset_minutes INTEGER NOT NULL,
                 created_at_ms INTEGER NOT NULL
             )]],
+            [[ALTER TABLE api_request_events ADD COLUMN operation TEXT]],
+            [[ALTER TABLE api_request_events ADD COLUMN usage_scope TEXT]],
+            [[ALTER TABLE api_request_events ADD COLUMN service_entry_id TEXT]],
+            [[ALTER TABLE api_request_events ADD COLUMN connection_id TEXT]],
+            [[ALTER TABLE api_request_events ADD COLUMN protocol_profile_id TEXT]],
+            [[ALTER TABLE api_request_events ADD COLUMN secondary_route_id TEXT]],
+            [[ALTER TABLE api_request_events ADD COLUMN capability_revision TEXT]],
+            [[ALTER TABLE api_request_events ADD COLUMN catalog_revision TEXT]],
+            [[ALTER TABLE api_request_events ADD COLUMN input_item_count INTEGER]],
+            [[ALTER TABLE api_request_events ADD COLUMN output_item_count INTEGER]],
+            [[ALTER TABLE api_request_events ADD COLUMN vector_dimensions INTEGER]],
+            [[ALTER TABLE api_request_events ADD COLUMN provider_cost TEXT]],
             [[CREATE INDEX IF NOT EXISTS idx_api_request_events_completed
                 ON api_request_events(completed_at_ms DESC)]],
             [[CREATE INDEX IF NOT EXISTS idx_api_request_events_calendar_date
@@ -465,7 +477,10 @@ function M.provider_request_completed(args)
         [[INSERT OR IGNORE INTO api_request_events(
             request_id, execution_id, session_id, project_id, workspace_id,
             model_ref, owner_kind, owner_id,
-            owner_name, status, attempt_index, retry_count, started_at_ms,
+            owner_name, usage_scope, operation, service_entry_id, connection_id,
+            protocol_profile_id, secondary_route_id, capability_revision,
+            catalog_revision, input_item_count, output_item_count,
+            vector_dimensions, provider_cost, status, attempt_index, retry_count, started_at_ms,
             first_event_at_ms, first_token_at_ms, completed_at_ms,
             time_to_first_event_ms, time_to_first_token_ms, duration_ms,
             input_tokens, output_tokens, reasoning_tokens, total_tokens,
@@ -475,14 +490,27 @@ function M.provider_request_completed(args)
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
             ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
-            ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31
+            ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
+            ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40,
+            ?41, ?42, ?43
         )]],
         {
             sql_string(payload.request_id), sql_string(payload.execution_id),
             sql_string(payload.session_id), sql_optional(payload.project_id, "string"),
             sql_optional(payload.workspace_id, "string"), sql_integer(model_ref),
             sql_string(payload.owner_kind), sql_string(payload.owner_id),
-            sql_string(payload.owner_name), sql_string(payload.status),
+            sql_string(payload.owner_name), sql_optional(payload.usage_scope, "string"),
+            sql_optional(payload.operation, "string"),
+            sql_optional(payload.service_entry_id, "string"),
+            sql_optional(payload.connection_id, "string"),
+            sql_optional(payload.protocol_profile_id, "string"),
+            sql_optional(payload.secondary_route_id, "string"),
+            sql_optional(payload.capability_revision, "string"),
+            sql_optional(payload.catalog_revision, "string"),
+            sql_optional(payload.input_item_count, "integer"),
+            sql_optional(payload.output_item_count, "integer"),
+            sql_optional(payload.vector_dimensions, "integer"),
+            sql_optional(payload.cost, "string"), sql_string(payload.status),
             sql_integer(payload.attempt_index), sql_integer(payload.retry_count),
             sql_integer(payload.started_at_ms), sql_optional(payload.first_event_at_ms, "integer"),
             sql_optional(payload.first_token_at_ms, "integer"), sql_integer(payload.completed_at_ms),
@@ -635,7 +663,10 @@ function M.dashboard_get(args)
                 ELSE SUM(duration_ms) / SUM(request_count) END AS averageDurationMs,
             COALESCE(SUM(CASE WHEN owner_kind = 'main_agent' THEN total_tokens ELSE 0 END), 0) AS mainAgentTokens,
             COALESCE(SUM(CASE WHEN owner_kind = 'subagent' THEN total_tokens ELSE 0 END), 0) AS subagentTokens,
-            COALESCE(SUM(CASE WHEN owner_kind IN ('context_compaction', 'git_commit_summary') THEN total_tokens ELSE 0 END), 0) AS internalTokens,
+            COALESCE(SUM(CASE WHEN owner_kind IN (
+                'context_compaction', 'git_commit_summary', 'internal_llm',
+                'internal_embedding', 'internal_rerank', 'internal_multimodal'
+            ) THEN total_tokens ELSE 0 END), 0) AS internalTokens,
             COALESCE(MAX(maximum_duration_ms), 0) AS longestRequestMs,
             COALESCE(MAX(maximum_request_tokens), 0) AS peakRequestTokens,
             CASE WHEN SUM(first_token_count) IS NULL OR SUM(first_token_count) = 0 THEN 0

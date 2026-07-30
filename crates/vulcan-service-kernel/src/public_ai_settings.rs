@@ -5,24 +5,36 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
 };
-use vulcan_ai_contract::{AccountUsageAvailability, AccountUsageSnapshot, PromptCachePolicy};
+use vulcan_ai_contract::{
+    AccountUsageAvailability, AccountUsageSnapshot, AiOperation, EmbeddingEncoding, EmbeddingInput,
+    EmbeddingInputContent, EmbeddingOutputKind, EmbeddingPayload, EmbeddingRequest, EmbeddingTask,
+    INFERENCE_CONTRACT_VERSION, InferenceCallerBudget, InferenceCallerContext, InferencePermission,
+    InferenceUsageScope, ModelCapabilities, PromptCachePolicy, ReasoningControlMode,
+    ReasoningEffort, RerankRequest, RerankScoreSemantics, RerankText, RerankTruncation,
+};
 use vulcan_provider_adapters::{
     AccountUsageQueryKind, ActiveAiModelSelection, ConnectionModelCatalog, CredentialBillingKind,
     CredentialConnection, CredentialMode, CredentialSecretEnvelope, CredentialSecretResolver,
     CredentialSecretStore, CustomProviderAuthentication, CustomProviderDefinition,
-    CustomProviderProtocol, ModelExecutionOverrides, OAuthAuthorizationChallenge,
+    CustomProviderProtocol, InferenceProfile, InferenceRouteBinding, InferenceRouteConfiguration,
+    InternalModelOverrides, ModelExecutionOverrides, OAuthAuthorizationChallenge,
     OAuthClientConfiguration, OAuthTransactionPhase, OAuthTransactionSnapshot,
     PersistedAiConfiguration, ProviderDescriptor, ProviderKind, ProviderToolCapabilityKind,
-    ProviderToolTarget, ProviderToolTargetSelection, PublicAiRuntime, ServiceEntryKind,
+    ProviderToolExecutionResult, ProviderToolTarget, ProviderToolTargetSelection, PublicAiRuntime,
+    ServiceEntryKind, registered_native_action_binding_id,
 };
 use vulcan_service_api::{ServiceEventEmitter, WorkbenchSnapshot};
 
 use crate::{
-    SharedServiceBridgeState, ai_credential_secret_store::OsAiCredentialSecretStore,
-    begin_public_ai_configuration_transaction, emit_workbench_event,
-    mutate_public_ai_configuration, mutate_public_ai_configuration_in_transaction,
-    public_ai_provider_rows_for_selection, shell_host_from_state,
+    SharedServiceBridgeState,
+    ai_credential_secret_store::OsAiCredentialSecretStore,
+    begin_public_ai_configuration_transaction,
+    configured_inference::{VMM_CONSUMER_PROFILE_ID, model_supports_disabled_reasoning},
+    emit_workbench_event, mutate_public_ai_configuration,
+    mutate_public_ai_configuration_in_transaction, public_ai_provider_rows_for_selection,
+    shell_host_from_state,
 };
 
 /// Browser-facing public AI settings snapshot.
@@ -69,6 +81,77 @@ pub(super) struct PublicAiSettingsSnapshot {
     /// One explicit selected target per semantic provider tool capability.
     /// 每项语义供应商工具能力唯一显式选择的目标。
     provider_tool_selections: BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
+    /// Exact internal inference routes available through current memory catalogs.
+    /// 当前内存目录可用的精确内部推理路由。
+    internal_inference_candidates: Vec<PublicAiInternalInferenceCandidate>,
+    /// Persisted consumer-isolated inference profiles.
+    /// 持久化的消费者隔离推理配置档。
+    inference_profiles: BTreeMap<String, InferenceProfile>,
+    /// Exact failures for persisted routes that the current runtime cannot execute.
+    /// 当前运行时无法执行的持久化路由精确失败原因。
+    inference_route_diagnostics: Vec<PublicAiInferenceRouteDiagnostic>,
+    /// Persisted operation-specific internal model defaults.
+    /// 持久化的操作专属内部模型默认值。
+    internal_model_overrides: BTreeMap<String, InternalModelOverrides>,
+}
+
+/// Browser-facing diagnostic for one persisted inference-profile route.
+/// 面向浏览器的一条持久化推理配置档路由诊断。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PublicAiInferenceRouteDiagnostic {
+    /// Stable consumer profile that owns the route.
+    /// 持有该路由的稳定消费者配置档。
+    consumer_profile_id: String,
+    /// Optional stable LLM purpose within the consumer profile.
+    /// 消费者配置档内可选的稳定 LLM 用途。
+    purpose_id: Option<String>,
+    /// Expected operation of the owning profile slot.
+    /// 所属配置槽位期望的操作。
+    operation: AiOperation,
+    /// Exact retained route that failed current runtime resolution.
+    /// 当前运行时解析失败但仍保留的精确路由。
+    route: InferenceRouteConfiguration,
+    /// Exact backend failure produced by strict route validation.
+    /// 严格路由校验产生的精确后端失败原因。
+    reason: String,
+}
+
+/// Browser-facing exact route candidate for one internal inference operation.
+/// 面向浏览器的一项内部推理操作精确路由候选。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PublicAiInternalInferenceCandidate {
+    /// User-visible provider name.
+    /// 用户可见供应商名称。
+    provider_display_name: String,
+    /// User-visible service-entry name.
+    /// 用户可见服务入口名称。
+    service_entry_display_name: String,
+    /// User-visible credential connection name.
+    /// 用户可见凭据连接名称。
+    connection_display_name: String,
+    /// User-visible model name.
+    /// 用户可见模型名称。
+    model_display_name: String,
+    /// Exact immutable route persisted when selected.
+    /// 选中时持久化的精确不可变路由。
+    route: InferenceRouteConfiguration,
+    /// Process-local catalog generation that established the model route.
+    /// 建立该模型路由的进程内目录代次。
+    catalog_generation: u64,
+    /// Whether the model operation is enabled for internal use.
+    /// 当前模型操作是否已为内部使用启用。
+    enabled: bool,
+    /// Exact usage scopes permitted by product, credential, and user narrowing.
+    /// 产品、凭据与用户收窄共同允许的精确用途范围。
+    usage_scopes: BTreeSet<InferenceUsageScope>,
+    /// Exact model capability contract used to generate internal controls.
+    /// 用于生成内部控件的精确模型能力契约。
+    capabilities: ModelCapabilities,
+    /// Current operation-scoped model defaults.
+    /// 当前操作作用域模型默认值。
+    overrides: InternalModelOverrides,
 }
 
 /// Browser-facing provider tool target paired with one credential.
@@ -362,6 +445,108 @@ pub(super) struct PublicAiModelEnabledSaveRequest {
     enabled: bool,
 }
 
+/// Saves one provider-model-operation internal access choice.
+/// 保存一项供应商、模型与操作作用域的内部访问选择。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiInternalModelEnabledSaveRequest {
+    /// Exact provider identifier.
+    /// 精确供应商标识。
+    provider_id: String,
+    /// Exact model identifier.
+    /// 精确模型标识。
+    model_id: String,
+    /// Exact internal operation.
+    /// 精确内部操作。
+    operation: AiOperation,
+    /// Requested enabled state.
+    /// 请求的启用状态。
+    enabled: bool,
+}
+
+/// Replaces one exact consumer-profile inference route.
+/// 替换一条精确消费者配置档推理路由。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiInferenceRouteSaveRequest {
+    /// Stable consumer profile identifier.
+    /// 稳定消费者配置档标识。
+    consumer_profile_id: String,
+    /// Consumer-owned purpose required only for restricted LLM routes.
+    /// 仅受限 LLM 路由要求的消费者自有用途。
+    #[serde(default)]
+    purpose_id: Option<String>,
+    /// Exact operation being replaced.
+    /// 正在替换的精确操作。
+    operation: AiOperation,
+    /// Exact route, or absence to clear the configured operation.
+    /// 精确路由，缺失时清除已配置操作。
+    route: Option<InferenceRouteConfiguration>,
+}
+
+/// Requests one real embedding or rerank connection test through a consumer profile.
+/// 请求通过一个消费者配置档执行真实向量或重排连接测试。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiInferenceTestRequest {
+    /// Stable consumer profile whose persisted route is tested.
+    /// 接受测试的持久化路由所属稳定消费者配置档。
+    consumer_profile_id: String,
+    /// Exact non-LLM operation to execute.
+    /// 要执行的精确非 LLM 操作。
+    operation: AiOperation,
+}
+
+/// Returns compact validated facts from one real internal inference test.
+/// 返回一次真实内部推理测试的紧凑已校验事实。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PublicAiInferenceTestResult {
+    /// Exact operation tested.
+    /// 接受测试的精确操作。
+    operation: AiOperation,
+    /// Frozen provider identifier returned by execution.
+    /// 执行返回的冻结供应商标识。
+    provider_id: String,
+    /// Frozen service-entry identifier returned by execution.
+    /// 执行返回的冻结服务入口标识。
+    service_entry_id: String,
+    /// Frozen credential connection identifier returned by execution.
+    /// 执行返回的冻结凭据连接标识。
+    connection_id: String,
+    /// Frozen model identifier returned by execution.
+    /// 执行返回的冻结模型标识。
+    model_id: String,
+    /// Number of validated result items.
+    /// 已校验结果项数量。
+    result_count: usize,
+    /// Optional validated embedding dimensions.
+    /// 可选的已校验向量维度。
+    dimensions: Option<u32>,
+    /// End-to-end provider execution time in milliseconds.
+    /// 供应商端到端执行耗时毫秒数。
+    duration_ms: u64,
+}
+
+/// Replaces operation-scoped internal defaults for one provider model.
+/// 替换一个供应商模型的操作作用域内部默认值。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiInternalModelOverridesSaveRequest {
+    /// Exact provider identifier.
+    /// 精确供应商标识。
+    provider_id: String,
+    /// Exact model identifier.
+    /// 精确模型标识。
+    model_id: String,
+    /// Exact internal operation.
+    /// 精确内部操作。
+    operation: AiOperation,
+    /// Complete replacement override value.
+    /// 完整替换覆盖值。
+    overrides: InternalModelOverrides,
+}
+
 /// Replaces the single selected target for one provider tool capability.
 /// 替换一项供应商工具能力唯一选中的目标。
 #[derive(Debug, Clone, Deserialize)]
@@ -373,6 +558,22 @@ pub(super) struct PublicAiProviderToolSelectionSaveRequest {
     /// One exact target, or absence to disable the capability.
     /// 一个精确目标，缺失时禁用该能力。
     selection: Option<ProviderToolTargetSelection>,
+}
+
+/// Executes one exact search or extraction target for settings diagnostics.
+/// 为设置诊断执行一个精确的搜索或网页抓取目标。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiProviderToolTestRequest {
+    /// Exact semantic capability under test.
+    /// 正在测试的精确语义能力。
+    capability: ProviderToolCapabilityKind,
+    /// Exact connection and provider-tool target selected by the operator.
+    /// 操作员选择的精确连接与供应商工具目标。
+    selection: ProviderToolTargetSelection,
+    /// Provider-native arguments already shaped by the target's declared schema.
+    /// 已按照目标声明 Schema 组织的供应商原生参数。
+    arguments: serde_json::Value,
 }
 
 /// Changes whether one current provider tool target is available to sessions.
@@ -521,6 +722,7 @@ pub(super) async fn service_save_public_ai_custom_provider(
         verified_protocols: BTreeSet::from([route.protocol_profile_id.clone()]),
         selected_protocol: route.protocol_profile_id.clone(),
         prompt_cache_by_protocol: BTreeMap::new(),
+        usage_scope_override: None,
     };
     let secret = CredentialSecretEnvelope::new_api_key(request.secret)?;
     let _transaction = begin_public_ai_configuration_transaction().await;
@@ -1139,6 +1341,7 @@ async fn add_public_ai_connection_with_secret(
         verified_protocols,
         selected_protocol,
         prompt_cache_by_protocol: BTreeMap::new(),
+        usage_scope_override: None,
     };
     let secret_store = OsAiCredentialSecretStore;
     CredentialSecretStore::create_secret(&secret_store, secret_reference.as_str(), &secret)?;
@@ -2313,6 +2516,827 @@ pub(super) async fn service_save_public_ai_model_enabled(
     build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
 }
 
+/// Saves one internal model operation switch without changing conversation availability.
+/// 保存一项内部模型操作开关且不改变会话可用性。
+///
+/// # Parameters
+/// 参数
+/// `app`, `state`, and `request` identify the settings transaction and exact operation.
+/// `app`、`state` 与 `request` 标识设置事务及精确操作。
+///
+/// # Returns
+/// 返回值
+/// The complete refreshed settings snapshot.
+/// 返回完整刷新后的设置快照。
+pub(super) async fn service_save_public_ai_internal_model_enabled(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiInternalModelEnabledSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    if !matches!(
+        request.operation,
+        AiOperation::ConversationRespond
+            | AiOperation::EmbeddingCreate
+            | AiOperation::RerankDocuments
+    ) {
+        return Err(format!(
+            "Operation `{}` is not configurable as an internal inference model.",
+            request.operation.as_str()
+        ));
+    }
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    let providers = runtime.effective_providers(&current_configuration)?;
+    let catalogs = runtime.catalog_snapshot()?;
+    let exists =
+        build_internal_inference_candidates(&current_configuration, &providers, &catalogs)?
+            .iter()
+            .any(|candidate| {
+                candidate.route.provider_id == request.provider_id
+                    && candidate.route.model_id == request.model_id
+                    && candidate.route.operation == request.operation
+            });
+    if !exists {
+        return Err(format!(
+            "Provider `{}` model `{}` does not expose registered internal operation `{}`.",
+            request.provider_id,
+            request.model_id,
+            request.operation.as_str()
+        ));
+    }
+    let configuration = mutate_public_ai_configuration(
+        &state,
+        "保存内部推理模型启用状态失败",
+        |configuration| {
+            configuration.set_internal_model_enabled(
+                request.provider_id.as_str(),
+                request.model_id.as_str(),
+                request.operation,
+                request.enabled,
+            );
+            Ok(())
+        },
+    )
+    .await?;
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Saves operation-scoped internal defaults after validating every exact runtime route.
+/// 在校验全部精确运行时路由后保存操作作用域内部默认值。
+///
+/// # Parameters
+/// 参数
+/// `app`, `state`, and `request` identify one provider-model-operation replacement.
+/// `app`、`state` 与 `request` 标识一个供应商、模型、操作的替换请求。
+///
+/// # Returns
+/// 返回值
+/// The complete refreshed settings snapshot.
+/// 返回完整刷新后的设置快照。
+pub(super) async fn service_save_public_ai_internal_model_overrides(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiInternalModelOverridesSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    if !matches!(
+        request.operation,
+        AiOperation::ConversationRespond
+            | AiOperation::EmbeddingCreate
+            | AiOperation::RerankDocuments
+    ) {
+        return Err(format!(
+            "Operation `{}` is not configurable as an internal inference model.",
+            request.operation.as_str()
+        ));
+    }
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    let providers = runtime.effective_providers(&current_configuration)?;
+    let catalogs = runtime.catalog_snapshot()?;
+    let matching_candidates =
+        build_internal_inference_candidates(&current_configuration, &providers, &catalogs)?
+            .into_iter()
+            .filter(|candidate| {
+                candidate.route.provider_id == request.provider_id
+                    && candidate.route.model_id == request.model_id
+                    && candidate.route.operation == request.operation
+            })
+            .collect::<Vec<_>>();
+    if matching_candidates.is_empty() {
+        return Err(format!(
+            "Provider `{}` model `{}` does not expose registered internal operation `{}`.",
+            request.provider_id,
+            request.model_id,
+            request.operation.as_str()
+        ));
+    }
+    for candidate in &matching_candidates {
+        validate_internal_model_overrides(
+            &candidate.capabilities,
+            &candidate.route,
+            &request.overrides,
+        )?;
+    }
+    let configuration = mutate_public_ai_configuration(
+        &state,
+        "保存内部推理模型覆盖失败",
+        |configuration| {
+            let key = PersistedAiConfiguration::internal_model_operation_key(
+                request.provider_id.as_str(),
+                request.model_id.as_str(),
+                request.operation,
+            );
+            if request.overrides == InternalModelOverrides::default() {
+                configuration.internal_model_overrides.remove(key.as_str());
+            } else {
+                configuration
+                    .internal_model_overrides
+                    .insert(key, request.overrides.clone());
+            }
+            Ok(())
+        },
+    )
+    .await?;
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Saves or clears one exact route in a consumer-isolated inference profile.
+/// 在消费者隔离推理配置档内保存或清除一条精确路由。
+///
+/// # Parameters
+/// 参数
+/// `app`, `state`, and `request` identify the settings transaction and route replacement.
+/// `app`、`state` 与 `request` 标识设置事务及路由替换。
+///
+/// # Returns
+/// 返回值
+/// The complete refreshed settings snapshot after strict route validation.
+/// 严格校验路由后返回完整刷新设置快照。
+pub(super) async fn service_save_public_ai_inference_route(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiInferenceRouteSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    validate_non_empty("consumerProfileId", request.consumer_profile_id.as_str())?;
+    match request.operation {
+        AiOperation::ConversationRespond => {
+            let purpose_id = request.purpose_id.as_deref().ok_or_else(|| {
+                String::from("Restricted LLM inference route requires purposeId.")
+            })?;
+            validate_non_empty("purposeId", purpose_id)?;
+        }
+        AiOperation::EmbeddingCreate | AiOperation::RerankDocuments => {
+            if request.purpose_id.is_some() {
+                return Err(String::from(
+                    "Embedding and rerank inference routes do not accept purposeId.",
+                ));
+            }
+        }
+        _ => {
+            return Err(format!(
+                "Operation `{}` is not configurable through the inference profile.",
+                request.operation.as_str()
+            ));
+        }
+    }
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    if let Some(route) = request.route.as_ref() {
+        if route.operation != request.operation {
+            return Err(String::from(
+                "Inference route operation differs from the requested profile operation.",
+            ));
+        }
+        // Selecting a route is an explicit enable action for that exact internal operation.
+        // 选择路由即显式启用该精确内部操作。
+        let mut validation_configuration = current_configuration.clone();
+        enable_internal_inference_route(&mut validation_configuration, route);
+        let selection =
+            runtime.resolve_internal_inference_selection(&validation_configuration, route)?;
+        validate_vmm_llm_reasoning_policy(
+            request.consumer_profile_id.as_str(),
+            request.operation,
+            &selection.model.capabilities,
+        )?;
+    }
+    let configuration =
+        mutate_public_ai_configuration(&state, "保存内部推理路由失败", |configuration| {
+            if let Some(route) = request.route.as_ref() {
+                // Persist capability enablement and route binding in one configuration mutation.
+                // 在一次配置变更中同时持久化能力启用与路由绑定。
+                enable_internal_inference_route(configuration, route);
+            }
+            let profile = configuration
+                .inference_profiles
+                .entry(request.consumer_profile_id.clone())
+                .or_default();
+            match request.operation {
+                AiOperation::ConversationRespond => {
+                    let purpose_id = request.purpose_id.as_deref().ok_or_else(|| {
+                        String::from("Restricted LLM inference route requires purposeId.")
+                    })?;
+                    if let Some(route) = request.route.clone() {
+                        profile.llm_routes.insert(purpose_id.to_string(), route);
+                    } else {
+                        profile.llm_routes.remove(purpose_id);
+                    }
+                }
+                AiOperation::EmbeddingCreate => {
+                    profile.embedding = request.route.clone();
+                }
+                AiOperation::RerankDocuments => {
+                    profile.rerank = request.route.clone();
+                }
+                _ => {
+                    return Err(format!(
+                        "Operation `{}` is not configurable through the inference profile.",
+                        request.operation.as_str()
+                    ));
+                }
+            }
+            Ok(())
+        })
+        .await?;
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Enables the exact internal operation owned by one selected inference route.
+/// 启用一条已选推理路由所拥有的精确内部操作。
+///
+/// # Parameters
+/// 参数
+/// `configuration` receives the explicit capability state and `route` identifies its owner.
+/// `configuration` 接收显式能力状态，`route` 标识其归属。
+fn enable_internal_inference_route(
+    configuration: &mut PersistedAiConfiguration,
+    route: &InferenceRouteConfiguration,
+) {
+    configuration.set_internal_model_enabled(
+        route.provider_id.as_str(),
+        route.model_id.as_str(),
+        route.operation,
+        true,
+    );
+}
+
+/// Executes one real provider-backed embedding or rerank settings test.
+/// 执行一次由真实供应商支撑的向量或重排设置测试。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the configured inference service and `request` selects only an authorized
+/// consumer profile operation; it cannot inject a provider route.
+/// `state` 持有已配置推理服务，`request` 只能选择获授权消费者配置档操作，不能注入供应商路由。
+///
+/// # Returns
+/// 返回值
+/// Compact frozen route facts after request and response invariants are independently verified.
+/// 请求与响应不变量经独立校验后返回紧凑冻结路由事实。
+pub(super) async fn service_test_public_ai_inference_route(
+    state: SharedServiceBridgeState,
+    request: PublicAiInferenceTestRequest,
+) -> Result<PublicAiInferenceTestResult, String> {
+    validate_non_empty("consumerProfileId", request.consumer_profile_id.as_str())?;
+    let permission = match request.operation {
+        AiOperation::EmbeddingCreate => InferencePermission::Embedding,
+        AiOperation::RerankDocuments => InferencePermission::Rerank,
+        _ => {
+            return Err(format!(
+                "Operation `{}` does not have a settings connection test.",
+                request.operation.as_str()
+            ));
+        }
+    };
+    let (_, configuration) = public_ai_runtime_and_configuration(&state)?;
+    let configured_route = configured_settings_inference_test_route(
+        &configuration,
+        request.consumer_profile_id.as_str(),
+        request.operation,
+    )?;
+    let service = configured_inference_service_for_settings(&state)?;
+    let caller = settings_inference_test_caller(
+        request.consumer_profile_id.as_str(),
+        permission,
+        configured_route.usage_scope,
+    )?;
+    let capabilities = service
+        .capability_snapshot(&caller, request.consumer_profile_id.as_str())
+        .map_err(|error| error.to_string())?;
+    let operation = capabilities
+        .operations
+        .iter()
+        .find(|candidate| {
+            candidate.operation == request.operation && candidate.purpose_id.is_none()
+        })
+        .ok_or_else(|| {
+            format!(
+                "Consumer profile `{}` does not expose operation `{}`.",
+                request.consumer_profile_id,
+                request.operation.as_str()
+            )
+        })?;
+    if !operation.available {
+        return Err(operation.unavailable_reason.clone().unwrap_or_else(|| {
+            format!(
+                "Consumer profile `{}` operation `{}` is unavailable.",
+                request.consumer_profile_id,
+                request.operation.as_str()
+            )
+        }));
+    }
+    match request.operation {
+        AiOperation::EmbeddingCreate => {
+            let embedding = operation.embedding.as_ref().ok_or_else(|| {
+                String::from("The configured route does not declare embedding capabilities.")
+            })?;
+            let request_id = format!("settings_embedding_test_{}", uuid::Uuid::new_v4().simple());
+            let response = service
+                .create_embeddings(
+                    &caller,
+                    EmbeddingRequest {
+                        contract_version: INFERENCE_CONTRACT_VERSION,
+                        request_id,
+                        idempotency_key: None,
+                        consumer_profile_id: request.consumer_profile_id,
+                        inputs: vec![EmbeddingInput {
+                            input_id: String::from("settings-test-input"),
+                            content: EmbeddingInputContent::Text {
+                                text: String::from(
+                                    "Vulcan Code internal embedding connection test.",
+                                ),
+                            },
+                        }],
+                        task: preferred_embedding_task(embedding)?,
+                        dimensions: None,
+                        output_kind: preferred_embedding_output_kind(embedding)?,
+                        encoding: preferred_embedding_encoding(embedding)?,
+                    },
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+            validate_embedding_test_response(&response)?;
+            Ok(PublicAiInferenceTestResult {
+                operation: AiOperation::EmbeddingCreate,
+                provider_id: response.route.provider_id,
+                service_entry_id: response.route.service_entry_id,
+                connection_id: response.route.connection_id,
+                model_id: response.route.model_id,
+                result_count: response.results.len(),
+                dimensions: Some(response.fingerprint.dimensions),
+                duration_ms: response.duration_ms,
+            })
+        }
+        AiOperation::RerankDocuments => {
+            let rerank = operation.rerank.as_ref().ok_or_else(|| {
+                String::from("The configured route does not declare rerank capabilities.")
+            })?;
+            let overrides = configuration.internal_model_overrides.get(
+                PersistedAiConfiguration::internal_model_operation_key(
+                    configured_route.provider_id.as_str(),
+                    configured_route.model_id.as_str(),
+                    AiOperation::RerankDocuments,
+                )
+                .as_str(),
+            );
+            let fixture_minimum = rerank.maximum_candidates.unwrap_or(2).clamp(1, 2);
+            let requested_top_n = overrides
+                .and_then(|value| value.rerank_top_n)
+                .unwrap_or(fixture_minimum);
+            let candidate_count = requested_top_n.max(fixture_minimum);
+            if rerank
+                .maximum_candidates
+                .is_some_and(|maximum| candidate_count > maximum)
+            {
+                return Err(format!(
+                    "Configured rerank test requires {candidate_count} candidates but the model maximum is {}.",
+                    rerank.maximum_candidates.unwrap_or_default()
+                ));
+            }
+            let candidates = fixed_rerank_test_candidates(candidate_count);
+            let request_id = format!("settings_rerank_test_{}", uuid::Uuid::new_v4().simple());
+            let response = service
+                .rerank_documents(
+                    &caller,
+                    RerankRequest {
+                        contract_version: INFERENCE_CONTRACT_VERSION,
+                        request_id,
+                        idempotency_key: None,
+                        consumer_profile_id: request.consumer_profile_id,
+                        query: RerankText {
+                            id: String::from("settings-test-query"),
+                            text: String::from("Which document describes a programming language?"),
+                        },
+                        candidates,
+                        top_n: requested_top_n,
+                        truncation: overrides
+                            .and_then(|value| value.rerank_truncation)
+                            .unwrap_or(preferred_rerank_truncation(rerank)?),
+                        return_content: overrides
+                            .and_then(|value| value.rerank_return_content)
+                            .unwrap_or(false),
+                    },
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+            validate_rerank_test_response(&response, candidate_count)?;
+            Ok(PublicAiInferenceTestResult {
+                operation: AiOperation::RerankDocuments,
+                provider_id: response.route.provider_id,
+                service_entry_id: response.route.service_entry_id,
+                connection_id: response.route.connection_id,
+                model_id: response.route.model_id,
+                result_count: response.results.len(),
+                dimensions: None,
+                duration_ms: response.duration_ms,
+            })
+        }
+        _ => Err(format!(
+            "Operation `{}` does not have a settings connection test.",
+            request.operation.as_str()
+        )),
+    }
+}
+
+/// Returns the configured inference service without retaining the shared state lock.
+/// 返回已配置推理服务且不保留共享状态锁。
+///
+/// # Parameters
+/// 参数
+/// `state` is the shared service bridge whose runtime owns the live configured-inference facade.
+/// `state` 是共享服务桥，其运行时持有实时已配置推理门面。
+///
+/// # Returns
+/// 返回值
+/// A cloned service handle, or an explicit startup/lock diagnostic without keeping the state lock.
+/// 返回克隆的服务句柄，或明确的启动/锁诊断，且不会继续持有状态锁。
+fn configured_inference_service_for_settings(
+    state: &SharedServiceBridgeState,
+) -> Result<Arc<crate::configured_inference::ConfiguredInferenceService>, String> {
+    state
+        .lock()
+        .map_err(|error| format!("Failed to lock service state for inference test: {error}"))?
+        .agent_runtime
+        .as_ref()
+        .map(|runtime| Arc::clone(&runtime.configured_inference_service))
+        .ok_or_else(|| String::from("Configured inference runtime is still starting."))
+}
+
+/// Builds the host-owned identity used only by explicit settings connection tests.
+/// 构建仅供显式设置连接测试使用的宿主持有身份。
+///
+/// # Parameters
+/// 参数
+/// `consumer_profile_id` and `permission` select the exact test operation while
+/// `usage_scope` is copied from the persisted route rather than accepted from browser input.
+/// `consumer_profile_id` 与 `permission` 选择精确测试操作，`usage_scope`
+/// 从持久化路由复制而非接受浏览器输入。
+///
+/// # Returns
+/// 返回值
+/// A short-lived caller context constrained to one profile, one operation, and one route scope.
+/// 返回仅限一个配置档、一项操作与一个路由用途范围的短期调用方上下文。
+fn settings_inference_test_caller(
+    consumer_profile_id: &str,
+    permission: InferencePermission,
+    usage_scope: InferenceUsageScope,
+) -> Result<InferenceCallerContext, String> {
+    let now_unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("System clock cannot issue an inference test deadline: {error}"))
+        .and_then(|duration| {
+            u64::try_from(duration.as_millis())
+                .map_err(|_| String::from("System time exceeds the supported millisecond range."))
+        })?;
+    Ok(InferenceCallerContext {
+        caller_id: String::from("vulcan-code-settings-inference-test"),
+        allowed_consumer_profile_ids: BTreeSet::from([consumer_profile_id.to_string()]),
+        permissions: BTreeSet::from([InferencePermission::Status, permission]),
+        usage_scope,
+        interactive_session_id: None,
+        deadline_unix_ms: Some(now_unix_ms.saturating_add(120_000)),
+        budget: InferenceCallerBudget {
+            max_concurrent_executions: 1,
+            max_input_units_per_request: Some(16_384),
+            max_output_tokens_per_request: None,
+            max_requests_per_minute: None,
+            max_input_units_per_minute: None,
+            max_execution_duration_ms: Some(120_000),
+        },
+    })
+}
+
+/// Resolves the exact host-owned route used by one settings inference test.
+/// 解析一次设置推理测试使用的精确宿主持有路由。
+///
+/// # Parameters
+/// 参数
+/// `configuration` owns consumer profiles, `consumer_profile_id` selects one profile,
+/// and `operation` must be embedding or rerank.
+/// `configuration` 持有消费者配置档，`consumer_profile_id` 选择一个配置档，
+/// `operation` 必须为向量或重排。
+///
+/// # Returns
+/// 返回值
+/// A cloned exact route whose operation matches its profile slot, or a controlled diagnostic.
+/// 返回操作与配置槽位一致的精确路由副本，或受控诊断。
+fn configured_settings_inference_test_route(
+    configuration: &PersistedAiConfiguration,
+    consumer_profile_id: &str,
+    operation: AiOperation,
+) -> Result<InferenceRouteConfiguration, String> {
+    let profile = configuration
+        .inference_profiles
+        .get(consumer_profile_id)
+        .ok_or_else(|| format!("Consumer profile `{consumer_profile_id}` is not configured."))?;
+    let route = match operation {
+        AiOperation::EmbeddingCreate => profile.embedding.as_ref(),
+        AiOperation::RerankDocuments => profile.rerank.as_ref(),
+        _ => None,
+    }
+    .ok_or_else(|| {
+        format!(
+            "Consumer profile `{consumer_profile_id}` does not configure operation `{}`.",
+            operation.as_str()
+        )
+    })?;
+    if route.operation != operation {
+        return Err(format!(
+            "Consumer profile `{consumer_profile_id}` stores operation `{}` in the `{}` test slot.",
+            route.operation.as_str(),
+            operation.as_str()
+        ));
+    }
+    Ok(route.clone())
+}
+
+/// Selects a deterministic declared embedding task for the fixed test request.
+/// 为固定测试请求选择一项确定且已声明的向量任务。
+///
+/// # Parameters
+/// 参数
+/// `capabilities` is the exact configured route contract returned by the inference facade.
+/// `capabilities` 是推理门面返回的精确已配置路由契约。
+///
+/// # Returns
+/// 返回值
+/// `ProviderDefault` when declared, otherwise the first ordered declared task, or an error.
+/// 已声明时返回 `ProviderDefault`，否则返回有序声明中的第一项任务，若为空则报错。
+fn preferred_embedding_task(
+    capabilities: &vulcan_ai_contract::EmbeddingCapabilities,
+) -> Result<EmbeddingTask, String> {
+    if capabilities.tasks.contains(&EmbeddingTask::ProviderDefault) {
+        return Ok(EmbeddingTask::ProviderDefault);
+    }
+    capabilities
+        .tasks
+        .iter()
+        .next()
+        .copied()
+        .ok_or_else(|| String::from("The embedding route does not declare any supported task."))
+}
+
+/// Selects a deterministic declared embedding output shape for the fixed test request.
+/// 为固定测试请求选择一项确定且已声明的向量输出形态。
+///
+/// # Parameters
+/// 参数
+/// `capabilities` is the exact configured embedding contract.
+/// `capabilities` 是精确已配置向量契约。
+///
+/// # Returns
+/// 返回值
+/// Dense output when declared, otherwise the first ordered output kind, or an explicit error.
+/// 已声明时返回稠密输出，否则返回有序输出类型中的第一项，若为空则显式报错。
+fn preferred_embedding_output_kind(
+    capabilities: &vulcan_ai_contract::EmbeddingCapabilities,
+) -> Result<EmbeddingOutputKind, String> {
+    if capabilities
+        .output_kinds
+        .contains(&EmbeddingOutputKind::Dense)
+    {
+        return Ok(EmbeddingOutputKind::Dense);
+    }
+    capabilities
+        .output_kinds
+        .iter()
+        .next()
+        .copied()
+        .ok_or_else(|| {
+            String::from("The embedding route does not declare any supported output shape.")
+        })
+}
+
+/// Selects a deterministic declared embedding encoding for the fixed test request.
+/// 为固定测试请求选择一项确定且已声明的向量编码。
+///
+/// # Parameters
+/// 参数
+/// `capabilities` is the exact configured embedding contract.
+/// `capabilities` 是精确已配置向量契约。
+///
+/// # Returns
+/// 返回值
+/// Float encoding when declared, otherwise the first ordered encoding, or an explicit error.
+/// 已声明时返回浮点编码，否则返回有序编码中的第一项，若为空则显式报错。
+fn preferred_embedding_encoding(
+    capabilities: &vulcan_ai_contract::EmbeddingCapabilities,
+) -> Result<EmbeddingEncoding, String> {
+    if capabilities.encodings.contains(&EmbeddingEncoding::Float) {
+        return Ok(EmbeddingEncoding::Float);
+    }
+    capabilities
+        .encodings
+        .iter()
+        .next()
+        .copied()
+        .ok_or_else(|| {
+            String::from("The embedding route does not declare any supported value encoding.")
+        })
+}
+
+/// Selects one deterministic declared rerank truncation policy.
+/// 选择一项确定且已声明的重排截断策略。
+///
+/// # Parameters
+/// 参数
+/// `capabilities` is the exact configured rerank contract.
+/// `capabilities` 是精确已配置重排契约。
+///
+/// # Returns
+/// 返回值
+/// Disabled truncation when declared, otherwise the first ordered policy, or an explicit error.
+/// 已声明时返回禁用截断，否则返回有序策略中的第一项，若为空则显式报错。
+fn preferred_rerank_truncation(
+    capabilities: &vulcan_ai_contract::RerankCapabilities,
+) -> Result<RerankTruncation, String> {
+    if capabilities
+        .truncation
+        .contains(&RerankTruncation::Disabled)
+    {
+        return Ok(RerankTruncation::Disabled);
+    }
+    capabilities
+        .truncation
+        .iter()
+        .next()
+        .copied()
+        .ok_or_else(|| {
+            String::from("The rerank route does not declare any supported truncation policy.")
+        })
+}
+
+/// Builds a deterministic candidate set large enough for the configured test result count.
+/// 构建一组足以覆盖已配置测试结果数量的确定候选。
+///
+/// # Parameters
+/// 参数
+/// `candidate_count` is already bounded by the exact model capability and configured Top N.
+/// `candidate_count` 已受精确模型能力与已配置 Top N 约束。
+///
+/// # Returns
+/// 返回值
+/// Stable text candidates with unique IDs and no user content.
+/// 返回带唯一标识且不包含用户内容的稳定文本候选。
+fn fixed_rerank_test_candidates(candidate_count: u32) -> Vec<RerankText> {
+    (0..candidate_count)
+        .map(|index| {
+            let text = match index {
+                0 => String::from("Rust is a systems programming language."),
+                1 => String::from("A maple tree loses leaves during autumn."),
+                _ => format!("Fixed unrelated settings test document {index}."),
+            };
+            RerankText {
+                id: format!("settings-test-candidate-{index}"),
+                text,
+            }
+        })
+        .collect()
+}
+
+/// Independently verifies embedding count, identity, dimensions, and finite numeric values.
+/// 独立校验向量数量、身份、维度与有限数值。
+///
+/// # Parameters
+/// 参数
+/// `response` is the normalized provider result returned by the configured inference facade.
+/// `response` 是已配置推理门面返回的归一化供应商结果。
+///
+/// # Returns
+/// 返回值
+/// Success only when one stable result matches its declared fingerprint and numeric invariants.
+/// 仅当一个稳定结果符合其声明指纹与数值不变量时返回成功。
+fn validate_embedding_test_response(
+    response: &vulcan_ai_contract::EmbeddingResponse,
+) -> Result<(), String> {
+    if response.results.len() != 1 {
+        return Err(format!(
+            "Embedding test expected one result but received {}.",
+            response.results.len()
+        ));
+    }
+    let result = &response.results[0];
+    if result.input_id != "settings-test-input" || result.input_index != 0 {
+        return Err(String::from(
+            "Embedding test response did not preserve input identity and index.",
+        ));
+    }
+    let dimensions = usize::try_from(response.fingerprint.dimensions)
+        .map_err(|_| String::from("Embedding dimensions cannot be represented on this host."))?;
+    if dimensions == 0 {
+        return Err(String::from(
+            "Embedding test response reported zero dimensions.",
+        ));
+    }
+    match &result.embedding {
+        EmbeddingPayload::Dense { values } => {
+            if values.len() != dimensions || values.iter().any(|value| !value.is_finite()) {
+                return Err(String::from(
+                    "Embedding test dense result has invalid dimensions or non-finite values.",
+                ));
+            }
+        }
+        EmbeddingPayload::Sparse { indices, values } => {
+            if indices.len() != values.len()
+                || values.iter().any(|value| !value.is_finite())
+                || indices
+                    .iter()
+                    .any(|index| *index >= response.fingerprint.dimensions)
+            {
+                return Err(String::from(
+                    "Embedding test sparse result has invalid indices or non-finite values.",
+                ));
+            }
+        }
+        EmbeddingPayload::MultiVector { vectors } => {
+            if vectors.is_empty()
+                || vectors.iter().any(|vector| {
+                    vector.len() != dimensions || vector.iter().any(|value| !value.is_finite())
+                })
+            {
+                return Err(String::from(
+                    "Embedding test multi-vector result has invalid dimensions or values.",
+                ));
+            }
+        }
+        EmbeddingPayload::Base64 { value } => {
+            if value.is_empty() {
+                return Err(String::from(
+                    "Embedding test Base64 result must not be empty.",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Independently verifies rerank indices, ranks, ordering, and finite raw scores.
+/// 独立校验重排索引、名次、顺序与有限原始分数。
+///
+/// # Parameters
+/// 参数
+/// `response` is the normalized rerank result and `candidate_count` is the exact submitted size.
+/// `response` 是归一化重排结果，`candidate_count` 是精确提交数量。
+///
+/// # Returns
+/// 返回值
+/// Success only when every result is unique, in range, finite, and follows declared ordering.
+/// 仅当每项结果唯一、未越界、为有限值且遵守声明排序时返回成功。
+fn validate_rerank_test_response(
+    response: &vulcan_ai_contract::RerankResponse,
+    candidate_count: u32,
+) -> Result<(), String> {
+    if response.results.is_empty() {
+        return Err(String::from("Rerank test returned no results."));
+    }
+    let mut original_indices = BTreeSet::new();
+    for (expected_rank, result) in response.results.iter().enumerate() {
+        if result.rank != u32::try_from(expected_rank).unwrap_or(u32::MAX)
+            || result.original_index >= candidate_count
+            || !original_indices.insert(result.original_index)
+            || !result.score.is_finite()
+        {
+            return Err(String::from(
+                "Rerank test response contains invalid ranks, indices, or scores.",
+            ));
+        }
+    }
+    let ordered =
+        response
+            .results
+            .windows(2)
+            .all(|pair| match response.fingerprint.score_semantics {
+                RerankScoreSemantics::HigherIsMoreRelevant => pair[0].score >= pair[1].score,
+                RerankScoreSemantics::LowerIsMoreRelevant => pair[0].score <= pair[1].score,
+                RerankScoreSemantics::Unknown => true,
+            });
+    if !ordered {
+        return Err(String::from(
+            "Rerank test scores do not follow the declared score semantics.",
+        ));
+    }
+    Ok(())
+}
+
 /// Saves or clears the single selected target for one provider tool capability.
 /// 保存或清除一项供应商工具能力唯一选中的目标。
 pub(super) async fn service_save_public_ai_provider_tool_selection(
@@ -2357,6 +3381,43 @@ pub(super) async fn service_save_public_ai_provider_tool_selection(
     .await?;
     publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
     build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Runs one real search or extraction diagnostic through the selected row without changing defaults.
+/// 通过所选行运行一次真实搜索或网页抓取诊断且不修改默认项。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the current runtime and configuration; `request` freezes the exact target and inputs.
+/// `state` 持有当前运行时与配置；`request` 固定精确目标与输入。
+///
+/// # Returns
+/// 返回值
+/// A unified search or extraction result, or an explicit validation/provider failure.
+/// 返回统一搜索或网页抓取结果，或明确的校验与供应商错误。
+pub(super) async fn service_test_public_ai_provider_tool(
+    state: SharedServiceBridgeState,
+    request: PublicAiProviderToolTestRequest,
+) -> Result<ProviderToolExecutionResult, String> {
+    if !matches!(
+        request.capability,
+        ProviderToolCapabilityKind::WebSearch | ProviderToolCapabilityKind::WebExtract
+    ) {
+        return Err(format!(
+            "Provider tool settings diagnostics do not support capability `{:?}`.",
+            request.capability
+        ));
+    }
+    let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
+    runtime
+        .execute_provider_tool_target_for_owner(
+            &configuration,
+            request.capability,
+            &request.selection,
+            request.arguments,
+            None,
+        )
+        .await
 }
 
 /// Saves the enabled state of one current provider tool target.
@@ -2751,6 +3812,10 @@ fn build_public_ai_settings_snapshot(
         configuration,
         &configuration.provider_tool_selections,
     )?;
+    let internal_inference_candidates =
+        build_internal_inference_candidates(configuration, &providers, &catalogs)?;
+    let inference_route_diagnostics =
+        build_internal_inference_route_diagnostics(runtime, configuration);
     Ok(PublicAiSettingsSnapshot {
         usage_refresh_interval_seconds: configuration.usage_refresh_interval_seconds,
         usage_cache: runtime.usage_cache_snapshot()?,
@@ -2793,7 +3858,539 @@ fn build_public_ai_settings_snapshot(
             })
             .collect(),
         provider_tool_selections,
+        internal_inference_candidates,
+        inference_profiles: configuration.inference_profiles.clone(),
+        inference_route_diagnostics,
+        internal_model_overrides: configuration.internal_model_overrides.clone(),
     })
+}
+
+/// Diagnoses every retained consumer route with the same strict resolver used for execution.
+/// 使用与真实执行相同的严格解析器诊断每条保留的消费者路由。
+///
+/// # Parameters
+/// 参数
+/// `runtime` resolves current credentials, models, bindings, and usage scopes while
+/// `configuration` owns the retained consumer routes.
+/// `runtime` 解析当前凭据、模型、绑定与用途范围，`configuration` 持有保留的消费者路由。
+///
+/// # Returns
+/// 返回值
+/// Only failed routes, each paired with its exact profile slot and backend reason.
+/// 仅返回失败路由，并携带其精确配置槽位与后端原因。
+fn build_internal_inference_route_diagnostics(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+) -> Vec<PublicAiInferenceRouteDiagnostic> {
+    let mut diagnostics = Vec::new();
+    for (consumer_profile_id, profile) in &configuration.inference_profiles {
+        for (purpose_id, route) in &profile.llm_routes {
+            push_internal_inference_route_diagnostic(
+                &mut diagnostics,
+                runtime,
+                configuration,
+                consumer_profile_id,
+                Some(purpose_id.as_str()),
+                AiOperation::ConversationRespond,
+                route,
+            );
+        }
+        if let Some(route) = profile.embedding.as_ref() {
+            push_internal_inference_route_diagnostic(
+                &mut diagnostics,
+                runtime,
+                configuration,
+                consumer_profile_id,
+                None,
+                AiOperation::EmbeddingCreate,
+                route,
+            );
+        }
+        if let Some(route) = profile.rerank.as_ref() {
+            push_internal_inference_route_diagnostic(
+                &mut diagnostics,
+                runtime,
+                configuration,
+                consumer_profile_id,
+                None,
+                AiOperation::RerankDocuments,
+                route,
+            );
+        }
+    }
+    diagnostics
+}
+
+/// Appends one diagnostic only when a retained profile route is not currently executable.
+/// 仅在保留的配置档路由当前不可执行时追加一项诊断。
+///
+/// # Parameters
+/// 参数
+/// The profile slot supplies trusted expected identity and `runtime` performs exact resolution.
+/// 配置档槽位提供可信期望身份，`runtime` 执行精确解析。
+///
+/// # Returns
+/// 返回值
+/// This function mutates `diagnostics` and has no independent return value.
+/// 本函数修改 `diagnostics`，不返回独立值。
+#[allow(clippy::too_many_arguments)]
+fn push_internal_inference_route_diagnostic(
+    diagnostics: &mut Vec<PublicAiInferenceRouteDiagnostic>,
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+    consumer_profile_id: &str,
+    purpose_id: Option<&str>,
+    expected_operation: AiOperation,
+    route: &InferenceRouteConfiguration,
+) {
+    let resolution = if route.operation != expected_operation {
+        Err(format!(
+            "Persisted inference route operation `{}` does not match profile slot operation `{}`.",
+            route.operation.as_str(),
+            expected_operation.as_str()
+        ))
+    } else {
+        runtime
+            .resolve_internal_inference_selection(configuration, route)
+            .and_then(|selection| {
+                validate_vmm_llm_reasoning_policy(
+                    consumer_profile_id,
+                    expected_operation,
+                    &selection.model.capabilities,
+                )
+            })
+    };
+    if let Err(reason) = resolution {
+        diagnostics.push(PublicAiInferenceRouteDiagnostic {
+            consumer_profile_id: consumer_profile_id.to_string(),
+            purpose_id: purpose_id.map(str::to_string),
+            operation: expected_operation,
+            route: route.clone(),
+            reason,
+        });
+    }
+}
+
+/// Builds exact internal inference route candidates from current connection catalogs.
+/// 从当前连接目录构建精确内部推理路由候选。
+///
+/// # Parameters
+/// 参数
+/// `configuration`, `providers`, and `catalogs` are one coherent settings snapshot.
+/// `configuration`、`providers` 与 `catalogs` 构成一份一致设置快照。
+///
+/// # Returns
+/// 返回值
+/// Stable candidates that preserve product, credential, binding, operation, and usage scope.
+/// 返回保留产品、凭据、绑定、操作与用途范围的稳定候选。
+fn build_internal_inference_candidates(
+    configuration: &PersistedAiConfiguration,
+    providers: &vulcan_provider_adapters::ProviderRegistry,
+    catalogs: &BTreeMap<String, ConnectionModelCatalog>,
+) -> Result<Vec<PublicAiInternalInferenceCandidate>, String> {
+    let mut candidates = Vec::new();
+    for connection in configuration.connection_graph.connections.values() {
+        let Some(catalog) = catalogs.get(connection.id.as_str()) else {
+            continue;
+        };
+        let provider = providers
+            .provider(connection.provider_id.as_str())
+            .ok_or_else(|| {
+                format!(
+                    "Provider `{}` referenced by connection `{}` is not registered.",
+                    connection.provider_id, connection.id
+                )
+            })?;
+        let entry = provider
+            .service_entries
+            .iter()
+            .find(|entry| entry.id == connection.service_entry_id)
+            .ok_or_else(|| {
+                format!(
+                    "Service entry `{}` referenced by connection `{}` is not registered.",
+                    connection.service_entry_id, connection.id
+                )
+            })?;
+        let usage_scopes = entry.effective_usage_scopes(connection)?;
+        for model in &catalog.models {
+            for operation in model
+                .capabilities
+                .operations
+                .iter()
+                .copied()
+                .filter(|operation| {
+                    matches!(
+                        operation,
+                        AiOperation::ConversationRespond
+                            | AiOperation::EmbeddingCreate
+                            | AiOperation::RerankDocuments
+                    )
+                })
+            {
+                let binding = match operation {
+                    AiOperation::ConversationRespond => InferenceRouteBinding::Protocol {
+                        protocol_profile_id: connection.selected_protocol.clone(),
+                    },
+                    AiOperation::EmbeddingCreate | AiOperation::RerankDocuments => {
+                        let Some(action_binding_id) = registered_native_action_binding_id(
+                            connection.provider_id.as_str(),
+                            connection.service_entry_id.as_str(),
+                            operation,
+                        ) else {
+                            continue;
+                        };
+                        InferenceRouteBinding::Action {
+                            action_binding_id: action_binding_id.to_string(),
+                        }
+                    }
+                    _ => continue,
+                };
+                for usage_scope in usage_scopes.iter().copied() {
+                    candidates.push(PublicAiInternalInferenceCandidate {
+                        provider_display_name: provider.display_name.clone(),
+                        service_entry_display_name: entry.display_name.clone(),
+                        connection_display_name: connection.display_name.clone(),
+                        model_display_name: model.display_name.clone(),
+                        route: InferenceRouteConfiguration {
+                            provider_id: connection.provider_id.clone(),
+                            service_entry_id: connection.service_entry_id.clone(),
+                            connection_id: connection.id.clone(),
+                            model_id: model.id.clone(),
+                            binding: binding.clone(),
+                            operation,
+                            usage_scope,
+                        },
+                        catalog_generation: catalog.generation,
+                        enabled: configuration.internal_model_is_enabled(
+                            connection.provider_id.as_str(),
+                            model.id.as_str(),
+                            operation,
+                        ),
+                        usage_scopes: usage_scopes.clone(),
+                        capabilities: model.capabilities.clone(),
+                        overrides: configuration
+                            .internal_model_overrides
+                            .get(
+                                PersistedAiConfiguration::internal_model_operation_key(
+                                    connection.provider_id.as_str(),
+                                    model.id.as_str(),
+                                    operation,
+                                )
+                                .as_str(),
+                            )
+                            .cloned()
+                            .unwrap_or_default(),
+                    });
+                }
+            }
+        }
+    }
+    candidates.sort_by(|left, right| {
+        (
+            left.route.operation,
+            left.provider_display_name.as_str(),
+            left.model_display_name.as_str(),
+            left.connection_display_name.as_str(),
+            left.route.usage_scope,
+        )
+            .cmp(&(
+                right.route.operation,
+                right.provider_display_name.as_str(),
+                right.model_display_name.as_str(),
+                right.connection_display_name.as_str(),
+                right.route.usage_scope,
+            ))
+    });
+    Ok(candidates)
+}
+
+/// Validates one complete internal override against one exact model route.
+/// 根据一条精确模型路由校验一份完整内部覆盖。
+fn validate_internal_model_overrides(
+    capabilities: &ModelCapabilities,
+    route: &InferenceRouteConfiguration,
+    overrides: &InternalModelOverrides,
+) -> Result<(), String> {
+    validate_internal_model_parameters(capabilities, route, overrides)?;
+    match route.operation {
+        AiOperation::ConversationRespond => {
+            ensure_no_embedding_overrides(overrides)?;
+            ensure_no_rerank_overrides(overrides)?;
+            validate_positive_limit(
+                "Internal context limit",
+                overrides.context_limit,
+                capabilities.context_limit,
+            )?;
+            validate_positive_limit(
+                "Internal output limit",
+                overrides.output_limit,
+                capabilities.output_limit,
+            )?;
+            if let Some(effort) = overrides.reasoning_effort {
+                validate_internal_reasoning_effort(capabilities, effort)?;
+            }
+        }
+        AiOperation::EmbeddingCreate => {
+            ensure_no_llm_overrides(overrides)?;
+            ensure_no_rerank_overrides(overrides)?;
+            let embedding = capabilities.embedding.as_ref().ok_or_else(|| {
+                String::from("The selected route does not declare embedding capabilities.")
+            })?;
+            if let Some(task) = overrides.embedding_task
+                && !embedding.tasks.contains(&task)
+            {
+                return Err(format!(
+                    "Embedding task `{:?}` is not supported by the selected model.",
+                    task
+                ));
+            }
+            if let Some(dimensions) = overrides.embedding_dimensions {
+                let in_discrete_set =
+                    embedding.dimensions.is_empty() || embedding.dimensions.contains(&dimensions);
+                let above_minimum = embedding
+                    .minimum_dimensions
+                    .is_none_or(|minimum| dimensions >= minimum);
+                let below_maximum = embedding
+                    .maximum_dimensions
+                    .is_none_or(|maximum| dimensions <= maximum);
+                if dimensions == 0 || !in_discrete_set || !above_minimum || !below_maximum {
+                    return Err(format!(
+                        "Embedding dimensions {dimensions} are not supported by the selected model."
+                    ));
+                }
+            }
+            if let Some(output_kind) = overrides.embedding_output_kind
+                && !embedding.output_kinds.contains(&output_kind)
+            {
+                return Err(format!(
+                    "Embedding output kind `{:?}` is not supported by the selected model.",
+                    output_kind
+                ));
+            }
+            if let Some(encoding) = overrides.embedding_encoding
+                && !embedding.encodings.contains(&encoding)
+            {
+                return Err(format!(
+                    "Embedding encoding `{:?}` is not supported by the selected model.",
+                    encoding
+                ));
+            }
+        }
+        AiOperation::RerankDocuments => {
+            ensure_no_llm_overrides(overrides)?;
+            ensure_no_embedding_overrides(overrides)?;
+            let rerank = capabilities.rerank.as_ref().ok_or_else(|| {
+                String::from("The selected route does not declare rerank capabilities.")
+            })?;
+            if let Some(top_n) = overrides.rerank_top_n {
+                if top_n == 0 {
+                    return Err(String::from("Rerank top N must be greater than zero."));
+                }
+                if rerank
+                    .maximum_candidates
+                    .is_some_and(|maximum| top_n > maximum)
+                {
+                    return Err(format!(
+                        "Rerank top N {top_n} exceeds the selected model limit."
+                    ));
+                }
+            }
+            if let Some(truncation) = overrides.rerank_truncation
+                && !rerank.truncation.contains(&truncation)
+            {
+                return Err(format!(
+                    "Rerank truncation `{:?}` is not supported by the selected model.",
+                    truncation
+                ));
+            }
+            if overrides.rerank_return_content == Some(true) && !rerank.supports_return_content {
+                return Err(String::from(
+                    "The selected rerank model cannot return candidate content.",
+                ));
+            }
+        }
+        _ => {
+            return Err(format!(
+                "Operation `{}` cannot own internal model overrides.",
+                route.operation.as_str()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Enforces VMM's no-reasoning policy for one resolved route.
+/// 对一条已解析路由强制执行 VMM 禁用思考策略。
+///
+/// # Parameters
+/// 参数
+/// `consumer_profile_id` and `operation` identify the profile slot; `capabilities` is exact.
+/// `consumer_profile_id` 与 `operation` 标识配置档槽位；`capabilities` 是精确能力。
+///
+/// # Returns
+/// 返回值
+/// Success outside VMM LLM slots or when the model explicitly supports disabled reasoning.
+/// 非 VMM LLM 槽位或模型明确支持关闭思考时返回成功。
+fn validate_vmm_llm_reasoning_policy(
+    consumer_profile_id: &str,
+    operation: AiOperation,
+    capabilities: &ModelCapabilities,
+) -> Result<(), String> {
+    if consumer_profile_id != VMM_CONSUMER_PROFILE_ID
+        || operation != AiOperation::ConversationRespond
+        || model_supports_disabled_reasoning(capabilities)
+    {
+        return Ok(());
+    }
+    Err(String::from(
+        "VMM LLM routes require a model that explicitly supports disabled reasoning.",
+    ))
+}
+
+/// Validates registered model parameters and their dependency graph for one exact route.
+/// 校验一条精确路由已注册的模型参数及其依赖图。
+fn validate_internal_model_parameters(
+    capabilities: &ModelCapabilities,
+    route: &InferenceRouteConfiguration,
+    overrides: &InternalModelOverrides,
+) -> Result<(), String> {
+    let protocol_id = match &route.binding {
+        InferenceRouteBinding::Protocol {
+            protocol_profile_id,
+        } => Some(protocol_profile_id.as_str()),
+        InferenceRouteBinding::Action { .. } => None,
+    };
+    for (parameter_id, value) in &overrides.model_parameters {
+        let definition = capabilities
+            .model_parameters
+            .iter()
+            .find(|definition| {
+                definition.id == *parameter_id
+                    && (definition.model_ids.is_empty()
+                        || definition.model_ids.contains(&route.model_id))
+                    && (definition.protocol_ids.is_empty()
+                        || protocol_id.is_some_and(|protocol_id| {
+                            definition
+                                .protocol_ids
+                                .iter()
+                                .any(|candidate| candidate == protocol_id)
+                        }))
+            })
+            .ok_or_else(|| {
+                format!(
+                    "Model parameter `{parameter_id}` is not registered for the selected route."
+                )
+            })?;
+        definition.validate_value(value)?;
+        for dependency in &definition.dependent_required {
+            if !overrides.model_parameters.contains_key(dependency) {
+                return Err(format!(
+                    "Model parameter `{parameter_id}` requires `{dependency}`."
+                ));
+            }
+        }
+        for conflict in &definition.conflicts {
+            if overrides.model_parameters.contains_key(conflict) {
+                return Err(format!(
+                    "Model parameter `{parameter_id}` conflicts with `{conflict}`."
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validates one positive local limit against an exact provider maximum.
+/// 根据精确供应商上限校验一个正数本地限制。
+fn validate_positive_limit(
+    label: &str,
+    requested: Option<u64>,
+    maximum: Option<u64>,
+) -> Result<(), String> {
+    let Some(requested) = requested else {
+        return Ok(());
+    };
+    if requested == 0 {
+        return Err(format!("{label} must be greater than zero."));
+    }
+    let maximum = maximum.ok_or_else(|| {
+        format!("{label} cannot be overridden because the provider did not declare a maximum.")
+    })?;
+    if requested > maximum {
+        return Err(format!(
+            "{label} {requested} exceeds the provider maximum {maximum}."
+        ));
+    }
+    Ok(())
+}
+
+/// Validates one explicit internal reasoning default against exact control metadata.
+/// 根据精确控制元数据校验一个显式内部推理默认值。
+fn validate_internal_reasoning_effort(
+    capabilities: &ModelCapabilities,
+    effort: ReasoningEffort,
+) -> Result<(), String> {
+    let valid = match capabilities.reasoning_control {
+        ReasoningControlMode::FixedOff => effort == ReasoningEffort::None,
+        ReasoningControlMode::FixedOn => {
+            effort != ReasoningEffort::None && capabilities.reasoning_efforts.contains(&effort)
+        }
+        ReasoningControlMode::Toggle
+        | ReasoningControlMode::EffortSelection
+        | ReasoningControlMode::ProviderAdaptive => {
+            capabilities.reasoning_efforts.contains(&effort)
+        }
+        ReasoningControlMode::Unknown => false,
+    };
+    valid.then_some(()).ok_or_else(|| {
+        format!(
+            "Reasoning effort `{}` is not declared by the selected model route.",
+            effort.as_str()
+        )
+    })
+}
+
+/// Rejects LLM-only fields on non-LLM operations.
+/// 拒绝非 LLM 操作上的 LLM 专属字段。
+fn ensure_no_llm_overrides(overrides: &InternalModelOverrides) -> Result<(), String> {
+    if overrides.context_limit.is_some()
+        || overrides.output_limit.is_some()
+        || overrides.reasoning_effort.is_some()
+    {
+        return Err(String::from(
+            "LLM limits and reasoning defaults cannot be saved for this operation.",
+        ));
+    }
+    Ok(())
+}
+
+/// Rejects embedding-only fields on other operations.
+/// 拒绝其他操作上的向量专属字段。
+fn ensure_no_embedding_overrides(overrides: &InternalModelOverrides) -> Result<(), String> {
+    if overrides.embedding_task.is_some()
+        || overrides.embedding_dimensions.is_some()
+        || overrides.embedding_output_kind.is_some()
+        || overrides.embedding_encoding.is_some()
+    {
+        return Err(String::from(
+            "Embedding defaults cannot be saved for this operation.",
+        ));
+    }
+    Ok(())
+}
+
+/// Rejects rerank-only fields on other operations.
+/// 拒绝其他操作上的重排专属字段。
+fn ensure_no_rerank_overrides(overrides: &InternalModelOverrides) -> Result<(), String> {
+    if overrides.rerank_top_n.is_some()
+        || overrides.rerank_truncation.is_some()
+        || overrides.rerank_return_content.is_some()
+    {
+        return Err(String::from(
+            "Rerank defaults cannot be saved for this operation.",
+        ));
+    }
+    Ok(())
 }
 
 /// Publishes public AI model rows through the existing shared workbench event.
@@ -3002,4 +4599,155 @@ fn validate_non_empty(field: &str, value: &str) -> Result<(), String> {
         return Err(format!("Field `{field}` must not be empty."));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod inference_settings_route_tests {
+    use super::*;
+
+    /// Builds one exact internal inference route for settings-boundary regression tests.
+    /// 为设置边界回归测试构建一条精确内部推理路由。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `operation` and `usage_scope` define the exact persisted route facts.
+    /// `operation` 与 `usage_scope` 定义精确持久化路由事实。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A deterministic route with a native action binding.
+    /// 返回带原生动作绑定的确定性路由。
+    fn route_fixture(
+        operation: AiOperation,
+        usage_scope: InferenceUsageScope,
+    ) -> InferenceRouteConfiguration {
+        InferenceRouteConfiguration {
+            provider_id: String::from("provider"),
+            service_entry_id: String::from("entry"),
+            connection_id: String::from("connection"),
+            model_id: String::from("model"),
+            binding: InferenceRouteBinding::Action {
+                action_binding_id: String::from("action"),
+            },
+            operation,
+            usage_scope,
+        }
+    }
+
+    /// Verifies a settings test retains the persisted route usage scope exactly.
+    /// 验证设置测试会精确保留持久化路由用途范围。
+    #[test]
+    fn settings_test_route_retains_exact_usage_scope() {
+        let expected = route_fixture(
+            AiOperation::EmbeddingCreate,
+            InferenceUsageScope::InternalBackground,
+        );
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.inference_profiles.insert(
+            String::from("vmm"),
+            InferenceProfile {
+                embedding: Some(expected.clone()),
+                ..InferenceProfile::default()
+            },
+        );
+
+        let actual = configured_settings_inference_test_route(
+            &configuration,
+            "vmm",
+            AiOperation::EmbeddingCreate,
+        )
+        .expect("the exact embedding route should resolve");
+
+        assert_eq!(actual, expected);
+    }
+
+    /// Verifies VMM LLM route validation rejects models that cannot disable reasoning.
+    /// 验证 VMM LLM 路由校验拒绝无法关闭思考的模型。
+    #[test]
+    fn vmm_llm_route_requires_disabled_reasoning_capability() {
+        let fixed_on = ModelCapabilities {
+            reasoning_control: ReasoningControlMode::FixedOn,
+            reasoning_efforts: vec![ReasoningEffort::High],
+            ..ModelCapabilities::default()
+        };
+        assert!(
+            validate_vmm_llm_reasoning_policy(
+                VMM_CONSUMER_PROFILE_ID,
+                AiOperation::ConversationRespond,
+                &fixed_on,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_vmm_llm_reasoning_policy(
+                "another-consumer",
+                AiOperation::ConversationRespond,
+                &fixed_on,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_vmm_llm_reasoning_policy(
+                VMM_CONSUMER_PROFILE_ID,
+                AiOperation::EmbeddingCreate,
+                &fixed_on,
+            )
+            .is_ok()
+        );
+    }
+
+    /// Verifies choosing one route enables only its exact model operation.
+    /// 验证选择一条路由只会启用其精确模型操作。
+    #[test]
+    fn selected_route_enables_exact_internal_operation() {
+        let route = route_fixture(
+            AiOperation::ConversationRespond,
+            InferenceUsageScope::ExternalService,
+        );
+        let mut configuration = PersistedAiConfiguration::default();
+
+        enable_internal_inference_route(&mut configuration, &route);
+
+        assert!(configuration.internal_model_is_enabled(
+            route.provider_id.as_str(),
+            route.model_id.as_str(),
+            AiOperation::ConversationRespond,
+        ));
+        assert!(!configuration.internal_model_is_enabled(
+            route.provider_id.as_str(),
+            route.model_id.as_str(),
+            AiOperation::EmbeddingCreate,
+        ));
+        assert!(!configuration.internal_model_is_enabled(
+            route.provider_id.as_str(),
+            "other-model",
+            AiOperation::ConversationRespond,
+        ));
+    }
+
+    /// Verifies a route stored in the wrong operation slot is rejected explicitly.
+    /// 验证存入错误操作槽位的路由会被显式拒绝。
+    #[test]
+    fn settings_test_route_rejects_operation_slot_mismatch() {
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.inference_profiles.insert(
+            String::from("vmm"),
+            InferenceProfile {
+                embedding: Some(route_fixture(
+                    AiOperation::RerankDocuments,
+                    InferenceUsageScope::ExternalService,
+                )),
+                ..InferenceProfile::default()
+            },
+        );
+
+        let error = configured_settings_inference_test_route(
+            &configuration,
+            "vmm",
+            AiOperation::EmbeddingCreate,
+        )
+        .expect_err("a mismatched operation slot must fail");
+
+        assert!(error.contains("stores operation `rerank_documents`"));
+    }
 }

@@ -7,7 +7,14 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use vulcan_ai_contract::{ModelParameterValue, PromptCachePolicy};
+use vulcan_ai_contract::{
+    AiOperation, EmbeddingEncoding, EmbeddingOutputKind, EmbeddingTask, InferenceUsageScope,
+    ModelParameterValue, PromptCachePolicy, ReasoningEffort, RerankTruncation,
+};
+
+/// Identifies the current persisted AI configuration schema.
+/// 标识当前持久化 AI 配置 Schema。
+pub const PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION: u32 = 1;
 
 /// Lists the reviewed OpenRouter models enabled by default.
 /// 列出默认启用的已审核 OpenRouter 模型。
@@ -68,10 +75,130 @@ pub struct ModelExecutionOverrides {
     pub model_parameters: BTreeMap<String, ModelParameterValue>,
 }
 
+/// Selects one exact protocol or action binding for internal inference.
+/// 为内部推理选择一个精确协议或动作绑定。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum InferenceRouteBinding {
+    /// Selects one verified conversation protocol.
+    /// 选择一个已验证对话协议。
+    Protocol {
+        /// Exact protocol profile identifier.
+        /// 精确协议 Profile 标识。
+        protocol_profile_id: String,
+    },
+    /// Selects one verified non-conversation action.
+    /// 选择一个已验证非对话动作。
+    Action {
+        /// Exact action binding identifier.
+        /// 精确动作绑定标识。
+        action_binding_id: String,
+    },
+}
+
+/// Persists one exact immutable-route source for configured inference.
+/// 持久化一条已配置推理的精确不可变路由来源。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InferenceRouteConfiguration {
+    /// Exact provider identifier.
+    /// 精确供应商标识。
+    pub provider_id: String,
+    /// Exact product or service-entry identifier.
+    /// 精确产品或服务入口标识。
+    pub service_entry_id: String,
+    /// Exact credential connection identifier.
+    /// 精确凭据连接标识。
+    pub connection_id: String,
+    /// Exact model identifier.
+    /// 精确模型标识。
+    pub model_id: String,
+    /// Exact protocol or action binding.
+    /// 精确协议或动作绑定。
+    pub binding: InferenceRouteBinding,
+    /// Exact provider-neutral operation.
+    /// 精确供应商无关操作。
+    pub operation: AiOperation,
+    /// Usage context this route is configured to serve.
+    /// 当前路由被配置服务的使用场景。
+    pub usage_scope: InferenceUsageScope,
+}
+
+/// Persists purpose-scoped LLM routes plus embedding and rerank routes for one consumer.
+/// 为一个消费者持久化用途作用域的 LLM 路由及向量、重排路由。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct InferenceProfile {
+    /// Configured restricted LLM routes keyed by stable consumer-owned purpose identifier.
+    /// 按消费者自有稳定用途标识索引的已配置受限 LLM 路由。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub llm_routes: BTreeMap<String, InferenceRouteConfiguration>,
+    /// Optional configured embedding route.
+    /// 可选的已配置向量路由。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<InferenceRouteConfiguration>,
+    /// Optional configured rerank route.
+    /// 可选的已配置重排路由。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rerank: Option<InferenceRouteConfiguration>,
+}
+
+/// Persists operation-specific internal model defaults without account selection.
+/// 持久化不含账号选择的操作专属内部模型默认值。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct InternalModelOverrides {
+    /// Optional local context-window narrowing for restricted LLM inference.
+    /// 受限 LLM 推理可选的本地上下文窗口收窄。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_limit: Option<u64>,
+    /// Optional local output-token narrowing for restricted LLM inference.
+    /// 受限 LLM 推理可选的本地输出 Token 收窄。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_limit: Option<u64>,
+    /// Optional exact reasoning effort.
+    /// 可选的精确推理强度。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+    /// Capability-registered model values.
+    /// 能力契约已注册的模型值。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_parameters: BTreeMap<String, ModelParameterValue>,
+    /// Optional default embedding task.
+    /// 可选的默认向量任务。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding_task: Option<EmbeddingTask>,
+    /// Optional default embedding dimensions.
+    /// 可选的默认向量维度。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding_dimensions: Option<u32>,
+    /// Optional default embedding output shape.
+    /// 可选的默认向量输出形态。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding_output_kind: Option<EmbeddingOutputKind>,
+    /// Optional default embedding encoding.
+    /// 可选的默认向量编码。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding_encoding: Option<EmbeddingEncoding>,
+    /// Optional default rerank result count.
+    /// 可选的默认重排结果数量。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rerank_top_n: Option<u32>,
+    /// Optional default rerank truncation.
+    /// 可选的默认重排截断方式。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rerank_truncation: Option<RerankTruncation>,
+    /// Optional default for returning rerank candidate content.
+    /// 可选的重排候选内容返回默认值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rerank_return_content: Option<bool>,
+}
+
 /// Stores all new AI configuration while excluding runtime-discovered model catalogs.
 /// 保存全部新 AI 配置，同时排除运行时发现的模型目录。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PersistedAiConfiguration {
+    /// Explicit internal configuration schema version.
+    /// 显式内部配置 Schema 版本。
+    #[serde(default)]
+    pub schema_version: u32,
     /// Background account-usage refresh interval in seconds.
     /// 后台账号用量刷新间隔秒数。
     #[serde(default = "default_usage_refresh_interval_seconds")]
@@ -96,6 +223,18 @@ pub struct PersistedAiConfiguration {
     /// 与供应商默认策略不同的用户模型启用选择。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub model_enabled_overrides: BTreeMap<String, bool>,
+    /// Internal model access choices scoped by provider, model, and operation.
+    /// 按供应商、模型与操作限定作用域的内部模型访问选择。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub internal_model_enabled_overrides: BTreeMap<String, bool>,
+    /// Independent inference routes grouped by stable consumer profile identifier.
+    /// 按稳定消费者配置档标识分组的独立推理路由。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub inference_profiles: BTreeMap<String, InferenceProfile>,
+    /// Operation-specific internal model defaults.
+    /// 操作专属内部模型默认值。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub internal_model_overrides: BTreeMap<String, InternalModelOverrides>,
     /// Per-connection model secondary routes keyed by collision-resistant composite key.
     /// 按抗冲突组合键索引的连接模型二级路由。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -122,12 +261,19 @@ impl Default for PersistedAiConfiguration {
     /// 构建一个不含供应商且用量刷新间隔为五分钟的配置。
     fn default() -> Self {
         Self {
+            schema_version: PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION,
             usage_refresh_interval_seconds: default_usage_refresh_interval_seconds(),
             custom_providers: BTreeMap::new(),
             active: None,
             connection_graph: PersistedConnectionGraph::default(),
             model_overrides: BTreeMap::new(),
             model_enabled_overrides: BTreeMap::new(),
+            internal_model_enabled_overrides: BTreeMap::new(),
+            inference_profiles: BTreeMap::from([(
+                String::from("vmm"),
+                InferenceProfile::default(),
+            )]),
+            internal_model_overrides: BTreeMap::new(),
             secondary_routes: BTreeMap::new(),
             provider_tool_selections: BTreeMap::new(),
             provider_tool_disabled_targets: BTreeMap::new(),
@@ -136,6 +282,44 @@ impl Default for PersistedAiConfiguration {
 }
 
 impl PersistedAiConfiguration {
+    /// Migrates the exact supported historical schema to the current version.
+    /// 将精确支持的历史 Schema 迁移到当前版本。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Whether the configuration changed, or an explicit unsupported-version error.
+    /// 返回配置是否变化，或明确的不支持版本错误。
+    pub fn migrate_to_current_schema(&mut self) -> Result<bool, String> {
+        match self.schema_version {
+            PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION => {
+                if self.inference_profiles.contains_key("vmm") {
+                    Ok(false)
+                } else {
+                    self.inference_profiles
+                        .insert(String::from("vmm"), InferenceProfile::default());
+                    Ok(true)
+                }
+            }
+            0 => {
+                self.provider_tool_selections
+                    .remove(&ProviderToolCapabilityKind::EmbeddingCreate);
+                self.provider_tool_selections
+                    .remove(&ProviderToolCapabilityKind::RerankDocuments);
+                self.provider_tool_disabled_targets
+                    .remove(&ProviderToolCapabilityKind::EmbeddingCreate);
+                self.provider_tool_disabled_targets
+                    .remove(&ProviderToolCapabilityKind::RerankDocuments);
+                self.inference_profiles
+                    .insert(String::from("vmm"), InferenceProfile::default());
+                self.schema_version = PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION;
+                Ok(true)
+            }
+            unsupported => Err(format!(
+                "Unsupported persisted AI configuration schema version {unsupported}; supported version is {PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION}."
+            )),
+        }
+    }
+
     /// Builds a stable key for one provider-model-protocol scoped setting.
     /// 为一个供应商、模型与协议作用域设置构建稳定键。
     ///
@@ -199,6 +383,78 @@ impl PersistedAiConfiguration {
             provider_id.len(),
             model_id.len()
         )
+    }
+
+    /// Builds a stable key for one provider-model-operation scoped internal setting.
+    /// 为一项供应商、模型与操作作用域的内部设置构建稳定键。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id`, `model_id`, and `operation` identify one exact internal capability.
+    /// `provider_id`、`model_id` 与 `operation` 标识一项精确内部能力。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A collision-resistant provider-model-operation key.
+    /// 返回抗冲突的供应商、模型与操作组合键。
+    pub fn internal_model_operation_key(
+        provider_id: &str,
+        model_id: &str,
+        operation: AiOperation,
+    ) -> String {
+        let operation_id = operation.as_str();
+        format!(
+            "{}:{provider_id}:{}:{model_id}:{}:{operation_id}",
+            provider_id.len(),
+            model_id.len(),
+            operation_id.len()
+        )
+    }
+
+    /// Reports whether one model operation is enabled for internal inference.
+    /// 报告一项模型操作是否已为内部推理启用。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id`, `model_id`, and `operation` identify one exact internal capability.
+    /// `provider_id`、`model_id` 与 `operation` 标识一项精确内部能力。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The explicit state, defaulting to disabled.
+    /// 返回显式状态，默认禁用。
+    pub fn internal_model_is_enabled(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+        operation: AiOperation,
+    ) -> bool {
+        self.internal_model_enabled_overrides
+            .get(Self::internal_model_operation_key(provider_id, model_id, operation).as_str())
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// Stores one explicit internal model operation state.
+    /// 保存一项显式内部模型操作状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id`, `model_id`, `operation`, and `enabled` identify the exact state.
+    /// `provider_id`、`model_id`、`operation` 与 `enabled` 标识精确状态。
+    pub fn set_internal_model_enabled(
+        &mut self,
+        provider_id: &str,
+        model_id: &str,
+        operation: AiOperation,
+        enabled: bool,
+    ) {
+        let key = Self::internal_model_operation_key(provider_id, model_id, operation);
+        if enabled {
+            self.internal_model_enabled_overrides.insert(key, true);
+        } else {
+            self.internal_model_enabled_overrides.remove(key.as_str());
+        }
     }
 
     /// Reports whether one model is enabled after applying the persisted user override.
@@ -308,5 +564,81 @@ mod tests {
         configuration.set_model_enabled("openrouter", "vendor/unreviewed-model", false);
         assert!(configuration.model_enabled_overrides.is_empty());
         assert!(!configuration.model_is_enabled("openrouter", "vendor/unreviewed-model"));
+    }
+
+    /// Verifies the sole historical schema migration removes only retired inference tool choices.
+    /// 验证唯一历史 Schema 迁移只删除已退役的推理工具选择。
+    #[test]
+    fn historical_configuration_migration_is_exact() {
+        let mut configuration = PersistedAiConfiguration {
+            schema_version: 0,
+            ..PersistedAiConfiguration::default()
+        };
+        let search_target = ProviderToolTargetSelection {
+            connection_id: String::from("search-connection"),
+            target_id: String::from("search-target"),
+        };
+        configuration
+            .provider_tool_selections
+            .insert(ProviderToolCapabilityKind::WebSearch, search_target.clone());
+        configuration.provider_tool_selections.insert(
+            ProviderToolCapabilityKind::EmbeddingCreate,
+            ProviderToolTargetSelection {
+                connection_id: String::from("embedding-connection"),
+                target_id: String::from("embedding-target"),
+            },
+        );
+        configuration.provider_tool_disabled_targets.insert(
+            ProviderToolCapabilityKind::RerankDocuments,
+            BTreeSet::from([ProviderToolTargetSelection {
+                connection_id: String::from("rerank-connection"),
+                target_id: String::from("rerank-target"),
+            }]),
+        );
+
+        assert!(
+            configuration
+                .migrate_to_current_schema()
+                .expect("schema zero must migrate")
+        );
+        assert_eq!(
+            configuration.schema_version,
+            PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
+        );
+        assert_eq!(
+            configuration
+                .provider_tool_selections
+                .get(&ProviderToolCapabilityKind::WebSearch),
+            Some(&search_target)
+        );
+        assert!(
+            !configuration
+                .provider_tool_selections
+                .contains_key(&ProviderToolCapabilityKind::EmbeddingCreate)
+        );
+        assert!(
+            !configuration
+                .provider_tool_disabled_targets
+                .contains_key(&ProviderToolCapabilityKind::RerankDocuments)
+        );
+        assert!(configuration.inference_profiles.contains_key("vmm"));
+    }
+
+    /// Verifies unknown persisted schema generations are rejected without mutation.
+    /// 验证未知持久化 Schema 代次被拒绝且不会发生变更。
+    #[test]
+    fn unknown_configuration_schema_is_rejected() {
+        let mut configuration = PersistedAiConfiguration {
+            schema_version: PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION + 1,
+            ..PersistedAiConfiguration::default()
+        };
+        let before = configuration.clone();
+
+        let error = configuration
+            .migrate_to_current_schema()
+            .expect_err("unknown version must fail");
+
+        assert!(error.contains("Unsupported persisted AI configuration schema version"));
+        assert_eq!(configuration, before);
     }
 }

@@ -110,6 +110,14 @@ function CredentialUsageSummary(props: {
   if (rows.length > 0) {
     return <MiniMaxUsageSummary rows={rows} />
   }
+  // tavilyPlanWindow selects only the account-plan allowance used by the compact Tavily card.
+  // tavilyPlanWindow 仅选择 Tavily 紧凑卡片使用的账号套餐额度。
+  const tavilyPlanWindow = props.providerId === "tavily"
+    ? props.usage.quota_windows.find((window) => window.id === "tavily-account-plan")
+    : undefined
+  if (props.providerId === "tavily") {
+    return <TavilyUsageSummary window={tavilyPlanWindow} />
+  }
   if (props.usage.quota_windows.length === 0) {
     return <span className="text-center text-xs text-muted-foreground">{t("composer.accountCard.noQuotaWindows")}</span>
   }
@@ -118,6 +126,59 @@ function CredentialUsageSummary(props: {
       {props.usage.quota_windows.slice(0, 3).map((window) => (
         <UsageWindowMetric key={window.id} label={window.display_name} window={window} />
       ))}
+    </div>
+  )
+}
+
+// TavilyUsageSummary renders only provider-reported account-plan consumption.
+// TavilyUsageSummary 仅渲染供应商报告的账号套餐消费。
+function TavilyUsageSummary(props: {
+  // window is the exact normalized Tavily account-plan allowance.
+  // window 是精确规范化的 Tavily 账号套餐额度。
+  window?: PublicAiAccountUsageWindow
+}) {
+  // t resolves the compact Tavily labels in the active locale.
+  // t 使用当前语言解析 Tavily 紧凑标签。
+  const { t } = useI18n()
+  // total determines whether the provider supplied a finite plan allowance.
+  // total 决定供应商是否提供了有限套餐额度。
+  const total = Number(props.window?.total)
+  // hasFiniteLimit distinguishes a real plan cap from an absent independent limit.
+  // hasFiniteLimit 区分真实套餐上限与缺失的独立上限。
+  const hasFiniteLimit = Number.isFinite(total) && total > 0
+  // value preserves Tavily's used-credit semantics instead of substituting remaining credits.
+  // value 保留 Tavily 已用 Credit 语义，而不以剩余额度替代。
+  const value = props.window?.used === undefined
+    ? "—"
+    : hasFiniteLimit
+      ? `${props.window.used} / ${props.window.total}`
+      : props.window.used
+  // percentage is the normalized remaining-plan percentage used by the progress bar.
+  // percentage 是进度条使用的规范化套餐剩余百分比。
+  const percentage = usageWindowPercentage(props.window)
+  return (
+    <div className="w-full space-y-1 text-[11px]">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium">{t("composer.accountCard.tavilyPlanQuota")}</span>
+        <span className="tabular-nums">
+          {t("composer.accountCard.used")} {value}
+        </span>
+      </div>
+      {hasFiniteLimit ? (
+        <div
+          aria-label={`${t("composer.accountCard.tavilyPlanQuota")}: ${Math.round(percentage)}%`}
+          aria-valuemax={100}
+          aria-valuemin={0}
+          aria-valuenow={Math.round(percentage)}
+          className="h-1.5 overflow-hidden rounded-full bg-muted"
+          role="progressbar"
+        >
+          <div
+            className={`h-full rounded-full ${percentage <= 10 ? "bg-destructive" : percentage <= 30 ? "bg-amber-500" : "bg-emerald-500"}`}
+            style={{ width: `${percentage}%` }}
+          />
+        </div>
+      ) : null}
     </div>
   )
 }

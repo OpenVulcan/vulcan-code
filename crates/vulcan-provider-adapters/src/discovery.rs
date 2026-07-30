@@ -6,11 +6,13 @@ use crate::{
     reasoning_catalog::{FixedReasoningProvider, fixed_reasoning_capabilities},
 };
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::{
-    AiOperation, CapabilitySupport, ModelCapabilities, ModelParameterDefault,
-    ModelParameterDefinition, ModelParameterSchema, PromptCacheCapability, ReasoningControlMode,
-    ReasoningEffort, ResourceKind,
+    AiOperation, CapabilitySupport, DistanceMetric, EmbeddingCapabilities, EmbeddingEncoding,
+    EmbeddingNormalization, EmbeddingOutputKind, EmbeddingTask, ModelCapabilities,
+    ModelParameterDefault, ModelParameterDefinition, ModelParameterSchema, PromptCacheCapability,
+    ReasoningControlMode, ReasoningEffort, RerankCapabilities, RerankScoreSemantics,
+    RerankTruncation, ResourceKind,
 };
 use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
@@ -194,6 +196,807 @@ pub fn parse_openrouter_model_catalog(
     })
 }
 
+/// Parses and atomically merges OpenRouter conversation, embedding, and rerank catalogs.
+/// 解析并原子合并 OpenRouter 会话、向量与重排目录。
+///
+/// # Parameters
+/// 参数
+/// `connection_id` and `generation` identify the in-memory snapshot; the three bodies are exact
+/// responses from `/models`, `/embeddings/models`, and `/models?output_modalities=all`.
+/// `connection_id` 与 `generation` 标识内存快照；三个正文分别来自 `/models`、
+/// `/embeddings/models` 与 `/models?output_modalities=all` 的精确响应。
+///
+/// # Returns
+/// 返回值
+/// One connection-scoped catalog only when all three source documents are valid.
+/// 仅在三个来源文档均有效时返回一个连接作用域目录。
+pub fn parse_openrouter_complete_model_catalog(
+    connection_id: &str,
+    generation: u64,
+    conversation_body: &str,
+    embedding_body: &str,
+    complete_body: &str,
+) -> Result<ConnectionModelCatalog, String> {
+    let conversation =
+        parse_openrouter_model_catalog(connection_id, generation, conversation_body)?;
+    let embedding_response: OpenRouterModelList = serde_json::from_str(embedding_body)
+        .map_err(|error| format!("OpenRouter embedding model list is invalid: {error}"))?;
+    let complete_response: OpenRouterModelList = serde_json::from_str(complete_body)
+        .map_err(|error| format!("OpenRouter complete model list is invalid: {error}"))?;
+
+    let mut models = conversation
+        .models
+        .into_iter()
+        .map(|model| (model.id.clone(), model))
+        .collect::<BTreeMap<_, _>>();
+    for model in embedding_response.data {
+        let architecture = model.architecture.as_ref().ok_or_else(|| {
+            format!(
+                "OpenRouter embedding model `{}` is missing architecture metadata.",
+                model.id
+            )
+        })?;
+        if !architecture
+            .output_modalities
+            .iter()
+            .any(|modality| modality == "embeddings")
+        {
+            return Err(format!(
+                "OpenRouter embedding model `{}` does not declare the `embeddings` output modality.",
+                model.id
+            ));
+        }
+        merge_openrouter_specialized_model(
+            &mut models,
+            &model,
+            openrouter_embedding_capabilities(&model),
+        );
+    }
+    for model in complete_response.data {
+        let is_rerank = model.architecture.as_ref().is_some_and(|architecture| {
+            architecture
+                .output_modalities
+                .iter()
+                .any(|modality| modality == "rerank")
+        });
+        if is_rerank {
+            merge_openrouter_specialized_model(
+                &mut models,
+                &model,
+                openrouter_rerank_capabilities(&model),
+            );
+        }
+    }
+    Ok(ConnectionModelCatalog {
+        connection_id: connection_id.to_string(),
+        models: models.into_values().collect(),
+        generation,
+    })
+}
+
+/// Merges one dedicated OpenRouter operation into its exact routing model identity.
+/// 把一项 OpenRouter 专用操作合并到其精确路由模型身份。
+///
+/// # Parameters
+/// 参数
+/// `models` is the unpublished atomic snapshot, `source` owns display identity, and
+/// `specialized` carries exactly one dedicated operation.
+/// `models` 是尚未发布的原子快照，`source` 拥有显示身份，`specialized` 仅承载一项专用操作。
+///
+/// # Returns
+/// 返回值
+/// This function updates the unpublished map in place and returns no value.
+/// 此函数原地更新尚未发布的映射且不返回值。
+fn merge_openrouter_specialized_model(
+    models: &mut BTreeMap<String, ConnectionModel>,
+    source: &OpenRouterModelEntry,
+    specialized: ModelCapabilities,
+) {
+    let model = models
+        .entry(source.id.clone())
+        .or_insert_with(|| ConnectionModel {
+            id: source.id.clone(),
+            display_name: openrouter_model_display_name(source.name.as_deref(), source.id.as_str()),
+            capabilities: ModelCapabilities::default(),
+        });
+    for operation in specialized.operations {
+        if !model.capabilities.operations.contains(&operation) {
+            model.capabilities.operations.push(operation);
+        }
+    }
+    for resource in specialized.input_resources {
+        if !model.capabilities.input_resources.contains(&resource) {
+            model.capabilities.input_resources.push(resource);
+        }
+    }
+    model.capabilities.context_limit = model
+        .capabilities
+        .context_limit
+        .or(specialized.context_limit);
+    if specialized.embedding.is_some() {
+        model.capabilities.embedding = specialized.embedding;
+    }
+    if specialized.rerank.is_some() {
+        model.capabilities.rerank = specialized.rerank;
+    }
+    model.capabilities.evidence_revision = String::from("openrouter-complete-catalog-api-2026-07");
+}
+
+/// Builds the conservative contract proven by OpenRouter's dedicated embedding catalog.
+/// 构建由 OpenRouter 专用向量目录证明的保守契约。
+///
+/// # Parameters
+/// 参数
+/// `model` is one exact entry from `/embeddings/models`.
+/// `model` 是 `/embeddings/models` 返回的一项精确条目。
+///
+/// # Returns
+/// 返回值
+/// Dense embedding support with only provider-default task semantics and documented encodings.
+/// 返回仅含供应商默认任务语义与文档化编码的稠密向量能力。
+fn openrouter_embedding_capabilities(model: &OpenRouterModelEntry) -> ModelCapabilities {
+    ModelCapabilities {
+        operations: vec![AiOperation::EmbeddingCreate],
+        embedding: Some(EmbeddingCapabilities {
+            tasks: BTreeSet::from([
+                EmbeddingTask::ProviderDefault,
+                EmbeddingTask::Query,
+                EmbeddingTask::Document,
+            ]),
+            input_resources: BTreeSet::new(),
+            output_kinds: BTreeSet::from([EmbeddingOutputKind::Dense]),
+            encodings: BTreeSet::from([EmbeddingEncoding::Float, EmbeddingEncoding::Base64]),
+            dimensions: BTreeSet::new(),
+            minimum_dimensions: None,
+            maximum_dimensions: None,
+            default_dimensions: None,
+            maximum_inputs: None,
+            maximum_tokens_per_input: model.context_length,
+            normalization: EmbeddingNormalization::Unknown,
+            distance_metric: DistanceMetric::Unknown,
+        }),
+        context_limit: model.context_length,
+        evidence_revision: String::from("openrouter-embeddings-models-api-2026-07"),
+        ..ModelCapabilities::default()
+    }
+}
+
+/// Builds the conservative text subset proven by OpenRouter's rerank output modality.
+/// 构建由 OpenRouter 重排输出模态证明的保守纯文本子集。
+///
+/// # Parameters
+/// 参数
+/// `model` is one exact entry from the complete OpenRouter model list.
+/// `model` 是 OpenRouter 完整模型列表中的一项精确条目。
+///
+/// # Returns
+/// 返回值
+/// Text rerank support without invented limits or unsupported truncation controls.
+/// 返回不虚构限制且不暴露未支持截断控制的纯文本重排能力。
+fn openrouter_rerank_capabilities(model: &OpenRouterModelEntry) -> ModelCapabilities {
+    ModelCapabilities {
+        operations: vec![AiOperation::RerankDocuments],
+        rerank: Some(RerankCapabilities {
+            query_resources: BTreeSet::new(),
+            candidate_resources: BTreeSet::new(),
+            maximum_candidates: None,
+            maximum_tokens_per_item: model.context_length,
+            maximum_request_tokens: model.context_length,
+            truncation: BTreeSet::from([RerankTruncation::Disabled]),
+            supports_return_content: true,
+            score_semantics: RerankScoreSemantics::HigherIsMoreRelevant,
+        }),
+        context_limit: model.context_length,
+        evidence_revision: String::from("openrouter-models-rerank-modality-2026-07"),
+        ..ModelCapabilities::default()
+    }
+}
+
+/// Builds one verified Alibaba Coding Plan static model catalog.
+/// 构建一个已验证的阿里云 Coding Plan 静态模型目录。
+///
+/// # Parameters
+/// 参数
+/// `connection_id` owns the in-memory catalog, `service_entry_id` selects the exact regional
+/// product, and `generation` is the process-local refresh generation.
+/// `connection_id` 拥有该内存目录，`service_entry_id` 选择精确区域产品，
+/// `generation` 是进程内刷新代次。
+///
+/// # Returns
+/// 返回值
+/// The exact reviewed catalog or an explicit unsupported-entry error.
+/// 返回精确的已审核目录，或明确的不支持入口错误。
+pub fn build_alibaba_coding_plan_catalog(
+    connection_id: &str,
+    service_entry_id: &str,
+    generation: u64,
+) -> Result<ConnectionModelCatalog, String> {
+    let evidence_revision = match service_entry_id {
+        "coding-plan-cn" => "alibaba.coding-plan-cn.2026-07-23",
+        "coding-plan-global" => "alibaba.coding-plan-global.2026-07-23",
+        unsupported => {
+            return Err(format!(
+                "Alibaba static Coding Plan catalog is not registered for service entry `{unsupported}`."
+            ));
+        }
+    };
+    let definitions = [
+        ("MiniMax-M2.5", "MiniMax M2.5", 196_608, &[][..]),
+        ("glm-4.7", "GLM-4.7", 202_752, &[][..]),
+        ("glm-5", "GLM-5", 202_752, &[][..]),
+        (
+            "kimi-k2.5",
+            "Kimi K2.5",
+            262_144,
+            &[ResourceKind::Image, ResourceKind::Video][..],
+        ),
+        ("qwen3-coder-next", "Qwen3 Coder Next", 262_144, &[][..]),
+        ("qwen3-coder-plus", "Qwen3 Coder Plus", 1_000_000, &[][..]),
+        ("qwen3-max-2026-01-23", "Qwen3 Max 0123", 262_144, &[][..]),
+        (
+            "qwen3.5-plus",
+            "Qwen3.5 Plus",
+            1_000_000,
+            &[ResourceKind::Image, ResourceKind::Video][..],
+        ),
+        (
+            "qwen3.6-plus",
+            "Qwen3.6 Plus",
+            1_000_000,
+            &[ResourceKind::Image, ResourceKind::Video][..],
+        ),
+        ("qwen3.7-plus", "Qwen3.7 Plus", 1_000_000, &[][..]),
+    ];
+    let models = definitions
+        .into_iter()
+        .map(|(model_id, display_name, context_limit, input_resources)| {
+            let mut model = ConnectionModel {
+                id: model_id.to_string(),
+                display_name: display_name.to_string(),
+                capabilities: ModelCapabilities {
+                    operations: vec![AiOperation::ConversationRespond],
+                    context_limit: Some(context_limit),
+                    input_resources: input_resources.to_vec(),
+                    evidence_revision: evidence_revision.to_string(),
+                    ..ModelCapabilities::default()
+                },
+            };
+            enrich_alibaba_model(service_entry_id, &mut model);
+            model
+        })
+        .collect();
+    Ok(ConnectionModelCatalog {
+        connection_id: connection_id.to_string(),
+        models,
+        generation,
+    })
+}
+
+/// Describes one reviewed Alibaba conversation offering without provider discovery guesses.
+/// 描述一项不含供应商发现猜测的已审核阿里云会话产品。
+#[derive(Clone, Copy)]
+struct AlibabaStaticConversationModel {
+    /// Exact upstream model identifier.
+    /// 精确上游模型标识。
+    id: &'static str,
+    /// User-visible model name.
+    /// 用户可见模型名称。
+    display_name: &'static str,
+    /// Exact context-window ceiling.
+    /// 精确上下文窗口上限。
+    context_limit: u64,
+    /// Optional verified output-token ceiling.
+    /// 可选已验证输出 Token 上限。
+    output_limit: Option<u64>,
+    /// Whether image input is proven for this product.
+    /// 当前产品是否已证明支持图片输入。
+    image_input: bool,
+    /// Whether video input is proven for this product.
+    /// 当前产品是否已证明支持视频输入。
+    video_input: bool,
+}
+
+/// Builds one exact Alibaba Token Plan product catalog.
+/// 构建一个精确阿里云 Token Plan 产品目录。
+///
+/// # Parameters
+/// 参数
+/// `connection_id`, `service_entry_id`, `protocol_id`, and `generation` are frozen route facts.
+/// `connection_id`、`service_entry_id`、`protocol_id` 与 `generation` 是冻结路由事实。
+///
+/// # Returns
+/// 返回值
+/// A product- and protocol-scoped static catalog or an explicit unsupported-product error.
+/// 返回产品与协议作用域静态目录，或明确不支持产品错误。
+pub fn build_alibaba_token_plan_catalog(
+    connection_id: &str,
+    service_entry_id: &str,
+    protocol_id: &str,
+    generation: u64,
+) -> Result<ConnectionModelCatalog, String> {
+    const PERSONAL_CN: &[AlibabaStaticConversationModel] = &[
+        alibaba_static_model(
+            "qwen3.8-max-preview",
+            "Qwen3.8 Max Preview",
+            1_000_000,
+            Some(131_072),
+            true,
+            true,
+        ),
+        alibaba_static_model("qwen3.7-max", "Qwen3.7 Max", 1_000_000, None, false, false),
+        alibaba_static_model("qwen3.7-plus", "Qwen3.7 Plus", 1_000_000, None, true, true),
+        alibaba_static_model(
+            "qwen3.6-flash",
+            "Qwen3.6 Flash",
+            1_000_000,
+            None,
+            true,
+            false,
+        ),
+        alibaba_static_model("glm-5.2", "GLM-5.2", 1_000_000, None, false, false),
+        alibaba_static_model(
+            "deepseek-v4-pro",
+            "DeepSeek V4 Pro",
+            1_000_000,
+            None,
+            false,
+            false,
+        ),
+    ];
+    const TEAM_CN: &[AlibabaStaticConversationModel] = &[
+        alibaba_static_model(
+            "qwen3.8-max-preview",
+            "Qwen3.8 Max Preview",
+            1_000_000,
+            Some(131_072),
+            true,
+            true,
+        ),
+        alibaba_static_model("qwen3.7-max", "Qwen3.7 Max", 1_000_000, None, false, false),
+        alibaba_static_model("qwen3.7-plus", "Qwen3.7 Plus", 1_000_000, None, true, true),
+        alibaba_static_model("qwen3.6-plus", "Qwen3.6 Plus", 1_000_000, None, true, true),
+        alibaba_static_model(
+            "qwen3.6-flash",
+            "Qwen3.6 Flash",
+            1_000_000,
+            None,
+            true,
+            false,
+        ),
+        alibaba_static_model(
+            "deepseek-v4-pro",
+            "DeepSeek V4 Pro",
+            1_000_000,
+            None,
+            false,
+            false,
+        ),
+        alibaba_static_model(
+            "deepseek-v4-flash",
+            "DeepSeek V4 Flash",
+            1_000_000,
+            None,
+            false,
+            false,
+        ),
+        alibaba_static_model(
+            "deepseek-v3.2",
+            "DeepSeek V3.2",
+            131_072,
+            None,
+            false,
+            false,
+        ),
+        alibaba_static_model(
+            "kimi-k2.7-code",
+            "Kimi K2.7 Code",
+            262_144,
+            None,
+            true,
+            true,
+        ),
+        alibaba_static_model("kimi-k2.6", "Kimi K2.6", 262_144, None, false, false),
+        alibaba_static_model("kimi-k2.5", "Kimi K2.5", 262_144, None, true, true),
+        alibaba_static_model("glm-5.2", "GLM-5.2", 1_000_000, None, false, false),
+        alibaba_static_model("glm-5.1", "GLM-5.1", 198_000, None, false, false),
+        alibaba_static_model("glm-5", "GLM-5", 198_000, None, false, false),
+        alibaba_static_model("MiniMax-M2.5", "MiniMax M2.5", 196_608, None, false, false),
+    ];
+    const TEAM_GLOBAL: &[AlibabaStaticConversationModel] = &[
+        alibaba_static_model("qwen3.7-max", "Qwen3.7 Max", 1_000_000, None, false, false),
+        alibaba_static_model("qwen3.7-plus", "Qwen3.7 Plus", 1_000_000, None, true, true),
+        alibaba_static_model("qwen3.6-plus", "Qwen3.6 Plus", 1_000_000, None, true, true),
+        alibaba_static_model(
+            "qwen3.6-flash",
+            "Qwen3.6 Flash",
+            1_000_000,
+            None,
+            true,
+            false,
+        ),
+        alibaba_static_model(
+            "deepseek-v4-pro",
+            "DeepSeek V4 Pro",
+            1_000_000,
+            None,
+            false,
+            false,
+        ),
+        alibaba_static_model(
+            "deepseek-v4-flash",
+            "DeepSeek V4 Flash",
+            1_000_000,
+            None,
+            false,
+            false,
+        ),
+        alibaba_static_model(
+            "deepseek-v3.2",
+            "DeepSeek V3.2",
+            128_000,
+            None,
+            false,
+            false,
+        ),
+        alibaba_static_model(
+            "kimi-k2.7-code",
+            "Kimi K2.7 Code",
+            256_000,
+            None,
+            true,
+            true,
+        ),
+        alibaba_static_model("kimi-k2.6", "Kimi K2.6", 256_000, None, false, false),
+        alibaba_static_model("kimi-k2.5", "Kimi K2.5", 256_000, None, true, true),
+        alibaba_static_model("glm-5.2", "GLM-5.2", 198_000, None, false, false),
+        alibaba_static_model("glm-5.1", "GLM-5.1", 198_000, None, false, false),
+        alibaba_static_model("glm-5", "GLM-5", 198_000, None, false, false),
+        alibaba_static_model("MiniMax-M2.5", "MiniMax M2.5", 192_000, None, false, false),
+    ];
+    let definitions = match service_entry_id {
+        "token-plan-personal-cn" => PERSONAL_CN,
+        "token-plan-team-cn" => TEAM_CN,
+        "token-plan-team-global" => TEAM_GLOBAL,
+        unsupported => {
+            return Err(format!(
+                "Alibaba static Token Plan catalog is not registered for service entry `{unsupported}`."
+            ));
+        }
+    };
+    build_alibaba_static_conversation_catalog(
+        connection_id,
+        service_entry_id,
+        protocol_id,
+        generation,
+        definitions,
+    )
+}
+
+/// Builds one exact Alibaba Model Studio regional catalog.
+/// 构建一个精确阿里云百炼 Model Studio 区域目录。
+///
+/// # Parameters
+/// 参数
+/// `connection_id`, `service_entry_id`, `protocol_id`, and `generation` are frozen route facts.
+/// `connection_id`、`service_entry_id`、`protocol_id` 与 `generation` 是冻结路由事实。
+///
+/// # Returns
+/// 返回值
+/// A reviewed regional catalog including conversation, embedding, and rerank operations.
+/// 返回包含会话、向量与重排操作的已审核区域目录。
+pub fn build_alibaba_model_studio_catalog(
+    connection_id: &str,
+    service_entry_id: &str,
+    protocol_id: &str,
+    generation: u64,
+) -> Result<ConnectionModelCatalog, String> {
+    const CHINA: &[AlibabaStaticConversationModel] = &[
+        alibaba_static_model(
+            "qwen3.5-flash",
+            "Qwen3.5 Flash",
+            1_000_000,
+            Some(65_536),
+            true,
+            true,
+        ),
+        alibaba_static_model(
+            "qwen3.5-plus",
+            "Qwen3.5 Plus",
+            1_000_000,
+            Some(65_536),
+            true,
+            true,
+        ),
+        alibaba_static_model(
+            "qwen3.6-plus",
+            "Qwen3.6 Plus",
+            1_000_000,
+            Some(65_536),
+            true,
+            true,
+        ),
+        alibaba_static_model(
+            "qwen3.7-plus",
+            "Qwen3.7 Plus",
+            1_000_000,
+            Some(65_536),
+            true,
+            true,
+        ),
+        alibaba_static_model(
+            "qwen3.7-max",
+            "Qwen3.7 Max",
+            1_000_000,
+            Some(65_536),
+            false,
+            false,
+        ),
+        alibaba_static_model(
+            "qwen3.7-max-2026-06-08",
+            "Qwen3.7 Max 2026-06-08",
+            1_000_000,
+            Some(65_536),
+            true,
+            true,
+        ),
+        alibaba_static_model("glm-5.1", "GLM-5.1", 202_752, Some(131_072), false, false),
+        alibaba_static_model(
+            "glm-5.2-fast-preview",
+            "GLM-5.2 Fast Preview",
+            1_048_576,
+            Some(131_072),
+            false,
+            false,
+        ),
+        alibaba_static_model(
+            "ZHIPU/GLM-5.2",
+            "ZHIPU GLM-5.2",
+            1_048_576,
+            Some(131_072),
+            false,
+            false,
+        ),
+        alibaba_static_model(
+            "kimi/kimi-k3",
+            "Kimi K3",
+            1_048_576,
+            Some(1_048_576),
+            true,
+            true,
+        ),
+        alibaba_static_model(
+            "MiniMax/MiniMax-M3",
+            "MiniMax M3",
+            1_048_576,
+            Some(32_768),
+            true,
+            true,
+        ),
+        alibaba_static_model(
+            "stepfun/step-3.7-flash",
+            "Step 3.7 Flash",
+            262_144,
+            Some(262_144),
+            true,
+            true,
+        ),
+        alibaba_static_model(
+            "xiaomi/mimo-v2.5-pro",
+            "Xiaomi MiMo V2.5 Pro",
+            1_048_576,
+            Some(131_072),
+            false,
+            false,
+        ),
+        alibaba_static_model(
+            "deepseek-v4-pro",
+            "DeepSeek V4 Pro",
+            1_000_000,
+            Some(393_216),
+            false,
+            false,
+        ),
+        alibaba_static_model(
+            "deepseek-v4-flash",
+            "DeepSeek V4 Flash",
+            1_000_000,
+            Some(393_216),
+            false,
+            false,
+        ),
+    ];
+    const SINGAPORE: &[AlibabaStaticConversationModel] = &[
+        alibaba_static_model(
+            "qwen3.5-flash",
+            "Qwen3.5 Flash",
+            1_000_000,
+            Some(65_536),
+            true,
+            true,
+        ),
+        alibaba_static_model(
+            "qwen3.5-plus",
+            "Qwen3.5 Plus",
+            1_000_000,
+            Some(65_536),
+            true,
+            true,
+        ),
+        alibaba_static_model(
+            "qwen3.6-plus",
+            "Qwen3.6 Plus",
+            1_000_000,
+            Some(65_536),
+            true,
+            true,
+        ),
+        alibaba_static_model(
+            "glm-5.2-fast-preview",
+            "GLM-5.2 Fast Preview",
+            1_048_576,
+            Some(131_072),
+            false,
+            false,
+        ),
+        alibaba_static_model(
+            "deepseek-v4-flash",
+            "DeepSeek V4 Flash",
+            1_000_000,
+            Some(393_216),
+            false,
+            false,
+        ),
+    ];
+    let definitions = match service_entry_id {
+        "model-studio-cn" => CHINA,
+        "model-studio-singapore" => SINGAPORE,
+        unsupported => {
+            return Err(format!(
+                "Alibaba static Model Studio catalog is not registered for service entry `{unsupported}`."
+            ));
+        }
+    };
+    let mut catalog = build_alibaba_static_conversation_catalog(
+        connection_id,
+        service_entry_id,
+        protocol_id,
+        generation,
+        definitions,
+    )?;
+    for (id, display_name) in [
+        ("text-embedding-v4", "Text Embedding V4"),
+        ("text-embedding-v3", "Text Embedding V3"),
+        ("qwen3-rerank", "Qwen3 Rerank"),
+    ] {
+        let mut model = ConnectionModel {
+            id: id.to_string(),
+            display_name: display_name.to_string(),
+            capabilities: ModelCapabilities::default(),
+        };
+        enrich_alibaba_model(service_entry_id, &mut model);
+        catalog.models.push(model);
+    }
+    if service_entry_id == "model-studio-cn" {
+        let mut model = ConnectionModel {
+            id: String::from("qwen3.7-text-embedding"),
+            display_name: String::from("Qwen3.7 Text Embedding"),
+            capabilities: ModelCapabilities::default(),
+        };
+        enrich_alibaba_model(service_entry_id, &mut model);
+        catalog.models.push(model);
+    }
+    Ok(catalog)
+}
+
+/// Creates one compile-time Alibaba static model definition.
+/// 创建一项编译期阿里云静态模型定义。
+///
+/// # Parameters
+/// 参数
+/// All arguments are copied from reviewed product evidence.
+/// 全部参数均复制自已审核产品证据。
+///
+/// # Returns
+/// 返回值
+/// One immutable static definition.
+/// 返回一项不可变静态定义。
+const fn alibaba_static_model(
+    id: &'static str,
+    display_name: &'static str,
+    context_limit: u64,
+    output_limit: Option<u64>,
+    image_input: bool,
+    video_input: bool,
+) -> AlibabaStaticConversationModel {
+    AlibabaStaticConversationModel {
+        id,
+        display_name,
+        context_limit,
+        output_limit,
+        image_input,
+        video_input,
+    }
+}
+
+/// Builds one protocol-scoped catalog from reviewed Alibaba product definitions.
+/// 根据已审核阿里云产品定义构建一个协议作用域目录。
+///
+/// # Parameters
+/// 参数
+/// The route identity and definition slice are exact code-owned facts.
+/// 路由身份与定义切片是精确代码持有事实。
+///
+/// # Returns
+/// 返回值
+/// A deterministic catalog whose Responses subset is kept separate from Chat.
+/// 返回将 Responses 子集与 Chat 分离的确定性目录。
+fn build_alibaba_static_conversation_catalog(
+    connection_id: &str,
+    service_entry_id: &str,
+    protocol_id: &str,
+    generation: u64,
+    definitions: &[AlibabaStaticConversationModel],
+) -> Result<ConnectionModelCatalog, String> {
+    if !matches!(
+        protocol_id,
+        OPENAI_CHAT_PROFILE_ID | ANTHROPIC_MESSAGES_PROFILE_ID | OPENAI_RESPONSES_PROFILE_ID
+    ) {
+        return Err(format!(
+            "Alibaba static catalog does not support protocol `{protocol_id}`."
+        ));
+    }
+    let responses_harness = protocol_id == OPENAI_RESPONSES_PROFILE_ID;
+    let models = definitions
+        .iter()
+        .filter(|definition| {
+            !responses_harness
+                || matches!(
+                    definition.id,
+                    "qwen3.8-max-preview" | "qwen3.7-max" | "qwen3.7-plus"
+                )
+        })
+        .map(|definition| {
+            let mut input_resources = Vec::new();
+            if !responses_harness && definition.image_input {
+                input_resources.push(ResourceKind::Image);
+            }
+            if !responses_harness && definition.video_input {
+                input_resources.push(ResourceKind::Video);
+            }
+            let mut model = ConnectionModel {
+                id: definition.id.to_string(),
+                display_name: if responses_harness {
+                    format!("{} Harness", definition.display_name)
+                } else {
+                    definition.display_name.to_string()
+                },
+                capabilities: ModelCapabilities {
+                    operations: vec![AiOperation::ConversationRespond],
+                    input_resources,
+                    context_limit: Some(definition.context_limit),
+                    output_limit: definition.output_limit,
+                    evidence_revision: format!("model-core.alibaba.{service_entry_id}.2026-07-30"),
+                    ..ModelCapabilities::default()
+                },
+            };
+            if responses_harness {
+                model.capabilities.tool_calling = CapabilitySupport::Unsupported;
+                model.capabilities.parallel_tool_calling = CapabilitySupport::Unsupported;
+                model.capabilities.reasoning = CapabilitySupport::Unsupported;
+                model.capabilities.reasoning_control = ReasoningControlMode::FixedOff;
+            } else {
+                enrich_alibaba_model(service_entry_id, &mut model);
+            }
+            model
+        })
+        .collect();
+    Ok(ConnectionModelCatalog {
+        connection_id: connection_id.to_string(),
+        models,
+        generation,
+    })
+}
+
 /// Returns the user-facing model name from one OpenRouter catalog entry.
 /// 从单个 OpenRouter 目录条目返回面向用户的模型名称。
 ///
@@ -294,7 +1097,7 @@ pub fn enrich_compatible_model_catalog(
         match provider_id {
             "kimi" => enrich_kimi_model(service_entry_id, protocol_id, model),
             "deepseek" => enrich_deepseek_model(model),
-            "alibaba" => enrich_alibaba_model(model),
+            "alibaba" => enrich_alibaba_model(service_entry_id, model),
             _ => {}
         }
     }
@@ -447,8 +1250,13 @@ fn enrich_deepseek_model(model: &mut ConnectionModel) {
     model.capabilities.tool_calling = CapabilitySupport::Native;
     model.capabilities.parallel_tool_calling = CapabilitySupport::Native;
     model.capabilities.reasoning = CapabilitySupport::Native;
-    model.capabilities.reasoning_efforts = vec![ReasoningEffort::High, ReasoningEffort::Max];
-    model.capabilities.evidence_revision = String::from("deepseek.api-docs.2026-07-29");
+    model.capabilities.reasoning_control = ReasoningControlMode::Toggle;
+    model.capabilities.reasoning_efforts = vec![
+        ReasoningEffort::None,
+        ReasoningEffort::High,
+        ReasoningEffort::Max,
+    ];
+    model.capabilities.evidence_revision = String::from("deepseek.api-docs.2026-07-30");
 }
 
 /// Applies Alibaba reasoning contracts only to exact model identities present in Model Core.
@@ -458,8 +1266,73 @@ fn enrich_deepseek_model(model: &mut ConnectionModel) {
 /// 参数
 /// `model` is one provider-returned model whose unknown identities remain conservative.
 /// `model` 是供应商返回的单个模型，未知身份保持保守能力。
-fn enrich_alibaba_model(model: &mut ConnectionModel) {
-    let reasoning_efforts = match model.id.as_str() {
+fn enrich_alibaba_model(service_entry_id: &str, model: &mut ConnectionModel) {
+    if matches!(
+        service_entry_id,
+        "model-studio-cn" | "model-studio-singapore"
+    ) {
+        match model.id.as_str() {
+            "text-embedding-v4" => {
+                apply_alibaba_embedding_capabilities(
+                    model,
+                    &[64, 128, 256, 512, 768, 1024, 1536, 2048],
+                    64,
+                    2048,
+                    1024,
+                    10,
+                    8_192,
+                );
+                return;
+            }
+            "text-embedding-v3" => {
+                apply_alibaba_embedding_capabilities(
+                    model,
+                    &[64, 128, 256, 512, 768, 1024],
+                    64,
+                    1024,
+                    1024,
+                    10,
+                    8_192,
+                );
+                return;
+            }
+            "qwen3.7-text-embedding" if service_entry_id == "model-studio-cn" => {
+                apply_alibaba_embedding_capabilities(
+                    model,
+                    &[256, 512, 768, 1024, 1536, 2048, 2560],
+                    256,
+                    2560,
+                    1024,
+                    20,
+                    128_000,
+                );
+                return;
+            }
+            "qwen3-rerank" => {
+                model.capabilities = ModelCapabilities {
+                    operations: vec![AiOperation::RerankDocuments],
+                    rerank: Some(RerankCapabilities {
+                        query_resources: BTreeSet::new(),
+                        candidate_resources: BTreeSet::new(),
+                        maximum_candidates: Some(500),
+                        maximum_tokens_per_item: Some(4_000),
+                        maximum_request_tokens: Some(120_000),
+                        truncation: BTreeSet::from([RerankTruncation::ProviderDefault]),
+                        supports_return_content: true,
+                        score_semantics: RerankScoreSemantics::HigherIsMoreRelevant,
+                    }),
+                    reasoning: CapabilitySupport::Unsupported,
+                    reasoning_control: ReasoningControlMode::FixedOff,
+                    context_limit: Some(120_000),
+                    evidence_revision: String::from("model-core.alibaba.qwen3-rerank.2026-07-30"),
+                    ..ModelCapabilities::default()
+                };
+                return;
+            }
+            _ => {}
+        }
+    }
+    let (reasoning_control, reasoning_efforts) = match model.id.as_str() {
         "qwen3.7-plus"
         | "qwen3.6-plus"
         | "qwen3.5-plus"
@@ -479,15 +1352,75 @@ fn enrich_alibaba_model(model: &mut ConnectionModel) {
         | "deepseek-v4-flash"
         | "deepseek-v3.2"
         | "kimi-k2.5"
-        | "kimi-k2.6" => vec![ReasoningEffort::None, ReasoningEffort::Adaptive],
-        "kimi-k2.7-code" => vec![ReasoningEffort::Adaptive],
+        | "kimi-k2.6" => (
+            ReasoningControlMode::Toggle,
+            vec![ReasoningEffort::None, ReasoningEffort::Adaptive],
+        ),
+        "qwen3.8-max-preview"
+        | "qwen3-max-2026-01-23"
+        | "qwen3-coder-next"
+        | "qwen3-coder-plus"
+        | "MiniMax-M2.5"
+        | "MiniMax/MiniMax-M3"
+        | "kimi-k2.7-code"
+        | "kimi/kimi-k3" => (
+            ReasoningControlMode::FixedOn,
+            vec![ReasoningEffort::Adaptive],
+        ),
         _ => return,
     };
     model.capabilities.tool_calling = CapabilitySupport::Native;
-    model.capabilities.parallel_tool_calling = CapabilitySupport::Native;
-    model.capabilities.reasoning = CapabilitySupport::Equivalent;
+    model.capabilities.parallel_tool_calling = CapabilitySupport::Unknown;
+    model.capabilities.reasoning = CapabilitySupport::Native;
+    model.capabilities.reasoning_control = reasoning_control;
     model.capabilities.reasoning_efforts = reasoning_efforts;
-    model.capabilities.evidence_revision = String::from("model-core.alibaba.2026-07-29");
+    model.capabilities.evidence_revision =
+        format!("model-core.alibaba.{service_entry_id}.2026-07-30");
+}
+
+/// Replaces one Alibaba catalog model with its exact compatible embedding contract.
+/// 使用精确兼容向量契约替换一项阿里云目录模型能力。
+///
+/// # Parameters
+/// 参数
+/// `model` is the provider-visible model; all numeric arguments are closed reviewed limits.
+/// `model` 是供应商可见模型；全部数值参数均为已审核的封闭限制。
+///
+/// # Returns
+/// 返回值
+/// This function mutates the model capability snapshot in place and returns no value.
+/// 此函数原地修改模型能力快照且不返回值。
+fn apply_alibaba_embedding_capabilities(
+    model: &mut ConnectionModel,
+    dimensions: &[u32],
+    minimum_dimensions: u32,
+    maximum_dimensions: u32,
+    default_dimensions: u32,
+    maximum_inputs: u32,
+    maximum_tokens_per_input: u64,
+) {
+    model.capabilities = ModelCapabilities {
+        operations: vec![AiOperation::EmbeddingCreate],
+        embedding: Some(EmbeddingCapabilities {
+            tasks: BTreeSet::from([EmbeddingTask::ProviderDefault]),
+            input_resources: BTreeSet::new(),
+            output_kinds: BTreeSet::from([EmbeddingOutputKind::Dense]),
+            encodings: BTreeSet::from([EmbeddingEncoding::Float]),
+            dimensions: dimensions.iter().copied().collect(),
+            minimum_dimensions: Some(minimum_dimensions),
+            maximum_dimensions: Some(maximum_dimensions),
+            default_dimensions: Some(default_dimensions),
+            maximum_inputs: Some(maximum_inputs),
+            maximum_tokens_per_input: Some(maximum_tokens_per_input),
+            normalization: EmbeddingNormalization::Unknown,
+            distance_metric: DistanceMetric::Unknown,
+        }),
+        reasoning: CapabilitySupport::Unsupported,
+        reasoning_control: ReasoningControlMode::FixedOff,
+        context_limit: Some(maximum_tokens_per_input),
+        evidence_revision: String::from("model-core.alibaba.embeddings.2026-07-30"),
+        ..ModelCapabilities::default()
+    };
 }
 
 /// Parses the OpenAI Codex subscription model catalog without local model guesses.
@@ -802,6 +1735,8 @@ fn minimax_text_capabilities(model_id: &str, protocol_id: &str) -> ModelCapabili
         operations: vec![AiOperation::ConversationRespond],
         input_resources,
         output_resources: Vec::new(),
+        embedding: None,
+        rerank: None,
         tool_calling: if verified_model {
             CapabilitySupport::Native
         } else {
@@ -1080,6 +2015,8 @@ fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabi
         operations: vec![AiOperation::ConversationRespond],
         input_resources,
         output_resources,
+        embedding: None,
+        rerank: None,
         tool_calling: if supports("tools") {
             CapabilitySupport::Native
         } else {
@@ -1563,6 +2500,123 @@ mod tests {
         assert!(error.contains("display_name"));
     }
 
+    /// Verifies Alibaba Coding Plan static catalogs retain exact regional identity and limits.
+    /// 验证阿里云 Coding Plan 静态目录保留精确区域身份与限制。
+    #[test]
+    fn alibaba_coding_plan_static_catalog_is_region_scoped() {
+        let catalog = build_alibaba_coding_plan_catalog("connection", "coding-plan-cn", 7)
+            .expect("registered Coding Plan entry must build");
+        assert_eq!(catalog.connection_id, "connection");
+        assert_eq!(catalog.generation, 7);
+        assert_eq!(catalog.models.len(), 10);
+        let qwen = catalog
+            .models
+            .iter()
+            .find(|model| model.id == "qwen3.7-plus")
+            .expect("Qwen 3.7 Plus");
+        assert_eq!(qwen.capabilities.context_limit, Some(1_000_000));
+        assert_eq!(
+            qwen.capabilities.evidence_revision,
+            "model-core.alibaba.coding-plan-cn.2026-07-30"
+        );
+        assert!(build_alibaba_coding_plan_catalog("connection", "model-studio-cn", 8).is_err());
+    }
+
+    /// Verifies Alibaba Model Studio publishes only reviewed embedding and rerank contracts.
+    /// 验证阿里云百炼 Model Studio 仅发布已审核的向量与重排契约。
+    #[test]
+    fn alibaba_model_studio_enrichment_is_product_and_region_scoped() {
+        let mut catalog = parse_openai_model_catalog(
+            "connection",
+            1,
+            r#"{"object":"list","data":[{"id":"text-embedding-v4","object":"model","created":1,"owned_by":"alibaba"},{"id":"text-embedding-v3","object":"model","created":1,"owned_by":"alibaba"},{"id":"qwen3.7-text-embedding","object":"model","created":1,"owned_by":"alibaba"},{"id":"qwen3-rerank","object":"model","created":1,"owned_by":"alibaba"}]}"#,
+        )
+        .expect("OpenAI-compatible identity list should parse");
+        enrich_compatible_model_catalog(
+            "alibaba",
+            "model-studio-cn",
+            OPENAI_CHAT_PROFILE_ID,
+            &mut catalog,
+        );
+
+        let embedding = catalog
+            .models
+            .iter()
+            .find(|model| model.id == "text-embedding-v4")
+            .expect("text embedding v4");
+        assert_eq!(
+            embedding.capabilities.operations,
+            vec![AiOperation::EmbeddingCreate]
+        );
+        assert_eq!(
+            embedding
+                .capabilities
+                .embedding
+                .as_ref()
+                .expect("embedding contract")
+                .maximum_inputs,
+            Some(10)
+        );
+        let embedding_v3 = catalog
+            .models
+            .iter()
+            .find(|model| model.id == "text-embedding-v3")
+            .expect("text embedding v3");
+        let embedding_v3_capabilities = embedding_v3
+            .capabilities
+            .embedding
+            .as_ref()
+            .expect("V3 embedding contract");
+        assert_eq!(embedding_v3_capabilities.maximum_dimensions, Some(1024));
+        assert_eq!(embedding_v3_capabilities.default_dimensions, Some(1024));
+        assert_eq!(embedding_v3_capabilities.maximum_inputs, Some(10));
+        let qwen37 = catalog
+            .models
+            .iter()
+            .find(|model| model.id == "qwen3.7-text-embedding")
+            .expect("qwen 3.7 embedding");
+        assert_eq!(
+            qwen37
+                .capabilities
+                .embedding
+                .as_ref()
+                .expect("China embedding contract")
+                .maximum_dimensions,
+            Some(2560)
+        );
+        let rerank = catalog
+            .models
+            .iter()
+            .find(|model| model.id == "qwen3-rerank")
+            .expect("qwen rerank");
+        assert_eq!(
+            rerank
+                .capabilities
+                .rerank
+                .as_ref()
+                .expect("rerank contract")
+                .maximum_candidates,
+            Some(500)
+        );
+
+        let mut singapore = parse_openai_model_catalog(
+            "connection",
+            2,
+            r#"{"object":"list","data":[{"id":"qwen3.7-text-embedding","object":"model","created":1,"owned_by":"alibaba"}]}"#,
+        )
+        .expect("OpenAI-compatible identity list should parse");
+        enrich_compatible_model_catalog(
+            "alibaba",
+            "model-studio-singapore",
+            OPENAI_CHAT_PROFILE_ID,
+            &mut singapore,
+        );
+        assert!(
+            singapore.models[0].capabilities.embedding.is_none(),
+            "China-only embedding must stay unavailable in Singapore"
+        );
+    }
+
     /// Verifies MiniMax discovery keeps M3 and M2 capability differences explicit.
     /// 验证 MiniMax 发现明确保留 M3 与 M2 的能力差异。
     #[test]
@@ -1654,6 +2708,59 @@ mod tests {
         );
     }
 
+    /// Verifies atomic OpenRouter discovery separates conversation, embedding, and rerank evidence.
+    /// 验证 OpenRouter 原子发现会分离会话、向量与重排证据。
+    #[test]
+    fn openrouter_complete_discovery_merges_only_exact_specialized_operations() {
+        let catalog = parse_openrouter_complete_model_catalog(
+            "connection",
+            9,
+            r#"{"data":[{"id":"example/chat","name":"Example: Chat","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]}}]}"#,
+            r#"{"data":[{"id":"example/embed","name":"Example: Embed","context_length":4096,"supported_parameters":[],"architecture":{"input_modalities":["text","image"],"output_modalities":["embeddings"]}}]}"#,
+            r#"{"data":[{"id":"example/chat","name":"Example: Chat","context_length":8192,"supported_parameters":[],"architecture":{"input_modalities":["text"],"output_modalities":["text"]}},{"id":"example/rerank","name":"Example: Rerank","context_length":32768,"supported_parameters":[],"architecture":{"input_modalities":["text"],"output_modalities":["rerank"]}}]}"#,
+        )
+        .expect("all three exact source documents should merge");
+
+        assert_eq!(catalog.generation, 9);
+        assert_eq!(catalog.models.len(), 3);
+        let embedding = catalog
+            .models
+            .iter()
+            .find(|model| model.id == "example/embed")
+            .expect("embedding model");
+        assert_eq!(
+            embedding.capabilities.operations,
+            vec![AiOperation::EmbeddingCreate]
+        );
+        assert!(
+            embedding
+                .capabilities
+                .embedding
+                .as_ref()
+                .expect("embedding contract")
+                .input_resources
+                .is_empty()
+        );
+        let rerank = catalog
+            .models
+            .iter()
+            .find(|model| model.id == "example/rerank")
+            .expect("rerank model");
+        assert_eq!(
+            rerank.capabilities.operations,
+            vec![AiOperation::RerankDocuments]
+        );
+        assert_eq!(
+            rerank
+                .capabilities
+                .rerank
+                .as_ref()
+                .expect("rerank contract")
+                .truncation,
+            BTreeSet::from([RerankTruncation::Disabled])
+        );
+    }
+
     /// Verifies the same MiniMax-M3 family keeps provider-specific reasoning contracts.
     /// 验证同一 MiniMax-M3 系列保留供应商专属思考契约。
     #[test]
@@ -1728,6 +2835,35 @@ mod tests {
         assert_eq!(
             catalog.models[0].capabilities.evidence_revision,
             "openai.models.v1"
+        );
+    }
+
+    /// Verifies DeepSeek official discovery exposes a switch with only documented effort levels.
+    /// 验证 DeepSeek 官方模型发现暴露开关及仅文档化的思考档位。
+    #[test]
+    fn deepseek_official_discovery_exposes_toggle_reasoning() {
+        let mut catalog = parse_openai_model_catalog(
+            "connection",
+            1,
+            r#"{"object":"list","data":[{"id":"deepseek-v4-pro","object":"model","created":1,"owned_by":"deepseek"}]}"#,
+        )
+        .expect("documented response should parse");
+        enrich_compatible_model_catalog(
+            "deepseek",
+            "official-api",
+            OPENAI_CHAT_PROFILE_ID,
+            &mut catalog,
+        );
+
+        let capabilities = &catalog.models[0].capabilities;
+        assert_eq!(capabilities.reasoning_control, ReasoningControlMode::Toggle);
+        assert_eq!(
+            capabilities.reasoning_efforts,
+            vec![
+                ReasoningEffort::None,
+                ReasoningEffort::High,
+                ReasoningEffort::Max,
+            ]
         );
     }
 

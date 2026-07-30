@@ -207,8 +207,12 @@ pub fn load_public_ai_connections_file() -> Result<PublicAiConnectionsFile, Stri
     }
     let text = fs::read_to_string(&path)
         .map_err(|error| format!("读取公共 AI 连接文件失败（{}）：{error}", path.display()))?;
-    parse_public_ai_connections_text(&text)
-        .map_err(|error| format!("解析公共 AI 连接文件失败（{}）：{error}", path.display()))
+    let mut file = parse_public_ai_connections_text(&text)
+        .map_err(|error| format!("解析公共 AI 连接文件失败（{}）：{error}", path.display()))?;
+    if file.configuration.migrate_to_current_schema()? {
+        save_public_ai_connections_file(&file.configuration)?;
+    }
+    Ok(file)
 }
 
 /// Parses and validates one standalone public AI connection document.

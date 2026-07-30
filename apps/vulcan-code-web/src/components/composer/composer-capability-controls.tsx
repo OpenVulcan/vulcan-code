@@ -428,7 +428,7 @@ function providerToolCapabilityColor(capability: PublicAiProviderToolCapabilityK
   if (capability === "image_generate" || capability === "image_edit") {
     return "#ec4899";
   }
-  if (capability === "video_generate") {
+  if (capability === "video_generate" || capability === "video_edit") {
     return "#f97316";
   }
   if (capability === "speech_synthesize" || capability === "speech_transcribe") {
@@ -455,7 +455,7 @@ function providerToolCapabilityIcon(
   if (capability === "media_analyze" || capability === "image_generate" || capability === "image_edit") {
     return <Image size={size} />;
   }
-  if (capability === "video_generate") {
+  if (capability === "video_generate" || capability === "video_edit") {
     return <Video size={size} />;
   }
   if (capability === "speech_synthesize" || capability === "speech_transcribe") {
@@ -479,6 +479,7 @@ function providerToolCapabilityLabel(
     media_analyze: "settings.providerTools.mediaAnalyze",
     image_generate: "settings.providerTools.imageGenerate",
     video_generate: "settings.providerTools.videoGenerate",
+    video_edit: "settings.providerTools.videoEdit",
     speech_synthesize: "settings.providerTools.speechSynthesize",
     music_generate: "settings.providerTools.musicGenerate",
   };

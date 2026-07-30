@@ -983,6 +983,36 @@ mod tests {
         assert_eq!(selection.selected_effort, "adaptive");
     }
 
+    /// Verifies DeepSeek exposes its documented off, high, and max choices while defaulting on.
+    /// 验证 DeepSeek 暴露文档化的关闭、高与最大选项，同时默认保持开启。
+    #[test]
+    fn reasoning_selector_exposes_deepseek_toggle_and_defaults_high() {
+        let capabilities = vulcan_ai_contract::ModelCapabilities {
+            reasoning: vulcan_ai_contract::CapabilitySupport::Native,
+            reasoning_control: vulcan_ai_contract::ReasoningControlMode::Toggle,
+            reasoning_efforts: vec![
+                vulcan_ai_contract::ReasoningEffort::None,
+                vulcan_ai_contract::ReasoningEffort::High,
+                vulcan_ai_contract::ReasoningEffort::Max,
+            ],
+            ..vulcan_ai_contract::ModelCapabilities::default()
+        };
+
+        let selection =
+            reasoning_selection(&ProviderConfigurationFile::default(), Some(&capabilities))
+                .expect("DeepSeek reasoning toggle should create a selector");
+
+        assert_eq!(
+            selection
+                .options
+                .iter()
+                .map(|option| option.value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["none", "high", "max"]
+        );
+        assert_eq!(selection.selected_effort, "high");
+    }
+
     /// Verifies models without adjustable levels remain visible as a fixed enabled state.
     /// 验证没有可调档位的思考模型仍以固定开启状态显示。
     #[test]

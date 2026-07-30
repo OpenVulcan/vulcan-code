@@ -300,6 +300,7 @@ fn validate_connection(
             credential_profile.id
         ));
     }
+    entry.effective_usage_scopes(connection)?;
     if entry.kind == crate::ServiceEntryKind::ProviderTools {
         if !connection.selected_protocol.is_empty() || !connection.verified_protocols.is_empty() {
             return Err(format!(
@@ -368,6 +369,7 @@ mod tests {
             ]),
             selected_protocol: protocol.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),
+            usage_scope_override: None,
         }
     }
 

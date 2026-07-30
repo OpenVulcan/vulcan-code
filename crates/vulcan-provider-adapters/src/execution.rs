@@ -179,7 +179,7 @@ pub type ProviderExecutionStream =
 
 /// One normalized generated resource returned by a provider tool.
 /// 供应商工具返回的一项归一化生成资源。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderToolGeneratedResource {
     /// Stable output identifier scoped to this invocation.
     /// 作用域限定在当前调用内的稳定输出标识。
@@ -328,7 +328,7 @@ pub struct ProviderToolRerankOutput {
 
 /// Flat composite output used when one provider operation returns multiple semantic kinds.
 /// 当一个供应商操作返回多种语义类型时使用的扁平复合输出。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderToolCompositeOutput {
     /// Ordered text fragments.
     /// 有序文本片段。
@@ -352,7 +352,8 @@ pub struct ProviderToolCompositeOutput {
 
 /// Closed normalized output returned by provider-native tools.
 /// 供应商原生工具返回的封闭归一化输出。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum ProviderToolNormalizedOutput {
     /// Provider-generated plain text.
     /// 供应商生成的纯文本。
@@ -379,7 +380,7 @@ pub enum ProviderToolNormalizedOutput {
 
 /// Unified typed result produced by one provider tool adapter.
 /// 一个供应商工具适配器产生的统一强类型结果。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderToolExecutionResult {
     /// Optional provider trace or task identifier.
     /// 可选供应商追踪或任务标识。
@@ -395,7 +396,7 @@ pub struct ProviderToolExecutionResult {
 pub struct ProviderExecutionClient {
     /// Shared configured HTTP client.
     /// 共享的已配置 HTTP 客户端。
-    http: reqwest::Client,
+    pub(crate) http: reqwest::Client,
     /// Strict protocol profile registry.
     /// 严格协议 Profile 注册表。
     protocols: Arc<ProtocolRegistry>,
@@ -1115,6 +1116,10 @@ fn project_deepseek_request(
         vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID => {
             let body = request_body_mut(encoded, "DeepSeek")?;
             match effort {
+                ReasoningEffort::None => {
+                    body.remove("reasoning_effort");
+                    body.insert(String::from("thinking"), json!({ "type": "disabled" }));
+                }
                 ReasoningEffort::High | ReasoningEffort::Max => {
                     body.insert(String::from("thinking"), json!({ "type": "enabled" }));
                 }
@@ -1127,19 +1132,26 @@ fn project_deepseek_request(
             }
         }
         vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID => {
-            let effort = match effort {
-                ReasoningEffort::High => "high",
-                ReasoningEffort::Max => "max",
+            let body = request_body_mut(encoded, "DeepSeek Anthropic")?;
+            match effort {
+                ReasoningEffort::None => {
+                    body.remove("output_config");
+                    body.insert(String::from("thinking"), json!({ "type": "disabled" }));
+                }
+                ReasoningEffort::High | ReasoningEffort::Max => {
+                    body.insert(String::from("thinking"), json!({ "type": "enabled" }));
+                    body.insert(
+                        String::from("output_config"),
+                        json!({ "effort": effort.as_str() }),
+                    );
+                }
                 unsupported => {
                     return Err(pre_dispatch_failure(format!(
                         "DeepSeek Anthropic does not expose reasoning effort `{}`.",
                         unsupported.as_str()
                     )));
                 }
-            };
-            let body = request_body_mut(encoded, "DeepSeek Anthropic")?;
-            body.insert(String::from("thinking"), json!({ "type": "enabled" }));
-            body.insert(String::from("output_config"), json!({ "effort": effort }));
+            }
         }
         protocol_id => {
             return Err(pre_dispatch_failure(format!(
@@ -1281,7 +1293,7 @@ fn project_credential_request(
 /// 返回值
 /// A validated merged header map or a controlled pre-dispatch failure.
 /// 返回已校验的合并请求头，或受控的分派前失败。
-fn execution_headers(
+pub(crate) fn execution_headers(
     route: &ProviderExecutionRoute,
     protocol_headers: &std::collections::BTreeMap<String, String>,
     secret: &CredentialExecutionSecret,
@@ -1910,7 +1922,7 @@ fn ensure_leading_slash(path: &str) -> String {
 
 /// Creates a structured pre-dispatch failure.
 /// 创建结构化分派前失败。
-fn pre_dispatch_failure(message: impl Into<String>) -> ProviderExecutionFailure {
+pub(crate) fn pre_dispatch_failure(message: impl Into<String>) -> ProviderExecutionFailure {
     ProviderExecutionFailure {
         error: Box::new(AiExecutionError {
             category: AiErrorCategory::InvalidRequest,
@@ -2009,7 +2021,7 @@ fn stream_protocol_failure(
 
 /// Creates a structured transport failure.
 /// 创建结构化传输失败。
-fn transport_failure(message: impl Into<String>) -> ProviderExecutionFailure {
+pub(crate) fn transport_failure(message: impl Into<String>) -> ProviderExecutionFailure {
     ProviderExecutionFailure {
         error: Box::new(AiExecutionError {
             category: AiErrorCategory::ProviderUnavailable,
@@ -2134,7 +2146,9 @@ fn validate_response_content_type(
 /// 返回值
 /// A terminal non-retryable protocol failure.
 /// 返回终结且不可重试的协议失败。
-fn response_headers_protocol_failure(message: impl Into<String>) -> ProviderExecutionFailure {
+pub(crate) fn response_headers_protocol_failure(
+    message: impl Into<String>,
+) -> ProviderExecutionFailure {
     ProviderExecutionFailure {
         error: Box::new(AiExecutionError {
             category: AiErrorCategory::InvalidRequest,
@@ -2174,7 +2188,7 @@ fn response_headers_protocol_failure(message: impl Into<String>) -> ProviderExec
 /// 返回值
 /// The complete UTF-8-lossy body within the limit, or a structured failure.
 /// 返回上限内完整的 UTF-8 宽容解码正文，或结构化失败。
-async fn read_bounded_response_text(
+pub(crate) async fn read_bounded_response_text(
     response: reqwest::Response,
     max_bytes: usize,
     url: &str,
@@ -2217,7 +2231,10 @@ async fn read_bounded_response_text(
 /// 返回值
 /// A normalized retry hint for valid seconds, fractional seconds, or HTTP dates.
 /// 对合法秒数、小数秒或 HTTP 日期返回归一化重试提示。
-fn parse_retry_after_headers(headers: &HeaderMap, now: SystemTime) -> Option<RetryAfterHint> {
+pub(crate) fn parse_retry_after_headers(
+    headers: &HeaderMap,
+    now: SystemTime,
+) -> Option<RetryAfterHint> {
     let value = headers
         .get(reqwest::header::RETRY_AFTER)?
         .to_str()
@@ -2277,7 +2294,7 @@ fn parse_decimal_seconds_milliseconds(value: &str) -> Option<u64> {
 
 /// Converts one non-success HTTP response.
 /// 转换一个非成功 HTTP 响应。
-fn http_failure(
+pub(crate) fn http_failure(
     status: u16,
     retry_after: Option<RetryAfterHint>,
     body: &str,
@@ -2401,7 +2418,9 @@ mod tests {
     use super::*;
     use crate::{
         CredentialMode,
-        providers::{kimi_descriptor, minimax_descriptor, openrouter_descriptor},
+        providers::{
+            deepseek_descriptor, kimi_descriptor, minimax_descriptor, openrouter_descriptor,
+        },
     };
     use std::collections::{BTreeMap, BTreeSet};
     use std::time::Duration;
@@ -2471,6 +2490,7 @@ mod tests {
             verified_protocols: BTreeSet::from([protocol_id.to_string()]),
             selected_protocol: protocol_id.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),
+            usage_scope_override: None,
         };
         ProviderExecutionRoute::resolve(
             provider,
@@ -2518,6 +2538,7 @@ mod tests {
             verified_protocols: BTreeSet::from([protocol_id.to_string()]),
             selected_protocol: protocol_id.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),
+            usage_scope_override: None,
         };
         ProviderExecutionRoute::resolve(
             provider,
@@ -2526,6 +2547,50 @@ mod tests {
             SecondaryRouteSelection::Automatic,
         )
         .expect("MiniMax route should resolve")
+    }
+
+    /// Resolves one DeepSeek official API route for an exact compatible protocol.
+    /// 为一个精确兼容协议解析 DeepSeek 官方 API 路由。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `protocol_id` selects the credential-bound Anthropic or OpenAI route.
+    /// `protocol_id` 选择凭据绑定的 Anthropic 或 OpenAI 路由。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A frozen DeepSeek official API route.
+    /// 返回冻结的 DeepSeek 官方 API 路由。
+    fn deepseek_route(protocol_id: &str) -> ProviderExecutionRoute {
+        let provider = deepseek_descriptor();
+        let entry = provider
+            .service_entries
+            .iter()
+            .find(|entry| entry.id == "official-api")
+            .expect("DeepSeek official API entry must exist")
+            .clone();
+        let connection = CredentialConnection {
+            id: String::from("connection"),
+            provider_id: provider.id.clone(),
+            service_entry_id: entry.id.clone(),
+            credential_profile_id: String::from("api-key"),
+            credential_mode: CredentialMode::Token,
+            credential_id: String::from("credential"),
+            display_name: String::from("Primary"),
+            secret_reference: String::from("secret"),
+            management_secret_reference: None,
+            verified_protocols: BTreeSet::from([protocol_id.to_string()]),
+            selected_protocol: protocol_id.to_string(),
+            prompt_cache_by_protocol: BTreeMap::new(),
+            usage_scope_override: None,
+        };
+        ProviderExecutionRoute::resolve(
+            provider,
+            entry,
+            connection,
+            SecondaryRouteSelection::Automatic,
+        )
+        .expect("DeepSeek route should resolve")
     }
 
     /// Resolves one exact Kimi Coding Plan route.
@@ -2551,6 +2616,7 @@ mod tests {
             verified_protocols: BTreeSet::from([String::from(OPENAI_CHAT_PROFILE_ID)]),
             selected_protocol: String::from(OPENAI_CHAT_PROFILE_ID),
             prompt_cache_by_protocol: BTreeMap::new(),
+            usage_scope_override: None,
         };
         ProviderExecutionRoute::resolve(
             provider,
@@ -2889,6 +2955,53 @@ mod tests {
                 .message
                 .contains("exposes only `none` and `adaptive`")
         );
+    }
+
+    /// Verifies DeepSeek Chat projects the documented disabled thinking shape.
+    /// 验证 DeepSeek Chat 投影文档化的关闭思考结构。
+    #[test]
+    fn deepseek_openai_chat_projects_disabled_thinking() {
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let mut request = minimal_request();
+        request.model_id = String::from("deepseek-v4-pro");
+        request.reasoning_effort = Some(ReasoningEffort::None);
+
+        let encoded = client
+            .encode_request(&deepseek_route(OPENAI_CHAT_PROFILE_ID), &request)
+            .expect("DeepSeek Chat request should encode");
+        assert_eq!(encoded.body["thinking"]["type"], "disabled");
+        assert!(encoded.body.get("reasoning_effort").is_none());
+    }
+
+    /// Verifies DeepSeek Anthropic projects both disabled and documented effort controls.
+    /// 验证 DeepSeek Anthropic 同时投影关闭思考与文档化档位控制。
+    #[test]
+    fn deepseek_anthropic_projects_disabled_and_enabled_thinking() {
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let route = deepseek_route(ANTHROPIC_MESSAGES_PROFILE_ID);
+        let mut disabled = minimal_request();
+        disabled.model_id = String::from("deepseek-v4-pro");
+        disabled.reasoning_effort = Some(ReasoningEffort::None);
+        let disabled = client
+            .encode_request(&route, &disabled)
+            .expect("DeepSeek Anthropic disabled request should encode");
+        assert_eq!(disabled.body["thinking"]["type"], "disabled");
+        assert!(disabled.body.get("output_config").is_none());
+
+        let mut enabled = minimal_request();
+        enabled.model_id = String::from("deepseek-v4-pro");
+        enabled.reasoning_effort = Some(ReasoningEffort::Max);
+        let enabled = client
+            .encode_request(&route, &enabled)
+            .expect("DeepSeek Anthropic enabled request should encode");
+        assert_eq!(enabled.body["thinking"]["type"], "enabled");
+        assert_eq!(enabled.body["output_config"]["effort"], "max");
     }
 
     /// Verifies every OpenRouter protocol route converges on the unified reasoning object.

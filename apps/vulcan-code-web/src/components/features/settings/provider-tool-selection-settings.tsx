@@ -1,6 +1,7 @@
 import * as React from "react";
-import { Star } from "lucide-react";
+import { FlaskConical, Star } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useI18n } from "@/i18n";
 import {
@@ -13,6 +14,7 @@ import type {
   PublicAiProviderToolTargetSnapshot,
   PublicAiSettingsSnapshot,
 } from "@/types";
+import { ProviderToolTestDialog } from "./provider-tool-test-dialog";
 
 // ProviderToolSelectionSettingsArea lists every current target and owns enabled/default preferences.
 // ProviderToolSelectionSettingsArea 列出全部当前目标并管理启用状态与默认目标。
@@ -25,6 +27,9 @@ export function ProviderToolSelectionSettingsArea(props: {
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null);
   const [pendingKey, setPendingKey] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  // testTarget is the exact current credential and provider target under diagnosis.
+  // testTarget 是当前正在诊断的精确凭据与供应商目标。
+  const [testTarget, setTestTarget] = React.useState<PublicAiProviderToolTargetSnapshot | null>(null);
 
   React.useEffect(() => {
     let active = true;
@@ -137,6 +142,19 @@ export function ProviderToolSelectionSettingsArea(props: {
                 >
                   <Star fill={isDefault ? "currentColor" : "none"} size={15} />
                 </button>
+                {props.capability === "web_search" || props.capability === "web_extract" ? (
+                  <Button
+                    aria-label={t("settings.providerTools.test")}
+                    disabled={pendingKey === key}
+                    onClick={() => setTestTarget(target)}
+                    size="icon-sm"
+                    title={t("settings.providerTools.test")}
+                    type="button"
+                    variant="outline"
+                  >
+                    <FlaskConical aria-hidden="true" size={15} />
+                  </Button>
+                ) : null}
                 <Switch
                   aria-label={target.enabled
                     ? t("settings.providerTools.enabled")
@@ -150,6 +168,10 @@ export function ProviderToolSelectionSettingsArea(props: {
           })}
         </div>
       )}
+      <ProviderToolTestDialog
+        target={testTarget}
+        onClose={() => setTestTarget(null)}
+      />
     </div>
   );
 }

@@ -6,10 +6,12 @@ import { Switch } from "@/components/ui/switch"
 import { useI18n } from "@/i18n"
 import {
   loadPublicAiSettings,
+  savePublicAiInternalModelEnabled,
   savePublicAiModelEnabled,
 } from "@/service/settings-actions-service"
 import type {
   PublicAiModel,
+  PublicAiOperation,
   PublicAiProviderDescriptor,
   PublicAiSettingsSnapshot,
 } from "@/types"
@@ -47,7 +49,33 @@ export function ModelListSettingsArea() {
   const [error, setError] = React.useState<string | null>(null)
   const [selectedProviderId, setSelectedProviderId] = React.useState<string | null>(null)
   const [editingRoute, setEditingRoute] = React.useState<PublicModelProtocolRoute | null>(null)
-  const [pendingModelKeys, setPendingModelKeys] = React.useState<Set<string>>(() => new Set())
+  const [pendingMutationKey, setPendingMutationKey] = React.useState<string | null>(null)
+  const mutationInFlightRef = React.useRef(false)
+
+  // runSnapshotMutation serializes full-snapshot writes so late responses cannot regress the UI.
+  // runSnapshotMutation 串行化完整快照写入，避免迟到响应使界面状态倒退。
+  const runSnapshotMutation = React.useCallback((
+    key: string,
+    mutation: () => Promise<PublicAiSettingsSnapshot>,
+  ) => {
+    if (mutationInFlightRef.current) {
+      return
+    }
+    mutationInFlightRef.current = true
+    setPendingMutationKey(key)
+    void mutation()
+      .then((next) => {
+        setSnapshot(next)
+        setError(null)
+      })
+      .catch((reason) => {
+        setError(errorMessage(reason))
+      })
+      .finally(() => {
+        mutationInFlightRef.current = false
+        setPendingMutationKey(null)
+      })
+  }, [])
 
   React.useEffect(() => {
     let active = true
@@ -85,18 +113,17 @@ export function ModelListSettingsArea() {
   const selectedGroup = groupedProviders.find((group) => group.provider.id === selectedProviderId)
     ?? groupedProviders[0]
     ?? null
-  const totalModelCount = groupedProviders.reduce((total, group) => total + group.models.size, 0)
 
   return (
     <div className="settings-direct-content model-list-surface">
       {error ? <p className="settings-muted-line settings-error-text">{error}</p> : null}
       {!snapshot ? (
-        <p className="settings-muted-line">正在读取实时模型目录…</p>
+        <p className="settings-muted-line">{t("settings.models.loadingCatalog")}</p>
       ) : (
         <>
           <div className="settings-split-layout">
-          <aside className="settings-provider-nav" aria-label="供应商">
-            <div className="settings-split-column-title">供应商</div>
+          <aside className="settings-provider-nav" aria-label={t("settings.models.provider")}>
+            <div className="settings-split-column-title">{t("settings.models.provider")}</div>
             {groupedProviders.map((group) => (
               <button
                 className={`settings-provider-nav-row ${selectedGroup?.provider.id === group.provider.id ? "active" : ""}`}
@@ -110,17 +137,24 @@ export function ModelListSettingsArea() {
               </button>
             ))}
           </aside>
-          <section className="settings-model-list-pane" aria-label="实时模型">
+          <section className="settings-model-list-pane" aria-label={t("settings.models.liveModels")}>
             <div className="settings-model-pane-header">
               <div>
-                <div className="settings-split-column-title">实时模型</div>
-                <small>{selectedGroup?.provider.display_name ?? "未选择供应商"} · 总计 {totalModelCount}</small>
+                <div className="settings-split-column-title">{t("settings.models.liveModels")}</div>
+                <small>
+                  {t("settings.models.catalogSummary")
+                    .replace(
+                      "{provider}",
+                      selectedGroup?.provider.display_name ?? t("settings.models.noProviderSelected"),
+                    )
+                    .replace("{count}", String(selectedGroup?.models.size ?? 0))}
+                </small>
               </div>
-              <span className="settings-muted-line">仅保存在内存；启动和手动同步后更新</span>
+              <span className="settings-muted-line">{t("settings.models.memoryOnly")}</span>
             </div>
             <div className="settings-model-row-list">
               {!selectedGroup ? (
-                <p className="settings-muted-line">当前没有已同步的模型。请先在“模型供应商”中添加账号并同步。</p>
+                <p className="settings-muted-line">{t("settings.models.emptyCatalog")}</p>
               ) : Array.from(selectedGroup.models.entries()).map(([modelId, routes]) => {
                 const representative = routes[0]
                 if (!representative) {
@@ -136,24 +170,60 @@ export function ModelListSettingsArea() {
                   && record.modelId === modelId
                 ))
                 const enabled = access?.enabled ?? true
-                const pending = pendingModelKeys.has(modelKey)
+                const internalOperations = internalOperationsForModel(
+                  snapshot,
+                  selectedGroup.provider.id,
+                  modelId,
+                )
                 return (
                   <article className="settings-model-row" key={`${selectedGroup.provider.id}/${modelId}`}>
                     <div>
                       <strong>{representative.model.display_name}</strong>
-                      <span>{modelId} · {availableAccountCount} 个可用账号</span>
+                      <span>
+                        {t("settings.models.availableAccounts")
+                          .replace("{model}", modelId)
+                          .replace("{count}", String(availableAccountCount))}
+                      </span>
                       <div className="settings-card-actions">
                         {routes.map((route) => {
                           const selector = `${selectedGroup.provider.id}/${route.model.id}/${route.protocolId}`
                           return (
                             <button
                               className="skill-action-button secondary"
+                              disabled={pendingMutationKey !== null}
                               key={selector}
                               onClick={() => setEditingRoute(route)}
                               type="button"
                             >
-                              {protocolDisplayName(route.protocolId)} · 附加条件
+                              {t("settings.models.additionalConditions")
+                                .replace("{protocol}", protocolDisplayName(route.protocolId))}
                             </button>
+                          )
+                        })}
+                        {internalOperations.map((operation) => {
+                          const internalKey = `internal/${modelKey}/${operation.operation}`
+                          return (
+                            <label
+                              className="inline-flex items-center gap-2 rounded-md border px-2 py-1 text-xs"
+                              key={internalKey}
+                            >
+                              <span>{internalOperationLabel(operation.operation, t)}</span>
+                              <Switch
+                                aria-label={`${t("settings.inference.internalToggle")} ${representative.model.display_name}`}
+                                checked={operation.enabled}
+                                disabled={pendingMutationKey !== null}
+                                onCheckedChange={(checked) => {
+                                  runSnapshotMutation(internalKey, () => (
+                                    savePublicAiInternalModelEnabled({
+                                      providerId: selectedGroup.provider.id,
+                                      modelId,
+                                      operation: operation.operation,
+                                      enabled: checked,
+                                    })
+                                  ))
+                                }}
+                              />
+                            </label>
                           )
                         })}
                       </div>
@@ -165,28 +235,15 @@ export function ModelListSettingsArea() {
                       <Switch
                         aria-label={`${t("settings.models.toggle")} ${representative.model.display_name}`}
                         checked={enabled}
-                        disabled={pending}
+                        disabled={pendingMutationKey !== null}
                         onCheckedChange={(checked) => {
-                          setPendingModelKeys((current) => new Set(current).add(modelKey))
-                          void savePublicAiModelEnabled({
-                            providerId: selectedGroup.provider.id,
-                            modelId,
-                            enabled: checked,
-                          })
-                            .then((next) => {
-                              setSnapshot(next)
-                              setError(null)
+                          runSnapshotMutation(modelKey, () => (
+                            savePublicAiModelEnabled({
+                              providerId: selectedGroup.provider.id,
+                              modelId,
+                              enabled: checked,
                             })
-                            .catch((reason) => {
-                              setError(errorMessage(reason))
-                            })
-                            .finally(() => {
-                              setPendingModelKeys((current) => {
-                                const next = new Set(current)
-                                next.delete(modelKey)
-                                return next
-                              })
-                            })
+                          ))
                         }}
                       />
                     </div>
@@ -221,6 +278,44 @@ export function ModelListSettingsArea() {
       />
     </div>
   )
+}
+
+// internalOperationsForModel returns deduplicated operation switches for one provider model.
+// internalOperationsForModel 返回一个供应商模型的去重操作开关。
+function internalOperationsForModel(
+  snapshot: PublicAiSettingsSnapshot,
+  providerId: string,
+  modelId: string,
+): Array<{ operation: PublicAiOperation; enabled: boolean }> {
+  const operations = new Map<PublicAiOperation, boolean>()
+  for (const candidate of snapshot.internalInferenceCandidates) {
+    if (
+      candidate.route.provider_id === providerId
+      && candidate.route.model_id === modelId
+    ) {
+      operations.set(
+        candidate.route.operation,
+        (operations.get(candidate.route.operation) ?? false) || candidate.enabled,
+      )
+    }
+  }
+  return Array.from(operations, ([operation, enabled]) => ({ operation, enabled }))
+}
+
+// internalOperationLabel returns the localized compact operation name.
+// internalOperationLabel 返回本地化的紧凑操作名称。
+function internalOperationLabel(
+  operation: PublicAiOperation,
+  t: ReturnType<typeof useI18n>["t"],
+): string {
+  switch (operation) {
+    case "conversation_respond":
+      return t("settings.inference.llm")
+    case "embedding_create":
+      return t("settings.inference.embedding")
+    case "rerank_documents":
+      return t("settings.inference.rerank")
+  }
 }
 
 // buildProviderModelGroups derives provider, model, and protocol rows from current memory catalogs.

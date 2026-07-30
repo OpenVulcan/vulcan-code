@@ -15,6 +15,7 @@ export type SettingsSubAreaId =
   | "provider-retry"
   | "ai-vendors"
   | "ai-web-search"
+  | "ai-web-extract"
   | "ai-understand-image"
   | "ai-understand-video"
   | "ai-understand-audio"

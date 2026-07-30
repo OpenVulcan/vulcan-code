@@ -11,7 +11,7 @@
           "completedAtMs": { "type": "number" },
           "providerName": { "type": "string", "minLength": 1 },
           "modelName": { "type": "string", "minLength": 1 },
-          "ownerKind": { "enum": ["main_agent", "subagent", "context_compaction", "git_commit_summary"] },
+          "ownerKind": { "enum": ["main_agent", "subagent", "context_compaction", "git_commit_summary", "internal_llm", "internal_embedding", "internal_rerank", "internal_multimodal"] },
           "ownerName": { "type": "string", "minLength": 1 },
           "status": { "enum": ["succeeded", "failed", "cancelled"] },
           "inputTokens": { "type": "number", "minimum": 0 },

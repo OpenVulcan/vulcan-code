@@ -5,7 +5,7 @@ use crate::OAuthProviderKind;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use vulcan_ai_contract::{ModelCapabilities, PromptCachePolicy};
+use vulcan_ai_contract::{InferenceUsageScope, ModelCapabilities, PromptCachePolicy};
 
 /// Identifies one credential acquisition mode.
 /// 标识一种凭据获取方式。
@@ -67,6 +67,9 @@ pub struct CredentialProfile {
     /// Token 凭据声明时要求的字面 Key 前缀。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_prefix: Option<String>,
+    /// Usage scopes permitted by the exact provider product contract.
+    /// 精确供应商产品契约允许的使用场景。
+    pub allowed_usage_scopes: BTreeSet<InferenceUsageScope>,
 }
 
 /// Describes one provider service entry.
@@ -105,6 +108,9 @@ pub struct ServiceEntry {
     /// Verified protocol routes available through this entry.
     /// 此入口可用的已验证协议路由。
     pub protocol_routes: Vec<ProtocolRoute>,
+    /// Usage scopes permitted by this exact product or regional service entry.
+    /// 当前精确产品或区域服务入口允许的使用场景。
+    pub allowed_usage_scopes: BTreeSet<InferenceUsageScope>,
 }
 
 /// Identifies one closed provider request projector implementation.
@@ -167,6 +173,53 @@ impl ServiceEntry {
             .iter()
             .find(|profile| profile.id == profile_id)
     }
+
+    /// Resolves the effective usage scopes for one exact credential connection.
+    /// 解析一个精确凭据连接的有效使用场景。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `connection` must bind this service entry and one declared credential profile.
+    /// `connection` 必须绑定当前服务入口及其一个已声明凭据配置档。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The product/profile intersection narrowed by the optional user override.
+    /// 返回产品与配置档交集，并由可选用户覆盖进一步收窄。
+    pub fn effective_usage_scopes(
+        &self,
+        connection: &CredentialConnection,
+    ) -> Result<BTreeSet<InferenceUsageScope>, String> {
+        if connection.service_entry_id != self.id {
+            return Err(format!(
+                "Connection `{}` does not bind service entry `{}`.",
+                connection.id, self.id
+            ));
+        }
+        let profile = self
+            .credential_profile(connection.credential_profile_id.as_str())
+            .ok_or_else(|| {
+                format!(
+                    "Credential profile `{}` is not registered for service entry `{}`.",
+                    connection.credential_profile_id, self.id
+                )
+            })?;
+        let product_scopes: BTreeSet<_> = profile
+            .allowed_usage_scopes
+            .intersection(&self.allowed_usage_scopes)
+            .copied()
+            .collect();
+        let Some(override_scopes) = connection.usage_scope_override.as_ref() else {
+            return Ok(product_scopes);
+        };
+        if !override_scopes.is_subset(&product_scopes) {
+            return Err(format!(
+                "Connection `{}` usage-scope override exceeds product `{}` permissions.",
+                connection.id, self.id
+            ));
+        }
+        Ok(override_scopes.clone())
+    }
 }
 
 /// Identifies one registered model-discovery contract.
@@ -186,6 +239,15 @@ pub enum ModelDiscoveryKind {
     /// OpenRouter public model catalog.
     /// OpenRouter 公共模型目录。
     OpenRouter,
+    /// Alibaba Coding Plan code-owned static catalog.
+    /// 阿里云 Coding Plan 代码持有的静态目录。
+    AlibabaCodingPlanStatic,
+    /// Alibaba Token Plan product-scoped static catalog.
+    /// 阿里云 Token Plan 产品作用域静态目录。
+    AlibabaTokenPlanStatic,
+    /// Alibaba Model Studio region-scoped static catalog.
+    /// 阿里云百炼 Model Studio 区域作用域静态目录。
+    AlibabaModelStudioStatic,
     /// OpenAI public models endpoint.
     /// OpenAI 公共模型端点。
     OpenAi,
@@ -430,6 +492,10 @@ pub struct CredentialConnection {
     /// 协议作用域的提示词缓存设置。
     #[serde(default)]
     pub prompt_cache_by_protocol: BTreeMap<String, PromptCachePolicy>,
+    /// Optional user narrowing of the credential-profile usage scopes.
+    /// 用户对凭据配置档使用场景的可选收窄。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_scope_override: Option<BTreeSet<InferenceUsageScope>>,
 }
 
 /// Describes one connection-scoped model.
@@ -485,6 +551,9 @@ pub enum ProviderToolCapabilityKind {
     /// Generates video.
     /// 生成视频。
     VideoGenerate,
+    /// Edits an existing video.
+    /// 编辑现有视频。
+    VideoEdit,
     /// Synthesizes speech.
     /// 合成语音。
     SpeechSynthesize,
@@ -497,12 +566,25 @@ pub enum ProviderToolCapabilityKind {
     /// Produces a music cover from an input recording.
     /// 根据输入录音生成音乐翻唱。
     MusicCover,
-    /// Creates embeddings.
-    /// 创建向量嵌入。
+    /// Retired migration sentinel for historical AI-visible embedding selections.
+    /// 历史 AI 可见向量选择使用的已退役迁移哨兵。
     EmbeddingCreate,
-    /// Reranks candidate documents.
-    /// 对候选文档重新排序。
+    /// Retired migration sentinel for historical AI-visible rerank selections.
+    /// 历史 AI 可见重排选择使用的已退役迁移哨兵。
     RerankDocuments,
+}
+
+impl ProviderToolCapabilityKind {
+    /// Reports whether this capability may produce an AI-visible provider tool.
+    /// 报告此能力是否可以生成 AI 可见供应商工具。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `false` for retired embedding and rerank migration sentinels.
+    /// 对已退役向量与重排迁移哨兵返回 `false`。
+    pub const fn is_ai_visible(self) -> bool {
+        !matches!(self, Self::EmbeddingCreate | Self::RerankDocuments)
+    }
 }
 
 /// Identifies the closed unified output shape used by provider tool cards.
@@ -603,6 +685,42 @@ pub enum ProviderToolAdapterKind {
     /// Alibaba Model Studio MCP WebSearch.
     /// 阿里云百炼 Model Studio MCP 网页搜索。
     AlibabaModelStudioSearch,
+    /// Alibaba synchronous Qwen image generation.
+    /// 阿里云同步 Qwen 图片生成。
+    AlibabaQwenImageGenerate,
+    /// Alibaba synchronous Qwen image editing.
+    /// 阿里云同步 Qwen 图片编辑。
+    AlibabaQwenImageEdit,
+    /// Alibaba synchronous Wan image generation.
+    /// 阿里云同步 Wan 图片生成。
+    AlibabaWanImageGenerate,
+    /// Alibaba synchronous CosyVoice speech synthesis.
+    /// 阿里云同步 CosyVoice 语音合成。
+    AlibabaCosyVoiceSynthesize,
+    /// Alibaba synchronous Qwen3 speech synthesis.
+    /// 阿里云同步 Qwen3 语音合成。
+    AlibabaQwenSpeechSynthesize,
+    /// Alibaba synchronous Qwen3 speech transcription.
+    /// 阿里云同步 Qwen3 语音转录。
+    AlibabaQwenSpeechTranscribe,
+    /// Alibaba asynchronous Fun-ASR transcription with host polling.
+    /// 阿里云异步 Fun-ASR 转录与宿主轮询。
+    AlibabaFunAsrTranscribe,
+    /// Alibaba Qwen Omni media analysis through the verified Chat carrier.
+    /// 阿里云 Qwen Omni 通过已验证 Chat 载体执行媒体分析。
+    AlibabaQwenOmniMediaAnalyze,
+    /// Alibaba asynchronous HappyHorse video generation with host polling.
+    /// 阿里云异步 HappyHorse 视频生成与宿主轮询。
+    AlibabaHappyHorseVideoGenerate,
+    /// Alibaba asynchronous HappyHorse video editing with host polling.
+    /// 阿里云异步 HappyHorse 视频编辑与宿主轮询。
+    AlibabaHappyHorseVideoEdit,
+    /// Alibaba Wan 2.7 asynchronous video generation with host polling.
+    /// 阿里云 Wan 2.7 异步视频生成与宿主轮询。
+    AlibabaWanVideoGenerate,
+    /// Alibaba synchronous Fun-Music generation.
+    /// 阿里云同步 Fun-Music 音乐生成。
+    AlibabaFunMusicGenerate,
     /// Tavily structured web search.
     /// Tavily 结构化网页搜索。
     TavilySearch,
@@ -615,6 +733,10 @@ pub enum ProviderToolAdapterKind {
 /// 描述一个供应商原生工具目标的精确执行路由。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderToolExecutionContract {
+    /// Optional exact native API origin when it differs from the conversation protocol root.
+    /// 当原生 API 源与会话协议根地址不同时使用的可选精确源地址。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_base_url: Option<String>,
     /// Relative endpoint path below the owning service entry.
     /// 所属服务入口下的相对端点路径。
     pub endpoint_path: String,

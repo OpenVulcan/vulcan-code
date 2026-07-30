@@ -1,6 +1,9 @@
 //! Provider-native tool request projection and unified output decoding.
 //! 供应商原生工具请求投影与统一输出解码。
 
+use crate::provider_task::{
+    ProviderAsyncTaskPoll, ProviderAsyncTaskRecoveryContext, ProviderAsyncTaskStart,
+};
 use crate::{
     AuthenticationProjection, CredentialExecutionSecret, ProviderToolAdapterKind,
     ProviderToolExecutionResult, ProviderToolExtractFailure, ProviderToolExtractOutput,
@@ -17,6 +20,32 @@ use serde_json::Value;
 /// 强类型解码前允许接收的供应商工具元数据响应上限。
 const PROVIDER_TOOL_RESPONSE_BYTE_LIMIT: usize = 8 * 1024 * 1024;
 
+/// Resolves the exact native endpoint for one frozen provider tool target.
+/// 为一个冻结供应商工具目标解析精确原生端点。
+///
+/// # Parameters
+/// 参数
+/// `entry` owns the selected account while `target` may select a native origin distinct from
+/// the conversation protocol root.
+/// `entry` 持有所选账号，`target` 可以选择与会话协议根地址不同的原生源地址。
+///
+/// # Returns
+/// 返回值
+/// The absolute provider tool URL.
+/// 返回绝对供应商工具 URL。
+pub(crate) fn provider_tool_url(entry: &ServiceEntry, target: &ProviderToolTarget) -> String {
+    let base_url = target
+        .execution
+        .endpoint_base_url
+        .as_deref()
+        .unwrap_or(entry.base_url.as_str());
+    format!(
+        "{}{}",
+        base_url.trim_end_matches('/'),
+        target.execution.endpoint_path
+    )
+}
+
 /// Reads one provider tool response through a shared bounded stream.
 /// 通过共享有界流读取一次供应商工具响应。
 ///
@@ -29,7 +58,7 @@ const PROVIDER_TOOL_RESPONSE_BYTE_LIMIT: usize = 8 * 1024 * 1024;
 /// 返回值
 /// UTF-8 response text no larger than the provider-tool metadata limit.
 /// 返回不超过供应商工具元数据上限的 UTF-8 响应文本。
-async fn read_bounded_provider_response(
+pub(crate) async fn read_bounded_provider_response(
     response: reqwest::Response,
     operation: &str,
 ) -> Result<String, String> {
@@ -97,6 +126,53 @@ pub(crate) async fn execute_provider_tool(
         ProviderToolAdapterKind::AlibabaModelStudioSearch => {
             execute_alibaba_search_tool(http, entry, target, arguments, secret).await
         }
+        ProviderToolAdapterKind::AlibabaQwenImageGenerate
+        | ProviderToolAdapterKind::AlibabaQwenImageEdit => {
+            execute_alibaba_qwen_image_tool(http, entry, target, arguments, secret).await
+        }
+        ProviderToolAdapterKind::AlibabaWanImageGenerate => {
+            execute_alibaba_wan_image_tool(http, entry, target, arguments, secret).await
+        }
+        ProviderToolAdapterKind::AlibabaCosyVoiceSynthesize => {
+            execute_alibaba_cosyvoice_tool(http, entry, target, arguments, secret).await
+        }
+        ProviderToolAdapterKind::AlibabaQwenSpeechSynthesize => {
+            execute_alibaba_qwen_tts_tool(http, entry, target, arguments, secret).await
+        }
+        ProviderToolAdapterKind::AlibabaQwenSpeechTranscribe => {
+            execute_alibaba_qwen_asr_tool(http, entry, target, arguments, secret).await
+        }
+        ProviderToolAdapterKind::AlibabaFunAsrTranscribe => {
+            crate::alibaba_provider_tools::execute_alibaba_fun_asr_tool(
+                http, entry, target, arguments, secret,
+            )
+            .await
+        }
+        ProviderToolAdapterKind::AlibabaQwenOmniMediaAnalyze => {
+            crate::alibaba_provider_tools::execute_alibaba_qwen_omni_media_tool(
+                http, entry, target, arguments, secret,
+            )
+            .await
+        }
+        ProviderToolAdapterKind::AlibabaHappyHorseVideoGenerate
+        | ProviderToolAdapterKind::AlibabaHappyHorseVideoEdit => {
+            crate::alibaba_provider_tools::execute_alibaba_happyhorse_video_tool(
+                http, entry, target, arguments, secret,
+            )
+            .await
+        }
+        ProviderToolAdapterKind::AlibabaWanVideoGenerate => {
+            crate::alibaba_provider_tools::execute_alibaba_wan_video_tool(
+                http, entry, target, arguments, secret,
+            )
+            .await
+        }
+        ProviderToolAdapterKind::AlibabaFunMusicGenerate => {
+            crate::alibaba_provider_tools::execute_alibaba_fun_music_tool(
+                http, entry, target, arguments, secret,
+            )
+            .await
+        }
         ProviderToolAdapterKind::TavilySearch => {
             execute_tavily_search_tool(http, entry, target, arguments, secret).await
         }
@@ -104,6 +180,175 @@ pub(crate) async fn execute_provider_tool(
             execute_tavily_extract_tool(http, entry, target, arguments, secret).await
         }
     }
+}
+
+/// Reports whether one adapter owns a provider-confirmed asynchronous task lifecycle.
+/// 报告某个适配器是否拥有供应商确认的异步任务生命周期。
+///
+/// # Parameters
+/// 参数
+/// `adapter` is the exact registered provider-tool adapter.
+/// `adapter` 是精确已注册供应商工具适配器。
+///
+/// # Returns
+/// 返回值
+/// `true` only for adapters with split start and poll implementations.
+/// 仅对具有拆分启动与轮询实现的适配器返回 `true`。
+pub(crate) fn is_provider_async_task_adapter(adapter: ProviderToolAdapterKind) -> bool {
+    matches!(
+        adapter,
+        ProviderToolAdapterKind::AlibabaFunAsrTranscribe
+            | ProviderToolAdapterKind::AlibabaHappyHorseVideoGenerate
+            | ProviderToolAdapterKind::AlibabaHappyHorseVideoEdit
+            | ProviderToolAdapterKind::AlibabaWanVideoGenerate
+    )
+}
+
+/// Starts one exact provider-native asynchronous task.
+/// 启动一个精确供应商原生异步任务。
+///
+/// # Parameters
+/// 参数
+/// Exact route, materialized arguments, and credential are frozen before dispatch.
+/// 精确路由、已物化参数与凭据在分派前冻结。
+///
+/// # Returns
+/// 返回值
+/// A provider-confirmed task identity and non-secret recovery context.
+/// 返回供应商确认的任务身份与非秘密恢复上下文。
+pub(crate) async fn start_provider_async_task(
+    http: &reqwest::Client,
+    entry: &ServiceEntry,
+    target: &ProviderToolTarget,
+    arguments: Value,
+    secret: &CredentialExecutionSecret,
+) -> Result<ProviderAsyncTaskStart, String> {
+    match target.execution.adapter {
+        ProviderToolAdapterKind::AlibabaFunAsrTranscribe => {
+            crate::alibaba_provider_tools::start_alibaba_fun_asr_task(
+                http, entry, target, arguments, secret,
+            )
+            .await
+        }
+        ProviderToolAdapterKind::AlibabaHappyHorseVideoGenerate
+        | ProviderToolAdapterKind::AlibabaHappyHorseVideoEdit => {
+            crate::alibaba_provider_tools::start_alibaba_happyhorse_video_task(
+                http, entry, target, arguments, secret,
+            )
+            .await
+        }
+        ProviderToolAdapterKind::AlibabaWanVideoGenerate => {
+            crate::alibaba_provider_tools::start_alibaba_wan_video_task(
+                http, entry, target, arguments, secret,
+            )
+            .await
+        }
+        adapter => Err(format!(
+            "Provider tool adapter `{adapter:?}` does not expose an asynchronous task lifecycle."
+        )),
+    }
+}
+
+/// Polls one exact provider-native asynchronous task once.
+/// 单次轮询一个精确供应商原生异步任务。
+///
+/// # Parameters
+/// 参数
+/// Exact route, task identity, recovery context, and credential remain immutable.
+/// 精确路由、任务身份、恢复上下文与凭据保持不可变。
+///
+/// # Returns
+/// 返回值
+/// A pending phase or a normalized terminal result.
+/// 返回等待阶段或归一化终态结果。
+pub(crate) async fn poll_provider_async_task(
+    http: &reqwest::Client,
+    entry: &ServiceEntry,
+    target: &ProviderToolTarget,
+    provider_task_id: &str,
+    recovery: &ProviderAsyncTaskRecoveryContext,
+    secret: &CredentialExecutionSecret,
+) -> Result<ProviderAsyncTaskPoll, String> {
+    match target.execution.adapter {
+        ProviderToolAdapterKind::AlibabaFunAsrTranscribe => {
+            crate::alibaba_provider_tools::poll_alibaba_fun_asr_task(
+                http,
+                entry,
+                secret,
+                provider_task_id,
+                recovery,
+            )
+            .await
+        }
+        ProviderToolAdapterKind::AlibabaHappyHorseVideoGenerate
+        | ProviderToolAdapterKind::AlibabaHappyHorseVideoEdit => {
+            crate::alibaba_provider_tools::poll_alibaba_video_task(
+                http,
+                entry,
+                secret,
+                provider_task_id,
+                "Alibaba HappyHorse",
+            )
+            .await
+        }
+        ProviderToolAdapterKind::AlibabaWanVideoGenerate => {
+            crate::alibaba_provider_tools::poll_alibaba_video_task(
+                http,
+                entry,
+                secret,
+                provider_task_id,
+                "Alibaba Wan video",
+            )
+            .await
+        }
+        adapter => Err(format!(
+            "Provider tool adapter `{adapter:?}` does not expose an asynchronous task lifecycle."
+        )),
+    }
+}
+
+/// Requests cancellation of one exact provider-native asynchronous task.
+/// 请求取消一个精确供应商原生异步任务。
+///
+/// # Parameters
+/// 参数
+/// Exact route, provider task identity, and credential remain immutable.
+/// 精确路由、供应商任务身份与凭据保持不可变。
+///
+/// # Returns
+/// 返回值
+/// Success only after provider confirmation; unsupported adapters fail explicitly.
+/// 仅在供应商确认后返回成功；不支持的适配器明确失败。
+pub(crate) async fn cancel_provider_async_task(
+    http: &reqwest::Client,
+    entry: &ServiceEntry,
+    target: &ProviderToolTarget,
+    provider_task_id: &str,
+    secret: &CredentialExecutionSecret,
+) -> Result<(), String> {
+    let operation = match target.execution.adapter {
+        ProviderToolAdapterKind::AlibabaHappyHorseVideoGenerate
+        | ProviderToolAdapterKind::AlibabaHappyHorseVideoEdit => "Alibaba HappyHorse",
+        ProviderToolAdapterKind::AlibabaWanVideoGenerate => "Alibaba Wan video",
+        ProviderToolAdapterKind::AlibabaFunAsrTranscribe => {
+            return Err(String::from(
+                "Alibaba Fun-ASR does not declare a provider cancellation endpoint.",
+            ));
+        }
+        adapter => {
+            return Err(format!(
+                "Provider tool adapter `{adapter:?}` does not expose an asynchronous task lifecycle."
+            ));
+        }
+    };
+    crate::alibaba_provider_tools::cancel_alibaba_task(
+        http,
+        entry,
+        secret,
+        provider_task_id,
+        operation,
+    )
+    .await
 }
 
 /// Exact MCP protocol revision used by Alibaba Model Studio WebSearch.
@@ -349,11 +594,7 @@ async fn execute_alibaba_mcp_request(
     session_id: Option<&str>,
     operation: &str,
 ) -> Result<(String, Option<String>), String> {
-    let url = format!(
-        "{}{}",
-        entry.base_url.trim_end_matches('/'),
-        target.execution.endpoint_path
-    );
+    let url = provider_tool_url(entry, target);
     let mut headers = HeaderMap::new();
     headers.insert(
         reqwest::header::CONTENT_TYPE,
@@ -598,11 +839,7 @@ async fn execute_tavily_json_request<T: Serialize>(
     body: &T,
     operation: &str,
 ) -> Result<String, String> {
-    let url = format!(
-        "{}{}",
-        entry.base_url.trim_end_matches('/'),
-        target.execution.endpoint_path
-    );
+    let url = provider_tool_url(entry, target);
     let mut headers = HeaderMap::new();
     headers.insert(
         reqwest::header::CONTENT_TYPE,
@@ -632,6 +869,1521 @@ async fn execute_tavily_json_request<T: Serialize>(
     Ok(response_text)
 }
 
+/// Strict AI-visible Qwen image generation arguments after host resource materialization.
+/// 宿主资源物化后的严格 AI 可见 Qwen 图片生成参数。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AlibabaQwenImageGenerateArguments {
+    /// Exact generation prompt.
+    /// 精确生成提示词。
+    prompt: String,
+    /// Optional excluded visual content.
+    /// 可选排除视觉内容。
+    #[serde(default)]
+    negative_prompt: String,
+    /// Optional requested output count.
+    /// 可选请求输出数量。
+    #[serde(default)]
+    count: Option<u8>,
+    /// Optional output width.
+    /// 可选输出宽度。
+    #[serde(default)]
+    width: Option<u32>,
+    /// Optional output height.
+    /// 可选输出高度。
+    #[serde(default)]
+    height: Option<u32>,
+    /// Optional provider-relative seed.
+    /// 可选供应商相对随机种子。
+    #[serde(default)]
+    seed: Option<i64>,
+    /// Optional provider prompt rewriting switch.
+    /// 可选供应商提示词改写开关。
+    #[serde(default)]
+    prompt_extend: Option<bool>,
+    /// Optional provider watermark switch.
+    /// 可选供应商水印开关。
+    #[serde(default)]
+    watermark: Option<bool>,
+}
+
+/// Strict Qwen image editing arguments after local paths become bounded Data URLs.
+/// 本地路径转换为有界 Data URL 后的严格 Qwen 图片编辑参数。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AlibabaQwenImageEditArguments {
+    /// Exact editing instruction.
+    /// 精确编辑指令。
+    instruction: String,
+    /// Ordered host-materialized image Data URLs.
+    /// 宿主物化后的有序图片 Data URL。
+    source_images: Vec<String>,
+    /// Optional excluded visual content.
+    /// 可选排除视觉内容。
+    #[serde(default)]
+    negative_prompt: String,
+    /// Optional requested output count.
+    /// 可选请求输出数量。
+    #[serde(default)]
+    count: Option<u8>,
+    /// Optional provider-relative seed.
+    /// 可选供应商相对随机种子。
+    #[serde(default)]
+    seed: Option<i64>,
+    /// Optional provider prompt rewriting switch.
+    /// 可选供应商提示词改写开关。
+    #[serde(default)]
+    prompt_extend: Option<bool>,
+    /// Optional provider watermark switch.
+    /// 可选供应商水印开关。
+    #[serde(default)]
+    watermark: Option<bool>,
+}
+
+/// Strict Wan image generation arguments after local paths become bounded Data URLs.
+/// 本地路径转换为有界 Data URL 后的严格 Wan 图片生成参数。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AlibabaWanImageGenerateArguments {
+    /// Exact generation prompt.
+    /// 精确生成提示词。
+    prompt: String,
+    /// Ordered optional reference image Data URLs.
+    /// 有序可选参考图片 Data URL。
+    #[serde(default)]
+    reference_images: Vec<String>,
+    /// Optional excluded visual content.
+    /// 可选排除视觉内容。
+    #[serde(default)]
+    negative_prompt: String,
+    /// Optional documented resolution tier.
+    /// 可选文档化分辨率档位。
+    #[serde(default)]
+    resolution: Option<String>,
+    /// Optional requested output count.
+    /// 可选请求输出数量。
+    #[serde(default)]
+    count: Option<u8>,
+    /// Optional provider-relative seed.
+    /// 可选供应商相对随机种子。
+    #[serde(default)]
+    seed: Option<i64>,
+    /// Optional provider prompt rewriting switch.
+    /// 可选供应商提示词改写开关。
+    #[serde(default)]
+    prompt_extend: Option<bool>,
+    /// Optional provider watermark switch.
+    /// 可选供应商水印开关。
+    #[serde(default)]
+    watermark: Option<bool>,
+}
+
+/// Exact synchronous Alibaba image request shared by reviewed Qwen and Wan contracts.
+/// 已审核 Qwen 与 Wan 合同共享的精确同步阿里云图片请求。
+#[derive(Debug, Serialize)]
+struct AlibabaImageWireRequest {
+    /// Exact upstream model identifier.
+    /// 精确上游模型标识。
+    model: String,
+    /// Single-turn ordered multimodal input.
+    /// 单轮有序多模态输入。
+    input: AlibabaImageWireInput,
+    /// Exact optional provider controls.
+    /// 精确可选供应商控制项。
+    #[serde(skip_serializing_if = "AlibabaImageWireParameters::is_empty")]
+    parameters: AlibabaImageWireParameters,
+}
+
+/// Contains the single required image-generation message.
+/// 包含唯一必需的图片生成消息。
+#[derive(Debug, Serialize)]
+struct AlibabaImageWireInput {
+    /// Exactly one user message.
+    /// 恰好一条用户消息。
+    messages: Vec<AlibabaImageWireMessage>,
+}
+
+/// Contains ordered image sources followed by one text instruction.
+/// 包含有序图片来源及其后的一条文本指令。
+#[derive(Debug, Serialize)]
+struct AlibabaImageWireMessage {
+    /// Provider-fixed user role.
+    /// 供应商固定的用户角色。
+    role: &'static str,
+    /// Ordered exact-one-of content blocks.
+    /// 有序精确单选内容块。
+    content: Vec<AlibabaImageWireContent>,
+}
+
+/// Represents one image carrier or text instruction.
+/// 表示一个图片载体或文本指令。
+#[derive(Debug, Serialize)]
+struct AlibabaImageWireContent {
+    /// Optional inline image Data URL.
+    /// 可选内联图片 Data URL。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image: Option<String>,
+    /// Optional text instruction.
+    /// 可选文本指令。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+}
+
+/// Contains the closed controls shared by Qwen Image 2.0 and Wan 2.7.
+/// 包含 Qwen Image 2.0 与 Wan 2.7 共享的封闭控制项。
+#[derive(Debug, Default, Serialize)]
+struct AlibabaImageWireParameters {
+    /// Optional excluded visual content.
+    /// 可选排除视觉内容。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    negative_prompt: Option<String>,
+    /// Optional provider-native size string.
+    /// 可选供应商原生尺寸字符串。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size: Option<String>,
+    /// Optional requested output count.
+    /// 可选请求输出数量。
+    #[serde(rename = "n", skip_serializing_if = "Option::is_none")]
+    count: Option<u8>,
+    /// Optional provider-relative seed.
+    /// 可选供应商相对随机种子。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seed: Option<i64>,
+    /// Optional provider prompt rewriting switch.
+    /// 可选供应商提示词改写开关。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_extend: Option<bool>,
+    /// Optional provider watermark switch.
+    /// 可选供应商水印开关。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    watermark: Option<bool>,
+}
+
+impl AlibabaImageWireParameters {
+    /// Reports whether every optional provider control is absent.
+    /// 报告是否全部可选供应商控制项均缺失。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` only when the request should omit the parameters object.
+    /// 仅在请求应省略参数对象时返回 `true`。
+    fn is_empty(&self) -> bool {
+        self.negative_prompt.is_none()
+            && self.size.is_none()
+            && self.count.is_none()
+            && self.seed.is_none()
+            && self.prompt_extend.is_none()
+            && self.watermark.is_none()
+    }
+}
+
+/// Exact successful Alibaba synchronous image response.
+/// 精确成功阿里云同步图片响应。
+#[derive(Debug, Deserialize)]
+struct AlibabaImageWireResponse {
+    /// Provider request identifier.
+    /// 供应商请求标识。
+    #[serde(default)]
+    request_id: Option<String>,
+    /// Ordered provider output.
+    /// 有序供应商输出。
+    output: AlibabaImageWireOutput,
+}
+
+/// Contains ordered image choices.
+/// 包含有序图片 Choice。
+#[derive(Debug, Deserialize)]
+struct AlibabaImageWireOutput {
+    /// Provider choices.
+    /// 供应商 Choice。
+    choices: Vec<AlibabaImageWireChoice>,
+}
+
+/// Contains one assistant response message.
+/// 包含一条 Assistant 响应消息。
+#[derive(Debug, Deserialize)]
+struct AlibabaImageWireChoice {
+    /// Generated resource message.
+    /// 生成资源消息。
+    message: AlibabaImageWireResponseMessage,
+}
+
+/// Contains ordered generated image content.
+/// 包含有序生成图片内容。
+#[derive(Debug, Deserialize)]
+struct AlibabaImageWireResponseMessage {
+    /// Generated content blocks.
+    /// 生成内容块。
+    content: Vec<AlibabaImageWireResponseContent>,
+}
+
+/// Contains one provider-issued temporary image URL.
+/// 包含一个供应商签发的临时图片 URL。
+#[derive(Debug, Deserialize)]
+struct AlibabaImageWireResponseContent {
+    /// Absolute temporary PNG URL.
+    /// 绝对临时 PNG URL。
+    image: String,
+}
+
+/// Executes one exact synchronous Qwen image generation or editing tool.
+/// 执行一个精确同步 Qwen 图片生成或编辑工具。
+///
+/// # Parameters
+/// 参数
+/// `entry`, `target`, `arguments`, and `secret` are immutable invocation snapshots.
+/// `entry`、`target`、`arguments` 与 `secret` 是不可变调用快照。
+///
+/// # Returns
+/// 返回值
+/// Ordered generated PNG resources.
+/// 返回有序生成 PNG 资源。
+async fn execute_alibaba_qwen_image_tool(
+    http: &reqwest::Client,
+    entry: &ServiceEntry,
+    target: &ProviderToolTarget,
+    arguments: Value,
+    secret: &CredentialExecutionSecret,
+) -> Result<ProviderToolExecutionResult, String> {
+    let body = match target.execution.adapter {
+        ProviderToolAdapterKind::AlibabaQwenImageGenerate => {
+            let arguments: AlibabaQwenImageGenerateArguments = serde_json::from_value(arguments)
+                .map_err(|error| format!("Alibaba Qwen image arguments are invalid: {error}"))?;
+            build_alibaba_qwen_generate_body(target, arguments)?
+        }
+        ProviderToolAdapterKind::AlibabaQwenImageEdit => {
+            let arguments: AlibabaQwenImageEditArguments = serde_json::from_value(arguments)
+                .map_err(|error| {
+                    format!("Alibaba Qwen image-edit arguments are invalid: {error}")
+                })?;
+            build_alibaba_qwen_edit_body(target, arguments)?
+        }
+        _ => {
+            return Err(String::from(
+                "Alibaba Qwen image executor received an incompatible adapter.",
+            ));
+        }
+    };
+    execute_alibaba_image_request(http, entry, target, secret, &body, "Alibaba Qwen image").await
+}
+
+/// Builds and validates one exact Qwen image generation body.
+/// 构建并验证一份精确 Qwen 图片生成正文。
+///
+/// # Parameters
+/// 参数
+/// `target` fixes the model and `arguments` contains model-native controls.
+/// `target` 固定模型，`arguments` 包含模型原生控制项。
+///
+/// # Returns
+/// 返回值
+/// A lossless synchronous MultiModalConversation request.
+/// 返回无损同步 MultiModalConversation 请求。
+fn build_alibaba_qwen_generate_body(
+    target: &ProviderToolTarget,
+    arguments: AlibabaQwenImageGenerateArguments,
+) -> Result<AlibabaImageWireRequest, String> {
+    validate_alibaba_image_text(arguments.prompt.as_str(), "prompt", None)?;
+    validate_alibaba_image_text(
+        arguments.negative_prompt.as_str(),
+        "negative_prompt",
+        Some(500),
+    )?;
+    validate_alibaba_image_count(arguments.count, 6)?;
+    validate_alibaba_image_seed(arguments.seed)?;
+    if arguments.width.is_some() != arguments.height.is_some() {
+        return Err(String::from(
+            "Alibaba Qwen image width and height must be supplied together.",
+        ));
+    }
+    let size = match (arguments.width, arguments.height) {
+        (Some(width), Some(height)) => {
+            let pixels = u64::from(width) * u64::from(height);
+            if !(512 * 512..=2048 * 2048).contains(&pixels) {
+                return Err(String::from(
+                    "Alibaba Qwen image size must contain between 512*512 and 2048*2048 pixels.",
+                ));
+            }
+            Some(format!("{width}*{height}"))
+        }
+        (None, None) => None,
+        _ => unreachable!("paired width and height were validated"),
+    };
+    Ok(alibaba_image_wire_request(
+        target.upstream_target_id.as_str(),
+        Vec::new(),
+        arguments.prompt,
+        AlibabaImageWireParameters {
+            negative_prompt: non_empty(arguments.negative_prompt),
+            size,
+            count: arguments.count,
+            seed: arguments.seed,
+            prompt_extend: arguments.prompt_extend,
+            watermark: arguments.watermark,
+        },
+    ))
+}
+
+/// Builds and validates one exact Qwen image editing body.
+/// 构建并验证一份精确 Qwen 图片编辑正文。
+///
+/// # Parameters
+/// 参数
+/// `target` fixes the model and `arguments` contains host-materialized sources.
+/// `target` 固定模型，`arguments` 包含宿主物化来源。
+///
+/// # Returns
+/// 返回值
+/// A lossless synchronous MultiModalConversation request.
+/// 返回无损同步 MultiModalConversation 请求。
+fn build_alibaba_qwen_edit_body(
+    target: &ProviderToolTarget,
+    arguments: AlibabaQwenImageEditArguments,
+) -> Result<AlibabaImageWireRequest, String> {
+    validate_alibaba_image_text(arguments.instruction.as_str(), "instruction", None)?;
+    validate_alibaba_image_text(
+        arguments.negative_prompt.as_str(),
+        "negative_prompt",
+        Some(500),
+    )?;
+    if !(1..=3).contains(&arguments.source_images.len()) {
+        return Err(String::from(
+            "Alibaba Qwen image editing requires one to three source images.",
+        ));
+    }
+    for image in &arguments.source_images {
+        validate_alibaba_image_data_url(image, 10 * 1024 * 1024)?;
+    }
+    validate_alibaba_image_count(arguments.count, 6)?;
+    validate_alibaba_image_seed(arguments.seed)?;
+    Ok(alibaba_image_wire_request(
+        target.upstream_target_id.as_str(),
+        arguments.source_images,
+        arguments.instruction,
+        AlibabaImageWireParameters {
+            negative_prompt: non_empty(arguments.negative_prompt),
+            size: None,
+            count: arguments.count,
+            seed: arguments.seed,
+            prompt_extend: arguments.prompt_extend,
+            watermark: arguments.watermark,
+        },
+    ))
+}
+
+/// Executes one exact synchronous Wan 2.7 image generation tool.
+/// 执行一个精确同步 Wan 2.7 图片生成工具。
+///
+/// # Parameters
+/// 参数
+/// `entry`, `target`, `arguments`, and `secret` are immutable invocation snapshots.
+/// `entry`、`target`、`arguments` 与 `secret` 是不可变调用快照。
+///
+/// # Returns
+/// 返回值
+/// Ordered generated PNG resources.
+/// 返回有序生成 PNG 资源。
+async fn execute_alibaba_wan_image_tool(
+    http: &reqwest::Client,
+    entry: &ServiceEntry,
+    target: &ProviderToolTarget,
+    arguments: Value,
+    secret: &CredentialExecutionSecret,
+) -> Result<ProviderToolExecutionResult, String> {
+    let arguments: AlibabaWanImageGenerateArguments = serde_json::from_value(arguments)
+        .map_err(|error| format!("Alibaba Wan image arguments are invalid: {error}"))?;
+    let body = build_alibaba_wan_generate_body(target, arguments)?;
+    execute_alibaba_image_request(http, entry, target, secret, &body, "Alibaba Wan image").await
+}
+
+/// Builds one exact Wan 2.7 image request after validating model-specific constraints.
+/// 在验证模型专属约束后构建一项精确 Wan 2.7 图片请求。
+///
+/// # Parameters
+/// 参数
+/// `target` fixes the provider model and `arguments` contains host-materialized inputs.
+/// `target` 固定供应商模型，`arguments` 包含宿主已物化输入。
+///
+/// # Returns
+/// 返回值
+/// A lossless synchronous request or one pre-dispatch validation failure.
+/// 返回无损同步请求，或一项分派前验证失败。
+fn build_alibaba_wan_generate_body(
+    target: &ProviderToolTarget,
+    arguments: AlibabaWanImageGenerateArguments,
+) -> Result<AlibabaImageWireRequest, String> {
+    validate_alibaba_image_text(arguments.prompt.as_str(), "prompt", Some(5000))?;
+    if arguments.reference_images.len() > 9 {
+        return Err(String::from(
+            "Alibaba Wan image generation accepts at most nine reference images.",
+        ));
+    }
+    for image in &arguments.reference_images {
+        validate_alibaba_image_data_url(image, 20 * 1024 * 1024)?;
+    }
+    validate_alibaba_image_count(arguments.count, 4)?;
+    validate_alibaba_image_seed(arguments.seed)?;
+    let resolution = arguments.resolution.as_deref().map(str::to_ascii_lowercase);
+    if resolution
+        .as_deref()
+        .is_some_and(|value| !matches!(value, "1k" | "2k" | "4k"))
+    {
+        return Err(String::from(
+            "Alibaba Wan image resolution must be 1k, 2k, or 4k.",
+        ));
+    }
+    if resolution.as_deref() == Some("4k")
+        && (target.upstream_target_id != "wan2.7-image-pro"
+            || !arguments.reference_images.is_empty())
+    {
+        return Err(String::from(
+            "Alibaba Wan 4k output is limited to wan2.7-image-pro text-only generation.",
+        ));
+    }
+    Ok(alibaba_image_wire_request(
+        target.upstream_target_id.as_str(),
+        arguments.reference_images,
+        arguments.prompt,
+        AlibabaImageWireParameters {
+            negative_prompt: non_empty(arguments.negative_prompt),
+            size: resolution.map(|value| value.to_ascii_uppercase()),
+            count: arguments.count,
+            seed: arguments.seed,
+            prompt_extend: arguments.prompt_extend,
+            watermark: arguments.watermark,
+        },
+    ))
+}
+
+/// Builds the shared single-message image request while preserving source ordering.
+/// 构建共享单消息图片请求并保留来源顺序。
+///
+/// # Parameters
+/// 参数
+/// `model`, `images`, `text`, and `parameters` are already validated.
+/// `model`、`images`、`text` 与 `parameters` 已完成验证。
+///
+/// # Returns
+/// 返回值
+/// The exact provider wire request.
+/// 返回精确供应商 Wire 请求。
+fn alibaba_image_wire_request(
+    model: &str,
+    images: Vec<String>,
+    text: String,
+    parameters: AlibabaImageWireParameters,
+) -> AlibabaImageWireRequest {
+    let mut content = images
+        .into_iter()
+        .map(|image| AlibabaImageWireContent {
+            image: Some(image),
+            text: None,
+        })
+        .collect::<Vec<_>>();
+    content.push(AlibabaImageWireContent {
+        image: None,
+        text: Some(text),
+    });
+    AlibabaImageWireRequest {
+        model: model.to_string(),
+        input: AlibabaImageWireInput {
+            messages: vec![AlibabaImageWireMessage {
+                role: "user",
+                content,
+            }],
+        },
+        parameters,
+    }
+}
+
+/// Executes and decodes one synchronous Alibaba native image request.
+/// 执行并解码一项同步阿里云原生图片请求。
+///
+/// # Parameters
+/// 参数
+/// `body` is the exact reviewed wire request and `operation` scopes diagnostics.
+/// `body` 是精确已审核 Wire 请求，`operation` 限定诊断范围。
+///
+/// # Returns
+/// 返回值
+/// Ordered normalized image resources or a controlled provider error.
+/// 返回有序归一化图片资源或受控供应商错误。
+async fn execute_alibaba_image_request(
+    http: &reqwest::Client,
+    entry: &ServiceEntry,
+    target: &ProviderToolTarget,
+    secret: &CredentialExecutionSecret,
+    body: &AlibabaImageWireRequest,
+    operation: &str,
+) -> Result<ProviderToolExecutionResult, String> {
+    let url = provider_tool_url(entry, target);
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    insert_authentication_header(
+        &mut headers,
+        target.execution.authentication,
+        secret.expose_value(),
+    )?;
+    let response = http
+        .post(url.as_str())
+        .headers(headers)
+        .json(body)
+        .send()
+        .await
+        .map_err(|error| format!("{operation} request to `{url}` failed: {error}"))?;
+    let status = response.status();
+    let response_text = read_bounded_provider_response(response, operation).await?;
+    if !status.is_success() {
+        return Err(format_http_error(
+            operation,
+            status.as_u16(),
+            response_text.as_str(),
+        ));
+    }
+    decode_alibaba_image_response(operation, response_text.as_str())
+}
+
+/// Decodes one exact Alibaba synchronous image response.
+/// 解码一项精确阿里云同步图片响应。
+///
+/// # Parameters
+/// 参数
+/// `operation` scopes diagnostics and `response_text` is the bounded successful body.
+/// `operation` 限定诊断范围，`response_text` 是有界成功正文。
+///
+/// # Returns
+/// 返回值
+/// Ordered PNG download resources.
+/// 返回有序 PNG 下载资源。
+fn decode_alibaba_image_response(
+    operation: &str,
+    response_text: &str,
+) -> Result<ProviderToolExecutionResult, String> {
+    let response: AlibabaImageWireResponse = serde_json::from_str(response_text)
+        .map_err(|error| format!("{operation} response JSON is invalid: {error}"))?;
+    let mut resources = Vec::new();
+    for choice in response.output.choices {
+        for content in choice.message.content {
+            let url = reqwest::Url::parse(content.image.as_str())
+                .map_err(|_| format!("{operation} response contains an invalid image URL."))?;
+            if !matches!(url.scheme(), "http" | "https")
+                || url.host_str().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+            {
+                return Err(format!(
+                    "{operation} response contains a non-public image URL."
+                ));
+            }
+            resources.push(ProviderToolGeneratedResource {
+                output_id: format!("image-{}", resources.len()),
+                kind: String::from("image"),
+                mime_type: String::from("image/png"),
+                bytes: None,
+                download_url: Some(content.image),
+            });
+        }
+    }
+    if resources.is_empty() {
+        return Err(format!(
+            "{operation} response contains no generated images."
+        ));
+    }
+    Ok(ProviderToolExecutionResult {
+        upstream_response_id: response.request_id,
+        output: ProviderToolNormalizedOutput::Resources(resources),
+    })
+}
+
+/// Validates one required or bounded optional Alibaba image text field.
+/// 验证一个必需或有界可选阿里云图片文本字段。
+///
+/// # Parameters
+/// 参数
+/// `value`, `name`, and `maximum_characters` define the exact field boundary.
+/// `value`、`name` 与 `maximum_characters` 定义精确字段边界。
+///
+/// # Returns
+/// 返回值
+/// Success only for a non-empty required value within its character ceiling.
+/// 仅在必需值非空且未超过字符上限时返回成功。
+fn validate_alibaba_image_text(
+    value: &str,
+    name: &str,
+    maximum_characters: Option<usize>,
+) -> Result<(), String> {
+    if value.trim().is_empty() && name != "negative_prompt" {
+        return Err(format!("Alibaba image {name} cannot be empty."));
+    }
+    if let Some(maximum) = maximum_characters
+        && value.chars().count() > maximum
+    {
+        return Err(format!(
+            "Alibaba image {name} exceeds {maximum} characters."
+        ));
+    }
+    Ok(())
+}
+
+/// Validates one optional Alibaba image result count.
+/// 验证一个可选阿里云图片结果数量。
+///
+/// # Parameters
+/// 参数
+/// `count` is absent or positive and `maximum` is the model-specific ceiling.
+/// `count` 可缺失或为正数，`maximum` 是模型专属上限。
+///
+/// # Returns
+/// 返回值
+/// Success when the optional count is representable by the selected model.
+/// 当可选数量可由所选模型表示时返回成功。
+fn validate_alibaba_image_count(count: Option<u8>, maximum: u8) -> Result<(), String> {
+    if count.is_some_and(|count| count == 0 || count > maximum) {
+        return Err(format!(
+            "Alibaba image count must be between one and {maximum}."
+        ));
+    }
+    Ok(())
+}
+
+/// Validates one optional Alibaba provider-relative image seed.
+/// 验证一个可选阿里云供应商相对图片随机种子。
+///
+/// # Parameters
+/// 参数
+/// `seed` is absent or a signed integer from the AI-visible contract.
+/// `seed` 可缺失或为 AI 可见合同中的有符号整数。
+///
+/// # Returns
+/// 返回值
+/// Success only within the documented non-negative 32-bit range.
+/// 仅在文档明确的非负 32 位范围内返回成功。
+fn validate_alibaba_image_seed(seed: Option<i64>) -> Result<(), String> {
+    if seed.is_some_and(|seed| !(0..=2_147_483_647).contains(&seed)) {
+        return Err(String::from(
+            "Alibaba image seed must be between 0 and 2147483647.",
+        ));
+    }
+    Ok(())
+}
+
+/// Validates one host-created image Data URL and its provider-specific byte ceiling.
+/// 验证一个宿主创建的图片 Data URL 及其供应商专属字节上限。
+///
+/// # Parameters
+/// 参数
+/// `value` is the carrier and `maximum_bytes` is the exact selected-adapter limit.
+/// `value` 是载体，`maximum_bytes` 是精确所选适配器上限。
+///
+/// # Returns
+/// 返回值
+/// Success only for a supported non-empty image payload.
+/// 仅在图片载荷受支持且非空时返回成功。
+fn validate_alibaba_image_data_url(value: &str, maximum_bytes: usize) -> Result<(), String> {
+    let encoded = [
+        "data:image/jpeg;base64,",
+        "data:image/png;base64,",
+        "data:image/bmp;base64,",
+        "data:image/webp;base64,",
+        "data:image/gif;base64,",
+    ]
+    .into_iter()
+    .find_map(|prefix| value.strip_prefix(prefix))
+    .ok_or_else(|| {
+        String::from("Alibaba image input must be a JPEG, PNG, BMP, WebP, or GIF Data URL.")
+    })?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded.as_bytes())
+        .map_err(|_| String::from("Alibaba image input contains invalid Base64."))?;
+    if bytes.is_empty() || bytes.len() > maximum_bytes {
+        return Err(format!(
+            "Alibaba image input must be non-empty and no larger than {maximum_bytes} bytes."
+        ));
+    }
+    Ok(())
+}
+
+/// Converts an optional empty provider string into an omitted wire field.
+/// 将可选空供应商字符串转换为省略的 Wire 字段。
+///
+/// # Parameters
+/// 参数
+/// `value` is an already validated optional provider field.
+/// `value` 是已验证的可选供应商字段。
+///
+/// # Returns
+/// 返回值
+/// `None` for empty text or the original non-empty text.
+/// 空文本返回 `None`，否则返回原始非空文本。
+fn non_empty(value: String) -> Option<String> {
+    (!value.is_empty()).then_some(value)
+}
+
+/// Strict CosyVoice synthesis arguments.
+/// 严格 CosyVoice 合成参数。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AlibabaCosyVoiceArguments {
+    /// Exact text or SSML document.
+    /// 精确文本或 SSML 文档。
+    text: String,
+    /// System, cloned, or designed voice identifier.
+    /// 系统、复刻或设计声音标识。
+    voice_id: String,
+    /// Requested provider audio encoding.
+    /// 请求的供应商音频编码。
+    #[serde(default = "default_alibaba_cosyvoice_format")]
+    output_format: String,
+    /// Optional output sample rate.
+    /// 可选输出采样率。
+    #[serde(default)]
+    sample_rate: Option<u32>,
+    /// Optional zero-through-one-hundred volume.
+    /// 可选零至一百音量。
+    #[serde(default)]
+    volume: Option<f64>,
+    /// Optional speech rate.
+    /// 可选语速。
+    #[serde(default)]
+    speed: Option<f64>,
+    /// Optional pitch multiplier.
+    /// 可选音调倍率。
+    #[serde(default)]
+    pitch: Option<f64>,
+    /// Optional deterministic seed.
+    /// 可选确定性种子。
+    #[serde(default)]
+    seed: Option<u16>,
+    /// Optional pronunciation language hint.
+    /// 可选发音语言提示。
+    #[serde(default)]
+    language: Option<String>,
+    /// Optional delivery instruction.
+    /// 可选表达指令。
+    #[serde(default)]
+    style: Option<String>,
+    /// Whether the exact text should be parsed as SSML.
+    /// 是否将精确文本解析为 SSML。
+    #[serde(default)]
+    enable_ssml: bool,
+}
+
+/// Returns the documented default CosyVoice output encoding.
+/// 返回文档规定的默认 CosyVoice 输出编码。
+///
+/// # Returns
+/// 返回值
+/// Lowercase `mp3`.
+/// 返回小写 `mp3`。
+fn default_alibaba_cosyvoice_format() -> String {
+    String::from("mp3")
+}
+
+/// Strict Qwen3-TTS synthesis arguments.
+/// 严格 Qwen3-TTS 合成参数。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AlibabaQwenTtsArguments {
+    /// Exact transcript to synthesize.
+    /// 待合成精确逐字稿。
+    text: String,
+    /// Documented preset voice identifier.
+    /// 文档规定的预设声音标识。
+    voice_id: String,
+    /// Optional documented pronunciation language.
+    /// 可选文档化发音语言。
+    #[serde(default)]
+    language: Option<String>,
+    /// Optional instruct-model delivery instruction.
+    /// 可选指令模型表达指令。
+    #[serde(default)]
+    style: Option<String>,
+}
+
+/// Strict Qwen3-ASR arguments after host audio materialization.
+/// 宿主音频物化后的严格 Qwen3-ASR 参数。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AlibabaQwenAsrArguments {
+    /// Host-created audio Data URL.
+    /// 宿主创建的音频 Data URL。
+    audio_url: String,
+    /// Optional documented source language.
+    /// 可选文档化源语言。
+    #[serde(default)]
+    language: Option<String>,
+}
+
+/// Exact Alibaba audio locator.
+/// 精确阿里云音频定位符。
+#[derive(Debug, Deserialize)]
+struct AlibabaAudioLocator {
+    /// Temporary complete resource URL.
+    /// 临时完整资源 URL。
+    url: String,
+}
+
+/// Exact CosyVoice successful response.
+/// 精确 CosyVoice 成功响应。
+#[derive(Debug, Deserialize)]
+struct AlibabaCosyVoiceResponse {
+    /// Provider request identifier.
+    /// 供应商请求标识。
+    request_id: String,
+    /// Terminal audio output.
+    /// 终态音频输出。
+    output: AlibabaCosyVoiceOutput,
+}
+
+/// Exact CosyVoice terminal output.
+/// 精确 CosyVoice 终态输出。
+#[derive(Debug, Deserialize)]
+struct AlibabaCosyVoiceOutput {
+    /// Complete audio locator.
+    /// 完整音频定位符。
+    audio: AlibabaAudioLocator,
+    /// Optional terminal reason.
+    /// 可选终止原因。
+    #[serde(default)]
+    finish_reason: String,
+}
+
+/// Exact non-streaming Qwen3-TTS response.
+/// 精确非流式 Qwen3-TTS 响应。
+#[derive(Debug, Deserialize)]
+struct AlibabaQwenTtsResponse {
+    /// Provider-repeated business status.
+    /// 供应商重复业务状态。
+    status_code: u16,
+    /// Provider request identifier.
+    /// 供应商请求标识。
+    request_id: String,
+    /// Terminal synthesis output.
+    /// 终态合成输出。
+    output: AlibabaQwenTtsOutput,
+}
+
+/// Exact Qwen3-TTS terminal output.
+/// 精确 Qwen3-TTS 终态输出。
+#[derive(Debug, Deserialize)]
+struct AlibabaQwenTtsOutput {
+    /// Required terminal reason.
+    /// 必需终止原因。
+    finish_reason: String,
+    /// Complete WAV locator.
+    /// 完整 WAV 定位符。
+    audio: AlibabaAudioLocator,
+}
+
+/// Exact synchronous Qwen3-ASR response.
+/// 精确同步 Qwen3-ASR 响应。
+#[derive(Debug, Deserialize)]
+struct AlibabaQwenAsrResponse {
+    /// Provider request identifier.
+    /// 供应商请求标识。
+    request_id: String,
+    /// Terminal recognition output.
+    /// 终态识别输出。
+    output: AlibabaQwenAsrOutput,
+}
+
+/// Contains exactly one terminal recognition choice.
+/// 包含恰好一个终态识别 Choice。
+#[derive(Debug, Deserialize)]
+struct AlibabaQwenAsrOutput {
+    /// Ordered recognition choices.
+    /// 有序识别 Choice。
+    choices: Vec<AlibabaQwenAsrChoice>,
+}
+
+/// Contains one terminal assistant transcript.
+/// 包含一个终态 Assistant 转录。
+#[derive(Debug, Deserialize)]
+struct AlibabaQwenAsrChoice {
+    /// Required terminal reason.
+    /// 必需终止原因。
+    finish_reason: String,
+    /// Assistant transcript message.
+    /// Assistant 转录消息。
+    message: AlibabaQwenAsrMessage,
+}
+
+/// Contains transcript text and provider annotations.
+/// 包含转录文本与供应商注解。
+#[derive(Debug, Deserialize)]
+struct AlibabaQwenAsrMessage {
+    /// Provider-fixed assistant role.
+    /// 供应商固定 Assistant 角色。
+    role: String,
+    /// Exactly one transcript content item.
+    /// 恰好一个转录内容项。
+    content: Vec<AlibabaQwenAsrContent>,
+}
+
+/// Contains one transcript text item.
+/// 包含一个转录文本项。
+#[derive(Debug, Deserialize)]
+struct AlibabaQwenAsrContent {
+    /// Complete recognized text.
+    /// 完整识别文本。
+    text: String,
+}
+
+/// Executes one exact CosyVoice synchronous synthesis request.
+/// 执行一个精确 CosyVoice 同步合成请求。
+///
+/// # Parameters
+/// 参数
+/// Invocation values are immutable after target selection and local validation.
+/// 调用值在目标选择与本地验证后保持不可变。
+///
+/// # Returns
+/// 返回值
+/// One normalized generated audio resource.
+/// 返回一个归一化生成音频资源。
+async fn execute_alibaba_cosyvoice_tool(
+    http: &reqwest::Client,
+    entry: &ServiceEntry,
+    target: &ProviderToolTarget,
+    arguments: Value,
+    secret: &CredentialExecutionSecret,
+) -> Result<ProviderToolExecutionResult, String> {
+    let arguments: AlibabaCosyVoiceArguments = serde_json::from_value(arguments)
+        .map_err(|error| format!("Alibaba CosyVoice arguments are invalid: {error}"))?;
+    let (body, mime_type) = build_alibaba_cosyvoice_body(target, arguments)?;
+    let response_text =
+        execute_alibaba_native_json(http, entry, target, secret, &body, "Alibaba CosyVoice")
+            .await?;
+    let response: AlibabaCosyVoiceResponse = serde_json::from_str(response_text.as_str())
+        .map_err(|error| format!("Alibaba CosyVoice response JSON is invalid: {error}"))?;
+    if response.request_id.trim().is_empty()
+        || (!response.output.finish_reason.is_empty() && response.output.finish_reason != "stop")
+    {
+        return Err(String::from("Alibaba CosyVoice response is not terminal."));
+    }
+    let url = validated_public_http_url(
+        response.output.audio.url.as_str(),
+        "Alibaba CosyVoice audio URL",
+    )?;
+    Ok(audio_resource_result(
+        Some(response.request_id),
+        url.to_string(),
+        mime_type,
+    ))
+}
+
+/// Builds one exact CosyVoice request and returns its normalized output MIME type.
+/// 构建一项精确 CosyVoice 请求并返回其归一化输出 MIME 类型。
+///
+/// # Parameters
+/// 参数
+/// `target` freezes the selected model and `arguments` contains strict caller input.
+/// `target` 冻结所选模型，`arguments` 包含严格调用方输入。
+///
+/// # Returns
+/// 返回值
+/// A provider-native JSON body and reviewed MIME type, or a pre-dispatch validation failure.
+/// 返回供应商原生 JSON 正文与已审核 MIME 类型，或分派前验证失败。
+fn build_alibaba_cosyvoice_body(
+    target: &ProviderToolTarget,
+    arguments: AlibabaCosyVoiceArguments,
+) -> Result<(Value, &'static str), String> {
+    if arguments.text.trim().is_empty() || arguments.voice_id.trim().is_empty() {
+        return Err(String::from(
+            "Alibaba CosyVoice requires non-empty text and voice_id.",
+        ));
+    }
+    if arguments
+        .volume
+        .is_some_and(|value| !(0.0..=100.0).contains(&value))
+        || arguments
+            .speed
+            .is_some_and(|value| !(0.5..=2.0).contains(&value))
+        || arguments
+            .pitch
+            .is_some_and(|value| !(0.5..=2.0).contains(&value))
+        || arguments.sample_rate == Some(0)
+    {
+        return Err(String::from(
+            "Alibaba CosyVoice numeric controls are outside their verified ranges.",
+        ));
+    }
+    let output_format = arguments.output_format.to_ascii_lowercase();
+    let mime_type = alibaba_cosyvoice_mime_type(output_format.as_str()).ok_or_else(|| {
+        String::from("Alibaba CosyVoice output_format must be mp3, pcm, wav, or opus.")
+    })?;
+    let language_hints = arguments
+        .language
+        .filter(|value| !value.is_empty())
+        .map(|value| vec![value]);
+    let input = json_object_with_optional_fields(
+        serde_json::Map::from_iter([
+            (String::from("text"), Value::String(arguments.text)),
+            (String::from("voice"), Value::String(arguments.voice_id)),
+            (String::from("format"), Value::String(output_format)),
+        ]),
+        [
+            (
+                "sample_rate",
+                arguments.sample_rate.map(|value| serde_json::json!(value)),
+            ),
+            (
+                "volume",
+                arguments.volume.map(|value| serde_json::json!(value)),
+            ),
+            (
+                "rate",
+                arguments.speed.map(|value| serde_json::json!(value)),
+            ),
+            (
+                "pitch",
+                arguments.pitch.map(|value| serde_json::json!(value)),
+            ),
+            ("seed", arguments.seed.map(|value| serde_json::json!(value))),
+            (
+                "language_hints",
+                language_hints.map(|value| serde_json::json!(value)),
+            ),
+            ("instruction", arguments.style.map(Value::String)),
+            (
+                "enable_ssml",
+                arguments.enable_ssml.then_some(Value::Bool(true)),
+            ),
+        ],
+    );
+    let body = serde_json::json!({
+        "model": target.upstream_target_id,
+        "input": input
+    });
+    Ok((body, mime_type))
+}
+
+/// Executes one exact non-streaming Qwen3-TTS request.
+/// 执行一个精确非流式 Qwen3-TTS 请求。
+///
+/// # Parameters
+/// 参数
+/// Invocation values are immutable after target selection and validation.
+/// 调用值在目标选择与验证后保持不可变。
+///
+/// # Returns
+/// 返回值
+/// One normalized generated WAV resource.
+/// 返回一个归一化生成 WAV 资源。
+async fn execute_alibaba_qwen_tts_tool(
+    http: &reqwest::Client,
+    entry: &ServiceEntry,
+    target: &ProviderToolTarget,
+    arguments: Value,
+    secret: &CredentialExecutionSecret,
+) -> Result<ProviderToolExecutionResult, String> {
+    let arguments: AlibabaQwenTtsArguments = serde_json::from_value(arguments)
+        .map_err(|error| format!("Alibaba Qwen3-TTS arguments are invalid: {error}"))?;
+    let body = build_alibaba_qwen_tts_body(target, arguments)?;
+    let response_text =
+        execute_alibaba_native_json(http, entry, target, secret, &body, "Alibaba Qwen3-TTS")
+            .await?;
+    let response: AlibabaQwenTtsResponse = serde_json::from_str(response_text.as_str())
+        .map_err(|error| format!("Alibaba Qwen3-TTS response JSON is invalid: {error}"))?;
+    if response.status_code != 200 || response.output.finish_reason != "stop" {
+        return Err(format!(
+            "Alibaba Qwen3-TTS returned non-terminal status {}.",
+            response.status_code
+        ));
+    }
+    let url = validated_public_http_url(
+        response.output.audio.url.as_str(),
+        "Alibaba Qwen3-TTS audio URL",
+    )?;
+    Ok(audio_resource_result(
+        Some(response.request_id),
+        url.to_string(),
+        "audio/wav",
+    ))
+}
+
+/// Builds one exact non-streaming Qwen3-TTS request.
+/// 构建一项精确非流式 Qwen3-TTS 请求。
+///
+/// # Parameters
+/// 参数
+/// `target` fixes plain versus instruct behavior and `arguments` contains strict semantic input.
+/// `target` 固定普通或指令模式行为，`arguments` 包含严格语义输入。
+///
+/// # Returns
+/// 返回值
+/// Provider-native JSON without unsupported explicit null fields.
+/// 返回不含不受支持显式空值的供应商原生 JSON。
+fn build_alibaba_qwen_tts_body(
+    target: &ProviderToolTarget,
+    arguments: AlibabaQwenTtsArguments,
+) -> Result<Value, String> {
+    if arguments.text.trim().is_empty()
+        || arguments.text.chars().count() > 600
+        || arguments.voice_id.trim().is_empty()
+    {
+        return Err(String::from(
+            "Alibaba Qwen3-TTS requires non-empty text of at most 600 characters and one voice_id.",
+        ));
+    }
+    if !supported_alibaba_qwen_tts_language(arguments.language.as_deref()) {
+        return Err(String::from("Alibaba Qwen3-TTS language is unsupported."));
+    }
+    if arguments.style.is_some() && target.upstream_target_id != "qwen3-tts-instruct-flash" {
+        return Err(String::from(
+            "Alibaba Qwen3-TTS style requires qwen3-tts-instruct-flash.",
+        ));
+    }
+    let optimize_instructions = arguments.style.is_some();
+    let input = json_object_with_optional_fields(
+        serde_json::Map::from_iter([
+            (String::from("text"), Value::String(arguments.text)),
+            (String::from("voice"), Value::String(arguments.voice_id)),
+        ]),
+        [
+            ("language_type", arguments.language.map(Value::String)),
+            ("instructions", arguments.style.map(Value::String)),
+            (
+                "optimize_instructions",
+                optimize_instructions.then_some(Value::Bool(true)),
+            ),
+        ],
+    );
+    let body = serde_json::json!({
+        "model": target.upstream_target_id,
+        "input": input
+    });
+    Ok(body)
+}
+
+/// Executes one exact synchronous Qwen3-ASR transcription request.
+/// 执行一个精确同步 Qwen3-ASR 转录请求。
+///
+/// # Parameters
+/// 参数
+/// Invocation values are immutable after host audio materialization.
+/// 调用值在宿主音频物化后保持不可变。
+///
+/// # Returns
+/// 返回值
+/// Complete provider transcript text.
+/// 返回完整供应商转录文本。
+async fn execute_alibaba_qwen_asr_tool(
+    http: &reqwest::Client,
+    entry: &ServiceEntry,
+    target: &ProviderToolTarget,
+    arguments: Value,
+    secret: &CredentialExecutionSecret,
+) -> Result<ProviderToolExecutionResult, String> {
+    let arguments: AlibabaQwenAsrArguments = serde_json::from_value(arguments)
+        .map_err(|error| format!("Alibaba Qwen3-ASR arguments are invalid: {error}"))?;
+    let body = build_alibaba_qwen_asr_body(target, arguments)?;
+    let response_text =
+        execute_alibaba_native_json(http, entry, target, secret, &body, "Alibaba Qwen3-ASR")
+            .await?;
+    let response: AlibabaQwenAsrResponse = serde_json::from_str(response_text.as_str())
+        .map_err(|error| format!("Alibaba Qwen3-ASR response JSON is invalid: {error}"))?;
+    if response.request_id.trim().is_empty() || response.output.choices.len() != 1 {
+        return Err(String::from(
+            "Alibaba Qwen3-ASR response omitted its terminal choice.",
+        ));
+    }
+    let choice = &response.output.choices[0];
+    if choice.finish_reason != "stop"
+        || choice.message.role != "assistant"
+        || choice.message.content.len() != 1
+    {
+        return Err(String::from("Alibaba Qwen3-ASR response is incomplete."));
+    }
+    Ok(ProviderToolExecutionResult {
+        upstream_response_id: Some(response.request_id),
+        output: ProviderToolNormalizedOutput::Text(choice.message.content[0].text.clone()),
+    })
+}
+
+/// Builds one exact synchronous Qwen3-ASR request.
+/// 构建一项精确同步 Qwen3-ASR 请求。
+///
+/// # Parameters
+/// 参数
+/// `target` fixes the ASR model and `arguments` contains host-materialized bounded audio.
+/// `target` 固定 ASR 模型，`arguments` 包含宿主已物化的有界音频。
+///
+/// # Returns
+/// 返回值
+/// Provider-native JSON with only reviewed optional fields.
+/// 返回仅含已审核可选字段的供应商原生 JSON。
+fn build_alibaba_qwen_asr_body(
+    target: &ProviderToolTarget,
+    arguments: AlibabaQwenAsrArguments,
+) -> Result<Value, String> {
+    if !supported_alibaba_qwen_asr_language(arguments.language.as_deref()) {
+        return Err(String::from("Alibaba Qwen3-ASR language is unsupported."));
+    }
+    validate_alibaba_audio_data_url(arguments.audio_url.as_str())?;
+    let asr_options = json_object_with_optional_fields(
+        serde_json::Map::from_iter([(String::from("enable_itn"), Value::Bool(false))]),
+        [("language", arguments.language.map(Value::String))],
+    );
+    let body = serde_json::json!({
+        "model": target.upstream_target_id,
+        "input": {
+            "messages": [{
+                "role": "user",
+                "content": [{"audio": arguments.audio_url}]
+            }]
+        },
+        "parameters": {
+            "result_format": "message",
+            "asr_options": asr_options
+        }
+    });
+    Ok(body)
+}
+
+/// Sends one synchronous Alibaba native JSON request through the selected origin.
+/// 通过所选源地址发送一项同步阿里云原生 JSON 请求。
+///
+/// # Parameters
+/// 参数
+/// `body` is the adapter-owned wire value and `operation` scopes diagnostics.
+/// `body` 是适配器持有的 Wire 值，`operation` 限定诊断范围。
+///
+/// # Returns
+/// 返回值
+/// The bounded successful response body.
+/// 返回有界成功响应正文。
+async fn execute_alibaba_native_json<T: Serialize + ?Sized>(
+    http: &reqwest::Client,
+    entry: &ServiceEntry,
+    target: &ProviderToolTarget,
+    secret: &CredentialExecutionSecret,
+    body: &T,
+    operation: &str,
+) -> Result<String, String> {
+    let url = provider_tool_url(entry, target);
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    insert_authentication_header(
+        &mut headers,
+        target.execution.authentication,
+        secret.expose_value(),
+    )?;
+    let response = http
+        .post(url.as_str())
+        .headers(headers)
+        .json(body)
+        .send()
+        .await
+        .map_err(|error| format!("{operation} request to `{url}` failed: {error}"))?;
+    let status = response.status();
+    let response_text = read_bounded_provider_response(response, operation).await?;
+    if !status.is_success() {
+        return Err(format_http_error(
+            operation,
+            status.as_u16(),
+            response_text.as_str(),
+        ));
+    }
+    Ok(response_text)
+}
+
+/// Adds only present provider-native optional fields to one JSON object.
+/// 仅把存在的供应商原生可选字段加入一个 JSON 对象。
+///
+/// # Parameters
+/// 参数
+/// `required` contains exact required fields and `optional` contains reviewed optional carriers.
+/// `required` 包含精确必需字段，`optional` 包含已审核可选载体。
+///
+/// # Returns
+/// 返回值
+/// A JSON object without unsupported explicit `null` values.
+/// 返回不含不支持显式 `null` 值的 JSON 对象。
+fn json_object_with_optional_fields<const N: usize>(
+    mut required: serde_json::Map<String, Value>,
+    optional: [(&str, Option<Value>); N],
+) -> Value {
+    for (name, value) in optional {
+        if let Some(value) = value {
+            required.insert(name.to_string(), value);
+        }
+    }
+    Value::Object(required)
+}
+
+/// Builds one normalized generated-audio result.
+/// 构建一个归一化生成音频结果。
+///
+/// # Parameters
+/// 参数
+/// `upstream_response_id`, `download_url`, and `mime_type` are already validated.
+/// `upstream_response_id`、`download_url` 与 `mime_type` 已完成验证。
+///
+/// # Returns
+/// 返回值
+/// A single-resource output union.
+/// 返回单资源输出联合。
+fn audio_resource_result(
+    upstream_response_id: Option<String>,
+    download_url: String,
+    mime_type: &str,
+) -> ProviderToolExecutionResult {
+    ProviderToolExecutionResult {
+        upstream_response_id,
+        output: ProviderToolNormalizedOutput::Resources(vec![ProviderToolGeneratedResource {
+            output_id: String::from("audio-0"),
+            kind: String::from("audio"),
+            mime_type: mime_type.to_string(),
+            bytes: None,
+            download_url: Some(download_url),
+        }]),
+    }
+}
+
+/// Maps one verified CosyVoice format to its exact MIME type.
+/// 将一个已验证 CosyVoice 格式映射为精确 MIME 类型。
+///
+/// # Parameters
+/// 参数
+/// `format` is the normalized provider encoding.
+/// `format` 是归一化供应商编码。
+///
+/// # Returns
+/// 返回值
+/// The matching MIME type or `None` for unsupported input.
+/// 返回匹配 MIME 类型，不支持时返回 `None`。
+fn alibaba_cosyvoice_mime_type(format: &str) -> Option<&'static str> {
+    match format {
+        "mp3" => Some("audio/mpeg"),
+        "pcm" => Some("audio/pcm"),
+        "wav" => Some("audio/wav"),
+        "opus" => Some("audio/opus"),
+        _ => None,
+    }
+}
+
+/// Reports whether Qwen3-TTS documents one pronunciation language.
+/// 报告 Qwen3-TTS 是否记录一种发音语言。
+///
+/// # Parameters
+/// 参数
+/// `language` is absent or one model-native language name.
+/// `language` 可缺失或为一个模型原生语言名称。
+///
+/// # Returns
+/// 返回值
+/// Whether the selected value can be projected losslessly.
+/// 返回所选值能否无损投影。
+fn supported_alibaba_qwen_tts_language(language: Option<&str>) -> bool {
+    matches!(
+        language,
+        None | Some(
+            "Auto"
+                | "Chinese"
+                | "English"
+                | "German"
+                | "Italian"
+                | "Portuguese"
+                | "Spanish"
+                | "Japanese"
+                | "Korean"
+                | "French"
+                | "Russian"
+        )
+    )
+}
+
+/// Reports whether Qwen3-ASR documents one source language.
+/// 报告 Qwen3-ASR 是否记录一种源语言。
+///
+/// # Parameters
+/// 参数
+/// `language` is absent or one provider-native source-language code.
+/// `language` 可缺失或为一个供应商原生源语言代码。
+///
+/// # Returns
+/// 返回值
+/// Whether the selected value can be projected losslessly.
+/// 返回所选值能否无损投影。
+fn supported_alibaba_qwen_asr_language(language: Option<&str>) -> bool {
+    matches!(
+        language,
+        None | Some(
+            "zh" | "yue"
+                | "en"
+                | "ja"
+                | "de"
+                | "ko"
+                | "ru"
+                | "fr"
+                | "pt"
+                | "ar"
+                | "it"
+                | "es"
+                | "hi"
+                | "id"
+                | "th"
+                | "tr"
+                | "uk"
+                | "vi"
+                | "cs"
+                | "da"
+                | "fil"
+                | "fi"
+                | "is"
+                | "ms"
+                | "no"
+                | "pl"
+                | "sv"
+        )
+    )
+}
+
+/// Validates one host-created Qwen3-ASR audio Data URL.
+/// 验证一个宿主创建的 Qwen3-ASR 音频 Data URL。
+///
+/// # Parameters
+/// 参数
+/// `value` is the complete provider audio carrier.
+/// `value` 是完整供应商音频载体。
+///
+/// # Returns
+/// 返回值
+/// Success only for one supported non-empty bounded audio payload.
+/// 仅在音频载荷受支持、非空且有界时返回成功。
+fn validate_alibaba_audio_data_url(value: &str) -> Result<(), String> {
+    let encoded = [
+        "data:audio/mpeg;base64,",
+        "data:audio/mp3;base64,",
+        "data:audio/wav;base64,",
+        "data:audio/x-wav;base64,",
+        "data:audio/mp4;base64,",
+        "data:audio/aac;base64,",
+        "data:audio/ogg;base64,",
+        "data:audio/flac;base64,",
+        "data:audio/webm;base64,",
+    ]
+    .into_iter()
+    .find_map(|prefix| value.strip_prefix(prefix))
+    .ok_or_else(|| String::from("Alibaba Qwen3-ASR audio format is unsupported."))?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded.as_bytes())
+        .map_err(|_| String::from("Alibaba Qwen3-ASR audio contains invalid Base64."))?;
+    if bytes.is_empty() || bytes.len() > 50 * 1024 * 1024 {
+        return Err(String::from(
+            "Alibaba Qwen3-ASR audio must be non-empty and no larger than 50 MiB.",
+        ));
+    }
+    Ok(())
+}
+
 /// Executes and decodes the exact MiniMax synchronous image contract.
 /// 执行并解码精确的 MiniMax 同步图片契约。
 ///
@@ -653,11 +2405,7 @@ async fn execute_minimax_image_tool(
 ) -> Result<ProviderToolExecutionResult, String> {
     let request = MiniMaxImageToolArguments::from_json(arguments)?;
     let body = request.into_wire_body(target.upstream_target_id.as_str())?;
-    let url = format!(
-        "{}{}",
-        entry.base_url.trim_end_matches('/'),
-        target.execution.endpoint_path
-    );
+    let url = provider_tool_url(entry, target);
     let mut headers = HeaderMap::new();
     headers.insert(
         reqwest::header::CONTENT_TYPE,
@@ -720,11 +2468,7 @@ async fn execute_minimax_search_tool(
             "MiniMax search max_results must be between one and ten.",
         ));
     }
-    let url = format!(
-        "{}{}",
-        entry.base_url.trim_end_matches('/'),
-        target.execution.endpoint_path
-    );
+    let url = provider_tool_url(entry, target);
     let mut headers = HeaderMap::new();
     headers.insert(
         reqwest::header::CONTENT_TYPE,
@@ -842,11 +2586,7 @@ async fn execute_minimax_vision_tool(
     let arguments: MiniMaxVisionToolArguments = serde_json::from_value(arguments)
         .map_err(|error| format!("MiniMax image-understanding arguments are invalid: {error}"))?;
     arguments.validate()?;
-    let url = format!(
-        "{}{}",
-        entry.base_url.trim_end_matches('/'),
-        target.execution.endpoint_path
-    );
+    let url = provider_tool_url(entry, target);
     let mut headers = HeaderMap::new();
     headers.insert(
         reqwest::header::CONTENT_TYPE,
@@ -1130,11 +2870,7 @@ async fn execute_minimax_speech_tool(
     let arguments: MiniMaxSpeechToolArguments = serde_json::from_value(arguments)
         .map_err(|error| format!("MiniMax speech arguments are invalid: {error}"))?;
     let (body, mime_type) = arguments.into_wire_body(target.upstream_target_id.as_str())?;
-    let url = format!(
-        "{}{}",
-        entry.base_url.trim_end_matches('/'),
-        target.execution.endpoint_path
-    );
+    let url = provider_tool_url(entry, target);
     let mut headers = HeaderMap::new();
     headers.insert(
         reqwest::header::CONTENT_TYPE,
@@ -1346,7 +3082,7 @@ fn decode_hexadecimal_bytes(value: &str) -> Result<Vec<u8>, String> {
 /// 返回值
 /// A parsed URL accepted for controlled host-side download.
 /// 返回可供受控宿主侧下载使用的已解析地址。
-fn validated_public_http_url(value: &str, label: &str) -> Result<reqwest::Url, String> {
+pub(crate) fn validated_public_http_url(value: &str, label: &str) -> Result<reqwest::Url, String> {
     let url = reqwest::Url::parse(value).map_err(|_| format!("{label} is not a valid URL."))?;
     if !matches!(url.scheme(), "http" | "https")
         || url.host_str().is_none()
@@ -1568,11 +3304,7 @@ async fn execute_minimax_music_tool(
     let arguments: MiniMaxMusicToolArguments = serde_json::from_value(arguments)
         .map_err(|error| format!("MiniMax music arguments are invalid: {error}"))?;
     let (body, mime_type) = arguments.into_wire_body(target.upstream_target_id.as_str())?;
-    let url = format!(
-        "{}{}",
-        entry.base_url.trim_end_matches('/'),
-        target.execution.endpoint_path
-    );
+    let url = provider_tool_url(entry, target);
     let mut headers = HeaderMap::new();
     headers.insert(
         reqwest::header::CONTENT_TYPE,
@@ -1910,8 +3642,13 @@ async fn execute_minimax_video_tool(
     let arguments: MiniMaxVideoToolArguments = serde_json::from_value(arguments)
         .map_err(|error| format!("MiniMax video arguments are invalid: {error}"))?;
     let body = arguments.into_wire_body(target.upstream_target_id.as_str())?;
-    let base_url = entry.base_url.trim_end_matches('/');
-    let start_url = format!("{base_url}{}", target.execution.endpoint_path);
+    let start_url = provider_tool_url(entry, target);
+    let base_url = target
+        .execution
+        .endpoint_base_url
+        .as_deref()
+        .unwrap_or(entry.base_url.as_str())
+        .trim_end_matches('/');
     let mut headers = HeaderMap::new();
     headers.insert(
         reqwest::header::CONTENT_TYPE,
@@ -3155,6 +4892,188 @@ mod tests {
             panic!("expected resource output");
         };
         assert_eq!(resources[0].bytes.as_deref(), Some("hello".as_bytes()));
+    }
+
+    /// Verifies Qwen image generation projects the reviewed synchronous wire shape.
+    /// 验证 Qwen 图片生成投影已审核同步 Wire 结构。
+    #[test]
+    fn projects_alibaba_qwen_image_request() {
+        let target = crate::built_in_provider_tool_targets("alibaba")
+            .into_iter()
+            .find(|target| {
+                target.service_entry_id == "model-studio-cn"
+                    && target.execution.adapter == ProviderToolAdapterKind::AlibabaQwenImageGenerate
+            })
+            .expect("Qwen generation target");
+        let arguments: AlibabaQwenImageGenerateArguments =
+            serde_json::from_value(serde_json::json!({
+                "prompt": "A blue forge",
+                "width": 1024,
+                "height": 1024,
+                "count": 2,
+                "prompt_extend": false
+            }))
+            .expect("typed Qwen arguments");
+        let body =
+            build_alibaba_qwen_generate_body(&target, arguments).expect("valid Qwen request");
+        let value = serde_json::to_value(body).expect("serializable Qwen body");
+        assert_eq!(value["model"], "qwen-image-2.0-pro");
+        assert_eq!(value["input"]["messages"][0]["role"], "user");
+        assert_eq!(
+            value["input"]["messages"][0]["content"][0]["text"],
+            "A blue forge"
+        );
+        assert_eq!(value["parameters"]["size"], "1024*1024");
+        assert_eq!(value["parameters"]["n"], 2);
+        assert_eq!(value["parameters"]["prompt_extend"], false);
+    }
+
+    /// Verifies Wan 4k output rejects reference-image generation exactly as documented.
+    /// 验证 Wan 4k 输出会按文档精确拒绝参考图生成。
+    #[test]
+    fn rejects_alibaba_wan_4k_reference_request() {
+        let target = crate::built_in_provider_tool_targets("alibaba")
+            .into_iter()
+            .find(|target| {
+                target.upstream_target_id == "wan2.7-image-pro"
+                    && target.execution.adapter == ProviderToolAdapterKind::AlibabaWanImageGenerate
+            })
+            .expect("Wan Pro target");
+        let arguments = serde_json::json!({
+            "prompt": "Retain this composition.",
+            "resolution": "4k",
+            "reference_images": ["data:image/png;base64,aGVsbG8="]
+        });
+        let parsed: AlibabaWanImageGenerateArguments =
+            serde_json::from_value(arguments).expect("typed Wan arguments");
+        let error = build_alibaba_wan_generate_body(&target, parsed)
+            .expect_err("Wan Pro 4k reference generation must be rejected");
+        assert_eq!(
+            error,
+            "Alibaba Wan 4k output is limited to wan2.7-image-pro text-only generation."
+        );
+    }
+
+    /// Verifies Alibaba temporary image URLs normalize into shared resource output.
+    /// 验证阿里云临时图片 URL 会归一化到共享资源输出。
+    #[test]
+    fn decodes_alibaba_image_response() {
+        let result = decode_alibaba_image_response(
+            "Alibaba image",
+            r#"{"request_id":"request-1","output":{"choices":[{"message":{"content":[{"image":"https://example.com/generated.png"}]}}]}}"#,
+        )
+        .expect("valid Alibaba image response");
+        assert_eq!(result.upstream_response_id.as_deref(), Some("request-1"));
+        let ProviderToolNormalizedOutput::Resources(resources) = result.output else {
+            panic!("expected resource output");
+        };
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].mime_type, "image/png");
+        assert_eq!(
+            resources[0].download_url.as_deref(),
+            Some("https://example.com/generated.png")
+        );
+    }
+
+    /// Verifies CosyVoice projects only supplied native fields and the reviewed MIME type.
+    /// 验证 CosyVoice 仅投影已提供原生字段与已审核 MIME 类型。
+    #[test]
+    fn projects_alibaba_cosyvoice_request_without_null_fields() {
+        let target = crate::built_in_provider_tool_targets("alibaba")
+            .into_iter()
+            .find(|target| {
+                target.service_entry_id == "model-studio-cn"
+                    && target.upstream_target_id == "cosyvoice-v3-flash"
+            })
+            .expect("CosyVoice target");
+        let arguments: AlibabaCosyVoiceArguments = serde_json::from_value(serde_json::json!({
+            "text": "你好，Vulcan。",
+            "voice_id": "longxiaochun",
+            "output_format": "wav",
+            "speed": 1.2
+        }))
+        .expect("typed CosyVoice arguments");
+        let (body, mime_type) =
+            build_alibaba_cosyvoice_body(&target, arguments).expect("valid CosyVoice body");
+        assert_eq!(body["model"], "cosyvoice-v3-flash");
+        assert_eq!(body["input"]["voice"], "longxiaochun");
+        assert_eq!(body["input"]["format"], "wav");
+        assert_eq!(body["input"]["rate"], 1.2);
+        assert!(body["input"].get("sample_rate").is_none());
+        assert!(body["input"].get("language_hints").is_none());
+        assert_eq!(mime_type, "audio/wav");
+    }
+
+    /// Verifies Qwen3-TTS exposes instructions only for the instruct model.
+    /// 验证 Qwen3-TTS 仅为指令模型暴露表达指令。
+    #[test]
+    fn projects_alibaba_qwen_tts_model_specific_request() {
+        let targets = crate::built_in_provider_tool_targets("alibaba");
+        let plain = targets
+            .iter()
+            .find(|target| {
+                target.service_entry_id == "model-studio-cn"
+                    && target.upstream_target_id == "qwen3-tts-flash"
+            })
+            .expect("plain Qwen3-TTS target");
+        let instruct = targets
+            .iter()
+            .find(|target| {
+                target.service_entry_id == "model-studio-cn"
+                    && target.upstream_target_id == "qwen3-tts-instruct-flash"
+            })
+            .expect("instruct Qwen3-TTS target");
+        let plain_error = build_alibaba_qwen_tts_body(
+            plain,
+            AlibabaQwenTtsArguments {
+                text: String::from("Hello."),
+                voice_id: String::from("Cherry"),
+                language: None,
+                style: Some(String::from("Speak warmly.")),
+            },
+        )
+        .expect_err("plain TTS must reject instructions");
+        assert!(plain_error.contains("requires qwen3-tts-instruct-flash"));
+        let body = build_alibaba_qwen_tts_body(
+            instruct,
+            AlibabaQwenTtsArguments {
+                text: String::from("Hello."),
+                voice_id: String::from("Cherry"),
+                language: Some(String::from("English")),
+                style: Some(String::from("Speak warmly.")),
+            },
+        )
+        .expect("valid instruct TTS body");
+        assert_eq!(body["input"]["instructions"], "Speak warmly.");
+        assert_eq!(body["input"]["optimize_instructions"], true);
+        assert_eq!(body["input"]["language_type"], "English");
+    }
+
+    /// Verifies Qwen3-ASR emits one bounded Data URL and omits an absent language.
+    /// 验证 Qwen3-ASR 发送一个有界 Data URL 并省略缺失语言。
+    #[test]
+    fn projects_alibaba_qwen_asr_request_without_null_language() {
+        let target = crate::built_in_provider_tool_targets("alibaba")
+            .into_iter()
+            .find(|target| {
+                target.service_entry_id == "model-studio-singapore"
+                    && target.upstream_target_id == "qwen3-asr-flash"
+            })
+            .expect("Qwen3-ASR target");
+        let body = build_alibaba_qwen_asr_body(
+            &target,
+            AlibabaQwenAsrArguments {
+                audio_url: String::from("data:audio/mpeg;base64,aGVsbG8="),
+                language: None,
+            },
+        )
+        .expect("valid Qwen3-ASR body");
+        assert_eq!(
+            body["input"]["messages"][0]["content"][0]["audio"],
+            "data:audio/mpeg;base64,aGVsbG8="
+        );
+        assert_eq!(body["parameters"]["asr_options"]["enable_itn"], false);
+        assert!(body["parameters"]["asr_options"].get("language").is_none());
     }
 
     /// Verifies image-01-live rejects image-01-only dimensions.

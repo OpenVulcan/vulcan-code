@@ -2,12 +2,14 @@
 //! Vulcan Core Service 的 HTTP 与 WebSocket 宿主层。
 
 use std::{
-    fs,
+    fs::{self, OpenOptions},
     future::Future,
+    io::Write,
     net::{Ipv4Addr, SocketAddr},
-    path::PathBuf,
+    path::{Path, PathBuf},
     pin::Pin,
     sync::{Arc, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
@@ -23,10 +25,16 @@ use axum::{
 };
 use tokio::{net::TcpListener, sync::broadcast};
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+use vulcan_ai_contract::{
+    EmbeddingRequest, LlmInferenceRequest, LlmInferenceStreamEvent, RerankRequest,
+};
 use vulcan_service_api::{
-    ServiceEvent, ServiceEventSink, ServiceMediaResponse, ServiceStaticResponse,
-    WebuiServiceDiscoverySnapshot, WebuiServiceRpcHttpRequest, build_service_media_file_response,
-    build_webui_static_response, service_media_error_response,
+    INFERENCE_SERVICE_API_VERSION, InferenceServiceDiscoverySnapshot,
+    InferenceServiceErrorEnvelope, InferenceServiceHealthSnapshot, InferenceServiceHttpError,
+    InferenceServiceRequest, InferenceServiceSuccessEnvelope, ServiceEvent, ServiceEventSink,
+    ServiceMediaResponse, ServiceStaticResponse, WebuiServiceDiscoverySnapshot,
+    WebuiServiceRpcHttpRequest, build_service_media_file_response, build_webui_static_response,
+    inference_service_discovery_snapshot_path, service_media_error_response,
     service_media_path_from_encoded_route_segment, webui_service_discovery_snapshot_path,
     webui_service_http_bind_ports_from_override, webui_service_origin_text_is_allowed,
     webui_service_request_token_values_are_valid, webui_service_required_origin_text_is_allowed,
@@ -43,13 +51,59 @@ pub type WebuiServiceRpcFuture =
 pub type WebuiServiceRpcDispatcher =
     Arc<dyn Fn(String, Option<serde_json::Value>) -> WebuiServiceRpcFuture + Send + Sync + 'static>;
 
+/// Boxed asynchronous result returned by the controlled inference dispatcher.
+/// 受控推理分发器返回的装箱异步结果。
+pub type InferenceServiceRpcFuture = Pin<
+    Box<dyn Future<Output = Result<serde_json::Value, InferenceServiceHttpError>> + Send + 'static>,
+>;
+
+/// Dispatches one versioned inference request after kernel-owned token authorization.
+/// 在内核拥有的令牌授权后分派一项版本化推理请求。
+pub type InferenceServiceRpcDispatcher = Arc<
+    dyn Fn(String, InferenceServiceRequest) -> InferenceServiceRpcFuture + Send + Sync + 'static,
+>;
+
+/// Carries ordered replay plus live delivery for one restricted LLM stream.
+/// 承载一项受限 LLM 流的有序重放与实时投递。
+pub struct InferenceServiceEventSubscription {
+    /// Events emitted before the subscriber attached.
+    /// 订阅者接入前已经发出的事件。
+    pub replay: Vec<LlmInferenceStreamEvent>,
+    /// Live bounded receiver created atomically with the replay snapshot.
+    /// 与重放快照原子创建的实时有界接收器。
+    pub receiver: broadcast::Receiver<LlmInferenceStreamEvent>,
+}
+
+/// Boxed event-subscription result for one caller-owned LLM execution.
+/// 一项调用方所有 LLM 执行的装箱事件订阅结果。
+pub type InferenceServiceEventFuture = Pin<
+    Box<
+        dyn Future<Output = Result<InferenceServiceEventSubscription, InferenceServiceHttpError>>
+            + Send
+            + 'static,
+    >,
+>;
+
+/// Authorizes and opens one restricted LLM event subscription.
+/// 授权并打开一项受限 LLM 事件订阅。
+pub type InferenceServiceEventSubscriber =
+    Arc<dyn Fn(String, String) -> InferenceServiceEventFuture + Send + Sync + 'static>;
+
 /// Shared service discovery snapshot used by health checks while readiness changes.
 /// 健康检查在就绪状态变化时使用的共享服务发现快照。
 pub type SharedWebuiServiceDiscoverySnapshot = Arc<Mutex<WebuiServiceDiscoverySnapshot>>;
 
+/// Shared protected inference discovery snapshot used by health checks and rotation.
+/// 健康检查与轮换使用的共享受保护推理发现快照。
+pub type SharedInferenceServiceDiscoverySnapshot = Arc<Mutex<InferenceServiceDiscoverySnapshot>>;
+
 /// Maximum JSON body size accepted by the browser-facing RPC endpoint.
 /// 浏览器侧 RPC 端点允许接收的最大 JSON 请求体大小。
 const WEBUI_SERVICE_RPC_BODY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
+
+/// Maximum JSON body size accepted by one inference operation.
+/// 单项推理操作允许接收的最大 JSON 请求体大小。
+const INFERENCE_SERVICE_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 
 /// Service event sink that forwards events into the browser WebSocket bus.
 /// 将服务事件转发到浏览器 WebSocket 总线的事件接收器。
@@ -145,6 +199,204 @@ pub fn write_webui_service_discovery_snapshot(
     fs::write(&path, body).map_err(|error| format!("failed to write {}: {error}", path.display()))
 }
 
+/// Persists the protected inference endpoint and its ephemeral access token.
+/// 持久化受保护推理端点及其临时访问令牌。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` is the exact protected discovery document.
+/// `snapshot` 是精确的受保护发现文档。
+/// `home_dir` and `temp_dir` resolve its user-scoped path.
+/// `home_dir` 与 `temp_dir` 用于解析其用户作用域路径。
+///
+/// # Returns
+/// 返回值
+/// Success after the complete document is written, otherwise an actionable diagnostic.
+/// 完整文档写入后返回成功，否则返回可操作诊断。
+pub fn write_inference_service_discovery_snapshot(
+    snapshot: &InferenceServiceDiscoverySnapshot,
+    home_dir: Option<PathBuf>,
+    temp_dir: PathBuf,
+) -> Result<(), String> {
+    let path = inference_service_discovery_snapshot_path(home_dir, temp_dir);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create inference discovery directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    let body = serde_json::to_string_pretty(snapshot)
+        .map_err(|error| format!("failed to encode inference discovery snapshot: {error}"))?;
+    write_protected_file_atomically(path.as_path(), body.as_bytes())
+}
+
+/// Publishes a secret-bearing discovery document through a same-directory atomic replacement.
+/// 通过同目录原子替换发布一份含秘密信息的发现文档。
+///
+/// # Parameters
+/// 参数
+/// `path` is the stable discovery location and `contents` is the complete encoded document.
+/// `path` 是稳定发现位置，`contents` 是完整编码文档。
+///
+/// # Returns
+/// 返回值
+/// Success only after a private regular staging file has replaced the destination.
+/// 仅在私有普通暂存文件替换目标后返回成功。
+fn write_protected_file_atomically(path: &Path, contents: &[u8]) -> Result<(), String> {
+    if let Ok(metadata) = fs::symlink_metadata(path)
+        && (!metadata.file_type().is_file() || metadata.file_type().is_symlink())
+    {
+        return Err(format!(
+            "refusing to replace non-regular inference discovery path {}",
+            path.display()
+        ));
+    }
+    let parent = path.parent().ok_or_else(|| {
+        format!(
+            "inference discovery path {} has no parent directory",
+            path.display()
+        )
+    })?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| String::from("system clock is earlier than the Unix epoch"))?
+        .as_nanos();
+    let staged_path = parent.join(format!(
+        ".inference-service.{}.{}.tmp",
+        std::process::id(),
+        nonce
+    ));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut staged = options.open(staged_path.as_path()).map_err(|error| {
+        format!(
+            "failed to create protected inference discovery staging file {}: {error}",
+            staged_path.display()
+        )
+    })?;
+    let publication = (|| {
+        harden_protected_file_permissions(staged_path.as_path())?;
+        staged.write_all(contents).map_err(|error| {
+            format!(
+                "failed to write protected inference discovery staging file {}: {error}",
+                staged_path.display()
+            )
+        })?;
+        staged.sync_all().map_err(|error| {
+            format!(
+                "failed to flush protected inference discovery staging file {}: {error}",
+                staged_path.display()
+            )
+        })?;
+        drop(staged);
+        replace_staged_file(staged_path.as_path(), path)
+    })();
+    if publication.is_err() {
+        let _ = fs::remove_file(staged_path.as_path());
+    }
+    publication
+}
+
+/// Restricts one secret-bearing staging file to its owner and Windows system administrators.
+/// 将一份含秘密信息的暂存文件限制为仅文件所有者与 Windows 系统管理员可访问。
+///
+/// # Parameters
+/// 参数
+/// `path` is the newly created regular staging file that does not yet contain secret bytes.
+/// `path` 是尚未写入秘密字节的新建普通暂存文件。
+///
+/// # Returns
+/// 返回值
+/// Success after inherited Windows access entries are removed and the protected allow-list is applied.
+/// 删除继承的 Windows 访问项并应用受保护允许列表后返回成功。
+#[cfg(windows)]
+fn harden_protected_file_permissions(path: &Path) -> Result<(), String> {
+    let system_root = std::env::var_os("SystemRoot")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            String::from("Windows SystemRoot is unavailable for protected file ACLs.")
+        })?;
+    let icacls = PathBuf::from(system_root)
+        .join("System32")
+        .join("icacls.exe");
+    let output = std::process::Command::new(icacls.as_path())
+        .arg(path)
+        .args([
+            "/inheritance:r",
+            "/grant:r",
+            "*S-1-3-4:(F)",
+            "*S-1-5-18:(F)",
+            "*S-1-5-32-544:(F)",
+        ])
+        .output()
+        .map_err(|error| {
+            format!(
+                "failed to launch Windows ACL protection for {}: {error}",
+                path.display()
+            )
+        })?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(output.stderr.as_slice())
+        .trim()
+        .to_string();
+    let diagnostic = if stderr.is_empty() {
+        format!("exit status {}", output.status)
+    } else {
+        stderr
+    };
+    Err(format!(
+        "failed to protect inference discovery staging file {}: {diagnostic}",
+        path.display()
+    ))
+}
+
+/// Preserves the creation-time `0600` mode already applied on non-Windows hosts.
+/// 在非 Windows 宿主上保留创建时已经应用的 `0600` 权限。
+///
+/// # Parameters
+/// 参数
+/// `path` is already protected by the platform-specific creation mode.
+/// `path` 已由平台特定创建模式保护。
+///
+/// # Returns
+/// 返回值
+/// Immediate success because no post-creation permission change is required.
+/// 因无需创建后权限变更而立即返回成功。
+#[cfg(not(windows))]
+fn harden_protected_file_permissions(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+/// Replaces one discovery destination with a complete same-directory staging file.
+/// 使用完整的同目录暂存文件替换发现目标。
+///
+/// # Parameters
+/// 参数
+/// `staged_path` and `target_path` are regular files on the same filesystem.
+/// `staged_path` 与 `target_path` 是同一文件系统上的普通文件。
+///
+/// # Returns
+/// 返回值
+/// Success after the standard-library same-filesystem replacement publishes the complete document.
+/// 标准库同文件系统替换发布完整文档后返回成功。
+fn replace_staged_file(staged_path: &Path, target_path: &Path) -> Result<(), String> {
+    fs::rename(staged_path, target_path).map_err(|error| {
+        format!(
+            "failed to publish protected inference discovery {}: {error}",
+            target_path.display()
+        )
+    })
+}
+
 /// Configuration required to host the browser-facing WebUI service.
 /// 承载浏览器侧 WebUI 服务所需的配置。
 #[derive(Clone)]
@@ -164,6 +416,15 @@ pub struct WebuiServiceHttpConfig {
     /// Business RPC dispatcher supplied by the service owner.
     /// 服务所有者提供的业务 RPC 分发器。
     pub rpc_dispatcher: WebuiServiceRpcDispatcher,
+    /// Protected inference discovery state without browser-token reuse.
+    /// 不复用浏览器令牌的受保护推理发现状态。
+    pub inference_discovery: SharedInferenceServiceDiscoverySnapshot,
+    /// Kernel-owned controlled inference dispatcher.
+    /// 内核拥有的受控推理分发器。
+    pub inference_dispatcher: InferenceServiceRpcDispatcher,
+    /// Kernel-owned restricted LLM event subscriber.
+    /// 内核拥有的受限 LLM 事件订阅器。
+    pub inference_event_subscriber: InferenceServiceEventSubscriber,
 }
 
 /// State captured by the browser-facing HTTP/WebSocket service host.
@@ -185,6 +446,15 @@ struct WebuiServiceHttpState {
     /// Business RPC dispatcher supplied by the service owner.
     /// 服务所有者提供的业务 RPC 分发器。
     rpc_dispatcher: WebuiServiceRpcDispatcher,
+    /// Protected inference discovery state.
+    /// 受保护推理发现状态。
+    inference_discovery: SharedInferenceServiceDiscoverySnapshot,
+    /// Controlled inference request dispatcher.
+    /// 受控推理请求分发器。
+    inference_dispatcher: InferenceServiceRpcDispatcher,
+    /// Restricted LLM event subscriber.
+    /// 受限 LLM 事件订阅器。
+    inference_event_subscriber: InferenceServiceEventSubscriber,
 }
 
 /// Serves one browser-facing WebUI service listener until it stops.
@@ -225,6 +495,9 @@ pub fn build_webui_service_router(config: WebuiServiceHttpConfig) -> Router {
         event_bus: config.event_bus,
         static_root: config.static_root,
         rpc_dispatcher: config.rpc_dispatcher,
+        inference_discovery: config.inference_discovery,
+        inference_dispatcher: config.inference_dispatcher,
+        inference_event_subscriber: config.inference_event_subscriber,
     };
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(|origin, _| {
@@ -249,6 +522,46 @@ pub fn build_webui_service_router(config: WebuiServiceHttpConfig) -> Router {
         )
         .route("/events", get(webui_service_events_ws_handler))
         .route(
+            "/inference/v1/health",
+            get(inference_service_health_http_handler),
+        )
+        .route(
+            "/inference/v1/capabilities/{consumer_profile_id}",
+            get(inference_service_capabilities_http_handler),
+        )
+        .route(
+            "/inference/v1/llm/start",
+            post(inference_service_llm_start_http_handler)
+                .layer(DefaultBodyLimit::max(INFERENCE_SERVICE_BODY_LIMIT_BYTES)),
+        )
+        .route(
+            "/inference/v1/llm/execute",
+            post(inference_service_llm_execute_http_handler)
+                .layer(DefaultBodyLimit::max(INFERENCE_SERVICE_BODY_LIMIT_BYTES)),
+        )
+        .route(
+            "/inference/v1/llm/{execution_id}",
+            get(inference_service_llm_status_http_handler),
+        )
+        .route(
+            "/inference/v1/llm/{execution_id}/cancel",
+            post(inference_service_llm_cancel_http_handler),
+        )
+        .route(
+            "/inference/v1/llm/{execution_id}/events",
+            get(inference_service_llm_events_ws_handler),
+        )
+        .route(
+            "/inference/v1/embeddings",
+            post(inference_service_embeddings_http_handler)
+                .layer(DefaultBodyLimit::max(INFERENCE_SERVICE_BODY_LIMIT_BYTES)),
+        )
+        .route(
+            "/inference/v1/rerank",
+            post(inference_service_rerank_http_handler)
+                .layer(DefaultBodyLimit::max(INFERENCE_SERVICE_BODY_LIMIT_BYTES)),
+        )
+        .route(
             "/asset/{encoded_path}",
             get(webui_service_asset_http_handler).head(webui_service_asset_head_http_handler),
         )
@@ -257,6 +570,300 @@ pub fn build_webui_service_router(config: WebuiServiceHttpConfig) -> Router {
         .fallback(get(webui_service_static_http_handler))
         .layer(cors)
         .with_state(service_state)
+}
+
+/// Returns non-secret health for the controlled inference surface.
+/// 返回受控推理界面的非秘密健康信息。
+async fn inference_service_health_http_handler(
+    AxumState(server_state): AxumState<WebuiServiceHttpState>,
+) -> Json<InferenceServiceHealthSnapshot> {
+    let discovery = server_state
+        .inference_discovery
+        .lock()
+        .map(|snapshot| snapshot.clone())
+        .unwrap_or_else(|error| error.into_inner().clone());
+    Json(InferenceServiceHealthSnapshot {
+        api_version: INFERENCE_SERVICE_API_VERSION,
+        status: discovery.status,
+        process_id: discovery.process_id,
+        started_at_unix_ms: discovery.started_at_unix_ms,
+    })
+}
+
+/// Returns one authorized consumer capability snapshot.
+/// 返回一份已授权消费者能力快照。
+async fn inference_service_capabilities_http_handler(
+    AxumState(server_state): AxumState<WebuiServiceHttpState>,
+    AxumPath(consumer_profile_id): AxumPath<String>,
+    headers: AxumHeaderMap,
+) -> AxumResponse {
+    inference_service_dispatch_http(
+        &server_state,
+        &headers,
+        InferenceServiceRequest::Capabilities {
+            consumer_profile_id,
+        },
+    )
+    .await
+}
+
+/// Starts one restricted LLM execution.
+/// 启动一项受限 LLM 执行。
+async fn inference_service_llm_start_http_handler(
+    AxumState(server_state): AxumState<WebuiServiceHttpState>,
+    headers: AxumHeaderMap,
+    Json(request): Json<LlmInferenceRequest>,
+) -> AxumResponse {
+    inference_service_dispatch_http(
+        &server_state,
+        &headers,
+        InferenceServiceRequest::StartLlm { request },
+    )
+    .await
+}
+
+/// Executes and aggregates one restricted LLM request.
+/// 执行并聚合一项受限 LLM 请求。
+async fn inference_service_llm_execute_http_handler(
+    AxumState(server_state): AxumState<WebuiServiceHttpState>,
+    headers: AxumHeaderMap,
+    Json(request): Json<LlmInferenceRequest>,
+) -> AxumResponse {
+    inference_service_dispatch_http(
+        &server_state,
+        &headers,
+        InferenceServiceRequest::ExecuteLlm { request },
+    )
+    .await
+}
+
+/// Returns one caller-owned restricted LLM status.
+/// 返回一项调用方所有的受限 LLM 状态。
+async fn inference_service_llm_status_http_handler(
+    AxumState(server_state): AxumState<WebuiServiceHttpState>,
+    AxumPath(execution_id): AxumPath<String>,
+    headers: AxumHeaderMap,
+) -> AxumResponse {
+    inference_service_dispatch_http(
+        &server_state,
+        &headers,
+        InferenceServiceRequest::LlmStatus { execution_id },
+    )
+    .await
+}
+
+/// Cancels one caller-owned restricted LLM execution.
+/// 取消一项调用方所有的受限 LLM 执行。
+async fn inference_service_llm_cancel_http_handler(
+    AxumState(server_state): AxumState<WebuiServiceHttpState>,
+    AxumPath(execution_id): AxumPath<String>,
+    headers: AxumHeaderMap,
+) -> AxumResponse {
+    inference_service_dispatch_http(
+        &server_state,
+        &headers,
+        InferenceServiceRequest::CancelLlm { execution_id },
+    )
+    .await
+}
+
+/// Executes one authorized embedding batch.
+/// 执行一批已授权向量。
+async fn inference_service_embeddings_http_handler(
+    AxumState(server_state): AxumState<WebuiServiceHttpState>,
+    headers: AxumHeaderMap,
+    Json(request): Json<EmbeddingRequest>,
+) -> AxumResponse {
+    inference_service_dispatch_http(
+        &server_state,
+        &headers,
+        InferenceServiceRequest::CreateEmbeddings { request },
+    )
+    .await
+}
+
+/// Executes one authorized document rerank.
+/// 执行一次已授权文档重排。
+async fn inference_service_rerank_http_handler(
+    AxumState(server_state): AxumState<WebuiServiceHttpState>,
+    headers: AxumHeaderMap,
+    Json(request): Json<RerankRequest>,
+) -> AxumResponse {
+    inference_service_dispatch_http(
+        &server_state,
+        &headers,
+        InferenceServiceRequest::Rerank { request },
+    )
+    .await
+}
+
+/// Dispatches one authenticated inference request through the kernel-owned boundary.
+/// 通过内核拥有的边界分派一项已鉴权推理请求。
+///
+/// # Parameters
+/// 参数
+/// `server_state` owns callbacks, `headers` carry the ephemeral token, and `request`
+/// is one closed transport operation.
+/// `server_state` 拥有回调，`headers` 承载临时令牌，`request` 是一项封闭传输操作。
+///
+/// # Returns
+/// 返回值
+/// A versioned success or controlled error response.
+/// 返回版本化成功或受控错误响应。
+async fn inference_service_dispatch_http(
+    server_state: &WebuiServiceHttpState,
+    headers: &AxumHeaderMap,
+    request: InferenceServiceRequest,
+) -> AxumResponse {
+    let Some(token) = inference_service_token_from_headers(headers) else {
+        return inference_service_error_response(InferenceServiceHttpError {
+            status: 401,
+            code: String::from("inference.unauthorized"),
+            message: String::from("Inference access token is missing."),
+        });
+    };
+    match (server_state.inference_dispatcher)(token, request).await {
+        Ok(result) => Json(InferenceServiceSuccessEnvelope {
+            api_version: INFERENCE_SERVICE_API_VERSION,
+            result,
+        })
+        .into_response(),
+        Err(error) => inference_service_error_response(error),
+    }
+}
+
+/// Opens one caller-owned restricted LLM event stream.
+/// 打开一项调用方所有的受限 LLM 事件流。
+async fn inference_service_llm_events_ws_handler(
+    AxumState(server_state): AxumState<WebuiServiceHttpState>,
+    AxumPath(execution_id): AxumPath<String>,
+    headers: AxumHeaderMap,
+    websocket: WebSocketUpgrade,
+) -> AxumResponse {
+    let Some(token) = inference_service_token_from_headers(&headers) else {
+        return inference_service_error_response(InferenceServiceHttpError {
+            status: 401,
+            code: String::from("inference.unauthorized"),
+            message: String::from("Inference access token is missing."),
+        });
+    };
+    let subscription = match (server_state.inference_event_subscriber)(token, execution_id).await {
+        Ok(subscription) => subscription,
+        Err(error) => return inference_service_error_response(error),
+    };
+    websocket
+        .on_upgrade(move |socket| inference_service_llm_events_socket(socket, subscription))
+        .into_response()
+}
+
+/// Streams restricted LLM events and fails closed when a consumer falls behind.
+/// 推送受限 LLM 事件，并在消费者滞后时失败关闭。
+///
+/// # Parameters
+/// 参数
+/// `socket` is the authorized WebSocket and `receiver` is caller-owned.
+/// `socket` 是已授权 WebSocket，`receiver` 由调用方所有。
+async fn inference_service_llm_events_socket(
+    mut socket: WebSocket,
+    subscription: InferenceServiceEventSubscription,
+) {
+    for event in subscription.replay {
+        let text = match serde_json::to_string(&event) {
+            Ok(text) => text,
+            Err(error) => {
+                eprintln!("[inference-service] failed to serialize replayed LLM event: {error}");
+                return;
+            }
+        };
+        if socket.send(AxumWsMessage::Text(text.into())).await.is_err() {
+            return;
+        }
+    }
+    let mut receiver = subscription.receiver;
+    loop {
+        let event = match receiver.recv().await {
+            Ok(event) => event,
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                let failure = LlmInferenceStreamEvent::Failed {
+                    category: String::from("backpressure"),
+                    message: format!(
+                        "Inference event consumer lagged behind by {skipped} buffered events."
+                    ),
+                    provider_error: None,
+                };
+                if let Ok(text) = serde_json::to_string(&failure) {
+                    let _ = socket.send(AxumWsMessage::Text(text.into())).await;
+                }
+                let _ = socket.send(AxumWsMessage::Close(None)).await;
+                break;
+            }
+            Err(broadcast::error::RecvError::Closed) => break,
+        };
+        let text = match serde_json::to_string(&event) {
+            Ok(text) => text,
+            Err(error) => {
+                eprintln!("[inference-service] failed to serialize LLM event: {error}");
+                break;
+            }
+        };
+        if socket.send(AxumWsMessage::Text(text.into())).await.is_err() {
+            break;
+        }
+    }
+}
+
+/// Extracts one opaque inference token from the dedicated header or Bearer authorization.
+/// 从专用 Header 或 Bearer 鉴权中提取一个不透明推理令牌。
+///
+/// # Parameters
+/// 参数
+/// `headers` contains the incoming loopback request headers.
+/// `headers` 包含传入回环请求 Header。
+///
+/// # Returns
+/// 返回值
+/// The exact token when present and non-empty.
+/// 存在且非空时返回精确令牌。
+fn inference_service_token_from_headers(headers: &AxumHeaderMap) -> Option<String> {
+    if let Some(token) = headers
+        .get("x-vulcan-inference-token")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.trim().is_empty())
+    {
+        return Some(token.to_string());
+    }
+    headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+}
+
+/// Converts one controlled inference error into its exact HTTP response.
+/// 将一项受控推理错误转换为精确 HTTP 响应。
+///
+/// # Parameters
+/// 参数
+/// `error` contains a concrete status, code, and non-secret diagnostic.
+/// `error` 包含明确状态、代码与非秘密诊断。
+///
+/// # Returns
+/// 返回值
+/// A versioned JSON error envelope.
+/// 返回版本化 JSON 错误信封。
+fn inference_service_error_response(error: InferenceServiceHttpError) -> AxumResponse {
+    let status =
+        AxumStatusCode::from_u16(error.status).unwrap_or(AxumStatusCode::INTERNAL_SERVER_ERROR);
+    (
+        status,
+        Json(InferenceServiceErrorEnvelope {
+            api_version: INFERENCE_SERVICE_API_VERSION,
+            code: error.code,
+            message: error.message,
+        }),
+    )
+        .into_response()
 }
 
 /// Returns a browser-facing health response.
@@ -529,6 +1136,131 @@ mod tests {
     use tower::ServiceExt;
     use vulcan_service_api::webui_service_ready_discovery_snapshot;
 
+    /// Builds one process-unique temporary path for filesystem publication tests.
+    /// 为文件系统发布测试构建一个进程内唯一的临时路径。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `label` identifies the test-owned path in diagnostics.
+    /// `label` 用于在诊断信息中标识测试拥有的路径。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A path below the operating-system temporary directory that does not need to exist yet.
+    /// 返回操作系统临时目录下尚不需要存在的路径。
+    fn unique_test_path(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("test clock should follow the Unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "vulcan-service-host-{label}-{}-{nonce}",
+            std::process::id()
+        ))
+    }
+
+    /// Verifies protected discovery publication replaces complete regular-file contents.
+    /// 验证受保护的发现信息发布会完整替换普通文件内容。
+    #[test]
+    fn protected_discovery_publication_replaces_regular_file() {
+        let directory = unique_test_path("replace");
+        fs::create_dir_all(directory.as_path()).expect("test directory should be created");
+        let target = directory.join("inference-service.json");
+
+        write_protected_file_atomically(target.as_path(), b"{\"revision\":1}")
+            .expect("initial discovery document should publish");
+        write_protected_file_atomically(target.as_path(), b"{\"revision\":2}")
+            .expect("replacement discovery document should publish");
+
+        assert_eq!(
+            fs::read(target.as_path()).expect("published discovery document should read"),
+            b"{\"revision\":2}"
+        );
+        fs::remove_dir_all(directory.as_path()).expect("test directory should be removed");
+    }
+
+    /// Verifies protected discovery publication refuses to replace a directory.
+    /// 验证受保护的发现信息发布会拒绝替换目录。
+    #[test]
+    fn protected_discovery_publication_rejects_non_regular_target() {
+        let directory = unique_test_path("non-regular");
+        let target = directory.join("inference-service.json");
+        fs::create_dir_all(target.as_path()).expect("directory target should be created");
+
+        let error = write_protected_file_atomically(target.as_path(), b"{}")
+            .expect_err("directory target must be rejected");
+
+        assert!(error.contains("non-regular inference discovery path"));
+        fs::remove_dir_all(directory.as_path()).expect("test directory should be removed");
+    }
+
+    /// Verifies Unix discovery files are private to the current user.
+    /// 验证 Unix 发现文件仅允许当前用户访问。
+    #[cfg(unix)]
+    #[test]
+    fn protected_discovery_publication_uses_private_unix_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = unique_test_path("permissions");
+        fs::create_dir_all(directory.as_path()).expect("test directory should be created");
+        let target = directory.join("inference-service.json");
+
+        write_protected_file_atomically(target.as_path(), b"{}")
+            .expect("discovery document should publish");
+
+        let mode = fs::metadata(target.as_path())
+            .expect("published discovery metadata should read")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+        fs::remove_dir_all(directory.as_path()).expect("test directory should be removed");
+    }
+
+    /// Verifies Windows discovery files reject inherited readers and retain only the protected allow-list.
+    /// 验证 Windows 发现文件拒绝继承读取者并仅保留受保护允许列表。
+    #[cfg(windows)]
+    #[test]
+    fn protected_discovery_publication_uses_private_windows_acl() {
+        let directory = unique_test_path("windows-permissions");
+        fs::create_dir_all(directory.as_path()).expect("test directory should be created");
+        let target = directory.join("inference-service.json");
+        let saved_acl = directory.join("inference-service.acl");
+
+        write_protected_file_atomically(target.as_path(), b"{}")
+            .expect("discovery document should publish");
+
+        let system_root = std::env::var_os("SystemRoot").expect("Windows SystemRoot should exist");
+        let output = std::process::Command::new(
+            PathBuf::from(system_root)
+                .join("System32")
+                .join("icacls.exe"),
+        )
+        .arg(target.as_path())
+        .args(["/save"])
+        .arg(saved_acl.as_path())
+        .arg("/q")
+        .output()
+        .expect("Windows ACL export should launch");
+        assert!(
+            output.status.success(),
+            "Windows ACL export failed: {}",
+            String::from_utf8_lossy(output.stderr.as_slice())
+        );
+        let bytes = fs::read(saved_acl.as_path()).expect("saved Windows ACL should read");
+        let code_units = bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .filter(|unit| *unit != 0xfeff)
+            .collect::<Vec<_>>();
+        let descriptor =
+            String::from_utf16(code_units.as_slice()).expect("saved Windows ACL should be UTF-16");
+        assert!(descriptor.contains("D:P"));
+        assert!(descriptor.contains("(A;;FA;;;BA)"));
+        assert!(descriptor.contains("(A;;FA;;;SY)"));
+        assert!(descriptor.contains("(A;;FA;;;OW)"));
+        fs::remove_dir_all(directory.as_path()).expect("test directory should be removed");
+    }
+
     /// Builds a minimal test WebUI service router.
     /// 构建最小化测试 WebUI 服务路由。
     fn test_router() -> Router {
@@ -541,6 +1273,20 @@ mod tests {
                 }))
             })
         });
+        let inference_dispatcher: InferenceServiceRpcDispatcher =
+            Arc::new(|_access_token, _request| {
+                Box::pin(async move { Ok(serde_json::Value::Null) })
+            });
+        let inference_event_subscriber: InferenceServiceEventSubscriber =
+            Arc::new(|_access_token, _execution_id| {
+                Box::pin(async move {
+                    let (_sender, receiver) = broadcast::channel(8);
+                    Ok(InferenceServiceEventSubscription {
+                        replay: Vec::new(),
+                        receiver,
+                    })
+                })
+            });
         build_webui_service_router(WebuiServiceHttpConfig {
             discovery: Arc::new(Mutex::new(webui_service_ready_discovery_snapshot(
                 17891,
@@ -552,6 +1298,19 @@ mod tests {
             event_bus,
             static_root: None,
             rpc_dispatcher: dispatcher,
+            inference_discovery: Arc::new(Mutex::new(InferenceServiceDiscoverySnapshot {
+                api_version: INFERENCE_SERVICE_API_VERSION,
+                status: String::from("ready"),
+                base_url: String::from("http://127.0.0.1:17891"),
+                process_id: 42,
+                caller_id: String::from("test-caller"),
+                consumer_profile_id: String::from("test-profile"),
+                access_token: String::from("test-inference-token"),
+                expires_at_unix_ms: u64::MAX,
+                started_at_unix_ms: String::from("123"),
+            })),
+            inference_dispatcher,
+            inference_event_subscriber,
         })
     }
 
@@ -638,6 +1397,57 @@ mod tests {
             .expect("router should respond");
 
         assert_eq!(response.status(), AxumStatusCode::OK);
+    }
+
+    /// Verifies protected inference operations reject callers without the dedicated token.
+    /// 验证受保护推理操作拒绝缺少专用令牌的调用方。
+    #[tokio::test]
+    async fn inference_capabilities_reject_missing_token() {
+        let response = test_router()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/inference/v1/capabilities/test-profile")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), AxumStatusCode::UNAUTHORIZED);
+        let body = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("body should read");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&body).expect("response should be JSON");
+        assert_eq!(payload["api_version"], INFERENCE_SERVICE_API_VERSION);
+        assert_eq!(payload["code"], "inference.unauthorized");
+    }
+
+    /// Verifies the dedicated token authorizes the closed capability request envelope.
+    /// 验证专用令牌可授权封闭能力请求信封。
+    #[tokio::test]
+    async fn inference_capabilities_accept_dedicated_token() {
+        let response = test_router()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/inference/v1/capabilities/test-profile")
+                    .header("x-vulcan-inference-token", "test-inference-token")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), AxumStatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("body should read");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&body).expect("response should be JSON");
+        assert_eq!(payload["api_version"], INFERENCE_SERVICE_API_VERSION);
+        assert_eq!(payload["result"], serde_json::Value::Null);
     }
 
     /// Verifies token-protected WebSocket handshakes tolerate host WebViews that omit Origin.

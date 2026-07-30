@@ -105,10 +105,15 @@ pub(super) async fn service_save_provider_retry_settings(
         &state,
         "保存 Provider 重试设置失败",
         |configuration| {
-            configuration.retry = persisted_retry;
+            configuration.retry = persisted_retry.clone();
             Ok(())
         },
         |guard, configuration| {
+            if let Some(runtime) = guard.agent_runtime.as_ref() {
+                runtime
+                    .configured_inference_service
+                    .update_retry_configuration(&configuration.retry);
+            }
             refresh_settings_projection_locked(guard, configuration);
             guard.workbench.clone()
         },

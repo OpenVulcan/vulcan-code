@@ -232,7 +232,11 @@ export function CredentialManagementArea(props: {
               const credentialProfile = credentialProfileForConnection(entry, connection)
               const catalog = snapshot.catalogs[connection.id]
               const usage = usageByConnection[connection.id] ?? snapshot.usageCache[connection.id]
-              const catalogError = snapshot.catalogErrors[connection.id]
+              // Provider-tool entries do not own a model catalog, so historical model-sync errors are irrelevant.
+              // 供应商工具入口不拥有模型目录，因此历史模型同步错误与其无关。
+              const catalogError = entry?.kind === "provider_tools"
+                ? undefined
+                : snapshot.catalogErrors[connection.id]
               const isDefault = snapshot.providerDefaults[connection.provider_id] === connection.id
               return (
                 <CredentialAccountCard
@@ -367,6 +371,9 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
   const providerName = props.provider?.display_name ?? props.connection.provider_id
   const authorizationName = props.credentialProfile?.display_name
     ?? props.connection.credential_profile_id
+  // connectionAvailable treats provider-tool entries as immediately usable because they have no model catalog to sync.
+  // connectionAvailable 将供应商工具入口视为立即可用，因为它们没有需要同步的模型目录。
+  const connectionAvailable = props.entry?.kind === "provider_tools" || Boolean(props.catalog)
   return (
     <Card
       className="max-h-[18rem] w-full max-w-[21rem] gap-0 border border-border ring-0"
@@ -384,7 +391,7 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
               <span className="truncate text-xs text-muted-foreground">
                 {props.entry?.display_name ?? providerName}
               </span>
-              <Badge variant="outline">{props.catalog ? "可用" : "待同步"}</Badge>
+              <Badge variant="outline">{connectionAvailable ? "可用" : "待同步"}</Badge>
             </div>
             <CardTitle className="truncate">{props.connection.display_name}</CardTitle>
             <CardDescription className="truncate text-xs">
@@ -417,13 +424,15 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
       </CardContent>
 
       <CardFooter className="mt-auto flex-wrap justify-end gap-2">
-        <CredentialIconAction
-          disabled={props.busy}
-          label="同步支持模型"
-          onClick={props.onSync}
-        >
-          <Boxes className="size-4" />
-        </CredentialIconAction>
+        {props.entry?.kind !== "provider_tools" ? (
+          <CredentialIconAction
+            disabled={props.busy}
+            label="同步支持模型"
+            onClick={props.onSync}
+          >
+            <Boxes className="size-4" />
+          </CredentialIconAction>
+        ) : null}
         {!props.isDefault ? (
           <CredentialIconAction
             disabled={props.busy}

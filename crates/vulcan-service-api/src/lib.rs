@@ -49,6 +49,7 @@ mod conversation;
 mod conversation_hydration;
 mod git_settings;
 mod host_tools;
+mod inference;
 mod knowledge_base;
 mod media;
 mod planning_state;
@@ -70,6 +71,7 @@ pub use conversation::*;
 pub use conversation_hydration::*;
 pub use git_settings::*;
 pub use host_tools::*;
+pub use inference::*;
 pub use knowledge_base::*;
 pub use media::*;
 pub use planning_state::*;
@@ -450,6 +452,18 @@ mod tests {
         assert_eq!(snapshot.pid, 42);
         assert_eq!(snapshot.started_at, "123456789");
         assert_eq!(snapshot.service_token, "token-value");
+    }
+
+    /// Verifies browser discovery debug formatting never exposes the service token.
+    /// 验证浏览器发现快照的调试格式绝不暴露服务令牌。
+    #[test]
+    fn webui_service_discovery_debug_redacts_service_token() {
+        let snapshot =
+            webui_service_ready_discovery_snapshot(17891, 42, "123456789", "token-value");
+        let debug = format!("{snapshot:?}");
+
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains(snapshot.service_token.as_str()));
     }
 
     /// Creates a unique temporary directory path for service-api tests.

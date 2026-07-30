@@ -36,6 +36,10 @@ messages:
   owner.subagent: 子代理
   owner.context_compaction: 上下文压缩
   owner.git_commit_summary: Git 提交摘要
+  owner.internal_llm: 内部 LLM
+  owner.internal_embedding: 内部向量
+  owner.internal_rerank: 内部重排
+  owner.internal_multimodal: 内部多模态
   metric.total_tokens: Token 用量
   metric.input_tokens: 输入 Token
   metric.output_tokens: 输出 Token

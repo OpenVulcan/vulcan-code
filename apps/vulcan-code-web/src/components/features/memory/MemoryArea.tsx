@@ -13,6 +13,7 @@ import {
   useMemoryAreaController,
   type MemoryActionProps,
 } from "./use-memory-area-controller"
+import { VmmInferenceSettings } from "./vmm-inference-settings"
 
 export { vmmSectionIcon } from "./vmm-memory-sections"
 export type { MemoryActionProps } from "./use-memory-area-controller"
@@ -165,6 +166,18 @@ export function MemoryArea(props: {
               <VmmRuntimePanel snapshot={props.snapshot} />
               <VmmResultPanel result={result} />
             </div>
+          </main>
+        </div>
+      </section>
+    )
+  }
+
+  if (props.activeSection === "inference") {
+    return (
+      <section className="vmm-memory-page">
+        <div className="vmm-memory-shell status-only">
+          <main className="vmm-memory-main vmm-status-page">
+            <VmmInferenceSettings />
           </main>
         </div>
       </section>

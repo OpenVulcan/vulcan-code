@@ -1,7 +1,10 @@
 //! Provider-neutral capability declarations.
 //! 供应商无关的能力声明。
 
-use crate::{AiOperation, ModelParameterDefinition, PromptCacheCapability, ResourceKind};
+use crate::{
+    AiOperation, EmbeddingCapabilities, ModelParameterDefinition, PromptCacheCapability,
+    RerankCapabilities, ResourceKind,
+};
 use serde::{Deserialize, Serialize};
 
 /// Identifies one provider-neutral reasoning-effort level selected by the user.
@@ -137,6 +140,14 @@ pub struct ModelCapabilities {
     /// 支持的输出资源类别。
     #[serde(default)]
     pub output_resources: Vec<ResourceKind>,
+    /// Strong embedding capabilities for this exact route.
+    /// 此精确路由的强类型向量能力。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<EmbeddingCapabilities>,
+    /// Strong rerank capabilities for this exact route.
+    /// 此精确路由的强类型重排能力。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rerank: Option<RerankCapabilities>,
     /// Tool-calling support level.
     /// 工具调用支持级别。
     pub tool_calling: CapabilitySupport,
@@ -187,6 +198,8 @@ impl Default for ModelCapabilities {
             operations: Vec::new(),
             input_resources: Vec::new(),
             output_resources: Vec::new(),
+            embedding: None,
+            rerank: None,
             tool_calling: CapabilitySupport::Unknown,
             parallel_tool_calling: CapabilitySupport::Unknown,
             reasoning: CapabilitySupport::Unknown,

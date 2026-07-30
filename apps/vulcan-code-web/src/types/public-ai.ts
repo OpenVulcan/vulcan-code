@@ -101,15 +101,54 @@ export interface PublicAiConnection {
 export interface PublicAiModel {
   id: string;
   display_name: string;
-  capabilities: {
-    context_limit?: number;
-    output_limit?: number;
-    reasoning: string;
-    tool_calling: string;
-    prompt_cache: PublicAiPromptCacheCapability;
-    model_parameters: PublicAiModelParameterDefinition[];
-    [key: string]: unknown;
-  };
+  capabilities: PublicAiModelCapabilities;
+}
+
+// PublicAiModelCapabilities carries exact route controls used by workbench and internal inference.
+// PublicAiModelCapabilities 承载工作台与内部推理使用的精确路由控件。
+export interface PublicAiModelCapabilities {
+  operations?: PublicAiOperation[];
+  context_limit?: number;
+  output_limit?: number;
+  // Evidence revision proving the exact capability projection.
+  // 证明精确能力投影的证据修订号。
+  evidence_revision: string;
+  reasoning: string;
+  reasoning_control?: string;
+  reasoning_efforts?: string[];
+  tool_calling: string;
+  prompt_cache: PublicAiPromptCacheCapability;
+  model_parameters: PublicAiModelParameterDefinition[];
+  embedding?: PublicAiEmbeddingCapabilities;
+  rerank?: PublicAiRerankCapabilities;
+  [key: string]: unknown;
+}
+
+// PublicAiEmbeddingCapabilities describes exact embedding defaults and request limits.
+// PublicAiEmbeddingCapabilities 描述精确向量默认值与请求限制。
+export interface PublicAiEmbeddingCapabilities {
+  tasks: string[];
+  output_kinds: string[];
+  encodings: string[];
+  dimensions: number[];
+  minimum_dimensions?: number;
+  maximum_dimensions?: number;
+  default_dimensions?: number;
+  maximum_inputs?: number;
+  maximum_tokens_per_input?: number;
+  normalization: string;
+  distance_metric: string;
+}
+
+// PublicAiRerankCapabilities describes exact rerank defaults and request limits.
+// PublicAiRerankCapabilities 描述精确重排默认值与请求限制。
+export interface PublicAiRerankCapabilities {
+  maximum_candidates?: number;
+  maximum_tokens_per_item?: number;
+  maximum_request_tokens?: number;
+  truncation: string[];
+  supports_return_content: boolean;
+  score_semantics: string;
 }
 
 // PublicAiPromptCacheCapability describes route-specific cache controls.
@@ -137,6 +176,15 @@ export interface PublicAiModelParameterDefinition {
   default: { type: string; [key: string]: unknown };
   protocol_ids: string[];
   model_ids: string[];
+  // Required sibling parameter identifiers declared by the adapter.
+  // 适配器声明的必需同级参数标识。
+  dependent_required: string[];
+  // Conflicting sibling parameter identifiers declared by the adapter.
+  // 适配器声明的冲突同级参数标识。
+  conflicts: string[];
+  // Evidence revision proving the exact parameter contract.
+  // 证明精确参数契约的证据修订号。
+  evidence_revision: string;
 }
 
 // PublicAiConnectionCatalog carries one memory-only model catalog.
@@ -191,12 +239,88 @@ export type PublicAiProviderToolCapabilityKind =
   | "image_generate"
   | "image_edit"
   | "video_generate"
+  | "video_edit"
   | "speech_synthesize"
   | "speech_transcribe"
   | "music_generate"
-  | "music_cover"
+  | "music_cover";
+
+// PublicAiOperation identifies one provider-neutral AI operation.
+// PublicAiOperation 标识一项供应商无关 AI 操作。
+export type PublicAiOperation =
+  | "conversation_respond"
   | "embedding_create"
   | "rerank_documents";
+
+// PublicAiInferenceUsageScope identifies one host-authorized usage context.
+// PublicAiInferenceUsageScope 标识一种由宿主授权的用途上下文。
+export type PublicAiInferenceUsageScope =
+  | "interactive_agent"
+  | "internal_background"
+  | "external_service";
+
+// PublicAiInferenceRouteBinding selects one exact protocol or native action.
+// PublicAiInferenceRouteBinding 选择一个精确协议或原生动作。
+export type PublicAiInferenceRouteBinding =
+  | {
+      kind: "protocol";
+      protocol_profile_id: string;
+    }
+  | {
+      kind: "action";
+      action_binding_id: string;
+    };
+
+// PublicAiInferenceRoute persists one exact immutable internal route.
+// PublicAiInferenceRoute 持久化一条精确不可变内部路由。
+export interface PublicAiInferenceRoute {
+  provider_id: string;
+  service_entry_id: string;
+  connection_id: string;
+  model_id: string;
+  binding: PublicAiInferenceRouteBinding;
+  operation: PublicAiOperation;
+  usage_scope: PublicAiInferenceUsageScope;
+}
+
+// PublicAiInternalInferenceCandidate describes one currently executable route choice.
+// PublicAiInternalInferenceCandidate 描述一项当前可执行路由选择。
+export interface PublicAiInternalInferenceCandidate {
+  providerDisplayName: string;
+  serviceEntryDisplayName: string;
+  connectionDisplayName: string;
+  modelDisplayName: string;
+  route: PublicAiInferenceRoute;
+  catalogGeneration: number;
+  enabled: boolean;
+  usageScopes: PublicAiInferenceUsageScope[];
+  capabilities: PublicAiModelCapabilities;
+  overrides: PublicAiInternalModelOverrides;
+}
+
+// PublicAiInferenceProfile stores consumer-isolated routes.
+// PublicAiInferenceProfile 保存消费者隔离路由。
+export interface PublicAiInferenceProfile {
+  llm_routes?: Record<string, PublicAiInferenceRoute>;
+  embedding?: PublicAiInferenceRoute;
+  rerank?: PublicAiInferenceRoute;
+}
+
+// PublicAiInternalModelOverrides stores operation-scoped defaults.
+// PublicAiInternalModelOverrides 保存操作作用域默认值。
+export interface PublicAiInternalModelOverrides {
+  context_limit?: number;
+  output_limit?: number;
+  reasoning_effort?: string;
+  model_parameters?: Record<string, unknown>;
+  embedding_task?: string;
+  embedding_dimensions?: number;
+  embedding_output_kind?: string;
+  embedding_encoding?: string;
+  rerank_top_n?: number;
+  rerank_truncation?: string;
+  rerank_return_content?: boolean;
+}
 
 // PublicAiProviderToolContract carries one selected-model-native schema and unified output contract.
 // PublicAiProviderToolContract 承载一个选定模型原生 Schema 与统一输出契约。
@@ -242,6 +366,95 @@ export interface PublicAiProviderToolTargetSelection {
   target_id: string;
 }
 
+// PublicAiProviderToolSearchResult carries one normalized ranked search item.
+// PublicAiProviderToolSearchResult 承载一项规范化排序搜索结果。
+export interface PublicAiProviderToolSearchResult {
+  // rank is the one-based provider result position.
+  // rank 是从一开始的供应商结果位置。
+  rank: number;
+  // title is the provider-returned result title.
+  // title 是供应商返回的结果标题。
+  title: string;
+  // url is the validated absolute result address.
+  // url 是经过校验的绝对结果地址。
+  url: string;
+  // source_domain is the normalized result hostname.
+  // source_domain 是规范化结果主机名。
+  source_domain: string;
+  // snippet is the provider-returned result excerpt.
+  // snippet 是供应商返回的结果摘要。
+  snippet: string;
+}
+
+// PublicAiProviderToolSearchOutput carries one unified provider search response.
+// PublicAiProviderToolSearchOutput 承载一份统一供应商搜索响应。
+export interface PublicAiProviderToolSearchOutput {
+  // query is the exact submitted search text.
+  // query 是精确提交的搜索文本。
+  query: string;
+  // results contains ordered normalized search evidence.
+  // results 包含有序的规范化搜索证据。
+  results: PublicAiProviderToolSearchResult[];
+}
+
+// PublicAiProviderToolExtractResult carries one successfully extracted page.
+// PublicAiProviderToolExtractResult 承载一个成功抓取的页面。
+export interface PublicAiProviderToolExtractResult {
+  // url is the validated source address.
+  // url 是经过校验的来源地址。
+  url: string;
+  // content is provider-returned Markdown or plain text.
+  // content 是供应商返回的 Markdown 或纯文本。
+  content: string;
+  // images contains validated image addresses returned for this page.
+  // images 包含当前页面返回的已验证图片地址。
+  images: string[];
+  // favicon is the optional validated site icon address.
+  // favicon 是可选的已验证站点图标地址。
+  favicon?: string | null;
+}
+
+// PublicAiProviderToolExtractFailure carries one provider-reported URL failure.
+// PublicAiProviderToolExtractFailure 承载一项供应商报告的 URL 失败。
+export interface PublicAiProviderToolExtractFailure {
+  // url is the failed source address.
+  // url 是失败的来源地址。
+  url: string;
+  // error is the controlled provider failure message.
+  // error 是受控的供应商失败消息。
+  error: string;
+}
+
+// PublicAiProviderToolExtractOutput carries unified extraction successes and failures.
+// PublicAiProviderToolExtractOutput 承载统一网页抓取成功项与失败项。
+export interface PublicAiProviderToolExtractOutput {
+  // results contains ordered successful pages.
+  // results 包含有序的成功页面。
+  results: PublicAiProviderToolExtractResult[];
+  // failures contains ordered per-URL failures.
+  // failures 包含有序的逐 URL 失败。
+  failures: PublicAiProviderToolExtractFailure[];
+}
+
+// PublicAiProviderToolTestResult is the closed settings-diagnostic result union.
+// PublicAiProviderToolTestResult 是封闭的设置诊断结果联合。
+export type PublicAiProviderToolTestResult = {
+  // upstream_response_id is the optional provider trace identifier.
+  // upstream_response_id 是可选的供应商追踪标识。
+  upstream_response_id?: string | null;
+  // output contains the normalized semantic result selected by kind.
+  // output 包含由 kind 选择的规范化语义结果。
+  output:
+    | {
+        kind: "search";
+        value: PublicAiProviderToolSearchOutput;
+      }
+    | {
+        kind: "extract";
+        value: PublicAiProviderToolExtractOutput;
+      };
+};
+
 // PublicAiSettingsSnapshot combines persisted and process-local settings state.
 // PublicAiSettingsSnapshot 组合持久化设置状态与进程内设置状态。
 export interface PublicAiSettingsSnapshot {
@@ -260,6 +473,33 @@ export interface PublicAiSettingsSnapshot {
   providerToolSelections: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
   >;
+  internalInferenceCandidates: PublicAiInternalInferenceCandidate[];
+  inferenceProfiles: Record<string, PublicAiInferenceProfile>;
+  inferenceRouteDiagnostics: PublicAiInferenceRouteDiagnostic[];
+  internalModelOverrides: Record<string, PublicAiInternalModelOverrides>;
+}
+
+// PublicAiInferenceRouteDiagnostic explains one retained route that cannot execute now.
+// PublicAiInferenceRouteDiagnostic 解释一条当前无法执行但仍保留的路由。
+export interface PublicAiInferenceRouteDiagnostic {
+  consumerProfileId: string;
+  purposeId?: string;
+  operation: PublicAiOperation;
+  route: PublicAiInferenceRoute;
+  reason: string;
+}
+
+// PublicAiInferenceTestResult carries compact validated facts from a real provider test.
+// PublicAiInferenceTestResult 承载一次真实供应商测试的紧凑已校验事实。
+export interface PublicAiInferenceTestResult {
+  operation: PublicAiOperation;
+  providerId: string;
+  serviceEntryId: string;
+  connectionId: string;
+  modelId: string;
+  resultCount: number;
+  dimensions?: number;
+  durationMs: number;
 }
 
 // PublicAiAccountUsage carries one credential-scoped observation.

@@ -3042,6 +3042,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 
 [[package]]
+name = "mime_guess"
+version = "2.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
+dependencies = [
+ "mime",
+ "unicase",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4471,6 +4481,7 @@ dependencies = [
  "hyper-util",
  "js-sys",
  "log",
+ "mime_guess",
  "percent-encoding",
  "pin-project-lite",
  "quinn",
@@ -6853,6 +6864,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "tokio-util",
  "uuid",
  "vulcan-ai-contract",
  "vulcan-ai-protocols",
@@ -6887,9 +6899,11 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "http-range",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "time",
+ "vulcan-ai-contract",
  "vulcan-luaskills-config",
 ]
 
@@ -6902,6 +6916,7 @@ dependencies = [
  "tokio",
  "tower 0.5.3",
  "tower-http",
+ "vulcan-ai-contract",
  "vulcan-service-api",
 ]
 
@@ -6914,6 +6929,7 @@ dependencies = [
  "encoding_rs",
  "futures-util",
  "ignore",
+ "jsonschema",
  "keyring",
  "luaskills",
  "reqwest 0.12.28",

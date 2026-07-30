@@ -525,12 +525,23 @@ pub(super) fn test_agent_runtime_bridge() -> AgentRuntimeBridge {
             vulcan_agent_runtime::mcp::configured_mcp_runtime_access(&provider_configuration),
         ),
     );
+    // publicAiRuntime is shared by ordinary provider tests and configured-inference isolation.
+    // publicAiRuntime 由普通供应商测试与已配置推理隔离层共享。
+    let public_ai_runtime = Arc::new(
+        vulcan_provider_adapters::PublicAiRuntime::unavailable()
+            .expect("test public AI runtime should initialize"),
+    );
+    // configuredInferenceService owns no network activity until an explicitly configured request.
+    // configuredInferenceService 在显式配置请求前不拥有网络活动。
+    let configured_inference_service = Arc::new(
+        crate::configured_inference::ConfiguredInferenceService::new(Arc::clone(
+            &public_ai_runtime,
+        )),
+    );
     AgentRuntimeBridge {
         provider_configuration,
-        public_ai_runtime: Arc::new(
-            vulcan_provider_adapters::PublicAiRuntime::unavailable()
-                .expect("test public AI runtime should initialize"),
-        ),
+        public_ai_runtime,
+        configured_inference_service,
         provider_id_override: None,
         model_id_override: None,
         agent_profile_catalog: AgentProfileCatalog::default(),

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// Identifies a resource media category.
 /// 标识资源媒体类别。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResourceKind {
     /// Image resource.

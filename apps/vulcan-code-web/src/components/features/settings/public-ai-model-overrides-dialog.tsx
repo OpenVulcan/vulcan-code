@@ -184,7 +184,15 @@ export function PublicAiModelOverridesDialog(props: {
 
   const promptCache = props.model?.capabilities.prompt_cache
   return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+    <Dialog
+      open={props.open}
+      onOpenChange={(open) => {
+        if (!open && saving) {
+          return
+        }
+        props.onOpenChange(open)
+      }}
+    >
       <DialogContent className="max-h-[calc(100vh-2rem)] gap-0 overflow-hidden p-0 sm:max-w-xl">
         <DialogHeader className="border-b bg-muted/30 px-5 py-4 pr-12">
           <div className="flex items-start gap-3">

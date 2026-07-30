@@ -4,7 +4,7 @@
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::provider_config::PersistedProviderRetryConfiguration;
 use std::time::Duration;
-use vulcan_ai_contract::{AiErrorCategory, AiExecutionError};
+use vulcan_ai_contract::{AiErrorCategory, AiExecutionError, DispatchOutcome};
 use vulcan_core::types::CoreError as VulcanCoreError;
 
 /// Hard safety ceiling for every backend-configured rate-limit retry wait.
@@ -14,7 +14,7 @@ const MAX_RATE_LIMIT_RETRY_DELAY: Duration = Duration::from_secs(1_800);
 /// Runtime provider retry policy derived from persisted user configuration.
 /// 从用户持久化配置派生出的运行时 Provider 重试策略。
 #[derive(Debug, Clone)]
-pub(crate) struct ProviderRetryPolicy {
+pub struct ProviderRetryPolicy {
     /// Whether automatic retry is enabled for this execution path.
     /// 当前执行路径是否启用自动重试。
     enabled: bool,
@@ -56,7 +56,7 @@ pub(crate) struct ProviderRetryPolicy {
 impl ProviderRetryPolicy {
     /// Builds a runtime retry policy from persisted configuration.
     /// 根据持久化配置构建运行时重试策略。
-    pub(crate) fn from_config(config: &PersistedProviderRetryConfiguration) -> Self {
+    pub fn from_config(config: &PersistedProviderRetryConfiguration) -> Self {
         // rateLimitInitialMs is bounded before deriving the matching maximum delay.
         // rateLimitInitialMs 在派生对应最大等待前先受硬上限约束。
         let rate_limit_initial_ms = config
@@ -167,6 +167,64 @@ impl ProviderRetryPolicy {
         })
     }
 
+    /// Classifies one typed public provider failure and returns the next safe retry decision.
+    /// 对一个强类型公共供应商失败进行分类，并返回下一项安全重试决策。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `error` preserves authoritative dispatch and semantic-output facts while
+    /// `completed_retries` counts already executed retries after the initial request.
+    /// `error` 保留权威分派与语义输出事实，`completed_retries` 统计初始请求后已执行的重试。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A bounded or cancellation-bound decision only when transparent replay is proven safe.
+    /// 仅在透明重放已被证明安全时返回有界或取消约束的决策。
+    pub fn next_structured_retry(
+        &self,
+        error: &AiExecutionError,
+        completed_retries: u32,
+    ) -> Option<ProviderRetryDecision> {
+        if !self.enabled {
+            return None;
+        }
+        let classification = classify_structured_retry_reason(error, self.retry_429)?;
+        let is_rate_limit = classification.category == ProviderRetryCategory::RateLimit;
+        let retry_limit = if is_rate_limit {
+            self.rate_limit_max_retries
+        } else {
+            self.max_retries
+        };
+        let unbounded = is_rate_limit && retry_limit == 0;
+        if !unbounded && completed_retries >= retry_limit {
+            return None;
+        }
+        let retry_number = completed_retries.saturating_add(1);
+        let retry_after = self
+            .respect_retry_after
+            .then(|| {
+                error
+                    .retry_after
+                    .as_ref()
+                    .map(|hint| Duration::from_millis(hint.delay_milliseconds))
+            })
+            .flatten();
+        let delay = if is_rate_limit {
+            self.rate_limit_delay(retry_number, retry_after)
+        } else {
+            retry_after
+                .map(|delay| delay.min(self.max_delay))
+                .unwrap_or_else(|| self.local_delay(retry_number))
+        };
+        Some(ProviderRetryDecision {
+            retry_number,
+            max_retries: retry_limit,
+            unbounded,
+            delay,
+            reason: classification.reason,
+        })
+    }
+
     /// Calculates the local exponential backoff delay for one 1-based retry number.
     /// 计算某个从 1 开始的重试序号对应的本地指数退避等待时间。
     fn local_delay(&self, retry_number: u32) -> Duration {
@@ -208,22 +266,22 @@ impl ProviderRetryPolicy {
 /// One concrete retry decision emitted after a failed provider attempt.
 /// 一次 Provider 尝试失败后产出的具体重试决策。
 #[derive(Debug, Clone)]
-pub(crate) struct ProviderRetryDecision {
+pub struct ProviderRetryDecision {
     /// 1-based retry number that will be executed next.
     /// 即将执行的从 1 开始的重试序号。
-    pub(crate) retry_number: u32,
+    pub retry_number: u32,
     /// Configured retry limit, or zero for an unbounded rate-limit retry.
     /// 已配置的重试上限；无次数上限的限流重试为零。
-    pub(crate) max_retries: u32,
+    pub max_retries: u32,
     /// Whether this retry continues without a count limit until cancellation.
     /// 本次重试是否会在取消前不受次数上限限制地持续执行。
-    pub(crate) unbounded: bool,
+    pub unbounded: bool,
     /// Delay before the next retry.
     /// 下一次重试前的等待时间。
-    pub(crate) delay: Duration,
+    pub delay: Duration,
     /// Human-readable retry reason.
     /// 人类可读的重试原因。
-    pub(crate) reason: String,
+    pub reason: String,
 }
 
 /// Stable retry category derived from one concrete Provider failure.
@@ -304,7 +362,11 @@ fn classify_structured_retry_reason(
     error: &AiExecutionError,
     retry_429: bool,
 ) -> Option<ProviderRetryClassification> {
-    if !error.retryable || error.semantic_output_observed || error.side_effect_observed {
+    if !error.retryable
+        || error.semantic_output_observed
+        || error.side_effect_observed
+        || error.dispatch_outcome == DispatchOutcome::Unknown
+    {
         return None;
     }
     match error.category {
@@ -704,6 +766,70 @@ mod tests {
         };
         details.side_effect_observed = true;
         assert!(policy().next_retry(&side_effect, 0, false).is_none());
+    }
+
+    /// Verifies configured inference uses only typed safe dispatch facts for retry.
+    /// 验证已配置推理仅依据强类型安全分派事实进行重试。
+    #[test]
+    fn structured_retry_entrypoint_retries_dispatched_transient_failures() {
+        let error = structured_provider_error(AiErrorCategory::ProviderUnavailable, true);
+        let VulcanCoreError::ProviderFailure {
+            details: Some(details),
+            ..
+        } = error
+        else {
+            panic!("structured error expected");
+        };
+
+        let decision = policy()
+            .next_structured_retry(details.as_ref(), 0)
+            .expect("typed dispatched transient failure should retry");
+
+        assert_eq!(decision.retry_number, 1);
+        assert_eq!(decision.reason, "Provider unavailable");
+    }
+
+    /// Verifies unknown provider dispatch never triggers transparent replay.
+    /// 验证未知供应商分派结果绝不会触发透明重放。
+    #[test]
+    fn structured_retry_entrypoint_rejects_unknown_dispatch() {
+        let mut error = structured_provider_error(AiErrorCategory::ProviderUnavailable, true);
+        let VulcanCoreError::ProviderFailure {
+            details: Some(details),
+            ..
+        } = &mut error
+        else {
+            panic!("structured error expected");
+        };
+        details.dispatch_outcome = DispatchOutcome::Unknown;
+
+        assert!(
+            policy()
+                .next_structured_retry(details.as_ref(), 0)
+                .is_none()
+        );
+    }
+
+    /// Verifies a zero rate-limit ceiling remains cancellation-bound on the typed path.
+    /// 验证限流次数上限为零时，强类型路径仍由取消操作约束。
+    #[test]
+    fn structured_retry_entrypoint_keeps_rate_limits_unbounded() {
+        let error = structured_provider_error(AiErrorCategory::RateLimited, true);
+        let VulcanCoreError::ProviderFailure {
+            details: Some(details),
+            ..
+        } = error
+        else {
+            panic!("structured error expected");
+        };
+
+        let decision = policy()
+            .next_structured_retry(details.as_ref(), 50)
+            .expect("typed rate-limit retry should remain active");
+
+        assert_eq!(decision.retry_number, 51);
+        assert!(decision.unbounded);
+        assert_eq!(decision.max_retries, 0);
     }
 
     /// Verifies Anthropic-compatible structured rate-limit errors remain retryable when the proxy omits HTTP 429 from the formatted message.
