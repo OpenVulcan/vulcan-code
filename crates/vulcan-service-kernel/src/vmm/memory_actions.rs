@@ -103,7 +103,7 @@ pub(crate) async fn service_run_vmm_memory_action(
             guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
             guard.workbench.revision = guard.workbench_generation;
             guard.workbench.vmm_memory.management_catalog = management_catalog;
-            hydrate_vmm_display_user_name(&mut guard.workbench.vmm_memory);
+            hydrate_vmm_default_identity(&mut guard.workbench.vmm_memory);
             guard.workbench.clone()
         };
         emit_workbench_event(&app, &workbench);

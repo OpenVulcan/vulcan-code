@@ -250,15 +250,31 @@ pub async fn run_vmm_workbench_action(
             run_vmm_ensure_project_preview(&client, &management_project_ref).await
         }
         VmmWorkbenchAction::LoadProfileNodes { target } => {
-            run_vmm_profile_nodes(&client, &effective, target).await
+            run_vmm_profile_nodes(
+                &client,
+                &management_user_ref,
+                &management_project_ref,
+                target,
+            )
+            .await
         }
         VmmWorkbenchAction::LoadProfileBundle => {
-            run_vmm_profile_bundle_preview(&client, &effective).await
+            run_vmm_profile_bundle_preview(&client, &management_user_ref, &management_project_ref)
+                .await
         }
         VmmWorkbenchAction::ApplyProfileInstruction {
             target,
             instruction,
-        } => run_vmm_apply_profile_instruction(&client, &effective, target, instruction).await,
+        } => {
+            run_vmm_apply_profile_instruction(
+                &client,
+                &management_user_ref,
+                &management_project_ref,
+                target,
+                instruction,
+            )
+            .await
+        }
         VmmWorkbenchAction::ResolveUser {
             user_ref,
             confirm_create,
@@ -496,18 +512,29 @@ async fn run_vmm_migrate_project(
     Ok(VmmManagementOutcome::MigrateProject(response))
 }
 
-/// Loads the configured profile bundle in combined mode.
-/// 按组合模式读取当前配置的画像 bundle。
+/// Loads one explicitly selected profile bundle in combined mode.
+/// 按组合模式读取一份明确选择的画像 bundle。
+///
+/// # Parameters
+/// 参数
+/// `client` is the connected VMM transport client.
+/// `client` 是已连接的 VMM 传输客户端。
+/// `management_user_ref` is the exact numeric catalog user key selected by the operator.
+/// `management_user_ref` 是操作人员明确选择的数字目录用户键。
+/// `management_project_ref` is the exact numeric catalog project key selected by the operator.
+/// `management_project_ref` 是操作人员明确选择的数字目录项目键。
+///
+/// # Returns
+/// 返回值
+/// The complete profile bundle for the selected user and project pair.
+/// 返回所选用户与项目组合的完整画像 bundle。
 async fn run_vmm_profile_bundle_preview(
     client: &TonicVmmClient,
-    effective: &VmmEffectiveConfig,
+    management_user_ref: &str,
+    management_project_ref: &str,
 ) -> Result<VmmManagementOutcome, String> {
-    let user_id = effective
-        .user_id
-        .ok_or_else(|| String::from("VMM 用户 ID 为空，无法读取画像。"))?;
-    let project_id = effective
-        .project_id
-        .ok_or_else(|| String::from("VMM 项目 ID 为空，无法读取画像。"))?;
+    let (user_id, project_id) =
+        parse_vmm_profile_identity_ids(management_user_ref, management_project_ref)?;
     let response = client
         .get_profile_bundle(GetProfileBundleRequest {
             user_id,
@@ -520,19 +547,32 @@ async fn run_vmm_profile_bundle_preview(
     Ok(VmmManagementOutcome::ProfileBundle(response))
 }
 
-/// Loads active profile nodes for one configured scope.
-/// 读取一个已配置作用域的 active 画像节点。
+/// Loads active profile nodes for one explicitly selected catalog target.
+/// 读取一个明确选择的目录目标的 active 画像节点。
+///
+/// # Parameters
+/// 参数
+/// `client` is the connected VMM transport client.
+/// `client` 是已连接的 VMM 传输客户端。
+/// `management_user_ref` is the exact numeric catalog user key selected by the operator.
+/// `management_user_ref` 是操作人员明确选择的数字目录用户键。
+/// `management_project_ref` is the exact numeric catalog project key selected by the operator.
+/// `management_project_ref` 是操作人员明确选择的数字目录项目键。
+/// `target` selects whether VMM returns user or project profile nodes.
+/// `target` 选择 VMM 返回用户画像节点还是项目画像节点。
+///
+/// # Returns
+/// 返回值
+/// Active nodes for the selected profile target.
+/// 返回所选画像目标的 active 节点。
 async fn run_vmm_profile_nodes(
     client: &TonicVmmClient,
-    effective: &VmmEffectiveConfig,
+    management_user_ref: &str,
+    management_project_ref: &str,
     target: ProfileTarget,
 ) -> Result<VmmManagementOutcome, String> {
-    let user_id = effective
-        .user_id
-        .ok_or_else(|| String::from("VMM 用户 ID 为空，无法读取画像节点。"))?;
-    let project_id = effective
-        .project_id
-        .ok_or_else(|| String::from("VMM 项目 ID 为空，无法读取画像节点。"))?;
+    let (user_id, project_id) =
+        parse_vmm_profile_identity_ids(management_user_ref, management_project_ref)?;
     let response = client
         .get_profile_nodes(GetProfileNodesRequest {
             target,
@@ -545,11 +585,30 @@ async fn run_vmm_profile_nodes(
     Ok(VmmManagementOutcome::ProfileNodes(response))
 }
 
-/// Applies one manual profile instruction for one configured scope.
-/// 为一个已配置作用域应用一条手工画像指令。
+/// Applies one manual profile instruction to an explicitly selected catalog target.
+/// 向一个明确选择的目录目标应用一条手工画像指令。
+///
+/// # Parameters
+/// 参数
+/// `client` is the connected VMM transport client.
+/// `client` 是已连接的 VMM 传输客户端。
+/// `management_user_ref` is the exact numeric catalog user key selected by the operator.
+/// `management_user_ref` 是操作人员明确选择的数字目录用户键。
+/// `management_project_ref` is the exact numeric catalog project key selected by the operator.
+/// `management_project_ref` 是操作人员明确选择的数字目录项目键。
+/// `target` selects the user or project profile namespace.
+/// `target` 选择用户或项目画像命名空间。
+/// `instruction` is the natural-language correction to apply.
+/// `instruction` 是需要应用的自然语言修正。
+///
+/// # Returns
+/// 返回值
+/// The durable instruction result returned by VMM.
+/// 返回 VMM 生成的长期指令结果。
 async fn run_vmm_apply_profile_instruction(
     client: &TonicVmmClient,
-    effective: &VmmEffectiveConfig,
+    management_user_ref: &str,
+    management_project_ref: &str,
     target: ProfileTarget,
     instruction: String,
 ) -> Result<VmmManagementOutcome, String> {
@@ -557,12 +616,8 @@ async fn run_vmm_apply_profile_instruction(
     if instruction.is_empty() {
         return Err(String::from("手工画像指令不能为空。"));
     }
-    let user_id = effective
-        .user_id
-        .ok_or_else(|| String::from("VMM 用户 ID 为空，无法应用画像指令。"))?;
-    let project_id = effective
-        .project_id
-        .ok_or_else(|| String::from("VMM 项目 ID 为空，无法应用画像指令。"))?;
+    let (user_id, project_id) =
+        parse_vmm_profile_identity_ids(management_user_ref, management_project_ref)?;
     let response = client
         .apply_profile_instruction(ApplyProfileInstructionRequest {
             target,
@@ -573,6 +628,39 @@ async fn run_vmm_apply_profile_instruction(
         .await
         .map_err(|error| error.to_string())?;
     Ok(VmmManagementOutcome::ProfileInstruction(response))
+}
+
+/// Parses the opaque catalog keys used by profile RPCs into their protocol identifiers.
+/// 将画像 RPC 使用的不透明目录键解析为协议数字标识。
+///
+/// # Parameters
+/// 参数
+/// `management_user_ref` is the exact `stable_key` returned by the VMM user catalog.
+/// `management_user_ref` 是 VMM 用户目录返回的准确 `stable_key`。
+/// `management_project_ref` is the exact `stable_key` returned by the VMM project catalog.
+/// `management_project_ref` 是 VMM 项目目录返回的准确 `stable_key`。
+///
+/// # Returns
+/// 返回值
+/// The numeric `(user_id, project_id)` pair required by profile RPCs.
+/// 返回画像 RPC 所需的数字 `(user_id, project_id)` 组合。
+fn parse_vmm_profile_identity_ids(
+    management_user_ref: &str,
+    management_project_ref: &str,
+) -> Result<(u64, u64), String> {
+    // user_id is the exact numeric key emitted by `vmm_management_catalog_from_outcome`.
+    // user_id 是 `vmm_management_catalog_from_outcome` 产生的准确数字键。
+    let user_id = management_user_ref
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| String::from("请选择一个有效的 VMM 用户后再读取画像。"))?;
+    // project_id is the exact numeric key emitted by `vmm_management_catalog_from_outcome`.
+    // project_id 是 `vmm_management_catalog_from_outcome` 产生的准确数字键。
+    let project_id = management_project_ref
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| String::from("请选择一个有效的 VMM 项目后再读取画像。"))?;
+    Ok((user_id, project_id))
 }
 
 /// Runs the memory-search AI-tool equivalent against the configured user/project.
@@ -728,5 +816,22 @@ fn format_delete_memory_error(error: vulcan_vmm::VmmClientError) -> String {
         String::from("当前 VMM 服务版本不支持删除记忆，请更新 VulcanMemoryMesh 后重试。")
     } else {
         error.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies profile actions use the selected catalog ids instead of configured defaults.
+    /// 验证画像动作使用所选目录标识，而不是退回配置默认值。
+    #[test]
+    fn profile_identity_parser_uses_explicit_catalog_keys() {
+        assert_eq!(
+            parse_vmm_profile_identity_ids("17", "29").expect("valid catalog keys"),
+            (17, 29)
+        );
+        assert!(parse_vmm_profile_identity_ids("user-name", "29").is_err());
+        assert!(parse_vmm_profile_identity_ids("17", "project-path").is_err());
     }
 }

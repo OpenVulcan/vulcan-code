@@ -1067,6 +1067,7 @@ fn run_service_bootstrap(
     }
     mark_webui_service_discovery_ready(state);
     emit_service_snapshots(event_emitter, &startup, &emitted_workbench);
+    crate::vmm::start_vmm_health_monitor(state.clone(), event_emitter.clone());
     Ok(())
 }
 

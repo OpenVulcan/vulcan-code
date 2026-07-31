@@ -34,6 +34,13 @@ describe("VMM management catalog readiness gate", () => {
       catalog: emptyCatalog(),
     })).toBe(true)
     expect(shouldRequestVmmManagementCatalog({
+      activeSection: "profile",
+      operationBusy: false,
+      processReady: true,
+      requestIssued: false,
+      catalog: emptyCatalog(),
+    })).toBe(true)
+    expect(shouldRequestVmmManagementCatalog({
       activeSection: "overview",
       operationBusy: true,
       processReady: true,

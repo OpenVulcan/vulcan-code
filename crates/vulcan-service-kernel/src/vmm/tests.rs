@@ -403,12 +403,13 @@ fn vmm_memory_snapshot_ignores_blank_selected_session_project_id() {
     assert_eq!(snapshot.selected_project_id.as_deref(), Some("project-a"));
 }
 
-/// Verifies catalog refresh resolves the configured user id to a visible name.
-/// 验证目录刷新会将已配置用户标识解析为可见名称。
+/// Verifies catalog refresh resolves exact global default ids to visible identity values.
+/// 验证目录刷新会将准确全局默认标识解析为可见身份值。
 #[test]
-fn hydrate_vmm_display_user_name_uses_exact_catalog_key() {
+fn hydrate_vmm_default_identity_uses_exact_catalog_keys() {
     let mut snapshot = VmmMemorySnapshot::default();
-    snapshot.effective.user_id = Some(7);
+    snapshot.global_draft.user_id = String::from("7");
+    snapshot.global_draft.project_id = String::from("11");
     snapshot.management_catalog.users = vec![
         vulcan_service_api::VmmUserDisplaySummary {
             stable_key: String::from("70"),
@@ -421,16 +422,37 @@ fn hydrate_vmm_display_user_name_uses_exact_catalog_key() {
             ..Default::default()
         },
     ];
+    snapshot.management_catalog.projects = vec![
+        vulcan_service_api::VmmProjectDisplaySummary {
+            stable_key: String::from("110"),
+            display_name: String::from("Wrong Project"),
+            display_path: String::from("wrong/space/project"),
+            ..Default::default()
+        },
+        vulcan_service_api::VmmProjectDisplaySummary {
+            stable_key: String::from("11"),
+            display_name: String::from("Visible Project"),
+            display_path: String::from("team/space/visible-project"),
+            ..Default::default()
+        },
+    ];
 
-    hydrate_vmm_display_user_name(&mut snapshot);
+    hydrate_vmm_default_identity(&mut snapshot);
 
     assert_eq!(
         snapshot.display_identity.user_name.as_deref(),
         Some("Visible User")
     );
-    snapshot.effective.user_id = None;
-    hydrate_vmm_display_user_name(&mut snapshot);
+    assert_eq!(
+        snapshot.display_identity.project_path.as_deref(),
+        Some("team/space/visible-project")
+    );
+    snapshot.global_draft.user_id.clear();
+    snapshot.global_draft.project_id.clear();
+    hydrate_vmm_default_identity(&mut snapshot);
     assert!(snapshot.display_identity.user_name.is_none());
+    assert!(snapshot.display_identity.project_name.is_none());
+    assert!(snapshot.display_identity.project_path.is_none());
 }
 
 /// Verifies managed lifecycle transitions rebuild all product states without losing the management catalog.
@@ -503,6 +525,13 @@ fn managed_runtime_projection_rebuilds_product_state_and_preserves_catalog() {
         display_name: String::from("Visible User"),
         ..Default::default()
     }];
+    retained_snapshot.management_catalog.projects =
+        vec![vulcan_service_api::VmmProjectDisplaySummary {
+            stable_key: String::from("11"),
+            display_name: String::from("Visible Project"),
+            display_path: String::from("default/default/visible-project"),
+            ..Default::default()
+        }];
     // managed_runtime represents a healthy child with every independently preflighted capability available.
     // managed_runtime 表示一个健康子进程，且每项独立预检能力均可用。
     let mut managed_runtime = crate::managed_memory_mesh_runtime::ManagedMemoryMeshSnapshot {
@@ -558,6 +587,10 @@ fn managed_runtime_projection_rebuilds_product_state_and_preserves_catalog() {
     assert_eq!(
         ready.display_identity.user_name.as_deref(),
         Some("Visible User")
+    );
+    assert_eq!(
+        ready.display_identity.project_path.as_deref(),
+        Some("default/default/visible-project")
     );
 
     managed_runtime.phase = String::from("stopped");

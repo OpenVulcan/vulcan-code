@@ -65,11 +65,9 @@ pub(crate) fn vmm_memory_snapshot(
         completed_turns: runtime.completed_turns,
         last_profile_update_at: runtime.updated_at.clone(),
     };
-    let display_identity = VmmDisplayIdentitySummary {
-        project_name: selected_project.map(|project| project.title.clone()),
-        project_path: selected_project.map(|project| project.path.clone()),
-        user_name: None,
-    };
+    // displayIdentity is hydrated from the global VMM ids and the runtime management catalog.
+    // displayIdentity 由全局 VMM 标识与运行时管理目录解析，不复用 Vulcan Code 当前任务项目。
+    let display_identity = VmmDisplayIdentitySummary::default();
     VmmMemorySnapshot {
         experience_state,
         prerequisites,
@@ -153,34 +151,38 @@ pub(crate) fn refresh_vmm_memory_runtime_projection(
     // never discard rows that were loaded through the management transport.
     // 管理记录是显式运行时缓存；重建生命周期派生状态绝不能丢弃通过管理传输加载的记录。
     refreshed.management_catalog = retained_snapshot.management_catalog.clone();
-    hydrate_vmm_display_user_name(&mut refreshed);
+    hydrate_vmm_default_identity(&mut refreshed);
     refreshed
 }
 
-/// Resolves the configured VMM user id to one human-readable catalog name.
-/// 将已配置的 VMM 用户标识解析为目录中的人类可读名称。
+/// Resolves the globally configured VMM identity to human-readable catalog values.
+/// 将全局配置的 VMM 身份解析为目录中的人类可读值。
 ///
 /// # Parameters
 /// 参数
-/// `snapshot` is the product snapshot whose catalog and effective identity are already current.
-/// `snapshot` 是目录与最终身份均已更新的产品快照。
+/// `snapshot` is the product snapshot whose global draft and management catalog are current.
+/// `snapshot` 是全局草稿与管理目录均已更新的产品快照。
 ///
 /// # Returns
 /// 返回值
-/// This function returns nothing and updates only the user-facing name projection.
-/// 本函数不返回值，仅更新面向用户的名称投影。
-pub(crate) fn hydrate_vmm_display_user_name(snapshot: &mut VmmMemorySnapshot) {
-    let Some(user_id) = snapshot.effective.user_id else {
-        snapshot.display_identity.user_name = None;
-        return;
-    };
-    let stable_key = user_id.to_string();
+/// This function returns nothing and updates only the user-facing default identity projection.
+/// 本函数不返回值，仅更新面向用户的默认身份投影。
+pub(crate) fn hydrate_vmm_default_identity(snapshot: &mut VmmMemorySnapshot) {
+    let user_key = snapshot.global_draft.user_id.trim();
     snapshot.display_identity.user_name = snapshot
         .management_catalog
         .users
         .iter()
-        .find(|user| user.stable_key == stable_key)
+        .find(|user| user.stable_key == user_key)
         .map(|user| user.display_name.clone());
+    let project_key = snapshot.global_draft.project_id.trim();
+    let project = snapshot
+        .management_catalog
+        .projects
+        .iter()
+        .find(|project| project.stable_key == project_key);
+    snapshot.display_identity.project_name = project.map(|project| project.display_name.clone());
+    snapshot.display_identity.project_path = project.map(|project| project.display_path.clone());
 }
 
 /// Projects product-facing VMM state dimensions from authoritative configuration and runtime state.
@@ -244,6 +246,8 @@ fn vmm_experience_state(
         } else {
             VmmHealthState::Healthy
         }
+    } else if runtime.managed_phase == "unhealthy" {
+        VmmHealthState::Unavailable
     } else if deployment == VmmDeploymentMode::External && runtime.managed_last_error.is_some() {
         VmmHealthState::Unavailable
     } else if deployment == VmmDeploymentMode::External {
@@ -386,7 +390,7 @@ pub(super) fn vmm_deployment_mode(global_layer: &vulcan_vmm::VmmConfigLayer) -> 
 /// 返回 WebUI 使用的稳定生命周期值。
 fn vmm_lifecycle_state(runtime: &VmmRuntimeSummary) -> VmmLifecycleState {
     match runtime.managed_phase.as_str() {
-        "ready" => VmmLifecycleState::Running,
+        "ready" | "unhealthy" => VmmLifecycleState::Running,
         "starting" => VmmLifecycleState::Starting,
         "stopping" => VmmLifecycleState::Stopping,
         "restarting" => VmmLifecycleState::Restarting,
@@ -1131,5 +1135,41 @@ mod tests {
         assert!(!runtime.postaction_ready);
         assert!(!runtime.profile_instruction_ready);
         assert!(!runtime.rerank_ready);
+    }
+
+    /// Verifies an owned child with a failed heartbeat remains running but unavailable.
+    /// 验证心跳失败但仍由宿主持有的子进程保持“运行中”，同时健康状态为“不可用”。
+    #[test]
+    fn unhealthy_managed_runtime_keeps_process_and_health_dimensions_separate() {
+        // global_layer describes one fully configured managed VMM deployment.
+        // global_layer 描述一份配置完整的托管 VMM 部署。
+        let global_layer = vulcan_vmm::VmmConfigLayer {
+            enabled: Some(true),
+            grpc_target: Some(String::from("127.0.0.1:17901")),
+            user_id: Some(1),
+            project_id: Some(1),
+            install: Some(vulcan_vmm::VmmInstallReservation {
+                managed_install_enabled: true,
+                ..vulcan_vmm::VmmInstallReservation::default()
+            }),
+            ..vulcan_vmm::VmmConfigLayer::default()
+        };
+        // effective is the exact resolved configuration used by product-state projection.
+        // effective 是产品状态投影使用的准确解析配置。
+        let effective = vulcan_vmm::VmmEffectiveConfig::resolve(&global_layer, None, None);
+        // runtime retains the live child generation while exposing its failed heartbeat.
+        // runtime 在保留存活子进程代次的同时暴露心跳失败。
+        let runtime = VmmRuntimeSummary {
+            managed_phase: String::from("unhealthy"),
+            managed_last_error: Some(String::from("heartbeat timeout")),
+            ..VmmRuntimeSummary::default()
+        };
+
+        // experience keeps lifecycle and transport health as independent dimensions.
+        // experience 将生命周期与传输健康保持为相互独立的维度。
+        let experience = vmm_experience_state(&effective, &global_layer, &runtime);
+
+        assert_eq!(experience.lifecycle, VmmLifecycleState::Running);
+        assert_eq!(experience.health, VmmHealthState::Unavailable);
     }
 }

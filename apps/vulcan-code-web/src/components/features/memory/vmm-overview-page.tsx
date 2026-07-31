@@ -134,7 +134,7 @@ function VmmOverviewPage({
             <VmmStateRow
               icon={<FolderKanban className="size-4" aria-hidden="true" />}
               label={t("vmm.experience.currentProject")}
-              value={snapshot.displayIdentity.projectName ?? t("vmm.experience.noProject")}
+              value={snapshot.displayIdentity.projectPath ?? t("vmm.experience.noProject")}
             />
             <VmmStateRow
               icon={<UserRound className="size-4" aria-hidden="true" />}

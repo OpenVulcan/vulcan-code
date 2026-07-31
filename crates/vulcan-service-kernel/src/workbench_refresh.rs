@@ -2,7 +2,7 @@
 //! workbench refresh 辅助逻辑。
 
 use super::*;
-use crate::vmm::hydrate_vmm_display_user_name;
+use crate::vmm::hydrate_vmm_default_identity;
 use vulcan_service_api::PendingPromptsChangedDelta;
 
 /// Input bundle for projecting runtime and workspace state into one WebUI workbench snapshot.
@@ -353,7 +353,7 @@ fn preserve_focused_catalog_domains_after_concurrent_refresh(
     // VMM 管理目录是显式内存缓存，不会从工作区文件重新构建。
     workbench.vmm_memory.management_catalog =
         retained_workbench.vmm_memory.management_catalog.clone();
-    hydrate_vmm_display_user_name(&mut workbench.vmm_memory);
+    hydrate_vmm_default_identity(&mut workbench.vmm_memory);
     if captured_generation == current_generation {
         return;
     }

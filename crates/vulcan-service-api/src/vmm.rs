@@ -404,21 +404,21 @@ pub struct VmmRecentActivitySummary {
     pub last_profile_update_at: Option<String>,
 }
 
-/// User-facing names for the currently selected memory context.
-/// 当前选中记忆上下文的用户可见名称。
+/// User-facing names for the globally configured default VMM identity.
+/// 全局配置的默认 VMM 身份对应的用户可见名称。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VmmDisplayIdentitySummary {
-    /// Current task project display name.
-    /// 当前任务项目显示名称。
+    /// Default VMM project display name resolved from the management catalog.
+    /// 从管理目录解析得到的默认 VMM 项目显示名称。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_name: Option<String>,
-    /// Current task project display path.
-    /// 当前任务项目显示路径。
+    /// Canonical Team/Space/Project path of the default VMM project.
+    /// 默认 VMM 项目的规范 Team/Space/Project 路径。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_path: Option<String>,
-    /// Resolved VMM user display name when the management catalog is available.
-    /// 管理目录可用时解析得到的 VMM 用户显示名称。
+    /// Default VMM user display name resolved from the management catalog.
+    /// 从管理目录解析得到的默认 VMM 用户显示名称。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_name: Option<String>,
 }
@@ -449,8 +449,8 @@ pub struct VmmMemorySnapshot {
     /// Recent memory activity.
     /// 近期记忆活动。
     pub recent_activity: VmmRecentActivitySummary,
-    /// User-facing current context identity.
-    /// 用户可见的当前上下文身份。
+    /// User-facing globally configured default VMM identity.
+    /// 用户可见的全局默认 VMM 身份。
     pub display_identity: VmmDisplayIdentitySummary,
     /// Effective VMM configuration for the selected session.
     /// 当前选中会话的最终 VMM 配置。

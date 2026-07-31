@@ -171,6 +171,17 @@ pub(crate) struct ManagedMemoryMeshRuntime {
     snapshot: ManagedMemoryMeshSnapshot,
 }
 
+/// Secret-bearing target copied only for one managed VMM heartbeat request.
+/// 仅为一次托管 VMM 心跳请求复制的含密目标。
+pub(crate) struct ManagedMemoryMeshHeartbeatTarget {
+    /// Actual loopback gRPC target published by the managed child.
+    /// 托管子进程发布的实际回环 gRPC 目标。
+    pub(crate) grpc_target: String,
+    /// Ephemeral bearer token owned by the current child generation.
+    /// 当前子进程代次持有的临时 Bearer 令牌。
+    pub(crate) access_token: String,
+}
+
 /// Prepared host-owned inputs for one isolated managed VMM maintenance run.
 /// 一次隔离托管 VMM 维护运行所需的宿主持有输入。
 #[derive(Debug, Clone)]
@@ -418,6 +429,46 @@ impl ManagedMemoryMeshRuntime {
         }
     }
 
+    /// Returns the exact secret-bearing target for one background heartbeat.
+    /// 返回一次后台心跳使用的准确含密目标。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A target only while the owned child can still answer heartbeat requests.
+    /// 仅当持有的子进程仍可响应心跳请求时返回目标。
+    pub(crate) fn heartbeat_target(&self) -> Option<ManagedMemoryMeshHeartbeatTarget> {
+        if self.child.is_none() || !matches!(self.snapshot.phase.as_str(), "ready" | "unhealthy") {
+            return None;
+        }
+        Some(ManagedMemoryMeshHeartbeatTarget {
+            grpc_target: self.snapshot.grpc_target.clone()?,
+            access_token: self.access_token.clone(),
+        })
+    }
+
+    /// Applies one authenticated heartbeat result to the retained lifecycle snapshot.
+    /// 将一次鉴权心跳结果应用到保留的生命周期快照。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `result` is the exact Healthz result returned for this owned child generation.
+    /// `result` 是当前持有子进程代次返回的准确 Healthz 结果。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when the user-facing lifecycle snapshot changed.
+    /// 当面向用户的生命周期快照发生变化时返回 `true`。
+    pub(crate) fn record_heartbeat_result(&mut self, result: Result<(), String>) -> bool {
+        if self.child.is_none() || !matches!(self.snapshot.phase.as_str(), "ready" | "unhealthy") {
+            return false;
+        }
+        if !apply_managed_heartbeat_result(&mut self.snapshot, result) {
+            return false;
+        }
+        publish_snapshot(self.snapshot.clone());
+        true
+    }
+
     /// Records one controlled automatic-restart failure on the supervised generation.
     /// 在受监督代次上记录一次受控自动重启失败。
     ///
@@ -459,6 +510,38 @@ impl ManagedMemoryMeshRuntime {
         publish_snapshot(self.snapshot.clone());
         Ok(())
     }
+}
+
+/// Applies one heartbeat outcome to a live managed lifecycle snapshot.
+/// 将一次心跳结果应用到存活的托管生命周期快照。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` is the exact lifecycle state owned by the current child generation.
+/// `snapshot` 是当前子进程代次持有的准确生命周期状态。
+/// `result` is the authenticated Healthz outcome.
+/// `result` 是鉴权 Healthz 结果。
+///
+/// # Returns
+/// 返回值
+/// `true` when the snapshot changed.
+/// 当快照发生变化时返回 `true`。
+fn apply_managed_heartbeat_result(
+    snapshot: &mut ManagedMemoryMeshSnapshot,
+    result: Result<(), String>,
+) -> bool {
+    let previous = snapshot.clone();
+    match result {
+        Ok(()) => {
+            snapshot.phase = String::from("ready");
+            snapshot.last_error = None;
+        }
+        Err(error) => {
+            snapshot.phase = String::from("unhealthy");
+            snapshot.last_error = Some(format!("VMM 托管心跳失败：{error}"));
+        }
+    }
+    snapshot != &previous
 }
 
 /// Prepares one strict managed manifest for the isolated VMM maintenance companion.
@@ -1516,7 +1599,7 @@ fn validate_status(
 
 /// Calls authenticated Healthz before exposing the runtime target.
 /// 在暴露运行时目标前调用鉴权 Healthz。
-async fn health_check(
+pub(crate) async fn health_check(
     grpc_target: &str,
     access_token: &str,
     vmm_config: &vulcan_vmm::VmmConfigLayer,
@@ -1931,6 +2014,43 @@ mod tests {
         assert!(runtime.snapshot.last_error.is_none());
         runtime.snapshot.phase = String::from("waiting_retry");
         assert!(runtime.refresh_liveness());
+    }
+
+    /// Verifies heartbeat failures become visible and later success restores readiness.
+    /// 验证心跳失败会变为可见状态，后续成功会恢复就绪。
+    #[test]
+    fn managed_heartbeat_result_round_trips_unhealthy_state() {
+        let root = std::env::temp_dir().join(format!("vulcan-vmm-heartbeat-{}", Uuid::new_v4()));
+        let mut snapshot = ManagedMemoryMeshSnapshot {
+            data_space_state: vulcan_service_api::VmmDataSpaceState::Ready,
+            phase: String::from("ready"),
+            grpc_target: Some(String::from("127.0.0.1:17901")),
+            controller_endpoint: String::from("http://127.0.0.1:19801"),
+            controller_space_id: String::from(MANAGED_VMM_SPACE_ID),
+            data_root: root.join("data"),
+            log_path: root.join("managed.log"),
+            last_error: None,
+            scope_ready: true,
+            scope_error: None,
+            capabilities: unavailable_capabilities("test"),
+        };
+
+        assert!(apply_managed_heartbeat_result(
+            &mut snapshot,
+            Err(String::from("timeout"))
+        ));
+        assert_eq!(snapshot.phase, "unhealthy");
+        assert_eq!(
+            snapshot.last_error.as_deref(),
+            Some("VMM 托管心跳失败：timeout")
+        );
+        assert!(!apply_managed_heartbeat_result(
+            &mut snapshot,
+            Err(String::from("timeout"))
+        ));
+        assert!(apply_managed_heartbeat_result(&mut snapshot, Ok(())));
+        assert_eq!(snapshot.phase, "ready");
+        assert!(snapshot.last_error.is_none());
     }
 
     /// Verifies retained workbench synchronization includes every managed capability field.

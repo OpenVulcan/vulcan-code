@@ -1202,6 +1202,8 @@ export type TranslationKey =
   | "memory.identity.create"
   | "memory.identity.migrate"
   | "memory.identity.delete"
+  | "memory.identity.default"
+  | "memory.identity.setDefault"
   | "memory.identity.protected"
   | "memory.identity.emptyUsers"
   | "memory.identity.emptyProjects"
@@ -1264,6 +1266,12 @@ export type TranslationKey =
   | "memory.profile.target"
   | "memory.profile.user"
   | "memory.profile.project"
+  | "memory.profile.selectUser"
+  | "memory.profile.selectProject"
+  | "memory.profile.searchUser"
+  | "memory.profile.searchProject"
+  | "memory.profile.noUser"
+  | "memory.profile.noProject"
   | "memory.profile.refresh"
   | "memory.profile.empty"
   | "memory.profile.instruction"
@@ -3178,10 +3186,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "vmm.experience.pendingWritebacks": "待写入记忆",
     "vmm.experience.completedTurns": "已处理对话",
     "vmm.experience.lastProfileUpdate": "最近画像更新",
-    "vmm.experience.currentProject": "当前项目",
-    "vmm.experience.currentUser": "当前用户",
-    "vmm.experience.noProject": "尚未关联项目",
-    "vmm.experience.noUser": "尚未建立记忆用户",
+    "vmm.experience.currentProject": "默认记忆项目",
+    "vmm.experience.currentUser": "默认记忆用户",
+    "vmm.experience.noProject": "尚未选择默认记忆项目",
+    "vmm.experience.noUser": "尚未选择默认记忆用户",
     "vmm.experience.refresh": "刷新状态",
     "vmm.experience.start": "启动服务",
     "vmm.experience.restart": "重新启动",
@@ -3219,6 +3227,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.identity.create": "创建",
     "memory.identity.migrate": "迁移",
     "memory.identity.delete": "删除",
+    "memory.identity.default": "默认使用",
+    "memory.identity.setDefault": "设为默认",
     "memory.identity.protected": "系统默认",
     "memory.identity.emptyUsers": "尚未创建长期记忆用户。",
     "memory.identity.emptyProjects": "尚未创建长期记忆项目。",
@@ -3277,10 +3287,16 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.content.write": "保存记忆",
     "memory.content.sourceConversation": "来源会话",
     "memory.profile.title": "画像",
-    "memory.profile.description": "查看 VMM 为当前用户或项目整理的长期偏好与约束，并通过自然语言进行修正。",
+    "memory.profile.description": "选择一个记忆用户或记忆项目，查看 VMM 整理的长期偏好与约束，并通过自然语言进行修正。",
     "memory.profile.target": "画像目标",
-    "memory.profile.user": "当前用户",
-    "memory.profile.project": "当前项目",
+    "memory.profile.user": "用户画像",
+    "memory.profile.project": "项目画像",
+    "memory.profile.selectUser": "选择记忆用户",
+    "memory.profile.selectProject": "选择记忆项目",
+    "memory.profile.searchUser": "搜索记忆用户…",
+    "memory.profile.searchProject": "搜索记忆项目…",
+    "memory.profile.noUser": "没有可用的记忆用户",
+    "memory.profile.noProject": "没有可用的记忆项目",
     "memory.profile.refresh": "刷新画像",
     "memory.profile.empty": "当前目标尚未形成画像条目。",
     "memory.profile.instruction": "画像修正指令",
@@ -5192,10 +5208,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "vmm.experience.pendingWritebacks": "Pending writes",
     "vmm.experience.completedTurns": "Processed conversations",
     "vmm.experience.lastProfileUpdate": "Last profile update",
-    "vmm.experience.currentProject": "Current project",
-    "vmm.experience.currentUser": "Current user",
-    "vmm.experience.noProject": "No project is linked",
-    "vmm.experience.noUser": "No memory user exists",
+    "vmm.experience.currentProject": "Default memory project",
+    "vmm.experience.currentUser": "Default memory user",
+    "vmm.experience.noProject": "No default memory project selected",
+    "vmm.experience.noUser": "No default memory user selected",
     "vmm.experience.refresh": "Refresh status",
     "vmm.experience.start": "Start service",
     "vmm.experience.restart": "Restart",
@@ -5233,6 +5249,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.identity.create": "Create",
     "memory.identity.migrate": "Migrate",
     "memory.identity.delete": "Delete",
+    "memory.identity.default": "Default",
+    "memory.identity.setDefault": "Set as default",
     "memory.identity.protected": "System default",
     "memory.identity.emptyUsers": "No durable memory users have been created.",
     "memory.identity.emptyProjects": "No durable memory projects have been created.",
@@ -5291,10 +5309,16 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.content.write": "Save memory",
     "memory.content.sourceConversation": "Source conversation",
     "memory.profile.title": "Profile",
-    "memory.profile.description": "Review durable preferences and constraints organized by VMM for the current user or project, and correct them with natural language.",
+    "memory.profile.description": "Choose a memory user or memory project, review the durable preferences and constraints organized by VMM, and correct them with natural language.",
     "memory.profile.target": "Profile target",
-    "memory.profile.user": "Current user",
-    "memory.profile.project": "Current project",
+    "memory.profile.user": "User profile",
+    "memory.profile.project": "Project profile",
+    "memory.profile.selectUser": "Select memory user",
+    "memory.profile.selectProject": "Select memory project",
+    "memory.profile.searchUser": "Search memory users…",
+    "memory.profile.searchProject": "Search memory projects…",
+    "memory.profile.noUser": "No memory users available",
+    "memory.profile.noProject": "No memory projects available",
     "memory.profile.refresh": "Refresh profile",
     "memory.profile.empty": "The current target has no profile items yet.",
     "memory.profile.instruction": "Profile correction instruction",

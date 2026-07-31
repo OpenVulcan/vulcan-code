@@ -253,17 +253,17 @@ export interface VmmRecentActivitySummary {
   lastProfileUpdateAt?: string | null;
 }
 
-// VmmDisplayIdentitySummary provides user-facing names for the selected context.
-// VmmDisplayIdentitySummary 提供当前选中上下文的用户可见名称。
+// VmmDisplayIdentitySummary provides user-facing names for the global default VMM identity.
+// VmmDisplayIdentitySummary 提供全局默认 VMM 身份的用户可见名称。
 export interface VmmDisplayIdentitySummary {
-  // Current task project display name.
-  // 当前任务项目显示名称。
+  // Default VMM project display name.
+  // 默认 VMM 项目显示名称。
   projectName?: string | null;
-  // Current task project display path.
-  // 当前任务项目显示路径。
+  // Canonical path of the default VMM project.
+  // 默认 VMM 项目的规范路径。
   projectPath?: string | null;
-  // Resolved VMM user display name.
-  // 解析得到的 VMM 用户显示名称。
+  // Default VMM user display name.
+  // 默认 VMM 用户显示名称。
   userName?: string | null;
 }
 
@@ -291,8 +291,8 @@ export interface VmmMemorySnapshot {
   // Recent memory activity.
   // 近期记忆活动。
   recentActivity: VmmRecentActivitySummary;
-  // User-facing current context identity.
-  // 用户可见的当前上下文身份。
+  // User-facing global default VMM identity.
+  // 用户可见的全局默认 VMM 身份。
   displayIdentity: VmmDisplayIdentitySummary;
   // Effective VMM configuration for the selected session.
   // 当前选中会话的最终 VMM 配置。

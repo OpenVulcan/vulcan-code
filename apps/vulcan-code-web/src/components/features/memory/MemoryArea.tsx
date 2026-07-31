@@ -45,7 +45,11 @@ export function shouldRequestVmmManagementCatalog(input: {
   catalog: VmmMemorySnapshot["managementCatalog"]
 }): boolean {
   return (
-    (input.activeSection === "overview" || input.activeSection === "identity_projects")
+    (
+      input.activeSection === "overview"
+      || input.activeSection === "identity_projects"
+      || input.activeSection === "profile"
+    )
     && input.processReady
     && !input.operationBusy
     && !input.requestIssued
@@ -102,48 +106,12 @@ export function MemoryArea(props: {
   // catalogLoadRequested prevents repeated automatic directory requests during snapshot refreshes.
   // catalogLoadRequested 防止快照刷新期间重复发起自动目录请求。
   const catalogLoadRequested = React.useRef(false)
-  // healthProbeConfigurationKey prevents duplicate automatic checks for one unresolved external configuration.
-  // healthProbeConfigurationKey 防止对同一个待确认外部配置重复发起自动检查。
-  const healthProbeConfigurationKey = React.useRef<string | null>(null)
 
   // Page navigation starts a new feedback generation so an earlier page cannot leak notices.
   // 页面导航会开启新的反馈代次，避免先前页面泄漏提示。
   React.useEffect(() => {
     clearFeedback()
   }, [activeSection, clearFeedback])
-
-  React.useEffect(() => {
-    const experience = props.snapshot.experienceState
-    if (
-      experience.deployment !== "external"
-      || experience.setup !== "ready"
-      || experience.health !== "unknown"
-    ) {
-      healthProbeConfigurationKey.current = null
-      return
-    }
-    // The key stays in memory only and is never logged or persisted. Including the credential
-    // ensures an explicitly changed key receives one new automatic verification.
-    // 该键仅保存在内存中且不会记录或持久化；包含凭据可确保显式更换密钥后获得一次新的自动验证。
-    const configurationKey = [
-      props.snapshot.effective.grpcTarget,
-      props.snapshot.globalDraft.grpcApiKey,
-    ].join("\u0000")
-    if (operationBusy || healthProbeConfigurationKey.current === configurationKey) {
-      return
-    }
-    healthProbeConfigurationKey.current = configurationKey
-    // A failed automatic check remains visible and user-retryable instead of creating an
-    // unbounded retry loop while the backend still reports unknown health.
-    // 自动检查失败后保持错误可见并允许用户手动重试，避免后端仍报告未知健康状态时形成无界重试循环。
-    void runAction("healthz")
-  }, [
-    operationBusy,
-    props.snapshot.effective.grpcTarget,
-    props.snapshot.experienceState,
-    props.snapshot.globalDraft.grpcApiKey,
-    runAction,
-  ])
 
   React.useEffect(() => {
     const catalog = props.snapshot.managementCatalog
@@ -272,7 +240,9 @@ export function MemoryArea(props: {
               props.snapshot.selectedProjectId
               ?? props.snapshot.projectScopes[0]?.projectId,
             )}
-            defaultProjectName={props.snapshot.displayIdentity.projectName
+            defaultProjectName={props.snapshot.projectScopes.find(
+              (project) => project.projectId === props.snapshot.selectedProjectId,
+            )?.name
               ?? props.snapshot.projectScopes[0]?.name
               ?? "Vulcan Code"}
             defaultUserName={props.snapshot.displayIdentity.userName ?? "Vulcan Code"}
@@ -310,8 +280,18 @@ export function MemoryArea(props: {
           <main className="vmm-memory-main vmm-status-page">
             <VmmIdentityProjectPage
               busy={operationBusy}
+              defaultProjectId={globalDraft.projectId}
+              defaultUserId={globalDraft.userId}
               notice={notice}
               onRunAction={runAction}
+              onSetDefaultProject={async (projectId) => applyDraft("global", null, {
+                ...globalDraft,
+                projectId,
+              })}
+              onSetDefaultUser={async (userId) => applyDraft("global", null, {
+                ...globalDraft,
+                userId,
+              })}
               result={result}
               snapshot={props.snapshot}
             />

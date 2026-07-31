@@ -4,6 +4,7 @@ import {
   FolderPlus,
   GitBranch,
   RefreshCw,
+  Star,
   Trash2,
   UserPlus,
   Users,
@@ -59,6 +60,12 @@ import type {
 interface VmmIdentityProjectPageProps {
   snapshot: VmmMemorySnapshot
   busy: boolean
+  // Persisted global default VMM user id.
+  // 已持久化的全局默认 VMM 用户标识。
+  defaultUserId: string
+  // Persisted global default VMM project id.
+  // 已持久化的全局默认 VMM 项目标识。
+  defaultProjectId: string
   // Page-owned operation feedback.
   // 当前页面持有的操作反馈。
   notice: string
@@ -67,6 +74,12 @@ interface VmmIdentityProjectPageProps {
     action: string,
     payload?: Record<string, unknown>,
   ) => Promise<VmmMemoryActionResult | null>
+  // Persists one catalog user as the global default VMM identity.
+  // 将一项目录用户持久化为全局默认 VMM 身份。
+  onSetDefaultUser: (userId: string) => Promise<boolean>
+  // Persists one catalog project as the global default VMM identity.
+  // 将一项目录项目持久化为全局默认 VMM 身份。
+  onSetDefaultProject: (projectId: string) => Promise<boolean>
 }
 
 // PendingDeletion identifies the exact visible entity being confirmed.
@@ -80,9 +93,13 @@ type PendingDeletion =
 function VmmIdentityProjectPage({
   snapshot,
   busy,
+  defaultUserId,
+  defaultProjectId,
   notice,
   result,
   onRunAction,
+  onSetDefaultUser,
+  onSetDefaultProject,
 }: VmmIdentityProjectPageProps) {
   const { t } = useI18n()
   const [createKind, setCreateKind] = React.useState<"user" | "project" | null>(null)
@@ -260,13 +277,18 @@ function VmmIdentityProjectPage({
         >
           {catalog.users.map((user) => (
             <CatalogRow
+              busy={busy}
+              defaultItem={user.stableKey === defaultUserId}
               key={user.stableKey}
               protectedItem={user.protected}
               title={user.displayName}
-              onDelete={user.protected ? undefined : () => {
+              onDelete={user.protected || user.stableKey === defaultUserId ? undefined : () => {
                 setDeletionText("")
                 setPendingDeletion({ kind: "user", item: user })
               }}
+              onSetDefault={user.stableKey === defaultUserId
+                ? undefined
+                : () => void onSetDefaultUser(user.stableKey)}
             />
           ))}
         </CatalogCard>
@@ -281,11 +303,13 @@ function VmmIdentityProjectPage({
         >
           {catalog.projects.map((project) => (
             <CatalogRow
-              detail={project.protected ? undefined : project.displayPath}
+              busy={busy}
+              defaultItem={project.stableKey === defaultProjectId}
+              detail={project.displayPath}
               key={project.stableKey}
               protectedItem={project.protected}
               title={project.displayName}
-              onDelete={project.protected ? undefined : () => {
+              onDelete={project.protected || project.stableKey === defaultProjectId ? undefined : () => {
                 setDeletionText("")
                 setPendingDeletion({ kind: "project", item: project })
               }}
@@ -293,6 +317,9 @@ function VmmIdentityProjectPage({
                 setMigrationTarget("")
                 setMigrationProject(project)
               }}
+              onSetDefault={project.stableKey === defaultProjectId
+                ? undefined
+                : () => void onSetDefaultProject(project.stableKey)}
             />
           ))}
         </CatalogCard>
@@ -490,15 +517,21 @@ function CatalogCard({
 // CatalogRow renders one human-readable user or project entry.
 // CatalogRow 渲染单个人类可读的用户或项目条目。
 function CatalogRow({
+  busy,
+  defaultItem,
   detail,
   onDelete,
   onMigrate,
+  onSetDefault,
   protectedItem,
   title,
 }: {
+  busy: boolean
+  defaultItem: boolean
   detail?: string
   onDelete?: () => void
   onMigrate?: () => void
+  onSetDefault?: () => void
   protectedItem: boolean
   title: string
 }) {
@@ -508,17 +541,31 @@ function CatalogRow({
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
           <strong className="truncate text-sm">{title}</strong>
+          {defaultItem ? <Badge>{t("memory.identity.default")}</Badge> : null}
           {protectedItem ? <Badge variant="secondary">{t("memory.identity.protected")}</Badge> : null}
         </div>
         {detail ? <p className="truncate text-xs text-muted-foreground">{detail}</p> : null}
       </div>
+      {onSetDefault ? (
+        <Button
+          aria-label={t("memory.identity.setDefault")}
+          disabled={busy}
+          onClick={onSetDefault}
+          size="icon-sm"
+          title={t("memory.identity.setDefault")}
+          type="button"
+          variant="ghost"
+        >
+          <Star className="size-4" />
+        </Button>
+      ) : null}
       {onMigrate ? (
-        <Button aria-label={t("memory.identity.migrate")} onClick={onMigrate} size="icon-sm" type="button" variant="ghost">
+        <Button aria-label={t("memory.identity.migrate")} disabled={busy} onClick={onMigrate} size="icon-sm" type="button" variant="ghost">
           <GitBranch className="size-4" />
         </Button>
       ) : null}
       {onDelete ? (
-        <Button aria-label={t("memory.identity.delete")} onClick={onDelete} size="icon-sm" type="button" variant="ghost">
+        <Button aria-label={t("memory.identity.delete")} disabled={busy} onClick={onDelete} size="icon-sm" type="button" variant="ghost">
           <Trash2 className="size-4 text-destructive" />
         </Button>
       ) : null}
