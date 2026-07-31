@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Database, Save, Settings2, ShieldAlert, Stethoscope } from "lucide-react"
+import { Database, Save, Settings2, ShieldAlert, Stethoscope, Unplug } from "lucide-react"
 
 import {
   Accordion,
@@ -45,6 +45,7 @@ interface VmmAdvancedPageProps {
   notice: string
   onChange: (patch: Partial<VmmConfigDraftSummary>) => void
   onSave: () => Promise<boolean>
+  onTestManagement: () => Promise<boolean>
   onMaintenance: (
     action: "managed_maintenance_start" | "managed_maintenance_status" | "managed_maintenance_cancel",
   ) => Promise<VmmMaintenanceSummary | null>
@@ -60,6 +61,7 @@ function VmmAdvancedPage({
   notice,
   onChange,
   onSave,
+  onTestManagement,
   onMaintenance,
   onStartRuntime,
 }: VmmAdvancedPageProps) {
@@ -163,6 +165,30 @@ function VmmAdvancedPage({
                   value={draft.grpcApiKey}
                 />
               </div>
+              <div className="space-y-2">
+                <Label htmlFor="vmm-management-endpoint">{t("memory.advanced.managementEndpoint")}</Label>
+                <Input
+                  id="vmm-management-endpoint"
+                  onChange={(event) => onChange({ managementBaseUrl: event.target.value })}
+                  placeholder="http://127.0.0.1:17635"
+                  value={draft.managementBaseUrl}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="vmm-management-token">{t("memory.advanced.managementToken")}</Label>
+                <Input
+                  id="vmm-management-token"
+                  onChange={(event) => onChange({ managementBearerToken: event.target.value })}
+                  type="password"
+                  value={draft.managementBearerToken}
+                />
+              </div>
+              <div className="flex items-end sm:col-span-2">
+                <Button disabled={busy} onClick={() => void onTestManagement()} type="button" variant="outline">
+                  <Unplug className="size-4" aria-hidden="true" />
+                  {t("memory.advanced.testManagement")}
+                </Button>
+              </div>
             </div>
           )}
         </CardContent>
@@ -198,6 +224,11 @@ function VmmAdvancedPage({
         <AccordionItem value="transport">
           <AccordionTrigger>{t("memory.advanced.transport")}</AccordionTrigger>
           <AccordionContent className="grid gap-4 pb-4 sm:grid-cols-2">
+            <AdvancedNumberField
+              label={t("memory.advanced.managementTimeout")}
+              onChange={(managementTimeoutMs) => onChange({ managementTimeoutMs })}
+              value={draft.managementTimeoutMs}
+            />
             <AdvancedNumberField
               label={t("vmm.settings.receiveTimeout")}
               onChange={(receiveTimeoutMs) => onChange({ receiveTimeoutMs })}

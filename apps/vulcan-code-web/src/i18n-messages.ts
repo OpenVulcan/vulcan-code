@@ -1261,6 +1261,70 @@ export type TranslationKey =
   | "memory.content.fullDetails"
   | "memory.content.write"
   | "memory.content.sourceConversation"
+  | "memory.data.title"
+  | "memory.data.description"
+  | "memory.data.managementReady"
+  | "memory.data.managementUnavailable"
+  | "memory.data.invalidResponse"
+  | "memory.data.activeRuntime"
+  | "memory.data.sessions"
+  | "memory.data.recycleBin"
+  | "memory.data.memoryEntries"
+  | "memory.data.searchPlaceholder"
+  | "memory.data.statusAll"
+  | "memory.data.statusActive"
+  | "memory.data.statusArchived"
+  | "memory.data.statusRecycled"
+  | "memory.data.statusForgotten"
+  | "memory.data.allStatuses"
+  | "memory.data.extractionPending"
+  | "memory.data.extractionCompleted"
+  | "memory.data.extractionFailed"
+  | "memory.data.allUsers"
+  | "memory.data.allProjects"
+  | "memory.data.createdFrom"
+  | "memory.data.createdTo"
+  | "memory.data.refresh"
+  | "memory.data.resetFilters"
+  | "memory.data.fullTextIndex"
+  | "memory.data.selected"
+  | "memory.data.mixedLifecycle"
+  | "memory.data.archive"
+  | "memory.data.unarchive"
+  | "memory.data.recycle"
+  | "memory.data.restartMemory"
+  | "memory.data.noSessions"
+  | "memory.data.loadMore"
+  | "memory.data.viewTurns"
+  | "memory.data.backToSessions"
+  | "memory.data.turns"
+  | "memory.data.noTurns"
+  | "memory.data.searchTurnPlaceholder"
+  | "memory.data.details"
+  | "memory.data.turnDetails"
+  | "memory.data.userContent"
+  | "memory.data.assistantContent"
+  | "memory.data.loading"
+  | "memory.data.impactTitle"
+  | "memory.data.impactDescription"
+  | "memory.data.confirmAction"
+  | "memory.data.cancel"
+  | "memory.data.turnCount"
+  | "memory.data.memoryCount"
+  | "memory.data.profileCount"
+  | "memory.data.vectorCount"
+  | "memory.data.pendingCount"
+  | "memory.data.hotCount"
+  | "memory.data.protectedCount"
+  | "memory.data.recycleEmpty"
+  | "memory.data.restore"
+  | "memory.data.purge"
+  | "memory.data.purgeTitle"
+  | "memory.data.purgeDescription"
+  | "memory.data.purgePlaceholder"
+  | "memory.data.restorable"
+  | "memory.data.systemBatch"
+  | "memory.data.updatedAt"
   | "memory.profile.title"
   | "memory.profile.description"
   | "memory.profile.target"
@@ -1291,6 +1355,10 @@ export type TranslationKey =
   | "memory.advanced.connection"
   | "memory.advanced.endpoint"
   | "memory.advanced.apiKey"
+  | "memory.advanced.managementEndpoint"
+  | "memory.advanced.managementToken"
+  | "memory.advanced.testManagement"
+  | "memory.advanced.managementTimeout"
   | "memory.advanced.runtime"
   | "memory.advanced.autoStart"
   | "memory.advanced.manualStart"
@@ -3286,6 +3354,70 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.content.fullDetails": "详细内容",
     "memory.content.write": "保存记忆",
     "memory.content.sourceConversation": "来源会话",
+    "memory.data.title": "记忆数据",
+    "memory.data.description": "按会话和回合查看长期记忆来源，并通过影响预览安全归档、回收或恢复数据。",
+    "memory.data.managementReady": "管理服务正常",
+    "memory.data.managementUnavailable": "管理服务不可用",
+    "memory.data.invalidResponse": "VMM 管理服务返回了不符合契约的数据。",
+    "memory.data.activeRuntime": "正在运行，暂不可操作",
+    "memory.data.sessions": "会话",
+    "memory.data.recycleBin": "回收站",
+    "memory.data.memoryEntries": "记忆条目",
+    "memory.data.searchPlaceholder": "搜索会话标题或内容摘要",
+    "memory.data.statusAll": "全部状态",
+    "memory.data.statusActive": "使用中",
+    "memory.data.statusArchived": "已归档",
+    "memory.data.statusRecycled": "回收站中",
+    "memory.data.statusForgotten": "已永久清理",
+    "memory.data.allStatuses": "全部提炼状态",
+    "memory.data.extractionPending": "等待提炼",
+    "memory.data.extractionCompleted": "已提炼",
+    "memory.data.extractionFailed": "提炼失败",
+    "memory.data.allUsers": "全部记忆用户",
+    "memory.data.allProjects": "全部记忆项目",
+    "memory.data.createdFrom": "创建起始日期",
+    "memory.data.createdTo": "创建结束日期",
+    "memory.data.refresh": "刷新",
+    "memory.data.resetFilters": "重置筛选",
+    "memory.data.fullTextIndex": "全文索引",
+    "memory.data.selected": "已选择 {count} 项",
+    "memory.data.mixedLifecycle": "所选会话归档状态不同；归档或取消归档需分批操作。",
+    "memory.data.archive": "归档",
+    "memory.data.unarchive": "取消归档",
+    "memory.data.recycle": "移入回收站",
+    "memory.data.restartMemory": "重新开始记忆",
+    "memory.data.noSessions": "没有符合条件的记忆会话。",
+    "memory.data.loadMore": "加载更多",
+    "memory.data.viewTurns": "查看回合",
+    "memory.data.backToSessions": "返回会话",
+    "memory.data.turns": "会话回合",
+    "memory.data.noTurns": "该会话没有可见回合。",
+    "memory.data.searchTurnPlaceholder": "搜索用户问题或助手回答",
+    "memory.data.details": "查看详情",
+    "memory.data.turnDetails": "回合详情",
+    "memory.data.userContent": "用户内容",
+    "memory.data.assistantContent": "助手内容",
+    "memory.data.loading": "正在读取…",
+    "memory.data.impactTitle": "确认数据影响",
+    "memory.data.impactDescription": "执行前请核对将被影响的会话、回合和派生数据。",
+    "memory.data.confirmAction": "确认执行",
+    "memory.data.cancel": "取消",
+    "memory.data.turnCount": "回合",
+    "memory.data.memoryCount": "记忆",
+    "memory.data.profileCount": "画像",
+    "memory.data.vectorCount": "向量",
+    "memory.data.pendingCount": "待处理",
+    "memory.data.hotCount": "热窗口",
+    "memory.data.protectedCount": "受保护",
+    "memory.data.recycleEmpty": "回收站中没有可管理的数据。",
+    "memory.data.restore": "恢复",
+    "memory.data.purge": "永久删除",
+    "memory.data.purgeTitle": "永久删除回收数据",
+    "memory.data.purgeDescription": "此操作不可恢复。请输入“永久删除”后继续。",
+    "memory.data.purgePlaceholder": "永久删除",
+    "memory.data.restorable": "可恢复",
+    "memory.data.systemBatch": "系统归档，不支持恢复",
+    "memory.data.updatedAt": "更新于 {time}",
     "memory.profile.title": "画像",
     "memory.profile.description": "选择一个记忆用户或记忆项目，查看 VMM 整理的长期偏好与约束，并通过自然语言进行修正。",
     "memory.profile.target": "画像目标",
@@ -3316,6 +3448,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.advanced.connection": "外部服务连接",
     "memory.advanced.endpoint": "gRPC 地址",
     "memory.advanced.apiKey": "访问密钥",
+    "memory.advanced.managementEndpoint": "管理 API 地址",
+    "memory.advanced.managementToken": "管理 Token",
+    "memory.advanced.testManagement": "保存并测试管理连接",
+    "memory.advanced.managementTimeout": "管理请求超时（毫秒）",
     "memory.advanced.runtime": "本地运行",
     "memory.advanced.autoStart": "随 Vulcan Code 自动启动",
     "memory.advanced.manualStart": "仅手动启动",
@@ -5308,6 +5444,70 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.content.fullDetails": "Full details",
     "memory.content.write": "Save memory",
     "memory.content.sourceConversation": "Source conversation",
+    "memory.data.title": "Memory data",
+    "memory.data.description": "Inspect long-term memory sources by session and turn, then archive, recycle, or restore data through an impact preview.",
+    "memory.data.managementReady": "Management service ready",
+    "memory.data.managementUnavailable": "Management service unavailable",
+    "memory.data.invalidResponse": "The VMM management service returned data that does not match its contract.",
+    "memory.data.activeRuntime": "Running; actions unavailable",
+    "memory.data.sessions": "Sessions",
+    "memory.data.recycleBin": "Recycle bin",
+    "memory.data.memoryEntries": "Memory entries",
+    "memory.data.searchPlaceholder": "Search session titles or content excerpts",
+    "memory.data.statusAll": "All statuses",
+    "memory.data.statusActive": "Active",
+    "memory.data.statusArchived": "Archived",
+    "memory.data.statusRecycled": "Recycled",
+    "memory.data.statusForgotten": "Permanently cleared",
+    "memory.data.allStatuses": "All extraction states",
+    "memory.data.extractionPending": "Pending extraction",
+    "memory.data.extractionCompleted": "Extracted",
+    "memory.data.extractionFailed": "Extraction failed",
+    "memory.data.allUsers": "All memory users",
+    "memory.data.allProjects": "All memory projects",
+    "memory.data.createdFrom": "Created from",
+    "memory.data.createdTo": "Created to",
+    "memory.data.refresh": "Refresh",
+    "memory.data.resetFilters": "Reset filters",
+    "memory.data.fullTextIndex": "Full-text index",
+    "memory.data.selected": "{count} selected",
+    "memory.data.mixedLifecycle": "The selected sessions have different archive states. Archive or unarchive one state at a time.",
+    "memory.data.archive": "Archive",
+    "memory.data.unarchive": "Unarchive",
+    "memory.data.recycle": "Move to recycle bin",
+    "memory.data.restartMemory": "Restart memory",
+    "memory.data.noSessions": "No memory sessions match these filters.",
+    "memory.data.loadMore": "Load more",
+    "memory.data.viewTurns": "View turns",
+    "memory.data.backToSessions": "Back to sessions",
+    "memory.data.turns": "Session turns",
+    "memory.data.noTurns": "This session has no visible turns.",
+    "memory.data.searchTurnPlaceholder": "Search user questions or assistant responses",
+    "memory.data.details": "View details",
+    "memory.data.turnDetails": "Turn details",
+    "memory.data.userContent": "User content",
+    "memory.data.assistantContent": "Assistant content",
+    "memory.data.loading": "Loading…",
+    "memory.data.impactTitle": "Confirm data impact",
+    "memory.data.impactDescription": "Review the sessions, turns, and derived data affected before continuing.",
+    "memory.data.confirmAction": "Confirm action",
+    "memory.data.cancel": "Cancel",
+    "memory.data.turnCount": "Turns",
+    "memory.data.memoryCount": "Memories",
+    "memory.data.profileCount": "Profiles",
+    "memory.data.vectorCount": "Vectors",
+    "memory.data.pendingCount": "Pending",
+    "memory.data.hotCount": "Hot window",
+    "memory.data.protectedCount": "Protected",
+    "memory.data.recycleEmpty": "There is no manageable data in the recycle bin.",
+    "memory.data.restore": "Restore",
+    "memory.data.purge": "Delete permanently",
+    "memory.data.purgeTitle": "Permanently delete recycled data",
+    "memory.data.purgeDescription": "This cannot be undone. Enter the required phrase to continue.",
+    "memory.data.purgePlaceholder": "永久删除",
+    "memory.data.restorable": "Restorable",
+    "memory.data.systemBatch": "System archive; restore unavailable",
+    "memory.data.updatedAt": "Updated {time}",
     "memory.profile.title": "Profile",
     "memory.profile.description": "Choose a memory user or memory project, review the durable preferences and constraints organized by VMM, and correct them with natural language.",
     "memory.profile.target": "Profile target",
@@ -5338,6 +5538,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.advanced.connection": "External service connection",
     "memory.advanced.endpoint": "gRPC endpoint",
     "memory.advanced.apiKey": "Access key",
+    "memory.advanced.managementEndpoint": "Management API endpoint",
+    "memory.advanced.managementToken": "Management token",
+    "memory.advanced.testManagement": "Save and test management connection",
+    "memory.advanced.managementTimeout": "Management timeout (ms)",
     "memory.advanced.runtime": "Local runtime",
     "memory.advanced.autoStart": "Start with Vulcan Code",
     "memory.advanced.manualStart": "Manual start only",

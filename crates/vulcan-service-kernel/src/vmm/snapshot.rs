@@ -246,9 +246,11 @@ fn vmm_experience_state(
         } else {
             VmmHealthState::Healthy
         }
-    } else if runtime.managed_phase == "unhealthy" {
-        VmmHealthState::Unavailable
-    } else if deployment == VmmDeploymentMode::External && runtime.managed_last_error.is_some() {
+    // Both an authenticated managed-health failure and an explicit external connection error make the service unavailable.
+    // 经过鉴权的托管健康失败与明确的外部连接错误都会使服务进入不可用状态。
+    } else if runtime.managed_phase == "unhealthy"
+        || (deployment == VmmDeploymentMode::External && runtime.managed_last_error.is_some())
+    {
         VmmHealthState::Unavailable
     } else if deployment == VmmDeploymentMode::External {
         VmmHealthState::Unknown
@@ -705,6 +707,14 @@ pub(crate) fn vmm_config_draft_summary(
             .clone()
             .or_else(|| effective.grpc_api_key.clone())
             .unwrap_or_default(),
+        management_base_url: layer.management_base_url.clone().unwrap_or_default(),
+        management_bearer_token: layer
+            .management_bearer_token
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(|_| String::from(WEBUI_REDACTED_SECRET_PLACEHOLDER))
+            .unwrap_or_default(),
+        management_timeout_ms: layer.management_timeout_ms.unwrap_or(30_000).to_string(),
         managed_install_enabled: layer
             .install
             .as_ref()
@@ -1017,8 +1027,8 @@ pub(crate) fn vmm_management_sections() -> Vec<VmmManagementSectionSummary> {
         (
             "content",
             "CONTENT",
-            "记忆内容",
-            "搜索、查看、写入和删除长期记忆。",
+            "记忆数据",
+            "按会话和回合查看、归档、回收、恢复并维护长期记忆。",
         ),
         (
             "identity_projects",

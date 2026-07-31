@@ -5,7 +5,7 @@ use crate::adapter::{
     render_vmm_context_item_detail, render_vmm_context_item_model, render_vmm_context_item_panel,
 };
 use crate::config::VmmEffectiveConfig;
-use crate::protocol::{ContextItem, PreCheckResponse};
+use crate::protocol::{ContextItem, PreCheckResponse, SessionMemoryStatus};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -71,7 +71,10 @@ impl VmmRecallBatch {
         response: &PreCheckResponse,
         config: &VmmEffectiveConfig,
     ) -> Option<Self> {
-        if !response.should_inject || config.implicit_memory_turns == 0 {
+        if !response.session_memory_status.allows_runtime_memory()
+            || !response.should_inject
+            || config.implicit_memory_turns == 0
+        {
             return None;
         }
         let items = response
@@ -325,6 +328,10 @@ pub struct VmmSessionMemoryState {
     /// Monotonic state revision used by atomic persistence and diagnostics.
     /// 供原子持久化与诊断使用的单调状态版本。
     pub revision: u64,
+    /// Authoritative lifecycle status most recently returned by VMM.
+    /// VMM 最近一次返回的权威生命周期状态。
+    #[serde(default)]
+    pub session_memory_status: SessionMemoryStatus,
     /// SHA-256 hashes of every committed Core controller command id.
     /// 每个已提交 Core 控制器命令标识的 SHA-256 哈希。
     pub committed_command_hashes: Vec<String>,
@@ -366,6 +373,7 @@ impl Default for VmmSessionMemoryState {
             schema_version: VMM_SESSION_MEMORY_SCHEMA_VERSION,
             session_id: String::new(),
             revision: 0,
+            session_memory_status: SessionMemoryStatus::Active,
             committed_command_hashes: Vec::new(),
             completed_turn_sequence: 0,
             last_consumed_turn_id: None,
@@ -489,12 +497,60 @@ impl VmmSessionMemoryState {
     pub fn is_pristine(&self) -> bool {
         self.session_id.is_empty()
             && self.revision == 0
+            && self.session_memory_status == SessionMemoryStatus::Active
             && self.completed_turn_sequence == 0
             && self.last_consumed_turn_id.is_none()
             && self.active_turn_id.is_none()
             && self.active_leases.is_empty()
             && self.pending_prompt_events.is_empty()
             && self.cache_epoch == VmmCacheEpoch::default()
+    }
+
+    /// Applies the authoritative VMM lifecycle status and revokes local memory when runtime use is paused.
+    /// 应用 VMM 权威生命周期状态，并在运行期记忆暂停时撤销本地记忆。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_id` is the exact host session identifier returned by the owning request path.
+    /// `session_id` 是所属请求链路返回的精确宿主会话标识。
+    /// `status` is the authoritative lifecycle status returned by VMM.
+    /// `status` 是 VMM 返回的权威生命周期状态。
+    /// `updated_at` is the durable mutation timestamp.
+    /// `updated_at` 是持久化变更时间戳。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when durable local state changed, otherwise `false`.
+    /// 本地持久化状态发生变化时返回 `true`，否则返回 `false`。
+    pub fn apply_authoritative_session_status(
+        &mut self,
+        session_id: &str,
+        status: SessionMemoryStatus,
+        updated_at: &str,
+    ) -> Result<bool, String> {
+        validate_mutation_timestamp(updated_at)?;
+        let must_revoke = !status.allows_runtime_memory()
+            && (!self.active_leases.is_empty()
+                || !self.pending_prompt_events.is_empty()
+                || !self.cache_epoch.anchors.is_empty()
+                || self.active_turn_id.is_some());
+        if self.session_memory_status == status && !must_revoke {
+            return Ok(false);
+        }
+        let previous_state = self.clone();
+        self.ensure_owner(session_id, updated_at)?;
+        self.session_memory_status = status;
+        if !status.allows_runtime_memory() {
+            self.active_leases.clear();
+            self.pending_prompt_events.clear();
+            self.cache_epoch = VmmCacheEpoch::default();
+            self.active_turn_id = None;
+        }
+        if let Err(error) = self.mark_changed(updated_at) {
+            *self = previous_state;
+            return Err(error);
+        }
+        Ok(true)
     }
 
     /// Returns whether an independent `vmm.json` document is required.
@@ -832,6 +888,12 @@ impl VmmSessionMemoryState {
         batch: &VmmRecallBatch,
         updated_at: &str,
     ) -> Result<VmmLeaseTransitionReport, String> {
+        if !self.session_memory_status.allows_runtime_memory() {
+            return Err(format!(
+                "VMM recall is disabled while session memory status is {:?}.",
+                self.session_memory_status
+            ));
+        }
         if batch.ttl_turns == 0 || batch.is_empty() {
             return Ok(VmmLeaseTransitionReport::default());
         }
@@ -3013,5 +3075,53 @@ mod tests {
             .expect_err("active anchor hash mismatch must be rejected");
 
         assert!(error.contains("does not match the semantic hash frozen"));
+    }
+
+    /// Verifies authoritative recycle status revokes local prompt state and blocks later recall until restart.
+    /// 验证权威回收状态会撤销本地提示词状态，并在重新开始前阻止后续召回。
+    #[test]
+    fn authoritative_recycle_status_revokes_and_blocks_local_memory() {
+        let mut state = VmmSessionMemoryState::default();
+        state
+            .apply_recall_batch(
+                "session-a",
+                "user-1",
+                &recall_batch(2, vec![memory_item(7, "memory", 0.8)]),
+                "1",
+            )
+            .expect("recall should create local state");
+
+        let changed = state
+            .apply_authoritative_session_status("session-a", SessionMemoryStatus::Recycled, "2")
+            .expect("recycle status should apply");
+
+        assert!(changed);
+        assert_eq!(state.session_memory_status, SessionMemoryStatus::Recycled);
+        assert!(state.active_leases.is_empty());
+        assert!(state.cache_epoch.anchors.is_empty());
+        assert!(
+            state
+                .apply_recall_batch(
+                    "session-a",
+                    "user-2",
+                    &recall_batch(2, vec![memory_item(8, "blocked", 0.8)]),
+                    "3",
+                )
+                .is_err()
+        );
+
+        state
+            .apply_authoritative_session_status("session-a", SessionMemoryStatus::Active, "4")
+            .expect("explicit restart status should apply");
+        assert!(
+            state
+                .apply_recall_batch(
+                    "session-a",
+                    "user-3",
+                    &recall_batch(2, vec![memory_item(8, "resumed", 0.8)]),
+                    "5",
+                )
+                .is_ok()
+        );
     }
 }

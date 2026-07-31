@@ -5,7 +5,8 @@ use crate::agent_runtime::conversation_hooks::{
     HOOK_CONVERSATION_COMPACTED, HOOK_CONVERSATION_PROFILE_PREPARE,
     HOOK_CONVERSATION_TURN_COMPLETED, HOOK_CONVERSATION_TURN_PRECHECK,
     HOOK_METADATA_VMM_PROFILE_SYNC_EFFECT, HOOK_METADATA_VMM_RECALL_BATCH_EFFECT,
-    HOOK_METADATA_VMM_WRITEBACK_EFFECTS, VmmProfileSyncHookEffect, VmmRecallBatchHookEffect,
+    HOOK_METADATA_VMM_SESSION_STATUS_EFFECT, HOOK_METADATA_VMM_WRITEBACK_EFFECTS,
+    VmmProfileSyncHookEffect, VmmRecallBatchHookEffect, VmmSessionStatusHookEffect,
     VmmWritebackHookEffect,
 };
 use crate::model::{SessionId, VmmProfileSyncState, VmmWritebackOutboxEntry};
@@ -541,6 +542,12 @@ async fn handle_vmm_precheck(
         .await
         .map_err(|error| HookError::handler(error.to_string()))?;
     let mut metadata = BTreeMap::new();
+    metadata.insert(
+        HOOK_METADATA_VMM_SESSION_STATUS_EFFECT.to_string(),
+        json!(VmmSessionStatusHookEffect {
+            status: response.session_memory_status,
+        }),
+    );
     if let Some(batch) = VmmRecallBatch::from_precheck_response(&response, &config) {
         metadata.insert(
             HOOK_METADATA_VMM_RECALL_BATCH_EFFECT.to_string(),
@@ -597,11 +604,14 @@ async fn handle_vmm_post_action(
                 "Previous VMM writeback outbox entry is still pending; queued behind it.",
             ),
         });
-    } else if let Err(error) = accepted_post_action(&client, request.clone()).await {
-        effects.push(VmmWritebackHookEffect::Enqueue {
-            request,
-            error: error.to_string(),
-        });
+    } else {
+        match accepted_post_action(&client, request.clone()).await {
+            Ok(status) => effects.push(VmmWritebackHookEffect::SessionStatus { status }),
+            Err(error) => effects.push(VmmWritebackHookEffect::Enqueue {
+                request,
+                error: error.to_string(),
+            }),
+        }
     }
     Ok(vmm_writeback_effect_result(effects))
 }
@@ -1162,7 +1172,10 @@ async fn flush_vmm_writeback_outbox(
     let mut effects = Vec::new();
     for entry in outbox {
         match accepted_post_action(client, entry.request.clone()).await {
-            Ok(()) => flushed.push(entry.id),
+            Ok(status) => {
+                flushed.push(entry.id);
+                effects.push(VmmWritebackHookEffect::SessionStatus { status });
+            }
             Err(error) => {
                 if !flushed.is_empty() {
                     effects.push(VmmWritebackHookEffect::Flushed {
@@ -1188,13 +1201,13 @@ async fn flush_vmm_writeback_outbox(
 async fn accepted_post_action(
     client: &TonicVmmClient,
     request: vulcan_vmm::PostActionRequest,
-) -> Result<(), HookError> {
+) -> Result<vulcan_vmm::SessionMemoryStatus, HookError> {
     let response = client
         .post_action(request)
         .await
         .map_err(|error| HookError::handler(error.to_string()))?;
     if response.accepted {
-        Ok(())
+        Ok(response.session_memory_status)
     } else {
         Err(HookError::handler(format!(
             "VMM PostAction returned accepted=false trace_id={}",

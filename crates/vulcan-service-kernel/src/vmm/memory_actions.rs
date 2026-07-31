@@ -51,6 +51,10 @@ pub(crate) async fn service_run_vmm_memory_action(
     ) {
         return service_control_managed_vmm_maintenance(app, state, request).await;
     }
+    if request.action.trim().starts_with("management_") {
+        return super::management_http::service_run_vmm_management_http_action(state, request)
+            .await;
+    }
     if request.action.trim() == "apply_profile_instruction"
         && let Some(snapshot) = crate::managed_memory_mesh_runtime::snapshot_from_state(&state)
         && !snapshot.capabilities.profile_instruction_ready
@@ -863,6 +867,9 @@ pub(crate) fn vmm_action_layer_from_effective(
         grpc_target: (!effective.grpc_target.trim().is_empty())
             .then(|| effective.grpc_target.clone()),
         grpc_api_key: effective.grpc_api_key.clone(),
+        management_base_url: None,
+        management_bearer_token: None,
+        management_timeout_ms: None,
         handshake_timeout_ms: Some(effective.handshake_timeout_ms),
         receive_timeout_ms: Some(effective.receive_timeout_ms),
         max_receive_message_bytes: effective.max_receive_message_bytes,

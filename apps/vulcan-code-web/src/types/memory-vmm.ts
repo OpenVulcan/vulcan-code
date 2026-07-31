@@ -401,6 +401,9 @@ export interface VmmConfigDraftSummary {
   enabled: boolean;
   grpcTarget: string;
   grpcApiKey: string;
+  managementBaseUrl: string;
+  managementBearerToken: string;
+  managementTimeoutMs: string;
   // Whether Vulcan Code owns the local VMM process.
   // Vulcan Code 是否持有本地 VMM 进程。
   managedInstallEnabled: boolean;
@@ -694,7 +697,8 @@ export type VmmMemoryActionResponse =
         trace_id: string;
       };
     }
-  | { kind: "maintenance"; value: VmmMaintenanceSummary };
+  | { kind: "maintenance"; value: VmmMaintenanceSummary }
+  | { kind: "management"; value: unknown };
 
 // VmmMemoryActionResult describes one VMM action response.
 // VmmMemoryActionResult 描述单个 VMM 动作响应。

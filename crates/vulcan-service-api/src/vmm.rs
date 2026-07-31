@@ -737,6 +737,15 @@ pub struct VmmConfigDraftSummary {
     /// Editable gRPC API key.
     /// 可编辑 gRPC API key。
     pub grpc_api_key: String,
+    /// Editable external management API base URL.
+    /// 可编辑外部管理 API 基础地址。
+    pub management_base_url: String,
+    /// Editable external management bearer token or redacted placeholder.
+    /// 可编辑外部管理 Bearer Token 或脱敏占位符。
+    pub management_bearer_token: String,
+    /// Editable external management timeout text.
+    /// 可编辑外部管理超时文本。
+    pub management_timeout_ms: String,
     /// Whether Vulcan Code owns a local VMM child process.
     /// Vulcan Code 是否持有本地 VMM 子进程。
     pub managed_install_enabled: bool,
@@ -1038,6 +1047,9 @@ pub enum VmmMemoryActionResponse {
     /// Managed backup and vector-rebuild status.
     /// 托管备份与向量重建状态。
     Maintenance(VmmMaintenanceSummary),
+    /// Structured response returned by the isolated VMM management HTTP API.
+    /// 独立 VMM 管理 HTTP API 返回的结构化响应。
+    Management(serde_json::Value),
 }
 
 impl Default for VmmMemoryActionResponse {

@@ -3,11 +3,11 @@
 
 use vulcan_vmm::ManagedConfig;
 
-/// Verifies the shared version-one fixture loses no fields in the Rust protocol mirror.
-/// 验证共享的一版固定夹具经过 Rust 协议镜像往返后不会丢失字段。
+/// Verifies the shared version-two fixture loses no fields in the Rust protocol mirror.
+/// 验证共享的二版固定夹具经过 Rust 协议镜像往返后不会丢失字段。
 #[test]
 fn managed_contract_fixture_round_trips_semantically() {
-    let body = include_str!("fixtures/vulcan-managed-contract-v1.json");
+    let body = include_str!("fixtures/vulcan-managed-contract-v2.json");
     let expected: serde_json::Value =
         serde_json::from_str(body).expect("managed contract fixture must contain valid JSON");
     let manifest: ManagedConfig =

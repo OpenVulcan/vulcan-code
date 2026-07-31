@@ -33,6 +33,7 @@ pub fn core_provider_context_injection_from_state_for_turn(
     let feature_policy = VmmRuntimeFeaturePolicy::from_env();
     let anchored_prefixes = if feature_policy.session_state_enabled
         && feature_policy.stable_anchors_enabled
+        && vmm_state.session_memory_status.allows_runtime_memory()
         && vmm_state.stable_anchor_rendering_enabled
     {
         vmm_state
@@ -66,7 +67,9 @@ pub fn core_provider_context_injection_from_state_for_turn(
         (!view.persistent_blocks.is_empty()).then(|| view.fingerprint.clone());
     // cache_pressure contains body-free aggregate capacity diagnostics for the active VMM epoch.
     // cache_pressure 包含当前 VMM 纪元不含正文的聚合容量诊断。
-    let cache_pressure = if feature_policy.session_state_enabled {
+    let cache_pressure = if feature_policy.session_state_enabled
+        && vmm_state.session_memory_status.allows_runtime_memory()
+    {
         vmm_state.cache_pressure()
     } else {
         vulcan_vmm::VmmCachePressure::default()

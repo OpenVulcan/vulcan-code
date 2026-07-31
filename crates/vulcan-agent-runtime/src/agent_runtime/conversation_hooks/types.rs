@@ -53,6 +53,13 @@ pub struct ConversationTimelineItem {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum VmmWritebackHookEffect {
+    /// Authoritative lifecycle state returned by one successful PostAction request.
+    /// 单次成功 PostAction 请求返回的权威生命周期状态。
+    SessionStatus {
+        /// Authoritative lifecycle state for the owning session.
+        /// 所属会话的权威生命周期状态。
+        status: vulcan_vmm::SessionMemoryStatus,
+    },
     /// Previously queued outbox entries were flushed successfully.
     /// 先前排队的 outbox 条目已成功冲刷。
     Flushed {
@@ -98,6 +105,15 @@ pub struct VmmRecallBatchHookEffect {
     /// Authoritative structured recall batch returned by the built-in VMM hook.
     /// 内置 VMM hook 返回的权威结构化召回批次。
     pub batch: vulcan_vmm::VmmRecallBatch,
+}
+
+/// Typed authoritative VMM session status transported through hook metadata.
+/// 通过 hook metadata 传输的类型化 VMM 权威会话状态。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VmmSessionStatusHookEffect {
+    /// Authoritative lifecycle state returned by VMM.
+    /// VMM 返回的权威生命周期状态。
+    pub status: vulcan_vmm::SessionMemoryStatus,
 }
 
 impl ConversationTimelineItem {
@@ -162,6 +178,38 @@ pub fn vmm_recall_batch_effect_from_report(
     serde_json::from_value(value.clone())
         .map(Some)
         .map_err(|error| format!("Invalid typed VMM recall hook metadata: {error}"))
+}
+
+/// Extracts the unique authoritative VMM session status from one hook dispatch report.
+/// 从单次 hook 调度报告中提取唯一的 VMM 权威会话状态。
+///
+/// # Parameters
+/// 参数
+/// `report` is the aggregated hook report whose metadata preserves hook ordering.
+/// `report` 是 metadata 保留 hook 顺序的聚合 hook 报告。
+///
+/// # Returns
+/// 返回值
+/// The unique typed status effect, absence, or an explicit malformed/ambiguous metadata error.
+/// 返回唯一类型化状态效果、缺失结果，或明确的畸形/歧义 metadata 错误。
+pub fn vmm_session_status_effect_from_report(
+    report: &HookDispatchReport,
+) -> Result<Option<VmmSessionStatusHookEffect>, String> {
+    let Some(values) = report
+        .metadata
+        .get(super::HOOK_METADATA_VMM_SESSION_STATUS_EFFECT)
+    else {
+        return Ok(None);
+    };
+    let [value] = values.as_slice() else {
+        return Err(format!(
+            "VMM session status hook metadata requires exactly one typed effect, found {}.",
+            values.len()
+        ));
+    };
+    serde_json::from_value(value.clone())
+        .map(Some)
+        .map_err(|error| format!("Invalid typed VMM session status hook metadata: {error}"))
 }
 
 /// In-memory state for one logical user-to-assistant turn.

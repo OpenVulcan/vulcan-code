@@ -23,8 +23,8 @@ pub use memory::{
     DeleteMemoriesResponse, GetTurnDetailsRequest, GetTurnDetailsResponse, MemorySearchGroupResult,
     MemorySearchHit, PostActionRequest, PostActionResponse, PostActionTimelineItem,
     PostActionTimelineType, PreCheckRecallMode, PreCheckRequest, PreCheckResponse,
-    SearchMemoryEventsRequest, SearchMemoryEventsResponse, TurnDetailEntry, WriteMemoriesRequest,
-    WriteMemoriesResponse, WriteMemoryItem, WriteMemoryResultItem,
+    SearchMemoryEventsRequest, SearchMemoryEventsResponse, SessionMemoryStatus, TurnDetailEntry,
+    WriteMemoriesRequest, WriteMemoriesResponse, WriteMemoryItem, WriteMemoryResultItem,
 };
 pub use profile::{
     ApplyProfileInstructionRequest, ApplyProfileInstructionResponse, GetProfileBundleRequest,

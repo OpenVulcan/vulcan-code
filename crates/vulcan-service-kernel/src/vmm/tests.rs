@@ -180,6 +180,9 @@ fn vmm_config_layer_from_draft_parses_transport_and_behavior_fields() {
         enabled: true,
         grpc_target: String::from(" http://127.0.0.1:50051 "),
         grpc_api_key: String::from(" secret "),
+        management_base_url: String::from("http://127.0.0.1:17635"),
+        management_bearer_token: String::from("management-secret"),
+        management_timeout_ms: String::from("30000"),
         managed_install_enabled: false,
         managed_binary_path: String::new(),
         auto_start_policy: String::from("on_start"),
@@ -210,6 +213,15 @@ fn vmm_config_layer_from_draft_parses_transport_and_behavior_fields() {
     assert_eq!(layer.enabled, Some(true));
     assert_eq!(layer.grpc_target.as_deref(), Some("http://127.0.0.1:50051"));
     assert_eq!(layer.grpc_api_key.as_deref(), Some("secret"));
+    assert_eq!(
+        layer.management_base_url.as_deref(),
+        Some("http://127.0.0.1:17635")
+    );
+    assert_eq!(
+        layer.management_bearer_token.as_deref(),
+        Some("management-secret")
+    );
+    assert_eq!(layer.management_timeout_ms, Some(30000));
     assert_eq!(layer.user_id, Some(7));
     assert_eq!(layer.project_id, Some(11));
     assert_eq!(layer.receive_timeout_ms, Some(12000));
@@ -228,6 +240,46 @@ fn vmm_config_layer_from_draft_parses_transport_and_behavior_fields() {
     assert_eq!(
         layer.injection_description.as_deref(),
         Some("Visible memories")
+    );
+}
+
+/// Verifies external management transport requires a complete secure endpoint-token pair.
+/// 验证外部管理传输必须提供完整且安全的端点与 Token 组合。
+#[test]
+fn vmm_config_layer_from_draft_validates_external_management_transport() {
+    let missing_token = VmmConfigDraftSummary {
+        management_base_url: String::from("https://memory.example.test"),
+        management_timeout_ms: String::from("30000"),
+        ..Default::default()
+    };
+    assert!(
+        vmm_config_layer_from_draft(&missing_token, true)
+            .expect_err("management token must be required")
+            .contains("缺少管理 Token")
+    );
+
+    let insecure_remote = VmmConfigDraftSummary {
+        management_base_url: String::from("http://memory.example.test"),
+        management_bearer_token: String::from("secret"),
+        management_timeout_ms: String::from("30000"),
+        ..Default::default()
+    };
+    assert!(
+        vmm_config_layer_from_draft(&insecure_remote, true)
+            .expect_err("remote management must require HTTPS")
+            .contains("必须使用 HTTPS")
+    );
+
+    let embedded_credentials = VmmConfigDraftSummary {
+        management_base_url: String::from("https://user:password@memory.example.test"),
+        management_bearer_token: String::from("secret"),
+        management_timeout_ms: String::from("30000"),
+        ..Default::default()
+    };
+    assert!(
+        vmm_config_layer_from_draft(&embedded_credentials, true)
+            .expect_err("management URL credentials must be rejected")
+            .contains("不能包含账号或密码")
     );
 }
 

@@ -516,6 +516,9 @@ pub(super) fn apply_vmm_writeback_effects_to_runtime_state(
 ) {
     for effect in effects {
         match effect {
+            // SessionStatus is committed by the Core VMM controller before ordinary runtime effects are applied.
+            // SessionStatus 会在应用普通运行时效果前由 Core VMM 控制器提交。
+            VmmWritebackHookEffect::SessionStatus { .. } => {}
             VmmWritebackHookEffect::Flushed { entry_ids } => {
                 let ids = entry_ids.into_iter().collect::<BTreeSet<_>>();
                 runtime_state

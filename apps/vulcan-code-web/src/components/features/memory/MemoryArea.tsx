@@ -7,7 +7,7 @@ import {
   type MemoryActionProps,
 } from "./use-memory-area-controller"
 import { VmmInferenceSettings } from "./vmm-inference-settings"
-import { VmmContentPage } from "./vmm-content-page"
+import { VmmDataPage } from "./vmm-data-page"
 import { VmmAdvancedPage } from "./vmm-advanced-page"
 import { VmmIdentityProjectPage } from "./vmm-identity-project-page"
 import { VmmOverviewPage } from "./vmm-overview-page"
@@ -150,6 +150,8 @@ export function MemoryArea(props: {
       enabled: false,
       grpcTarget: input.mode === "external" ? input.externalEndpoint : "",
       grpcApiKey: input.mode === "external" ? input.externalApiKey : "",
+      managementBaseUrl: input.mode === "external" ? input.externalManagementBaseUrl : "",
+      managementBearerToken: input.mode === "external" ? input.externalManagementToken : "",
       managedInstallEnabled: input.mode === "managed",
       autoStartPolicy: input.mode === "managed" ? "on_start" : "manual",
     }
@@ -159,6 +161,9 @@ export function MemoryArea(props: {
     // Saving the managed on-start draft performs the single authoritative startup reconciliation.
     // 保存托管自动启动草稿会执行唯一权威的启动协调，此处仅验证连接，避免重复启动。
     if (!await runAction("healthz")) {
+      return false
+    }
+    if (!await runAction("management_capabilities")) {
       return false
     }
     const userResult = await runAction("resolve_user", {
@@ -325,7 +330,7 @@ export function MemoryArea(props: {
       <section className="vmm-memory-page">
         <div className="vmm-memory-shell status-only">
           <main className="vmm-memory-main vmm-status-page">
-            <VmmContentPage
+            <VmmDataPage
               busy={operationBusy}
               onRunAction={runAction}
               result={result}
@@ -371,6 +376,10 @@ export function MemoryArea(props: {
                   : null
               }}
               onSave={() => saveDraft("global")}
+              onTestManagement={async () => {
+                if (!await saveDraft("global")) return false
+                return Boolean(await runAction("management_capabilities"))
+              }}
               onStartRuntime={async () => Boolean(await runAction("managed_runtime_start"))}
               snapshot={props.snapshot}
             />

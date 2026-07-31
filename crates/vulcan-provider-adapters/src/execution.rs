@@ -919,7 +919,7 @@ fn project_minimax_request(
             vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID => {
                 // MiniMax Anthropic uses `thinking.type`; generic Anthropic `output_config.effort` is not accepted.
                 // MiniMax Anthropic 使用 `thinking.type`；通用 Anthropic `output_config.effort` 不被接受。
-                body.remove("output_config");
+                project_anthropic_output_config_effort(body, None, "MiniMax Anthropic")?;
                 body.insert(String::from("thinking"), json!({ "type": thinking_type }));
             }
             vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID => {
@@ -1013,7 +1013,7 @@ fn project_openrouter_request(
                 body.remove("reasoning_effort");
             }
             vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID => {
-                body.remove("output_config");
+                project_anthropic_output_config_effort(body, None, "OpenRouter Anthropic")?;
             }
             vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID => {}
             protocol_id => {
@@ -1135,15 +1135,16 @@ fn project_deepseek_request(
             let body = request_body_mut(encoded, "DeepSeek Anthropic")?;
             match effort {
                 ReasoningEffort::None => {
-                    body.remove("output_config");
+                    project_anthropic_output_config_effort(body, None, "DeepSeek Anthropic")?;
                     body.insert(String::from("thinking"), json!({ "type": "disabled" }));
                 }
                 ReasoningEffort::High | ReasoningEffort::Max => {
                     body.insert(String::from("thinking"), json!({ "type": "enabled" }));
-                    body.insert(
-                        String::from("output_config"),
-                        json!({ "effort": effort.as_str() }),
-                    );
+                    project_anthropic_output_config_effort(
+                        body,
+                        Some(effort.as_str()),
+                        "DeepSeek Anthropic",
+                    )?;
                 }
                 unsupported => {
                     return Err(pre_dispatch_failure(format!(
@@ -1199,7 +1200,7 @@ fn project_alibaba_request(
             body.insert(String::from("enable_thinking"), Value::Bool(enabled));
         }
         vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID => {
-            body.remove("output_config");
+            project_anthropic_output_config_effort(body, None, "Alibaba Anthropic")?;
             body.insert(
                 String::from("thinking"),
                 json!({ "type": if enabled { "enabled" } else { "disabled" } }),
@@ -1234,6 +1235,50 @@ fn request_body_mut<'a>(
         .body
         .as_object_mut()
         .ok_or_else(|| pre_dispatch_failure(format!("{label} request body must be a JSON object.")))
+}
+
+/// Updates only Anthropic reasoning effort while preserving native structured-output format fields.
+/// 仅更新 Anthropic 的思考强度，同时保留原生结构化输出格式字段。
+///
+/// # Parameters
+/// 参数
+/// `body` is the encoded Anthropic request, `effort` is the provider-supported value or removal,
+/// and `label` identifies the exact provider projection in controlled failures.
+/// `body` 是已编码的 Anthropic 请求，`effort` 是供应商支持的值或移除指令，`label` 用于在受控错误中标识精确供应商投影。
+///
+/// # Returns
+/// 返回值
+/// Success after preserving sibling fields such as `format`, or a pre-dispatch shape failure.
+/// 保留 `format` 等同级字段后返回成功，或者返回分派前结构错误。
+fn project_anthropic_output_config_effort(
+    body: &mut serde_json::Map<String, Value>,
+    effort: Option<&str>,
+    label: &str,
+) -> Result<(), ProviderExecutionFailure> {
+    if effort.is_none() && !body.contains_key("output_config") {
+        return Ok(());
+    }
+    let output_config = body
+        .entry(String::from("output_config"))
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or_else(|| {
+            pre_dispatch_failure(format!(
+                "{label} output_config projection must be a JSON object."
+            ))
+        })?;
+    match effort {
+        Some(value) => {
+            output_config.insert(String::from("effort"), Value::String(value.to_string()));
+        }
+        None => {
+            output_config.remove("effort");
+        }
+    }
+    if output_config.is_empty() {
+        body.remove("output_config");
+    }
+    Ok(())
 }
 
 /// Applies credential-bound non-secret identity fields immediately before dispatch.
@@ -2424,7 +2469,9 @@ mod tests {
     };
     use std::collections::{BTreeMap, BTreeSet};
     use std::time::Duration;
-    use vulcan_ai_contract::{AiMessage, AiOperation, ContentItem, MessageRole};
+    use vulcan_ai_contract::{
+        AiMessage, AiOperation, ContentItem, MessageRole, StructuredOutputPolicy,
+    };
     use vulcan_ai_protocols::{
         ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
     };
@@ -2945,6 +2992,44 @@ mod tests {
             .expect("MiniMax Anthropic request should encode");
         assert_eq!(encoded.body["thinking"]["type"], "disabled");
         assert!(encoded.body.get("output_config").is_none());
+    }
+
+    /// Verifies MiniMax thinking projection preserves Anthropic native JSON Schema output format.
+    /// 验证 MiniMax 思考参数投影会保留 Anthropic 原生 JSON Schema 输出格式。
+    #[test]
+    fn minimax_anthropic_preserves_structured_output_format() {
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let mut request = minimal_request();
+        request.model_id = String::from("MiniMax-M3");
+        request.reasoning_effort = Some(ReasoningEffort::None);
+        request.structured_output = StructuredOutputPolicy::JsonSchema {
+            name: String::from("vmm_turn_analysis"),
+            description: Some(String::from("VMM turn analysis")),
+            schema: json!({
+                "type": "object",
+                "properties": { "turn_id": { "type": "integer" } },
+                "required": ["turn_id"],
+                "additionalProperties": false,
+            }),
+            strict: true,
+        };
+
+        let encoded = client
+            .encode_request(&minimax_route(ANTHROPIC_MESSAGES_PROFILE_ID), &request)
+            .expect("MiniMax Anthropic structured request should encode");
+        assert_eq!(encoded.body["thinking"]["type"], "disabled");
+        assert_eq!(
+            encoded.body["output_config"]["format"]["type"],
+            "json_schema"
+        );
+        assert_eq!(
+            encoded.body["output_config"]["format"]["schema"]["required"][0],
+            "turn_id"
+        );
+        assert!(encoded.body["output_config"].get("effort").is_none());
     }
 
     /// Verifies MiniMax rejects undocumented strength controls before dispatch.

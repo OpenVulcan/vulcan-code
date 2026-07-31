@@ -494,6 +494,11 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
       if (acceptsFeedback(operation)) {
         setNotice(t("memory.vmm.action.failed").replace("{message}", message));
       }
+      // Management workspaces own request-local error rendering and must receive the original failure.
+      // 管理工作区负责渲染请求级错误，因此必须收到原始失败。
+      if (action.startsWith("management_")) {
+        throw error;
+      }
       return null;
     } finally {
       finishOperation(operation);

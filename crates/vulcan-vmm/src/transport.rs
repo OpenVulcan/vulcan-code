@@ -333,7 +333,7 @@ impl VmmClient for TonicVmmClient {
             .pre_check(self.request(grpc_precheck_request(request), "precheck")?)
             .await
             .map_err(status_error)?;
-        Ok(protocol_precheck_response(response.into_inner()))
+        protocol_precheck_response(response.into_inner())
     }
 
     /// Calls VMM PostAction.
@@ -351,6 +351,7 @@ impl VmmClient for TonicVmmClient {
         Ok(PostActionResponse {
             accepted: response.accepted,
             trace_id: response.trace_id,
+            session_memory_status: protocol_session_memory_status(response.session_memory_status)?,
         })
     }
 

@@ -4,7 +4,7 @@
 use vulcan_agent_runtime::{
     ExecutionPromptPurpose, ExecutionRunReport,
     agent_runtime::conversation_hooks::{
-        ConversationCompletionRequest, ConversationTurnCompletionStatus,
+        ConversationCompletionRequest, ConversationTurnCompletionStatus, VmmWritebackHookEffect,
     },
     conversation_protocol::SessionConversationState,
 };
@@ -1033,6 +1033,54 @@ pub(super) fn spawn_conversation_completion_hook_task(
         }
         if outcome.vmm_writeback_effects.is_empty() {
             return;
+        }
+        // authoritative_status is the last successful PostAction lifecycle observation in FIFO order.
+        // authoritative_status 是按 FIFO 顺序最后一次成功 PostAction 观察到的生命周期状态。
+        let authoritative_status = outcome
+            .vmm_writeback_effects
+            .iter()
+            .rev()
+            .find_map(|effect| match effect {
+                VmmWritebackHookEffect::SessionStatus { status } => Some(*status),
+                _ => None,
+            });
+        if let Some(status) = authoritative_status {
+            let vmm_controller_registry = match state.lock() {
+                Ok(guard) => guard.vmm_controller_registry.clone(),
+                Err(error) => {
+                    eprintln!("failed to lock service state: {error}");
+                    return;
+                }
+            };
+            let now = current_unix_millis_text();
+            let controller = match vmm_controller_registry.get_or_open(
+                &controller_runtime.data_root,
+                session_id,
+                &now,
+            ) {
+                Ok(controller) => controller,
+                Err(error) => {
+                    eprintln!(
+                        "[webui-service] failed to open VMM session controller after PostAction for {session_id}: {error}"
+                    );
+                    return;
+                }
+            };
+            let command_id = format!(
+                "postaction-session-status:{}:{}",
+                outcome.turn_id,
+                serde_json::to_string(&status).unwrap_or_else(|_| String::from("invalid"))
+            );
+            if let Err(error) = controller.execute_command(&command_id, &now, |candidate| {
+                candidate
+                    .apply_authoritative_session_status(&session_id.to_string(), status, &now)
+                    .map(|_| ())
+            }) {
+                eprintln!(
+                    "[webui-service] failed to persist authoritative VMM session status for {session_id}: {error}"
+                );
+                return;
+            }
         }
         let workspace_snapshot = {
             let mut guard = match state.lock() {

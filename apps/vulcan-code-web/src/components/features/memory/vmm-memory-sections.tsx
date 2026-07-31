@@ -4,7 +4,6 @@ import {
   Database,
   FolderTree,
   ScrollText,
-  Search,
   Settings2,
   SlidersHorizontal,
 } from "lucide-react"
@@ -26,7 +25,7 @@ export function vmmSectionIcon(sectionId: string): React.ReactNode {
     return <SlidersHorizontal size={16} />
   }
   if (sectionId === "content") {
-    return <Search size={16} />
+    return <Database size={16} />
   }
   if (sectionId === "identity_projects") {
     return <FolderTree size={16} />

@@ -34,11 +34,11 @@ use vulcan_vmm::{
     MANAGED_CONTRACT_OWNER, MANAGED_CONTRACT_VERSION, MANAGED_INFERENCE_MODE, ManagedAssets,
     ManagedConfig, ManagedControllerLease, ManagedGrpcConfig, ManagedGrpcKeepalive,
     ManagedGrpcRequestTimeout, ManagedInferenceConfig, ManagedLoggingConfig,
-    ManagedMemoryPipelineConfig, ManagedNoiseConfig, ManagedParent, ManagedPiiConfig,
-    ManagedPostActionConfig, ManagedPreCheckConfig, ManagedPromptConfig, ManagedRelationalConfig,
-    ManagedRetentionConfig, ManagedRuntimeConfig, ManagedStatus, ManagedStorageConfig,
-    ManagedVectorConfig, ResolveProjectRequest, ResolveUserRequest, TonicVmmClient, VmmClient,
-    VmmTransportConfig,
+    ManagedManagementConfig, ManagedMemoryPipelineConfig, ManagedNoiseConfig, ManagedParent,
+    ManagedPiiConfig, ManagedPostActionConfig, ManagedPreCheckConfig, ManagedPromptConfig,
+    ManagedRelationalConfig, ManagedRetentionConfig, ManagedRuntimeConfig, ManagedStatus,
+    ManagedStorageConfig, ManagedVectorConfig, ResolveProjectRequest, ResolveUserRequest,
+    TonicVmmClient, VmmClient, VmmTransportConfig,
 };
 
 /// Stable isolated Controller space used only by the managed VMM runtime.
@@ -168,6 +168,8 @@ pub(crate) struct ManagedMemoryMeshRuntime {
     status_path: PathBuf,
     shutdown_path: PathBuf,
     access_token: String,
+    management_listen_addr: String,
+    management_access_token: String,
     snapshot: ManagedMemoryMeshSnapshot,
 }
 
@@ -180,6 +182,20 @@ pub(crate) struct ManagedMemoryMeshHeartbeatTarget {
     /// Ephemeral bearer token owned by the current child generation.
     /// 当前子进程代次持有的临时 Bearer 令牌。
     pub(crate) access_token: String,
+}
+
+/// Secret-bearing target copied only for one backend management request.
+/// 仅为一次后端管理请求复制的含密目标。
+pub(crate) struct ManagedMemoryMeshManagementTarget {
+    /// Absolute management API origin for the managed or external service.
+    /// 托管或外部服务的管理 API 绝对源地址。
+    pub(crate) base_url: String,
+    /// Ephemeral management Bearer token owned by the current child generation.
+    /// 当前子进程代次持有的临时管理 Bearer Token。
+    pub(crate) access_token: String,
+    /// Request timeout selected by the owning backend configuration.
+    /// 持有方后端配置选择的请求超时。
+    pub(crate) timeout: std::time::Duration,
 }
 
 /// Prepared host-owned inputs for one isolated managed VMM maintenance run.
@@ -271,6 +287,11 @@ impl ManagedMemoryMeshRuntime {
             Uuid::new_v4().as_simple(),
             Uuid::new_v4().as_simple()
         );
+        let management_access_token = format!(
+            "{}{}",
+            Uuid::new_v4().as_simple(),
+            Uuid::new_v4().as_simple()
+        );
         let system_root = binary_path
             .parent()
             .and_then(Path::parent)
@@ -287,6 +308,7 @@ impl ManagedMemoryMeshRuntime {
             &shutdown_path,
             &preferred_listen_addr,
             &access_token,
+            &management_access_token,
             controller_endpoint,
             &discovery_path,
             vmm_config,
@@ -360,6 +382,13 @@ impl ManagedMemoryMeshRuntime {
             cleanup_ephemeral_runtime_files(&manifest_path, &status_path, &shutdown_path);
             return Err(error);
         }
+        if let Err(error) =
+            management_health_check(&status.management_listen_addr, &management_access_token).await
+        {
+            stop_child(&mut child);
+            cleanup_ephemeral_runtime_files(&manifest_path, &status_path, &shutdown_path);
+            return Err(error);
+        }
         let scope_error =
             reconcile_configured_scope(&status.grpc_listen_addr, &access_token, vmm_config)
                 .await
@@ -372,6 +401,8 @@ impl ManagedMemoryMeshRuntime {
             status_path,
             shutdown_path,
             access_token,
+            management_listen_addr: status.management_listen_addr,
+            management_access_token,
             snapshot: ManagedMemoryMeshSnapshot {
                 data_space_state: vulcan_service_api::VmmDataSpaceState::Ready,
                 phase: String::from("ready"),
@@ -446,6 +477,19 @@ impl ManagedMemoryMeshRuntime {
         })
     }
 
+    /// Returns the exact secret-bearing target for one backend management request.
+    /// 返回一次后端管理请求使用的准确含密目标。
+    pub(crate) fn management_target(&self) -> Option<ManagedMemoryMeshManagementTarget> {
+        if self.child.is_none() || !matches!(self.snapshot.phase.as_str(), "ready" | "unhealthy") {
+            return None;
+        }
+        Some(ManagedMemoryMeshManagementTarget {
+            base_url: format!("http://{}", self.management_listen_addr),
+            access_token: self.management_access_token.clone(),
+            timeout: std::time::Duration::from_secs(30),
+        })
+    }
+
     /// Applies one authenticated heartbeat result to the retained lifecycle snapshot.
     /// 将一次鉴权心跳结果应用到保留的生命周期快照。
     ///
@@ -500,15 +544,29 @@ impl ManagedMemoryMeshRuntime {
         {
             self.child_job = None;
         }
-        remove_runtime_file(&self.manifest_path)?;
-        remove_runtime_file(&self.status_path)?;
-        remove_runtime_file(&self.shutdown_path)?;
+        let cleanup_errors = [
+            remove_runtime_file(&self.manifest_path),
+            remove_runtime_file(&self.status_path),
+            remove_runtime_file(&self.shutdown_path),
+        ]
+        .into_iter()
+        .filter_map(Result::err)
+        .collect::<Vec<_>>();
         self.snapshot.phase = String::from("stopped");
         self.snapshot.grpc_target = None;
         self.snapshot.last_error = None;
         self.access_token.clear();
+        self.management_access_token.clear();
+        self.management_listen_addr.clear();
         publish_snapshot(self.snapshot.clone());
-        Ok(())
+        if cleanup_errors.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "清理 VMM 托管运行文件失败：{}",
+                cleanup_errors.join("; ")
+            ))
+        }
     }
 }
 
@@ -618,6 +676,11 @@ pub(crate) fn prepare_managed_vmm_maintenance(
         Uuid::new_v4().as_simple(),
         Uuid::new_v4().as_simple()
     );
+    let management_access_token = format!(
+        "{}{}",
+        Uuid::new_v4().as_simple(),
+        Uuid::new_v4().as_simple()
+    );
     let manifest = default_managed_manifest(
         &instance_id,
         generation,
@@ -628,6 +691,7 @@ pub(crate) fn prepare_managed_vmm_maintenance(
         &shutdown_path,
         &preferred_listen_addr,
         &access_token,
+        &management_access_token,
         controller_endpoint,
         &discovery_path,
         vmm_config,
@@ -879,6 +943,70 @@ pub(crate) fn snapshot_from_state(
         return Some(runtime.snapshot());
     }
     lifecycle_snapshot()
+}
+
+/// Returns the current secret-bearing management target for one backend-only HTTP request.
+/// 为一次仅后端 HTTP 请求返回当前含密管理目标。
+pub(crate) fn management_target_from_state(
+    state: &crate::SharedServiceBridgeState,
+) -> Option<ManagedMemoryMeshManagementTarget> {
+    let managed_runtime = state
+        .lock()
+        .ok()?
+        .managed_memory_mesh_runtime
+        .as_ref()
+        .map(std::sync::Arc::clone);
+    if let Some(target) =
+        managed_runtime.and_then(|runtime| runtime.lock().ok()?.management_target())
+    {
+        return Some(target);
+    }
+    let configuration = crate::provider_configuration_from_state(state).ok()?;
+    external_management_target_from_layer(&configuration.vmm)
+}
+
+/// Builds one external management target only when the effective configuration is not managed locally.
+/// 仅当最终配置不是本机托管模式时构建外部管理目标。
+fn external_management_target_from_layer(
+    layer: &vulcan_vmm::VmmConfigLayer,
+) -> Option<ManagedMemoryMeshManagementTarget> {
+    if layer
+        .install
+        .as_ref()
+        .is_some_and(|install| install.managed_install_enabled)
+    {
+        return None;
+    }
+    let base_url = layer
+        .management_base_url
+        .as_deref()?
+        .trim()
+        .trim_end_matches('/')
+        .to_string();
+    let access_token = layer.management_bearer_token.as_deref()?.trim().to_string();
+    if base_url.is_empty() || access_token.is_empty() {
+        return None;
+    }
+    let parsed = reqwest::Url::parse(&base_url).ok()?;
+    let loopback = parsed
+        .host_str()
+        .is_some_and(|host| matches!(host, "127.0.0.1" | "localhost" | "::1"));
+    if parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || (parsed.scheme() != "https" && !(parsed.scheme() == "http" && loopback))
+        || layer
+            .management_timeout_ms
+            .is_some_and(|value| !(1_000..=120_000).contains(&value))
+    {
+        return None;
+    }
+    Some(ManagedMemoryMeshManagementTarget {
+        base_url,
+        access_token,
+        timeout: std::time::Duration::from_millis(layer.management_timeout_ms.unwrap_or(30_000)),
+    })
 }
 
 /// Synchronizes one managed-runtime transition into every retained product-facing VMM state.
@@ -1312,6 +1440,7 @@ fn default_managed_manifest(
     shutdown_path: &Path,
     preferred_listen_addr: &str,
     access_token: &str,
+    management_access_token: &str,
     controller_endpoint: &str,
     discovery_path: &Path,
     vmm_config: &vulcan_vmm::VmmConfigLayer,
@@ -1370,6 +1499,18 @@ fn default_managed_manifest(
                         .grpc_keepalive_permit_without_calls
                         .unwrap_or(true),
                 },
+            },
+            management: ManagedManagementConfig {
+                preferred_listen_addr: String::from("127.0.0.1:0"),
+                allow_ephemeral_fallback: true,
+                access_token: management_access_token.to_string(),
+                max_request_body_bytes: 1 << 20,
+                default_page_size: 30,
+                max_page_size: 100,
+                read_header_timeout: String::from("5s"),
+                request_timeout: String::from("30s"),
+                idle_timeout: String::from("1m"),
+                shutdown_timeout: String::from("10s"),
             },
             storage: ManagedStorageConfig {
                 mode: String::from("controller"),
@@ -1583,6 +1724,8 @@ fn validate_status(
         || status.parent_process_id != parent_id
         || status.manifest_digest != manifest_digest
         || status.grpc_proto_version != 1
+        || status.management_protocol_version != 1
+        || !status.management_ready
         || status.inference_protocol_version != INFERENCE_SERVICE_API_VERSION
     {
         return Err(String::from("VMM 就绪状态的身份、摘要或协议版本不匹配。"));
@@ -1593,6 +1736,52 @@ fn validate_status(
         .map_err(|error| format!("VMM 就绪地址无效：{error}"))?;
     if !address.ip().is_loopback() {
         return Err(String::from("VMM 就绪地址不是回环地址。"));
+    }
+    let management_address = status
+        .management_listen_addr
+        .parse::<SocketAddr>()
+        .map_err(|error| format!("VMM 管理就绪地址无效：{error}"))?;
+    if !management_address.ip().is_loopback() {
+        return Err(String::from("VMM 管理就绪地址不是回环地址。"));
+    }
+    Ok(())
+}
+
+/// Minimal authenticated capabilities response used only during managed child startup.
+/// 仅在托管子进程启动期间使用的最小鉴权能力响应。
+#[derive(Debug, Deserialize)]
+struct ManagementCapabilitiesProbe {
+    /// Exact management protocol version returned by the child.
+    /// 子进程返回的精确管理协议版本。
+    protocol_version: u32,
+}
+
+/// Calls the authenticated management capabilities endpoint before exposing any administration proxy.
+/// 在暴露任何管理代理前调用带鉴权的管理能力端点。
+async fn management_health_check(listen_addr: &str, access_token: &str) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| format!("创建 VMM 管理健康检查客户端失败：{error}"))?;
+    let response = client
+        .get(format!("http://{listen_addr}/management/v1/capabilities"))
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|error| format!("VMM 管理健康检查失败：{error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("VMM 管理健康检查返回 HTTP {}。", response.status()));
+    }
+    let capabilities = response
+        .json::<ManagementCapabilitiesProbe>()
+        .await
+        .map_err(|error| format!("解析 VMM 管理能力失败：{error}"))?;
+    if capabilities.protocol_version != 1 {
+        return Err(format!(
+            "VMM 管理协议版本不匹配：期望 1，实际 {}。",
+            capabilities.protocol_version
+        ));
     }
     Ok(())
 }
@@ -1899,6 +2088,7 @@ mod tests {
             &root.join("shutdown"),
             "127.0.0.1:0",
             "secret",
+            "management-secret",
             "http://127.0.0.1:17625",
             &root.join("inference.json"),
             &vmm_config,
@@ -1937,6 +2127,9 @@ mod tests {
             manifest_digest: String::from("digest"),
             grpc_listen_addr: String::from("127.0.0.1:17635"),
             grpc_proto_version: 1,
+            management_listen_addr: String::from("127.0.0.1:17636"),
+            management_protocol_version: 1,
+            management_ready: true,
             inference_protocol_version: INFERENCE_SERVICE_API_VERSION,
         };
         let error = validate_status(&status, "instance", 7, 43, 11, "digest")
@@ -1993,7 +2186,9 @@ mod tests {
             manifest_path: root.join("manifest.json"),
             status_path: root.join("status.json"),
             shutdown_path: root.join("shutdown"),
-            access_token: String::new(),
+            access_token: String::from("runtime-secret"),
+            management_listen_addr: String::from("127.0.0.1:17902"),
+            management_access_token: String::from("management-secret"),
             snapshot: ManagedMemoryMeshSnapshot {
                 data_space_state: vulcan_service_api::VmmDataSpaceState::Unknown,
                 phase: String::from("stopped"),
@@ -2012,6 +2207,9 @@ mod tests {
         assert!(!runtime.refresh_liveness());
         runtime.stop().expect("stopped runtime cleanup");
         assert!(runtime.snapshot.last_error.is_none());
+        assert!(runtime.access_token.is_empty());
+        assert!(runtime.management_access_token.is_empty());
+        assert!(runtime.management_listen_addr.is_empty());
         runtime.snapshot.phase = String::from("waiting_retry");
         assert!(runtime.refresh_liveness());
     }
@@ -2398,6 +2596,66 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies a stopped managed deployment cannot silently fall through to stale external management settings.
+    /// 验证已停止的托管部署不会静默回退到陈旧的外部管理设置。
+    #[test]
+    fn external_management_target_rejects_managed_configuration() {
+        let layer = vulcan_vmm::VmmConfigLayer {
+            management_base_url: Some(String::from("http://127.0.0.1:17635")),
+            management_bearer_token: Some(String::from("external-secret")),
+            install: Some(vulcan_vmm::VmmInstallReservation {
+                managed_install_enabled: true,
+                ..vulcan_vmm::VmmInstallReservation::default()
+            }),
+            ..vulcan_vmm::VmmConfigLayer::default()
+        };
+
+        assert!(external_management_target_from_layer(&layer).is_none());
+    }
+
+    /// Verifies a configured external deployment retains its exact safe endpoint and timeout.
+    /// 验证已配置的外部部署保留其准确安全端点与超时。
+    #[test]
+    fn external_management_target_accepts_explicit_external_configuration() {
+        let layer = vulcan_vmm::VmmConfigLayer {
+            management_base_url: Some(String::from("http://127.0.0.1:17635/")),
+            management_bearer_token: Some(String::from("external-secret")),
+            management_timeout_ms: Some(4_321),
+            ..vulcan_vmm::VmmConfigLayer::default()
+        };
+
+        let target = external_management_target_from_layer(&layer)
+            .expect("external management target should be available");
+        assert_eq!(target.base_url, "http://127.0.0.1:17635");
+        assert_eq!(target.access_token, "external-secret");
+        assert_eq!(target.timeout, std::time::Duration::from_millis(4_321));
+    }
+
+    /// Rejects URL-embedded credentials so management authentication has exactly one bearer-token source.
+    /// 拒绝 URL 内嵌凭据，确保管理鉴权只有一个 Bearer Token 来源。
+    #[test]
+    fn external_management_target_rejects_url_credentials() {
+        let layer = vulcan_vmm::VmmConfigLayer {
+            management_base_url: Some(String::from("https://user:secret@example.com")),
+            management_bearer_token: Some(String::from("management-token")),
+            ..vulcan_vmm::VmmConfigLayer::default()
+        };
+        assert!(external_management_target_from_layer(&layer).is_none());
+    }
+
+    /// Rejects an out-of-contract timeout even when persisted state bypassed the settings form.
+    /// 即使持久化状态绕过设置表单，也拒绝超出契约范围的超时值。
+    #[test]
+    fn external_management_target_rejects_invalid_timeout() {
+        let layer = vulcan_vmm::VmmConfigLayer {
+            management_base_url: Some(String::from("https://memory.example.test")),
+            management_bearer_token: Some(String::from("management-token")),
+            management_timeout_ms: Some(999),
+            ..vulcan_vmm::VmmConfigLayer::default()
+        };
+        assert!(external_management_target_from_layer(&layer).is_none());
     }
 
     /// Builds one deterministic embedding-space fingerprint for lifecycle tests.

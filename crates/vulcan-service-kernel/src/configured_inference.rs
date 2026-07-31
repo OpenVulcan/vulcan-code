@@ -3367,10 +3367,14 @@ fn finalize_restricted_structured_output(
                     "Restricted LLM structured-output schema could not be compiled.",
                 )
             })?;
-            if !validator.is_valid(value) {
+            if let Err(error) = validator.validate(value) {
                 return Err(ConfiguredInferenceError::new(
                     ConfiguredInferenceErrorCategory::Execution,
-                    "Restricted LLM response did not satisfy the requested JSON Schema.",
+                    format!(
+                        "Restricted LLM response did not satisfy the requested JSON Schema at `{}`: {}.",
+                        error.instance_path(),
+                        error
+                    ),
                 ));
             }
             Ok(())
@@ -5315,5 +5319,6 @@ mod tests {
 
         assert_eq!(error.category, ConfiguredInferenceErrorCategory::Execution);
         assert!(error.message.contains("JSON Schema"));
+        assert!(error.message.contains("/accepted"));
     }
 }

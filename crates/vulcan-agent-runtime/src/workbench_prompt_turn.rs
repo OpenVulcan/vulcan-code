@@ -30,6 +30,7 @@ use crate::{
             ConversationHookRuntime, ConversationPrecheckOutcome, ConversationPrecheckRequest,
             ConversationProfileOutcome, ConversationProfileRequest,
             vmm_profile_sync_effect_from_report, vmm_recall_batch_effect_from_report,
+            vmm_session_status_effect_from_report,
         },
         events::{RuntimeEvent, RuntimeEventKind},
         vmm_hooks::{
@@ -833,6 +834,18 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
     // 用户提示 precheck 仅持有召回、提示词转换及其自身的非画像 Hook 输出。
     match input.precheck_outcome.report {
         Ok(report) => {
+            if feature_policy.session_state_enabled
+                && let Some(effect) = vmm_session_status_effect_from_report(&report)?
+            {
+                let now = current_unix_millis_text();
+                if vmm_session_memory.apply_authoritative_session_status(
+                    &session_id.to_string(),
+                    effect.status,
+                    &now,
+                )? {
+                    runtime_state.updated_at = now;
+                }
+            }
             if feature_policy.session_state_enabled
                 && let Some(effect) = vmm_recall_batch_effect_from_report(&report)?
             {

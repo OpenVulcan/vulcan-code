@@ -1,3 +1,4 @@
+use crate::client::VmmClientError;
 use crate::grpc::{
     PostActionTimelineItem as GrpcPostActionTimelineItem,
     ProfileBundleMode as GrpcProfileBundleMode, ProfileNodeEntry as GrpcProfileNodeEntry,
@@ -12,8 +13,8 @@ use crate::protocol::{
     MemorySearchHit, MigrateProjectResponse, PostActionTimelineItem, PostActionTimelineType,
     PreCheckResponse, ProfileBundleMode, ProfileNodeEntry, ProfileNodeSourceKind, ProfileTarget,
     ProjectEntry, ResolveProjectResponse, ResolveUserResponse, RetiredProfileNodeEntry,
-    SearchMemoryEventsResponse, TurnDetailEntry, UserEntry, WriteMemoriesResponse,
-    WriteMemoryResultItem,
+    SearchMemoryEventsResponse, SessionMemoryStatus, TurnDetailEntry, UserEntry,
+    WriteMemoriesResponse, WriteMemoryResultItem,
 };
 
 /// Converts a generated protobuf profile-bundle mode into protocol enum.
@@ -322,8 +323,8 @@ pub(super) fn protocol_get_profile_bundle_response(
 /// 将生成的 protobuf PreCheck 响应转换为协议结构。
 pub(super) fn protocol_precheck_response(
     response: crate::grpc::PreCheckResponse,
-) -> PreCheckResponse {
-    PreCheckResponse {
+) -> Result<PreCheckResponse, VmmClientError> {
+    Ok(PreCheckResponse {
         should_inject: response.should_inject,
         context_items: response
             .context_items
@@ -339,6 +340,24 @@ pub(super) fn protocol_precheck_response(
             .collect(),
         degraded: response.degraded,
         trace_id: response.trace_id,
+        session_memory_status: protocol_session_memory_status(response.session_memory_status)?,
+    })
+}
+
+/// Converts one generated lifecycle integer and rejects unspecified or unknown protocol values.
+/// 将生成的生命周期整数转换为协议枚举，并拒绝未指定或未知的协议值。
+pub(super) fn protocol_session_memory_status(
+    status: i32,
+) -> Result<SessionMemoryStatus, VmmClientError> {
+    match crate::grpc::SessionMemoryStatus::try_from(status) {
+        Ok(crate::grpc::SessionMemoryStatus::Active) => Ok(SessionMemoryStatus::Active),
+        Ok(crate::grpc::SessionMemoryStatus::Archived) => Ok(SessionMemoryStatus::Archived),
+        Ok(crate::grpc::SessionMemoryStatus::Recycled) => Ok(SessionMemoryStatus::Recycled),
+        Ok(crate::grpc::SessionMemoryStatus::Forgotten) => Ok(SessionMemoryStatus::Forgotten),
+        Ok(crate::grpc::SessionMemoryStatus::Unspecified) | Err(_) => Err(VmmClientError::new(
+            "incompatible_session_memory_status",
+            format!("VMM returned unsupported session memory status {status}"),
+        )),
     }
 }
 

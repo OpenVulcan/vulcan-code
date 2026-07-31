@@ -60,6 +60,13 @@ pub(crate) async fn save_vmm_memory_config(
                 request.draft.grpc_api_key =
                     configuration.vmm.grpc_api_key.clone().unwrap_or_default();
             }
+            if request.draft.management_bearer_token.trim() == WEBUI_REDACTED_SECRET_PLACEHOLDER {
+                request.draft.management_bearer_token = configuration
+                    .vmm
+                    .management_bearer_token
+                    .clone()
+                    .unwrap_or_default();
+            }
             configuration.vmm = vmm_config_layer_from_draft(&request.draft, true)?;
             Ok(())
         },
@@ -184,13 +191,23 @@ pub(crate) fn vmm_config_layer_from_draft(
             return Err(String::from("VMM 请求超时必须严格大于 PreCheck 意图超时。"));
         }
     }
-    Ok(vulcan_vmm::VmmConfigLayer {
+    let layer = vulcan_vmm::VmmConfigLayer {
         enabled: Some(draft.enabled),
         grpc_target: include_transport
             .then(|| vmm_non_empty_text(&draft.grpc_target))
             .flatten(),
         grpc_api_key: include_transport
             .then(|| vmm_non_empty_text(&draft.grpc_api_key))
+            .flatten(),
+        management_base_url: include_transport
+            .then(|| vmm_non_empty_text(&draft.management_base_url))
+            .flatten(),
+        management_bearer_token: include_transport
+            .then(|| vmm_non_empty_text(&draft.management_bearer_token))
+            .flatten(),
+        management_timeout_ms: include_transport
+            .then(|| vmm_parse_optional_u64(&draft.management_timeout_ms, "VMM 管理请求超时"))
+            .transpose()?
             .flatten(),
         handshake_timeout_ms: include_transport
             .then(|| vmm_parse_optional_u64(&draft.handshake_timeout_ms, "VMM 握手超时"))
@@ -256,7 +273,50 @@ pub(crate) fn vmm_config_layer_from_draft(
         } else {
             None
         },
-    })
+    };
+    validate_external_management_layer(&layer)?;
+    Ok(layer)
+}
+
+/// Validates the optional external management endpoint and secret as one inseparable pair.
+/// 将可选外部管理端点与密钥作为不可分割的一组进行校验。
+fn validate_external_management_layer(layer: &vulcan_vmm::VmmConfigLayer) -> Result<(), String> {
+    let base_url = layer.management_base_url.as_deref().map(str::trim);
+    let token = layer.management_bearer_token.as_deref().map(str::trim);
+    match (
+        base_url.filter(|value| !value.is_empty()),
+        token.filter(|value| !value.is_empty()),
+    ) {
+        (None, None) => return Ok(()),
+        (Some(_), None) => return Err(String::from("外部 VMM 管理地址已填写，但缺少管理 Token。")),
+        (None, Some(_)) => {
+            return Err(String::from("外部 VMM 管理 Token 已填写，但缺少管理地址。"));
+        }
+        (Some(_), Some(_)) => {}
+    }
+    let base_url = reqwest::Url::parse(base_url.unwrap_or_default())
+        .map_err(|error| format!("外部 VMM 管理地址无效：{error}"))?;
+    if !base_url.username().is_empty() || base_url.password().is_some() {
+        return Err(String::from("外部 VMM 管理地址不能包含账号或密码。"));
+    }
+    if base_url.query().is_some() || base_url.fragment().is_some() {
+        return Err(String::from("外部 VMM 管理地址不能包含查询参数或片段。"));
+    }
+    let loopback = base_url
+        .host_str()
+        .is_some_and(|host| matches!(host, "127.0.0.1" | "localhost" | "::1"));
+    if base_url.scheme() != "https" && !(base_url.scheme() == "http" && loopback) {
+        return Err(String::from("非回环 VMM 管理地址必须使用 HTTPS。"));
+    }
+    if layer
+        .management_timeout_ms
+        .is_some_and(|value| !(1_000..=120_000).contains(&value))
+    {
+        return Err(String::from(
+            "VMM 管理请求超时必须位于 1000 到 120000 毫秒之间。",
+        ));
+    }
+    Ok(())
 }
 
 /// Converts and validates the complete host-authoritative managed VMM behavior draft.

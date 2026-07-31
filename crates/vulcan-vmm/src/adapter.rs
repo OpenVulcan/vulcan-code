@@ -177,7 +177,7 @@ pub fn injection_from_precheck_response(
     response: &PreCheckResponse,
     config: &VmmEffectiveConfig,
 ) -> Option<InjectionInsert> {
-    if !response.should_inject {
+    if !response.session_memory_status.allows_runtime_memory() || !response.should_inject {
         return None;
     }
     let items = response

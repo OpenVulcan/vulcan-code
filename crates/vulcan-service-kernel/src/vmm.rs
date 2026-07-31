@@ -31,6 +31,7 @@ use crate::{
 mod config;
 mod external_health;
 mod health_monitor;
+mod management_http;
 mod memory_actions;
 mod snapshot;
 mod static_profile;

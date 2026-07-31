@@ -437,9 +437,8 @@ fn project_anthropic_request_controls(
     match &request.structured_output {
         StructuredOutputPolicy::None => {}
         StructuredOutputPolicy::JsonObject => {
-            return Err(ProtocolConversionError::new(
-                "Anthropic Messages requires an explicit JSON Schema for structured output.",
-            ));
+            // Anthropic has no schema-free JSON-object switch. Keep this provider-neutral policy non-blocking and let the shared finalizer parse the returned text as JSON.
+            // Anthropic 没有无 Schema 的 JSON 对象开关；此处保持公共策略非阻断，再由共享终结器把返回文本解析为 JSON。
         }
         StructuredOutputPolicy::JsonSchema { schema, .. } => {
             let output_config = body
@@ -451,13 +450,16 @@ fn project_anthropic_request_controls(
             });
         }
     }
-    if !matches!(
-        request.reasoning_output,
-        ReasoningOutputPolicy::ProviderDefault
-    ) {
-        return Err(ProtocolConversionError::new(
-            "Anthropic Messages has no registered public reasoning-output visibility projector.",
-        ));
+    match request.reasoning_output {
+        ReasoningOutputPolicy::ProviderDefault | ReasoningOutputPolicy::Hidden => {
+            // Anthropic exposes no separate "hide reasoning" response switch. Hidden remains a safe consumer-side policy because callers can ignore reasoning blocks without changing the upstream request.
+            // Anthropic 没有独立的“隐藏思考”响应开关；调用方可以忽略思考块，因此 Hidden 可作为不改变上游请求的安全消费侧策略。
+        }
+        ReasoningOutputPolicy::SummaryAuto | ReasoningOutputPolicy::Detailed => {
+            return Err(ProtocolConversionError::new(
+                "Anthropic Messages cannot project the requested public reasoning-output visibility.",
+            ));
+        }
     }
     Ok(())
 }
@@ -1331,6 +1333,58 @@ mod tests {
             .encode(&request(PromptCachePolicy::ProviderDefault))
             .expect("request should encode");
         assert!(encoded.body.get("cache_control").is_none());
+    }
+
+    /// Verifies schema-free JSON-object requests fall back to text JSON instead of failing protocol conversion.
+    /// 验证无 Schema 的 JSON 对象请求会回退为文本 JSON，而不是在协议转换阶段失败。
+    #[test]
+    fn json_object_uses_non_blocking_text_fallback() {
+        let mut public_request = request(PromptCachePolicy::ProviderDefault);
+        public_request.structured_output = StructuredOutputPolicy::JsonObject;
+        let encoded = AnthropicMessagesProfile
+            .encode(&public_request)
+            .expect("schema-free JSON object request should encode");
+        assert!(encoded.body.get("output_config").is_none());
+    }
+
+    /// Verifies explicit JSON Schema requests use Anthropic native structured output.
+    /// 验证显式 JSON Schema 请求会使用 Anthropic 原生结构化输出。
+    #[test]
+    fn json_schema_uses_native_output_format() {
+        let mut public_request = request(PromptCachePolicy::ProviderDefault);
+        public_request.structured_output = StructuredOutputPolicy::JsonSchema {
+            name: String::from("result"),
+            description: Some(String::from("Structured result")),
+            schema: json!({
+                "type": "object",
+                "properties": { "accepted": { "type": "boolean" } },
+                "required": ["accepted"],
+                "additionalProperties": false,
+            }),
+            strict: true,
+        };
+        let encoded = AnthropicMessagesProfile
+            .encode(&public_request)
+            .expect("explicit JSON Schema request should encode");
+        assert_eq!(
+            encoded.body["output_config"]["format"]["type"],
+            "json_schema"
+        );
+        assert_eq!(
+            encoded.body["output_config"]["format"]["schema"]["required"][0],
+            "accepted"
+        );
+    }
+
+    /// Verifies hidden reasoning is accepted as a consumer-side visibility policy.
+    /// 验证隐藏思考可作为消费侧可见性策略被接受。
+    #[test]
+    fn hidden_reasoning_output_is_non_blocking() {
+        let mut public_request = request(PromptCachePolicy::ProviderDefault);
+        public_request.reasoning_output = ReasoningOutputPolicy::Hidden;
+        AnthropicMessagesProfile
+            .encode(&public_request)
+            .expect("hidden reasoning output should not block Anthropic encoding");
     }
 
     /// Verifies Anthropic web search is encoded as a versioned server tool.

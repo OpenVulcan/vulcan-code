@@ -37,10 +37,10 @@ pub use managed::{
     MANAGED_CONTRACT_OWNER, MANAGED_CONTRACT_VERSION, MANAGED_INFERENCE_MODE, ManagedAssets,
     ManagedConfig, ManagedControllerLease, ManagedGrpcConfig, ManagedGrpcKeepalive,
     ManagedGrpcRequestTimeout, ManagedInferenceConfig, ManagedLoggingConfig,
-    ManagedMemoryPipelineConfig, ManagedNoiseConfig, ManagedParent, ManagedPiiConfig,
-    ManagedPostActionConfig, ManagedPreCheckConfig, ManagedPromptConfig, ManagedRelationalConfig,
-    ManagedRetentionConfig, ManagedRuntimeConfig, ManagedStatus, ManagedStorageConfig,
-    ManagedVectorConfig,
+    ManagedManagementConfig, ManagedMemoryPipelineConfig, ManagedNoiseConfig, ManagedParent,
+    ManagedPiiConfig, ManagedPostActionConfig, ManagedPreCheckConfig, ManagedPromptConfig,
+    ManagedRelationalConfig, ManagedRetentionConfig, ManagedRuntimeConfig, ManagedStatus,
+    ManagedStorageConfig, ManagedVectorConfig,
 };
 pub use protocol::{
     ApplyProfileInstructionRequest, ApplyProfileInstructionResponse, ChatCompactRequest,
@@ -54,8 +54,8 @@ pub use protocol::{
     PreCheckRequest, PreCheckResponse, ProfileBundleMode, ProfileNodeEntry, ProfileNodeSourceKind,
     ProfileTarget, ProjectEntry, ResolveProjectRequest, ResolveProjectResponse, ResolveUserRequest,
     ResolveUserResponse, RetiredProfileNodeEntry, SearchMemoryEventsRequest,
-    SearchMemoryEventsResponse, TurnDetailEntry, UserEntry, WriteMemoriesRequest,
-    WriteMemoriesResponse, WriteMemoryItem, WriteMemoryResultItem,
+    SearchMemoryEventsResponse, SessionMemoryStatus, TurnDetailEntry, UserEntry,
+    WriteMemoriesRequest, WriteMemoriesResponse, WriteMemoryItem, WriteMemoryResultItem,
 };
 pub use session_state::{
     VMM_SESSION_MEMORY_MAX_BYTES, VMM_SESSION_MEMORY_SCHEMA_VERSION, VmmCacheEpoch,

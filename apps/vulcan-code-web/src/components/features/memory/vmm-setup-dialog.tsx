@@ -45,6 +45,8 @@ interface VmmQuickSetupInput {
   projectName: string
   externalEndpoint: string
   externalApiKey: string
+  externalManagementBaseUrl: string
+  externalManagementToken: string
 }
 
 // VmmSetupDialogProps defines controlled visibility and the asynchronous setup action.
@@ -84,6 +86,8 @@ function VmmSetupDialog({
   const [projectName, setProjectName] = React.useState(defaultProjectName)
   const [externalEndpoint, setExternalEndpoint] = React.useState("")
   const [externalApiKey, setExternalApiKey] = React.useState("")
+  const [externalManagementBaseUrl, setExternalManagementBaseUrl] = React.useState("")
+  const [externalManagementToken, setExternalManagementToken] = React.useState("")
   const [inferenceReady, setInferenceReady] = React.useState(false)
   const [failed, setFailed] = React.useState(false)
   // submitting keeps the whole multi-request setup workflow visibly exclusive.
@@ -101,6 +105,8 @@ function VmmSetupDialog({
     setProjectName(defaultProjectName)
     setExternalEndpoint("")
     setExternalApiKey("")
+    setExternalManagementBaseUrl("")
+    setExternalManagementToken("")
     setInferenceReady(false)
     setFailed(false)
     setSubmitting(false)
@@ -108,7 +114,10 @@ function VmmSetupDialog({
 
   const effectiveBusy = busy || submitting
   const identityComplete = userName.trim().length > 0 && projectName.trim().length > 0
-  const connectionComplete = mode === "managed" || externalEndpoint.trim().length > 0
+  const connectionComplete = mode === "managed"
+    || (externalEndpoint.trim().length > 0
+      && externalManagementBaseUrl.trim().length > 0
+      && externalManagementToken.trim().length > 0)
   const canAdvance = step === 0
     ? connectionComplete
     : step === 1
@@ -137,6 +146,8 @@ function VmmSetupDialog({
         projectName: projectName.trim(),
         externalEndpoint: externalEndpoint.trim(),
         externalApiKey,
+        externalManagementBaseUrl: externalManagementBaseUrl.trim(),
+        externalManagementToken,
       })
       if (completed) {
         onOpenChange(false)
@@ -150,6 +161,8 @@ function VmmSetupDialog({
     canSubmit,
     externalApiKey,
     externalEndpoint,
+    externalManagementBaseUrl,
+    externalManagementToken,
     mode,
     onOpenChange,
     onSubmit,
@@ -180,9 +193,13 @@ function VmmSetupDialog({
             <SetupModeStep
               apiKey={externalApiKey}
               endpoint={externalEndpoint}
+              managementBaseUrl={externalManagementBaseUrl}
+              managementToken={externalManagementToken}
               mode={mode}
               onApiKeyChange={setExternalApiKey}
               onEndpointChange={setExternalEndpoint}
+              onManagementBaseUrlChange={setExternalManagementBaseUrl}
+              onManagementTokenChange={setExternalManagementToken}
               onModeChange={setMode}
             />
           ) : null}
@@ -292,16 +309,24 @@ function VmmSetupDialog({
 function SetupModeStep({
   apiKey,
   endpoint,
+  managementBaseUrl,
+  managementToken,
   mode,
   onApiKeyChange,
   onEndpointChange,
+  onManagementBaseUrlChange,
+  onManagementTokenChange,
   onModeChange,
 }: {
   apiKey: string
   endpoint: string
+  managementBaseUrl: string
+  managementToken: string
   mode: VmmQuickSetupMode
   onApiKeyChange: (value: string) => void
   onEndpointChange: (value: string) => void
+  onManagementBaseUrlChange: (value: string) => void
+  onManagementTokenChange: (value: string) => void
   onModeChange: (value: VmmQuickSetupMode) => void
 }) {
   const { t } = useI18n()
@@ -342,7 +367,7 @@ function SetupModeStep({
         </label>
       </RadioGroup>
       {mode === "external" ? (
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4 rounded-xl border p-4 sm:grid-cols-2">
           <div className="space-y-2">
             <Label htmlFor="vmm-setup-endpoint">{t("memory.advanced.endpoint")}</Label>
             <Input
@@ -359,6 +384,24 @@ function SetupModeStep({
               onChange={(event) => onApiKeyChange(event.target.value)}
               type="password"
               value={apiKey}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="vmm-setup-management-url">{t("memory.advanced.managementEndpoint")}</Label>
+            <Input
+              id="vmm-setup-management-url"
+              onChange={(event) => onManagementBaseUrlChange(event.target.value)}
+              placeholder="http://127.0.0.1:17635"
+              value={managementBaseUrl}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="vmm-setup-management-token">{t("memory.advanced.managementToken")}</Label>
+            <Input
+              id="vmm-setup-management-token"
+              onChange={(event) => onManagementTokenChange(event.target.value)}
+              type="password"
+              value={managementToken}
             />
           </div>
         </div>

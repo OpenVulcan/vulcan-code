@@ -384,6 +384,18 @@ pub struct VmmConfigLayer {
     /// 可选 gRPC API key。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grpc_api_key: Option<String>,
+    /// Optional external VMM management API base URL.
+    /// 可选外部 VMM 管理 API 基础地址。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub management_base_url: Option<String>,
+    /// Optional external VMM management bearer token.
+    /// 可选外部 VMM 管理 Bearer Token。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub management_bearer_token: Option<String>,
+    /// Optional external VMM management request timeout in milliseconds.
+    /// 可选外部 VMM 管理请求超时，单位毫秒。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub management_timeout_ms: Option<u64>,
     /// Optional handshake timeout in milliseconds.
     /// 可选握手超时时间，单位毫秒。
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -20,6 +20,34 @@ pub enum PreCheckRecallMode {
     PreCheckRecallModeFull,
 }
 
+/// Authoritative VMM lifecycle state for one resolved conversation session.
+/// 单个已解析会话的 VMM 权威生命周期状态。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionMemoryStatus {
+    /// Normal recall and persistence are enabled.
+    /// 启用正常召回与持久化。
+    #[default]
+    Active,
+    /// Hidden from default management lists while runtime memory remains enabled.
+    /// 从默认管理列表隐藏，但运行时记忆仍然启用。
+    Archived,
+    /// Recoverable data is in the recycle bin and runtime memory is paused.
+    /// 可恢复数据位于回收站，运行时记忆已暂停。
+    Recycled,
+    /// Content was permanently purged and only a no-content tombstone remains.
+    /// 内容已永久清理，仅保留无内容墓碑。
+    Forgotten,
+}
+
+impl SessionMemoryStatus {
+    /// Returns whether recall and writeback are allowed in this lifecycle state.
+    /// 返回当前生命周期状态是否允许召回与写回。
+    pub const fn allows_runtime_memory(self) -> bool {
+        matches!(self, Self::Active | Self::Archived)
+    }
+}
+
 impl PreCheckRecallMode {
     /// Returns the current proto enum label.
     /// 返回当前 proto 枚举标签。
@@ -103,6 +131,10 @@ pub struct PreCheckResponse {
     /// VMM 返回的追踪标识。
     #[serde(default)]
     pub trace_id: String,
+    /// Authoritative lifecycle state returned by VMM.
+    /// VMM 返回的权威生命周期状态。
+    #[serde(default)]
+    pub session_memory_status: SessionMemoryStatus,
 }
 
 /// VMM timeline item role accepted by PostAction.
@@ -179,6 +211,10 @@ pub struct PostActionResponse {
     /// VMM 返回的追踪标识。
     #[serde(default)]
     pub trace_id: String,
+    /// Authoritative lifecycle state returned by VMM.
+    /// VMM 返回的权威生命周期状态。
+    #[serde(default)]
+    pub session_memory_status: SessionMemoryStatus,
 }
 
 /// Request body for VMM ChatCompact.

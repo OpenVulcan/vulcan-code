@@ -1,11 +1,13 @@
 //! Strongly typed Vulcan Code managed-runtime manifest and readiness contracts.
 //! Vulcan Code 托管运行时清单与就绪握手的强类型契约。
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 /// Exact managed manifest version accepted by both processes.
 /// 两个进程共同接受的精确托管清单版本。
-pub const MANAGED_CONTRACT_VERSION: u32 = 1;
+pub const MANAGED_CONTRACT_VERSION: u32 = 2;
 
 /// Stable authority owner written into every generated manifest.
 /// 写入每份生成清单的稳定权威所有者。
@@ -115,6 +117,63 @@ pub struct ManagedGrpcConfig {
     /// Server keepalive configuration.
     /// 服务端保活配置。
     pub keepalive: ManagedGrpcKeepalive,
+}
+
+/// Contains the isolated HTTP management listener, credential, and resource limits.
+/// 包含隔离的 HTTP 管理监听器、凭据与资源限制。
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedManagementConfig {
+    /// Preferred loopback address, with dynamic fallback controlled separately.
+    /// 首选回环地址，动态回退由独立字段控制。
+    pub preferred_listen_addr: String,
+    /// Allows binding a dynamic loopback port when the preferred port is busy.
+    /// 首选端口被占用时是否允许绑定动态回环端口。
+    pub allow_ephemeral_fallback: bool,
+    /// Ephemeral process-local management Bearer token.
+    /// 进程级临时管理 Bearer Token。
+    pub access_token: String,
+    /// Maximum decoded HTTP request body size.
+    /// HTTP 请求体解码前的最大字节数。
+    pub max_request_body_bytes: u64,
+    /// Default collection page size.
+    /// 集合默认分页大小。
+    pub default_page_size: u32,
+    /// Maximum accepted collection page size.
+    /// 集合允许的最大分页大小。
+    pub max_page_size: u32,
+    /// HTTP request-header read timeout.
+    /// HTTP 请求头读取超时。
+    pub read_header_timeout: String,
+    /// HTTP request processing timeout.
+    /// HTTP 请求处理超时。
+    pub request_timeout: String,
+    /// HTTP idle connection timeout.
+    /// HTTP 空闲连接超时。
+    pub idle_timeout: String,
+    /// Graceful HTTP shutdown timeout.
+    /// HTTP 优雅关闭超时。
+    pub shutdown_timeout: String,
+}
+
+/// Redacts the management Bearer token from every debug representation.
+/// 从所有调试表示中脱敏管理 Bearer Token。
+impl fmt::Debug for ManagedManagementConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ManagedManagementConfig")
+            .field("preferred_listen_addr", &self.preferred_listen_addr)
+            .field("allow_ephemeral_fallback", &self.allow_ephemeral_fallback)
+            .field("access_token", &"<redacted>")
+            .field("max_request_body_bytes", &self.max_request_body_bytes)
+            .field("default_page_size", &self.default_page_size)
+            .field("max_page_size", &self.max_page_size)
+            .field("read_header_timeout", &self.read_header_timeout)
+            .field("request_timeout", &self.request_timeout)
+            .field("idle_timeout", &self.idle_timeout)
+            .field("shutdown_timeout", &self.shutdown_timeout)
+            .finish()
+    }
 }
 
 /// Contains lease and timeout settings for the shared external Controller.
@@ -455,6 +514,9 @@ pub struct ManagedRuntimeConfig {
     /// Managed gRPC configuration.
     /// 托管 gRPC 配置。
     pub grpc: ManagedGrpcConfig,
+    /// Managed HTTP administration configuration.
+    /// 托管 HTTP 管理配置。
+    pub management: ManagedManagementConfig,
     /// Managed storage configuration.
     /// 托管存储配置。
     pub storage: ManagedStorageConfig,
@@ -550,7 +612,44 @@ pub struct ManagedStatus {
     /// gRPC protocol version.
     /// gRPC 协议版本。
     pub grpc_proto_version: u32,
+    /// Actual loopback HTTP management address.
+    /// 实际回环 HTTP 管理地址。
+    pub management_listen_addr: String,
+    /// Management HTTP protocol version.
+    /// 管理 HTTP 协议版本。
+    pub management_protocol_version: u32,
+    /// Indicates that every required management listener finished binding.
+    /// 表示全部必需管理监听器已经完成绑定。
+    pub management_ready: bool,
     /// Vulcan inference protocol version.
     /// Vulcan 推理协议版本。
     pub inference_protocol_version: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ManagedManagementConfig;
+
+    /// Verifies debug formatting retains diagnostics while never exposing the management token.
+    /// 验证调试格式保留诊断字段但绝不暴露管理 Token。
+    #[test]
+    fn management_debug_redacts_access_token() {
+        let config = ManagedManagementConfig {
+            preferred_listen_addr: String::from("127.0.0.1:0"),
+            allow_ephemeral_fallback: true,
+            access_token: String::from("management-secret"),
+            max_request_body_bytes: 1 << 20,
+            default_page_size: 30,
+            max_page_size: 100,
+            read_header_timeout: String::from("5s"),
+            request_timeout: String::from("30s"),
+            idle_timeout: String::from("1m"),
+            shutdown_timeout: String::from("10s"),
+        };
+
+        let debug = format!("{config:?}");
+        assert!(debug.contains("<redacted>"));
+        assert!(debug.contains("127.0.0.1:0"));
+        assert!(!debug.contains("management-secret"));
+    }
 }
