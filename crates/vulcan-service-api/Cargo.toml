@@ -18,3 +18,4 @@ serde_json.workspace = true
 time = { version = "0.3.44", features = ["formatting", "local-offset", "macros", "serde"] }
 vulcan-ai-contract.workspace = true
 vulcan-luaskills-config.workspace = true
+vulcan-vmm.workspace = true

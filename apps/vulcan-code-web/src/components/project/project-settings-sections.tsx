@@ -3,7 +3,7 @@ import { StatusPill } from "@/components/shared/status";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { VmmSelectField, vmmPolicyModeOptions } from "@/components/features/memory/vmm-memory-components";
+import { VmmSelectField, vmmPolicyModeOptions } from "@/components/features/memory/vmm-project-settings-fields";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type {

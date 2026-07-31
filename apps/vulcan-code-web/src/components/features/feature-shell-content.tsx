@@ -52,6 +52,12 @@ export function FeatureContent(props: {
   // Service-backed VMM memory page actions.
   // 服务端支持的 VMM 记忆页面动作。
   memoryActions: MemoryActionProps;
+  // Updates the selected VMM memory sub page.
+  // 更新选中的 VMM 记忆子页面。
+  onSelectMemorySubArea: (area: MemorySubAreaId) => void;
+  // Opens credential management for memory inference prerequisites.
+  // 为记忆推理前置条件打开凭据管理。
+  onOpenCredentialManagement: () => void;
   // Service-backed settings page actions.
   // 服务端支持的设置页面动作。
   settingsActions: SettingsActionProps;
@@ -102,7 +108,8 @@ export function FeatureContent(props: {
         <MemoryArea
           activeSection={props.activeMemorySubArea}
           actions={props.memoryActions}
-          memories={props.workbench.memories}
+          onOpenCredentialManagement={props.onOpenCredentialManagement}
+          onSelectSection={props.onSelectMemorySubArea}
           snapshot={props.workbench.vmmMemory}
         />
       </div>

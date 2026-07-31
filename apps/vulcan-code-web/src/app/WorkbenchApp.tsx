@@ -24,6 +24,7 @@ import {
   serviceClient,
 } from "@/service/webui-service-runtime";
 import {
+  loadStartupSnapshot,
   loadWorkbenchSnapshot,
 } from "@/service/workbench-snapshot-service";
 import { ConversationLiveStreamProvider } from "@/state/conversation-live-stream-context";
@@ -60,6 +61,9 @@ export function WorkbenchApp(props: {
   // workbench stores the latest workbench snapshot.
   // workbench 保存最近一次工作台快照。
   const [workbench, setWorkbench] = React.useState<WorkbenchSnapshot | null>(null);
+  // serviceInstanceEpoch identifies the browser-visible local service generation.
+  // serviceInstanceEpoch 标识浏览器当前可见的本地服务代次。
+  const [serviceInstanceEpoch, setServiceInstanceEpoch] = React.useState(0);
   // liveStreamStore owns ordered streamed bodies without routing every fragment through global React state.
   // liveStreamStore 持有有序流式正文，避免每个片段经过全局 React 状态。
   const [liveStreamStore] = React.useState(() => new ConversationLiveStreamStore());
@@ -118,51 +122,16 @@ export function WorkbenchApp(props: {
   }, []);
 
   React.useEffect(() => {
-    // handleConnectionStatusChange maps transport-level connection changes to user-visible toasts.
-    // handleConnectionStatusChange 将传输层连接变化映射为用户可见的提示。
-    function handleConnectionStatusChange(event: Event) {
-      const detail = (event as CustomEvent<BrowserServiceConnectionDetail>).detail;
-      if (!detail) {
-        return;
-      }
-      if (detail.status === "connected") {
-        serviceHasConnectedRef.current = true;
-        if (serviceWasDisconnectedRef.current) {
-          serviceWasDisconnectedRef.current = false;
-          toast.success(webuiAppTranslation(appLocaleRef.current, "app.serviceConnectionRestored"), {
-            id: BROWSER_SERVICE_CONNECTION_TOAST_ID,
-            duration: 2200,
-          });
-        }
-        return;
-      }
-      if (!serviceHasConnectedRef.current) {
-        return;
-      }
-      serviceWasDisconnectedRef.current = true;
-      if (detail.status === "reconnecting") {
-        toast.loading(webuiAppTranslation(appLocaleRef.current, "app.serviceReconnecting"), {
-          id: BROWSER_SERVICE_CONNECTION_TOAST_ID,
-        });
-        return;
-      }
-      toast.loading(webuiAppTranslation(appLocaleRef.current, "app.serviceCheckingRecovery"), {
-        id: BROWSER_SERVICE_CONNECTION_TOAST_ID,
-        description: detail.message,
-      });
-    }
-
-    window.addEventListener(BROWSER_SERVICE_CONNECTION_EVENT, handleConnectionStatusChange);
-    return () => {
-      window.removeEventListener(BROWSER_SERVICE_CONNECTION_EVENT, handleConnectionStatusChange);
-    };
-  }, []);
-
-  React.useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
     let retryTimer: number | null = null;
     let retryDelayMs = 500;
+    // reconnectSnapshotTimer stores the pending authoritative snapshot reload after a service reconnect.
+    // reconnectSnapshotTimer 保存服务重连后等待执行的权威快照重载定时器。
+    let reconnectSnapshotTimer: number | null = null;
+    // reconnectEpoch invalidates snapshot reloads that belong to an earlier connection generation.
+    // reconnectEpoch 使属于较早连接代次的快照重载失效。
+    let reconnectEpoch = 0;
 
     // scheduleBootstrapRetry retries service discovery after transient startup races.
     // scheduleBootstrapRetry 在瞬时启动竞态后重试服务发现。
@@ -280,10 +249,16 @@ export function WorkbenchApp(props: {
         return;
       }
       workbenchDeltaRecoveringRef.current = true;
+      // requestedAtSnapshotSequence rejects a response superseded by another full snapshot or reconnect.
+      // requestedAtSnapshotSequence 拒绝已被另一份全量快照或重连边界取代的响应。
+      const requestedAtSnapshotSequence = workbenchSnapshotSeqRef.current;
       let shouldRetryRecovery = false;
       try {
         const recoveredWorkbench = await loadWorkbenchSnapshot();
-        if (cancelled) {
+        if (
+          cancelled
+          || requestedAtSnapshotSequence !== workbenchSnapshotSeqRef.current
+        ) {
           return;
         }
         const revision = recoveredWorkbench.revision ?? 0;
@@ -309,6 +284,125 @@ export function WorkbenchApp(props: {
       if (shouldRetryRecovery && !cancelled) {
         scheduleDeltaGapRecovery();
       }
+    }
+
+    // clearReconnectSnapshotTimer cancels one pending reconnect snapshot retry.
+    // clearReconnectSnapshotTimer 取消一次等待中的重连快照重试。
+    function clearReconnectSnapshotTimer() {
+      if (reconnectSnapshotTimer !== null) {
+        window.clearTimeout(reconnectSnapshotTimer);
+        reconnectSnapshotTimer = null;
+      }
+    }
+
+    // resetStreamOrderingForReconnect removes state owned by the previous service instance.
+    // resetStreamOrderingForReconnect 移除由上一服务实例持有的流排序状态。
+    function resetStreamOrderingForReconnect() {
+      if (workbenchDeltaTimerRef.current !== null) {
+        window.clearTimeout(workbenchDeltaTimerRef.current);
+        workbenchDeltaTimerRef.current = null;
+      }
+      clearDeltaGapTimer();
+      workbenchDeltaBufferRef.current = [];
+      workbenchDeltaPendingRef.current.clear();
+      workbenchDeltaRecoveringRef.current = false;
+      workbenchRevisionRef.current = 0;
+      workbenchSnapshotSeqRef.current += 1;
+      setWorkbenchDelta(null);
+    }
+
+    // reloadSnapshotsAfterReconnect rebases the UI on the newly connected service instance.
+    // reloadSnapshotsAfterReconnect 以新连接的服务实例为基准重新装载界面状态。
+    async function reloadSnapshotsAfterReconnect(
+      epoch: number,
+      snapshotSequence: number,
+      retryAttempt: number,
+    ) {
+      try {
+        const [nextStartup, nextWorkbench] = await Promise.all([
+          loadStartupSnapshot(),
+          loadWorkbenchSnapshot(),
+        ]);
+        if (cancelled || epoch !== reconnectEpoch) {
+          return;
+        }
+        setStartup(nextStartup);
+        setServiceInstanceEpoch(epoch);
+        // A workbench event may have delivered a newer full snapshot while the HTTP reload was in flight.
+        // HTTP 重载进行期间，工作台事件可能已经送达更新的全量快照。
+        if (snapshotSequence === workbenchSnapshotSeqRef.current) {
+          const revision = nextWorkbench.revision ?? 0;
+          liveStreamStore.rebaseWorkbenchSnapshot(nextWorkbench);
+          liveStreamStore.flushNotifications();
+          discardBufferedDeltasThroughRevision(revision);
+          workbenchRevisionRef.current = revision;
+          workbenchSnapshotSeqRef.current += 1;
+          setWorkbench(nextWorkbench);
+          workbenchRef.current = nextWorkbench;
+          drainContiguousDeltas();
+        }
+        toast.success(
+          webuiAppTranslation(appLocaleRef.current, "app.serviceConnectionRestored"),
+          {
+            id: BROWSER_SERVICE_CONNECTION_TOAST_ID,
+            duration: 2200,
+          },
+        );
+      } catch (reloadError) {
+        if (cancelled || epoch !== reconnectEpoch) {
+          return;
+        }
+        console.warn("Failed to reload service snapshots after reconnect.", reloadError);
+        const delay = Math.min(500 * (2 ** retryAttempt), 5000);
+        clearReconnectSnapshotTimer();
+        reconnectSnapshotTimer = window.setTimeout(() => {
+          reconnectSnapshotTimer = null;
+          void reloadSnapshotsAfterReconnect(epoch, snapshotSequence, retryAttempt + 1);
+        }, delay);
+      }
+    }
+
+    // handleConnectionStatusChange restores authoritative snapshots after a real disconnect.
+    // handleConnectionStatusChange 在真实断线后恢复权威快照。
+    function handleConnectionStatusChange(event: Event) {
+      const detail = (event as CustomEvent<BrowserServiceConnectionDetail>).detail;
+      if (!detail) {
+        return;
+      }
+      if (detail.status === "connected") {
+        serviceHasConnectedRef.current = true;
+        if (!serviceWasDisconnectedRef.current) {
+          return;
+        }
+        serviceWasDisconnectedRef.current = false;
+        reconnectEpoch += 1;
+        clearReconnectSnapshotTimer();
+        resetStreamOrderingForReconnect();
+        const epoch = reconnectEpoch;
+        const snapshotSequence = workbenchSnapshotSeqRef.current;
+        toast.loading(
+          webuiAppTranslation(appLocaleRef.current, "app.serviceCheckingRecovery"),
+          { id: BROWSER_SERVICE_CONNECTION_TOAST_ID },
+        );
+        void reloadSnapshotsAfterReconnect(epoch, snapshotSequence, 0);
+        return;
+      }
+      if (!serviceHasConnectedRef.current) {
+        return;
+      }
+      serviceWasDisconnectedRef.current = true;
+      reconnectEpoch += 1;
+      clearReconnectSnapshotTimer();
+      if (detail.status === "reconnecting") {
+        toast.loading(webuiAppTranslation(appLocaleRef.current, "app.serviceReconnecting"), {
+          id: BROWSER_SERVICE_CONNECTION_TOAST_ID,
+        });
+        return;
+      }
+      toast.loading(webuiAppTranslation(appLocaleRef.current, "app.serviceCheckingRecovery"), {
+        id: BROWSER_SERVICE_CONNECTION_TOAST_ID,
+        description: detail.message,
+      });
     }
 
     // scheduleDeltaGapRecovery waits for late deltas before using a full snapshot to bridge the gap.
@@ -424,9 +518,13 @@ export function WorkbenchApp(props: {
       }
     }
 
+    window.addEventListener(BROWSER_SERVICE_CONNECTION_EVENT, handleConnectionStatusChange);
     void bootstrap();
     return () => {
       cancelled = true;
+      reconnectEpoch += 1;
+      window.removeEventListener(BROWSER_SERVICE_CONNECTION_EVENT, handleConnectionStatusChange);
+      clearReconnectSnapshotTimer();
       if (workbenchDeltaTimerRef.current !== null) {
         window.clearTimeout(workbenchDeltaTimerRef.current);
         workbenchDeltaTimerRef.current = null;
@@ -459,7 +557,12 @@ export function WorkbenchApp(props: {
     <I18nProvider initialLocale={workbench.uiLocale ?? startup.uiLocale}>
       <TooltipProvider>
         <ConversationLiveStreamProvider store={liveStreamStore}>
-          <WorkbenchLayout startup={startup} workbench={workbench} workbenchDelta={workbenchDelta} />
+          <WorkbenchLayout
+            serviceInstanceEpoch={serviceInstanceEpoch}
+            startup={startup}
+            workbench={workbench}
+            workbenchDelta={workbenchDelta}
+          />
         </ConversationLiveStreamProvider>
         <Toaster />
       </TooltipProvider>

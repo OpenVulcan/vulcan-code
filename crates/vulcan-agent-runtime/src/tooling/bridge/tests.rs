@@ -117,10 +117,10 @@ fn implicit_luaskills_dispatch_uses_canonical_name() {
     assert_eq!(view.canonical_name, "vulcan-codekit-ast-tree");
 }
 
-/// Verifies VMM memory tools stay hidden until the effective VMM config is ready and AI tools are enabled.
-/// 验证 VMM 记忆工具在最终 VMM 配置就绪且 AI 工具启用前保持隐藏。
+/// Verifies VMM memory tools require ready configuration, enabled AI tools, and one live runtime.
+/// 验证 VMM 记忆工具要求配置就绪、AI 工具启用且运行时实时可用。
 #[test]
-fn vmm_memory_tools_are_filtered_by_effective_config() {
+fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
     let runtime_config = crate::agent_runtime::config::AgentRuntimeConfig {
         active_model: None,
         active_agent_id: String::from("agent-a"),
@@ -131,6 +131,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config() {
         enabled_mcp_server_ids: Vec::new(),
     };
     let global_vmm = VmmConfigLayer {
+        enabled: Some(true),
         grpc_target: Some(String::from("127.0.0.1:19090")),
         user_id: Some(1),
         project_id: Some(2),
@@ -174,6 +175,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config() {
         Vec::new(),
         VmmConfigLayer::default(),
         VmmConfigLayer::default(),
+        true,
     );
     let enabled_ids = enabled_manager
         .resolve_for_execution_mode("Build")
@@ -187,6 +189,42 @@ fn vmm_memory_tools_are_filtered_by_effective_config() {
     assert!(enabled_ids.iter().any(|id| id == "vmm_memory_delete"));
 
     let disabled_manager = build_vulcan_tools_manager(
+        Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
+        Arc::new(crate::agent_runtime::question_runtime::QuestionRuntime::new()),
+        native_catalog.clone(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        None,
+        None,
+        None,
+        None,
+        base_ids.clone(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        None,
+        Default::default(),
+        Vec::new(),
+        None,
+        Vec::new(),
+        VmmConfigLayer::default(),
+        VmmConfigLayer {
+            enabled: Some(false),
+            ai_tools_enabled: Some(true),
+            ..VmmConfigLayer::default()
+        },
+        true,
+    );
+    let disabled_ids = disabled_manager
+        .resolve_for_execution_mode("Build")
+        .descriptors
+        .into_iter()
+        .map(|descriptor| descriptor.id)
+        .collect::<Vec<_>>();
+    assert!(!disabled_ids.iter().any(|id| id.starts_with("vmm_")));
+
+    let stopped_manager = build_vulcan_tools_manager(
         Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
         Arc::new(crate::agent_runtime::question_runtime::QuestionRuntime::new()),
         native_catalog,
@@ -207,16 +245,14 @@ fn vmm_memory_tools_are_filtered_by_effective_config() {
         None,
         Vec::new(),
         VmmConfigLayer::default(),
-        VmmConfigLayer {
-            ai_tools_enabled: Some(false),
-            ..VmmConfigLayer::default()
-        },
+        VmmConfigLayer::default(),
+        false,
     );
-    let disabled_ids = disabled_manager
+    let stopped_ids = stopped_manager
         .resolve_for_execution_mode("Build")
         .descriptors
         .into_iter()
         .map(|descriptor| descriptor.id)
         .collect::<Vec<_>>();
-    assert!(!disabled_ids.iter().any(|id| id.starts_with("vmm_")));
+    assert!(!stopped_ids.iter().any(|id| id.starts_with("vmm_")));
 }

@@ -873,6 +873,7 @@ mod tests {
             hydrated_conversation_windows: BTreeMap::new(),
             agent_runtime: None,
             codebase_memory_controller: Default::default(),
+            managed_memory_mesh_runtime: None,
             service_runtime: None,
             webui_service_discovery: None,
             controller_runtime: None,

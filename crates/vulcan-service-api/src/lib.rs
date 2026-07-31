@@ -90,6 +90,7 @@ pub use workspace_context::*;
 #[cfg(test)]
 mod tests {
     use super::{
+        VmmMaintenancePhase, VmmMaintenanceSummary, VmmMemoryActionResponse,
         WEBUI_REDACTED_SECRET_PLACEHOLDER, WEBUI_SERVICE_HTTP_PORT, WEBUI_SERVICE_HTTP_PORT_END,
         WEBUI_SERVICE_LOOPBACK_HOST, WEBUI_STATIC_DIR_ENV, build_webui_static_response,
         redact_webui_service_rpc_secrets, webui_service_discovery_snapshot_path,
@@ -162,6 +163,24 @@ mod tests {
         assert!(!webui_service_rpc_secret_key_should_be_redacted(
             "targetChoices"
         ));
+    }
+
+    /// Verifies typed VMM action responses serialize to the tagged WebUI contract.
+    /// 验证强类型 VMM 动作响应会序列化为带标签的 WebUI 契约。
+    #[test]
+    fn vmm_action_response_serializes_tagged_maintenance_data() {
+        let response = VmmMemoryActionResponse::Maintenance(VmmMaintenanceSummary {
+            phase: VmmMaintenancePhase::Rebuilding,
+            progress_percent: 50,
+            message: String::from("rebuilding"),
+            ..VmmMaintenanceSummary::default()
+        });
+
+        let value = serde_json::to_value(response).expect("serialize typed VMM response");
+
+        assert_eq!(value["kind"], "maintenance");
+        assert_eq!(value["value"]["phase"], "rebuilding");
+        assert_eq!(value["value"]["progressPercent"], 50);
     }
 
     /// Verifies WebUI static route paths cannot traverse outside the bundle directory.

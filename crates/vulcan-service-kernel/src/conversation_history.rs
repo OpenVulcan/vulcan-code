@@ -947,6 +947,7 @@ pub(super) async fn load_hydrated_session_workbench(
             .map(|runtime| runtime.public_ai_runtime.as_ref()),
         workspace: &refreshed_snapshot,
         vmm_session_states: &vmm_session_states,
+        managed_vmm_runtime: None,
         surface_messages: surface_messages.as_slice(),
         subagent_navigation,
         pending_questions: pending_question_snapshots_from_agent_runtime(

@@ -331,6 +331,16 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         );
     }
     let mut request = continuation.request;
+    // Live VMM readiness is captured at turn admission so model-visible memory tools cannot outlive
+    // a stopped or failed transport. Child tasks inherit the same immutable request fact.
+    // 在回合准入时捕获 VMM 实时就绪状态，避免模型可见记忆工具在传输停止或失败后继续暴露；子任务继承同一不可变请求事实。
+    request.vmm_runtime_ready = state
+        .lock()
+        .map_err(|error| format!("读取 VMM 实时就绪状态失败：{error}"))?
+        .workbench
+        .vmm_memory
+        .runtime
+        .process_ready;
     request.provider_id_override = agent_runtime.provider_id_override.clone();
     request.model_id_override = agent_runtime.model_id_override.clone();
     request.connection_id_override = None;

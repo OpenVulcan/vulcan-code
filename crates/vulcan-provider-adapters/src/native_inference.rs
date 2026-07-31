@@ -43,6 +43,10 @@ const ALIBABA_EMBEDDING_BINDING_ID: &str = "alibaba.model_studio.embeddings.v1";
 /// 阿里云重排的稳定原生绑定标识。
 const ALIBABA_RERANK_BINDING_ID: &str = "alibaba.model_studio.rerank.v1";
 
+/// Exact documented DashScope path for Alibaba text reranking.
+/// 阿里云文本重排的精确文档化 DashScope 路径。
+const ALIBABA_RERANK_ENDPOINT_PATH: &str = "/api/v1/services/rerank/text-rerank/text-rerank";
+
 /// Returns the exact registered native action binding for one provider product operation.
 /// 返回一个供应商产品操作对应的精确已注册原生动作绑定。
 ///
@@ -179,7 +183,7 @@ impl NativeInferenceRoute {
             }
             ("alibaba", "model-studio-cn" | "model-studio-singapore") => Ok((
                 Self::AlibabaModelStudio,
-                "/reranks",
+                ALIBABA_RERANK_ENDPOINT_PATH,
                 ALIBABA_RERANK_BINDING_ID,
             )),
             _ => Err(pre_dispatch_failure(format!(
@@ -397,7 +401,7 @@ impl ProviderExecutionClient {
             request,
         )?;
         let response = self
-            .send_native_json(route, endpoint, &wire_request, secret)
+            .send_native_json(native_route, route, endpoint, &wire_request, secret)
             .await?;
         let wire: WireEmbeddingResponse =
             serde_json::from_str(response.as_str()).map_err(|error| {
@@ -462,7 +466,7 @@ impl ProviderExecutionClient {
             fingerprint: EmbeddingSpaceFingerprint {
                 provider_id: route.provider.id.clone(),
                 service_entry_id: route.entry.id.clone(),
-                deployment_id: None,
+                deployment_id: Some(route.connection.credential_id.clone()),
                 secondary_route_id: secondary_route_id(&route.secondary_route),
                 model_id: model.id.clone(),
                 binding_id: binding_id.to_string(),
@@ -475,6 +479,7 @@ impl ProviderExecutionClient {
                 distance_metric: capabilities.distance_metric,
             },
             results,
+            dropped: Vec::new(),
             usage: normalized_usage(wire.usage),
             duration_ms: elapsed_milliseconds(started_at),
         })
@@ -522,7 +527,7 @@ impl ProviderExecutionClient {
             request,
         )?;
         let response = self
-            .send_native_json(route, endpoint, &wire_request, secret)
+            .send_native_json(native_route, route, endpoint, &wire_request, secret)
             .await?;
         let wire: WireRerankResponse =
             serde_json::from_str(response.as_str()).map_err(|error| {
@@ -573,7 +578,7 @@ impl ProviderExecutionClient {
             fingerprint: RerankProfileFingerprint {
                 provider_id: route.provider.id.clone(),
                 service_entry_id: route.entry.id.clone(),
-                deployment_id: None,
+                deployment_id: Some(route.connection.credential_id.clone()),
                 secondary_route_id: secondary_route_id(&route.secondary_route),
                 model_id: model.id.clone(),
                 binding_id: binding_id.to_string(),
@@ -600,13 +605,14 @@ impl ProviderExecutionClient {
     /// 返回完整有界 UTF-8 JSON 文本或结构化执行失败。
     async fn send_native_json<T: Serialize>(
         &self,
+        native_route: NativeInferenceRoute,
         route: &ProviderExecutionRoute,
         endpoint: &str,
         body: &T,
         secret: &CredentialExecutionSecret,
     ) -> Result<String, ProviderExecutionFailure> {
         let headers = execution_headers(route, &BTreeMap::new(), secret)?;
-        let url = native_request_url(route.entry.base_url.as_str(), endpoint);
+        let url = native_request_url(native_route, route.entry.base_url.as_str(), endpoint)?;
         let response = self
             .http
             .post(url.as_str())
@@ -662,8 +668,25 @@ impl ProviderExecutionClient {
 /// 返回值
 /// One URL without inventing or duplicating protocol path segments.
 /// 返回不虚构或重复协议路径段的 URL。
-fn native_request_url(base_url: &str, endpoint: &str) -> String {
-    format!("{}{}", base_url.trim_end_matches('/'), endpoint)
+fn native_request_url(
+    native_route: NativeInferenceRoute,
+    base_url: &str,
+    endpoint: &str,
+) -> Result<String, ProviderExecutionFailure> {
+    if native_route == NativeInferenceRoute::AlibabaModelStudio
+        && endpoint == ALIBABA_RERANK_ENDPOINT_PATH
+    {
+        let origin = base_url
+            .trim_end_matches('/')
+            .strip_suffix("/compatible-mode/v1")
+            .ok_or_else(|| {
+                pre_dispatch_failure(format!(
+                    "Alibaba Model Studio rerank route requires a `/compatible-mode/v1` service root, received `{base_url}`."
+                ))
+            })?;
+        return Ok(format!("{origin}{endpoint}"));
+    }
+    Ok(format!("{}{}", base_url.trim_end_matches('/'), endpoint))
 }
 
 /// Projects one validated public embedding request to an exact provider wire body.
@@ -830,12 +853,23 @@ fn validate_response_model(
         && requested
             .split_once('/')
             .is_some_and(|(_, bare)| bare == reported);
-    if exact || openrouter_bare {
+    let openrouter_upstream_alias = native_route == NativeInferenceRoute::OpenRouter
+        && openrouter_response_model_alias_matches(requested, reported);
+    if exact || openrouter_bare || openrouter_upstream_alias {
         return Ok(());
     }
     Err(response_headers_protocol_failure(format!(
         "Native inference response model `{reported}` differs from immutable target `{requested}`."
     )))
+}
+
+/// Accepts only documented upstream model identities that OpenRouter reports for a different public slug.
+/// 仅接受 OpenRouter 对不同公开 slug 回报的、已有官方依据的上游模型身份。
+fn openrouter_response_model_alias_matches(requested: &str, reported: &str) -> bool {
+    matches!(
+        (requested, reported),
+        ("cohere/rerank-4-fast", "rerank-v4.0-fast") | ("cohere/rerank-4-pro", "rerank-v4.0-pro")
+    )
 }
 
 /// Converts one closed wire embedding representation into the public payload.
@@ -1077,6 +1111,7 @@ mod tests {
             dimensions: Some(2),
             output_kind: EmbeddingOutputKind::Dense,
             encoding: EmbeddingEncoding::Float,
+            invalid_input_policy: Default::default(),
         }
     }
 
@@ -1154,8 +1189,8 @@ mod tests {
         assert!(error.to_string().contains("differs"));
     }
 
-    /// Verifies OpenRouter accepts only its observed bare response identity exception.
-    /// 验证 OpenRouter 仅接受已观察的裸响应身份例外。
+    /// Verifies OpenRouter accepts only exact, bare, or documented upstream response identities.
+    /// 验证 OpenRouter 仅接受精确、裸名或已有官方依据的上游响应身份。
     #[test]
     fn response_model_identity_is_exact_or_openrouter_bare() {
         assert!(
@@ -1165,6 +1200,30 @@ mod tests {
                 Some("text-embedding-3-small"),
             )
             .is_ok()
+        );
+        assert!(
+            validate_response_model(
+                NativeInferenceRoute::OpenRouter,
+                "cohere/rerank-4-fast",
+                Some("rerank-v4.0-fast"),
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_response_model(
+                NativeInferenceRoute::OpenRouter,
+                "cohere/rerank-4-pro",
+                Some("rerank-v4.0-pro"),
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_response_model(
+                NativeInferenceRoute::OpenRouter,
+                "cohere/rerank-4-fast",
+                Some("rerank-v4.0-pro"),
+            )
+            .is_err()
         );
         assert!(
             validate_response_model(
@@ -1233,17 +1292,40 @@ mod tests {
     fn alibaba_native_urls_preserve_the_registered_compatible_root() {
         assert_eq!(
             native_request_url(
+                NativeInferenceRoute::AlibabaModelStudio,
                 "https://dashscope.aliyuncs.com/compatible-mode/v1",
                 "/embeddings",
-            ),
+            )
+            .expect("embedding URL"),
             "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
         );
         assert_eq!(
             native_request_url(
+                NativeInferenceRoute::AlibabaModelStudio,
                 "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                "/reranks",
-            ),
-            "https://dashscope.aliyuncs.com/compatible-mode/v1/reranks"
+                ALIBABA_RERANK_ENDPOINT_PATH,
+            )
+            .expect("rerank URL"),
+            "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
+        );
+    }
+
+    /// Verifies Alibaba rerank refuses a service root whose product identity is unknown.
+    /// 验证阿里云重排会拒绝产品身份未知的服务根。
+    #[test]
+    fn alibaba_rerank_rejects_an_unregistered_service_root() {
+        let error = native_request_url(
+            NativeInferenceRoute::AlibabaModelStudio,
+            "https://dashscope.aliyuncs.com/api/v1",
+            ALIBABA_RERANK_ENDPOINT_PATH,
+        )
+        .expect_err("unregistered Alibaba service root must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("requires a `/compatible-mode/v1` service root"),
+            "{error}"
         );
     }
 }

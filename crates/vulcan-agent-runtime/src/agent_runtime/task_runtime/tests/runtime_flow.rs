@@ -70,6 +70,7 @@ fn build_task_start_test_runtime_context(
             system_prompt_hook_blocks: Vec::new(),
             project_vmm: Default::default(),
             session_vmm: Default::default(),
+            vmm_runtime_ready: true,
             boundary_events: Vec::new(),
             runtime_system_updates: Vec::new(),
             controller_runtime: None,

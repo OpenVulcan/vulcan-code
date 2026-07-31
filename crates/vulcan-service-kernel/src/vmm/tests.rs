@@ -180,9 +180,13 @@ fn vmm_config_layer_from_draft_parses_transport_and_behavior_fields() {
         enabled: true,
         grpc_target: String::from(" http://127.0.0.1:50051 "),
         grpc_api_key: String::from(" secret "),
+        managed_install_enabled: false,
+        managed_binary_path: String::new(),
+        auto_start_policy: String::from("on_start"),
+        managed_runtime_settings: Default::default(),
         user_id: String::from("7"),
         project_id: String::from("11"),
-        receive_timeout_ms: String::from("1200"),
+        receive_timeout_ms: String::from("12000"),
         handshake_timeout_ms: String::from("300"),
         max_receive_message_bytes: String::from("4096"),
         grpc_keepalive_time_ms: String::from("5000"),
@@ -208,7 +212,7 @@ fn vmm_config_layer_from_draft_parses_transport_and_behavior_fields() {
     assert_eq!(layer.grpc_api_key.as_deref(), Some("secret"));
     assert_eq!(layer.user_id, Some(7));
     assert_eq!(layer.project_id, Some(11));
-    assert_eq!(layer.receive_timeout_ms, Some(1200));
+    assert_eq!(layer.receive_timeout_ms, Some(12000));
     assert_eq!(layer.handshake_timeout_ms, Some(300));
     assert_eq!(layer.max_receive_message_bytes, Some(4096));
     assert_eq!(layer.grpc_keepalive_time_ms, Some(5000));
@@ -227,6 +231,68 @@ fn vmm_config_layer_from_draft_parses_transport_and_behavior_fields() {
     );
 }
 
+/// Verifies identity drafts reject zero because VMM business scopes require positive identifiers.
+/// 验证身份草稿拒绝零值，因为 VMM 业务作用域要求使用正整数标识。
+#[test]
+fn vmm_config_layer_from_draft_rejects_zero_identity_ids() {
+    let zero_user = VmmConfigDraftSummary {
+        user_id: String::from("0"),
+        project_id: String::from("1"),
+        ..VmmConfigDraftSummary::default()
+    };
+    let user_error =
+        vmm_config_layer_from_draft(&zero_user, false).expect_err("zero user id must be rejected");
+    assert!(user_error.contains("VMM 用户 ID 必须是正整数"));
+
+    let zero_project = VmmConfigDraftSummary {
+        user_id: String::from("1"),
+        project_id: String::from("0"),
+        ..VmmConfigDraftSummary::default()
+    };
+    let project_error = vmm_config_layer_from_draft(&zero_project, false)
+        .expect_err("zero project id must be rejected");
+    assert!(project_error.contains("VMM 项目 ID 必须是正整数"));
+}
+
+/// Verifies managed behavior conversion preserves explicit values and rejects unsafe timing relationships.
+/// 验证托管行为转换会保留明确值，并拒绝不安全的超时关系。
+#[test]
+fn vmm_config_layer_from_draft_validates_managed_behavior_boundaries() {
+    let mut draft = VmmConfigDraftSummary {
+        receive_timeout_ms: String::from("12000"),
+        ..Default::default()
+    };
+    draft.managed_runtime_settings.precheck_top_k = String::from("9");
+    draft.managed_runtime_settings.precheck_intent_timeout = String::from("7s");
+    draft.managed_runtime_settings.retention_session_idle_after = String::from("360h");
+
+    let layer = vmm_config_layer_from_draft(&draft, true).expect("managed behavior should convert");
+    let settings = layer
+        .install
+        .expect("global transport layer should retain managed installation state")
+        .runtime_settings;
+    assert_eq!(settings.precheck_top_k, 9);
+    assert_eq!(settings.precheck_intent_timeout, "7s");
+    assert_eq!(settings.retention_session_idle_after, "360h");
+
+    draft.receive_timeout_ms = String::from("7000");
+    let timeout_error = vmm_config_layer_from_draft(&draft, true)
+        .expect_err("request timeout must exceed PreCheck intent timeout");
+    assert!(timeout_error.contains("必须严格大于 PreCheck 意图超时"));
+
+    draft.receive_timeout_ms = String::from("12000");
+    draft.managed_runtime_settings.precheck_intent_timeout = String::from("not-a-duration");
+    let duration_error = vmm_config_layer_from_draft(&draft, true)
+        .expect_err("invalid Go duration must be rejected");
+    assert!(duration_error.contains("必须使用 Go 时长格式"));
+
+    draft.managed_runtime_settings.precheck_intent_timeout = String::from("7s");
+    draft.managed_runtime_settings.retention_session_idle_after = String::from("359h");
+    let retention_error = vmm_config_layer_from_draft(&draft, true)
+        .expect_err("retention idle duration below the safety floor must be rejected");
+    assert!(retention_error.contains("必须大于或等于 360h"));
+}
+
 /// Verifies project-layer conversion strips transport-only fields.
 /// 验证项目层转换会剥离仅属于传输层的字段。
 #[test]
@@ -235,6 +301,9 @@ fn vmm_config_layer_from_draft_omits_transport_fields_for_project_layer() {
         enabled: true,
         grpc_target: String::from("http://127.0.0.1:50051"),
         grpc_api_key: String::from("secret"),
+        managed_install_enabled: false,
+        managed_binary_path: String::new(),
+        auto_start_policy: String::from("on_start"),
         receive_timeout_ms: String::from("1200"),
         handshake_timeout_ms: String::from("300"),
         max_receive_message_bytes: String::from("4096"),
@@ -324,9 +393,264 @@ fn vmm_memory_snapshot_ignores_blank_selected_session_project_id() {
         hydrated_session_ids: BTreeSet::new(),
     };
 
-    let snapshot = vmm_memory_snapshot(&workspace, &ProviderConfigurationFile::default(), None);
+    let snapshot = vmm_memory_snapshot(
+        &workspace,
+        &ProviderConfigurationFile::default(),
+        None,
+        None,
+    );
 
     assert_eq!(snapshot.selected_project_id.as_deref(), Some("project-a"));
+}
+
+/// Verifies catalog refresh resolves the configured user id to a visible name.
+/// 验证目录刷新会将已配置用户标识解析为可见名称。
+#[test]
+fn hydrate_vmm_display_user_name_uses_exact_catalog_key() {
+    let mut snapshot = VmmMemorySnapshot::default();
+    snapshot.effective.user_id = Some(7);
+    snapshot.management_catalog.users = vec![
+        vulcan_service_api::VmmUserDisplaySummary {
+            stable_key: String::from("70"),
+            display_name: String::from("Wrong User"),
+            ..Default::default()
+        },
+        vulcan_service_api::VmmUserDisplaySummary {
+            stable_key: String::from("7"),
+            display_name: String::from("Visible User"),
+            ..Default::default()
+        },
+    ];
+
+    hydrate_vmm_display_user_name(&mut snapshot);
+
+    assert_eq!(
+        snapshot.display_identity.user_name.as_deref(),
+        Some("Visible User")
+    );
+    snapshot.effective.user_id = None;
+    hydrate_vmm_display_user_name(&mut snapshot);
+    assert!(snapshot.display_identity.user_name.is_none());
+}
+
+/// Verifies managed lifecycle transitions rebuild all product states without losing the management catalog.
+/// 验证托管生命周期转换会重建全部产品状态且不会丢失管理目录。
+#[test]
+fn managed_runtime_projection_rebuilds_product_state_and_preserves_catalog() {
+    // session_id identifies the exact retained conversation used by the canonical VMM snapshot builder.
+    // session_id 标识规范 VMM 快照构建器使用的准确保留会话。
+    let session_id = SessionId::new_v4();
+    // workspace supplies one valid selected project and conversation without relying on process-global fixtures.
+    // workspace 提供一个有效的当前项目与会话，不依赖进程级全局夹具。
+    let workspace = WorkspaceSnapshot {
+        task_projects: vec![TaskProjectSummary::new(
+            "project-a",
+            "Project A",
+            "D:/project-a",
+            false,
+            0,
+            None,
+            None,
+            vec![session_id],
+        )],
+        archived_task_projects: Vec::new(),
+        sessions: vec![SessionSummary::new(
+            session_id,
+            Some(String::from("project-a")),
+            "Managed VMM projection",
+            "",
+            SessionState::Completed,
+            0,
+            0,
+            "now",
+        )],
+        archived_sessions: Vec::new(),
+        session_messages: BTreeMap::new(),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::new(),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::new(),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: session_id,
+        hydrated_session_ids: BTreeSet::new(),
+    };
+    // provider_configuration expresses one complete managed deployment with every user-controlled memory feature enabled.
+    // provider_configuration 表示一份完整托管部署，并启用所有由用户控制的记忆能力。
+    let provider_configuration = ProviderConfigurationFile {
+        vmm: vulcan_vmm::VmmConfigLayer {
+            enabled: Some(true),
+            grpc_target: Some(String::from("127.0.0.1:17901")),
+            user_id: Some(7),
+            project_id: Some(11),
+            precheck_enabled: Some(true),
+            memory_writeback_enabled: Some(true),
+            ai_tools_enabled: Some(true),
+            install: Some(vulcan_vmm::VmmInstallReservation {
+                managed_install_enabled: true,
+                ..vulcan_vmm::VmmInstallReservation::default()
+            }),
+            ..vulcan_vmm::VmmConfigLayer::default()
+        },
+        ..ProviderConfigurationFile::default()
+    };
+    // retained_snapshot carries the explicit catalog that lifecycle refreshes must preserve.
+    // retained_snapshot 携带生命周期刷新必须保留的显式管理目录。
+    let mut retained_snapshot = VmmMemorySnapshot::default();
+    retained_snapshot.management_catalog.users = vec![vulcan_service_api::VmmUserDisplaySummary {
+        stable_key: String::from("7"),
+        display_name: String::from("Visible User"),
+        ..Default::default()
+    }];
+    // managed_runtime represents a healthy child with every independently preflighted capability available.
+    // managed_runtime 表示一个健康子进程，且每项独立预检能力均可用。
+    let mut managed_runtime = crate::managed_memory_mesh_runtime::ManagedMemoryMeshSnapshot {
+        data_space_state: vulcan_service_api::VmmDataSpaceState::Ready,
+        phase: String::from("ready"),
+        grpc_target: Some(String::from("127.0.0.1:17901")),
+        controller_endpoint: String::from("http://127.0.0.1:19801"),
+        controller_space_id: String::from("vmm-memory"),
+        data_root: std::env::temp_dir().join("vulcan-vmm-product-state-data"),
+        log_path: std::env::temp_dir().join("vulcan-vmm-product-state.log"),
+        last_error: None,
+        scope_ready: true,
+        scope_error: None,
+        capabilities: crate::managed_memory_mesh_runtime::ManagedVmmCapabilityPreflight {
+            embedding_dimension: 1024,
+            embedding_fingerprint: None,
+            precheck_ready: true,
+            precheck_error: None,
+            postaction_ready: true,
+            postaction_error: None,
+            profile_instruction_ready: true,
+            profile_instruction_error: None,
+            rerank_ready: true,
+            rerank_error: None,
+        },
+    };
+
+    let ready = refresh_vmm_memory_runtime_projection(
+        &retained_snapshot,
+        &workspace,
+        &provider_configuration,
+        &managed_runtime,
+    );
+
+    assert!(ready.runtime.process_ready);
+    assert_eq!(
+        ready.experience_state.deployment,
+        VmmDeploymentMode::Managed
+    );
+    assert_eq!(ready.experience_state.setup, VmmSetupState::Ready);
+    assert_eq!(ready.experience_state.lifecycle, VmmLifecycleState::Running);
+    assert_eq!(ready.experience_state.health, VmmHealthState::Healthy);
+    assert!(
+        ready
+            .capabilities
+            .iter()
+            .all(|capability| capability.available)
+    );
+    assert_eq!(
+        ready.management_catalog,
+        retained_snapshot.management_catalog
+    );
+    assert_eq!(
+        ready.display_identity.user_name.as_deref(),
+        Some("Visible User")
+    );
+
+    managed_runtime.phase = String::from("stopped");
+    managed_runtime.grpc_target = None;
+    let stopped = refresh_vmm_memory_runtime_projection(
+        &ready,
+        &workspace,
+        &provider_configuration,
+        &managed_runtime,
+    );
+
+    assert!(!stopped.runtime.process_ready);
+    assert_eq!(
+        stopped.experience_state.lifecycle,
+        VmmLifecycleState::Stopped
+    );
+    assert_eq!(stopped.experience_state.health, VmmHealthState::Unknown);
+    assert!(
+        stopped
+            .capabilities
+            .iter()
+            .all(|capability| !capability.available)
+    );
+    assert_eq!(
+        stopped.management_catalog,
+        retained_snapshot.management_catalog
+    );
+}
+
+/// Verifies project rows use the canonical structured path for actions and display.
+/// 验证项目记录会把规范结构化路径用于动作与展示。
+#[test]
+fn vmm_project_display_summary_separates_transport_reference_from_human_path() {
+    let project = vulcan_vmm::ProjectEntry {
+        project_id: 9,
+        team_id: 1,
+        space_id: 2,
+        team_name: String::from("Team A"),
+        space_name: String::from("Workspace"),
+        project_name: String::from("Product"),
+        display_path: String::from("[9]Team A/Workspace/Product"),
+    };
+
+    let summary = vmm_project_display_summary(&project);
+
+    assert_eq!(summary.display_name, "Product");
+    assert_eq!(summary.display_path, "Team A/Workspace/Product");
+    assert_eq!(summary.action_path, "Team A/Workspace/Product");
+    assert!(!summary.protected);
+}
+
+/// Verifies the default VMM project remains protected through structured names.
+/// 验证默认 VMM 项目会通过结构化名称继续受到保护。
+#[test]
+fn vmm_project_display_summary_protects_default_project_without_parsing_display_text() {
+    let project = vulcan_vmm::ProjectEntry {
+        project_id: 1,
+        team_id: 1,
+        space_id: 1,
+        team_name: String::from("default"),
+        space_name: String::from("default"),
+        project_name: String::from("default"),
+        display_path: String::from("[1]default/default/default"),
+    };
+
+    let summary = vmm_project_display_summary(&project);
+
+    assert_eq!(summary.display_path, "default/default/default");
+    assert_eq!(summary.action_path, "default/default/default");
+    assert!(summary.protected);
+}
+
+/// Verifies runtime defaults cannot impersonate an explicitly configured VMM deployment.
+/// 验证运行时默认值不会冒充用户明确配置的 VMM 部署。
+#[test]
+fn vmm_deployment_mode_requires_explicit_global_configuration() {
+    let empty = vulcan_vmm::VmmConfigLayer::default();
+    assert_eq!(vmm_deployment_mode(&empty), VmmDeploymentMode::Disabled);
+
+    let external = vulcan_vmm::VmmConfigLayer {
+        grpc_target: Some(String::from("127.0.0.1:17625")),
+        ..vulcan_vmm::VmmConfigLayer::default()
+    };
+    assert_eq!(vmm_deployment_mode(&external), VmmDeploymentMode::External);
+
+    let managed = vulcan_vmm::VmmConfigLayer {
+        install: Some(vulcan_vmm::VmmInstallReservation {
+            managed_install_enabled: true,
+            ..vulcan_vmm::VmmInstallReservation::default()
+        }),
+        ..vulcan_vmm::VmmConfigLayer::default()
+    };
+    assert_eq!(vmm_deployment_mode(&managed), VmmDeploymentMode::Managed);
 }
 
 /// Verifies static profile snapshots group active nodes by target and date.

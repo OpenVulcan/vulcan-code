@@ -291,6 +291,9 @@ pub struct ExecutionPreparationRequest {
     /// Session-level VMM configuration captured for the current conversation.
     /// 为当前会话捕获的会话级 VMM 配置。
     pub session_vmm: VmmConfigLayer,
+    /// Whether the exact VMM transport was live when this execution request was admitted.
+    /// 本次执行请求获准时准确 VMM 传输是否处于实时就绪状态。
+    pub vmm_runtime_ready: bool,
     /// session-boundary boundary events accepted before this provider execution starts.
     /// 本次 Provider 执行开始前已经接受的 会话边界边界事件。
     pub boundary_events: Vec<SessionBoundaryEvent>,

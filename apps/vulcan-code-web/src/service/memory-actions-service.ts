@@ -33,6 +33,7 @@ export async function runVmmMemoryAction(request: VmmMemoryActionRequest): Promi
       kind: request.action,
       request,
       response: previewVmmActionResponse(request.action),
+      data: { kind: "empty" },
     };
   }
   return serviceClient.request<VmmMemoryActionResult>("service_run_vmm_memory_action", { request });
@@ -179,35 +180,11 @@ function browserPreviewProjectVmmDraft(
 // previewVmmActionResponse returns a compact browser-preview result for one VMM action.
 // previewVmmActionResponse 返回单个 VMM 动作的紧凑浏览器预览结果。
 function previewVmmActionResponse(action: string): unknown {
-  if (action === "load_users_projects") {
-    return {
-      users: [{ userId: 20000, userName: "preview-user" }],
-      projects: [{ projectId: 1001, displayPath: "OpenVulcan/Vulcan/Code" }],
-    };
-  }
-  if (action === "load_profile_nodes") {
-    return {
-      nodes: [
-        { profileNodeId: 1, content: "User prefers engineering closure.", priority: "high", level: "user", bindId: 20000 },
-        { profileNodeId: 2, content: "The current project is migrating the WebUI.", priority: "normal", level: "project", bindId: 1001 },
-      ],
-    };
-  }
-  if (action === "search_memory_events") {
-    return {
-      results: [{ query: "webui", hits: [{ memoryId: 1, sourceTurnId: 42, abstractText: "The skills page migrated to WebUI." }] }],
-      traceId: "preview-trace",
-    };
-  }
-  if (action === "delete_memories") {
-    return {
-      deletedMemoryIds: [1],
-      notFoundMemoryIds: [],
-      deletedVectorRows: 1,
-      traceId: "preview-delete-trace",
-    };
-  }
-  return { ok: true, preview: true };
+  return {
+    available: false,
+    action,
+    message: "Browser preview cannot execute or simulate durable VMM operations.",
+  };
 }
 
 // projectAttachmentPreviewFallback builds a no-op cleanup preview for browser-only mode.

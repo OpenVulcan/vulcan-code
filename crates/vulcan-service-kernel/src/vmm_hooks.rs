@@ -25,6 +25,109 @@ use crate::{
 /// 按规范化工作区路径索引的进程内项目 VMM 配置层缓存。
 static PROJECT_VMM_LAYER_CACHE: OnceLock<ProjectVmmLayerCache> = OnceLock::new();
 
+/// Process-wide ephemeral transport injected only while the host-owned VMM child is ready.
+/// 仅在宿主持有的 VMM 子进程就绪期间注入的进程级临时传输。
+static MANAGED_VMM_TRANSPORT_OVERLAY: OnceLock<RwLock<Option<ManagedVmmTransportOverlay>>> =
+    OnceLock::new();
+
+/// Keeps the actual managed gRPC target and secret authorization outside persisted configuration.
+/// 将实际托管 gRPC 目标与秘密鉴权信息保留在持久化配置之外。
+#[derive(Clone)]
+struct ManagedVmmTransportOverlay {
+    /// Actual ready gRPC target.
+    /// 实际就绪 gRPC 目标。
+    grpc_target: String,
+    /// Full authorization metadata value.
+    /// 完整鉴权元数据值。
+    authorization: String,
+    /// Whether the managed generation can execute PreCheck.
+    /// 当前托管代次是否能够执行 PreCheck。
+    precheck_ready: bool,
+    /// Whether the managed generation can execute PostAction.
+    /// 当前托管代次是否能够执行 PostAction。
+    postaction_ready: bool,
+    /// Whether the exact configured numeric user/project scope resolved.
+    /// 准确配置的数字用户/项目作用域是否解析成功。
+    scope_ready: bool,
+}
+
+/// Installs one process-local managed transport without mutating persisted provider settings.
+/// 安装一份进程内托管传输，且不修改持久化 Provider 设置。
+pub(crate) fn install_managed_vmm_transport_overlay(
+    grpc_target: String,
+    authorization: String,
+    precheck_ready: bool,
+    postaction_ready: bool,
+    scope_ready: bool,
+) -> Result<(), String> {
+    let overlay = MANAGED_VMM_TRANSPORT_OVERLAY.get_or_init(|| RwLock::new(None));
+    let mut guard = overlay
+        .write()
+        .map_err(|_| String::from("managed VMM transport overlay is locked"))?;
+    *guard = Some(ManagedVmmTransportOverlay {
+        grpc_target,
+        authorization,
+        precheck_ready,
+        postaction_ready,
+        scope_ready,
+    });
+    Ok(())
+}
+
+/// Clears the process-local managed transport after the owned child stops.
+/// 在持有的子进程停止后清除进程内托管传输。
+pub(crate) fn clear_managed_vmm_transport_overlay() {
+    let Some(overlay) = MANAGED_VMM_TRANSPORT_OVERLAY.get() else {
+        return;
+    };
+    if let Ok(mut guard) = overlay.write() {
+        *guard = None;
+    }
+}
+
+/// Returns the current non-secret managed gRPC target for settings projection.
+/// 返回用于设置投影的当前不含秘密托管 gRPC 目标。
+pub(crate) fn managed_vmm_public_target() -> Option<String> {
+    MANAGED_VMM_TRANSPORT_OVERLAY
+        .get()
+        .and_then(|overlay| overlay.read().ok())
+        .and_then(|guard| guard.as_ref().map(|overlay| overlay.grpc_target.clone()))
+}
+
+/// Applies the current managed transport to every configuration layer so lower scopes cannot
+/// replace an owned child with stale external connection data.
+/// 将当前托管传输应用到每一层配置，使较低作用域无法用陈旧外部连接数据替换宿主持有的子进程。
+fn apply_managed_vmm_transport_overlay(snapshot: &mut VmmHookConfigSnapshot) {
+    let Some(overlay) = MANAGED_VMM_TRANSPORT_OVERLAY
+        .get()
+        .and_then(|overlay| overlay.read().ok())
+        .and_then(|guard| guard.clone())
+    else {
+        return;
+    };
+    let apply = |layer: &mut vulcan_vmm::VmmConfigLayer| {
+        layer.enabled = Some(true);
+        layer.grpc_target = Some(overlay.grpc_target.clone());
+        layer.grpc_api_key = Some(overlay.authorization.clone());
+        if !overlay.scope_ready {
+            layer.enabled = Some(false);
+        }
+        if !overlay.precheck_ready {
+            layer.precheck_enabled = Some(false);
+        }
+        if !overlay.postaction_ready {
+            layer.memory_writeback_enabled = Some(false);
+        }
+    };
+    apply(&mut snapshot.global);
+    for layer in snapshot.projects_by_workspace.values_mut() {
+        apply(layer);
+    }
+    for layer in snapshot.sessions.values_mut() {
+        apply(layer);
+    }
+}
+
 /// Cached project VMM layer with monotonic metadata for debugging and tests.
 /// 带单调元数据的项目 VMM 配置层缓存项，用于调试与测试。
 #[derive(Clone)]
@@ -365,7 +468,7 @@ pub(super) fn build_vmm_hook_config_snapshot(
         }
         last_compaction_ids.insert(session_key, runtime_state.last_compaction_id.clone());
     }
-    let snapshot = VmmHookConfigSnapshot {
+    let mut snapshot = VmmHookConfigSnapshot {
         global: provider_configuration.vmm.clone(),
         projects_by_workspace,
         sessions,
@@ -373,6 +476,7 @@ pub(super) fn build_vmm_hook_config_snapshot(
         profile_sync,
         last_compaction_ids,
     };
+    apply_managed_vmm_transport_overlay(&mut snapshot);
     webui_trace(
         "vmm_hook_snapshot_built",
         format!(

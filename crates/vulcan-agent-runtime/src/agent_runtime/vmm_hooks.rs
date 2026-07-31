@@ -1347,6 +1347,7 @@ mod tests {
         // config is a memory-ready VMM configuration with recall explicitly disabled.
         // config 是已满足普通记忆链路条件但显式禁用召回的 VMM 配置。
         let mut config = VmmEffectiveConfig {
+            enabled: true,
             grpc_target: String::from("http://127.0.0.1:50051"),
             user_id: Some(1),
             project_id: Some(2),

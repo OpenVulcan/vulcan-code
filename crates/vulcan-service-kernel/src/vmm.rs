@@ -7,11 +7,13 @@ use serde_json::{Value, json};
 use vulcan_agent_runtime::provider_config::ProviderConfigurationFile;
 use vulcan_context_injection::InjectionKind;
 use vulcan_service_api::{
-    VmmConfigDraftSummary, VmmConfigSaveRequest, VmmEffectiveSummary, VmmManagementSectionSummary,
-    VmmMemoryActionRequest, VmmMemoryActionResult, VmmMemorySnapshot, VmmProjectScopeSummary,
-    VmmRuntimeSummary, VmmStaticProfileDateGroupSummary, VmmStaticProfileNodeSummary,
-    VmmStaticProfileSectionSummary, VmmStaticProfileSummary, WEBUI_REDACTED_SECRET_PLACEHOLDER,
-    WorkbenchSnapshot,
+    VmmCapabilitySummary, VmmConfigDraftSummary, VmmConfigSaveRequest, VmmDataSpaceSummary,
+    VmmDeploymentMode, VmmDisplayIdentitySummary, VmmEffectiveSummary, VmmExperienceStateSummary,
+    VmmHealthState, VmmLifecycleState, VmmManagementCatalogSummary, VmmManagementSectionSummary,
+    VmmMemoryActionRequest, VmmMemoryActionResult, VmmMemorySnapshot, VmmPrerequisiteSummary,
+    VmmProjectScopeSummary, VmmRecentActivitySummary, VmmRuntimeSummary, VmmSetupState,
+    VmmStaticProfileDateGroupSummary, VmmStaticProfileNodeSummary, VmmStaticProfileSectionSummary,
+    VmmStaticProfileSummary, WEBUI_REDACTED_SECRET_PLACEHOLDER, WorkbenchSnapshot,
 };
 use vulcan_workbench_model::{SessionRuntimeStateEntry, TaskProjectSummary};
 
@@ -27,11 +29,13 @@ use crate::{
 };
 
 mod config;
+mod external_health;
 mod memory_actions;
 mod snapshot;
 mod static_profile;
 
 pub(super) use config::*;
+use external_health::*;
 pub(super) use memory_actions::*;
 pub(super) use snapshot::*;
 pub(super) use static_profile::*;

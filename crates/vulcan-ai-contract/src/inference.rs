@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Identifies the only inference contract version accepted by this release.
 /// 标识当前版本唯一接受的推理契约版本。
-pub const INFERENCE_CONTRACT_VERSION: u32 = 1;
+pub const INFERENCE_CONTRACT_VERSION: u32 = 2;
 
 /// Identifies one permission granted to an inference caller.
 /// 标识授予推理调用方的一项权限。
@@ -408,6 +408,20 @@ pub struct EmbeddingInput {
     pub content: EmbeddingInputContent,
 }
 
+/// Selects whether an embedding batch may omit only provider-confirmed invalid items.
+/// 选择向量批次是否允许仅省略供应商已确认非法的单项输入。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmbeddingInvalidInputPolicy {
+    /// Fails the complete batch when any input cannot be embedded.
+    /// 任一输入无法生成向量时使完整批次失败。
+    #[default]
+    FailBatch,
+    /// Allows omission only when the provider identifies the exact invalid input.
+    /// 仅当供应商明确标识精确非法输入时允许省略该项。
+    DropProviderConfirmedItems,
+}
+
 /// Carries one configured embedding request.
 /// 承载一次已配置向量请求。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -442,6 +456,10 @@ pub struct EmbeddingRequest {
     /// Requested value encoding.
     /// 请求的数值编码。
     pub encoding: EmbeddingEncoding,
+    /// Explicit invalid-input handling policy.
+    /// 显式非法输入处理策略。
+    #[serde(default)]
+    pub invalid_input_policy: EmbeddingInvalidInputPolicy,
 }
 
 impl EmbeddingRequest {
@@ -675,6 +693,24 @@ pub struct EmbeddingResult {
     pub embedding: EmbeddingPayload,
 }
 
+/// Carries one input omitted only after the provider confirmed an item-scoped validation failure.
+/// 承载一项仅在供应商确认单项校验失败后才被省略的输入。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmbeddingDroppedInput {
+    /// Original stable input identifier.
+    /// 原始稳定输入标识。
+    pub input_id: String,
+    /// Original zero-based input index.
+    /// 原始从零开始的输入索引。
+    pub input_index: u32,
+    /// Stable adapter-selected reason code.
+    /// 适配器选择的稳定原因代码。
+    pub reason_code: String,
+    /// Controlled message without provider secrets.
+    /// 不含供应商秘密的受控消息。
+    pub controlled_message: String,
+}
+
 /// Carries one validated embedding response.
 /// 承载一次已校验向量响应。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -691,12 +727,88 @@ pub struct EmbeddingResponse {
     /// Results corresponding one-to-one with request inputs.
     /// 与请求输入一一对应的结果。
     pub results: Vec<EmbeddingResult>,
+    /// Provider-confirmed item-scoped omissions.
+    /// 供应商已确认的单项省略记录。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dropped: Vec<EmbeddingDroppedInput>,
     /// Provider request usage.
     /// 供应商请求用量。
     pub usage: RequestUsage,
     /// End-to-end execution duration in milliseconds.
     /// 端到端执行耗时毫秒数。
     pub duration_ms: u64,
+}
+
+impl EmbeddingResponse {
+    /// Validates exact result and omission coverage against the originating request.
+    /// 根据原始请求校验精确结果与省略项覆盖关系。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `request` is the immutable request that produced this response.
+    /// `request` 是生成当前响应的不可变请求。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success only when every input appears exactly once as a result or an allowed omission.
+    /// 仅当每项输入都恰好作为结果或允许的省略项出现一次时返回成功。
+    pub fn validate_for_request(&self, request: &EmbeddingRequest) -> Result<(), String> {
+        if self.request_id != request.request_id {
+            return Err(String::from(
+                "Embedding response request_id does not match the originating request.",
+            ));
+        }
+        if request.invalid_input_policy == EmbeddingInvalidInputPolicy::FailBatch
+            && !self.dropped.is_empty()
+        {
+            return Err(String::from(
+                "Embedding response omitted inputs under fail_batch policy.",
+            ));
+        }
+        let mut covered_indices = BTreeSet::new();
+        for result in &self.results {
+            let index = result.input_index as usize;
+            let Some(input) = request.inputs.get(index) else {
+                return Err(format!(
+                    "Embedding response result index {} is out of range.",
+                    result.input_index
+                ));
+            };
+            if result.input_id != input.input_id || !covered_indices.insert(result.input_index) {
+                return Err(format!(
+                    "Embedding response result identity `{}` is invalid or repeated.",
+                    result.input_id
+                ));
+            }
+        }
+        for dropped in &self.dropped {
+            let index = dropped.input_index as usize;
+            let Some(input) = request.inputs.get(index) else {
+                return Err(format!(
+                    "Embedding response dropped index {} is out of range.",
+                    dropped.input_index
+                ));
+            };
+            if dropped.input_id != input.input_id
+                || dropped.reason_code.trim().is_empty()
+                || dropped.controlled_message.trim().is_empty()
+                || !covered_indices.insert(dropped.input_index)
+            {
+                return Err(format!(
+                    "Embedding response dropped identity `{}` is invalid or repeated.",
+                    dropped.input_id
+                ));
+            }
+        }
+        if covered_indices.len() != request.inputs.len() {
+            return Err(format!(
+                "Embedding response covered {} of {} inputs.",
+                covered_indices.len(),
+                request.inputs.len()
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Represents one rerank text value with stable identity.
@@ -1316,7 +1428,7 @@ mod tests {
     #[test]
     fn restricted_llm_request_rejects_expansive_fields() {
         let error = serde_json::from_value::<LlmInferenceRequest>(serde_json::json!({
-            "contract_version": 1,
+            "contract_version": INFERENCE_CONTRACT_VERSION,
             "request_id": "request-1",
             "consumer_profile_id": "vmm",
             "messages": [],
@@ -1347,6 +1459,7 @@ mod tests {
             dimensions: Some(1_024),
             output_kind: EmbeddingOutputKind::Dense,
             encoding: EmbeddingEncoding::Float,
+            invalid_input_policy: EmbeddingInvalidInputPolicy::DropProviderConfirmedItems,
         };
         let encoded = serde_json::to_value(&request).expect("request should serialize");
         let decoded = serde_json::from_value::<EmbeddingRequest>(encoded)

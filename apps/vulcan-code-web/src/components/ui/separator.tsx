@@ -1,8 +1,12 @@
+"use client"
+
 import * as React from "react"
 import { Separator as SeparatorPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 
+// Separator renders an accessible visual divider in horizontal or vertical orientation.
+// Separator 以水平或垂直方向渲染无障碍视觉分隔线。
 function Separator({
   className,
   orientation = "horizontal",

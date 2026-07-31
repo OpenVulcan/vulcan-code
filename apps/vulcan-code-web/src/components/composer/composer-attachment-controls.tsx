@@ -63,6 +63,9 @@ export function ComposerAttachmentMenu(props: {
     SessionVmmPolicySummary,
     "precheckMode" | "memoryWritebackMode"
   > | null;
+  // Whether the effective project configuration makes VMM available to this composer.
+  // 当前项目最终生效配置是否允许输入区使用 VMM。
+  vmmAvailable: boolean;
   // Opens a file picker for one attachment kind or all kinds.
   // 按附件类型或全部类型打开文件选择器。
   onPick: (kind: string | null) => void;
@@ -176,26 +179,28 @@ export function ComposerAttachmentMenu(props: {
           <ListChecks size={15} />
           <span>{t("composer.planMode")}</span>
         </DropdownMenuCheckboxItem>
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>
-            <BrainCircuit size={15} />
-            <span>{t("composer.vmmMemory")}</span>
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="composer-thinking-menu">
-            <VmmPolicySubMenu
-              label={t("composer.vmm.precheckInjection")}
-              policy="precheck"
-              selectedMode={props.sessionVmmPolicy?.precheckMode ?? "inherit"}
-              onChange={props.onVmmPolicyChange}
-            />
-            <VmmPolicySubMenu
-              label={t("composer.vmm.memoryWriteback")}
-              policy="writeback"
-              selectedMode={props.sessionVmmPolicy?.memoryWritebackMode ?? "inherit"}
-              onChange={props.onVmmPolicyChange}
-            />
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
+        {props.vmmAvailable ? (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <BrainCircuit size={15} />
+              <span>{t("composer.vmmMemory")}</span>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="composer-thinking-menu">
+              <VmmPolicySubMenu
+                label={t("composer.vmm.precheckInjection")}
+                policy="precheck"
+                selectedMode={props.sessionVmmPolicy?.precheckMode ?? "inherit"}
+                onChange={props.onVmmPolicyChange}
+              />
+              <VmmPolicySubMenu
+                label={t("composer.vmm.memoryWriteback")}
+                policy="writeback"
+                selectedMode={props.sessionVmmPolicy?.memoryWritebackMode ?? "inherit"}
+                onChange={props.onVmmPolicyChange}
+              />
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        ) : null}
         <DropdownMenuItem onSelect={props.onOpenGoal}>
           <Target size={15} />
           <span>{t("composer.goal")}</span>

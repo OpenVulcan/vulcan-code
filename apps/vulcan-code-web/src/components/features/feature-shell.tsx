@@ -118,7 +118,7 @@ function FeatureShell(props: {
   }, [activeSkillSubArea, props.workbench.plugins])
   // activeMemorySubArea keeps VMM left navigation and content synchronized.
   // activeMemorySubArea 保持 VMM 左侧导航与内容区域同步。
-  const [activeMemorySubArea, setActiveMemorySubArea] = React.useState<MemorySubAreaId>("status")
+  const [activeMemorySubArea, setActiveMemorySubArea] = React.useState<MemorySubAreaId>("overview")
   // luaInstallDialogOpen controls the standalone LuaSkills install dialog.
   // luaInstallDialogOpen 控制独立 LuaSkills 安装弹窗。
   const [luaInstallDialogOpen, setLuaInstallDialogOpen] = React.useState(false)
@@ -238,6 +238,11 @@ function FeatureShell(props: {
         activeSkillSubArea={activeSkillSubArea}
         activeSettingsSubArea={props.activeSettingsSubArea}
         memoryActions={props.memoryActions}
+        onOpenCredentialManagement={() => {
+          props.onSelectSettingsSubArea("credential-management")
+          props.onSelectArea("settings")
+        }}
+        onSelectMemorySubArea={setActiveMemorySubArea}
         onProviderPickerOpenChange={setProviderPickerOpen}
         providerPickerOpen={providerPickerOpen}
         settingsActions={props.settingsActions}

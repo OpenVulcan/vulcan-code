@@ -214,6 +214,9 @@ import {
 // WorkbenchLayout renders the WebUI workbench shell.
 // WorkbenchLayout 渲染 WebUI 工作台外壳。
 export function WorkbenchLayout(props: {
+  // Browser-visible local service generation used to reset revision ordering after a reconnect.
+  // 浏览器可见的本地服务代次，用于在重连后重置版本排序。
+  serviceInstanceEpoch: number;
   // Latest startup snapshot displayed by the shell blocker.
   // 壳层阻塞面板展示的最近启动快照。
   startup: StartupSnapshot;
@@ -286,7 +289,9 @@ export function WorkbenchLayout(props: {
   const [activeWorkbenchSkillSubArea, setActiveWorkbenchSkillSubArea] = React.useState<SkillSubAreaId>("catalog");
   // activeWorkbenchMemorySubArea stores the embedded memory settings sub page.
   // activeWorkbenchMemorySubArea 保存内嵌记忆设置的子页面。
-  const [activeWorkbenchMemorySubArea, setActiveWorkbenchMemorySubArea] = React.useState<MemorySubAreaId>("status");
+  // activeWorkbenchMemorySubArea starts on the current product overview instead of a removed legacy id.
+  // activeWorkbenchMemorySubArea 从当前产品总览开始，而不是已移除的旧分区标识。
+  const [activeWorkbenchMemorySubArea, setActiveWorkbenchMemorySubArea] = React.useState<MemorySubAreaId>("overview");
   // initialDraftConversationRef computes the first-run draft once for local selection state.
   // initialDraftConversationRef 为本地选择状态只计算一次首次启动草稿。
   const initialDraftConversationRef = React.useRef<DraftConversationSelection | null | undefined>(undefined);
@@ -384,6 +389,9 @@ export function WorkbenchLayout(props: {
   const acceptedGlobalProjectSettingsRevisionByDomainRef = React.useRef<ProjectSettingsRevision>(
     workbenchState.projectSettingsRevisions.global,
   );
+  // acceptedServiceInstanceEpochRef identifies which local service owns all accepted revisions.
+  // acceptedServiceInstanceEpochRef 标识所有已接受版本归属的本地服务实例。
+  const acceptedServiceInstanceEpochRef = React.useRef(props.serviceInstanceEpoch);
   // workbenchStateRef exposes the latest workbench state to route-click callbacks without stale closures.
   // workbenchStateRef 向路由点击回调暴露最新工作台状态，避免闭包过期。
   const workbenchStateRef = React.useRef<WorkbenchSnapshot>(workbenchState);
@@ -457,6 +465,35 @@ export function WorkbenchLayout(props: {
       return merged;
     })()
   ), []);
+  // resetAcceptedWorkbenchOrderingForServiceInstance clears ordering owned by a replaced service.
+  // resetAcceptedWorkbenchOrderingForServiceInstance 清理由已替换服务持有的版本排序。
+  const resetAcceptedWorkbenchOrderingForServiceInstance = React.useCallback((
+    serviceInstanceEpoch: number,
+  ): boolean => {
+    // serviceInstanceChanged is the only condition that permits a lower revision to become authoritative.
+    // serviceInstanceChanged 是唯一允许较低版本重新成为权威状态的条件。
+    const serviceInstanceChanged =
+      acceptedServiceInstanceEpochRef.current !== serviceInstanceEpoch;
+    if (!serviceInstanceChanged) {
+      return false;
+    }
+    acceptedServiceInstanceEpochRef.current = serviceInstanceEpoch;
+    acceptedWorkbenchRevisionRef.current = 0;
+    acceptedLuaSkillsRevisionRef.current = 0;
+    acceptedAgentSkillsRevisionRef.current = 0;
+    acceptedSubagentCatalogRevisionRef.current = 0;
+    acceptedConversationLifecycleRevisionRef.current = 0;
+    acceptedConversationLifecycleRevisionByIdRef.current.clear();
+    acceptedProjectLifecycleRevisionRef.current = 0;
+    acceptedProjectLifecycleRevisionByIdRef.current.clear();
+    acceptedProjectSettingsRevisionByKeyRef.current.clear();
+    acceptedGlobalProjectSettingsRevisionByDomainRef.current = {
+      vmm: 0,
+      agentSkills: 0,
+      codebaseMemory: 0,
+    };
+    return true;
+  }, []);
   // acceptServiceWorkbenchSnapshot reserves one service snapshot revision before applying related local state.
   // acceptServiceWorkbenchSnapshot 在应用关联本地状态前预占一个服务快照版本。
   const acceptServiceWorkbenchSnapshot = React.useCallback((snapshot: WorkbenchSnapshot): boolean => {
@@ -1300,6 +1337,9 @@ export function WorkbenchLayout(props: {
   }, [draftConversation, selectedConversationId, workbenchState.conversations.length, workbenchState.projects]);
 
   React.useEffect(() => {
+    const serviceInstanceChanged = resetAcceptedWorkbenchOrderingForServiceInstance(
+      props.serviceInstanceEpoch,
+    );
     if (!acceptServiceWorkbenchSnapshot(props.workbench)) {
       return;
     }
@@ -1352,13 +1392,20 @@ export function WorkbenchLayout(props: {
       );
       acceptedProjectSettings[projectId] = acceptedRevisions;
     }
-    setProjectSettingsRevisionById((current) => ({ ...current, ...acceptedProjectSettings }));
+    setProjectSettingsRevisionById((current) => (
+      serviceInstanceChanged
+        ? acceptedProjectSettings
+        : { ...current, ...acceptedProjectSettings }
+    ));
     setWorkbenchState((current) => (
       mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache(
         current,
         props.workbench,
         subagentSurfaceMessageCacheRef.current,
-        { preserveExpandedProjectIds: expandedProjectIdsLocallyEditedRef.current },
+        {
+          allowServiceRevisionReset: serviceInstanceChanged,
+          preserveExpandedProjectIds: expandedProjectIdsLocallyEditedRef.current,
+        },
       )
     ));
     const nextSelected = props.workbench.selectedConversationId ?? props.workbench.conversations[0]?.id ?? null;
@@ -1374,7 +1421,12 @@ export function WorkbenchLayout(props: {
       }
       return nextSelected;
     });
-  }, [acceptServiceWorkbenchSnapshot, props.workbench]);
+  }, [
+    acceptServiceWorkbenchSnapshot,
+    props.serviceInstanceEpoch,
+    props.workbench,
+    resetAcceptedWorkbenchOrderingForServiceInstance,
+  ]);
 
   React.useEffect(() => {
     if (!props.workbenchDelta) {
@@ -1690,6 +1742,10 @@ export function WorkbenchLayout(props: {
             onOpenSkills={handleOpenWorkspaceSkills}
             onOpenAgentSkills={handleOpenWorkspaceAgentSkills}
             onOpenAgents={handleOpenWorkspaceAgents}
+            onOpenCredentialManagement={() => {
+              setActiveSettingsSubArea("credential-management")
+              handleSelectTopFeatureArea("settings")
+            }}
             onOpenMemory={handleOpenWorkspaceMemory}
             onOpenKnowledge={handleOpenWorkspaceKnowledge}
             onSelectArea={handleSelectTopFeatureArea}

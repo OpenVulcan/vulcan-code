@@ -2389,14 +2389,14 @@ pub(crate) fn http_failure(
             }),
             message: error
                 .and_then(|value| value.get("message").and_then(Value::as_str))
-                .unwrap_or(if body.is_empty() {
-                    "Provider returned an empty error response."
-                } else {
-                    body
-                })
-                .chars()
-                .take(2_000)
-                .collect(),
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    if body.is_empty() {
+                        format!("Provider returned HTTP {status} with an empty error response.")
+                    } else {
+                        body.chars().take(2_000).collect()
+                    }
+                }),
             dispatch_outcome: DispatchOutcome::Dispatched,
             semantic_output_observed: false,
             side_effect_observed: false,
@@ -2428,6 +2428,19 @@ mod tests {
     use vulcan_ai_protocols::{
         ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
     };
+
+    /// Verifies an empty upstream error body retains the exact HTTP status.
+    /// 验证空上游错误正文仍会保留精确 HTTP 状态。
+    #[test]
+    fn empty_http_error_response_reports_status() {
+        let failure = http_failure(404, None, "");
+
+        assert_eq!(failure.error.http_status, Some(404));
+        assert_eq!(
+            failure.error.message,
+            "Provider returned HTTP 404 with an empty error response."
+        );
+    }
 
     /// Builds one minimal provider-neutral conversation request.
     /// 构建一个最小供应商无关对话请求。

@@ -194,6 +194,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         implicit_luaskill_prompt_entries.clone(),
         project_vmm.clone(),
         session_vmm.clone(),
+        request.vmm_runtime_ready,
     );
     let mut resolved_tools = tools_manager.resolve_for_execution_mode(&request.execution_mode);
     if !request.execution_mode.eq_ignore_ascii_case("plan") {

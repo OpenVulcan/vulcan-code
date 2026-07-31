@@ -2,6 +2,7 @@
 //! workbench refresh 辅助逻辑。
 
 use super::*;
+use crate::vmm::hydrate_vmm_display_user_name;
 use vulcan_service_api::PendingPromptsChangedDelta;
 
 /// Input bundle for projecting runtime and workspace state into one WebUI workbench snapshot.
@@ -41,6 +42,10 @@ pub(crate) struct WorkbenchRuntimeProjection<'a> {
     /// Read-only state snapshots from currently open Core VMM session controllers.
     /// 当前已打开 Core VMM 会话控制器提供的只读状态快照。
     pub(crate) vmm_session_states: &'a BTreeMap<SessionId, vulcan_vmm::VmmSessionMemoryState>,
+    /// Optional process-local managed VMM lifecycle snapshot.
+    /// 可选的进程内托管 VMM 生命周期快照。
+    pub(crate) managed_vmm_runtime:
+        Option<crate::managed_memory_mesh_runtime::ManagedMemoryMeshSnapshot>,
     /// Surface messages for the active visible conversation.
     /// 当前可见会话的界面消息。
     pub(crate) surface_messages: &'a [SessionMessageEntry],
@@ -251,6 +256,7 @@ async fn refresh_workbench_snapshot_with_selected_session(
     // vmm_session_states are read-only snapshots used only for WebUI projection.
     // vmm_session_states 是仅用于 WebUI 投影的只读快照。
     let vmm_session_states = vmm_controller_registry.snapshots()?;
+    let managed_vmm_runtime = crate::managed_memory_mesh_runtime::snapshot_from_state(&state);
     let mut workbench = workbench_from_runtime(WorkbenchRuntimeProjection {
         controller: &controller_runtime,
         command_session_runtime: agent_runtime_for_status
@@ -267,6 +273,7 @@ async fn refresh_workbench_snapshot_with_selected_session(
             .map(|runtime| runtime.public_ai_runtime.as_ref()),
         workspace: &refreshed_snapshot,
         vmm_session_states: &vmm_session_states,
+        managed_vmm_runtime,
         surface_messages: surface_messages.as_slice(),
         subagent_navigation,
         pending_questions: pending_question_snapshots_from_agent_runtime(
@@ -342,6 +349,11 @@ fn preserve_focused_catalog_domains_after_concurrent_refresh(
     current_generation: u64,
 ) {
     preserve_project_settings_revisions(workbench, retained_workbench);
+    // The VMM management catalog is an explicit in-memory cache and is never rebuilt from workspace files.
+    // VMM 管理目录是显式内存缓存，不会从工作区文件重新构建。
+    workbench.vmm_memory.management_catalog =
+        retained_workbench.vmm_memory.management_catalog.clone();
+    hydrate_vmm_display_user_name(&mut workbench.vmm_memory);
     if captured_generation == current_generation {
         return;
     }
@@ -782,6 +794,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         public_ai_runtime,
         workspace,
         vmm_session_states,
+        managed_vmm_runtime,
         surface_messages,
         subagent_navigation,
         pending_questions,
@@ -1104,7 +1117,12 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         session_addons_by_conversation,
         session_vmm_policies_by_conversation,
         memories: memories(workspace),
-        vmm_memory: vmm_memory_snapshot(workspace, provider_configuration, selected_runtime_state),
+        vmm_memory: vmm_memory_snapshot(
+            workspace,
+            provider_configuration,
+            selected_runtime_state,
+            managed_vmm_runtime.as_ref(),
+        ),
         command_sessions: command_sessions(controller, command_session_runtime),
         logs: logs
             .iter()

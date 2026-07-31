@@ -834,6 +834,7 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         public_ai_runtime,
         workspace: &workspace_snapshot,
         vmm_session_states: &vmm_session_states,
+        managed_vmm_runtime: None,
         surface_messages: surface_messages.as_slice(),
         subagent_navigation,
         pending_questions,

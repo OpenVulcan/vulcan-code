@@ -42,6 +42,27 @@ const LLM_EVENT_BUFFER_CAPACITY: usize = 128;
 /// 标识 VMM 内部推理消费者配置档。
 pub(crate) const VMM_CONSUMER_PROFILE_ID: &str = "vmm";
 
+/// Foundational VMM LLM purposes required before memory can be enabled.
+/// 启用记忆前必须就绪的 VMM 基础 LLM 用途。
+pub(crate) const VMM_REQUIRED_LLM_PURPOSES: [&str; 4] = [
+    "precheck_l1",
+    "precheck_l2",
+    "postaction_l1",
+    "postaction_l2",
+];
+
+/// Captures controlled availability errors for optional VMM inference routes.
+/// 记录 VMM 可选推理路由的受控可用性错误。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VmmOptionalInferenceRouteValidation {
+    /// Profile-instruction route error, or `None` when the exact route is executable.
+    /// 画像指令路由错误；精确路由可执行时为 `None`。
+    pub(crate) profile_instruction_error: Option<String>,
+    /// Rerank route error, or `None` when the exact route is executable.
+    /// 重排路由错误；精确路由可执行时为 `None`。
+    pub(crate) rerank_error: Option<String>,
+}
+
 /// Retains terminal LLM status briefly for polling and reconnect diagnostics.
 /// 短暂保留 LLM 终态，供轮询与重连诊断使用。
 const LLM_TERMINAL_RETENTION: Duration = Duration::from_secs(15 * 60);
@@ -1323,75 +1344,7 @@ impl ConfiguredInferenceService {
         };
         let completed_at_unix_ms = current_unix_millis();
         let session_id = facts.execution_id.clone();
-        let mut payload = internal_inference_identity_payload(&facts);
-        let object = payload
-            .as_object_mut()
-            .expect("Internal inference telemetry identity must be an object.");
-        object.extend([
-            (String::from("status"), json!(facts.status)),
-            (
-                String::from("started_at_ms"),
-                json!(facts.started_at_unix_ms),
-            ),
-            (
-                String::from("first_event_at_ms"),
-                json!(facts.first_response_at_unix_ms),
-            ),
-            (
-                String::from("first_token_at_ms"),
-                json!(facts.first_response_at_unix_ms),
-            ),
-            (String::from("completed_at_ms"), json!(completed_at_unix_ms)),
-            (
-                String::from("time_to_first_event_ms"),
-                json!(
-                    facts
-                        .first_response_at_unix_ms
-                        .map(|timestamp| timestamp.saturating_sub(facts.started_at_unix_ms))
-                ),
-            ),
-            (
-                String::from("time_to_first_token_ms"),
-                json!(
-                    facts
-                        .first_response_at_unix_ms
-                        .map(|timestamp| timestamp.saturating_sub(facts.started_at_unix_ms))
-                ),
-            ),
-            (String::from("duration_ms"), json!(facts.duration_ms)),
-            (
-                String::from("input_tokens"),
-                json!(usage_value_or_zero(&facts.usage.input_tokens)),
-            ),
-            (
-                String::from("uncached_input_tokens"),
-                json!(usage_value_or_zero(&facts.usage.uncached_input_tokens)),
-            ),
-            (
-                String::from("output_tokens"),
-                json!(usage_value_or_zero(&facts.usage.output_tokens)),
-            ),
-            (
-                String::from("reasoning_tokens"),
-                json!(usage_value_or_zero(&facts.usage.reasoning_tokens)),
-            ),
-            (
-                String::from("total_tokens"),
-                json!(usage_value_or_zero(&facts.usage.total_tokens)),
-            ),
-            (
-                String::from("cached_input_tokens"),
-                json!(usage_value_or_null(&facts.usage.cache_read_tokens)),
-            ),
-            (
-                String::from("cache_creation_input_tokens"),
-                json!(usage_value_or_null(&facts.usage.cache_write_tokens)),
-            ),
-            (String::from("cost"), json!(facts.usage.cost)),
-            (String::from("finish_reason"), serde_json::Value::Null),
-            (String::from("error_category"), json!(facts.error_category)),
-            (String::from("error_code"), serde_json::Value::Null),
-        ]);
+        let payload = internal_inference_terminal_payload(&facts, completed_at_unix_ms);
         dispatch_internal_inference_hook(
             runtime,
             "provider.request.completed",
@@ -1851,6 +1804,12 @@ impl ConfiguredInferenceService {
             .await;
         match result {
             Ok(response) => {
+                response.validate_for_request(&request).map_err(|message| {
+                    ConfiguredInferenceError::new(
+                        ConfiguredInferenceErrorCategory::Execution,
+                        message,
+                    )
+                })?;
                 let first_response_at_unix_ms = current_unix_millis();
                 let facts = InternalInferenceTelemetryFacts::succeeded(
                     caller,
@@ -3137,6 +3096,163 @@ fn configured_operation_route<'a>(
     Ok(route)
 }
 
+/// Validates every exact inference route required before VMM can be enabled.
+/// 校验启用 VMM 前必需的每一条精确推理路由。
+///
+/// # Parameters
+/// 参数
+/// `runtime` resolves current credential, catalog, protocol, and internal-enable facts.
+/// `runtime` 解析当前凭据、目录、协议和内部启用事实。
+/// `configuration` owns the persisted VMM inference profile.
+/// `configuration` 持有持久化的 VMM 推理配置档。
+///
+/// # Returns
+/// 返回值
+/// Success only when embedding and all foundational LLM routes are executable with reasoning off.
+/// 仅当向量路由与全部基础 LLM 路由均可执行且能够关闭思考时返回成功。
+pub(crate) fn validate_vmm_required_inference_routes(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+) -> Result<(), String> {
+    let embedding = configured_operation_route(
+        configuration,
+        VMM_CONSUMER_PROFILE_ID,
+        AiOperation::EmbeddingCreate,
+        None,
+    )
+    .map_err(|error| error.message)?;
+    if embedding.usage_scope != InferenceUsageScope::ExternalService {
+        return Err(String::from(
+            "VMM 向量路由必须使用 external_service 用途范围。",
+        ));
+    }
+    runtime
+        .resolve_internal_inference_selection(configuration, embedding)
+        .map_err(|error| format!("VMM 向量路由不可用：{error}"))?;
+
+    for purpose_id in VMM_REQUIRED_LLM_PURPOSES {
+        let route = configured_operation_route(
+            configuration,
+            VMM_CONSUMER_PROFILE_ID,
+            AiOperation::ConversationRespond,
+            Some(purpose_id),
+        )
+        .map_err(|error| error.message)?;
+        if route.usage_scope != InferenceUsageScope::ExternalService {
+            return Err(format!(
+                "VMM 基础 LLM 用途 `{purpose_id}` 必须使用 external_service 用途范围。"
+            ));
+        }
+        let selection = runtime
+            .resolve_internal_inference_selection(configuration, route)
+            .map_err(|error| format!("VMM 基础 LLM 用途 `{purpose_id}` 不可用：{error}"))?;
+        if !model_supports_disabled_reasoning(&selection.model.capabilities) {
+            return Err(format!(
+                "VMM 基础 LLM 用途 `{purpose_id}` 的模型不支持关闭思考。"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Inspects optional VMM routes without turning their absence into a startup blocker.
+/// 检查 VMM 可选路由，但不把缺失可选路由升级为启动阻塞。
+///
+/// # Parameters
+/// 参数
+/// `runtime` resolves exact connection, model, operation, and binding facts.
+/// `runtime` 解析精确账号连接、模型、操作与绑定事实。
+/// `configuration` owns the persisted VMM inference profile.
+/// `configuration` 持有持久化的 VMM 推理配置档。
+///
+/// # Returns
+/// 返回值
+/// Controlled per-capability errors suitable for truthful readiness projection.
+/// 返回适合真实可用性投影的逐能力受控错误。
+pub(crate) fn inspect_vmm_optional_inference_routes(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+) -> VmmOptionalInferenceRouteValidation {
+    VmmOptionalInferenceRouteValidation {
+        profile_instruction_error: validate_vmm_optional_profile_instruction_route(
+            runtime,
+            configuration,
+        )
+        .err(),
+        rerank_error: validate_vmm_optional_rerank_route(runtime, configuration).err(),
+    }
+}
+
+/// Validates the optional VMM profile-instruction route against its exact runtime contract.
+/// 根据精确运行时契约校验可选的 VMM 画像指令路由。
+///
+/// # Parameters
+/// 参数
+/// `runtime` and `configuration` resolve one immutable route selection.
+/// `runtime` 与 `configuration` 解析一项不可变路由选择。
+///
+/// # Returns
+/// Success only when the route is executable as an external service with reasoning disabled.
+/// 仅当路由可作为关闭思考的外部服务执行时返回成功。
+fn validate_vmm_optional_profile_instruction_route(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+) -> Result<(), String> {
+    let purpose_id = "profile_instruction";
+    let route = configured_operation_route(
+        configuration,
+        VMM_CONSUMER_PROFILE_ID,
+        AiOperation::ConversationRespond,
+        Some(purpose_id),
+    )
+    .map_err(|error| format!("VMM 手工画像指令不可用：{}", error.message))?;
+    if route.usage_scope != InferenceUsageScope::ExternalService {
+        return Err(String::from(
+            "VMM 手工画像指令路由必须使用 external_service 用途范围。",
+        ));
+    }
+    let selection = runtime
+        .resolve_internal_inference_selection(configuration, route)
+        .map_err(|error| format!("VMM 手工画像指令不可用：{error}"))?;
+    if !model_supports_disabled_reasoning(&selection.model.capabilities) {
+        return Err(String::from("VMM 手工画像指令模型不支持关闭思考。"));
+    }
+    Ok(())
+}
+
+/// Validates the optional VMM rerank route against its exact runtime contract.
+/// 根据精确运行时契约校验可选的 VMM 重排路由。
+///
+/// # Parameters
+/// 参数
+/// `runtime` and `configuration` resolve one immutable route selection.
+/// `runtime` 与 `configuration` 解析一项不可变路由选择。
+///
+/// # Returns
+/// Success only when the route exposes an authorized external-service rerank action.
+/// 仅当路由暴露已授权的外部服务重排动作时返回成功。
+fn validate_vmm_optional_rerank_route(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+) -> Result<(), String> {
+    let route = configured_operation_route(
+        configuration,
+        VMM_CONSUMER_PROFILE_ID,
+        AiOperation::RerankDocuments,
+        None,
+    )
+    .map_err(|error| format!("VMM 重排路由不可用：{}", error.message))?;
+    if route.usage_scope != InferenceUsageScope::ExternalService {
+        return Err(String::from(
+            "VMM 重排路由必须使用 external_service 用途范围。",
+        ));
+    }
+    runtime
+        .resolve_internal_inference_selection(configuration, route)
+        .map_err(|error| format!("VMM 重排路由不可用：{error}"))?;
+    Ok(())
+}
+
 /// Validates that one configured route serves the caller's actual usage scope.
 /// 校验一条已配置路由服务调用方的实际用途范围。
 ///
@@ -4321,6 +4437,96 @@ fn internal_inference_identity_payload(
     payload
 }
 
+/// Builds one privacy-safe terminal plugin payload from normalized inference facts.
+/// 从归一化推理事实构建一份隐私安全的插件终态载荷。
+///
+/// # Parameters
+/// 参数
+/// `facts` contains immutable route, timing, operation, and normalized usage data, while
+/// `completed_at_unix_ms` is the host-captured terminal wall-clock timestamp.
+/// `facts` 包含不可变路由、计时、操作与归一化用量数据，
+/// `completed_at_unix_ms` 是宿主捕获的终态墙钟时间戳。
+///
+/// # Returns
+/// 返回值
+/// The exact `provider.request.completed` payload consumed by usage-statistics plugins.
+/// 返回用量统计插件消费的精确 `provider.request.completed` 载荷。
+fn internal_inference_terminal_payload(
+    facts: &InternalInferenceTelemetryFacts,
+    completed_at_unix_ms: u64,
+) -> serde_json::Value {
+    let mut payload = internal_inference_identity_payload(facts);
+    let object = payload
+        .as_object_mut()
+        .expect("Internal inference telemetry identity must be an object.");
+    object.extend([
+        (String::from("status"), json!(facts.status)),
+        (
+            String::from("started_at_ms"),
+            json!(facts.started_at_unix_ms),
+        ),
+        (
+            String::from("first_event_at_ms"),
+            json!(facts.first_response_at_unix_ms),
+        ),
+        (
+            String::from("first_token_at_ms"),
+            json!(facts.first_response_at_unix_ms),
+        ),
+        (String::from("completed_at_ms"), json!(completed_at_unix_ms)),
+        (
+            String::from("time_to_first_event_ms"),
+            json!(
+                facts
+                    .first_response_at_unix_ms
+                    .map(|timestamp| timestamp.saturating_sub(facts.started_at_unix_ms))
+            ),
+        ),
+        (
+            String::from("time_to_first_token_ms"),
+            json!(
+                facts
+                    .first_response_at_unix_ms
+                    .map(|timestamp| timestamp.saturating_sub(facts.started_at_unix_ms))
+            ),
+        ),
+        (String::from("duration_ms"), json!(facts.duration_ms)),
+        (
+            String::from("input_tokens"),
+            json!(usage_value_or_zero(&facts.usage.input_tokens)),
+        ),
+        (
+            String::from("uncached_input_tokens"),
+            json!(usage_value_or_zero(&facts.usage.uncached_input_tokens)),
+        ),
+        (
+            String::from("output_tokens"),
+            json!(usage_value_or_zero(&facts.usage.output_tokens)),
+        ),
+        (
+            String::from("reasoning_tokens"),
+            json!(usage_value_or_zero(&facts.usage.reasoning_tokens)),
+        ),
+        (
+            String::from("total_tokens"),
+            json!(usage_value_or_zero(&facts.usage.total_tokens)),
+        ),
+        (
+            String::from("cached_input_tokens"),
+            json!(usage_value_or_null(&facts.usage.cache_read_tokens)),
+        ),
+        (
+            String::from("cache_creation_input_tokens"),
+            json!(usage_value_or_null(&facts.usage.cache_write_tokens)),
+        ),
+        (String::from("cost"), json!(facts.usage.cost)),
+        (String::from("finish_reason"), serde_json::Value::Null),
+        (String::from("error_category"), json!(facts.error_category)),
+        (String::from("error_code"), serde_json::Value::Null),
+    ]);
+    payload
+}
+
 /// Inserts one optional telemetry field without serializing absence as JSON null.
 /// 插入一项可选遥测字段且不把缺失序列化为 JSON 空值。
 ///
@@ -4496,7 +4702,7 @@ fn lock_error<T>(_: std::sync::PoisonError<T>) -> ConfiguredInferenceError {
 mod tests {
     use super::*;
     use std::{
-        collections::BTreeSet,
+        collections::{BTreeMap, BTreeSet},
         sync::atomic::{AtomicUsize, Ordering},
     };
     use vulcan_ai_contract::{
@@ -4665,6 +4871,62 @@ mod tests {
         assert!(!model_supports_disabled_reasoning(&unknown));
     }
 
+    /// Verifies optional VMM capability status resolves exact routes instead of trusting field presence.
+    /// 验证 VMM 可选能力状态会解析精确路由，而不是只相信字段存在。
+    #[test]
+    fn vmm_optional_route_validation_rejects_unresolvable_configured_routes() {
+        let runtime = PublicAiRuntime::unavailable().expect("test public AI runtime");
+        let profile_instruction = InferenceRouteConfiguration {
+            provider_id: String::from("minimax"),
+            service_entry_id: String::from("china"),
+            connection_id: String::from("missing-connection"),
+            model_id: String::from("MiniMax-M3"),
+            binding: InferenceRouteBinding::Protocol {
+                protocol_profile_id: String::from("anthropic-messages"),
+            },
+            operation: AiOperation::ConversationRespond,
+            usage_scope: InferenceUsageScope::ExternalService,
+        };
+        let rerank = InferenceRouteConfiguration {
+            provider_id: String::from("openrouter"),
+            service_entry_id: String::from("public-api"),
+            connection_id: String::from("missing-connection"),
+            model_id: String::from("cohere/rerank-v4.0-fast"),
+            binding: InferenceRouteBinding::Action {
+                action_binding_id: String::from("openrouter.rerank.v1"),
+            },
+            operation: AiOperation::RerankDocuments,
+            usage_scope: InferenceUsageScope::ExternalService,
+        };
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.inference_profiles.insert(
+            String::from(VMM_CONSUMER_PROFILE_ID),
+            InferenceProfile {
+                llm_routes: BTreeMap::from([(
+                    String::from("profile_instruction"),
+                    profile_instruction,
+                )]),
+                embedding: None,
+                rerank: Some(rerank),
+            },
+        );
+
+        let validation = inspect_vmm_optional_inference_routes(&runtime, &configuration);
+
+        assert!(
+            validation
+                .profile_instruction_error
+                .as_deref()
+                .is_some_and(|error| error.contains("missing-connection"))
+        );
+        assert!(
+            validation
+                .rerank_error
+                .as_deref()
+                .is_some_and(|error| error.contains("missing-connection"))
+        );
+    }
+
     #[test]
     fn caller_authorization_requires_exact_profile_and_scope_identity() {
         let caller = test_caller();
@@ -4735,6 +4997,72 @@ mod tests {
             output_token_limit: None,
         };
         assert_eq!(llm_input_units(&request).expect("input should fit"), 6);
+    }
+
+    /// Verifies internal inference terminal telemetry preserves cache and token accounting.
+    /// 验证内部推理终态遥测会保留缓存与 Token 计量。
+    #[test]
+    fn internal_inference_terminal_payload_preserves_usage_accounting() {
+        let known = |value| UsageValue::Known {
+            value,
+            source: vulcan_ai_contract::UsageValueSource::Reported,
+        };
+        let facts = InternalInferenceTelemetryFacts {
+            request_id: String::from("request-vmm-1"),
+            execution_id: String::from("execution-vmm-1"),
+            caller_id: String::from("vmm-local"),
+            consumer_profile_id: String::from("vmm"),
+            usage_scope: InferenceUsageScope::InternalBackground,
+            owner_kind: "vmm",
+            provider_id: String::from("provider-1"),
+            provider_name: String::from("Provider One"),
+            service_entry_id: String::from("service-1"),
+            connection_id: String::from("connection-1"),
+            protocol_profile_id: Some(String::from("protocol-1")),
+            secondary_route_id: None,
+            secondary_provider_name: None,
+            secondary_endpoint_name: None,
+            model_id: String::from("model-1"),
+            model_name: String::from("Model One"),
+            operation: String::from("llm.generate"),
+            capability_revision: String::from("capability-1"),
+            catalog_revision: String::from("catalog-1"),
+            started_at_unix_ms: 1_000,
+            first_response_at_unix_ms: Some(1_125),
+            duration_ms: 750,
+            retry_count: 1,
+            status: "succeeded",
+            usage: RequestUsage {
+                input_tokens: known(100),
+                uncached_input_tokens: known(30),
+                output_tokens: known(20),
+                reasoning_tokens: known(5),
+                cache_read_tokens: known(70),
+                cache_write_tokens: known(8),
+                total_tokens: known(125),
+                cost: Some(String::from("0.00125")),
+                ..RequestUsage::default()
+            },
+            input_item_count: Some(2),
+            output_item_count: Some(1),
+            vector_dimensions: None,
+            error_category: None,
+        };
+
+        let payload = internal_inference_terminal_payload(&facts, 1_750);
+
+        assert_eq!(payload["usage_scope"], "internal_background");
+        assert_eq!(payload["owner_kind"], "vmm");
+        assert_eq!(payload["input_tokens"], 100);
+        assert_eq!(payload["uncached_input_tokens"], 30);
+        assert_eq!(payload["cached_input_tokens"], 70);
+        assert_eq!(payload["cache_creation_input_tokens"], 8);
+        assert_eq!(payload["output_tokens"], 20);
+        assert_eq!(payload["reasoning_tokens"], 5);
+        assert_eq!(payload["total_tokens"], 125);
+        assert_eq!(payload["cost"], "0.00125");
+        assert_eq!(payload["time_to_first_token_ms"], 125);
+        assert_eq!(payload["retry_count"], 1);
     }
 
     #[test]

@@ -7,6 +7,7 @@ import type {
   VmmMemoryActionRequest,
   VmmMemoryActionResult,
   VmmMemorySnapshot,
+  VmmSearchMemoryEventsActionValue,
 } from "@/types";
 
 import type { VmmScope } from "./vmm-memory-sections";
@@ -52,15 +53,25 @@ export interface MemoryAreaController {
   // Latest accepted VMM action result.
   // 最新被接受的 VMM 动作结果。
   result: VmmMemoryActionResult | null;
+  // Clears feedback owned by the previously visible memory page.
+  // 清除先前可见记忆页面持有的反馈。
+  clearFeedback: () => void;
   // Current global or project configuration scope.
   // 当前全局或项目配置作用域。
   scope: VmmScope;
   // Runs one action through the exclusive operation channel.
   // 通过独占操作通道执行单个动作。
-  runAction: (action: string, payload?: Record<string, unknown>) => Promise<void>;
+  runAction: (action: string, payload?: Record<string, unknown>) => Promise<VmmMemoryActionResult | null>;
   // Saves the current or explicitly requested configuration scope.
   // 保存当前或明确请求的配置作用域。
-  saveDraft: (targetScope?: VmmScope) => Promise<void>;
+  saveDraft: (targetScope?: VmmScope) => Promise<boolean>;
+  // Applies one explicit draft to the global layer or one selected project.
+  // 将一份明确草稿应用到全局层或一个选定项目。
+  applyDraft: (
+    targetScope: VmmScope,
+    targetProjectId: string | null,
+    draft: VmmConfigDraftSummary,
+  ) => Promise<boolean>;
   // Selects and loads one exact project configuration route.
   // 选择并加载一个准确项目配置路由。
   selectProject: (projectId: string) => Promise<void>;
@@ -95,6 +106,9 @@ interface MemoryAreaOperation {
   // Monotonic operation id unique to this mounted controller.
   // 当前挂载控制器内唯一的单调操作标识。
   requestId: number;
+  // Feedback generation captured when the operation starts.
+  // 操作开始时捕获的反馈代次。
+  feedbackGeneration: number;
 }
 
 // UseMemoryAreaControllerOptions supplies the current snapshot and service actions.
@@ -143,9 +157,9 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
   // result stores the latest accepted management response.
   // result 保存最新被接受的管理响应。
   const [result, setResult] = React.useState<VmmMemoryActionResult | null>(null);
-  // notice stores snapshot status or the latest locally owned operation message.
-  // notice 保存快照状态或最新本地操作提示。
-  const [notice, setNotice] = React.useState(options.snapshot.notice);
+  // notice stores only task-level feedback; technical snapshot notices remain in diagnostics.
+  // notice 只保存任务级反馈；技术快照提示仅保留在诊断区域。
+  const [notice, setNotice] = React.useState("");
   // busyAction stores the operation currently holding the exclusive channel.
   // busyAction 保存当前持有独占通道的操作。
   const [busyAction, setBusyAction] = React.useState<string | null>(null);
@@ -170,15 +184,20 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
   // actionsRef exposes the latest service callbacks without rebuilding every controller operation.
   // actionsRef 暴露最新服务回调，避免重建每个控制器操作。
   const actionsRef = React.useRef(options.actions);
-  // noticeOwnedRef prevents unrelated snapshots from replacing a local operation result.
-  // noticeOwnedRef 防止无关快照替换本地操作结果。
-  const noticeOwnedRef = React.useRef(false);
   // nextRequestIdRef provides collision-free operation ids.
   // nextRequestIdRef 提供无冲突操作标识。
   const nextRequestIdRef = React.useRef(0);
   // activeOperationRef synchronously excludes duplicate or overlapping management operations.
   // activeOperationRef 同步排除重复或重叠的管理操作。
   const activeOperationRef = React.useRef<MemoryAreaOperation | null>(null);
+  // mountedRef prevents a genuinely unmounted controller from publishing asynchronous feedback
+  // without destroying operation ownership during React Strict Mode's development effect replay.
+  // mountedRef 防止真正卸载的控制器发布异步反馈，同时避免 React 严格模式在开发期
+  // 重放副作用时破坏操作所有权。
+  const mountedRef = React.useRef(true);
+  // feedbackGenerationRef invalidates page-specific notices without cancelling the service request.
+  // feedbackGenerationRef 在不取消服务请求的前提下使页面专属提示失效。
+  const feedbackGenerationRef = React.useRef(0);
 
   snapshotRef.current = options.snapshot;
   actionsRef.current = options.actions;
@@ -202,8 +221,9 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
   }, []);
 
   React.useEffect(() => {
+    mountedRef.current = true;
     return () => {
-      activeOperationRef.current = null;
+      mountedRef.current = false;
     };
   }, []);
 
@@ -249,12 +269,7 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
       setProjectIdState(snapshotProjectId);
       setLoadingProjectId(null);
       setResult(null);
-      noticeOwnedRef.current = false;
-      setNotice(options.snapshot.notice);
-    } else if (!noticeOwnedRef.current
-      && !activeOperationRef.current
-      && (scopeRef.current === "global" || projectIdRef.current === snapshotProjectId)) {
-      setNotice(options.snapshot.notice);
+      setNotice("");
     }
   }, [invalidateActiveOperation, options.snapshot]);
 
@@ -269,6 +284,7 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
     const operation = {
       action,
       requestId: nextRequestIdRef.current + 1,
+      feedbackGeneration: feedbackGenerationRef.current,
     };
     nextRequestIdRef.current = operation.requestId;
     activeOperationRef.current = operation;
@@ -279,7 +295,8 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
   // ownsOperation verifies that one continuation still owns the exclusive channel.
   // ownsOperation 校验一个异步延续是否仍拥有独占通道。
   const ownsOperation = React.useCallback((operation: MemoryAreaOperation): boolean => {
-    return activeOperationRef.current?.requestId === operation.requestId;
+    return mountedRef.current
+      && activeOperationRef.current?.requestId === operation.requestId;
   }, []);
 
   // finishOperation releases only the operation that still owns busy state.
@@ -289,8 +306,25 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
       return false;
     }
     activeOperationRef.current = null;
-    setBusyAction(null);
-    return true;
+    if (mountedRef.current) {
+      setBusyAction(null);
+    }
+    return mountedRef.current;
+  }, []);
+
+  // acceptsFeedback verifies that an operation still belongs to the visible memory page.
+  // acceptsFeedback 校验操作是否仍属于当前可见的记忆页面。
+  const acceptsFeedback = React.useCallback((operation: MemoryAreaOperation): boolean => {
+    return mountedRef.current
+      && operation.feedbackGeneration === feedbackGenerationRef.current;
+  }, []);
+
+  // clearFeedback starts a new page feedback generation while preserving in-flight ownership.
+  // clearFeedback 在保留执行中操作所有权的同时开启新的页面反馈代次。
+  const clearFeedback = React.useCallback(() => {
+    feedbackGenerationRef.current += 1;
+    setResult(null);
+    setNotice("");
   }, []);
 
   // setGlobalDraft updates the draft and marks local ownership before React renders.
@@ -344,15 +378,13 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
     if (nextScope === "project"
       && projectIdRef.current
       && projectIdRef.current !== memorySnapshotProjectId(snapshotRef.current)) {
-      noticeOwnedRef.current = true;
       setNotice(t("memory.vmm.project.selected").replace(
         "{project}",
         memoryProjectLabel(snapshotRef.current, projectIdRef.current),
       ));
       return;
     }
-    noticeOwnedRef.current = false;
-    setNotice(snapshotRef.current.notice);
+    setNotice("");
   }, [t]);
 
   // selectProject loads and commits the exact draft for one project route.
@@ -375,7 +407,6 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
       setProjectIdState(normalizedProjectId);
       setLoadingProjectId(null);
       setResult(null);
-      noticeOwnedRef.current = true;
       setNotice(t("memory.vmm.project.selected").replace("{project}", projectLabel));
       return;
     }
@@ -392,7 +423,6 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
     setProjectIdState(normalizedProjectId);
     setLoadingProjectId(normalizedProjectId);
     setResult(null);
-    noticeOwnedRef.current = true;
     setNotice(t("memory.vmm.project.loading").replace("{project}", projectLabel));
     try {
       // draft is the authoritative editable configuration returned for normalizedProjectId.
@@ -403,7 +433,6 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
       }
       replaceProjectDraftEntry(normalizedProjectId, { draft, dirty: false });
       setLoadingProjectId(null);
-      noticeOwnedRef.current = true;
       setNotice(t("memory.vmm.project.selected").replace("{project}", projectLabel));
     } catch (error) {
       if (!ownsOperation(operation)) {
@@ -412,7 +441,6 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
       projectIdRef.current = previousProjectId;
       setProjectIdState(previousProjectId);
       setLoadingProjectId(null);
-      noticeOwnedRef.current = true;
       // message normalizes the project-load failure for the localized notice.
       // message 规范化项目加载失败以生成本地化提示。
       const message = error instanceof Error ? error.message : String(error);
@@ -429,7 +457,7 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
     // operation 防止双击与跨动作结果覆盖。
     const operation = beginOperation(action);
     if (!operation) {
-      return;
+      return null;
     }
     // requestScope fixes the configuration scope for the entire asynchronous request.
     // requestScope 为整个异步请求固定配置作用域。
@@ -437,7 +465,6 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
     // requestProjectId fixes the project route only when project scope is active.
     // requestProjectId 仅在项目作用域激活时固定项目路由。
     const requestProjectId = requestScope === "project" ? projectIdRef.current : null;
-    noticeOwnedRef.current = true;
     setNotice(t("memory.vmm.action.running").replace("{action}", action));
     try {
       // nextResult is the only response allowed to replace the visible action result.
@@ -450,22 +477,28 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
         payload,
       });
       if (!ownsOperation(operation)) {
-        return;
+        return null;
       }
-      setResult((currentResult) => vmmResultAfterAction(currentResult, nextResult, action));
-      setNotice(nextResult.summary);
+      if (acceptsFeedback(operation)) {
+        setResult((currentResult) => vmmResultAfterAction(currentResult, nextResult, action));
+        setNotice(nextResult.summary);
+      }
+      return nextResult;
     } catch (error) {
       if (!ownsOperation(operation)) {
-        return;
+        return null;
       }
       // message normalizes the action failure for the localized notice.
       // message 规范化动作失败以生成本地化提示。
       const message = error instanceof Error ? error.message : String(error);
-      setNotice(t("memory.vmm.action.failed").replace("{message}", message));
+      if (acceptsFeedback(operation)) {
+        setNotice(t("memory.vmm.action.failed").replace("{message}", message));
+      }
+      return null;
     } finally {
       finishOperation(operation);
     }
-  }, [beginOperation, finishOperation, ownsOperation, t]);
+  }, [acceptsFeedback, beginOperation, finishOperation, ownsOperation, t]);
 
   // saveDraft persists one captured scope draft through the exclusive operation channel.
   // saveDraft 通过独占操作通道持久化一个已捕获作用域草稿。
@@ -483,7 +516,7 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
       draft = globalDraftRef.current;
     } else {
       if (!targetProjectId || !projectEntry || loadingProjectId === targetProjectId) {
-        return;
+        return false;
       }
       draft = projectEntry.draft;
     }
@@ -494,9 +527,8 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
     // operation 同步排除重叠保存与管理动作。
     const operation = beginOperation(action);
     if (!operation) {
-      return;
+      return false;
     }
-    noticeOwnedRef.current = true;
     setNotice(targetScope === "global"
       ? t("memory.vmm.save.global.running")
       : t("memory.vmm.save.project.running"));
@@ -507,7 +539,7 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
         draft,
       });
       if (!ownsOperation(operation)) {
-        return;
+        return false;
       }
       if (targetScope === "global") {
         if (globalDraftRef.current === draft) {
@@ -521,21 +553,95 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
           replaceProjectDraftEntry(targetProjectId, { draft, dirty: false });
         }
       }
-      setNotice(targetScope === "global"
-        ? t("memory.vmm.save.global.completed")
-        : t("memory.vmm.save.project.completed"));
+      if (acceptsFeedback(operation)) {
+        setNotice(targetScope === "global"
+          ? t("memory.vmm.save.global.completed")
+          : t("memory.vmm.save.project.completed"));
+      }
+      return true;
     } catch (error) {
       if (!ownsOperation(operation)) {
-        return;
+        return false;
       }
       // message normalizes the save failure for the localized notice.
       // message 规范化保存失败以生成本地化提示。
       const message = error instanceof Error ? error.message : String(error);
-      setNotice(t("memory.vmm.save.failed").replace("{message}", message));
+      if (acceptsFeedback(operation)) {
+        setNotice(t("memory.vmm.save.failed").replace("{message}", message));
+      }
+      return false;
     } finally {
       finishOperation(operation);
     }
-  }, [beginOperation, finishOperation, loadingProjectId, ownsOperation, replaceProjectDraftEntry, t]);
+  }, [
+    acceptsFeedback,
+    beginOperation,
+    finishOperation,
+    loadingProjectId,
+    ownsOperation,
+    replaceProjectDraftEntry,
+    t,
+  ]);
+
+  // applyDraft saves one captured product draft to an explicitly selected target.
+  // applyDraft 将一份捕获的产品草稿保存到明确选择的目标。
+  const applyDraft = React.useCallback(async (
+    targetScope: VmmScope,
+    targetProjectId: string | null,
+    draft: VmmConfigDraftSummary,
+  ): Promise<boolean> => {
+    if (targetScope === "project" && !targetProjectId?.trim()) {
+      return false;
+    }
+    const operation = beginOperation(`apply-${targetScope}`);
+    if (!operation) {
+      return false;
+    }
+    setNotice(targetScope === "global"
+      ? t("memory.vmm.save.global.running")
+      : t("memory.vmm.save.project.running"));
+    try {
+      await actionsRef.current.onSaveVmmConfig({
+        scope: targetScope,
+        projectId: targetScope === "project" ? targetProjectId : null,
+        draft,
+      });
+      if (!ownsOperation(operation)) {
+        return false;
+      }
+      if (targetScope === "global") {
+        globalDraftRef.current = draft;
+        globalDraftDirtyRef.current = false;
+        setGlobalDraftState(draft);
+      } else if (targetProjectId) {
+        replaceProjectDraftEntry(targetProjectId, { draft, dirty: false });
+      }
+      if (acceptsFeedback(operation)) {
+        setNotice(targetScope === "global"
+          ? t("memory.vmm.save.global.completed")
+          : t("memory.vmm.save.project.completed"));
+      }
+      return true;
+    } catch (error) {
+      if (!ownsOperation(operation)) {
+        return false;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      if (acceptsFeedback(operation)) {
+        setNotice(t("memory.vmm.save.failed").replace("{message}", message));
+      }
+      return false;
+    } finally {
+      finishOperation(operation);
+    }
+  }, [
+    acceptsFeedback,
+    beginOperation,
+    finishOperation,
+    ownsOperation,
+    replaceProjectDraftEntry,
+    t,
+  ]);
 
   // selectedProjectEntry is the exact cache row rendered by the current project route.
   // selectedProjectEntry 是当前项目路由渲染的准确缓存行。
@@ -557,6 +663,8 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
     notice,
     result,
     scope,
+    applyDraft,
+    clearFeedback,
     runAction,
     saveDraft,
     selectProject,
@@ -565,6 +673,8 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
     setGlobalDraft,
   }), [
     busyAction,
+    clearFeedback,
+    applyDraft,
     globalDraft,
     notice,
     projectDraft,
@@ -618,36 +728,31 @@ function vmmResultAfterAction(
   if (action !== "delete_memories" || currentResult?.kind !== "search_memory_events") {
     return nextResult;
   }
+  if (
+    currentResult.data.kind !== "search_memory_events"
+    || nextResult.data.kind !== "delete_memories"
+  ) {
+    return nextResult;
+  }
   // deletedIds contains durable ids confirmed by the delete response.
   // deletedIds 包含删除响应确认的长期标识。
-  const deletedIds = vmmDeletedMemoryIdSet(nextResult.response);
+  const deletedIds = new Set(nextResult.data.value.deleted_memory_ids);
   if (deletedIds.size === 0) {
     return currentResult;
   }
+  const searchValue = vmmSearchResultWithoutMemoryIds(
+    currentResult.data.value,
+    deletedIds,
+  );
   return {
     ...currentResult,
     summary: nextResult.summary,
-    response: vmmSearchResultWithoutMemoryIds(currentResult.response, deletedIds),
+    response: searchValue,
+    data: {
+      kind: "search_memory_events",
+      value: searchValue,
+    },
   };
-}
-
-// vmmDeletedMemoryIdSet extracts deleted ids from one delete response.
-// vmmDeletedMemoryIdSet 从删除响应中提取已删除标识集合。
-// Parameters: response is the unknown VMM transport payload.
-// 参数：response 是未知 VMM 传输载荷。
-// Returns: the positive durable memory ids confirmed as deleted.
-// 返回值：确认已删除的正数长期记忆标识。
-function vmmDeletedMemoryIdSet(response: unknown): Set<number> {
-  // object is the safe record projection of the transport payload.
-  // object 是传输载荷的安全记录投影。
-  const object = vmmObject(response);
-  // values supports the two field names explicitly emitted by current transport serializers.
-  // values 支持当前传输序列化器明确产生的两种字段名。
-  const values = object.deletedMemoryIds ?? object.deleted_memory_ids;
-  if (!Array.isArray(values)) {
-    return new Set();
-  }
-  return new Set(values.map(vmmNumber).filter((value) => value > 0));
 }
 
 // vmmSearchResultWithoutMemoryIds removes deleted hits from one search response.
@@ -656,55 +761,15 @@ function vmmDeletedMemoryIdSet(response: unknown): Set<number> {
 // 参数：response 是当前检索载荷，deletedIds 标识已确认删除项。
 // Returns: a copied search payload without hits backed by deleted memories.
 // 返回值：移除已删除记忆命中项后的检索载荷副本。
-function vmmSearchResultWithoutMemoryIds(response: unknown, deletedIds: Set<number>): unknown {
-  // object is the safe search-response projection.
-  // object 是安全的检索响应投影。
-  const object = vmmObject(response);
-  // groups contains response result groups when the transport returned an array.
-  // groups 在传输返回数组时包含响应结果分组。
-  const groups = Array.isArray(object.results) ? object.results : [];
+function vmmSearchResultWithoutMemoryIds(
+  response: VmmSearchMemoryEventsActionValue,
+  deletedIds: Set<number>,
+): VmmSearchMemoryEventsActionValue {
   return {
-    ...object,
-    results: groups.map((group) => {
-      // groupObject is one safe result-group projection.
-      // groupObject 是单个安全结果分组投影。
-      const groupObject = vmmObject(group);
-      // hits contains the group's transport hit rows.
-      // hits 包含当前分组的传输命中行。
-      const hits = Array.isArray(groupObject.hits) ? groupObject.hits : [];
-      return {
-        ...groupObject,
-        hits: hits.filter((hit) => !deletedIds.has(vmmNumber(vmmObject(hit).memoryId ?? vmmObject(hit).memory_id))),
-      };
-    }),
+    ...response,
+    results: response.results.map((group) => ({
+      ...group,
+      hits: group.hits.filter((hit) => !deletedIds.has(hit.memory_id)),
+    })),
   };
-}
-
-// vmmObject normalizes unknown values into an object.
-// vmmObject 将未知值规范化为对象。
-// Parameters: value is an unknown transport value.
-// 参数：value 是未知传输值。
-// Returns: the record value or an empty record for non-objects.
-// 返回值：记录值；非对象时返回空记录。
-function vmmObject(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
-}
-
-// vmmNumber normalizes unknown values into a finite number.
-// vmmNumber 将未知值规范化为有限数字。
-// Parameters: value is an unknown numeric transport field.
-// 参数：value 是未知数值传输字段。
-// Returns: a finite number or zero when the field is invalid.
-// 返回值：有限数值；字段无效时返回零。
-function vmmNumber(value: unknown): number {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    // parsed is the explicit numeric conversion of the transport string.
-    // parsed 是传输字符串的明确数值转换结果。
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-  return 0;
 }

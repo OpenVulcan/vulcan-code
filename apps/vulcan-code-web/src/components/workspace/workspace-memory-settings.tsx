@@ -1,9 +1,5 @@
 import * as React from "react";
 import {
-  BrainCircuit,
-  Database,
-} from "lucide-react";
-import {
   MemoryArea,
   vmmSectionIcon,
   type MemoryActionProps,
@@ -25,6 +21,12 @@ export function WorkspaceMemorySettings(props: {
   // Workbench snapshot containing VMM memory state.
   // 包含 VMM 记忆状态的工作台快照。
   workbench: WorkbenchSnapshot;
+  // Opens credential management when VMM prerequisite models are not configured.
+  // 在 VMM 前置模型未配置时打开凭据管理。
+  onOpenCredentialManagement: () => void;
+  // Updates the selected embedded memory sub page.
+  // 更新选中的内嵌记忆子页面。
+  onSelectSubArea: (subArea: MemorySubAreaId) => void;
 }) {
   const {
     activeSubArea,
@@ -36,7 +38,8 @@ export function WorkspaceMemorySettings(props: {
     <MemoryArea
       activeSection={activeSubArea}
       actions={memoryActions}
-      memories={workbench.memories}
+      onOpenCredentialManagement={props.onOpenCredentialManagement}
+      onSelectSection={props.onSelectSubArea}
       snapshot={workbench.vmmMemory}
     />
   );
@@ -64,7 +67,7 @@ export function FloatingMemoryMenu(props: {
   const { t } = useI18n();
   // rows stores the embedded memory menu rows.
   // rows 保存内嵌记忆菜单行。
-  const rows = memoryMenuRows(props.workbench, t);
+  const rows = memoryMenuRows(props.workbench);
   // activeMeta stores the selected menu label for the collapsed pill.
   // activeMeta 保存收起胶囊展示的当前菜单标签。
   const activeMeta = memorySubAreaMeta(props.activeSubArea, props.workbench, t);
@@ -97,33 +100,19 @@ export function FloatingMemoryMenu(props: {
 
 // memoryMenuRows builds embedded memory menu rows from the snapshot.
 // memoryMenuRows 根据快照构建内嵌记忆菜单行。
-function memoryMenuRows(workbench: WorkbenchSnapshot, t: ReturnType<typeof useI18n>["t"]): Array<{ detail: string; icon: React.ReactNode; id: MemorySubAreaId; label: string }> {
-  return [
-    {
-      detail: workbench.vmmMemory.notice,
-      icon: <BrainCircuit size={15} />,
-      id: "status",
-      label: t("workspaceToolPanel.status"),
-    },
-    {
-      detail: t("settings.inference.subtitle"),
-      icon: <Database size={15} />,
-      id: "inference",
-      label: t("settings.inference.title"),
-    },
-    ...workbench.vmmMemory.sections.map((section) => ({
-      detail: section.description,
-      icon: vmmSectionIcon(section.id),
-      id: section.id,
-      label: section.label,
-    })),
-  ];
+function memoryMenuRows(workbench: WorkbenchSnapshot): Array<{ detail: string; icon: React.ReactNode; id: MemorySubAreaId; label: string }> {
+  return workbench.vmmMemory.sections.map((section) => ({
+    detail: section.description,
+    icon: vmmSectionIcon(section.id),
+    id: section.id,
+    label: section.label,
+  }));
 }
 
 // memorySubAreaMeta returns the compact label and detail for one embedded memory page.
 // memorySubAreaMeta 返回单个内嵌记忆页面的紧凑标签与详情。
 export function memorySubAreaMeta(subArea: MemorySubAreaId, workbench: WorkbenchSnapshot, t: ReturnType<typeof useI18n>["t"]): { detail: string; label: string } {
-  const row = memoryMenuRows(workbench, t).find((item) => item.id === subArea);
+  const row = memoryMenuRows(workbench).find((item) => item.id === subArea);
   return {
     detail: row?.detail ?? workbench.vmmMemory.notice,
     label: row?.label ?? t("workspaceToolPanel.status"),

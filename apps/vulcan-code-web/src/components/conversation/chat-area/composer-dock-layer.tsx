@@ -97,6 +97,10 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
       sessionReviewSummary={props.isEmptyConversation ? null : props.sessionReviewSummary}
       sessionPlanMode={props.isEmptyConversation ? null : workbench.sessionPlanMode ?? null}
       sessionVmmPolicy={props.isEmptyConversation ? null : workbench.sessionVmmPolicy ?? null}
+        vmmAvailable={
+          workbench.vmmMemory.effective.enabled
+          && workbench.vmmMemory.runtime.processReady
+        }
       runtimeCue={props.isEmptyConversation ? null : props.runtimeCue}
       runtimeStatusHost={props.runtimeStatusHost}
       todolistStatusHost={props.todolistStatusHost}

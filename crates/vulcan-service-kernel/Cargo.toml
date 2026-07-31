@@ -52,3 +52,9 @@ vulcan-tools-manager.workspace = true
 vulcan-vmm.workspace = true
 vulcan-workbench-model.workspace = true
 vulcan-workspace-store.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+vulcan-windows-console-helper = { path = "../vulcan-windows-console-helper" }
+
+[dev-dependencies]
+tempfile = "3.27.0"

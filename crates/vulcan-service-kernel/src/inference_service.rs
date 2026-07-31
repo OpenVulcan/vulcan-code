@@ -424,6 +424,7 @@ mod tests {
             dimensions: None,
             output_kind: EmbeddingOutputKind::Dense,
             encoding: EmbeddingEncoding::Float,
+            invalid_input_policy: Default::default(),
         };
 
         let error = validate_external_embedding_request(&request)

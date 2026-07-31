@@ -903,6 +903,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       <WorkspaceMemorySettings
         activeSubArea={props.activeMemorySubArea}
         memoryActions={props.memoryActions}
+        onOpenCredentialManagement={props.onOpenCredentialManagement}
+        onSelectSubArea={props.onSelectMemorySubArea}
         workbench={props.workbench}
       />
     ),

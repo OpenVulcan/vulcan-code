@@ -383,6 +383,7 @@ where
         public_ai_runtime: public_ai_runtime.as_deref(),
         workspace: &workspace_snapshot,
         vmm_session_states: &vmm_session_states,
+        managed_vmm_runtime: None,
         surface_messages: surface_messages.as_slice(),
         subagent_navigation,
         pending_questions,

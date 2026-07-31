@@ -16,7 +16,7 @@ use vulcan_ai_contract::{
 
 /// Identifies the first controlled loopback inference API version.
 /// 标识首个受控回环推理 API 版本。
-pub const INFERENCE_SERVICE_API_VERSION: u32 = 1;
+pub const INFERENCE_SERVICE_API_VERSION: u32 = 2;
 
 /// Resolves the default protected inference discovery file path.
 /// 解析默认受保护推理发现文件路径。

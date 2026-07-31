@@ -18,6 +18,39 @@ use test_support::*;
 
 mod active_session_state_tests;
 mod conversation_selection_tests;
+
+/// Verifies application shutdown drains tasks before VMM and releases MCP last.
+/// 验证应用关闭会先排空任务、再关闭 VMM，并最后释放 MCP。
+#[test]
+fn runtime_shutdown_order_is_tasks_then_managed_memory_then_mcp() {
+    let events = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+    let task_events = Arc::clone(&events);
+    let memory_events = Arc::clone(&events);
+    let mcp_events = Arc::clone(&events);
+    let stopped_id = Uuid::new_v4();
+
+    let stopped = ordered_runtime_shutdown(
+        move || {
+            task_events.lock().expect("task events").push("tasks");
+            Ok(vec![stopped_id])
+        },
+        move || {
+            memory_events.lock().expect("memory events").push("vmm");
+            Ok(())
+        },
+        move || {
+            mcp_events.lock().expect("mcp events").push("mcp");
+            Ok(())
+        },
+    )
+    .expect("ordered shutdown");
+
+    assert_eq!(stopped, vec![stopped_id]);
+    assert_eq!(
+        *events.lock().expect("final events"),
+        vec!["tasks", "vmm", "mcp"]
+    );
+}
 mod conversation_submission_activation_tests;
 mod conversation_submission_preflight_tests;
 mod conversation_submission_queue_tests;

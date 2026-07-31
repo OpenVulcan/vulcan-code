@@ -740,6 +740,7 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         system_prompt_hook_blocks: Vec::new(),
         project_vmm: VmmConfigLayer::default(),
         session_vmm: VmmConfigLayer::default(),
+        vmm_runtime_ready: true,
         boundary_events: Vec::new(),
         runtime_system_updates: Vec::new(),
         controller_runtime: None,

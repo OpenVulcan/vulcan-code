@@ -6905,6 +6905,7 @@ dependencies = [
  "time",
  "vulcan-ai-contract",
  "vulcan-luaskills-config",
+ "vulcan-vmm",
 ]
 
 [[package]]
@@ -6936,6 +6937,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "time",
  "tokio",
  "uuid",
@@ -6964,6 +6966,7 @@ dependencies = [
  "vulcan-task-session",
  "vulcan-tools-manager",
  "vulcan-vmm",
+ "vulcan-windows-console-helper",
  "vulcan-workbench-model",
  "vulcan-workspace-store",
 ]

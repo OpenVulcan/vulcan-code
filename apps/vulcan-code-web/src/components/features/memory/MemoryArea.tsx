@@ -1,19 +1,22 @@
 import * as React from "react"
-import { ListRestart, RefreshCw } from "lucide-react"
 
-import { useI18n } from "@/i18n"
-import type {
-  MemorySummary,
-  VmmMemorySnapshot,
-} from "@/types"
+import type { VmmMemorySnapshot } from "@/types"
 
-import { VmmEffectiveOverview, VmmResultPanel, VmmRuntimePanel } from "./vmm-memory-components"
-import { renderVmmSectionDetail, type VmmScope } from "./vmm-memory-sections"
 import {
   useMemoryAreaController,
   type MemoryActionProps,
 } from "./use-memory-area-controller"
 import { VmmInferenceSettings } from "./vmm-inference-settings"
+import { VmmContentPage } from "./vmm-content-page"
+import { VmmAdvancedPage } from "./vmm-advanced-page"
+import { VmmIdentityProjectPage } from "./vmm-identity-project-page"
+import { VmmOverviewPage } from "./vmm-overview-page"
+import { VmmProfilePage } from "./vmm-profile-page"
+import { VmmRulesPage } from "./vmm-rules-page"
+import {
+  VmmSetupDialog,
+  type VmmQuickSetupInput,
+} from "./vmm-setup-dialog"
 
 export { vmmSectionIcon } from "./vmm-memory-sections"
 export type { MemoryActionProps } from "./use-memory-area-controller"
@@ -21,6 +24,36 @@ export type { MemoryActionProps } from "./use-memory-area-controller"
 // MemorySubAreaId identifies the selected VMM memory management page.
 // MemorySubAreaId 标识当前选中的 VMM 记忆管理页面。
 export type MemorySubAreaId = string
+
+// shouldRequestVmmManagementCatalog decides whether the live VMM directory can be loaded safely.
+// shouldRequestVmmManagementCatalog 判断当前是否可以安全加载实时 VMM 管理目录。
+export function shouldRequestVmmManagementCatalog(input: {
+  // Current visible memory section.
+  // 当前可见的记忆分区。
+  activeSection: MemorySubAreaId
+  // Whether another memory operation owns the exclusive request channel.
+  // 是否已有其他记忆操作占用独占请求通道。
+  operationBusy: boolean
+  // Whether the configured VMM transport has completed its readiness handshake.
+  // 已配置 VMM 传输是否已完成就绪握手。
+  processReady: boolean
+  // Whether this page generation already issued the directory request.
+  // 当前页面代次是否已经发起过目录请求。
+  requestIssued: boolean
+  // Current retained management catalog.
+  // 当前保留的管理目录。
+  catalog: VmmMemorySnapshot["managementCatalog"]
+}): boolean {
+  return (
+    (input.activeSection === "overview" || input.activeSection === "identity_projects")
+    && input.processReady
+    && !input.operationBusy
+    && !input.requestIssued
+    && !input.catalog.loading
+    && input.catalog.users.length === 0
+    && input.catalog.projects.length === 0
+  )
+}
 
 // MemoryArea renders the VMM memory management workbench.
 // MemoryArea 渲染 VMM 记忆管理工作台。
@@ -31,14 +64,19 @@ export function MemoryArea(props: {
   // Service-backed VMM actions.
   // 服务端支持的 VMM 动作。
   actions: MemoryActionProps
-  // Memory summaries shown in the memory page.
-  // 记忆页展示的记忆摘要。
-  memories: MemorySummary[]
+  // Opens model credential management when required inference routes cannot be configured.
+  // 在无法配置必需推理路由时打开模型凭据管理。
+  onOpenCredentialManagement: () => void
   // Detailed VMM snapshot.
   // 详细 VMM 快照。
   snapshot: VmmMemorySnapshot
+  // Selects another VMM section from actions rendered inside the page.
+  // 从页面内部操作选择另一个 VMM 分区。
+  onSelectSection: (section: MemorySubAreaId) => void
 }) {
-  const { t } = useI18n();
+  // activeSection falls back to overview when stale navigation references an unavailable page.
+  // activeSection 在旧导航引用不可用页面时回退到总览。
+  const activeSection = vmmVisibleSection(props.activeSection)
   // controller owns exact draft routes and the exclusive asynchronous operation channel.
   // controller 持有准确草稿路由与独占异步操作通道。
   const controller = useMemoryAreaController({
@@ -48,131 +86,212 @@ export function MemoryArea(props: {
   // Controller fields expose the rendered scope, exact drafts, and guarded action callbacks.
   // 控制器字段暴露渲染作用域、准确草稿与受保护动作回调。
   const {
-    busyAction,
+    applyDraft,
+    clearFeedback,
     globalDraft,
     notice,
     operationBusy,
-    projectDraft,
-    projectDraftReady,
-    projectId,
     result,
     runAction,
     saveDraft,
-    scope,
-    selectProject,
-    selectScope,
-    setActiveDraft,
     setGlobalDraft,
   } = controller;
-  const [userRef, setUserRef] = React.useState(props.snapshot.effective.userId?.toString() ?? "");
-  const [userConfirmationCode, setUserConfirmationCode] = React.useState("");
-  const [projectPath, setProjectPath] = React.useState("");
-  const [projectDeleteConfirmed, setProjectDeleteConfirmed] = React.useState(false);
-  const [migrateSource, setMigrateSource] = React.useState("");
-  const [migrateTarget, setMigrateTarget] = React.useState("");
-  const [migrateConfirmed, setMigrateConfirmed] = React.useState(false);
-  const [profileTarget, setProfileTarget] = React.useState("user");
-  const [profileInstruction, setProfileInstruction] = React.useState("");
-  const [searchQueries, setSearchQueries] = React.useState("");
-  const [searchTopK, setSearchTopK] = React.useState("5");
-  const [turnIds, setTurnIds] = React.useState("");
-  const [writeAbstract, setWriteAbstract] = React.useState("");
-  const [writeDetails, setWriteDetails] = React.useState("");
-  const [writeScopeLevel, setWriteScopeLevel] = React.useState("2");
-  const [writeCategory, setWriteCategory] = React.useState("1");
-  const [writePriority, setWritePriority] = React.useState("2");
-  const [writeMemoryLevel, setWriteMemoryLevel] = React.useState("2");
-  const [deleteMemoryIds, setDeleteMemoryIds] = React.useState("");
-  const [deleteReason, setDeleteReason] = React.useState("");
+  // setupDialogOpen controls the first-time managed VMM setup workflow.
+  // setupDialogOpen 控制首次托管 VMM 快速配置流程。
+  const [setupDialogOpen, setSetupDialogOpen] = React.useState(false)
+  // catalogLoadRequested prevents repeated automatic directory requests during snapshot refreshes.
+  // catalogLoadRequested 防止快照刷新期间重复发起自动目录请求。
+  const catalogLoadRequested = React.useRef(false)
+  // healthProbeConfigurationKey prevents duplicate automatic checks for one unresolved external configuration.
+  // healthProbeConfigurationKey 防止对同一个待确认外部配置重复发起自动检查。
+  const healthProbeConfigurationKey = React.useRef<string | null>(null)
 
-  // activeDraft is the exact editable draft selected by the committed scope.
-  // activeDraft 是已提交作用域选择的准确可编辑草稿。
-  const activeDraft = scope === "global" ? globalDraft : projectDraft;
-  // handleProjectIdChange starts an exact project draft load without leaking a floating promise to React.
-  // handleProjectIdChange 启动准确项目草稿加载，并避免向 React 泄漏悬空 Promise。
-  const handleProjectIdChange = React.useCallback((nextProjectId: string) => {
-    void selectProject(nextProjectId);
-  }, [selectProject]);
+  // Page navigation starts a new feedback generation so an earlier page cannot leak notices.
+  // 页面导航会开启新的反馈代次，避免先前页面泄漏提示。
+  React.useEffect(() => {
+    clearFeedback()
+  }, [activeSection, clearFeedback])
 
-  const activeSectionDetail = renderVmmSectionDetail({
-    activeDraft,
-    activeSection: props.activeSection,
-    busyAction,
-    globalDraft,
-    migrateConfirmed,
-    migrateSource,
-    migrateTarget,
-    notice,
+  React.useEffect(() => {
+    const experience = props.snapshot.experienceState
+    if (
+      experience.deployment !== "external"
+      || experience.setup !== "ready"
+      || experience.health !== "unknown"
+    ) {
+      healthProbeConfigurationKey.current = null
+      return
+    }
+    // The key stays in memory only and is never logged or persisted. Including the credential
+    // ensures an explicitly changed key receives one new automatic verification.
+    // 该键仅保存在内存中且不会记录或持久化；包含凭据可确保显式更换密钥后获得一次新的自动验证。
+    const configurationKey = [
+      props.snapshot.effective.grpcTarget,
+      props.snapshot.globalDraft.grpcApiKey,
+    ].join("\u0000")
+    if (operationBusy || healthProbeConfigurationKey.current === configurationKey) {
+      return
+    }
+    healthProbeConfigurationKey.current = configurationKey
+    // A failed automatic check remains visible and user-retryable instead of creating an
+    // unbounded retry loop while the backend still reports unknown health.
+    // 自动检查失败后保持错误可见并允许用户手动重试，避免后端仍报告未知健康状态时形成无界重试循环。
+    void runAction("healthz")
+  }, [
     operationBusy,
-    profileInstruction,
-    profileTarget,
-    projectDeleteConfirmed,
-    projectDraft,
-    projectDraftReady,
-    projectId,
-    projectPath,
-    result,
-    scope,
-    searchQueries,
-    searchTopK,
-    setActiveDraft,
-    setGlobalDraft,
-    setMigrateConfirmed,
-    setMigrateSource,
-    setMigrateTarget,
-    setProfileInstruction,
-    setProfileTarget,
-    setProjectDeleteConfirmed,
-    setProjectId: handleProjectIdChange,
-    setProjectPath,
-    setScope: selectScope,
-    setSearchQueries,
-    setSearchTopK,
-    setTurnIds,
-    setUserConfirmationCode,
-    setUserRef,
-    setDeleteMemoryIds,
-    setDeleteReason,
-    setWriteAbstract,
-    setWriteCategory,
-    setWriteDetails,
-    setWriteMemoryLevel,
-    setWritePriority,
-    setWriteScopeLevel,
-    snapshot: props.snapshot,
-    t,
-    turnIds,
-    userConfirmationCode,
-    userRef,
-    deleteMemoryIds,
-    deleteReason,
-    writeAbstract,
-    writeCategory,
-    writeDetails,
-    writeMemoryLevel,
-    writePriority,
-    writeScopeLevel,
-    onRunAction: runAction,
-    onSaveDraft: saveDraft,
-  });
+    props.snapshot.effective.grpcTarget,
+    props.snapshot.experienceState,
+    props.snapshot.globalDraft.grpcApiKey,
+    runAction,
+  ])
 
-  if (props.activeSection === "status") {
-    return (
-      <section className="vmm-memory-page">
-        <div className="vmm-memory-shell status-only">
-          <main className="vmm-memory-main vmm-status-page">
-            <VmmEffectiveOverview memories={props.memories} snapshot={props.snapshot} />
-            <div className="vmm-status-grid">
-              <VmmRuntimePanel snapshot={props.snapshot} />
-              <VmmResultPanel result={result} />
-            </div>
-          </main>
-        </div>
-      </section>
-    )
+  React.useEffect(() => {
+    const catalog = props.snapshot.managementCatalog
+    if (!props.snapshot.runtime.processReady) {
+      catalogLoadRequested.current = false
+    }
+    if (!shouldRequestVmmManagementCatalog({
+      activeSection,
+      operationBusy,
+      processReady: props.snapshot.runtime.processReady,
+      requestIssued: catalogLoadRequested.current,
+      catalog,
+    })) {
+      return
+    }
+    catalogLoadRequested.current = true
+    // One automatic request is enough for this ready process generation. A failed request remains
+    // visible and user-retryable instead of creating an unbounded background retry loop.
+    // 当前就绪进程代次只自动请求一次；失败会保持可见并允许用户重试，避免产生无界后台重试循环。
+    void runAction("load_users_projects")
+  }, [
+    activeSection,
+    operationBusy,
+    props.snapshot.managementCatalog,
+    props.snapshot.runtime.processReady,
+    runAction,
+  ])
+
+  // handleQuickSetup persists the selected service mode, verifies it, creates identity bindings, and applies one explicit scope.
+  // handleQuickSetup 持久化选中的服务模式、完成验证、创建身份绑定并应用到一个明确范围。
+  const handleQuickSetup = React.useCallback(async (input: VmmQuickSetupInput): Promise<boolean> => {
+    // connectionDraft is saved before any RPC so every following action uses the exact visible connection choice.
+    // connectionDraft 在任何 RPC 前保存，确保后续动作使用用户可见的准确连接选择。
+    const connectionDraft = {
+      ...globalDraft,
+      enabled: false,
+      grpcTarget: input.mode === "external" ? input.externalEndpoint : "",
+      grpcApiKey: input.mode === "external" ? input.externalApiKey : "",
+      managedInstallEnabled: input.mode === "managed",
+      autoStartPolicy: input.mode === "managed" ? "on_start" : "manual",
+    }
+    if (!await applyDraft("global", null, connectionDraft)) {
+      return false
+    }
+    // Saving the managed on-start draft performs the single authoritative startup reconciliation.
+    // 保存托管自动启动草稿会执行唯一权威的启动协调，此处仅验证连接，避免重复启动。
+    if (!await runAction("healthz")) {
+      return false
+    }
+    const userResult = await runAction("resolve_user", {
+      userRef: input.userName,
+      confirmCreate: true,
+    })
+    const userId = userResult?.data.kind === "resolve_user"
+      ? String(userResult.data.value.user?.user_id ?? "")
+      : ""
+    if (!userId) {
+      return false
+    }
+    const projectResult = await runAction("ensure_project", {
+      projectPath: vmmSetupProjectPath(input.projectName),
+      confirmCreate: true,
+    })
+    const projectId = projectResult?.data.kind === "ensure_project"
+      ? String(projectResult.data.value.project?.project_id ?? "")
+      : ""
+    if (!projectId) {
+      return false
+    }
+    // identityDraft stores durable VMM ids while keeping internal ids out of the setup UI.
+    // identityDraft 保存持久化 VMM 标识，同时不在配置界面暴露内部标识。
+    const identityDraft = {
+      ...connectionDraft,
+      enabled: input.scope === "all_projects",
+      userId,
+      projectId,
+    }
+    if (!await applyDraft("global", null, identityDraft)) {
+      return false
+    }
+    if (input.scope === "current_project") {
+      const currentProjectId = props.snapshot.selectedProjectId
+        ?? props.snapshot.projectScopes[0]?.projectId
+        ?? null
+      if (!currentProjectId) {
+        return false
+      }
+      const projectDraft = {
+        ...identityDraft,
+        enabled: true,
+        hasOverride: true,
+      }
+      if (!await applyDraft("project", currentProjectId, projectDraft)) {
+        return false
+      }
+    }
+    await runAction("healthz")
+    await runAction("load_users_projects")
+    return true
+  }, [
+    applyDraft,
+    globalDraft,
+    props.snapshot.projectScopes,
+    props.snapshot.selectedProjectId,
+    runAction,
+  ])
+
+  // overviewPage is the safe product fallback for stale navigation and first-time setup.
+  // overviewPage 是旧导航与首次配置共用的安全产品回退页。
+  const overviewPage = (
+    <section className="vmm-memory-page">
+      <div className="vmm-memory-shell status-only">
+        <main className="vmm-memory-main vmm-status-page">
+          <VmmOverviewPage
+            busy={operationBusy}
+            onControl={async (action) => {
+              await runAction(action)
+            }}
+            onOpenAdvanced={() => props.onSelectSection("advanced")}
+            onOpenSetup={() => setSetupDialogOpen(true)}
+            snapshot={props.snapshot}
+          />
+          <VmmSetupDialog
+            busy={operationBusy}
+            currentProjectAvailable={Boolean(
+              props.snapshot.selectedProjectId
+              ?? props.snapshot.projectScopes[0]?.projectId,
+            )}
+            defaultProjectName={props.snapshot.displayIdentity.projectName
+              ?? props.snapshot.projectScopes[0]?.name
+              ?? "Vulcan Code"}
+            defaultUserName={props.snapshot.displayIdentity.userName ?? "Vulcan Code"}
+            notice={notice}
+            onOpenCredentialManagement={props.onOpenCredentialManagement}
+            onOpenChange={setSetupDialogOpen}
+            onSubmit={handleQuickSetup}
+            open={setupDialogOpen}
+          />
+        </main>
+      </div>
+    </section>
+  )
+
+  if (activeSection === "overview") {
+    return overviewPage
   }
 
-  if (props.activeSection === "inference") {
+  if (activeSection === "inference") {
     return (
       <section className="vmm-memory-page">
         <div className="vmm-memory-shell status-only">
@@ -184,42 +303,126 @@ export function MemoryArea(props: {
     )
   }
 
-  return (
-    <section className="vmm-memory-page">
-      <div className="vmm-memory-shell">
-        <main className="vmm-memory-main">
-          <div className="vmm-scope-bar">
-            <label>
-              <span>{t("memory.scope")}</span>
-              <select disabled={operationBusy} value={scope} onChange={(event) => selectScope(event.target.value as VmmScope)}>
-                <option value="global">{t("memory.scope.global")}</option>
-                <option value="project">{t("memory.scope.project")}</option>
-              </select>
-            </label>
-            <label>
-              <span>{t("memory.project")}</span>
-              <select disabled={scope !== "project" || operationBusy} value={projectId} onChange={(event) => handleProjectIdChange(event.target.value)}>
-                {props.snapshot.projectScopes.map((project) => (
-                  <option key={project.projectId} value={project.projectId}>{project.name}</option>
-                ))}
-              </select>
-            </label>
-            <button className="vmm-icon-button" disabled={operationBusy} onClick={() => runAction("healthz")} type="button">
-              <RefreshCw size={15} />{t("memory.action.testConnection")}
-            </button>
-            <button className="vmm-icon-button" disabled={operationBusy} onClick={() => runAction("load_users_projects")} type="button">
-              <ListRestart size={15} />{t("memory.action.refreshUsersProjects")}
-            </button>
-          </div>
-          {activeSectionDetail}
-        </main>
-        <aside className="vmm-memory-result">
-          <VmmRuntimePanel snapshot={props.snapshot} />
-          <VmmResultPanel result={result} />
-        </aside>
-      </div>
-    </section>
-  )
+  if (activeSection === "identity_projects") {
+    return (
+      <section className="vmm-memory-page">
+        <div className="vmm-memory-shell status-only">
+          <main className="vmm-memory-main vmm-status-page">
+            <VmmIdentityProjectPage
+              busy={operationBusy}
+              notice={notice}
+              onRunAction={runAction}
+              result={result}
+              snapshot={props.snapshot}
+            />
+          </main>
+        </div>
+      </section>
+    )
+  }
+
+  if (activeSection === "rules") {
+    return (
+      <section className="vmm-memory-page">
+        <div className="vmm-memory-shell status-only">
+          <main className="vmm-memory-main vmm-status-page">
+            <VmmRulesPage
+              busy={operationBusy}
+              draft={globalDraft}
+              notice={notice}
+              onApply={applyDraft}
+              onChange={(patch) => setGlobalDraft((draft) => ({ ...draft, ...patch }))}
+              projects={props.snapshot.projectScopes}
+            />
+          </main>
+        </div>
+      </section>
+    )
+  }
+
+  if (activeSection === "content") {
+    return (
+      <section className="vmm-memory-page">
+        <div className="vmm-memory-shell status-only">
+          <main className="vmm-memory-main vmm-status-page">
+            <VmmContentPage
+              busy={operationBusy}
+              onRunAction={runAction}
+              result={result}
+              snapshot={props.snapshot}
+            />
+          </main>
+        </div>
+      </section>
+    )
+  }
+
+  if (activeSection === "profile") {
+    return (
+      <section className="vmm-memory-page">
+        <div className="vmm-memory-shell status-only">
+          <main className="vmm-memory-main vmm-status-page">
+            <VmmProfilePage
+              busy={operationBusy}
+              onRunAction={runAction}
+              result={result}
+              snapshot={props.snapshot}
+            />
+          </main>
+        </div>
+      </section>
+    )
+  }
+
+  if (activeSection === "advanced") {
+    return (
+      <section className="vmm-memory-page">
+        <div className="vmm-memory-shell status-only">
+          <main className="vmm-memory-main vmm-status-page">
+            <VmmAdvancedPage
+              busy={operationBusy}
+              draft={globalDraft}
+              notice={notice}
+              onChange={(patch) => setGlobalDraft((draft) => ({ ...draft, ...patch }))}
+              onMaintenance={async (action) => {
+                const maintenanceResult = await runAction(action)
+                return maintenanceResult?.data.kind === "maintenance"
+                  ? maintenanceResult.data.value
+                  : null
+              }}
+              onSave={() => saveDraft("global")}
+              onStartRuntime={async () => Boolean(await runAction("managed_runtime_start"))}
+              snapshot={props.snapshot}
+            />
+          </main>
+        </div>
+      </section>
+    )
+  }
+
+  return overviewPage
+}
+
+// vmmVisibleSection returns one supported product page and falls back to the overview.
+// vmmVisibleSection 返回一个受支持的产品页面，并在未知输入时回退到总览。
+function vmmVisibleSection(section: MemorySubAreaId): MemorySubAreaId {
+  const visibleSections = new Set([
+    "overview",
+    "inference",
+    "identity_projects",
+    "rules",
+    "content",
+    "profile",
+    "advanced",
+  ])
+  return visibleSections.has(section) ? section : "overview"
+}
+
+// vmmSetupProjectPath converts one visible project name into the canonical VMM hierarchy.
+// vmmSetupProjectPath 将一个可见项目名称转换为标准 VMM 层级路径。
+function vmmSetupProjectPath(projectName: string): string {
+  const normalizedName = projectName.trim().replace(/[\\/]+/g, "-")
+  return `default/default/${normalizedName}`
 }
 
 

@@ -482,15 +482,12 @@ function featureSidebarRows(
     ]
   }
   if (activeArea === "memory") {
-    return [
-      { id: "status", label: t("workspaceToolPanel.status"), detail: workbench.vmmMemory.notice, icon: <BrainCircuit size={16} /> },
-      ...workbench.vmmMemory.sections.map((section) => ({
-        id: section.id,
-        label: section.label,
-        detail: section.description,
-        icon: vmmSectionIcon(section.id),
-      })),
-    ]
+    return workbench.vmmMemory.sections.map((section) => ({
+      id: section.id,
+      label: section.label,
+      detail: section.description,
+      icon: vmmSectionIcon(section.id),
+    }))
   }
   if (activeArea === "knowledge") {
     return [

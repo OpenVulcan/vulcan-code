@@ -625,6 +625,11 @@ pub(crate) fn service_startup_snapshot(
 pub(crate) fn service_workbench_snapshot(
     state: SharedServiceBridgeState,
 ) -> Result<WorkbenchSnapshot, String> {
+    // Managed child liveness belongs to the current process, so every full snapshot request
+    // reconciles that small projection before cloning the retained workbench.
+    // 托管子进程存活状态属于当前进程，因此每次请求完整快照时都先协调这份小型投影，
+    // 再克隆保留的工作台。
+    crate::managed_memory_mesh_runtime::synchronize_workbench_runtime(&state)?;
     // guard keeps the retained workbench stable while live pending questions are attached.
     // guard 在附加实时待回答问题期间保持保留工作台稳定。
     let guard = state

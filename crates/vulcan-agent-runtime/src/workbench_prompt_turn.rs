@@ -960,6 +960,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         system_prompt_hook_blocks,
         project_vmm: input.project_configuration.vmm,
         session_vmm: runtime_state.vmm.clone(),
+        vmm_runtime_ready: false,
         boundary_events: input.start.boundary_events.clone(),
         runtime_system_updates: Vec::new(),
         controller_runtime: None,

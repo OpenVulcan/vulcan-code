@@ -94,6 +94,9 @@ export function ComposerPanel(props: {
   // Current persisted VMM memory policy for the selected conversation.
   // 当前选中会话的持久化 VMM 记忆策略。
   sessionVmmPolicy: SessionVmmPolicySummary | null;
+  // Whether the effective project configuration makes VMM available to this composer.
+  // 当前项目最终生效配置是否允许输入区使用 VMM。
+  vmmAvailable: boolean;
   // Whether the selected conversation has an active backend run.
   // 当前选中会话是否存在活跃后端运行。
   isConversationRunning: boolean;
@@ -521,6 +524,7 @@ export function ComposerPanel(props: {
                   ? props.sessionVmmPolicy
                   : draftSessionSettings.vmmPolicy
               }
+              vmmAvailable={props.vmmAvailable}
               draftKnowledgeSelection={draftSessionSettings.knowledgeSelection}
               onDraftKnowledgeSelectionChange={draftSessionSettings.setKnowledgeSelection}
               onOpenKnowledge={props.onOpenKnowledge}

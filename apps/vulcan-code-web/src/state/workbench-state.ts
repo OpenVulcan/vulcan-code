@@ -37,6 +37,9 @@ export type SubagentSurfaceMessageCache = Map<string, ConversationMessage[]>;
 // WorkbenchMergeOptions tunes snapshot merge behavior for local interaction state.
 // WorkbenchMergeOptions 调整快照合并时本地交互状态的处理方式。
 export interface WorkbenchMergeOptions {
+  // Whether a confirmed service-instance change may reset monotonically increasing revisions.
+  // 已确认服务实例切换时，是否允许重置单调递增的版本。
+  allowServiceRevisionReset?: boolean;
   // Whether local project expansion should win over incoming snapshots.
   // 本地项目展开状态是否优先于传入快照。
   preserveExpandedProjectIds?: boolean;
@@ -86,7 +89,10 @@ export function mergeWorkbenchSnapshot(
 ): WorkbenchSnapshot {
   const currentRevision = current.revision ?? 0;
   const incomingRevision = incoming.revision ?? 0;
-  if (!shouldAcceptWorkbenchRevision(currentRevision, incomingRevision)) {
+  if (
+    !options.allowServiceRevisionReset
+    && !shouldAcceptWorkbenchRevision(currentRevision, incomingRevision)
+  ) {
     return current;
   }
 

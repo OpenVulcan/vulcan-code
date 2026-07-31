@@ -1144,6 +1144,242 @@ export type TranslationKey =
   | "vmm.overview.precheckAiTools"
   | "vmm.overview.writeback"
   | "vmm.overview.runtime"
+  | "vmm.experience.title"
+  | "vmm.experience.subtitle"
+  | "vmm.experience.quickSetup.title"
+  | "vmm.experience.quickSetup.description"
+  | "vmm.experience.quickSetup.action"
+  | "vmm.experience.quickSetup.running"
+  | "vmm.experience.status"
+  | "vmm.experience.deployment"
+  | "vmm.experience.setup"
+  | "vmm.experience.lifecycle"
+  | "vmm.experience.health"
+  | "vmm.experience.prerequisites"
+  | "vmm.experience.capabilities"
+  | "vmm.experience.activity"
+  | "vmm.experience.pendingWritebacks"
+  | "vmm.experience.completedTurns"
+  | "vmm.experience.lastProfileUpdate"
+  | "vmm.experience.currentProject"
+  | "vmm.experience.currentUser"
+  | "vmm.experience.noProject"
+  | "vmm.experience.noUser"
+  | "vmm.experience.refresh"
+  | "vmm.experience.start"
+  | "vmm.experience.restart"
+  | "vmm.experience.stop"
+  | "vmm.experience.openAdvanced"
+  | "memory.dataSpace.unknown.title"
+  | "memory.dataSpace.unknown.description"
+  | "memory.dataSpace.empty.title"
+  | "memory.dataSpace.empty.description"
+  | "memory.dataSpace.ready.title"
+  | "memory.dataSpace.ready.description"
+  | "memory.dataSpace.unmarkedHistory.title"
+  | "memory.dataSpace.unmarkedHistory.description"
+  | "memory.dataSpace.fingerprintChanged.title"
+  | "memory.dataSpace.fingerprintChanged.description"
+  | "memory.dataSpace.markerCorrupt.title"
+  | "memory.dataSpace.markerCorrupt.description"
+  | "memory.dataSpace.markerVersionUnsupported.title"
+  | "memory.dataSpace.markerVersionUnsupported.description"
+  | "memory.dataSpace.schemaMigrationRequired.title"
+  | "memory.dataSpace.schemaMigrationRequired.description"
+  | "memory.dataSpace.rebuildRunning.title"
+  | "memory.dataSpace.rebuildRunning.description"
+  | "memory.dataSpace.handleLater"
+  | "memory.dataSpace.repair"
+  | "memory.identity.title"
+  | "memory.identity.description"
+  | "memory.identity.refresh"
+  | "memory.identity.users"
+  | "memory.identity.projects"
+  | "memory.identity.addUser"
+  | "memory.identity.addProject"
+  | "memory.identity.userName"
+  | "memory.identity.projectName"
+  | "memory.identity.create"
+  | "memory.identity.migrate"
+  | "memory.identity.delete"
+  | "memory.identity.protected"
+  | "memory.identity.emptyUsers"
+  | "memory.identity.emptyProjects"
+  | "memory.identity.confirmDeleteTitle"
+  | "memory.identity.confirmDeleteDescription"
+  | "memory.identity.typeName"
+  | "memory.identity.checking"
+  | "memory.identity.migrateTitle"
+  | "memory.identity.migrateDescription"
+  | "memory.identity.targetProjectName"
+  | "memory.common.cancel"
+  | "memory.common.close"
+  | "memory.common.save"
+  | "memory.common.apply"
+  | "memory.common.loading"
+  | "memory.rules.title"
+  | "memory.rules.description"
+  | "memory.rules.enable"
+  | "memory.rules.enableDescription"
+  | "memory.rules.recall"
+  | "memory.rules.recallDescription"
+  | "memory.rules.organize"
+  | "memory.rules.organizeDescription"
+  | "memory.rules.aiTools"
+  | "memory.rules.aiToolsDescription"
+  | "memory.rules.recallTurns"
+  | "memory.rules.profileRefresh"
+  | "memory.rules.profileLimit"
+  | "memory.rules.applySettings"
+  | "memory.rules.applyTitle"
+  | "memory.rules.applyDescription"
+  | "memory.rules.allProjects"
+  | "memory.rules.oneProject"
+  | "memory.rules.selectProject"
+  | "memory.rules.searchProject"
+  | "memory.rules.noProject"
+  | "memory.rules.applied"
+  | "memory.content.title"
+  | "memory.content.description"
+  | "memory.content.sessionRequiredTitle"
+  | "memory.content.sessionRequired"
+  | "memory.content.search"
+  | "memory.content.searchPlaceholder"
+  | "memory.content.add"
+  | "memory.content.empty"
+  | "memory.content.noResults"
+  | "memory.content.details"
+  | "memory.content.category"
+  | "memory.content.createdAt"
+  | "memory.content.deleteTitle"
+  | "memory.content.deleteDescription"
+  | "memory.content.deleteReason"
+  | "memory.content.addTitle"
+  | "memory.content.summary"
+  | "memory.content.fullDetails"
+  | "memory.content.write"
+  | "memory.content.sourceConversation"
+  | "memory.profile.title"
+  | "memory.profile.description"
+  | "memory.profile.target"
+  | "memory.profile.user"
+  | "memory.profile.project"
+  | "memory.profile.refresh"
+  | "memory.profile.empty"
+  | "memory.profile.instruction"
+  | "memory.profile.instructionPlaceholder"
+  | "memory.profile.applyInstruction"
+  | "memory.profile.preview"
+  | "memory.profile.previewDescription"
+  | "memory.profile.priority"
+  | "memory.profile.level"
+  | "memory.advanced.title"
+  | "memory.advanced.description"
+  | "memory.advanced.deployment"
+  | "memory.advanced.managed"
+  | "memory.advanced.managedDescription"
+  | "memory.advanced.external"
+  | "memory.advanced.externalDescription"
+  | "memory.advanced.connection"
+  | "memory.advanced.endpoint"
+  | "memory.advanced.apiKey"
+  | "memory.advanced.runtime"
+  | "memory.advanced.autoStart"
+  | "memory.advanced.manualStart"
+  | "memory.advanced.transport"
+  | "memory.advanced.diagnostics"
+  | "memory.advanced.diagnosticRuntime"
+  | "memory.advanced.diagnosticGrpc"
+  | "memory.advanced.diagnosticController"
+  | "memory.advanced.diagnosticData"
+  | "memory.advanced.diagnosticLog"
+  | "memory.advanced.data"
+  | "memory.advanced.save"
+  | "memory.advanced.backupRebuild"
+  | "memory.advanced.maintenanceUnavailable"
+  | "memory.maintenance.confirmTitle"
+  | "memory.maintenance.confirmDescription"
+  | "memory.maintenance.backupFirst"
+  | "memory.maintenance.backupFirstDescription"
+  | "memory.maintenance.later"
+  | "memory.maintenance.progressTitle"
+  | "memory.maintenance.progressDescription"
+  | "memory.maintenance.cancel"
+  | "memory.maintenance.completed"
+  | "memory.maintenance.failed"
+  | "memory.maintenance.cancelled"
+  | "memory.maintenance.startMemory"
+  | "memory.maintenance.startFailed"
+  | "memory.maintenance.startFailedDescription"
+  | "vmm.experience.deployment.disabled"
+  | "vmm.experience.deployment.managed"
+  | "vmm.experience.deployment.external"
+  | "vmm.experience.setup.notConfigured"
+  | "vmm.experience.setup.checking"
+  | "vmm.experience.setup.ready"
+  | "vmm.experience.setup.incomplete"
+  | "vmm.experience.setup.blocked"
+  | "vmm.experience.lifecycle.stopped"
+  | "vmm.experience.lifecycle.starting"
+  | "vmm.experience.lifecycle.running"
+  | "vmm.experience.lifecycle.stopping"
+  | "vmm.experience.lifecycle.restarting"
+  | "vmm.experience.lifecycle.crashed"
+  | "vmm.experience.lifecycle.waitingRetry"
+  | "vmm.experience.lifecycle.failed"
+  | "vmm.experience.health.unknown"
+  | "vmm.experience.health.healthy"
+  | "vmm.experience.health.degraded"
+  | "vmm.experience.health.unavailable"
+  | "vmm.experience.state.available"
+  | "vmm.experience.state.unavailable"
+  | "vmm.experience.prerequisite.memory.title"
+  | "vmm.experience.prerequisite.memory.description"
+  | "vmm.experience.prerequisite.transport.title"
+  | "vmm.experience.prerequisite.transport.description"
+  | "vmm.experience.prerequisite.user.title"
+  | "vmm.experience.prerequisite.user.description"
+  | "vmm.experience.prerequisite.project.title"
+  | "vmm.experience.prerequisite.project.description"
+  | "vmm.experience.prerequisite.runtime.title"
+  | "vmm.experience.prerequisite.runtime.description"
+  | "vmm.experience.capability.recall"
+  | "vmm.experience.capability.writeback"
+  | "vmm.experience.capability.tools"
+  | "vmm.experience.capability.profile"
+  | "vmm.experience.capability.rerank"
+  | "vmm.setup.title"
+  | "vmm.setup.description"
+  | "vmm.setup.stepLabel"
+  | "vmm.setup.previous"
+  | "vmm.setup.next"
+  | "vmm.setup.mode.title"
+  | "vmm.setup.mode.description"
+  | "vmm.setup.managed.title"
+  | "vmm.setup.managed.description"
+  | "vmm.setup.external.title"
+  | "vmm.setup.external.description"
+  | "vmm.setup.inference.title"
+  | "vmm.setup.inference.description"
+  | "vmm.setup.inference.required"
+  | "vmm.setup.inference.openCredentials"
+  | "vmm.setup.scope.title"
+  | "vmm.setup.scope.description"
+  | "vmm.setup.scope.all_projects"
+  | "vmm.setup.scope.current_project"
+  | "vmm.setup.scope.currentProjectUnavailable"
+  | "vmm.setup.scope.not_yet"
+  | "vmm.setup.confirm.title"
+  | "vmm.setup.confirm.description"
+  | "vmm.setup.user"
+  | "vmm.setup.user.placeholder"
+  | "vmm.setup.project"
+  | "vmm.setup.project.placeholder"
+  | "vmm.setup.safety"
+  | "vmm.setup.cancel"
+  | "vmm.setup.submit"
+  | "vmm.setup.running"
+  | "vmm.setup.failed"
   | "vmm.overview.outboxProfiles"
   | "vmm.overview.completedTurns"
   | "vmm.overview.summaryEntry"
@@ -1154,14 +1390,95 @@ export type TranslationKey =
   | "vmm.runtime.profileNodes"
   | "vmm.runtime.updatedAt"
   | "vmm.runtime.noProfileBase"
+  | "vmm.runtime.start"
+  | "vmm.runtime.restart"
+  | "vmm.runtime.stop"
+  | "vmm.runtime.openLog"
+  | "vmm.runtime.mode"
+  | "vmm.runtime.mode.managed"
+  | "vmm.runtime.mode.external"
+  | "vmm.runtime.phase.ready"
+  | "vmm.runtime.phase.starting"
+  | "vmm.runtime.phase.stopped"
+  | "vmm.runtime.phase.failed"
+  | "vmm.runtime.phase.external"
+  | "vmm.runtime.phase.crashed"
+  | "vmm.runtime.phase.waiting_retry"
+  | "vmm.runtime.phase.stopping"
+  | "vmm.runtime.grpcTarget"
+  | "vmm.runtime.controller"
+  | "vmm.runtime.controllerSpace"
+  | "vmm.runtime.dataRoot"
+  | "vmm.runtime.logPath"
+  | "vmm.runtime.processCapability"
+  | "vmm.runtime.scopeCapability"
+  | "vmm.runtime.profileInstructionCapability"
+  | "vmm.runtime.capabilityReady"
+  | "vmm.runtime.capabilityUnavailable"
   | "vmm.result.title"
   | "vmm.result.emptySummary"
   | "vmm.result.request"
   | "vmm.result.response"
   | "vmm.result.emptyHint"
   | "vmm.result.generic"
+  | "vmm.managed.behavior.identity"
+  | "vmm.managed.behavior.lifecycle"
+  | "vmm.managed.behavior.pipeline"
+  | "vmm.managed.behavior.retention"
+  | "vmm.managed.piiLanguage"
+  | "vmm.managed.noiseEnabled"
+  | "vmm.managed.noiseLanguage"
+  | "vmm.managed.noiseSemanticEnabled"
+  | "vmm.managed.noiseSemanticThreshold"
+  | "vmm.managed.promptLanguage"
+  | "vmm.managed.precheckIntentTimeout"
+  | "vmm.managed.precheckTopK"
+  | "vmm.managed.precheckSearchScope"
+  | "vmm.managed.precheckSimilarityThreshold"
+  | "vmm.managed.scope.team"
+  | "vmm.managed.scope.space"
+  | "vmm.managed.scope.project"
+  | "vmm.managed.postactionInputMode"
+  | "vmm.managed.inputMode.compat"
+  | "vmm.managed.inputMode.strict"
+  | "vmm.managed.postactionTurnThreshold"
+  | "vmm.managed.postactionTokenThreshold"
+  | "vmm.managed.postactionIdleTimeout"
+  | "vmm.managed.postactionHistoryTurns"
+  | "vmm.managed.postactionMaxInputTokens"
+  | "vmm.managed.postactionMaxQueueWorkers"
+  | "vmm.managed.pipelineMaxSearchKeywords"
+  | "vmm.managed.pipelineMinSimilarityScore"
+  | "vmm.managed.pipelineReplaceMinSimilarityScore"
+  | "vmm.managed.pipelineHardDedupeThreshold"
+  | "vmm.managed.pipelineHardDedupePoolTopK"
+  | "vmm.managed.pipelineHybridEnabled"
+  | "vmm.managed.pipelineLexicalTopK"
+  | "vmm.managed.pipelineRrfK"
+  | "vmm.managed.pipelineMmrEnabled"
+  | "vmm.managed.pipelineMmrLambda"
+  | "vmm.managed.pipelineWeibullEnabled"
+  | "vmm.managed.pipelineWeibullShape"
+  | "vmm.managed.pipelineWeibullScaleHours"
+  | "vmm.managed.pipelineWeibullMinMultiplier"
+  | "vmm.managed.pipelineWeibullReinforceWeight"
+  | "vmm.managed.pipelineWeibullCrossSessionBoost"
+  | "vmm.managed.retentionEnabled"
+  | "vmm.managed.retentionScanInterval"
+  | "vmm.managed.retentionTurnKeepExtraTurns"
+  | "vmm.managed.retentionSessionIdleAfter"
+  | "vmm.managed.retentionTrashDuration"
+  | "vmm.managed.retentionPriorityFloor"
+  | "vmm.managed.retentionMemoryLevelFloor"
+  | "vmm.managed.retentionSkipProtectedShared"
   | "vmm.settings.grpcTarget"
   | "vmm.settings.apiKey"
+  | "vmm.settings.managedRuntime"
+  | "vmm.settings.managedBinaryPath"
+  | "vmm.settings.packagedBinary"
+  | "vmm.settings.autoStartPolicy"
+  | "vmm.settings.autoStart"
+  | "vmm.settings.manualStart"
   | "vmm.settings.receiveTimeout"
   | "vmm.settings.handshakeTimeout"
   | "vmm.settings.maxReceiveBytes"
@@ -1407,12 +1724,18 @@ export type TranslationKey =
   | "settings.inference.rerankTopN"
   | "settings.inference.rerankTruncation"
   | "settings.inference.rerankReturnContent"
-  | "settings.inference.purpose.precheckL1"
-  | "settings.inference.purpose.precheckL2"
-  | "settings.inference.purpose.postactionL1"
-  | "settings.inference.purpose.postactionL2"
-  | "settings.inference.purpose.profileInstruction"
-  | "settings.inference.purpose.reserve"
+| "settings.inference.purpose.precheckL1"
+| "settings.inference.purpose.precheckL1Description"
+| "settings.inference.purpose.precheckL2"
+| "settings.inference.purpose.precheckL2Description"
+| "settings.inference.purpose.postactionL1"
+| "settings.inference.purpose.postactionL1Description"
+| "settings.inference.purpose.postactionL2"
+| "settings.inference.purpose.postactionL2Description"
+| "settings.inference.purpose.profileInstruction"
+| "settings.inference.purpose.profileInstructionDescription"
+| "settings.inference.purpose.reserve"
+| "settings.inference.purpose.reserveDescription"
   | "settings.providerTools.title"
   | "settings.providerTools.description"
   | "settings.providerTools.select"
@@ -2838,6 +3161,242 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "vmm.overview.precheckAiTools": "前置召回：{precheck} · AI 工具：{tools}",
     "vmm.overview.writeback": "后置提交：{writeback}",
     "vmm.overview.runtime": "运行态",
+    "vmm.experience.title": "记忆服务",
+    "vmm.experience.subtitle": "配置、启动并管理 Vulcan Memory Mesh 长期记忆。",
+    "vmm.experience.quickSetup.title": "尚未启用长期记忆",
+    "vmm.experience.quickSetup.description": "使用推荐设置启用本机托管记忆。Vulcan Code 会检查运行文件、模型配置和数据安全状态后再启动。",
+    "vmm.experience.quickSetup.action": "开始快速配置",
+    "vmm.experience.quickSetup.running": "正在保存配置并启动记忆服务…",
+    "vmm.experience.status": "服务状态",
+    "vmm.experience.deployment": "运行方式",
+    "vmm.experience.setup": "配置状态",
+    "vmm.experience.lifecycle": "进程状态",
+    "vmm.experience.health": "可用状态",
+    "vmm.experience.prerequisites": "配置检查",
+    "vmm.experience.capabilities": "可用能力",
+    "vmm.experience.activity": "近期活动",
+    "vmm.experience.pendingWritebacks": "待写入记忆",
+    "vmm.experience.completedTurns": "已处理对话",
+    "vmm.experience.lastProfileUpdate": "最近画像更新",
+    "vmm.experience.currentProject": "当前项目",
+    "vmm.experience.currentUser": "当前用户",
+    "vmm.experience.noProject": "尚未关联项目",
+    "vmm.experience.noUser": "尚未建立记忆用户",
+    "vmm.experience.refresh": "刷新状态",
+    "vmm.experience.start": "启动服务",
+    "vmm.experience.restart": "重新启动",
+    "vmm.experience.stop": "停止服务",
+    "vmm.experience.openAdvanced": "打开高级设置",
+    "memory.dataSpace.unknown.title": "尚未检查记忆数据",
+    "memory.dataSpace.unknown.description": "启动本地记忆服务后会自动检查数据兼容性。",
+    "memory.dataSpace.empty.title": "记忆数据空间为空",
+    "memory.dataSpace.empty.description": "首次启动时会安全创建新的记忆数据空间。",
+    "memory.dataSpace.ready.title": "记忆数据可用",
+    "memory.dataSpace.ready.description": "现有记忆数据与当前向量模型配置一致。",
+    "memory.dataSpace.unmarkedHistory.title": "检测到历史记忆数据",
+    "memory.dataSpace.unmarkedHistory.description": "现有数据缺少可信的向量空间标记。为避免错误解释历史向量，需要先备份并重建索引。",
+    "memory.dataSpace.fingerprintChanged.title": "向量模型配置已变化",
+    "memory.dataSpace.fingerprintChanged.description": "历史向量与当前模型或维度不一致，需要备份并重建索引后才能继续。",
+    "memory.dataSpace.markerCorrupt.title": "记忆数据标记损坏",
+    "memory.dataSpace.markerCorrupt.description": "现有记忆不会被直接覆盖。请先检查数据并选择安全恢复方式。",
+    "memory.dataSpace.markerVersionUnsupported.title": "记忆数据需要迁移",
+    "memory.dataSpace.markerVersionUnsupported.description": "现有数据来自不受支持的版本，需要通过正式迁移流程升级。",
+    "memory.dataSpace.schemaMigrationRequired.title": "记忆存储需要升级",
+    "memory.dataSpace.schemaMigrationRequired.description": "存储结构与当前版本不一致，需要先完成正式迁移。",
+    "memory.dataSpace.rebuildRunning.title": "正在重建记忆索引",
+    "memory.dataSpace.rebuildRunning.description": "后台正在安全重建向量索引，完成前请勿关闭应用。",
+    "memory.dataSpace.handleLater": "稍后处理",
+    "memory.dataSpace.repair": "查看恢复方案",
+    "memory.identity.title": "用户与项目",
+    "memory.identity.description": "管理长期记忆使用者与项目映射。内部编号仅用于服务路由，不会显示在页面中。",
+    "memory.identity.refresh": "刷新列表",
+    "memory.identity.users": "用户",
+    "memory.identity.projects": "项目",
+    "memory.identity.addUser": "添加用户",
+    "memory.identity.addProject": "添加项目",
+    "memory.identity.userName": "用户名称",
+    "memory.identity.projectName": "项目名称",
+    "memory.identity.create": "创建",
+    "memory.identity.migrate": "迁移",
+    "memory.identity.delete": "删除",
+    "memory.identity.protected": "系统默认",
+    "memory.identity.emptyUsers": "尚未创建长期记忆用户。",
+    "memory.identity.emptyProjects": "尚未创建长期记忆项目。",
+    "memory.identity.confirmDeleteTitle": "确认删除",
+    "memory.identity.confirmDeleteDescription": "该操作会删除关联的长期记忆和画像。服务会先检查影响范围，再执行最终删除。",
+    "memory.identity.typeName": "输入“{name}”以确认",
+    "memory.identity.checking": "正在检查影响范围…",
+    "memory.identity.migrateTitle": "迁移项目",
+    "memory.identity.migrateDescription": "将源项目中的记忆安全迁移到一个已存在的目标项目。服务会先完成预检。",
+    "memory.identity.targetProjectName": "目标项目",
+    "memory.common.cancel": "取消",
+    "memory.common.close": "关闭",
+    "memory.common.save": "保存",
+    "memory.common.apply": "应用",
+    "memory.common.loading": "处理中…",
+    "memory.rules.title": "记忆规则",
+    "memory.rules.description": "先调整规则，再一次性应用到所有项目或一个指定项目。",
+    "memory.rules.enable": "启用长期记忆",
+    "memory.rules.enableDescription": "允许 Vulcan Code 为会话保存和召回长期记忆。",
+    "memory.rules.recall": "自动召回",
+    "memory.rules.recallDescription": "每轮开始前检索与当前任务相关的记忆。",
+    "memory.rules.organize": "自动整理",
+    "memory.rules.organizeDescription": "在会话完成后整理并写回有价值的信息。",
+    "memory.rules.aiTools": "允许 AI 主动管理记忆",
+    "memory.rules.aiToolsDescription": "向当前模型提供记忆搜索、写入与删除工具。",
+    "memory.rules.recallTurns": "隐式记忆保留回合",
+    "memory.rules.profileRefresh": "画像刷新间隔",
+    "memory.rules.profileLimit": "画像条目上限",
+    "memory.rules.applySettings": "应用设置",
+    "memory.rules.applyTitle": "选择应用范围",
+    "memory.rules.applyDescription": "这次修改只会写入一个明确范围，不会批量覆盖未选择的项目。",
+    "memory.rules.allProjects": "所有项目（全局默认）",
+    "memory.rules.oneProject": "一个指定项目",
+    "memory.rules.selectProject": "选择项目",
+    "memory.rules.searchProject": "搜索项目…",
+    "memory.rules.noProject": "没有可用项目",
+    "memory.rules.applied": "设置已应用。",
+    "memory.content.title": "记忆内容",
+    "memory.content.description": "使用自然语言搜索、查看和维护当前用户与项目的长期记忆。",
+    "memory.content.sessionRequiredTitle": "新增记忆需要关联会话",
+    "memory.content.sessionRequired": "请先在工作台打开一个具体会话，再返回此处新增记忆。检索和查看现有记忆不受影响。",
+    "memory.content.search": "搜索记忆",
+    "memory.content.searchPlaceholder": "例如：上次决定使用哪个数据库？",
+    "memory.content.add": "新增记忆",
+    "memory.content.empty": "输入问题即可搜索长期记忆。",
+    "memory.content.noResults": "没有找到相关记忆。",
+    "memory.content.details": "查看详情",
+    "memory.content.category": "分类",
+    "memory.content.createdAt": "创建时间",
+    "memory.content.deleteTitle": "删除这条记忆？",
+    "memory.content.deleteDescription": "删除后不会再被自动召回。该操作会同时清理对应的向量索引。",
+    "memory.content.deleteReason": "删除原因（可选）",
+    "memory.content.addTitle": "新增长期记忆",
+    "memory.content.summary": "简短摘要",
+    "memory.content.fullDetails": "详细内容",
+    "memory.content.write": "保存记忆",
+    "memory.content.sourceConversation": "来源会话",
+    "memory.profile.title": "画像",
+    "memory.profile.description": "查看 VMM 为当前用户或项目整理的长期偏好与约束，并通过自然语言进行修正。",
+    "memory.profile.target": "画像目标",
+    "memory.profile.user": "当前用户",
+    "memory.profile.project": "当前项目",
+    "memory.profile.refresh": "刷新画像",
+    "memory.profile.empty": "当前目标尚未形成画像条目。",
+    "memory.profile.instruction": "画像修正指令",
+    "memory.profile.instructionPlaceholder": "例如：不要再把旧数据库方案视为当前决定。",
+    "memory.profile.applyInstruction": "应用指令",
+    "memory.profile.preview": "最终画像预览",
+    "memory.profile.previewDescription": "这是提供给记忆服务的完整画像文本，仅在排查或核对时需要查看。",
+    "memory.profile.priority": "优先级",
+    "memory.profile.level": "层级",
+    "memory.advanced.title": "高级设置",
+    "memory.advanced.description": "选择本地托管或外部服务，并在需要时查看连接、数据恢复与技术诊断。",
+    "memory.advanced.deployment": "运行方式",
+    "memory.advanced.managed": "本地托管（推荐）",
+    "memory.advanced.managedDescription": "由 Vulcan Code 自动启动、停止和保护本地记忆服务。",
+    "memory.advanced.external": "连接外部 VMM",
+    "memory.advanced.externalDescription": "连接由你或团队独立运行的 VMM 服务。",
+    "memory.advanced.connection": "外部服务连接",
+    "memory.advanced.endpoint": "gRPC 地址",
+    "memory.advanced.apiKey": "访问密钥",
+    "memory.advanced.runtime": "本地运行",
+    "memory.advanced.autoStart": "随 Vulcan Code 自动启动",
+    "memory.advanced.manualStart": "仅手动启动",
+    "memory.advanced.transport": "连接高级参数",
+    "memory.advanced.diagnostics": "技术诊断",
+    "memory.advanced.diagnosticRuntime": "运行状态",
+    "memory.advanced.diagnosticGrpc": "服务地址",
+    "memory.advanced.diagnosticController": "存储控制器",
+    "memory.advanced.diagnosticData": "数据目录",
+    "memory.advanced.diagnosticLog": "运行日志",
+    "memory.advanced.data": "记忆数据",
+    "memory.advanced.save": "保存高级设置",
+    "memory.advanced.backupRebuild": "备份并重建",
+    "memory.advanced.maintenanceUnavailable": "当前版本尚未提供安全维护入口，现有数据不会被修改。",
+    "memory.maintenance.confirmTitle": "安全处理历史记忆",
+    "memory.maintenance.confirmDescription": "Vulcan Code 将先完整备份现有数据，再使用当前向量模型重建索引。原始数据不会被直接删除。",
+    "memory.maintenance.backupFirst": "先备份，后重建",
+    "memory.maintenance.backupFirstDescription": "备份完成前不会修改现有向量；重建失败时会保留原始数据和已完成备份。",
+    "memory.maintenance.later": "稍后处理",
+    "memory.maintenance.progressTitle": "正在处理记忆数据",
+    "memory.maintenance.progressDescription": "离开当前页面不会中断操作；重新打开高级设置仍可查看进度。",
+    "memory.maintenance.cancel": "取消维护",
+    "memory.maintenance.completed": "数据处理完成",
+    "memory.maintenance.failed": "数据处理失败",
+    "memory.maintenance.cancelled": "数据处理已取消",
+    "memory.maintenance.startMemory": "启动记忆服务",
+    "memory.maintenance.startFailed": "记忆服务尚未启动",
+    "memory.maintenance.startFailedDescription": "备份与重建已经完成。请保留此窗口，并根据页面提示检查运行文件、模型配置或端口后重试。",
+    "vmm.experience.deployment.disabled": "未启用",
+    "vmm.experience.deployment.managed": "本机托管",
+    "vmm.experience.deployment.external": "外部服务",
+    "vmm.experience.setup.notConfigured": "未配置",
+    "vmm.experience.setup.checking": "正在检查",
+    "vmm.experience.setup.ready": "已就绪",
+    "vmm.experience.setup.incomplete": "需要完善",
+    "vmm.experience.setup.blocked": "需要处理",
+    "vmm.experience.lifecycle.stopped": "已停止",
+    "vmm.experience.lifecycle.starting": "正在启动",
+    "vmm.experience.lifecycle.running": "运行中",
+    "vmm.experience.lifecycle.stopping": "正在停止",
+    "vmm.experience.lifecycle.restarting": "正在重启",
+    "vmm.experience.lifecycle.crashed": "异常退出",
+    "vmm.experience.lifecycle.waitingRetry": "等待重试",
+    "vmm.experience.lifecycle.failed": "启动失败",
+    "vmm.experience.health.unknown": "尚未检查",
+    "vmm.experience.health.healthy": "正常",
+    "vmm.experience.health.degraded": "部分可用",
+    "vmm.experience.health.unavailable": "不可用",
+    "vmm.experience.state.available": "可用",
+    "vmm.experience.state.unavailable": "不可用",
+    "vmm.experience.prerequisite.memory.title": "启用长期记忆",
+    "vmm.experience.prerequisite.memory.description": "完成快速配置后，Vulcan Code 才会检索和写入长期记忆。",
+    "vmm.experience.prerequisite.transport.title": "配置记忆服务",
+    "vmm.experience.prerequisite.transport.description": "选择本机托管或外部服务，并完成连接配置。",
+    "vmm.experience.prerequisite.user.title": "建立记忆用户",
+    "vmm.experience.prerequisite.user.description": "选择或创建用于长期记忆的用户身份。",
+    "vmm.experience.prerequisite.project.title": "关联当前项目",
+    "vmm.experience.prerequisite.project.description": "将当前工作区关联到一个长期记忆项目。",
+    "vmm.experience.prerequisite.runtime.title": "修复记忆服务启动问题",
+    "vmm.experience.prerequisite.runtime.description": "查看受控错误并重试；不会静默覆盖已有记忆数据。",
+    "vmm.experience.capability.recall": "对话前自动召回",
+    "vmm.experience.capability.writeback": "完成后自动整理",
+    "vmm.experience.capability.tools": "AI 记忆工具",
+    "vmm.experience.capability.profile": "画像指令",
+    "vmm.experience.capability.rerank": "记忆重排",
+    "vmm.setup.title": "快速配置长期记忆",
+    "vmm.setup.description": "使用本机托管模式建立记忆用户与当前项目。整个过程会先检查数据安全状态。",
+    "vmm.setup.stepLabel": "第 {current} 步，共 {total} 步",
+    "vmm.setup.previous": "上一步",
+    "vmm.setup.next": "下一步",
+    "vmm.setup.mode.title": "记忆服务在哪里运行",
+    "vmm.setup.mode.description": "大多数用户选择本机托管；已有独立 VMM 服务时再选择外部连接。",
+    "vmm.setup.managed.title": "本机托管",
+    "vmm.setup.managed.description": "Vulcan Code 负责启动、停止和连接本机 VMM 服务。",
+    "vmm.setup.external.title": "连接外部服务",
+    "vmm.setup.external.description": "连接已由你或团队运行的 VMM，不启动本机进程。",
+    "vmm.setup.inference.title": "选择记忆处理模型",
+    "vmm.setup.inference.description": "为记忆提取、整理、向量和重排选择模型与账号。下拉列表会自动过滤到适合对应任务的模型。",
+    "vmm.setup.inference.required": "必须先配置并启用向量模型，以及 PreCheck 与 PostAction 的 L1/L2 基础模型和账号。全部路由有效后才会初始化记忆；画像与重排可稍后补充。",
+    "vmm.setup.inference.openCredentials": "配置模型账号",
+    "vmm.setup.scope.title": "选择启用范围",
+    "vmm.setup.scope.description": "先确定记忆身份，再决定立即应用到哪里；以后可在“记忆规则”中调整。",
+    "vmm.setup.scope.all_projects": "立即对所有项目启用",
+    "vmm.setup.scope.current_project": "仅对当前项目启用",
+    "vmm.setup.scope.currentProjectUnavailable": "当前没有可关联的工作区项目",
+    "vmm.setup.scope.not_yet": "暂不启用，只完成配置",
+    "vmm.setup.confirm.title": "确认配置",
+    "vmm.setup.confirm.description": "模型与账号选择已在上一步即时保存；确认后将保存服务位置与启用范围，并创建记忆空间。",
+    "vmm.setup.user": "记忆用户名称",
+    "vmm.setup.user.placeholder": "例如：本地用户",
+    "vmm.setup.project": "当前项目名称",
+    "vmm.setup.project.placeholder": "例如：vulcan-code",
+    "vmm.setup.safety": "已有数据不会被自动覆盖。发现旧数据、向量空间变化或损坏标记时，配置会暂停并提供明确处理选项。",
+    "vmm.setup.cancel": "取消",
+    "vmm.setup.submit": "配置并启动",
+    "vmm.setup.running": "正在检查、启动并建立记忆空间…",
+    "vmm.setup.failed": "快速配置尚未完成，请根据下方提示处理后重试。",
     "vmm.overview.outboxProfiles": "outbox：{outbox} · 画像节点：{profiles}",
     "vmm.overview.completedTurns": "已完成回合：{turns}",
     "vmm.overview.summaryEntry": "摘要入口",
@@ -2848,14 +3407,95 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "vmm.runtime.profileNodes": "画像节点",
     "vmm.runtime.updatedAt": "更新时间",
     "vmm.runtime.noProfileBase": "暂无画像基点。",
+    "vmm.runtime.start": "启动",
+    "vmm.runtime.restart": "重启",
+    "vmm.runtime.stop": "停止",
+    "vmm.runtime.openLog": "查看日志",
+    "vmm.runtime.mode": "运行方式",
+    "vmm.runtime.mode.managed": "Vulcan Code 托管",
+    "vmm.runtime.mode.external": "外部 VMM",
+    "vmm.runtime.phase.ready": "托管 VMM 已启动",
+    "vmm.runtime.phase.starting": "托管 VMM 启动中",
+    "vmm.runtime.phase.stopped": "托管 VMM 已停止",
+    "vmm.runtime.phase.failed": "托管 VMM 启动失败",
+    "vmm.runtime.phase.external": "托管 VMM 未启动",
+    "vmm.runtime.phase.crashed": "托管 VMM 已崩溃",
+    "vmm.runtime.phase.waiting_retry": "托管 VMM 等待重试",
+    "vmm.runtime.phase.stopping": "托管 VMM 正在停止",
+    "vmm.runtime.grpcTarget": "实际 gRPC 地址",
+    "vmm.runtime.controller": "共享 Controller",
+    "vmm.runtime.controllerSpace": "VMM Space",
+    "vmm.runtime.dataRoot": "数据目录",
+    "vmm.runtime.logPath": "运行日志",
+    "vmm.runtime.processCapability": "进程能力",
+    "vmm.runtime.scopeCapability": "用户/项目对账",
+    "vmm.runtime.profileInstructionCapability": "画像指令",
+    "vmm.runtime.capabilityReady": "可用",
+    "vmm.runtime.capabilityUnavailable": "不可用",
     "vmm.result.title": "动作结果",
     "vmm.result.emptySummary": "尚未执行 VMM 动作。",
     "vmm.result.request": "请求",
     "vmm.result.response": "响应",
     "vmm.result.emptyHint": "点击左侧动作后会显示请求与响应。",
     "vmm.result.generic": "结果",
+    "vmm.managed.behavior.identity": "隐私、噪声与提示词",
+    "vmm.managed.behavior.lifecycle": "前置召回与后置写回",
+    "vmm.managed.behavior.pipeline": "检索与去重流水线",
+    "vmm.managed.behavior.retention": "保留与回收",
+    "vmm.managed.piiLanguage": "PII 规则语言",
+    "vmm.managed.noiseEnabled": "启用噪声过滤",
+    "vmm.managed.noiseLanguage": "噪声规则语言",
+    "vmm.managed.noiseSemanticEnabled": "启用语义噪声过滤",
+    "vmm.managed.noiseSemanticThreshold": "语义噪声阈值",
+    "vmm.managed.promptLanguage": "提示词包",
+    "vmm.managed.precheckIntentTimeout": "意图解析超时",
+    "vmm.managed.precheckTopK": "前置召回数量",
+    "vmm.managed.precheckSearchScope": "前置检索范围",
+    "vmm.managed.precheckSimilarityThreshold": "前置相似度阈值",
+    "vmm.managed.scope.team": "团队",
+    "vmm.managed.scope.space": "空间",
+    "vmm.managed.scope.project": "项目",
+    "vmm.managed.postactionInputMode": "后置输入模式",
+    "vmm.managed.inputMode.compat": "兼容",
+    "vmm.managed.inputMode.strict": "严格",
+    "vmm.managed.postactionTurnThreshold": "会话分析轮次阈值",
+    "vmm.managed.postactionTokenThreshold": "会话分析 Token 阈值",
+    "vmm.managed.postactionIdleTimeout": "会话分析空闲超时",
+    "vmm.managed.postactionHistoryTurns": "会话分析历史轮数",
+    "vmm.managed.postactionMaxInputTokens": "会话分析最大输入 Token",
+    "vmm.managed.postactionMaxQueueWorkers": "后置队列工作数",
+    "vmm.managed.pipelineMaxSearchKeywords": "最大检索关键词数",
+    "vmm.managed.pipelineMinSimilarityScore": "最小召回相似度",
+    "vmm.managed.pipelineReplaceMinSimilarityScore": "最小替换相似度",
+    "vmm.managed.pipelineHardDedupeThreshold": "硬去重阈值",
+    "vmm.managed.pipelineHardDedupePoolTopK": "硬去重候选数",
+    "vmm.managed.pipelineHybridEnabled": "启用混合检索",
+    "vmm.managed.pipelineLexicalTopK": "词法召回数量",
+    "vmm.managed.pipelineRrfK": "倒数排名融合常量",
+    "vmm.managed.pipelineMmrEnabled": "启用多样性过滤",
+    "vmm.managed.pipelineMmrLambda": "多样性平衡系数",
+    "vmm.managed.pipelineWeibullEnabled": "启用 Weibull 衰减",
+    "vmm.managed.pipelineWeibullShape": "Weibull 形状参数",
+    "vmm.managed.pipelineWeibullScaleHours": "Weibull 小时尺度",
+    "vmm.managed.pipelineWeibullMinMultiplier": "最小衰减倍率",
+    "vmm.managed.pipelineWeibullReinforceWeight": "强化权重",
+    "vmm.managed.pipelineWeibullCrossSessionBoost": "跨会话增强系数",
+    "vmm.managed.retentionEnabled": "启用保留扫描",
+    "vmm.managed.retentionScanInterval": "保留扫描间隔",
+    "vmm.managed.retentionTurnKeepExtraTurns": "热窗口额外轮数",
+    "vmm.managed.retentionSessionIdleAfter": "会话空闲回收时长",
+    "vmm.managed.retentionTrashDuration": "回收站保留时长",
+    "vmm.managed.retentionPriorityFloor": "受保护优先级下限",
+    "vmm.managed.retentionMemoryLevelFloor": "受保护记忆级别下限",
+    "vmm.managed.retentionSkipProtectedShared": "跳过受保护共享记忆",
     "vmm.settings.grpcTarget": "gRPC 地址",
     "vmm.settings.apiKey": "API Key",
+    "vmm.settings.managedRuntime": "由 Vulcan Code 托管本地 VMM",
+    "vmm.settings.managedBinaryPath": "VMM 可执行文件",
+    "vmm.settings.packagedBinary": "留空使用随包 Sidecar",
+    "vmm.settings.autoStartPolicy": "启动策略",
+    "vmm.settings.autoStart": "随 Vulcan Code 启动",
+    "vmm.settings.manualStart": "手动启动",
     "vmm.settings.receiveTimeout": "请求超时",
     "vmm.settings.handshakeTimeout": "握手超时",
     "vmm.settings.maxReceiveBytes": "最大接收字节",
@@ -3101,12 +3741,18 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.inference.rerankTopN": "默认返回数量",
     "settings.inference.rerankTruncation": "截断策略",
     "settings.inference.rerankReturnContent": "返回候选正文",
-    "settings.inference.purpose.precheckL1": "预检 L1",
-    "settings.inference.purpose.precheckL2": "预检 L2",
-    "settings.inference.purpose.postactionL1": "后处理 L1",
-    "settings.inference.purpose.postactionL2": "后处理 L2",
+    "settings.inference.purpose.precheckL1": "快速判断",
+    "settings.inference.purpose.precheckL1Description": "PreCheck L1：低延迟判断本轮是否需要召回长期记忆。",
+    "settings.inference.purpose.precheckL2": "深度判断",
+    "settings.inference.purpose.precheckL2Description": "PreCheck L2：在复杂输入下补充判断应召回哪些长期记忆。",
+    "settings.inference.purpose.postactionL1": "快速整理",
+    "settings.inference.purpose.postactionL1Description": "PostAction L1：低延迟提取本轮值得保留的信息。",
+    "settings.inference.purpose.postactionL2": "深度整理",
+    "settings.inference.purpose.postactionL2Description": "PostAction L2：复核、合并并形成可长期使用的记忆。",
     "settings.inference.purpose.profileInstruction": "画像指令",
-    "settings.inference.purpose.reserve": "预留路由",
+    "settings.inference.purpose.profileInstructionDescription": "处理用户对个人或项目画像提出的自然语言修正。",
+    "settings.inference.purpose.reserve": "备用任务",
+    "settings.inference.purpose.reserveDescription": "预留给 VMM 后续内部任务，不影响当前常规记忆流程。",
     "settings.providerTools.title": "AI 扩展能力",
     "settings.providerTools.description": "每项能力只能选择一个实际模型；AI 将收到该模型的原生参数 Schema。",
     "settings.providerTools.select": "选择模型",
@@ -4529,6 +5175,242 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "vmm.overview.precheckAiTools": "Precheck recall: {precheck} · AI tools: {tools}",
     "vmm.overview.writeback": "Writeback: {writeback}",
     "vmm.overview.runtime": "Runtime",
+    "vmm.experience.title": "Memory service",
+    "vmm.experience.subtitle": "Configure, start, and manage Vulcan Memory Mesh long-term memory.",
+    "vmm.experience.quickSetup.title": "Long-term memory is not enabled",
+    "vmm.experience.quickSetup.description": "Enable locally managed memory with recommended settings. Vulcan Code checks the runtime, model configuration, and data safety before starting.",
+    "vmm.experience.quickSetup.action": "Start quick setup",
+    "vmm.experience.quickSetup.running": "Saving configuration and starting the memory service…",
+    "vmm.experience.status": "Service status",
+    "vmm.experience.deployment": "Deployment",
+    "vmm.experience.setup": "Setup",
+    "vmm.experience.lifecycle": "Process",
+    "vmm.experience.health": "Availability",
+    "vmm.experience.prerequisites": "Configuration checks",
+    "vmm.experience.capabilities": "Capabilities",
+    "vmm.experience.activity": "Recent activity",
+    "vmm.experience.pendingWritebacks": "Pending writes",
+    "vmm.experience.completedTurns": "Processed conversations",
+    "vmm.experience.lastProfileUpdate": "Last profile update",
+    "vmm.experience.currentProject": "Current project",
+    "vmm.experience.currentUser": "Current user",
+    "vmm.experience.noProject": "No project is linked",
+    "vmm.experience.noUser": "No memory user exists",
+    "vmm.experience.refresh": "Refresh status",
+    "vmm.experience.start": "Start service",
+    "vmm.experience.restart": "Restart",
+    "vmm.experience.stop": "Stop service",
+    "vmm.experience.openAdvanced": "Open advanced settings",
+    "memory.dataSpace.unknown.title": "Memory data has not been checked",
+    "memory.dataSpace.unknown.description": "Data compatibility will be checked automatically when the local memory service starts.",
+    "memory.dataSpace.empty.title": "Memory data space is empty",
+    "memory.dataSpace.empty.description": "A new memory data space will be created safely on first start.",
+    "memory.dataSpace.ready.title": "Memory data is ready",
+    "memory.dataSpace.ready.description": "Existing memory data matches the current embedding model configuration.",
+    "memory.dataSpace.unmarkedHistory.title": "Historical memory data detected",
+    "memory.dataSpace.unmarkedHistory.description": "The existing data has no trusted vector-space marker. Back up and rebuild the index before continuing.",
+    "memory.dataSpace.fingerprintChanged.title": "Embedding configuration changed",
+    "memory.dataSpace.fingerprintChanged.description": "Historical vectors do not match the current model or dimensions. Back up and rebuild the index first.",
+    "memory.dataSpace.markerCorrupt.title": "Memory data marker is damaged",
+    "memory.dataSpace.markerCorrupt.description": "Existing memory will not be overwritten. Inspect the data and choose a safe recovery path.",
+    "memory.dataSpace.markerVersionUnsupported.title": "Memory data requires migration",
+    "memory.dataSpace.markerVersionUnsupported.description": "The existing data uses an unsupported version and must be upgraded through the formal migration flow.",
+    "memory.dataSpace.schemaMigrationRequired.title": "Memory storage requires an upgrade",
+    "memory.dataSpace.schemaMigrationRequired.description": "The storage schema differs from the current version and must be migrated first.",
+    "memory.dataSpace.rebuildRunning.title": "Rebuilding the memory index",
+    "memory.dataSpace.rebuildRunning.description": "The vector index is being rebuilt safely in the background. Keep the app open until it finishes.",
+    "memory.dataSpace.handleLater": "Handle later",
+    "memory.dataSpace.repair": "View recovery options",
+    "memory.identity.title": "Users and projects",
+    "memory.identity.description": "Manage durable memory users and project mappings. Internal identifiers remain hidden and are used only for routing.",
+    "memory.identity.refresh": "Refresh list",
+    "memory.identity.users": "Users",
+    "memory.identity.projects": "Projects",
+    "memory.identity.addUser": "Add user",
+    "memory.identity.addProject": "Add project",
+    "memory.identity.userName": "User name",
+    "memory.identity.projectName": "Project name",
+    "memory.identity.create": "Create",
+    "memory.identity.migrate": "Migrate",
+    "memory.identity.delete": "Delete",
+    "memory.identity.protected": "System default",
+    "memory.identity.emptyUsers": "No durable memory users have been created.",
+    "memory.identity.emptyProjects": "No durable memory projects have been created.",
+    "memory.identity.confirmDeleteTitle": "Confirm deletion",
+    "memory.identity.confirmDeleteDescription": "This removes associated durable memory and profile data. The service checks the impact before the final deletion.",
+    "memory.identity.typeName": "Type “{name}” to confirm",
+    "memory.identity.checking": "Checking impact…",
+    "memory.identity.migrateTitle": "Migrate project",
+    "memory.identity.migrateDescription": "Safely migrate source project memory into an existing destination project. The service runs a preflight check first.",
+    "memory.identity.targetProjectName": "Destination project",
+    "memory.common.cancel": "Cancel",
+    "memory.common.close": "Close",
+    "memory.common.save": "Save",
+    "memory.common.apply": "Apply",
+    "memory.common.loading": "Working…",
+    "memory.rules.title": "Memory rules",
+    "memory.rules.description": "Adjust the rules first, then apply them once to all projects or one selected project.",
+    "memory.rules.enable": "Enable durable memory",
+    "memory.rules.enableDescription": "Allow Vulcan Code to save and recall durable memory for conversations.",
+    "memory.rules.recall": "Automatic recall",
+    "memory.rules.recallDescription": "Retrieve memory related to the current task before each turn.",
+    "memory.rules.organize": "Automatic organization",
+    "memory.rules.organizeDescription": "Organize and write back valuable information after a conversation completes.",
+    "memory.rules.aiTools": "Let AI manage memory",
+    "memory.rules.aiToolsDescription": "Expose memory search, write, and delete tools to the current model.",
+    "memory.rules.recallTurns": "Implicit memory retention turns",
+    "memory.rules.profileRefresh": "Profile refresh interval",
+    "memory.rules.profileLimit": "Profile item limit",
+    "memory.rules.applySettings": "Apply settings",
+    "memory.rules.applyTitle": "Choose where to apply",
+    "memory.rules.applyDescription": "This change writes to one explicit scope and never overwrites unselected projects in bulk.",
+    "memory.rules.allProjects": "All projects (global default)",
+    "memory.rules.oneProject": "One selected project",
+    "memory.rules.selectProject": "Select a project",
+    "memory.rules.searchProject": "Search projects…",
+    "memory.rules.noProject": "No projects available",
+    "memory.rules.applied": "Settings applied.",
+    "memory.content.title": "Memory content",
+    "memory.content.description": "Use natural language to search, inspect, and maintain durable memory for the current user and project.",
+    "memory.content.sessionRequiredTitle": "A conversation is required to add memory",
+    "memory.content.sessionRequired": "Open a specific conversation in the workbench before adding memory here. Searching and inspecting existing memory remain available.",
+    "memory.content.search": "Search memory",
+    "memory.content.searchPlaceholder": "For example: Which database did we choose last time?",
+    "memory.content.add": "Add memory",
+    "memory.content.empty": "Enter a question to search durable memory.",
+    "memory.content.noResults": "No related memory was found.",
+    "memory.content.details": "View details",
+    "memory.content.category": "Category",
+    "memory.content.createdAt": "Created",
+    "memory.content.deleteTitle": "Delete this memory?",
+    "memory.content.deleteDescription": "It will no longer be recalled automatically. The corresponding vector index is removed as well.",
+    "memory.content.deleteReason": "Deletion reason (optional)",
+    "memory.content.addTitle": "Add durable memory",
+    "memory.content.summary": "Short summary",
+    "memory.content.fullDetails": "Full details",
+    "memory.content.write": "Save memory",
+    "memory.content.sourceConversation": "Source conversation",
+    "memory.profile.title": "Profile",
+    "memory.profile.description": "Review durable preferences and constraints organized by VMM for the current user or project, and correct them with natural language.",
+    "memory.profile.target": "Profile target",
+    "memory.profile.user": "Current user",
+    "memory.profile.project": "Current project",
+    "memory.profile.refresh": "Refresh profile",
+    "memory.profile.empty": "The current target has no profile items yet.",
+    "memory.profile.instruction": "Profile correction instruction",
+    "memory.profile.instructionPlaceholder": "For example: Do not treat the old database approach as the current decision.",
+    "memory.profile.applyInstruction": "Apply instruction",
+    "memory.profile.preview": "Final profile preview",
+    "memory.profile.previewDescription": "This is the complete profile text supplied to the memory service. Open it only for review or troubleshooting.",
+    "memory.profile.priority": "Priority",
+    "memory.profile.level": "Level",
+    "memory.advanced.title": "Advanced settings",
+    "memory.advanced.description": "Choose local hosting or an external service, and inspect connections, data recovery, and diagnostics when needed.",
+    "memory.advanced.deployment": "Deployment",
+    "memory.advanced.managed": "Locally managed (recommended)",
+    "memory.advanced.managedDescription": "Vulcan Code starts, stops, and protects the local memory service automatically.",
+    "memory.advanced.external": "Connect an external VMM",
+    "memory.advanced.externalDescription": "Connect to a VMM service operated independently by you or your team.",
+    "memory.advanced.connection": "External service connection",
+    "memory.advanced.endpoint": "gRPC endpoint",
+    "memory.advanced.apiKey": "Access key",
+    "memory.advanced.runtime": "Local runtime",
+    "memory.advanced.autoStart": "Start with Vulcan Code",
+    "memory.advanced.manualStart": "Manual start only",
+    "memory.advanced.transport": "Advanced transport",
+    "memory.advanced.diagnostics": "Technical diagnostics",
+    "memory.advanced.diagnosticRuntime": "Runtime state",
+    "memory.advanced.diagnosticGrpc": "Service endpoint",
+    "memory.advanced.diagnosticController": "Storage controller",
+    "memory.advanced.diagnosticData": "Data directory",
+    "memory.advanced.diagnosticLog": "Runtime log",
+    "memory.advanced.data": "Memory data",
+    "memory.advanced.save": "Save advanced settings",
+    "memory.advanced.backupRebuild": "Back up and rebuild",
+    "memory.advanced.maintenanceUnavailable": "This version does not yet expose a safe maintenance entry. Existing data will not be modified.",
+    "memory.maintenance.confirmTitle": "Safely process historical memory",
+    "memory.maintenance.confirmDescription": "Vulcan Code will create a complete backup first, then rebuild the index with the current embedding model. Original data is not deleted directly.",
+    "memory.maintenance.backupFirst": "Back up before rebuilding",
+    "memory.maintenance.backupFirstDescription": "Existing vectors are not modified before backup completes. A failed rebuild keeps both original data and the completed backup.",
+    "memory.maintenance.later": "Handle later",
+    "memory.maintenance.progressTitle": "Processing memory data",
+    "memory.maintenance.progressDescription": "Leaving this page does not interrupt the operation. Reopen Advanced settings to see progress.",
+    "memory.maintenance.cancel": "Cancel maintenance",
+    "memory.maintenance.completed": "Data processing complete",
+    "memory.maintenance.failed": "Data processing failed",
+    "memory.maintenance.cancelled": "Data processing cancelled",
+    "memory.maintenance.startMemory": "Start memory service",
+    "memory.maintenance.startFailed": "The memory service has not started",
+    "memory.maintenance.startFailedDescription": "Backup and rebuild completed. Keep this dialog open, follow the page guidance to check runtime files, model configuration, or ports, then retry.",
+    "vmm.experience.deployment.disabled": "Disabled",
+    "vmm.experience.deployment.managed": "Managed locally",
+    "vmm.experience.deployment.external": "External service",
+    "vmm.experience.setup.notConfigured": "Not configured",
+    "vmm.experience.setup.checking": "Checking",
+    "vmm.experience.setup.ready": "Ready",
+    "vmm.experience.setup.incomplete": "Needs attention",
+    "vmm.experience.setup.blocked": "Blocked",
+    "vmm.experience.lifecycle.stopped": "Stopped",
+    "vmm.experience.lifecycle.starting": "Starting",
+    "vmm.experience.lifecycle.running": "Running",
+    "vmm.experience.lifecycle.stopping": "Stopping",
+    "vmm.experience.lifecycle.restarting": "Restarting",
+    "vmm.experience.lifecycle.crashed": "Crashed",
+    "vmm.experience.lifecycle.waitingRetry": "Waiting to retry",
+    "vmm.experience.lifecycle.failed": "Start failed",
+    "vmm.experience.health.unknown": "Not checked",
+    "vmm.experience.health.healthy": "Healthy",
+    "vmm.experience.health.degraded": "Partially available",
+    "vmm.experience.health.unavailable": "Unavailable",
+    "vmm.experience.state.available": "Available",
+    "vmm.experience.state.unavailable": "Unavailable",
+    "vmm.experience.prerequisite.memory.title": "Enable long-term memory",
+    "vmm.experience.prerequisite.memory.description": "Vulcan Code can recall and write long-term memory after quick setup.",
+    "vmm.experience.prerequisite.transport.title": "Configure the memory service",
+    "vmm.experience.prerequisite.transport.description": "Choose a locally managed or external service and complete its connection settings.",
+    "vmm.experience.prerequisite.user.title": "Create a memory user",
+    "vmm.experience.prerequisite.user.description": "Select or create the identity used for durable memory.",
+    "vmm.experience.prerequisite.project.title": "Link the current project",
+    "vmm.experience.prerequisite.project.description": "Link the current workspace to a durable memory project.",
+    "vmm.experience.prerequisite.runtime.title": "Repair memory service startup",
+    "vmm.experience.prerequisite.runtime.description": "Review the controlled error and retry. Existing memory data is never overwritten silently.",
+    "vmm.experience.capability.recall": "Automatic recall before replies",
+    "vmm.experience.capability.writeback": "Automatic maintenance after replies",
+    "vmm.experience.capability.tools": "AI memory tools",
+    "vmm.experience.capability.profile": "Profile instructions",
+    "vmm.experience.capability.rerank": "Memory reranking",
+    "vmm.setup.title": "Quick setup for long-term memory",
+    "vmm.setup.description": "Use local managed mode to create a memory user and link the current project. Data safety is checked before any startup.",
+    "vmm.setup.stepLabel": "Step {current} of {total}",
+    "vmm.setup.previous": "Previous",
+    "vmm.setup.next": "Next",
+    "vmm.setup.mode.title": "Where the memory service runs",
+    "vmm.setup.mode.description": "Managed locally is best for most users. Choose an external connection only when a VMM service already exists.",
+    "vmm.setup.managed.title": "Managed locally",
+    "vmm.setup.managed.description": "Vulcan Code starts, stops, and connects to the local VMM service.",
+    "vmm.setup.external.title": "Connect to an external service",
+    "vmm.setup.external.description": "Connect to a VMM run by you or your team without starting a local process.",
+    "vmm.setup.inference.title": "Choose memory processing models",
+    "vmm.setup.inference.description": "Select the model and account for memory extraction, organization, embeddings, and reranking. Each list is filtered to suitable models.",
+    "vmm.setup.inference.required": "Configure and enable an embedding model plus the PreCheck and PostAction L1/L2 base models and accounts first. Memory is initialized only after every required route is valid; profile and reranking routes can be added later.",
+    "vmm.setup.inference.openCredentials": "Configure model accounts",
+    "vmm.setup.scope.title": "Choose where to enable memory",
+    "vmm.setup.scope.description": "Define the memory identity, then choose where it takes effect. You can change this later under Memory rules.",
+    "vmm.setup.scope.all_projects": "Enable for all projects now",
+    "vmm.setup.scope.current_project": "Enable only for the current project",
+    "vmm.setup.scope.currentProjectUnavailable": "No workspace project is available to link",
+    "vmm.setup.scope.not_yet": "Configure only; do not enable yet",
+    "vmm.setup.confirm.title": "Confirm setup",
+    "vmm.setup.confirm.description": "Model and account choices were saved in the previous step. Confirm to save the service location and enablement scope, then create the memory space.",
+    "vmm.setup.user": "Memory user name",
+    "vmm.setup.user.placeholder": "For example: Local user",
+    "vmm.setup.project": "Current project name",
+    "vmm.setup.project.placeholder": "For example: vulcan-code",
+    "vmm.setup.safety": "Existing data is never overwritten automatically. Setup pauses and offers explicit recovery options for historical data, vector-space changes, or corrupt markers.",
+    "vmm.setup.cancel": "Cancel",
+    "vmm.setup.submit": "Configure and start",
+    "vmm.setup.running": "Checking, starting, and creating the memory space…",
+    "vmm.setup.failed": "Quick setup is not complete. Follow the guidance below and try again.",
     "vmm.overview.outboxProfiles": "outbox: {outbox} · profile nodes: {profiles}",
     "vmm.overview.completedTurns": "Completed turns: {turns}",
     "vmm.overview.summaryEntry": "Summary entry",
@@ -4539,14 +5421,95 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "vmm.runtime.profileNodes": "Profile nodes",
     "vmm.runtime.updatedAt": "Updated at",
     "vmm.runtime.noProfileBase": "No profile base yet.",
+    "vmm.runtime.start": "Start",
+    "vmm.runtime.restart": "Restart",
+    "vmm.runtime.stop": "Stop",
+    "vmm.runtime.openLog": "Open log",
+    "vmm.runtime.mode": "Runtime mode",
+    "vmm.runtime.mode.managed": "Managed by Vulcan Code",
+    "vmm.runtime.mode.external": "External VMM",
+    "vmm.runtime.phase.ready": "Managed VMM is running",
+    "vmm.runtime.phase.starting": "Managed VMM is starting",
+    "vmm.runtime.phase.stopped": "Managed VMM is stopped",
+    "vmm.runtime.phase.failed": "Managed VMM failed to start",
+    "vmm.runtime.phase.external": "Managed VMM is not running",
+    "vmm.runtime.phase.crashed": "Managed VMM crashed",
+    "vmm.runtime.phase.waiting_retry": "Managed VMM is waiting to retry",
+    "vmm.runtime.phase.stopping": "Managed VMM is stopping",
+    "vmm.runtime.grpcTarget": "Actual gRPC target",
+    "vmm.runtime.controller": "Shared Controller",
+    "vmm.runtime.controllerSpace": "VMM Space",
+    "vmm.runtime.dataRoot": "Data root",
+    "vmm.runtime.logPath": "Runtime log",
+    "vmm.runtime.processCapability": "Process capability",
+    "vmm.runtime.scopeCapability": "User/project reconciliation",
+    "vmm.runtime.profileInstructionCapability": "Profile instruction",
+    "vmm.runtime.capabilityReady": "Available",
+    "vmm.runtime.capabilityUnavailable": "Unavailable",
     "vmm.result.title": "Action result",
     "vmm.result.emptySummary": "No VMM action has run yet.",
     "vmm.result.request": "Request",
     "vmm.result.response": "Response",
     "vmm.result.emptyHint": "Requests and responses appear after you run an action on the left.",
     "vmm.result.generic": "Result",
+    "vmm.managed.behavior.identity": "Privacy, noise, and prompts",
+    "vmm.managed.behavior.lifecycle": "Precheck and postaction",
+    "vmm.managed.behavior.pipeline": "Retrieval and deduplication pipeline",
+    "vmm.managed.behavior.retention": "Retention and recycling",
+    "vmm.managed.piiLanguage": "PII rule language",
+    "vmm.managed.noiseEnabled": "Enable noise filtering",
+    "vmm.managed.noiseLanguage": "Noise rule language",
+    "vmm.managed.noiseSemanticEnabled": "Enable semantic noise filtering",
+    "vmm.managed.noiseSemanticThreshold": "Semantic noise threshold",
+    "vmm.managed.promptLanguage": "Prompt bundle",
+    "vmm.managed.precheckIntentTimeout": "Intent timeout",
+    "vmm.managed.precheckTopK": "Precheck recall count",
+    "vmm.managed.precheckSearchScope": "Precheck search scope",
+    "vmm.managed.precheckSimilarityThreshold": "Precheck similarity threshold",
+    "vmm.managed.scope.team": "Team",
+    "vmm.managed.scope.space": "Space",
+    "vmm.managed.scope.project": "Project",
+    "vmm.managed.postactionInputMode": "Postaction input mode",
+    "vmm.managed.inputMode.compat": "Compatible",
+    "vmm.managed.inputMode.strict": "Strict",
+    "vmm.managed.postactionTurnThreshold": "Session analysis turn threshold",
+    "vmm.managed.postactionTokenThreshold": "Session analysis token threshold",
+    "vmm.managed.postactionIdleTimeout": "Session analysis idle timeout",
+    "vmm.managed.postactionHistoryTurns": "Session analysis history turns",
+    "vmm.managed.postactionMaxInputTokens": "Session analysis max input tokens",
+    "vmm.managed.postactionMaxQueueWorkers": "Postaction queue workers",
+    "vmm.managed.pipelineMaxSearchKeywords": "Maximum search keywords",
+    "vmm.managed.pipelineMinSimilarityScore": "Minimum recall similarity",
+    "vmm.managed.pipelineReplaceMinSimilarityScore": "Minimum replacement similarity",
+    "vmm.managed.pipelineHardDedupeThreshold": "Hard deduplication threshold",
+    "vmm.managed.pipelineHardDedupePoolTopK": "Hard deduplication candidates",
+    "vmm.managed.pipelineHybridEnabled": "Enable hybrid retrieval",
+    "vmm.managed.pipelineLexicalTopK": "Lexical recall count",
+    "vmm.managed.pipelineRrfK": "Reciprocal rank fusion constant",
+    "vmm.managed.pipelineMmrEnabled": "Enable diversity filtering",
+    "vmm.managed.pipelineMmrLambda": "Diversity balance",
+    "vmm.managed.pipelineWeibullEnabled": "Enable Weibull decay",
+    "vmm.managed.pipelineWeibullShape": "Weibull shape",
+    "vmm.managed.pipelineWeibullScaleHours": "Weibull scale hours",
+    "vmm.managed.pipelineWeibullMinMultiplier": "Minimum decay multiplier",
+    "vmm.managed.pipelineWeibullReinforceWeight": "Reinforcement weight",
+    "vmm.managed.pipelineWeibullCrossSessionBoost": "Cross-session boost",
+    "vmm.managed.retentionEnabled": "Enable retention scans",
+    "vmm.managed.retentionScanInterval": "Retention scan interval",
+    "vmm.managed.retentionTurnKeepExtraTurns": "Extra hot-window turns",
+    "vmm.managed.retentionSessionIdleAfter": "Session idle recycle duration",
+    "vmm.managed.retentionTrashDuration": "Trash retention duration",
+    "vmm.managed.retentionPriorityFloor": "Protected priority floor",
+    "vmm.managed.retentionMemoryLevelFloor": "Protected memory-level floor",
+    "vmm.managed.retentionSkipProtectedShared": "Skip protected shared memories",
     "vmm.settings.grpcTarget": "gRPC address",
     "vmm.settings.apiKey": "API Key",
+    "vmm.settings.managedRuntime": "Manage local VMM with Vulcan Code",
+    "vmm.settings.managedBinaryPath": "VMM executable",
+    "vmm.settings.packagedBinary": "Leave empty to use the packaged sidecar",
+    "vmm.settings.autoStartPolicy": "Startup policy",
+    "vmm.settings.autoStart": "Start with Vulcan Code",
+    "vmm.settings.manualStart": "Manual start",
     "vmm.settings.receiveTimeout": "Request timeout",
     "vmm.settings.handshakeTimeout": "Handshake timeout",
     "vmm.settings.maxReceiveBytes": "Max receive bytes",
@@ -4792,12 +5755,18 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.inference.rerankTopN": "Default result count",
     "settings.inference.rerankTruncation": "Truncation policy",
     "settings.inference.rerankReturnContent": "Return candidate content",
-    "settings.inference.purpose.precheckL1": "Pre-check L1",
-    "settings.inference.purpose.precheckL2": "Pre-check L2",
-    "settings.inference.purpose.postactionL1": "Post-action L1",
-    "settings.inference.purpose.postactionL2": "Post-action L2",
+    "settings.inference.purpose.precheckL1": "Fast decision",
+    "settings.inference.purpose.precheckL1Description": "PreCheck L1: quickly decides whether this turn needs long-term memory recall.",
+    "settings.inference.purpose.precheckL2": "Deep decision",
+    "settings.inference.purpose.precheckL2Description": "PreCheck L2: determines which memories to recall for complex input.",
+    "settings.inference.purpose.postactionL1": "Fast organization",
+    "settings.inference.purpose.postactionL1Description": "PostAction L1: quickly extracts information worth retaining from this turn.",
+    "settings.inference.purpose.postactionL2": "Deep organization",
+    "settings.inference.purpose.postactionL2Description": "PostAction L2: reviews and merges information into durable memory.",
     "settings.inference.purpose.profileInstruction": "Profile instruction",
-    "settings.inference.purpose.reserve": "Reserve route",
+    "settings.inference.purpose.profileInstructionDescription": "Applies natural-language corrections to the user or project profile.",
+    "settings.inference.purpose.reserve": "Reserved task",
+    "settings.inference.purpose.reserveDescription": "Reserved for future VMM internal tasks and not used by the normal memory flow.",
     "settings.providerTools.title": "AI extension capabilities",
     "settings.providerTools.description": "Each capability selects exactly one model and exposes that model's native parameter schema.",
     "settings.providerTools.select": "Select model",

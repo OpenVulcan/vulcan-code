@@ -125,6 +125,9 @@ export interface WorkspaceShellProps {
   // Opens the memory feature area from the workbench sidebar.
   // 从工作台侧栏打开记忆功能区。
   onOpenMemory: () => void;
+  // Opens credential management from the VMM first-run prerequisite flow.
+  // 从 VMM 首次配置前置流程打开凭据管理。
+  onOpenCredentialManagement: () => void;
   // Opens the knowledge library management area from the workbench sidebar.
   // 从工作台侧栏打开知识库管理区域。
   onOpenKnowledge: () => void;

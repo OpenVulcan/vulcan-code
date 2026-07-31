@@ -149,9 +149,193 @@ fn feature_value_enabled(value: Option<&str>) -> bool {
     )
 }
 
-/// Reserved future install-management state.
-/// 预留的未来安装管理状态。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Stores the host-authoritative VMM behavior used to generate every managed manifest.
+/// 保存由宿主权威管理、用于生成每份托管清单的 VMM 行为配置。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VmmManagedRuntimeSettings {
+    /// PII rule language.
+    /// PII 规则语言。
+    pub pii_default_language: String,
+    /// Whether noise filtering is enabled.
+    /// 是否启用噪声过滤。
+    pub noise_enabled: bool,
+    /// Noise-rule language.
+    /// 噪声规则语言。
+    pub noise_default_language: String,
+    /// Whether semantic noise filtering is enabled.
+    /// 是否启用语义噪声过滤。
+    pub noise_semantic_enabled: bool,
+    /// Semantic noise rejection threshold.
+    /// 语义噪声拒绝阈值。
+    pub noise_semantic_threshold: f64,
+    /// Prompt bundle language.
+    /// 提示词包语言。
+    pub prompt_language: String,
+    /// PreCheck intent timeout.
+    /// PreCheck 意图解析超时。
+    pub precheck_intent_timeout: String,
+    /// PreCheck recall count.
+    /// PreCheck 召回数量。
+    pub precheck_top_k: u32,
+    /// PreCheck search scope.
+    /// PreCheck 搜索范围。
+    pub precheck_search_scope: String,
+    /// PreCheck similarity threshold.
+    /// PreCheck 相似度阈值。
+    pub precheck_similarity_threshold: f64,
+    /// PostAction input compatibility mode.
+    /// PostAction 输入兼容模式。
+    pub postaction_input_mode: String,
+    /// PostAction turn threshold.
+    /// PostAction 轮次阈值。
+    pub postaction_turn_threshold: u32,
+    /// PostAction token threshold.
+    /// PostAction Token 阈值。
+    pub postaction_token_threshold: u32,
+    /// PostAction idle timeout.
+    /// PostAction 空闲超时。
+    pub postaction_idle_timeout: String,
+    /// PostAction history turn count.
+    /// PostAction 历史轮数。
+    pub postaction_history_turns: u32,
+    /// PostAction maximum input tokens.
+    /// PostAction 最大输入 Token。
+    pub postaction_max_input_tokens: u32,
+    /// PostAction queue worker count.
+    /// PostAction 队列工作数。
+    pub postaction_max_queue_workers: u32,
+    /// Maximum recall keyword count.
+    /// 最大召回关键词数量。
+    pub pipeline_max_search_keywords: u32,
+    /// Minimum recall similarity.
+    /// 最小召回相似度。
+    pub pipeline_min_similarity_score: f64,
+    /// Minimum replacement similarity.
+    /// 最小替换相似度。
+    pub pipeline_replace_min_similarity_score: f64,
+    /// Hard deduplication threshold.
+    /// 硬去重阈值。
+    pub pipeline_hard_dedupe_threshold: f64,
+    /// Hard deduplication candidate count.
+    /// 硬去重候选数量。
+    pub pipeline_hard_dedupe_pool_top_k: u32,
+    /// Whether hybrid retrieval is enabled.
+    /// 是否启用混合检索。
+    pub pipeline_hybrid_enabled: bool,
+    /// Lexical recall count.
+    /// 词法召回数量。
+    pub pipeline_lexical_top_k: u32,
+    /// Reciprocal-rank-fusion constant.
+    /// 倒数排名融合常量。
+    pub pipeline_rrf_k: u32,
+    /// Whether diversity filtering is enabled.
+    /// 是否启用多样性过滤。
+    pub pipeline_mmr_enabled: bool,
+    /// Diversity balance.
+    /// 多样性平衡系数。
+    pub pipeline_mmr_lambda: f64,
+    /// Whether Weibull decay is enabled.
+    /// 是否启用 Weibull 衰减。
+    pub pipeline_weibull_enabled: bool,
+    /// Weibull shape.
+    /// Weibull 形状参数。
+    pub pipeline_weibull_shape: f64,
+    /// Weibull scale in hours.
+    /// Weibull 小时尺度。
+    pub pipeline_weibull_scale_hours: f64,
+    /// Minimum decay multiplier.
+    /// 最小衰减倍率。
+    pub pipeline_weibull_min_multiplier: f64,
+    /// Reinforcement weight.
+    /// 强化权重。
+    pub pipeline_weibull_reinforce_weight: f64,
+    /// Cross-session boost.
+    /// 跨会话增强系数。
+    pub pipeline_weibull_cross_session_boost: f64,
+    /// Whether retention scanning is enabled.
+    /// 是否启用保留扫描。
+    pub retention_enabled: bool,
+    /// Retention scan interval.
+    /// 保留扫描间隔。
+    pub retention_scan_interval: String,
+    /// Extra hot-window turns.
+    /// 热窗口额外轮数。
+    pub retention_turn_keep_extra_turns: u32,
+    /// Idle time before session recycling.
+    /// 会话回收前空闲时间。
+    pub retention_session_idle_after: String,
+    /// Trash retention duration.
+    /// 回收站保留时长。
+    pub retention_trash_duration: String,
+    /// Protected priority floor.
+    /// 受保护优先级下限。
+    pub retention_priority_floor: String,
+    /// Protected memory-level floor.
+    /// 受保护记忆级别下限。
+    pub retention_memory_level_floor: String,
+    /// Whether protected shared memories are skipped.
+    /// 是否跳过受保护共享记忆。
+    pub retention_skip_protected_shared: bool,
+}
+
+impl Default for VmmManagedRuntimeSettings {
+    /// Returns the audited managed-runtime defaults mirrored from VMM.
+    /// 返回与 VMM 对齐并经过审计的托管运行时默认值。
+    fn default() -> Self {
+        Self {
+            pii_default_language: String::from("zh-CN"),
+            noise_enabled: true,
+            noise_default_language: String::from("zh-CN"),
+            noise_semantic_enabled: true,
+            noise_semantic_threshold: 0.88,
+            prompt_language: String::from("default_en"),
+            precheck_intent_timeout: String::from("5s"),
+            precheck_top_k: 5,
+            precheck_search_scope: String::from("space"),
+            precheck_similarity_threshold: 0.0,
+            postaction_input_mode: String::from("compat"),
+            postaction_turn_threshold: 2,
+            postaction_token_threshold: 12_000,
+            postaction_idle_timeout: String::from("15m"),
+            postaction_history_turns: 3,
+            postaction_max_input_tokens: 6_000,
+            postaction_max_queue_workers: 4,
+            pipeline_max_search_keywords: 5,
+            pipeline_min_similarity_score: 0.75,
+            pipeline_replace_min_similarity_score: 0.80,
+            pipeline_hard_dedupe_threshold: 0.99,
+            pipeline_hard_dedupe_pool_top_k: 16,
+            pipeline_hybrid_enabled: true,
+            pipeline_lexical_top_k: 8,
+            pipeline_rrf_k: 60,
+            pipeline_mmr_enabled: true,
+            pipeline_mmr_lambda: 0.75,
+            pipeline_weibull_enabled: true,
+            pipeline_weibull_shape: 1.35,
+            pipeline_weibull_scale_hours: 2160.0,
+            pipeline_weibull_min_multiplier: 0.4,
+            pipeline_weibull_reinforce_weight: 0.18,
+            pipeline_weibull_cross_session_boost: 0.12,
+            retention_enabled: true,
+            retention_scan_interval: String::from("30m"),
+            retention_turn_keep_extra_turns: 5,
+            retention_session_idle_after: String::from("360h"),
+            retention_trash_duration: String::from("720h"),
+            retention_priority_floor: String::from("P1"),
+            retention_memory_level_floor: String::from("stable"),
+            retention_skip_protected_shared: true,
+        }
+    }
+}
+
+// Managed runtime floating-point settings are persisted through JSON, which rejects non-finite
+// values, and the service save path additionally validates them before persistence.
+// 托管运行时浮点设置通过会拒绝非有限值的 JSON 持久化，服务保存链路还会在持久化前再次校验。
+impl Eq for VmmManagedRuntimeSettings {}
+
+/// Stores managed local-runtime installation and behavior state.
+/// 保存托管本地运行时的安装与行为状态。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VmmInstallReservation {
     /// Whether the future installer should manage a local VMM binary.
     /// 后续安装器是否应管理本地 VMM 二进制。
@@ -165,6 +349,23 @@ pub struct VmmInstallReservation {
     /// 为后续发行版预留的可选自动启动策略。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_start_policy: Option<String>,
+    /// Complete host-authoritative managed VMM behavior.
+    /// 完整的宿主权威托管 VMM 行为配置。
+    #[serde(default)]
+    pub runtime_settings: VmmManagedRuntimeSettings,
+}
+
+impl Default for VmmInstallReservation {
+    /// Returns disabled managed installation with audited behavior defaults.
+    /// 返回禁用的托管安装与经过审计的行为默认值。
+    fn default() -> Self {
+        Self {
+            managed_install_enabled: false,
+            managed_binary_path: None,
+            auto_start_policy: None,
+            runtime_settings: VmmManagedRuntimeSettings::default(),
+        }
+    }
 }
 
 /// One optional VMM configuration layer.
@@ -373,11 +574,11 @@ pub struct VmmEffectiveConfig {
 }
 
 impl Default for VmmEffectiveConfig {
-    /// Builds the default disabled-but-ready VMM effective configuration.
-    /// 构建默认的未配置但可用 VMM 最终配置。
+    /// Builds the default disabled and unconfigured VMM effective configuration.
+    /// 构建默认关闭且尚未配置的 VMM 最终配置。
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             enabled_source: VmmEffectiveConfigSource::Default,
             grpc_target: String::new(),
             grpc_target_source: VmmEffectiveConfigSource::Default,
@@ -638,11 +839,25 @@ mod tests {
     /// 构建只包含标识与目标的最小配置层。
     fn base_global_layer() -> VmmConfigLayer {
         VmmConfigLayer {
+            enabled: Some(true),
             grpc_target: Some(String::from("127.0.0.1:50051")),
             user_id: Some(7),
             project_id: Some(9),
             ..VmmConfigLayer::default()
         }
+    }
+
+    /// Verifies an installation without any persisted VMM layer stays disabled.
+    /// 验证没有任何持久化 VMM 配置层的全新安装保持禁用。
+    #[test]
+    fn default_effective_config_is_disabled() {
+        let resolved = VmmEffectiveConfig::resolve(&VmmConfigLayer::default(), None, None);
+
+        assert!(!resolved.enabled);
+        assert_eq!(
+            resolved.diagnose_memory_flow(true),
+            VmmConfigDiagnostic::DisabledByConfig
+        );
     }
 
     #[test]
@@ -707,7 +922,14 @@ mod tests {
             VmmConfigDiagnostic::GrpcOffline
         );
 
-        let missing_target = VmmEffectiveConfig::resolve(&VmmConfigLayer::default(), None, None);
+        let missing_target = VmmEffectiveConfig::resolve(
+            &VmmConfigLayer {
+                enabled: Some(true),
+                ..VmmConfigLayer::default()
+            },
+            None,
+            None,
+        );
         assert_eq!(
             missing_target.diagnose_memory_flow(true),
             VmmConfigDiagnostic::MissingGrpcTarget

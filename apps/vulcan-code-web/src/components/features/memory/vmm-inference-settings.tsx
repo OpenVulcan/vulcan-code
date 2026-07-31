@@ -21,6 +21,11 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { useI18n } from "@/i18n"
 import { cn } from "@/lib/utils"
 import {
@@ -35,9 +40,75 @@ import type {
   PublicAiSettingsSnapshot,
 } from "@/types"
 
+// VmmInferenceSettingsProps exposes required-foundation readiness to the first-run workflow.
+// VmmInferenceSettingsProps 向首次配置流程暴露必需基础能力就绪状态。
+interface VmmInferenceSettingsProps {
+  onRequiredRouteReady?: (ready: boolean) => void
+}
+
+// VMM_REQUIRED_LLM_PURPOSES lists the foundational LLM routes required before VMM can be initialized.
+// VMM_REQUIRED_LLM_PURPOSES 列出初始化 VMM 前必须就绪的基础 LLM 路由。
+export const VMM_REQUIRED_LLM_PURPOSES = [
+  "precheck_l1",
+  "precheck_l2",
+  "postaction_l1",
+  "postaction_l2",
+] as const
+
+// vmmRequiredInferenceReady returns whether the exact embedding and foundational LLM routes are executable.
+// vmmRequiredInferenceReady 返回精确向量路由和基础 LLM 路由是否均可执行。
+export function vmmRequiredInferenceReady(
+  snapshot: PublicAiSettingsSnapshot | null,
+): boolean {
+  if (!snapshot) {
+    return false
+  }
+  const profile = snapshot.inferenceProfiles.vmm
+  const embeddingRoute = profile?.embedding
+  if (!embeddingRoute) {
+    return false
+  }
+  const candidates = snapshot.internalInferenceCandidates.filter((candidate) => (
+    candidate.enabled
+    && candidate.route.usage_scope === "external_service"
+  ))
+  const diagnostics = snapshot.inferenceRouteDiagnostics.filter((diagnostic) => (
+    diagnostic.consumerProfileId === "vmm"
+  ))
+  const embeddingReady = candidates.some((candidate) => (
+    candidate.route.operation === "embedding_create"
+    && inferenceRouteKey(candidate.route) === inferenceRouteKey(embeddingRoute)
+  )) && !diagnostics.some((diagnostic) => (
+    diagnostic.operation === "embedding_create"
+    && diagnostic.purposeId === undefined
+  ))
+  if (!embeddingReady) {
+    return false
+  }
+  const llmCandidates = candidates.filter((candidate) => (
+    candidate.route.operation === "conversation_respond"
+    && candidateSupportsDisabledReasoning(candidate)
+  ))
+  return VMM_REQUIRED_LLM_PURPOSES.every((purposeId) => {
+    const route = profile.llm_routes?.[purposeId]
+    return Boolean(
+      route
+      && llmCandidates.some((candidate) => (
+        inferenceRouteKey(candidate.route) === inferenceRouteKey(route)
+      ))
+      && !diagnostics.some((diagnostic) => (
+        diagnostic.operation === "conversation_respond"
+        && diagnostic.purposeId === purposeId
+      )),
+    )
+  })
+}
+
 // VmmInferenceSettings owns VMM inference route loading, mutation, and validation.
 // VmmInferenceSettings 管理 VMM 推理路由的加载、变更与验证。
-export function VmmInferenceSettings() {
+export function VmmInferenceSettings({
+  onRequiredRouteReady,
+}: VmmInferenceSettingsProps = {}) {
   const { t } = useI18n()
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null)
   const [error, setError] = React.useState<string | null>(null)
@@ -97,7 +168,8 @@ export function VmmInferenceSettings() {
   // VMM's issued access grant is fixed to external_service, so other scopes are not selectable.
   // VMM 签发的访问授权固定为 external_service，因此其他用途范围不可选择。
   const candidates = snapshot?.internalInferenceCandidates.filter((candidate) => (
-    candidate.route.usage_scope === "external_service"
+    candidate.enabled
+    && candidate.route.usage_scope === "external_service"
   )) ?? []
   // llmCandidates retain only exact contracts that can run with reasoning disabled.
   // llmCandidates 仅保留能够关闭思考执行的精确契约。
@@ -108,13 +180,44 @@ export function VmmInferenceSettings() {
   const diagnostics = snapshot?.inferenceRouteDiagnostics.filter((diagnostic) => (
     diagnostic.consumerProfileId === "vmm"
   )) ?? []
-  const purposes: Array<{ id: string; label: string }> = [
-    { id: "precheck_l1", label: t("settings.inference.purpose.precheckL1") },
-    { id: "precheck_l2", label: t("settings.inference.purpose.precheckL2") },
-    { id: "postaction_l1", label: t("settings.inference.purpose.postactionL1") },
-    { id: "postaction_l2", label: t("settings.inference.purpose.postactionL2") },
-    { id: "profile_instruction", label: t("settings.inference.purpose.profileInstruction") },
-    { id: "reserve", label: t("settings.inference.purpose.reserve") },
+  // requiredRoutesReady gates first initialization on embedding plus all PreCheck/PostAction LLM routes.
+  // requiredRoutesReady 使用向量路由和全部 PreCheck/PostAction LLM 路由共同门控首次初始化。
+  const requiredRoutesReady = vmmRequiredInferenceReady(snapshot)
+
+  React.useEffect(() => {
+    onRequiredRouteReady?.(requiredRoutesReady)
+  }, [onRequiredRouteReady, requiredRoutesReady])
+  const purposes: Array<{ id: string; label: string; description: string }> = [
+    {
+      id: "precheck_l1",
+      label: t("settings.inference.purpose.precheckL1"),
+      description: t("settings.inference.purpose.precheckL1Description"),
+    },
+    {
+      id: "precheck_l2",
+      label: t("settings.inference.purpose.precheckL2"),
+      description: t("settings.inference.purpose.precheckL2Description"),
+    },
+    {
+      id: "postaction_l1",
+      label: t("settings.inference.purpose.postactionL1"),
+      description: t("settings.inference.purpose.postactionL1Description"),
+    },
+    {
+      id: "postaction_l2",
+      label: t("settings.inference.purpose.postactionL2"),
+      description: t("settings.inference.purpose.postactionL2Description"),
+    },
+    {
+      id: "profile_instruction",
+      label: t("settings.inference.purpose.profileInstruction"),
+      description: t("settings.inference.purpose.profileInstructionDescription"),
+    },
+    {
+      id: "reserve",
+      label: t("settings.inference.purpose.reserve"),
+      description: t("settings.inference.purpose.reserveDescription"),
+    },
   ]
   const matchingEditingCandidates = React.useMemo(() => {
     if (!editingCandidate || !snapshot) {
@@ -198,8 +301,9 @@ export function VmmInferenceSettings() {
               <InferenceRouteField
                 candidates={llmCandidates}
                 disabled={pendingMutationKey !== null || testingOperation !== null}
+                description={purpose.description}
                 key={purpose.id}
-                label={`${t("settings.inference.llm")} · ${purpose.label}`}
+                label={`${t("settings.inference.modelRegion")} · ${purpose.label}`}
                 onConfigure={setEditingCandidate}
                 onChange={(route) => saveRoute("conversation_respond", purpose.id, route)}
                 route={profile?.llm_routes?.[purpose.id]}
@@ -290,6 +394,9 @@ function InferenceRouteField(props: {
   // User-visible route purpose.
   // 面向用户的路由用途。
   label: string
+  // Human explanation of the internal task served by this route.
+  // 该路由所服务内部任务的人类可读说明。
+  description?: string
   // Persisted exact route.
   // 已持久化的精确路由。
   route?: PublicAiInferenceRoute
@@ -428,7 +535,25 @@ function InferenceRouteField(props: {
 
   return (
     <div className="min-w-0 rounded-lg border p-2">
-      <label className="mb-1.5 block truncate text-xs font-medium">{props.label}</label>
+      <div className="mb-1.5 flex min-w-0 items-center gap-1">
+        <label className="block truncate text-xs font-medium">{props.label}</label>
+        {props.description ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                aria-label={props.description}
+                className="shrink-0 text-muted-foreground hover:text-foreground"
+                type="button"
+              >
+                <Info className="size-3.5" aria-hidden="true" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-72 text-xs" side="top">
+              {props.description}
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
+      </div>
       <div className="grid min-w-0 grid-cols-2 gap-1.5">
         <div className="min-w-0">
           <span className="mb-1 block text-[11px] text-muted-foreground">
@@ -528,15 +653,6 @@ function InferenceRouteField(props: {
             {selectedCandidate.serviceEntryDisplayName}
             {" · "}
             {t("settings.inference.credentialAvailable")}
-          </p>
-          <p>
-            {formatSkillText(t("settings.inference.catalogGeneration"), {
-              generation: selectedCandidate.catalogGeneration,
-            })}
-            {" · "}
-            {formatSkillText(t("settings.inference.capabilityRevision"), {
-              revision: selectedCandidate.capabilities.evidence_revision,
-            })}
           </p>
         </div>
       ) : null}

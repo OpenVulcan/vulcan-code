@@ -2870,6 +2870,7 @@ pub(super) async fn service_test_public_ai_inference_route(
                         dimensions: None,
                         output_kind: preferred_embedding_output_kind(embedding)?,
                         encoding: preferred_embedding_encoding(embedding)?,
+                        invalid_input_policy: Default::default(),
                     },
                 )
                 .await

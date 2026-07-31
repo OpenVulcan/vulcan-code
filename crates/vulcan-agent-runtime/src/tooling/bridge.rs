@@ -87,6 +87,7 @@ pub fn build_vulcan_tools_manager(
     implicit_luaskill_prompt_entries: Vec<LuaSkillPromptEntry>,
     project_vmm: vulcan_vmm::VmmConfigLayer,
     session_vmm: vulcan_vmm::VmmConfigLayer,
+    vmm_runtime_ready: bool,
 ) -> VulcanToolsManager {
     let mut candidates = Vec::new();
     let mut occupied_public_tool_ids = BTreeSet::new();
@@ -95,7 +96,8 @@ pub fn build_vulcan_tools_manager(
         Some(&project_vmm),
         Some(&session_vmm),
     );
-    let vmm_ai_tools_enabled = vmm_effective.ai_tools_enabled
+    let vmm_ai_tools_enabled = vmm_runtime_ready
+        && vmm_effective.ai_tools_enabled
         && vmm_effective.diagnose_memory_flow(true) == vulcan_vmm::VmmConfigDiagnostic::Ready;
 
     for subagent_candidate in build_subagent_tool_candidates(task_runtime) {

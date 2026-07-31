@@ -4,6 +4,7 @@
 pub mod adapter;
 pub mod client;
 pub mod config;
+pub mod managed;
 pub mod protocol;
 pub mod session_state;
 pub mod transport;
@@ -29,7 +30,17 @@ pub use config::{
     DEFAULT_VMM_INJECTION_DESCRIPTION, DEFAULT_VMM_INJECTION_TAG, MAX_PROFILE_NODE_LIMIT,
     VMM_OPENAI_APPEND_CONTINUATION_FEATURE_ENV, VMM_SESSION_STATE_FEATURE_ENV,
     VMM_STABLE_ANCHORS_FEATURE_ENV, VmmConfigDiagnostic, VmmConfigLayer, VmmEffectiveConfig,
-    VmmEffectiveConfigSource, VmmInstallReservation, VmmRuntimeFeaturePolicy,
+    VmmEffectiveConfigSource, VmmInstallReservation, VmmManagedRuntimeSettings,
+    VmmRuntimeFeaturePolicy,
+};
+pub use managed::{
+    MANAGED_CONTRACT_OWNER, MANAGED_CONTRACT_VERSION, MANAGED_INFERENCE_MODE, ManagedAssets,
+    ManagedConfig, ManagedControllerLease, ManagedGrpcConfig, ManagedGrpcKeepalive,
+    ManagedGrpcRequestTimeout, ManagedInferenceConfig, ManagedLoggingConfig,
+    ManagedMemoryPipelineConfig, ManagedNoiseConfig, ManagedParent, ManagedPiiConfig,
+    ManagedPostActionConfig, ManagedPreCheckConfig, ManagedPromptConfig, ManagedRelationalConfig,
+    ManagedRetentionConfig, ManagedRuntimeConfig, ManagedStatus, ManagedStorageConfig,
+    ManagedVectorConfig,
 };
 pub use protocol::{
     ApplyProfileInstructionRequest, ApplyProfileInstructionResponse, ChatCompactRequest,
