@@ -25,7 +25,13 @@ export interface PublicAiCredentialProfile {
   credential_mode: CredentialMode;
   oauth_provider?: OAuthProviderKind;
   billing_kind: CredentialBillingKind;
-  account_usage_query: "unsupported" | "mini_max_token_plan" | "open_router_credits" | "tavily_credits";
+  account_usage_query:
+    | "unsupported"
+    | "mini_max_token_plan"
+    | "open_router_credits"
+    | "tavily_credits"
+    | "deep_seek_balance"
+    | "kimi_coding_plan";
   authentication?: string;
   key_prefix?: string;
 }
@@ -118,7 +124,13 @@ export interface PublicAiConnection {
   service_entry_id: string;
   credential_profile_id: string;
   billing_kind: CredentialBillingKind;
-  usage_capability: "unsupported" | "mini_max_token_plan" | "open_router_credits" | "tavily_credits";
+  usage_capability:
+    | "unsupported"
+    | "mini_max_token_plan"
+    | "open_router_credits"
+    | "tavily_credits"
+    | "deep_seek_balance"
+    | "kimi_coding_plan";
   has_management_key: boolean;
   service_origin_override?: string;
   credential_mode: CredentialMode;
@@ -143,6 +155,12 @@ export interface PublicAiModelCapabilities {
   operations?: PublicAiOperation[];
   context_limit?: number;
   output_limit?: number;
+  // Resource modalities accepted by this exact model route.
+  // 此精确模型路由接受的资源模态。
+  input_resources?: PublicAiResourceKind[];
+  // Resource modalities emitted by this exact model route.
+  // 此精确模型路由输出的资源模态。
+  output_resources?: PublicAiResourceKind[];
   // Evidence revision proving the exact capability projection.
   // 证明精确能力投影的证据修订号。
   evidence_revision: string;
@@ -156,6 +174,10 @@ export interface PublicAiModelCapabilities {
   rerank?: PublicAiRerankCapabilities;
   [key: string]: unknown;
 }
+
+// PublicAiResourceKind identifies one provider-neutral non-text modality.
+// PublicAiResourceKind 标识一种供应商无关的非文本模态。
+export type PublicAiResourceKind = "image" | "audio" | "video" | "file";
 
 // PublicAiEmbeddingCapabilities describes exact embedding defaults and request limits.
 // PublicAiEmbeddingCapabilities 描述精确向量默认值与请求限制。
@@ -236,8 +258,8 @@ export interface PublicAiActiveSelection {
   connection_id: string;
 }
 
-// PublicAiModelOverrides stores local narrowing and registered parameter values.
-// PublicAiModelOverrides 保存本地收窄与注册参数值。
+// PublicAiModelOverrides stores local limit overrides and registered parameter values.
+// PublicAiModelOverrides 保存本地限制覆盖与注册参数值。
 export interface PublicAiModelOverrides {
   context_limit?: number;
   output_limit?: number;

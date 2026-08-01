@@ -180,6 +180,18 @@ export async function savePublicAiModelEnabled(request: {
   );
 }
 
+// savePublicAiProviderModelsEnabled atomically applies one enabled state to every synchronized model of a provider.
+// savePublicAiProviderModelsEnabled 原子地为一个供应商的全部已同步模型应用同一启用状态。
+export async function savePublicAiProviderModelsEnabled(request: {
+  providerId: string;
+  enabled: boolean;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_provider_models_enabled",
+    { request },
+  );
+}
+
 // savePublicAiInternalModelEnabled persists one operation-scoped internal model switch.
 // savePublicAiInternalModelEnabled 持久化一个操作作用域内部模型开关。
 export async function savePublicAiInternalModelEnabled(request: {

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   filterModelPickerChoices,
   groupModelPickerChoices,
+  modelAccountProtocolDisplayName,
   modelPickerChoiceKey,
   modelPickerChoicesFromProviders,
   resolveModelPickerGroupChoice,
@@ -108,5 +109,15 @@ describe("model picker account grouping", () => {
     expect(firstKey).not.toBe(secondKey);
     expect(JSON.parse(firstKey)[2]).toBe(choices[0]?.connectionId);
     expect(JSON.parse(secondKey)[2]).toBe(choices[1]?.connectionId);
+  });
+});
+
+describe("modelAccountProtocolDisplayName", () => {
+  // Verifies the account card presents protocol semantics instead of provider implementation metadata.
+  // 验证账号卡片展示协议语义，而不是供应商实现元数据。
+  it("formats known protocols and preserves future identifiers", () => {
+    expect(modelAccountProtocolDisplayName("anthropic-messages.v1")).toBe("Anthropic Messages");
+    expect(modelAccountProtocolDisplayName("openai-responses.v1")).toBe("OpenAI Responses");
+    expect(modelAccountProtocolDisplayName("future-protocol.v1")).toBe("future-protocol.v1");
   });
 });

@@ -487,6 +487,19 @@ pub(super) struct PublicAiModelEnabledSaveRequest {
     enabled: bool,
 }
 
+/// Saves one enabled state for every synchronized model owned by a provider.
+/// 为一个供应商拥有的全部已同步模型保存同一启用状态。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiProviderModelsEnabledSaveRequest {
+    /// Exact provider identifier whose synchronized model set is mutated.
+    /// 要修改其已同步模型集合的精确供应商标识。
+    provider_id: String,
+    /// Requested enabled state for the complete provider model set.
+    /// 供应商完整模型集合请求的启用状态。
+    enabled: bool,
+}
+
 /// Saves one provider-model-operation internal access choice.
 /// 保存一项供应商、模型与操作作用域的内部访问选择。
 #[derive(Debug, Clone, Deserialize)]
@@ -2564,6 +2577,89 @@ pub(super) async fn service_save_public_ai_model_enabled(
             for runtime_state in workspace.session_runtime_state.values_mut() {
                 if runtime_state.active_provider_id.as_deref() == Some(request.provider_id.as_str())
                     && runtime_state.active_model_id.as_deref() == Some(request.model_id.as_str())
+                {
+                    runtime_state.active_provider_id = fallback
+                        .as_ref()
+                        .map(|selection| selection.provider_id.clone());
+                    runtime_state.active_connection_id = fallback
+                        .as_ref()
+                        .map(|selection| selection.connection_id.clone());
+                    runtime_state.active_model_id = fallback
+                        .as_ref()
+                        .map(|selection| selection.model_id.clone());
+                    runtime_state.updated_at = crate::current_unix_millis_text();
+                }
+            }
+        }
+    }
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Saves one provider-wide model access state and reconciles every affected active selection.
+/// 保存供应商范围的模型访问状态，并协调全部受影响的当前选择。
+///
+/// # Parameters
+/// 参数
+/// `app` publishes the refreshed workbench, `state` owns the persisted graph, and `request` identifies one provider and state.
+/// `app` 发布刷新的工作台，`state` 持有持久化图，`request` 标识一个供应商及状态。
+///
+/// # Returns
+/// 返回值
+/// The complete refreshed settings snapshot after one atomic configuration mutation.
+/// 返回一次原子配置变更后的完整刷新设置快照。
+pub(super) async fn service_save_public_ai_provider_models_enabled(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiProviderModelsEnabledSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    let catalogs = runtime.catalog_snapshot()?;
+    let model_ids = current_configuration
+        .connection_graph
+        .connections
+        .values()
+        .filter(|connection| connection.provider_id == request.provider_id)
+        .filter_map(|connection| catalogs.get(connection.id.as_str()))
+        .flat_map(|catalog| catalog.models.iter().map(|model| model.id.clone()))
+        .collect::<BTreeSet<_>>();
+    if model_ids.is_empty() {
+        return Err(format!(
+            "Provider `{}` does not expose synchronized models.",
+            request.provider_id
+        ));
+    }
+    let configuration = mutate_public_ai_configuration(
+        &state,
+        "批量保存公共 AI 模型启用状态失败",
+        |configuration| {
+            for model_id in &model_ids {
+                configuration.set_model_enabled(
+                    request.provider_id.as_str(),
+                    model_id.as_str(),
+                    request.enabled,
+                );
+            }
+            if !request.enabled
+                && configuration
+                    .active
+                    .as_ref()
+                    .is_some_and(|selection| selection.provider_id == request.provider_id)
+            {
+                configuration.active = first_enabled_model_selection(configuration, &catalogs);
+            }
+            Ok(())
+        },
+    )
+    .await?;
+    if !request.enabled {
+        let fallback = first_enabled_model_selection(&configuration, &catalogs);
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("Failed to lock service state: {error}"))?;
+        if let Some(workspace) = guard.workspace_snapshot.as_mut() {
+            for runtime_state in workspace.session_runtime_state.values_mut() {
+                if runtime_state.active_provider_id.as_deref() == Some(request.provider_id.as_str())
                 {
                     runtime_state.active_provider_id = fallback
                         .as_ref()

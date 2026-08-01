@@ -20,6 +20,9 @@ export interface CredentialUsageOverviewProps {
   // usage is the latest memory-only account observation.
   // usage 是最新的仅内存账号观测。
   usage?: PublicAiAccountUsage
+  // showQuotaSection controls whether the surface renders quota content and its divider.
+  // showQuotaSection 控制当前界面是否渲染额度内容及其分隔线。
+  showQuotaSection?: boolean
 }
 
 // CredentialUsageOverview renders shared balance, plan, and quota presentation.
@@ -28,40 +31,74 @@ export function CredentialUsageOverview(props: CredentialUsageOverviewProps) {
   // t resolves all account-usage copy in the active locale.
   // t 使用当前语言解析全部账号用量文案。
   const { t } = useI18n()
-  // planName prefers the provider-reported plan over the persisted billing category.
-  // planName 优先使用供应商报告的套餐，其次使用持久化计费类别。
-  const planName = props.usage?.plan_name
-    ?? credentialBillingKindLabel(props.connection.billing_kind, t)
+  // nonPlanAccount identifies providers whose balance account does not represent a subscription plan.
+  // nonPlanAccount 标识余额账号不代表订阅套餐的供应商。
+  const nonPlanAccount = props.connection.provider_id === "deepseek"
+  // planName prefers the provider-reported plan unless the provider explicitly has no plan concept.
+  // planName 优先使用供应商报告的套餐，除非该供应商明确没有套餐概念。
+  const planName = nonPlanAccount
+    ? t("composer.accountCard.nonPlan")
+    : props.usage?.plan_name ?? credentialBillingKindLabel(props.connection.billing_kind, t)
 
   return (
     <>
-      <div className="grid grid-cols-2 gap-3 border-t pt-3">
+      <div className="grid grid-cols-2 gap-2 border-t pt-1.5">
         <div className="min-w-0">
-          <p className="text-[11px] text-muted-foreground">{t("composer.accountCard.plan")}</p>
-          <p className="mt-1 truncate text-sm font-medium">{planName}</p>
+          <p className="text-[11px] text-muted-foreground">
+            {t(nonPlanAccount ? "composer.accountCard.accountType" : "composer.accountCard.plan")}
+          </p>
+          <p className="mt-0.5 truncate text-sm font-medium">{planName}</p>
         </div>
         <div className="min-w-0">
           <p className="text-[11px] text-muted-foreground">{t("composer.accountCard.balance")}</p>
-          <p className="mt-1 truncate text-sm font-medium">
+          <p className="mt-0.5 truncate text-sm font-medium">
             {accountBalanceLabel(props.usage)}
           </p>
         </div>
       </div>
-      <div className="flex min-h-0 flex-1 flex-col border-t" data-slot="credential-usage">
-        <div
-          className="flex min-h-16 flex-1 items-center justify-center pt-3"
-          data-slot="credential-usage-content"
-        >
-          <CredentialUsageSummary
-            credentialProfile={props.credentialProfile}
-            hasManagementKey={props.connection.has_management_key}
-            providerId={props.connection.provider_id}
-            usage={props.usage}
-          />
+      {props.showQuotaSection !== false ? (
+        <div className="flex min-h-0 flex-1 flex-col border-t" data-slot="credential-usage">
+          <div
+            className="flex min-h-16 flex-1 items-center justify-center"
+            data-slot="credential-usage-content"
+          >
+            {nonPlanAccount ? (
+              <span className="text-center text-xs text-muted-foreground">
+                {t("composer.accountCard.noQuotaWindows")}
+              </span>
+            ) : (
+              <CredentialUsageSummary
+                credentialProfile={props.credentialProfile}
+                hasManagementKey={props.connection.has_management_key}
+                providerId={props.connection.provider_id}
+                usage={props.usage}
+              />
+            )}
+          </div>
         </div>
-      </div>
+      ) : null}
     </>
   )
+}
+
+// usageCapabilitySupportsQuotaWindows returns whether one account contract exposes plan windows.
+// usageCapabilitySupportsQuotaWindows 返回一个账号契约是否公开套餐额度窗口。
+//
+// Parameters
+// 参数
+// `capability` is the exact backend-declared account usage implementation.
+// `capability` 是后端声明的精确账号用量实现。
+//
+// Returns
+// 返回值
+// True only for usage implementations that produce user-facing quota windows.
+// 仅对会产生用户可见额度窗口的用量实现返回 true。
+export function usageCapabilitySupportsQuotaWindows(
+  capability: PublicAiConnection["usage_capability"],
+): boolean {
+  return capability === "mini_max_token_plan"
+    || capability === "tavily_credits"
+    || capability === "kimi_coding_plan"
 }
 
 // CredentialUsageSummary renders provider-aware compact quota information.
@@ -413,7 +450,42 @@ function accountBalanceLabel(usage?: PublicAiAccountUsage): string {
   if (!usage?.balance_amount) {
     return "--"
   }
+  // formattedAmount rounds the provider decimal string without converting it to a floating-point Number.
+  // formattedAmount 在不转换为浮点 Number 的情况下舍入供应商金额字符串。
+  const formattedAmount = formatCurrencyAmount(usage.balance_amount)
   return usage.currency
-    ? `${usage.balance_amount} ${usage.currency}`
-    : usage.balance_amount
+    ? `${formattedAmount} ${usage.currency}`
+    : formattedAmount
+}
+
+// formatCurrencyAmount formats a plain decimal currency string with exactly two fractional digits.
+// formatCurrencyAmount 将普通十进制金额字符串格式化为固定两位小数。
+//
+// Parameters
+// 参数
+// `value` is the provider-owned decimal string and is never converted to JavaScript Number.
+// `value` 是供应商返回的十进制字符串，绝不会转换为 JavaScript Number。
+//
+// Returns
+// 返回值
+// A half-up rounded two-decimal string, or the original value for an unsupported representation.
+// 返回四舍五入后的两位小数字符串；不支持的表示形式保持原值。
+export function formatCurrencyAmount(value: string): string {
+  const match = /^([+-]?)(\d+)(?:\.(\d*))?$/.exec(value.trim())
+  if (!match) {
+    return value
+  }
+  const sign = match[1]
+  const integerDigits = match[2]
+  const fractionDigits = match[3] ?? ""
+  const retainedFraction = fractionDigits.padEnd(2, "0").slice(0, 2)
+  const roundingDigit = fractionDigits[2] ?? "0"
+  let scaledAmount = BigInt(`${integerDigits}${retainedFraction}`)
+  if (roundingDigit >= "5") {
+    scaledAmount += 1n
+  }
+  const whole = scaledAmount / 100n
+  const fraction = String(scaledAmount % 100n).padStart(2, "0")
+  const normalizedSign = sign === "-" && scaledAmount !== 0n ? "-" : sign === "+" ? "+" : ""
+  return `${normalizedSign}${whole}.${fraction}`
 }

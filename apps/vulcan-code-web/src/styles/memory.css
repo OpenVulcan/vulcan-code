@@ -4,6 +4,17 @@
   scrollbar-gutter: stable;
 }
 
+/* Memory cards use inset borders because scroll containers clip the shared outward ring. */
+/* 记忆卡片使用内嵌边框，因为滚动容器会裁剪公共组件向外扩展的 ring。 */
+.vmm-memory-page [data-slot="card"] {
+  border: 1px solid var(--border);
+  box-shadow: none;
+}
+
+.vmm-memory-page [data-slot="card"].border-dashed {
+  border-style: dashed;
+}
+
 .vmm-memory-shell {
   display: grid;
   min-height: 100%;

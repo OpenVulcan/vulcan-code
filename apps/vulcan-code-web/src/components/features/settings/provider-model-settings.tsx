@@ -1,44 +1,68 @@
 import * as React from "react"
-import { FileText } from "lucide-react"
+import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  AudioLines,
+  Binary,
+  File,
+  Image as ImageIcon,
+  ListOrdered,
+  Search,
+  SlidersHorizontal,
+  Type,
+  Video,
+} from "lucide-react"
 
+import {
+  filterProviderModels,
+  type FilterableProviderModel,
+  type ModelEnabledFilter,
+} from "@/components/features/settings/provider-model-filter"
+import {
+  providerModelModalities,
+  type ProviderModelModality,
+} from "@/components/features/settings/provider-model-modalities"
+import {
+  buildProviderModelGroups,
+  compactServiceEntryName,
+  type PublicModelProtocolRoute,
+} from "@/components/features/settings/provider-model-routes"
+import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { PublicAiModelOverridesDialog } from "@/components/features/settings/public-ai-model-overrides-dialog"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { AdaptiveToolPanel } from "@/components/workspace/adaptive-tool-panel"
+import { WorkspaceToolPanelMenu } from "@/components/workspace/workspace-tool-panel-menu"
 import { useI18n } from "@/i18n"
 import {
   loadPublicAiSettings,
   savePublicAiInternalModelEnabled,
   savePublicAiModelEnabled,
+  savePublicAiProviderModelsEnabled,
 } from "@/service/settings-actions-service"
 import type {
   PublicAiModel,
   PublicAiOperation,
-  PublicAiProviderDescriptor,
   PublicAiSettingsSnapshot,
 } from "@/types"
 
-// PublicModelProtocolRoute binds one discovered model to its provider protocol scope.
-// PublicModelProtocolRoute 将一个发现模型绑定到其供应商协议作用域。
-interface PublicModelProtocolRoute {
-  // Number of credential accounts exposing this exact route.
-  // 暴露此精确路由的凭据账号数量。
-  accountCount: number
-  // Credential-discovered model snapshot used for exact capability controls.
-  // 用于精确能力控件的凭据发现模型快照。
-  model: PublicAiModel
-  // Exact protocol profile identifier.
-  // 精确协议配置档标识。
-  protocolId: string
-}
-
-// PublicProviderModels groups deduplicated models under one registered provider.
-// PublicProviderModels 将去重模型归组到一个已注册供应商下。
-interface PublicProviderModels {
-  // Registered provider descriptor.
-  // 已注册供应商描述。
-  provider: PublicAiProviderDescriptor
-  // Protocol-scoped model routes keyed by exact model identifier.
-  // 按精确模型标识索引的协议作用域模型路由。
-  models: Map<string, PublicModelProtocolRoute[]>
+// PublicProviderModelRow binds one rendered provider model to its routes and effective enabled state.
+// PublicProviderModelRow 将一个渲染中的供应商模型绑定到其路由与有效启用状态。
+interface PublicProviderModelRow extends FilterableProviderModel {
+  // Protocol-scoped routes exposing this model through configured accounts.
+  // 通过已配置账号暴露此模型的协议作用域路由。
+  routes: PublicModelProtocolRoute[]
 }
 
 // ModelListSettingsArea renders the process-local public AI model catalog.
@@ -50,6 +74,9 @@ export function ModelListSettingsArea() {
   const [selectedProviderId, setSelectedProviderId] = React.useState<string | null>(null)
   const [editingRoute, setEditingRoute] = React.useState<PublicModelProtocolRoute | null>(null)
   const [pendingMutationKey, setPendingMutationKey] = React.useState<string | null>(null)
+  const [menuExpanded, setMenuExpanded] = React.useState(true)
+  const [searchQuery, setSearchQuery] = React.useState("")
+  const [enabledFilter, setEnabledFilter] = React.useState<ModelEnabledFilter>("all")
   const mutationInFlightRef = React.useRef(false)
 
   // runSnapshotMutation serializes full-snapshot writes so late responses cannot regress the UI.
@@ -113,49 +140,175 @@ export function ModelListSettingsArea() {
   const selectedGroup = groupedProviders.find((group) => group.provider.id === selectedProviderId)
     ?? groupedProviders[0]
     ?? null
+  // providerModelRows materializes the selected provider's effective model access state once per snapshot.
+  // providerModelRows 为每次快照集中生成当前供应商的有效模型访问状态。
+  const providerModelRows = React.useMemo<PublicProviderModelRow[]>(() => {
+    if (!snapshot || !selectedGroup) {
+      return []
+    }
+    return Array.from(selectedGroup.models.entries()).flatMap(([modelId, routes]) => {
+      const representative = routes[0]
+      if (!representative) {
+        return []
+      }
+      const access = snapshot.modelAccessRecords.find((record) => (
+        record.providerId === selectedGroup.provider.id
+        && record.modelId === modelId
+      ))
+      return [{
+        modelId,
+        displayName: representative.model.display_name,
+        enabled: access?.enabled ?? true,
+        routes,
+      }]
+    })
+  }, [selectedGroup, snapshot])
+  // visibleModelRows applies page-local filters without changing catalog or persisted access state.
+  // visibleModelRows 应用页面内筛选，不改变目录或持久化访问状态。
+  const visibleModelRows = React.useMemo(
+    () => filterProviderModels(providerModelRows, searchQuery, enabledFilter),
+    [enabledFilter, providerModelRows, searchQuery],
+  )
+  // selectedProviderLabel supplies the shared collapsed-menu pill label.
+  // selectedProviderLabel 为共享收起菜单胶囊提供标签。
+  const selectedProviderLabel = selectedGroup?.provider.display_name
+    ?? t("settings.models.noProviderSelected")
+  const allProviderModelsEnabled = providerModelRows.length > 0
+    && providerModelRows.every((model) => model.enabled)
+  const allProviderModelsDisabled = providerModelRows.length > 0
+    && providerModelRows.every((model) => !model.enabled)
+
+  // saveAllProviderModelsEnabled persists one atomic enabled state for every synchronized model of the selected provider.
+  // saveAllProviderModelsEnabled 为当前供应商的全部已同步模型原子持久化同一个启用状态。
+  const saveAllProviderModelsEnabled = React.useCallback((enabled: boolean) => {
+    if (!selectedGroup || providerModelRows.length === 0) {
+      return
+    }
+    runSnapshotMutation(`provider/${selectedGroup.provider.id}/${enabled}`, () => (
+      savePublicAiProviderModelsEnabled({
+        providerId: selectedGroup.provider.id,
+        enabled,
+      })
+    ))
+  }, [providerModelRows.length, runSnapshotMutation, selectedGroup])
 
   return (
-    <div className="settings-direct-content model-list-surface">
-      {error ? <p className="settings-muted-line settings-error-text">{error}</p> : null}
-      {!snapshot ? (
-        <p className="settings-muted-line">{t("settings.models.loadingCatalog")}</p>
-      ) : (
-        <>
-          <div className="settings-split-layout">
-          <aside className="settings-provider-nav" aria-label={t("settings.models.provider")}>
-            <div className="settings-split-column-title">{t("settings.models.provider")}</div>
-            {groupedProviders.map((group) => (
-              <button
-                className={`settings-provider-nav-row ${selectedGroup?.provider.id === group.provider.id ? "active" : ""}`}
-                key={group.provider.id}
-                onClick={() => setSelectedProviderId(group.provider.id)}
-                type="button"
-              >
-                <FileText size={14} />
-                <span>{group.provider.display_name}</span>
-                <small>[{group.models.size}]</small>
-              </button>
-            ))}
-          </aside>
+    <AdaptiveToolPanel
+      className="workspace-tool-panel-page workspace-skills-settings credential-management-layout model-list-layout"
+      contentClassName="workspace-skills-content credential-management-content model-list-content"
+      contentShellClassName="credential-management-content-shell"
+      expanded={menuExpanded}
+      minContentWidth={336}
+      panel={(
+        <WorkspaceToolPanelMenu
+          activeLabel={selectedProviderLabel}
+          ariaLabel={t("settings.models.provider")}
+          className="credential-management-menu"
+          collapseLabel={t("settings.models.collapseProviders")}
+          expanded={menuExpanded}
+          expandLabel={t("settings.models.expandProviders")}
+          heading={t("settings.models.provider")}
+          onExpandedChange={setMenuExpanded}
+        >
+          {groupedProviders.map((group) => (
+            <button
+              className={`workspace-tool-panel-menu-row ${selectedGroup?.provider.id === group.provider.id ? "active" : ""}`}
+              key={group.provider.id}
+              onClick={() => setSelectedProviderId(group.provider.id)}
+              type="button"
+            >
+              <ProviderIcon
+                category={group.provider.category}
+                className="size-5"
+                providerId={group.provider.id}
+              />
+              <span>{group.provider.display_name}</span>
+              <small>{group.models.size}</small>
+            </button>
+          ))}
+        </WorkspaceToolPanelMenu>
+      )}
+      panelWidth={176}
+      side="left"
+    >
+      <div className="settings-direct-content model-list-surface">
+        {error ? <p className="settings-muted-line settings-error-text">{error}</p> : null}
+        {!snapshot ? (
+          <p className="settings-muted-line">{t("settings.models.loadingCatalog")}</p>
+        ) : (
           <section className="settings-model-list-pane" aria-label={t("settings.models.liveModels")}>
             <div className="settings-model-pane-header">
               <div>
                 <div className="settings-split-column-title">{t("settings.models.liveModels")}</div>
                 <small>
                   {t("settings.models.catalogSummary")
-                    .replace(
-                      "{provider}",
-                      selectedGroup?.provider.display_name ?? t("settings.models.noProviderSelected"),
-                    )
-                    .replace("{count}", String(selectedGroup?.models.size ?? 0))}
+                    .replace("{provider}", selectedProviderLabel)
+                    .replace("{count}", String(providerModelRows.length))}
                 </small>
               </div>
               <span className="settings-muted-line">{t("settings.models.memoryOnly")}</span>
             </div>
             <div className="settings-model-row-list">
-              {!selectedGroup ? (
+              <div className="settings-model-sticky-controls">
+                <div className="settings-model-toolbar">
+                  <div className="settings-model-search">
+                    <Search aria-hidden="true" size={15} />
+                    <Input
+                      aria-label={t("settings.models.searchLabel")}
+                      onChange={(event) => setSearchQuery(event.target.value)}
+                      placeholder={t("settings.models.searchPlaceholder")}
+                      value={searchQuery}
+                    />
+                  </div>
+                  <Select
+                    onValueChange={(value) => {
+                      if (value === "all" || value === "enabled" || value === "disabled") {
+                        setEnabledFilter(value)
+                      }
+                    }}
+                    value={enabledFilter}
+                  >
+                    <SelectTrigger aria-label={t("settings.models.statusFilter")}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">{t("settings.models.filterAll")}</SelectItem>
+                      <SelectItem value="enabled">{t("settings.models.filterEnabled")}</SelectItem>
+                      <SelectItem value="disabled">{t("settings.models.filterDisabled")}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <div className="settings-model-bulk-actions">
+                    <Button
+                      disabled={pendingMutationKey !== null || allProviderModelsEnabled}
+                      onClick={() => saveAllProviderModelsEnabled(true)}
+                      size="sm"
+                      type="button"
+                      variant="outline"
+                    >
+                      {t("settings.models.enableAll")}
+                    </Button>
+                    <Button
+                      disabled={pendingMutationKey !== null || allProviderModelsDisabled}
+                      onClick={() => saveAllProviderModelsEnabled(false)}
+                      size="sm"
+                      type="button"
+                      variant="outline"
+                    >
+                      {t("settings.models.disableAll")}
+                    </Button>
+                  </div>
+                </div>
+                <div className="settings-model-filter-summary">
+                  {t("settings.models.filteredSummary")
+                    .replace("{visible}", String(visibleModelRows.length))
+                    .replace("{total}", String(providerModelRows.length))}
+                </div>
+              </div>
+              {!selectedGroup || providerModelRows.length === 0 ? (
                 <p className="settings-muted-line">{t("settings.models.emptyCatalog")}</p>
-              ) : Array.from(selectedGroup.models.entries()).map(([modelId, routes]) => {
+              ) : visibleModelRows.length === 0 ? (
+                <p className="settings-muted-line">{t("settings.models.emptyFilter")}</p>
+              ) : visibleModelRows.map(({ modelId, routes, enabled }) => {
                 const representative = routes[0]
                 if (!representative) {
                   return null
@@ -165,11 +318,6 @@ export function ModelListSettingsArea() {
                   0,
                 )
                 const modelKey = `${selectedGroup.provider.id}/${modelId}`
-                const access = snapshot.modelAccessRecords.find((record) => (
-                  record.providerId === selectedGroup.provider.id
-                  && record.modelId === modelId
-                ))
-                const enabled = access?.enabled ?? true
                 const internalOperations = internalOperationsForModel(
                   snapshot,
                   selectedGroup.provider.id,
@@ -177,36 +325,81 @@ export function ModelListSettingsArea() {
                 )
                 return (
                   <article className="settings-model-row" key={`${selectedGroup.provider.id}/${modelId}`}>
-                    <div>
-                      <strong>{representative.model.display_name}</strong>
-                      <span>
-                        {t("settings.models.availableAccounts")
-                          .replace("{model}", modelId)
-                          .replace("{count}", String(availableAccountCount))}
-                      </span>
-                      <div className="settings-card-actions">
-                        {routes.map((route) => {
-                          const selector = `${selectedGroup.provider.id}/${route.model.id}/${route.protocolId}`
-                          return (
-                            <button
-                              className="skill-action-button secondary"
+                    <div className="settings-model-row-main">
+                      <div className="settings-model-title-line">
+                        <strong>{representative.model.display_name}</strong>
+                        <span className="settings-model-id">({modelId})</span>
+                        <Badge className="settings-model-credential-count" variant="outline">
+                          {t("settings.models.availableCredentials")
+                            .replace("{count}", String(availableAccountCount))}
+                        </Badge>
+                      </div>
+                      <Tabs
+                        className="settings-model-route-tabs"
+                        defaultValue={modelRouteValue(representative)}
+                      >
+                        <TabsList className="settings-model-route-tabs-list">
+                          {routes.map((route) => (
+                            <TabsTrigger
+                              className="settings-model-route-tab"
+                              key={modelRouteValue(route)}
+                              title={route.serviceEntryName}
+                              value={modelRouteValue(route)}
+                            >
+                              {compactServiceEntryName(route.serviceEntryName)}
+                              {route.accountCount > 1 ? (
+                                <Badge variant="secondary">{route.accountCount}</Badge>
+                              ) : null}
+                            </TabsTrigger>
+                          ))}
+                        </TabsList>
+                        {routes.map((route) => (
+                          <TabsContent
+                            className="settings-model-route-content"
+                            key={modelRouteValue(route)}
+                            value={modelRouteValue(route)}
+                          >
+                            <Button
+                              aria-label={t("settings.models.additionalConditions")
+                                .replace("{protocol}", protocolDisplayName(route.protocolId))}
+                              className="settings-model-route-panel"
                               disabled={pendingMutationKey !== null}
-                              key={selector}
                               onClick={() => setEditingRoute(route)}
                               type="button"
+                              variant="ghost"
                             >
-                              {t("settings.models.additionalConditions")
-                                .replace("{protocol}", protocolDisplayName(route.protocolId))}
-                            </button>
-                          )
-                        })}
-                        {internalOperations.map((operation) => {
+                              <span className="settings-model-route-protocol">
+                                {protocolDisplayName(route.protocolId)}
+                                <SlidersHorizontal aria-hidden="true" size={14} />
+                              </span>
+                              <ModelModalitySummary model={route.model} />
+                            </Button>
+                          </TabsContent>
+                        ))}
+                      </Tabs>
+                    </div>
+                    <div className="settings-model-switches">
+                      <label className="settings-model-switch-control">
+                        <span>{t("settings.models.status")}</span>
+                        <Switch
+                          aria-label={`${t("settings.models.toggle")} ${representative.model.display_name}`}
+                          checked={enabled}
+                          disabled={pendingMutationKey !== null}
+                          onCheckedChange={(checked) => {
+                            runSnapshotMutation(modelKey, () => (
+                              savePublicAiModelEnabled({
+                                providerId: selectedGroup.provider.id,
+                                modelId,
+                                enabled: checked,
+                              })
+                            ))
+                          }}
+                        />
+                      </label>
+                      {internalOperations.map((operation) => {
                           const internalKey = `internal/${modelKey}/${operation.operation}`
                           return (
-                            <label
-                              className="inline-flex items-center gap-2 rounded-md border px-2 py-1 text-xs"
-                              key={internalKey}
-                            >
+                            <label className="settings-model-switch-control" key={internalKey}>
                               <span>{internalOperationLabel(operation.operation, t)}</span>
                               <Switch
                                 aria-label={`${t("settings.inference.internalToggle")} ${representative.model.display_name}`}
@@ -226,35 +419,13 @@ export function ModelListSettingsArea() {
                             </label>
                           )
                         })}
-                      </div>
-                    </div>
-                    <div className="ml-auto flex shrink-0 items-center gap-2">
-                      <span className="text-xs text-muted-foreground">
-                        {enabled ? t("settings.models.enabled") : t("settings.models.disabled")}
-                      </span>
-                      <Switch
-                        aria-label={`${t("settings.models.toggle")} ${representative.model.display_name}`}
-                        checked={enabled}
-                        disabled={pendingMutationKey !== null}
-                        onCheckedChange={(checked) => {
-                          runSnapshotMutation(modelKey, () => (
-                            savePublicAiModelEnabled({
-                              providerId: selectedGroup.provider.id,
-                              modelId,
-                              enabled: checked,
-                            })
-                          ))
-                        }}
-                      />
                     </div>
                   </article>
                 )
               })}
             </div>
           </section>
-          </div>
-        </>
-      )}
+        )}
       <PublicAiModelOverridesDialog
         model={editingRoute?.model ?? null}
         onOpenChange={(open) => {
@@ -276,8 +447,125 @@ export function ModelListSettingsArea() {
         providerDisplayName={selectedGroup?.provider.display_name ?? null}
         providerId={selectedGroup?.provider.id ?? null}
       />
-    </div>
+      </div>
+    </AdaptiveToolPanel>
   )
+}
+
+// ModelModalitySummary renders compact, tooltip-backed modality icons for one protocol route.
+// ModelModalitySummary 为一个协议路由渲染带提示的紧凑模态图标。
+function ModelModalitySummary(props: { model: PublicAiModel }) {
+  const { t } = useI18n()
+  const modalities = providerModelModalities(props.model)
+  if (modalities.input.length === 0 && modalities.output.length === 0) {
+    return null
+  }
+  return (
+    <span className="settings-model-modality-summary">
+      {modalities.input.length > 0 ? (
+        <span className="settings-model-modality-group">
+          <ModalityIcon
+            icon={<ArrowDownToLine aria-hidden="true" />}
+            label={t("settings.models.inputModalities")}
+            muted
+          />
+          {modalities.input.map((modality) => (
+            <ModalityIcon
+              icon={modelModalityIcon(modality)}
+              key={`input/${modality}`}
+              label={modelModalityLabel(modality, t)}
+            />
+          ))}
+        </span>
+      ) : null}
+      {modalities.output.length > 0 ? (
+        <span className="settings-model-modality-group">
+          <ModalityIcon
+            icon={<ArrowUpFromLine aria-hidden="true" />}
+            label={t("settings.models.outputModalities")}
+            muted
+          />
+          {modalities.output.map((modality) => (
+            <ModalityIcon
+              icon={modelModalityIcon(modality)}
+              key={`output/${modality}`}
+              label={modelModalityLabel(modality, t)}
+            />
+          ))}
+        </span>
+      ) : null}
+    </span>
+  )
+}
+
+// ModalityIcon renders one accessible icon with its full meaning available on hover.
+// ModalityIcon 渲染一个可访问图标，并在悬停时提供完整含义。
+function ModalityIcon(props: { icon: React.ReactNode; label: string; muted?: boolean }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          aria-label={props.label}
+          className={`settings-model-modality-icon ${props.muted ? "muted" : ""}`}
+          role="img"
+        >
+          {props.icon}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" sideOffset={5}>{props.label}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+// modelModalityIcon maps one closed modality identifier to its compact visual symbol.
+// modelModalityIcon 将一个封闭模态标识映射为紧凑视觉符号。
+function modelModalityIcon(modality: ProviderModelModality): React.ReactNode {
+  switch (modality) {
+    case "text":
+      return <Type aria-hidden="true" />
+    case "image":
+      return <ImageIcon aria-hidden="true" />
+    case "audio":
+      return <AudioLines aria-hidden="true" />
+    case "video":
+      return <Video aria-hidden="true" />
+    case "file":
+      return <File aria-hidden="true" />
+    case "embedding":
+      return <Binary aria-hidden="true" />
+    case "rerank":
+      return <ListOrdered aria-hidden="true" />
+  }
+}
+
+// modelRouteValue returns the stable tab value for one exact service-entry protocol route.
+// modelRouteValue 返回一个精确服务入口协议路由的稳定页签值。
+function modelRouteValue(route: PublicModelProtocolRoute): string {
+  return `${route.serviceEntryId}/${route.protocolId}`
+}
+
+// modelModalityLabel maps one closed modality identifier to its localized label.
+// modelModalityLabel 将一个封闭模态标识映射为本地化标签。
+function modelModalityLabel(
+  modality: ProviderModelModality,
+  t: ReturnType<typeof useI18n>["t"],
+): string {
+  switch (modality) {
+    case "text":
+      return t("settings.models.modality.text")
+    case "image":
+      return t("settings.models.modality.image")
+    case "audio":
+      return t("settings.models.modality.audio")
+    case "video":
+      return t("settings.models.modality.video")
+    case "file":
+      return t("settings.models.modality.file")
+    case "embedding":
+      return t("settings.models.modality.embedding")
+    case "rerank":
+      return t("settings.models.modality.rerank")
+  }
 }
 
 // internalOperationsForModel returns deduplicated operation switches for one provider model.
@@ -318,49 +606,15 @@ function internalOperationLabel(
   }
 }
 
-// buildProviderModelGroups derives provider, model, and protocol rows from current memory catalogs.
-// buildProviderModelGroups 从当前内存目录派生供应商、模型与协议行。
-function buildProviderModelGroups(snapshot: PublicAiSettingsSnapshot): PublicProviderModels[] {
-  return snapshot.providers
-    .map((provider) => {
-      const models = new Map<string, PublicModelProtocolRoute[]>()
-      for (const connection of snapshot.connections) {
-        if (connection.provider_id !== provider.id) {
-          continue
-        }
-        const catalog = snapshot.catalogs[connection.id]
-        if (!catalog) {
-          continue
-        }
-        for (const model of catalog.models) {
-          const routes = models.get(model.id) ?? []
-          const existing = routes.find((route) => route.protocolId === connection.selected_protocol)
-          if (existing) {
-            existing.accountCount += 1
-          } else {
-            routes.push({
-              accountCount: 1,
-              model,
-              protocolId: connection.selected_protocol,
-            })
-          }
-          models.set(model.id, routes)
-        }
-      }
-      return { provider, models }
-    })
-    .filter((group) => group.models.size > 0)
-}
-
 // protocolDisplayName maps exact protocol profile identifiers to user-visible labels.
 // protocolDisplayName 把精确协议配置档标识映射为用户可见标签。
 function protocolDisplayName(protocolId: string): string {
   const labels: Record<string, string> = {
-    "anthropic-messages.v1": "Anthropic Messages",
-    "anthropic-messages-video.v1": "Anthropic Messages + Video",
-    "claude-code-messages.v1": "Claude Code Messages",
-    "openai-chat-completions.v1": "OpenAI Chat Completions",
-    "openai-codex-responses.v1": "OpenAI Codex Responses",
+    "anthropic-messages.v1": "Anthropic",
+    "anthropic-messages-video.v1": "Anthropic + Video",
+    "claude-code-messages.v1": "Claude Code",
+    "openai-chat-completions.v1": "OpenAI Chat",
+    "openai-codex-responses.v1": "Codex Responses",
     "openai-responses.v1": "OpenAI Responses",
   }
   return labels[protocolId] ?? protocolId

@@ -103,6 +103,10 @@ function VmmIdentityProjectPage({
 }: VmmIdentityProjectPageProps) {
   const { t } = useI18n()
   const [createKind, setCreateKind] = React.useState<"user" | "project" | null>(null)
+  // createTeamName and createSpaceName expose the complete VMM project hierarchy while preserving the historical default scope.
+  // createTeamName 与 createSpaceName 展示完整的 VMM 项目层级，同时保留历史默认作用域。
+  const [createTeamName, setCreateTeamName] = React.useState("default")
+  const [createSpaceName, setCreateSpaceName] = React.useState("default")
   const [createName, setCreateName] = React.useState("")
   const [pendingDeletion, setPendingDeletion] = React.useState<PendingDeletion | null>(null)
   const [deletionText, setDeletionText] = React.useState("")
@@ -159,7 +163,7 @@ function VmmIdentityProjectPage({
         confirmCreate: true,
       })
     } else {
-      const projectPath = canonicalProjectPath(normalizedName)
+      const projectPath = canonicalProjectPath(createTeamName, createSpaceName, normalizedName)
       creationResult = await onRunAction("ensure_project", {
         projectPath,
         confirmCreate: true,
@@ -169,9 +173,11 @@ function VmmIdentityProjectPage({
       return
     }
     setCreateKind(null)
+    setCreateTeamName("default")
+    setCreateSpaceName("default")
     setCreateName("")
     await refreshCatalog()
-  }, [createKind, createName, onRunAction, refreshCatalog])
+  }, [createKind, createName, createSpaceName, createTeamName, onRunAction, refreshCatalog])
 
   // confirmDeletion performs the required hidden preflight before the destructive call.
   // confirmDeletion 在破坏性调用前执行所需的隐藏预检。
@@ -272,7 +278,10 @@ function VmmIdentityProjectPage({
           actionLabel={t("memory.identity.addUser")}
           emptyLabel={t("memory.identity.emptyUsers")}
           icon={<Users className="size-4" aria-hidden="true" />}
-          onAdd={() => setCreateKind("user")}
+          onAdd={() => {
+            setCreateName("")
+            setCreateKind("user")
+          }}
           title={t("memory.identity.users")}
         >
           {catalog.users.map((user) => (
@@ -298,7 +307,12 @@ function VmmIdentityProjectPage({
           actionLabel={t("memory.identity.addProject")}
           emptyLabel={t("memory.identity.emptyProjects")}
           icon={<FolderKanban className="size-4" aria-hidden="true" />}
-          onAdd={() => setCreateKind("project")}
+          onAdd={() => {
+            setCreateTeamName("default")
+            setCreateSpaceName("default")
+            setCreateName("")
+            setCreateKind("project")
+          }}
           title={t("memory.identity.projects")}
         >
           {catalog.projects.map((project) => (
@@ -330,34 +344,89 @@ function VmmIdentityProjectPage({
         onOpenChange={(open) => {
           if (!open) {
             setCreateKind(null)
+            setCreateTeamName("default")
+            setCreateSpaceName("default")
             setCreateName("")
           }
         }}
       >
-        <DialogContent>
+        <DialogContent className={createKind === "project" ? "sm:max-w-xl" : undefined}>
           <DialogHeader>
             <DialogTitle>
               {createKind === "user" ? t("memory.identity.addUser") : t("memory.identity.addProject")}
             </DialogTitle>
             <DialogDescription>{t("memory.identity.description")}</DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="vmm-create-name">
-              {createKind === "user" ? t("memory.identity.userName") : t("memory.identity.projectName")}
-            </Label>
-            <Input
-              autoFocus
-              disabled={busy}
-              id="vmm-create-name"
-              onChange={(event) => setCreateName(event.target.value)}
-              value={createName}
-            />
-          </div>
+          {createKind === "project" ? (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                {t("memory.identity.projectPathStructure")}
+              </p>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="space-y-2">
+                  <Label htmlFor="vmm-create-team">{t("memory.identity.teamName")}</Label>
+                  <Input
+                    autoFocus
+                    disabled={busy}
+                    id="vmm-create-team"
+                    onChange={(event) => setCreateTeamName(event.target.value)}
+                    value={createTeamName}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="vmm-create-space">{t("memory.identity.spaceName")}</Label>
+                  <Input
+                    disabled={busy}
+                    id="vmm-create-space"
+                    onChange={(event) => setCreateSpaceName(event.target.value)}
+                    value={createSpaceName}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="vmm-create-project">{t("memory.identity.projectName")}</Label>
+                  <Input
+                    disabled={busy}
+                    id="vmm-create-project"
+                    onChange={(event) => setCreateName(event.target.value)}
+                    placeholder={t("memory.identity.projectPlaceholder")}
+                    value={createName}
+                  />
+                </div>
+              </div>
+              <div className="rounded-lg border bg-muted/30 px-3 py-2 text-sm">
+                <span className="text-muted-foreground">{t("memory.identity.projectPathPreview")}</span>
+                <code className="ml-2 break-all">
+                  {canonicalProjectPath(
+                    createTeamName.trim() || "Team",
+                    createSpaceName.trim() || "Space",
+                    createName.trim() || "Project",
+                  )}
+                </code>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Label htmlFor="vmm-create-name">{t("memory.identity.userName")}</Label>
+              <Input
+                autoFocus
+                disabled={busy}
+                id="vmm-create-name"
+                onChange={(event) => setCreateName(event.target.value)}
+                value={createName}
+              />
+            </div>
+          )}
           <DialogFooter>
             <Button onClick={() => setCreateKind(null)} type="button" variant="outline">
               {t("memory.common.cancel")}
             </Button>
-            <Button disabled={busy || !createName.trim()} onClick={() => void submitCreation()} type="button">
+            <Button
+              disabled={busy
+                || !createName.trim()
+                || (createKind === "project" && (!createTeamName.trim() || !createSpaceName.trim()))}
+              onClick={() => void submitCreation()}
+              type="button"
+            >
               {busy ? t("memory.common.loading") : t("memory.identity.create")}
             </Button>
           </DialogFooter>
@@ -573,11 +642,15 @@ function CatalogRow({
   )
 }
 
-// canonicalProjectPath converts one visible project name into the exact VMM hierarchy.
-// canonicalProjectPath 将一个可见项目名称转换为准确的 VMM 层级路径。
-function canonicalProjectPath(projectName: string): string {
-  const normalizedName = projectName.trim().replace(/[\\/]+/g, "-")
-  return `default/default/${normalizedName}`
+// canonicalProjectPath joins the explicit Team, Space, and Project segments required by VMM.
+// canonicalProjectPath 拼接 VMM 要求的显式 Team、Space 与 Project 路径段。
+// Parameters are the visible Team, Space, and Project names; the return value is one canonical three-segment path.
+// 参数是可见的 Team、Space 与 Project 名称；返回值是规范的三级路径。
+export function canonicalProjectPath(teamName: string, spaceName: string, projectName: string): string {
+  // normalizeSegment prevents one field from silently injecting extra hierarchy levels.
+  // normalizeSegment 防止单个输入字段静默注入额外层级。
+  const normalizeSegment = (value: string) => value.trim().replace(/[\\/]+/g, "-")
+  return [teamName, spaceName, projectName].map(normalizeSegment).join("/")
 }
 
 // vmmDeleteUserConfirmationCode reads the exact DeleteUserResponse field.

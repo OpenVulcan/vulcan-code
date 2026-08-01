@@ -3,6 +3,7 @@ import { Boxes, ExternalLink, KeyRound, Layers3, Plus, RefreshCw, Star, Trash2 }
 import { toast } from "sonner"
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
+import { localizedServiceEntryPresentation } from "@/components/features/settings/provider-presentation"
 import { CredentialUsageOverview } from "@/components/public-ai/credential-usage-overview"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -53,7 +54,6 @@ import type {
   CredentialMode,
   PublicAiAccountUsage,
   PublicAiConnection,
-  PublicAiConnectionCatalog,
   PublicAiCredentialProfile,
   PublicAiOAuthTransaction,
   PublicAiProviderDescriptor,
@@ -304,7 +304,6 @@ export function CredentialManagementArea(props: {
               const provider = providerForConnection(snapshot, connection)
               const entry = entryForConnection(provider, connection)
               const credentialProfile = credentialProfileForConnection(entry, connection)
-              const catalog = snapshot.catalogs[connection.id]
               const usage = usageByConnection[connection.id] ?? snapshot.usageCache[connection.id]
               // Provider-tool entries do not own a model catalog, so historical model-sync errors are irrelevant.
               // 供应商工具入口不拥有模型目录，因此历史模型同步错误与其无关。
@@ -315,7 +314,6 @@ export function CredentialManagementArea(props: {
               return (
                 <CredentialAccountCard
                   busy={busyConnectionId === connection.id}
-                  catalog={catalog}
                   catalogError={catalogError}
                   connection={connection}
                   credentialProfile={credentialProfile}
@@ -513,9 +511,6 @@ interface CredentialAccountCardProps {
   // busy prevents duplicate account operations.
   // busy 防止重复账号操作。
   busy: boolean
-  // catalog is the current memory-only model catalog.
-  // catalog 是当前仅内存模型目录。
-  catalog?: PublicAiConnectionCatalog
   // catalogError reports the latest exact catalog failure.
   // catalogError 报告最新精确目录失败。
   catalogError?: string
@@ -557,20 +552,21 @@ interface CredentialAccountCardProps {
 // CredentialAccountCard renders the Model Core account-card hierarchy with Vulcan Code actions.
 // CredentialAccountCard 使用 Vulcan Code 操作渲染 Model Core 账号卡片层级。
 function CredentialAccountCard(props: CredentialAccountCardProps) {
+  const { t } = useI18n()
   const usageSupported = props.credentialProfile?.account_usage_query !== "unsupported"
     && (props.connection.provider_id !== "openrouter" || props.connection.has_management_key)
   const providerName = props.provider?.display_name ?? props.connection.provider_id
-  const authorizationName = props.credentialProfile?.display_name
-    ?? props.connection.credential_profile_id
-  // connectionAvailable treats provider-tool entries as immediately usable because they have no model catalog to sync.
-  // connectionAvailable 将供应商工具入口视为立即可用，因为它们没有需要同步的模型目录。
-  const connectionAvailable = props.entry?.kind === "provider_tools" || Boolean(props.catalog)
+  // serviceEntryPresentation separates Alibaba product names from composable scope and region tags.
+  // serviceEntryPresentation 将阿里云产品名称与可组合的账号范围、区域标签分离。
+  const serviceEntryPresentation = props.entry
+    ? localizedServiceEntryPresentation(props.connection.provider_id, props.entry, t)
+    : { title: providerName, tags: [] }
   return (
     <Card
-      className="max-h-[18rem] w-full max-w-[21rem] gap-0 border border-border ring-0"
+      className="h-60 w-full max-w-[21rem] gap-0 border border-border pt-2 ring-0"
       size="sm"
     >
-      <CardHeader>
+      <CardHeader className="shrink-0">
         <div className="flex items-start justify-between gap-3">
           <ProviderIcon
             category={props.provider?.category}
@@ -579,15 +575,16 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
             serviceEntryId={props.connection.service_entry_id}
           />
           <div className="min-w-0 flex-1">
-            <div className="mb-1 flex flex-wrap items-center gap-1.5">
-              <span className="truncate text-xs text-muted-foreground">
-                {props.entry?.display_name ?? providerName}
-              </span>
-              <Badge variant="outline">{connectionAvailable ? "可用" : "待同步"}</Badge>
+            <div className="mb-1 truncate text-xs text-muted-foreground">
+              {serviceEntryPresentation.title}
             </div>
             <CardTitle className="truncate">{props.connection.display_name}</CardTitle>
-            <CardDescription className="truncate text-xs">
-              {authorizationName}
+            <CardDescription className="mt-0.5 flex min-h-4 flex-wrap items-center gap-1.5">
+              {serviceEntryPresentation.tags.map((tag) => (
+                <Badge className="h-4 px-1.5 text-[10px]" key={tag} variant="outline">
+                  {tag}
+                </Badge>
+              ))}
             </CardDescription>
           </div>
           {usageSupported ? (
@@ -602,7 +599,7 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
         </div>
       </CardHeader>
 
-      <CardContent className="mt-3 flex flex-1 flex-col gap-3">
+      <CardContent className="mt-0.5 flex min-h-0 flex-1 flex-col gap-2">
         <CredentialUsageOverview
           connection={props.connection}
           credentialProfile={props.credentialProfile}
@@ -615,7 +612,7 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
         ) : null}
       </CardContent>
 
-      <CardFooter className="mt-auto flex-wrap justify-end gap-2">
+      <CardFooter className="mt-auto shrink-0 flex-wrap justify-end gap-2 px-3 py-1.5">
         {props.entry?.kind !== "provider_tools" ? (
           <CredentialIconAction
             disabled={props.busy}

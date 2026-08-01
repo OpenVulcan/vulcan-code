@@ -53,16 +53,16 @@ pub struct ActiveAiModelSelection {
     pub connection_id: String,
 }
 
-/// Stores local narrowing and parameter choices for one connection-model pair.
-/// 保存一个连接与模型组合的本地收窄及参数选择。
+/// Stores local limit overrides and parameter choices for one connection-model pair.
+/// 保存一个连接与模型组合的本地限制覆盖及参数选择。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ModelExecutionOverrides {
-    /// Optional local context-window narrowing.
-    /// 可选本地上下文窗口收窄。
+    /// Optional context-window override, bounded by a declared provider maximum when present.
+    /// 可选上下文窗口覆盖；供应商声明上限时不得超过该上限。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_limit: Option<u64>,
-    /// Optional local output-token narrowing.
-    /// 可选本地输出 Token 收窄。
+    /// Optional output-token override, bounded by declared provider and effective context limits.
+    /// 可选输出 Token 覆盖；受供应商已声明上限及有效上下文限制约束。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_limit: Option<u64>,
     /// Optional model-level prompt-cache override.
@@ -145,12 +145,12 @@ pub struct InferenceProfile {
 /// 持久化不含账号选择的操作专属内部模型默认值。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct InternalModelOverrides {
-    /// Optional local context-window narrowing for restricted LLM inference.
-    /// 受限 LLM 推理可选的本地上下文窗口收窄。
+    /// Optional context-window override for restricted LLM inference.
+    /// 受限 LLM 推理可选的上下文窗口覆盖。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_limit: Option<u64>,
-    /// Optional local output-token narrowing for restricted LLM inference.
-    /// 受限 LLM 推理可选的本地输出 Token 收窄。
+    /// Optional output-token override for restricted LLM inference.
+    /// 受限 LLM 推理可选的输出 Token 覆盖。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_limit: Option<u64>,
     /// Optional exact reasoning effort.

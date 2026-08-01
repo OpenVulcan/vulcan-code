@@ -1,7 +1,10 @@
 import * as React from "react";
 import { Check, Cpu, RefreshCw, Search, UserRound } from "lucide-react";
 import { ProviderIcon } from "@/components/features/settings/provider-icon";
-import { CredentialUsageOverview } from "@/components/public-ai/credential-usage-overview";
+import {
+  CredentialUsageOverview,
+  usageCapabilitySupportsQuotaWindows,
+} from "@/components/public-ai/credential-usage-overview";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -340,6 +343,14 @@ export function ModelAccountPickerControl(props: {
   // usage is the latest cached or explicitly refreshed account observation.
   // usage 是最新缓存或显式刷新的账号观测。
   const usage = connection ? detailsSnapshot?.usageCache[connection.id] : undefined;
+  // quotaWindowsSupported follows the backend-declared account usage implementation.
+  // quotaWindowsSupported 遵循后端声明的账号用量实现。
+  const quotaWindowsSupported = connection
+    ? usageCapabilitySupportsQuotaWindows(connection.usage_capability)
+    : false;
+  // usageOverviewVisible keeps quota-capable accounts visible while showing balance-only accounts after observation.
+  // usageOverviewVisible 始终展示额度账号，并在余额账号取得观测后展示余额。
+  const usageOverviewVisible = quotaWindowsSupported || Boolean(usage);
   // usageSupported follows the same provider-specific rules as credential management.
   // usageSupported 遵循与凭据管理相同的供应商专用规则。
   const usageSupported = Boolean(
@@ -506,37 +517,54 @@ export function ModelAccountPickerControl(props: {
             </div>
           </CardHeader>
           <CardContent className="mt-3 flex flex-col gap-3">
-            <div className="grid grid-cols-2 gap-x-3 gap-y-2 border-t pt-3 text-xs">
-              <div className="min-w-0">
-                <p className="text-muted-foreground">{t("composer.accountCard.provider")}</p>
-                <p className="mt-0.5 truncate font-medium">{provider?.display_name ?? selectedAccount.providerName}</p>
-              </div>
-              <div className="min-w-0">
-                <p className="text-muted-foreground">{t("composer.accountCard.serviceEntry")}</p>
-                <p className="mt-0.5 truncate font-medium">{entry?.display_name ?? "—"}</p>
-              </div>
-              <div className="col-span-2 min-w-0">
-                <p className="text-muted-foreground">{t("composer.accountCard.credentialType")}</p>
-                <p className="mt-0.5 truncate font-medium">{credentialProfile?.display_name ?? connection?.credential_profile_id ?? "—"}</p>
-              </div>
+            <div className="border-t pt-3 text-xs">
+              <p className="text-muted-foreground">{t("composer.accountCard.protocolType")}</p>
+              <p className="mt-0.5 truncate font-medium">
+                {connection ? modelAccountProtocolDisplayName(connection.selected_protocol) : "—"}
+              </p>
             </div>
-            {connection ? (
+            {connection && usageOverviewVisible ? (
               <CredentialUsageOverview
                 connection={connection}
                 credentialProfile={credentialProfile}
+                showQuotaSection={quotaWindowsSupported}
                 usage={usage}
               />
-            ) : detailsLoading ? (
+            ) : !connection && detailsLoading ? (
               <p className="py-3 text-center text-xs text-muted-foreground">{t("composer.accountCard.loading")}</p>
-            ) : (
+            ) : !connection ? (
               <p className="py-3 text-center text-xs text-muted-foreground">{t("composer.accountCard.metadataUnavailable")}</p>
-            )}
+            ) : null}
             {detailsError ? <p className="text-xs text-destructive" role="status">{detailsError}</p> : null}
           </CardContent>
         </Card>
       </HoverCardContent>
     </HoverCard>
   );
+}
+
+// modelAccountProtocolDisplayName returns the user-facing label for one exact wire protocol.
+// modelAccountProtocolDisplayName 返回一个精确 Wire 协议的用户可见名称。
+//
+// Parameters
+// 参数
+// `protocolId` is the selected protocol profile persisted on the credential connection.
+// `protocolId` 是持久化在凭据连接上的已选协议配置标识。
+//
+// Returns
+// 返回值
+// A stable known label or the original identifier when the protocol is newly introduced.
+// 返回稳定的已知名称；协议为新增类型时返回原始标识。
+export function modelAccountProtocolDisplayName(protocolId: string): string {
+  const labels: Record<string, string> = {
+    "anthropic-messages.v1": "Anthropic Messages",
+    "anthropic-messages-video.v1": "Anthropic Messages + Video",
+    "claude-code-messages.v1": "Claude Code Messages",
+    "openai-chat-completions.v1": "OpenAI Chat Completions",
+    "openai-codex-responses.v1": "OpenAI Codex Responses",
+    "openai-responses.v1": "OpenAI Responses",
+  };
+  return labels[protocolId] ?? protocolId;
 }
 
 // formatModelPickerTranslation replaces simple named placeholders in localized model picker templates.

@@ -72,6 +72,35 @@ const EVENT_KIND_TO_TOPIC: Record<BrowserServiceEvent["kind"], string> = {
   pluginUiInvalidated: "plugin.ui.invalidated",
 };
 
+// closeWebSocketWhenReady closes one socket without aborting its opening handshake.
+// closeWebSocketWhenReady 在不中断建连握手的前提下关闭一个套接字。
+//
+// Parameters
+// 参数
+// `socket` is the exact browser WebSocket and `shouldClose` revalidates ownership when it opens.
+// `socket` 是精确的浏览器 WebSocket，`shouldClose` 在连接建立时重新校验所有权。
+//
+// Returns
+// 返回值
+// This function returns after closing an open socket or registering a one-shot deferred close.
+// 函数在关闭已连接套接字或登记一次性延迟关闭后返回。
+export function closeWebSocketWhenReady(
+  socket: WebSocket,
+  shouldClose: () => boolean,
+): void {
+  if (socket.readyState === socket.CONNECTING) {
+    socket.addEventListener("open", () => {
+      if (shouldClose()) {
+        socket.close();
+      }
+    }, { once: true });
+    return;
+  }
+  if (socket.readyState === socket.OPEN && shouldClose()) {
+    socket.close();
+  }
+}
+
 // BrowserServiceTransport talks to the local service through HTTP RPC and WebSocket events.
 // BrowserServiceTransport 通过 HTTP RPC 与 WebSocket 事件连接本地服务。
 export class BrowserServiceTransport implements ServiceTransport {
@@ -167,8 +196,7 @@ export class BrowserServiceTransport implements ServiceTransport {
       }
       if (this.handlerCount() === 0) {
         this.clearReconnectTimer();
-        this.socket?.close();
-        this.socket = null;
+        this.closeSocketIfUnused();
       }
     };
   }
@@ -179,8 +207,7 @@ export class BrowserServiceTransport implements ServiceTransport {
     this.disposed = true;
     this.handlers.clear();
     this.clearReconnectTimer();
-    this.socket?.close();
-    this.socket = null;
+    this.closeSocketIfUnused();
   }
 
   // ensureSocket opens the event WebSocket once.
@@ -224,9 +251,26 @@ export class BrowserServiceTransport implements ServiceTransport {
     });
     socket.addEventListener("error", () => {
       emitBrowserServiceConnectionStatus("disconnected", "Browser service connection failed.");
-      socket.close();
     });
     this.socket = socket;
+  }
+
+  // closeSocketIfUnused closes the current socket only after its ownership state is revalidated.
+  // closeSocketIfUnused 仅在重新校验当前套接字所有权状态后关闭连接。
+  //
+  // Returns
+  // 返回值
+  // This method returns after requesting an immediate or deferred close when no subscriber remains.
+  // 当没有订阅者时，该方法在请求立即关闭或延迟关闭后返回。
+  private closeSocketIfUnused(): void {
+    const socket = this.socket;
+    if (!socket) {
+      return;
+    }
+    closeWebSocketWhenReady(
+      socket,
+      () => this.socket === socket && (this.disposed || this.handlerCount() === 0),
+    );
   }
 
   // scheduleReconnect queues a reconnect while active handlers still exist.

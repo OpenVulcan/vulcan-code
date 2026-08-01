@@ -9,6 +9,7 @@ import {
 } from "lucide-react"
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
+import { localizedProviderDescription } from "@/components/features/settings/provider-presentation"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -27,6 +28,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { useI18n } from "@/i18n"
 import {
   loadPublicAiSettings,
@@ -326,6 +332,9 @@ function SystemProviderTable(props: {
                 // protocolNames is the unique protocol set declared by all service entries.
                 // protocolNames 是所有服务入口声明的唯一协议集合。
                 const protocolNames = uniqueProtocolNames(provider)
+                // providerDescription is the registered bilingual introduction for this provider.
+                // providerDescription 是当前供应商已注册的双语介绍。
+                const providerDescription = localizedProviderDescription(provider.id, t)
                 return (
                   <TableRow key={provider.id}>
                     <TableCell className="whitespace-normal py-3 align-top">
@@ -341,22 +350,25 @@ function SystemProviderTable(props: {
                     </TableCell>
                     <TableCell className="whitespace-normal py-3 align-top">
                       <div className="text-sm text-muted-foreground">
-                        {provider.category === "relay"
-                          ? `${t("settings.providerCategory.relay")} · `
-                          : ""}
-                        {provider.service_entries.length} 个服务入口
+                        {providerDescription}
                       </div>
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        {provider.service_entries.map((entry) => (
-                          <Badge key={entry.id} variant="outline">
-                            {entry.display_name}
-                          </Badge>
-                        ))}
-                        {protocolNames.map((protocolName) => (
-                          <Badge key={protocolName} variant="outline">
-                            {protocolName}
-                          </Badge>
-                        ))}
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <ProviderSummaryTooltip
+                          items={provider.service_entries.map((entry) => entry.display_name)}
+                          label={t("settings.providerSummary.serviceEntries").replace(
+                            "{count}",
+                            String(provider.service_entries.length),
+                          )}
+                          title={t("settings.providerSummary.serviceEntriesTitle")}
+                        />
+                        <ProviderSummaryTooltip
+                          items={protocolNames}
+                          label={t("settings.providerSummary.protocols").replace(
+                            "{count}",
+                            String(protocolNames.length),
+                          )}
+                          title={t("settings.providerSummary.protocolsTitle")}
+                        />
                       </div>
                     </TableCell>
                     <TableCell className="py-3 text-right align-top">
@@ -504,6 +516,47 @@ function CustomProviderDialog(props: {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// ProviderSummaryTooltip renders one compact count whose hover card lists exact values.
+// ProviderSummaryTooltip 渲染一个紧凑数量摘要，并在悬停卡片中列出精确值。
+//
+// Parameters
+// 参数
+// `label` is the compact summary, `title` names the collection, and `items` are exact entries.
+// `label` 是紧凑摘要，`title` 是集合名称，`items` 是精确条目。
+//
+// Returns
+// 返回值
+// A keyboard-focusable, hover-persistent tooltip trigger.
+// 返回可通过键盘聚焦且允许鼠标驻留的 Tooltip 触发器。
+function ProviderSummaryTooltip(props: {
+  items: string[]
+  label: string
+  title: string
+}) {
+  return (
+    <Tooltip delayDuration={500}>
+      <TooltipTrigger asChild>
+        <button
+          className="inline-flex h-6 items-center rounded-full border border-border px-2.5 text-xs font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          type="button"
+        >
+          {props.label}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent className="block max-w-md space-y-2 px-3 py-2" side="bottom" sideOffset={6}>
+        <p className="font-medium">{props.title}</p>
+        <div className="flex max-w-sm flex-wrap gap-1.5">
+          {props.items.map((item) => (
+            <span className="rounded border border-background/25 px-1.5 py-0.5" key={item}>
+              {item}
+            </span>
+          ))}
+        </div>
+      </TooltipContent>
+    </Tooltip>
   )
 }
 

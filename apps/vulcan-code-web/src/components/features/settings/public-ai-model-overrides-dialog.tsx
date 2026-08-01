@@ -371,14 +371,11 @@ function ModelLimitField(props: {
         ) : null}
       </div>
       <Input
-        disabled={!declared}
         id={props.id}
         inputMode="numeric"
         onChange={(event) => props.onChange(event.currentTarget.value)}
         pattern="[0-9]*"
-        placeholder={declared
-          ? t("settings.modelOverrides.leaveBlank")
-          : t("settings.modelOverrides.providerNotDeclared")}
+        placeholder={t("settings.modelOverrides.leaveBlank")}
         type="text"
         value={props.value}
       />

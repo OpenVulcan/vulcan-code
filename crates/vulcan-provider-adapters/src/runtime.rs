@@ -2353,8 +2353,8 @@ fn exact_active_connection(
     Ok(connection)
 }
 
-/// Validates local narrowing, cache policy, and closed model parameters.
-/// 校验本地收窄、缓存策略与封闭模型参数。
+/// Validates local limit overrides, cache policy, and closed model parameters.
+/// 校验本地限制覆盖、缓存策略与封闭模型参数。
 fn validate_model_overrides(
     model: &crate::ConnectionModel,
     protocol_id: &str,
@@ -2367,13 +2367,11 @@ fn validate_model_overrides(
                 model.id
             ));
         }
-        let advertised = model.capabilities.context_limit.ok_or_else(|| {
-            format!(
-                "Model `{}` does not advertise a context limit that can be narrowed.",
-                model.id
-            )
-        })?;
-        if context_limit > advertised {
+        if model
+            .capabilities
+            .context_limit
+            .is_some_and(|advertised| context_limit > advertised)
+        {
             return Err(format!(
                 "Model `{}` context override exceeds its discovered limit.",
                 model.id
@@ -2756,6 +2754,46 @@ mod tests {
                 .expect("shared model override should resolve");
             assert_eq!(selection.overrides.context_limit, Some(4096));
         }
+    }
+
+    /// Verifies an undeclared provider limit may be supplied explicitly by the user.
+    /// 验证供应商未声明上限时允许用户显式提供覆盖值。
+    #[test]
+    fn undeclared_model_limits_accept_explicit_overrides() {
+        let mut model = catalog("connection")
+            .models
+            .into_iter()
+            .next()
+            .expect("catalog fixture should expose one model");
+        model.capabilities.context_limit = None;
+        model.capabilities.output_limit = None;
+        let overrides = ModelExecutionOverrides {
+            context_limit: Some(16_384),
+            output_limit: Some(4_096),
+            ..ModelExecutionOverrides::default()
+        };
+
+        validate_model_overrides(&model, OPENAI_CHAT_PROFILE_ID, &overrides)
+            .expect("explicit limits should be accepted when the provider does not declare caps");
+    }
+
+    /// Verifies declared provider limits remain hard upper bounds for local overrides.
+    /// 验证供应商已声明的上限仍是本地覆盖不可突破的硬上限。
+    #[test]
+    fn declared_model_limits_reject_expansive_overrides() {
+        let model = catalog("connection")
+            .models
+            .into_iter()
+            .next()
+            .expect("catalog fixture should expose one model");
+        let overrides = ModelExecutionOverrides {
+            context_limit: Some(16_384),
+            ..ModelExecutionOverrides::default()
+        };
+
+        let error = validate_model_overrides(&model, OPENAI_CHAT_PROFILE_ID, &overrides)
+            .expect_err("declared context cap must reject an expansive override");
+        assert!(error.contains("context override exceeds its discovered limit"));
     }
 
     /// Verifies adapter-declared explicit defaults become immutable execution values.

@@ -398,7 +398,8 @@ mod tests {
     //! 严格请求投影器注册测试。
 
     use super::{
-        CredentialDirectoryVisibility, ProviderCategory, ProviderPartnershipKind, ProviderRegistry,
+        CredentialDirectoryVisibility, ProviderCategory, ProviderPartnershipKind,
+        ProviderPromotionDisclosureKey, ProviderRegistry,
     };
     use crate::{AccountUsageQueryKind, AuthenticationProjection, RequestProjectorKind};
 
@@ -448,6 +449,47 @@ mod tests {
         );
     }
 
+    /// Verifies every promoted onboarding provider exposes the exact disclosed invitation link.
+    /// 验证每个推广引导供应商都暴露精确且已披露的邀请链接。
+    #[test]
+    fn native_onboarding_referrals_are_disclosed_exactly() {
+        let registry = ProviderRegistry::first_batch().expect("built-in registry should be valid");
+        for (provider_id, referral_url, campaign_id) in [
+            (
+                "apikeyfun",
+                "https://apikey.fun/register?aff=LY4DT3DCTM9N",
+                "LY4DT3DCTM9N",
+            ),
+            (
+                "claudeapi",
+                "https://console.apito.ai/register?aff=8jvf",
+                "8jvf",
+            ),
+            ("qiniu", "https://s.qiniu.com/reuYBn", "reuYBn"),
+            ("fennoai", "https://api.fenno.ai/s/v59N", "v59N"),
+            (
+                "code0",
+                "https://console.code0.ai/register?aff=il6p",
+                "il6p",
+            ),
+        ] {
+            let promotion = registry
+                .provider(provider_id)
+                .and_then(|provider| provider.promotion.as_ref())
+                .expect("promoted onboarding provider should expose metadata");
+            assert_eq!(promotion.referral_url.as_deref(), Some(referral_url));
+            assert_eq!(promotion.campaign_id.as_deref(), Some(campaign_id));
+            assert_eq!(
+                promotion.partnership_kind,
+                ProviderPartnershipKind::Referral
+            );
+            assert_eq!(
+                promotion.disclosure_key,
+                ProviderPromotionDisclosureKey::ReferralRevenue
+            );
+        }
+    }
+
     /// Verifies every pinned provider exposes only the explicitly registered verified protocol set.
     /// 验证每个固定供应商只暴露显式注册且已验证的协议集合。
     #[test]
@@ -456,40 +498,46 @@ mod tests {
         // Expected routes are closed per provider and must not inherit another provider's capabilities.
         // 预期路由按供应商封闭，禁止继承其他供应商能力。
         let expected_routes = [
-            ("apikeyfun", vec!["openai-chat-completions.v1"]),
-            ("claudeapi", vec!["anthropic-messages.v1"]),
+            ("apikeyfun", 2, vec!["openai-chat-completions.v1"]),
+            ("claudeapi", 1, vec!["anthropic-messages.v1"]),
             (
                 "qiniu",
+                1,
                 vec!["openai-chat-completions.v1", "anthropic-messages.v1"],
             ),
             (
                 "fennoai",
+                1,
                 vec!["openai-chat-completions.v1", "anthropic-messages.v1"],
             ),
             (
                 "code0",
+                1,
                 vec!["openai-chat-completions.v1", "anthropic-messages.v1"],
             ),
         ];
 
-        for (provider_id, expected_profile_ids) in expected_routes {
+        for (provider_id, expected_entry_count, mut expected_profile_ids) in expected_routes {
             let provider = registry
                 .provider(provider_id)
                 .expect("pinned provider should be registered");
-            assert_eq!(provider.service_entries.len(), 1);
-            let entry = &provider.service_entries[0];
-            assert!(entry.base_url.starts_with("https://"));
-            assert_eq!(entry.credential_profiles.len(), 1);
-            assert_eq!(
-                entry.credential_profiles[0].account_usage_query,
-                AccountUsageQueryKind::Unsupported
-            );
-            assert!(entry.protocol_routes.iter().all(|route| route.verified));
-            let actual_profile_ids = entry
-                .protocol_routes
+            assert_eq!(provider.service_entries.len(), expected_entry_count);
+            assert!(provider.service_entries.iter().all(|entry| {
+                entry.base_url.starts_with("https://")
+                    && entry.credential_profiles.len() == 1
+                    && entry.credential_profiles[0].account_usage_query
+                        == AccountUsageQueryKind::Unsupported
+                    && entry.protocol_routes.iter().all(|route| route.verified)
+            }));
+            let mut actual_profile_ids = provider
+                .service_entries
                 .iter()
+                .flat_map(|entry| entry.protocol_routes.iter())
                 .map(|route| route.protocol_profile_id.as_str())
                 .collect::<Vec<_>>();
+            actual_profile_ids.sort_unstable();
+            actual_profile_ids.dedup();
+            expected_profile_ids.sort_unstable();
             assert_eq!(actual_profile_ids, expected_profile_ids);
         }
     }
@@ -585,6 +633,51 @@ mod tests {
         }
     }
 
+    /// Verifies APIKEY.FUN exposes its default and image-disabled SLB endpoints independently.
+    /// 验证 APIKEY.FUN 独立暴露默认入口与禁用生图的 SLB 入口。
+    #[test]
+    fn apikeyfun_exposes_exact_default_and_slb_service_entries() {
+        let registry = ProviderRegistry::first_batch().expect("built-in registry should be valid");
+        let provider = registry
+            .provider("apikeyfun")
+            .expect("APIKEY.FUN provider should be registered");
+        let entries = provider
+            .service_entries
+            .iter()
+            .map(|entry| {
+                let route = entry
+                    .protocol_routes
+                    .iter()
+                    .find(|route| route.protocol_profile_id == "openai-chat-completions.v1")
+                    .expect("APIKEY.FUN entry should expose the OpenAI Chat route");
+                (
+                    entry.id.as_str(),
+                    entry.display_name.as_str(),
+                    entry.base_url.as_str(),
+                    route.endpoint_path.as_deref(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            entries,
+            vec![
+                (
+                    "public-api",
+                    "Default API",
+                    "https://api.apikey.fun/v1",
+                    Some("/chat/completions"),
+                ),
+                (
+                    "slb-api",
+                    "SLB API (Image Generation Disabled)",
+                    "https://slb.apikey.fun/v1",
+                    Some("/chat/completions"),
+                ),
+            ]
+        );
+    }
+
     /// Verifies promotion relationship kinds cannot silently present a different disclosure.
     /// 验证推广合作类型不能静默展示另一种披露文案。
     #[test]
@@ -594,7 +687,7 @@ mod tests {
             .promotion
             .as_mut()
             .expect("APIKEY.FUN should expose registration metadata")
-            .partnership_kind = ProviderPartnershipKind::Sponsored;
+            .disclosure_key = ProviderPromotionDisclosureKey::NeutralRegistration;
         let mut registry = ProviderRegistry::default();
         let error = registry
             .register(provider)
@@ -607,11 +700,12 @@ mod tests {
     #[test]
     fn rejects_undisclosed_referral_url() {
         let mut provider = crate::providers::apikeyfun_descriptor();
-        provider
+        let promotion = provider
             .promotion
             .as_mut()
-            .expect("APIKEY.FUN should expose registration metadata")
-            .referral_url = Some(String::from("https://apikey.fun/register?aff=vulcan"));
+            .expect("APIKEY.FUN should expose registration metadata");
+        promotion.partnership_kind = ProviderPartnershipKind::None;
+        promotion.disclosure_key = ProviderPromotionDisclosureKey::NeutralRegistration;
         let mut registry = ProviderRegistry::default();
         let error = registry
             .register(provider)
@@ -635,7 +729,12 @@ mod tests {
         );
         assert_eq!(
             value["promotion"]["disclosure_key"],
-            "settings.providerPromotion.neutralDisclosure"
+            "settings.providerPromotion.referralDisclosure"
+        );
+        assert_eq!(value["promotion"]["partnership_kind"], "referral");
+        assert_eq!(
+            value["promotion"]["referral_url"],
+            "https://s.qiniu.com/reuYBn"
         );
     }
 }

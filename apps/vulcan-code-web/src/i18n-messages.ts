@@ -538,9 +538,12 @@ export type TranslationKey =
   | "composer.accountCard.provider"
   | "composer.accountCard.serviceEntry"
   | "composer.accountCard.credentialType"
+  | "composer.accountCard.protocolType"
   | "composer.accountCard.loading"
   | "composer.accountCard.metadataUnavailable"
   | "composer.accountCard.plan"
+  | "composer.accountCard.accountType"
+  | "composer.accountCard.nonPlan"
   | "composer.accountCard.balance"
   | "composer.accountCard.usageUnsupported"
   | "composer.accountCard.managementKeyRequired"
@@ -1198,7 +1201,12 @@ export type TranslationKey =
   | "memory.identity.addUser"
   | "memory.identity.addProject"
   | "memory.identity.userName"
+  | "memory.identity.teamName"
+  | "memory.identity.spaceName"
   | "memory.identity.projectName"
+  | "memory.identity.projectPathStructure"
+  | "memory.identity.projectPathPreview"
+  | "memory.identity.projectPlaceholder"
   | "memory.identity.create"
   | "memory.identity.migrate"
   | "memory.identity.delete"
@@ -1680,6 +1688,32 @@ export type TranslationKey =
   | "settings.providerCategory.cloudMaaS"
   | "settings.providerCategory.relay"
   | "settings.providerCategory.unclassified"
+  | "settings.providerDescription.default"
+  | "settings.providerDescription.minimax"
+  | "settings.providerDescription.kimi"
+  | "settings.providerDescription.deepseek"
+  | "settings.providerDescription.alibaba"
+  | "settings.providerDescription.openrouter"
+  | "settings.providerDescription.apikeyfun"
+  | "settings.providerDescription.claudeapi"
+  | "settings.providerDescription.qiniu"
+  | "settings.providerDescription.fennoai"
+  | "settings.providerDescription.code0"
+  | "settings.providerDescription.tavily"
+  | "settings.providerDescription.openai"
+  | "settings.providerDescription.anthropic"
+  | "settings.providerDescription.google"
+  | "settings.providerSummary.serviceEntries"
+  | "settings.providerSummary.protocols"
+  | "settings.providerSummary.serviceEntriesTitle"
+  | "settings.providerSummary.protocolsTitle"
+  | "settings.serviceEntry.title.codingPlan"
+  | "settings.serviceEntry.title.tokenPlan"
+  | "settings.serviceEntry.title.modelStudio"
+  | "settings.serviceEntry.tag.personal"
+  | "settings.serviceEntry.tag.team"
+  | "settings.serviceEntry.tag.china"
+  | "settings.serviceEntry.tag.international"
   | "settings.providerOnboarding.notConfigured"
   | "settings.providerOnboarding.description"
   | "settings.providerOnboarding.serviceEntries"
@@ -1780,7 +1814,30 @@ export type TranslationKey =
   | "settings.models.memoryOnly"
   | "settings.models.emptyCatalog"
   | "settings.models.availableAccounts"
+  | "settings.models.availableCredentials"
+  | "settings.models.status"
   | "settings.models.additionalConditions"
+  | "settings.models.collapseProviders"
+  | "settings.models.expandProviders"
+  | "settings.models.searchLabel"
+  | "settings.models.searchPlaceholder"
+  | "settings.models.statusFilter"
+  | "settings.models.filterAll"
+  | "settings.models.filterEnabled"
+  | "settings.models.filterDisabled"
+  | "settings.models.enableAll"
+  | "settings.models.disableAll"
+  | "settings.models.filteredSummary"
+  | "settings.models.emptyFilter"
+  | "settings.models.inputModalities"
+  | "settings.models.outputModalities"
+  | "settings.models.modality.text"
+  | "settings.models.modality.image"
+  | "settings.models.modality.audio"
+  | "settings.models.modality.video"
+  | "settings.models.modality.file"
+  | "settings.models.modality.embedding"
+  | "settings.models.modality.rerank"
   | "settings.inference.title"
   | "settings.inference.subtitle"
   | "settings.inference.vmmReasoningNotice"
@@ -2661,9 +2718,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.accountCard.provider": "来源供应商",
     "composer.accountCard.serviceEntry": "服务入口",
     "composer.accountCard.credentialType": "凭据类型",
+    "composer.accountCard.protocolType": "协议类型",
     "composer.accountCard.loading": "正在读取账号信息...",
     "composer.accountCard.metadataUnavailable": "账号信息暂不可用",
     "composer.accountCard.plan": "会员套餐",
+    "composer.accountCard.accountType": "账号类型",
+    "composer.accountCard.nonPlan": "非套餐",
     "composer.accountCard.balance": "余额",
     "composer.accountCard.usageUnsupported": "不支持用量查询",
     "composer.accountCard.managementKeyRequired": "添加可选管理密钥后可查询余额",
@@ -3321,7 +3381,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.identity.addUser": "添加用户",
     "memory.identity.addProject": "添加项目",
     "memory.identity.userName": "用户名称",
-    "memory.identity.projectName": "项目名称",
+    "memory.identity.teamName": "团队（Team）",
+    "memory.identity.spaceName": "空间（Space）",
+    "memory.identity.projectName": "项目（Project）",
+    "memory.identity.projectPathStructure": "VMM 项目采用 Team / Space / Project 三级路径，每一级都是独立的记忆作用域。",
+    "memory.identity.projectPathPreview": "完整路径",
+    "memory.identity.projectPlaceholder": "例如：vulcan-code",
     "memory.identity.create": "创建",
     "memory.identity.migrate": "迁移",
     "memory.identity.delete": "删除",
@@ -3803,6 +3868,32 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerCategory.cloudMaaS": "云服务",
     "settings.providerCategory.relay": "中转站",
     "settings.providerCategory.unclassified": "未分类",
+    "settings.providerDescription.default": "该供应商提供已注册的模型或 AI 能力接入。",
+    "settings.providerDescription.minimax": "MiniMax 官方模型、开放平台与 Token Plan 服务。",
+    "settings.providerDescription.kimi": "月之暗面开放平台与 Kimi Coding Plan 服务。",
+    "settings.providerDescription.deepseek": "DeepSeek 官方模型 API 与账号服务。",
+    "settings.providerDescription.alibaba": "Alibaba Cloud Model Studio、Coding Plan 与 Token Plan 服务。",
+    "settings.providerDescription.openrouter": "聚合多个模型与上游节点的统一模型路由平台。",
+    "settings.providerDescription.apikeyfun": "提供多种兼容协议的第三方模型中转服务。",
+    "settings.providerDescription.claudeapi": "提供 Anthropic 兼容协议的第三方模型中转服务。",
+    "settings.providerDescription.qiniu": "七牛云提供的模型推理与兼容协议服务。",
+    "settings.providerDescription.fennoai": "提供多种兼容协议的第三方模型中转服务。",
+    "settings.providerDescription.code0": "提供 OpenAI 与 Anthropic 兼容协议的第三方模型中转服务。",
+    "settings.providerDescription.tavily": "面向 AI 应用的网页搜索与内容抓取服务。",
+    "settings.providerDescription.openai": "OpenAI 官方模型与 Codex 账号服务。",
+    "settings.providerDescription.anthropic": "Anthropic 官方 Claude 模型与 Claude Code 账号服务。",
+    "settings.providerDescription.google": "Google 官方 Gemini API 与 Code Assist 服务。",
+    "settings.providerSummary.serviceEntries": "{count} 个接入点",
+    "settings.providerSummary.protocols": "{count} 个协议支持",
+    "settings.providerSummary.serviceEntriesTitle": "具体接入点",
+    "settings.providerSummary.protocolsTitle": "具体协议支持",
+    "settings.serviceEntry.title.codingPlan": "Coding Plan",
+    "settings.serviceEntry.title.tokenPlan": "Token Plan",
+    "settings.serviceEntry.title.modelStudio": "Model Studio",
+    "settings.serviceEntry.tag.personal": "个人",
+    "settings.serviceEntry.tag.team": "团队",
+    "settings.serviceEntry.tag.china": "中国",
+    "settings.serviceEntry.tag.international": "国际",
     "settings.providerOnboarding.notConfigured": "待添加凭据",
     "settings.providerOnboarding.description": "供应商入口固定展示；添加真实凭据后才会参与模型同步与调用。",
     "settings.providerOnboarding.serviceEntries": "个可用服务入口",
@@ -3817,7 +3908,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerOnboarding.externalOpenAnyway": "仍要打开",
     "settings.providerOnboarding.externalOpenFailed": "打开供应商注册页面失败",
     "settings.providerPromotion.neutralDisclosure": "普通注册链接，不包含 Vulcan 收益归因。",
-    "settings.providerPromotion.referralDisclosure": "推广链接；注册可能为 Vulcan 带来收益，但不会影响模型排序或调用路由。",
+    "settings.providerPromotion.referralDisclosure": "通过邀请链接注册可能会为开发者带来收益，用于支持 Vulcan 持续开发；不会影响模型排序或调用路由。",
     "settings.providerPromotion.sponsoredDisclosure": "赞助合作入口；合作关系不会影响模型排序或调用路由。",
     "settings.modelList": "模型列表",
     "settings.providerRetry": "请求重试",
@@ -3873,14 +3964,14 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.gitCommit.summaryExtraPromptPlaceholder": "例如：提交信息必须使用中文；首行不超过 50 字；正文按要点分行。",
     "settings.gitCommit.summaryExtraPromptHelp": "该内容会追加到固定英文基础提示词之后，用于表达你的提交信息习惯。",
     "settings.modelOverrides.title": "模型附加条件",
-    "settings.modelOverrides.description": "仅收窄当前供应商、模型与协议的运行参数，不改变账号选择。",
+    "settings.modelOverrides.description": "调整当前供应商、模型与协议的运行参数，不改变账号选择。",
     "settings.modelOverrides.limits": "Token 限制",
-    "settings.modelOverrides.limitsDescription": "留空时使用供应商声明的上限；只能向下收窄。",
+    "settings.modelOverrides.limitsDescription": "供应商已声明上限时只能向下收窄；未声明时允许手动设定，留空则使用供应商默认行为。",
     "settings.modelOverrides.contextLimit": "上下文限制",
     "settings.modelOverrides.outputLimit": "输出 Token 限制",
     "settings.modelOverrides.leaveBlank": "留空使用供应商默认值",
     "settings.modelOverrides.providerMaximum": "供应商上限",
-    "settings.modelOverrides.providerNotDeclared": "供应商未声明，无法覆盖",
+    "settings.modelOverrides.providerNotDeclared": "供应商未声明上限，可手动设置覆盖值。",
     "settings.modelOverrides.cache": "提示词缓存",
     "settings.modelOverrides.cacheDescription": "选择供应商默认行为，或在协议支持时由 Vulcan 显式管理。",
     "settings.modelOverrides.cacheMode": "缓存策略",
@@ -3903,7 +3994,30 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.models.memoryOnly": "仅保存在内存；启动和手动同步后更新",
     "settings.models.emptyCatalog": "当前没有已同步的模型。请先在“模型供应商”中添加账号并同步。",
     "settings.models.availableAccounts": "{model} · {count} 个可用账号",
+    "settings.models.availableCredentials": "{count} 个可用凭据",
+    "settings.models.status": "状态",
     "settings.models.additionalConditions": "{protocol} · 附加条件",
+    "settings.models.collapseProviders": "收起为胶囊",
+    "settings.models.expandProviders": "展开供应商分类",
+    "settings.models.searchLabel": "搜索模型",
+    "settings.models.searchPlaceholder": "搜索模型名称或 ID",
+    "settings.models.statusFilter": "按启用状态筛选模型",
+    "settings.models.filterAll": "全部状态",
+    "settings.models.filterEnabled": "仅已启用",
+    "settings.models.filterDisabled": "仅已关闭",
+    "settings.models.enableAll": "全部启用",
+    "settings.models.disableAll": "全部禁用",
+    "settings.models.filteredSummary": "显示 {visible} / {total} 个模型",
+    "settings.models.emptyFilter": "当前筛选条件下没有模型。",
+    "settings.models.inputModalities": "输入",
+    "settings.models.outputModalities": "输出",
+    "settings.models.modality.text": "文本",
+    "settings.models.modality.image": "图片",
+    "settings.models.modality.audio": "音频",
+    "settings.models.modality.video": "视频",
+    "settings.models.modality.file": "文件",
+    "settings.models.modality.embedding": "向量",
+    "settings.models.modality.rerank": "重排",
     "settings.inference.title": "内部推理",
     "settings.inference.subtitle": "为 VMM 等内部消费者选择精确模型、协议和凭据，不跟随当前会话模型。",
     "settings.inference.vmmReasoningNotice": "为保证记忆处理效率，VMM 的全部 LLM 请求都会强制关闭思考；模型列表仅显示明确支持关闭思考的模型。",
@@ -4781,9 +4895,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.accountCard.provider": "Provider",
     "composer.accountCard.serviceEntry": "Service entry",
     "composer.accountCard.credentialType": "Credential type",
+    "composer.accountCard.protocolType": "Protocol type",
     "composer.accountCard.loading": "Loading account information...",
     "composer.accountCard.metadataUnavailable": "Account information is unavailable",
     "composer.accountCard.plan": "Plan",
+    "composer.accountCard.accountType": "Account type",
+    "composer.accountCard.nonPlan": "Non-plan",
     "composer.accountCard.balance": "Balance",
     "composer.accountCard.usageUnsupported": "Usage lookup is unsupported",
     "composer.accountCard.managementKeyRequired": "Add an optional management key to query balance",
@@ -5441,7 +5558,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.identity.addUser": "Add user",
     "memory.identity.addProject": "Add project",
     "memory.identity.userName": "User name",
-    "memory.identity.projectName": "Project name",
+    "memory.identity.teamName": "Team",
+    "memory.identity.spaceName": "Space",
+    "memory.identity.projectName": "Project",
+    "memory.identity.projectPathStructure": "VMM projects use a three-level Team / Space / Project path. Each level is an independent memory scope.",
+    "memory.identity.projectPathPreview": "Full path",
+    "memory.identity.projectPlaceholder": "For example: vulcan-code",
     "memory.identity.create": "Create",
     "memory.identity.migrate": "Migrate",
     "memory.identity.delete": "Delete",
@@ -5923,6 +6045,32 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerCategory.cloudMaaS": "Cloud service",
     "settings.providerCategory.relay": "Relay",
     "settings.providerCategory.unclassified": "Unclassified",
+    "settings.providerDescription.default": "This provider exposes registered model or AI capability endpoints.",
+    "settings.providerDescription.minimax": "Official MiniMax models, API platform, and Token Plan services.",
+    "settings.providerDescription.kimi": "Moonshot AI platform and Kimi Coding Plan services.",
+    "settings.providerDescription.deepseek": "Official DeepSeek model API and account services.",
+    "settings.providerDescription.alibaba": "Alibaba Cloud Model Studio, Coding Plan, and Token Plan services.",
+    "settings.providerDescription.openrouter": "A unified model routing platform spanning multiple models and upstream endpoints.",
+    "settings.providerDescription.apikeyfun": "A third-party model relay supporting multiple compatible protocols.",
+    "settings.providerDescription.claudeapi": "A third-party model relay providing Anthropic-compatible access.",
+    "settings.providerDescription.qiniu": "Model inference and compatible protocol services from Qiniu Cloud.",
+    "settings.providerDescription.fennoai": "A third-party model relay supporting multiple compatible protocols.",
+    "settings.providerDescription.code0": "A third-party model relay supporting OpenAI- and Anthropic-compatible protocols.",
+    "settings.providerDescription.tavily": "Web search and content extraction services designed for AI applications.",
+    "settings.providerDescription.openai": "Official OpenAI models and Codex account services.",
+    "settings.providerDescription.anthropic": "Official Anthropic Claude models and Claude Code account services.",
+    "settings.providerDescription.google": "Official Google Gemini API and Code Assist services.",
+    "settings.providerSummary.serviceEntries": "{count} endpoints",
+    "settings.providerSummary.protocols": "{count} supported protocols",
+    "settings.providerSummary.serviceEntriesTitle": "Endpoints",
+    "settings.providerSummary.protocolsTitle": "Supported protocols",
+    "settings.serviceEntry.title.codingPlan": "Coding Plan",
+    "settings.serviceEntry.title.tokenPlan": "Token Plan",
+    "settings.serviceEntry.title.modelStudio": "Model Studio",
+    "settings.serviceEntry.tag.personal": "Personal",
+    "settings.serviceEntry.tag.team": "Team",
+    "settings.serviceEntry.tag.china": "China",
+    "settings.serviceEntry.tag.international": "International",
     "settings.providerOnboarding.notConfigured": "Credential required",
     "settings.providerOnboarding.description": "This provider stays visible; it joins model sync and execution only after a real credential is added.",
     "settings.providerOnboarding.serviceEntries": "available service entries",
@@ -5937,7 +6085,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerOnboarding.externalOpenAnyway": "Open anyway",
     "settings.providerOnboarding.externalOpenFailed": "Failed to open provider signup page",
     "settings.providerPromotion.neutralDisclosure": "Neutral signup link with no Vulcan revenue attribution.",
-    "settings.providerPromotion.referralDisclosure": "Referral link; signup may benefit Vulcan but never changes model ranking or routing.",
+    "settings.providerPromotion.referralDisclosure": "Registering through an invitation link may support the developers and help sustain Vulcan development; it does not affect model ranking or request routing.",
     "settings.providerPromotion.sponsoredDisclosure": "Sponsored entry; the relationship never changes model ranking or routing.",
     "settings.modelList": "Model list",
     "settings.providerRetry": "Request retry",
@@ -5993,14 +6141,14 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.gitCommit.summaryExtraPromptPlaceholder": "Example: write the commit message in Chinese; keep the title under 50 characters; split the body into bullet lines.",
     "settings.gitCommit.summaryExtraPromptHelp": "This text is appended after the fixed English base prompt to express your commit-message preferences.",
     "settings.modelOverrides.title": "Model overrides",
-    "settings.modelOverrides.description": "Narrow runtime parameters for this provider, model, and protocol without changing account selection.",
+    "settings.modelOverrides.description": "Adjust runtime parameters for this provider, model, and protocol without changing account selection.",
     "settings.modelOverrides.limits": "Token limits",
-    "settings.modelOverrides.limitsDescription": "Leave blank to use the provider limit. Overrides may only narrow it.",
+    "settings.modelOverrides.limitsDescription": "Declared provider limits may only be narrowed. When no limit is declared, you may set one manually or leave it blank for provider defaults.",
     "settings.modelOverrides.contextLimit": "Context limit",
     "settings.modelOverrides.outputLimit": "Output token limit",
     "settings.modelOverrides.leaveBlank": "Leave blank to use the provider default",
     "settings.modelOverrides.providerMaximum": "Provider maximum",
-    "settings.modelOverrides.providerNotDeclared": "Not declared by the provider; cannot be overridden",
+    "settings.modelOverrides.providerNotDeclared": "No provider limit is declared; you may set an override manually.",
     "settings.modelOverrides.cache": "Prompt cache",
     "settings.modelOverrides.cacheDescription": "Use the provider behavior, or let Vulcan manage caching when the protocol supports it.",
     "settings.modelOverrides.cacheMode": "Cache policy",
@@ -6023,7 +6171,30 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.models.memoryOnly": "Memory only; updated at startup and after manual synchronization",
     "settings.models.emptyCatalog": "No synchronized models are available. Add an account under Model Providers and synchronize it first.",
     "settings.models.availableAccounts": "{model} · {count} available accounts",
+    "settings.models.availableCredentials": "{count} available credentials",
+    "settings.models.status": "Status",
     "settings.models.additionalConditions": "{protocol} · Additional conditions",
+    "settings.models.collapseProviders": "Collapse to pill",
+    "settings.models.expandProviders": "Expand provider categories",
+    "settings.models.searchLabel": "Search models",
+    "settings.models.searchPlaceholder": "Search model name or ID",
+    "settings.models.statusFilter": "Filter models by enabled state",
+    "settings.models.filterAll": "All states",
+    "settings.models.filterEnabled": "Enabled only",
+    "settings.models.filterDisabled": "Disabled only",
+    "settings.models.enableAll": "Enable all",
+    "settings.models.disableAll": "Disable all",
+    "settings.models.filteredSummary": "Showing {visible} of {total} models",
+    "settings.models.emptyFilter": "No models match the current filters.",
+    "settings.models.inputModalities": "Input",
+    "settings.models.outputModalities": "Output",
+    "settings.models.modality.text": "Text",
+    "settings.models.modality.image": "Image",
+    "settings.models.modality.audio": "Audio",
+    "settings.models.modality.video": "Video",
+    "settings.models.modality.file": "File",
+    "settings.models.modality.embedding": "Embedding",
+    "settings.models.modality.rerank": "Rerank",
     "settings.inference.title": "Internal inference",
     "settings.inference.subtitle": "Select exact models, protocols, and credentials for VMM and other internal consumers independently from the active conversation model.",
     "settings.inference.vmmReasoningNotice": "To keep memory processing efficient, every VMM LLM request forces reasoning off; the model list shows only models that explicitly support disabled reasoning.",

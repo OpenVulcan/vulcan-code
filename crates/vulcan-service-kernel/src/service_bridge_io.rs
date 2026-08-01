@@ -73,7 +73,18 @@ fn external_url_is_allowed(url: &str) -> bool {
     };
     // allowed_host limits shell navigation to exact source-defined HTTPS domains.
     // allowed_host 将 Shell 导航限制为源码明确声明的精确 HTTPS 域名。
-    let allowed_host = matches!(parsed.host_str(), Some("github.com" | "context7.com"));
+    let allowed_host = matches!(
+        parsed.host_str(),
+        Some(
+            "github.com"
+                | "context7.com"
+                | "apikey.fun"
+                | "console.apito.ai"
+                | "s.qiniu.com"
+                | "api.fenno.ai"
+                | "console.code0.ai"
+        )
+    );
     external_url_is_safe(url) && allowed_host
 }
 
@@ -788,6 +799,21 @@ mod tests {
         ));
     }
 
+    /// Verifies disclosed provider referral URLs use the exact HTTPS domain allowlist.
+    /// 验证已披露的供应商邀请链接使用精确 HTTPS 域名白名单。
+    #[test]
+    fn external_url_allowlist_accepts_provider_referral_https_urls() {
+        for url in [
+            "https://apikey.fun/register?aff=LY4DT3DCTM9N",
+            "https://console.apito.ai/register?aff=8jvf",
+            "https://s.qiniu.com/reuYBn",
+            "https://api.fenno.ai/s/v59N",
+            "https://console.code0.ai/register?aff=il6p",
+        ] {
+            assert!(external_url_is_allowed(url), "{url}");
+        }
+    }
+
     /// Verifies non-allowlisted or unsafe URLs remain blocked.
     /// 验证非白名单或不安全链接仍会被阻止。
     #[test]
@@ -805,6 +831,11 @@ mod tests {
         assert!(!external_url_is_allowed("https://docs.context7.com"));
         assert!(!external_url_is_allowed(
             "https://user:token@context7.com/dashboard"
+        ));
+        assert!(!external_url_is_allowed("http://s.qiniu.com/reuYBn"));
+        assert!(!external_url_is_allowed("https://evil.s.qiniu.com/reuYBn"));
+        assert!(!external_url_is_allowed(
+            "https://user:token@s.qiniu.com/reuYBn"
         ));
         assert!(!external_url_is_allowed("not a url"));
     }

@@ -322,24 +322,47 @@ pub fn apikeyfun_descriptor() -> ProviderDescriptor {
         kind: ProviderKind::System,
         category: ProviderCategory::Relay,
         credential_directory_visibility: CredentialDirectoryVisibility::PinnedOnboarding,
-        promotion: Some(neutral_promotion("https://apikey.fun/register")),
-        service_entries: vec![service_entry(ServiceEntrySpec {
-            id: "public-api",
-            request_projector: RequestProjectorKind::Direct,
-            display_name: "APIKEY.FUN Gateway",
-            base_url: "https://api.apikey.fun/v1",
-            credential_profiles: vec![token_profile(
-                "api-key",
-                "API Key",
-                CredentialBillingKind::ProviderManaged,
-                AccountUsageQueryKind::Unsupported,
-                None,
-            )],
-            authentication: AuthenticationProjection::BearerAuthorization,
-            request_headers: [],
-            model_discovery: ModelDiscoveryKind::OpenAi,
-            protocol_routes: [protocol_route(OPENAI_CHAT_PROFILE_ID, "/chat/completions")],
-        })],
+        promotion: Some(referral_promotion(
+            "https://apikey.fun/register",
+            "https://apikey.fun/register?aff=LY4DT3DCTM9N",
+            "LY4DT3DCTM9N",
+        )),
+        service_entries: vec![
+            service_entry(ServiceEntrySpec {
+                id: "public-api",
+                request_projector: RequestProjectorKind::Direct,
+                display_name: "Default API",
+                base_url: "https://api.apikey.fun/v1",
+                credential_profiles: vec![token_profile(
+                    "api-key",
+                    "API Key",
+                    CredentialBillingKind::ProviderManaged,
+                    AccountUsageQueryKind::Unsupported,
+                    None,
+                )],
+                authentication: AuthenticationProjection::BearerAuthorization,
+                request_headers: [],
+                model_discovery: ModelDiscoveryKind::OpenAi,
+                protocol_routes: [protocol_route(OPENAI_CHAT_PROFILE_ID, "/chat/completions")],
+            }),
+            service_entry(ServiceEntrySpec {
+                id: "slb-api",
+                request_projector: RequestProjectorKind::Direct,
+                display_name: "SLB API (Image Generation Disabled)",
+                base_url: "https://slb.apikey.fun/v1",
+                credential_profiles: vec![token_profile(
+                    "api-key",
+                    "API Key",
+                    CredentialBillingKind::ProviderManaged,
+                    AccountUsageQueryKind::Unsupported,
+                    None,
+                )],
+                authentication: AuthenticationProjection::BearerAuthorization,
+                request_headers: [],
+                model_discovery: ModelDiscoveryKind::OpenAi,
+                protocol_routes: [protocol_route(OPENAI_CHAT_PROFILE_ID, "/chat/completions")],
+            }),
+        ],
     }
 }
 
@@ -357,7 +380,11 @@ pub fn claudeapi_descriptor() -> ProviderDescriptor {
         kind: ProviderKind::System,
         category: ProviderCategory::Relay,
         credential_directory_visibility: CredentialDirectoryVisibility::PinnedOnboarding,
-        promotion: Some(neutral_promotion("https://console.apito.ai")),
+        promotion: Some(referral_promotion(
+            "https://console.apito.ai/register",
+            "https://console.apito.ai/register?aff=8jvf",
+            "8jvf",
+        )),
         service_entries: vec![service_entry(ServiceEntrySpec {
             id: "gateway",
             request_projector: RequestProjectorKind::Direct,
@@ -399,7 +426,11 @@ pub fn qiniu_descriptor() -> ProviderDescriptor {
         kind: ProviderKind::System,
         category: ProviderCategory::CloudMaaS,
         credential_directory_visibility: CredentialDirectoryVisibility::PinnedOnboarding,
-        promotion: Some(neutral_promotion("https://portal.qiniu.com/signup")),
+        promotion: Some(referral_promotion(
+            "https://portal.qiniu.com/signup",
+            "https://s.qiniu.com/reuYBn",
+            "reuYBn",
+        )),
         service_entries: vec![service_entry(ServiceEntrySpec {
             id: "token-api",
             request_projector: RequestProjectorKind::Direct,
@@ -444,7 +475,11 @@ pub fn fennoai_descriptor() -> ProviderDescriptor {
         kind: ProviderKind::System,
         category: ProviderCategory::Relay,
         credential_directory_visibility: CredentialDirectoryVisibility::PinnedOnboarding,
-        promotion: Some(neutral_promotion("https://api.fenno.ai/register")),
+        promotion: Some(referral_promotion(
+            "https://api.fenno.ai/register",
+            "https://api.fenno.ai/s/v59N",
+            "v59N",
+        )),
         service_entries: vec![service_entry(ServiceEntrySpec {
             id: "gateway",
             request_projector: RequestProjectorKind::Direct,
@@ -489,7 +524,11 @@ pub fn code0_descriptor() -> ProviderDescriptor {
         kind: ProviderKind::System,
         category: ProviderCategory::Relay,
         credential_directory_visibility: CredentialDirectoryVisibility::PinnedOnboarding,
-        promotion: Some(neutral_promotion("https://code0.ai")),
+        promotion: Some(referral_promotion(
+            "https://console.code0.ai/register",
+            "https://console.code0.ai/register?aff=il6p",
+            "il6p",
+        )),
         service_entries: vec![service_entry(ServiceEntrySpec {
             id: "hong-kong",
             request_projector: RequestProjectorKind::Direct,
@@ -1063,25 +1102,30 @@ fn all_usage_scopes() -> std::collections::BTreeSet<InferenceUsageScope> {
     .collect()
 }
 
-/// Creates neutral registration metadata without claiming a Vulcan referral relationship.
-/// 创建不宣称 Vulcan 推广关系的普通注册元数据。
+/// Creates disclosed referral registration metadata for one built-in provider.
+/// 为一个内置供应商创建已披露的邀请注册元数据。
 ///
 /// # Parameters
 /// 参数
-/// `signup_url` is the exact public HTTPS registration or product entry.
-/// `signup_url` 是精确的公开 HTTPS 注册或产品入口。
+/// `signup_url` is the neutral registration page, `referral_url` is the invitation link, and
+/// `campaign_id` is the public attribution identifier embedded by the provider.
+/// `signup_url` 是普通注册页，`referral_url` 是邀请链接，`campaign_id` 是供应商嵌入的公开归因标识。
 ///
 /// # Returns
 /// 返回值
-/// Registration metadata that can receive a Vulcan-owned referral URL later.
-/// 返回后续可补充 Vulcan 自有推广链接的注册元数据。
-fn neutral_promotion(signup_url: &str) -> ProviderPromotion {
+/// Promotion metadata whose relationship and disclosure are explicitly marked as referral-based.
+/// 返回将合作关系与披露明确标记为邀请推广的元数据。
+fn referral_promotion(
+    signup_url: &str,
+    referral_url: &str,
+    campaign_id: &str,
+) -> ProviderPromotion {
     ProviderPromotion {
         signup_url: signup_url.to_string(),
-        referral_url: None,
-        campaign_id: None,
-        partnership_kind: ProviderPartnershipKind::None,
-        disclosure_key: ProviderPromotionDisclosureKey::NeutralRegistration,
+        referral_url: Some(referral_url.to_string()),
+        campaign_id: Some(campaign_id.to_string()),
+        partnership_kind: ProviderPartnershipKind::Referral,
+        disclosure_key: ProviderPromotionDisclosureKey::ReferralRevenue,
     }
 }
 
