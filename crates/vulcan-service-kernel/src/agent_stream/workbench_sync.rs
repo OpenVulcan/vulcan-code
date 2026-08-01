@@ -159,7 +159,7 @@ pub(crate) fn apply_execution_preparation(
                 runtime_state.active_model_id = Some(preparation.model_blueprint.model_id.clone());
                 runtime_state.active_reasoning_effort =
                     Some(preparation.model_blueprint.reasoning.requested_effort);
-                runtime_state.active_temperature = preparation.temperature;
+                runtime_state.active_temperature = None;
                 runtime_state.live_context_budget_fingerprint = preparation
                     .context_budget
                     .as_ref()

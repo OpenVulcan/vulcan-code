@@ -50,12 +50,44 @@ export interface PublicAiServiceEntry {
   protocol_routes: PublicAiProtocolRoute[];
 }
 
+// PublicAiProviderCategory identifies the provider's user-facing business relationship.
+// PublicAiProviderCategory 标识供应商面向用户的业务关系类别。
+export type PublicAiProviderCategory = "unclassified" | "official" | "cloud_maas" | "relay";
+
+// PublicAiCredentialDirectoryVisibility controls zero-credential onboarding visibility.
+// PublicAiCredentialDirectoryVisibility 控制零凭据引导入口的可见性。
+export type PublicAiCredentialDirectoryVisibility = "configured_only" | "pinned_onboarding";
+
+// PublicAiProviderPartnershipKind identifies the disclosed commercial relationship.
+// PublicAiProviderPartnershipKind 标识已披露的商业合作关系。
+export type PublicAiProviderPartnershipKind = "none" | "referral" | "sponsored";
+
+// PublicAiProviderPromotionDisclosureKey is the closed set of localized disclosure messages.
+// PublicAiProviderPromotionDisclosureKey 是本地化披露文案的封闭集合。
+export type PublicAiProviderPromotionDisclosureKey =
+  | "settings.providerPromotion.neutralDisclosure"
+  | "settings.providerPromotion.referralDisclosure"
+  | "settings.providerPromotion.sponsoredDisclosure";
+
+// PublicAiProviderPromotion describes public registration and referral metadata.
+// PublicAiProviderPromotion 描述公开注册与推广元数据。
+export interface PublicAiProviderPromotion {
+  signup_url: string;
+  referral_url?: string;
+  campaign_id?: string;
+  partnership_kind: PublicAiProviderPartnershipKind;
+  disclosure_key: PublicAiProviderPromotionDisclosureKey;
+}
+
 // PublicAiProviderDescriptor describes one registered provider adapter.
 // PublicAiProviderDescriptor 描述一个已注册供应商适配器。
 export interface PublicAiProviderDescriptor {
   id: string;
   display_name: string;
   kind: "system" | "custom";
+  category: PublicAiProviderCategory;
+  credential_directory_visibility: PublicAiCredentialDirectoryVisibility;
+  promotion?: PublicAiProviderPromotion;
   service_entries: PublicAiServiceEntry[];
 }
 
@@ -88,6 +120,7 @@ export interface PublicAiConnection {
   billing_kind: CredentialBillingKind;
   usage_capability: "unsupported" | "mini_max_token_plan" | "open_router_credits" | "tavily_credits";
   has_management_key: boolean;
+  service_origin_override?: string;
   credential_mode: CredentialMode;
   credential_id: string;
   display_name: string;
@@ -356,7 +389,6 @@ export interface PublicAiProviderToolTargetSnapshot {
   connectionId: string;
   connectionDisplayName: string;
   target: PublicAiProviderToolTarget;
-  enabled: boolean;
 }
 
 // PublicAiProviderToolTargetSelection stores the one selected target for one capability.
@@ -364,6 +396,24 @@ export interface PublicAiProviderToolTargetSnapshot {
 export interface PublicAiProviderToolTargetSelection {
   connection_id: string;
   target_id: string;
+}
+
+// PublicAiSessionProviderToolConflict describes one retained choice that requires confirmation.
+// PublicAiSessionProviderToolConflict 描述一项需要确认的已保留选择。
+export interface PublicAiSessionProviderToolConflict {
+  capability: PublicAiProviderToolCapabilityKind;
+  kind: "missing_selection" | "target_unavailable";
+  message: string;
+}
+
+// PublicAiSessionProviderToolSettings owns one complete session capability snapshot.
+// PublicAiSessionProviderToolSettings 持有一份完整会话能力快照。
+export interface PublicAiSessionProviderToolSettings {
+  enabledCapabilities: PublicAiProviderToolCapabilityKind[];
+  selections: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
+  >;
+  conflicts: PublicAiSessionProviderToolConflict[];
 }
 
 // PublicAiProviderToolSearchResult carries one normalized ranked search item.
@@ -473,6 +523,7 @@ export interface PublicAiSettingsSnapshot {
   providerToolSelections: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
   >;
+  providerToolEnabledCapabilities: PublicAiProviderToolCapabilityKind[];
   internalInferenceCandidates: PublicAiInternalInferenceCandidate[];
   inferenceProfiles: Record<string, PublicAiInferenceProfile>;
   inferenceRouteDiagnostics: PublicAiInferenceRouteDiagnostic[];
@@ -545,6 +596,7 @@ export interface PublicAiConnectionAddRequest {
   selectedProtocol: string;
   secret: string;
   managementKey?: string;
+  serviceOriginOverride?: string;
 }
 
 // PublicAiConnectionUpdateRequest describes one credential edit.
@@ -559,6 +611,7 @@ export interface PublicAiConnectionUpdateRequest {
   secret?: string;
   managementKey?: string;
   removeManagementKey?: boolean;
+  serviceOriginOverride?: string;
 }
 
 // PublicAiOAuthClientConfiguration carries user-owned client settings for declared flows.

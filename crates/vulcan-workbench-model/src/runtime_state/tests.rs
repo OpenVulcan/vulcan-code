@@ -544,3 +544,13 @@ fn prompt_source_semantics_separate_followup_and_interrupt_turns() {
     assert!(PendingSessionPromptSource::UserInterrupt.appends_visible_user_prompt_record());
     assert!(PendingSessionPromptSource::UserInterrupt.folds_into_active_turn_process());
 }
+
+/// Verifies internal pending prompts preserve provider reasoning defaults unless explicitly set.
+/// 验证内部待发送提示词在未显式设置时保留供应商推理默认值。
+#[test]
+fn pending_prompt_runtime_defaults_do_not_force_reasoning_effort() {
+    assert_eq!(
+        PendingPromptRuntimeOptions::default().reasoning_effort,
+        vulcan_provider_config::config::ReasoningEffortLevel::Off
+    );
+}

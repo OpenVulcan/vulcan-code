@@ -477,7 +477,7 @@ pub(crate) fn build_webui_context_compaction_job_request(
         provider_configuration: agent_runtime.provider_configuration.clone(),
         model_label: None,
         reasoning_effort: active_reasoning_selection_effort(&agent_runtime.provider_configuration)
-            .unwrap_or(ReasoningEffortLevel::Medium),
+            .unwrap_or(ReasoningEffortLevel::Off),
         agent_profile_catalog: agent_runtime.agent_profile_catalog.clone(),
         luaskills_runtime: agent_runtime.luaskills_runtime.clone(),
         mcp_runtime_access,

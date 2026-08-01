@@ -232,6 +232,9 @@ export function ComposerPanel(props: {
     draftSlotKey,
     props.conversationId,
   );
+  // providerToolSettingsBlocked mirrors explicit session conflicts into the send boundary.
+  // providerToolSettingsBlocked 将显式会话冲突映射到发送边界。
+  const [providerToolSettingsBlocked, setProviderToolSettingsBlocked] = React.useState(false);
 
   // visibleSessionGoal hides completed goals from the composer-level control strip.
   // visibleSessionGoal 从输入区控制条中隐藏已完成目标。
@@ -317,7 +320,7 @@ export function ComposerPanel(props: {
   // 发送控制器管理重复门控、停止路由、草稿消费与失败恢复。
   const {
     canAutoSubmitCreatedGoal,
-    sendDraft: handleComposerSend,
+    sendDraft,
     stopConversation: handleComposerStop,
     submitCreatedGoal,
   } = useComposerSendController({
@@ -344,6 +347,12 @@ export function ComposerPanel(props: {
     onStopConversationRun: props.onStopConversationRun,
     onTrace: props.onTrace,
   });
+  // handleComposerSend blocks user submissions until invalid capability routes are confirmed.
+  // handleComposerSend 在无效能力路由重新确认前阻止用户提交。
+  const handleComposerSend = React.useCallback(async () => {
+    if (providerToolSettingsBlocked && !props.isConversationRunning) return;
+    await sendDraft();
+  }, [props.isConversationRunning, providerToolSettingsBlocked, sendDraft]);
 
   // handlePendingPromptEdit restores one queued prompt into the composer draft.
   // handlePendingPromptEdit 将单条排队提示词恢复到输入区草稿。
@@ -565,8 +574,9 @@ export function ComposerPanel(props: {
             <ComposerAiCapabilityControl
               ariaLabel={t("composer.aria.capability")}
               conversationId={props.conversationId}
-              draftSelections={draftSessionSettings.providerToolSelections}
-              onDraftSelectionsChange={draftSessionSettings.setProviderToolSelections}
+              draftSettings={draftSessionSettings.providerToolSettings}
+              onConflictChange={setProviderToolSettingsBlocked}
+              onDraftSettingsChange={draftSessionSettings.setProviderToolSettings}
             />
             {activeProviderModelSummary?.model.supportsSecondaryRoutes && secondaryRouteProviderId ? (
               <ModelSecondaryRouteControl
@@ -583,6 +593,7 @@ export function ComposerPanel(props: {
             contextUsage={props.contextUsage}
             draftInput={draftInput}
             isConversationRunning={props.isConversationRunning}
+            sendBlocked={providerToolSettingsBlocked}
             onReasoningEffortChange={(value) => void handleReasoningEffortChange(value)}
             onSend={() => void handleComposerSend()}
             onStop={() => void handleComposerStop()}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
+import { renderToStaticMarkup } from "react-dom/server"
 
-import { resolveProviderIconKey } from "@/components/features/settings/provider-icon"
+import { ProviderIcon, resolveProviderIconKey } from "@/components/features/settings/provider-icon"
 
 // Provider artwork resolution preserves family, product, theme, and fallback behavior.
 // 供应商图标解析保留系列、产品、主题与回退行为。
@@ -13,6 +14,11 @@ describe("provider icon library", () => {
     expect(resolveProviderIconKey({ providerId: "openai" })).toBe("compatibility")
     expect(resolveProviderIconKey({ providerId: "anthropic" })).toBe("claude")
     expect(resolveProviderIconKey({ providerId: "google" })).toBe("gemini")
+    expect(resolveProviderIconKey({ providerId: "apikeyfun" })).toBe("apikeyfun")
+    expect(resolveProviderIconKey({ providerId: "claudeapi" })).toBe("claudeapi")
+    expect(resolveProviderIconKey({ providerId: "qiniu" })).toBe("qiniu")
+    expect(resolveProviderIconKey({ providerId: "fennoai" })).toBe("fennoai")
+    expect(resolveProviderIconKey({ providerId: "code0" })).toBe("code0")
   })
 
   // Product artwork overrides its provider-family default.
@@ -28,5 +34,19 @@ describe("provider icon library", () => {
   // 未知自定义供应商使用已审核的兼容图标。
   it("falls back to compatibility artwork", () => {
     expect(resolveProviderIconKey({ providerId: "custom:example" })).toBe("compatibility")
+  })
+
+  // Relay artwork owns one visible and accessible marker independent of the provider name.
+  // 中转站图标拥有一个独立于供应商名称的可见且可访问标识。
+  it("renders the independent relay marker only for relay providers", () => {
+    const relayMarkup = renderToStaticMarkup(<ProviderIcon category="relay" providerId="claudeapi" />)
+    const cloudMarkup = renderToStaticMarkup(<ProviderIcon category="cloud_maas" providerId="qiniu" />)
+
+    expect(relayMarkup).toContain('data-provider-category="relay"')
+    expect(relayMarkup).toContain('aria-label="Relay provider / 中转站"')
+    expect(relayMarkup).toContain('role="img"')
+    expect(relayMarkup).toContain(">R</span>")
+    expect(cloudMarkup).not.toContain("Relay provider / 中转站")
+    expect(cloudMarkup).not.toContain(">R</span>")
   })
 })

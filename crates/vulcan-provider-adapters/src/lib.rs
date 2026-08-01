@@ -4,6 +4,7 @@
 mod alibaba_provider_tools;
 pub mod client;
 pub mod configuration;
+mod connection_endpoint;
 pub mod connection_graph;
 pub mod credentials;
 pub mod custom_provider;
@@ -22,6 +23,7 @@ pub mod tool_catalog;
 
 pub use client::*;
 pub use configuration::*;
+pub use connection_endpoint::normalize_connection_service_origin_override;
 pub use connection_graph::*;
 pub use credentials::*;
 pub use custom_provider::*;

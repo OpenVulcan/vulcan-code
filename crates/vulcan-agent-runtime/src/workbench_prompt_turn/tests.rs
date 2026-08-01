@@ -493,6 +493,7 @@ fn precheck_cannot_own_vmm_profile_state_or_system_block() {
 #[test]
 fn hidden_model_guidance_stays_out_of_visible_transcript() {
     let mut runtime_state = SessionRuntimeStateEntry::default();
+    runtime_state.active_temperature = Some(0.7);
     let mut hook_runtime = ConversationHookRuntime::new();
     let start = begin_shared_prompt_turn_with_runtime_state(
         &mut runtime_state,
@@ -552,6 +553,11 @@ fn hidden_model_guidance_stays_out_of_visible_transcript() {
         Some(expected_hook_turn_id.as_str())
     );
     assert!(continuation.request.prompt.contains("执行计划"));
+    assert!(continuation.request.temperature.is_none());
+    assert_eq!(
+        continuation.request.reasoning_effort,
+        vulcan_provider_config::config::ReasoningEffortLevel::Off
+    );
     assert!(
         continuation
             .request

@@ -142,6 +142,34 @@
   cursor: pointer;
 }
 
+.composer-capability-conflict-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid color-mix(in srgb, var(--destructive) 35%, var(--border));
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 7%, var(--background));
+  font-size: 12px;
+}
+
+.composer-capability-route-selectors {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 0.72fr);
+  align-content: start;
+  gap: 10px;
+}
+
+.composer-capability-route-selectors > label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
 .composer-capability-target-row:hover {
   background: var(--accent);
 }

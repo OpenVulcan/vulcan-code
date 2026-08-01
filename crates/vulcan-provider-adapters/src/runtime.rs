@@ -1459,6 +1459,8 @@ impl PublicAiRuntime {
                     record.route.selection.target_id
                 )
             })?;
+        let target =
+            crate::connection_endpoint::apply_connection_provider_tool_origin(&connection, target);
         if target.service_entry_id != entry.id
             || target.execution.adapter != record.route.adapter
             || !target
@@ -1551,6 +1553,8 @@ impl PublicAiRuntime {
                     selection.target_id
                 )
             })?;
+        let target =
+            crate::connection_endpoint::apply_connection_provider_tool_origin(&connection, target);
         if target.contract.capability != capability
             || target.service_entry_id != entry.id
             || !target
@@ -2496,6 +2500,7 @@ mod tests {
             display_name: id.to_string(),
             secret_reference: format!("secret-{id}"),
             management_secret_reference: None,
+            service_origin_override: None,
             verified_protocols: BTreeSet::from([OPENAI_CHAT_PROFILE_ID.to_string()]),
             selected_protocol: OPENAI_CHAT_PROFILE_ID.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),

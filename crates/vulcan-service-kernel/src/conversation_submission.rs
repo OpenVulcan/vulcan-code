@@ -41,9 +41,9 @@ use super::{
     start_reserved_webui_session_kernel_user_turn, start_webui_precheck_or_continue,
     start_webui_session_kernel_user_turn, store_workspace_snapshot_without_workbench_rebuild,
     sync_hydrated_session_dialogue_ready_marker, validate_composer_attachment_summary,
-    validate_provider_tool_selections, webui_session_allows_user_prompt_editing,
-    webui_session_kernel_has_active_turn, webui_shared_prompt_precheck_plan, webui_submit_trace,
-    webui_trace_if_slow, workbench_with_live_pending_question, workspace_path_for_session,
+    webui_session_allows_user_prompt_editing, webui_session_kernel_has_active_turn,
+    webui_shared_prompt_precheck_plan, webui_submit_trace, webui_trace_if_slow,
+    workbench_with_live_pending_question, workspace_path_for_session,
     workspace_user_prompt_message_allows_destructive_edit,
 };
 mod activation;
@@ -125,22 +125,34 @@ pub(super) struct SubmissionInitialGoal {
     token_budget: Option<i64>,
 }
 
-/// Freezes every draft-only session override required by the first provider turn.
-/// 固定首个 Provider 回合所需的全部草稿会话覆盖项。
+/// Freezes one complete provider tool snapshot for a new conversation.
+/// 固定新会话的一份完整供应商工具快照。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SubmissionProviderToolSettings {
+    /// Capabilities enabled only for the materialized conversation.
+    /// 仅为物化会话启用的能力。
+    enabled_capabilities:
+        std::collections::BTreeSet<vulcan_provider_adapters::ProviderToolCapabilityKind>,
+    /// Exact model and account retained independently from activation.
+    /// 与启用状态独立保留的精确模型与账号。
+    selections: BTreeMap<
+        vulcan_provider_adapters::ProviderToolCapabilityKind,
+        vulcan_provider_adapters::ProviderToolTargetSelection,
+    >,
+}
+
+/// Freezes every draft-only session setting required by the first provider turn.
+/// 固定首个 Provider 回合所需的全部草稿会话设置。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct SubmissionSessionSettings {
     /// Optional explicit VMM policy pair; absence preserves inherited defaults.
     /// 可选显式 VMM 策略对；缺省时保留继承默认值。
     vmm_policy: Option<SubmissionVmmPolicy>,
-    /// Optional complete provider-tool override; an empty map explicitly disables all capabilities.
-    /// 可选完整供应商工具覆盖；空映射表示显式关闭全部能力。
-    provider_tool_selections: Option<
-        BTreeMap<
-            vulcan_provider_adapters::ProviderToolCapabilityKind,
-            vulcan_provider_adapters::ProviderToolTargetSelection,
-        >,
-    >,
+    /// Optional complete provider-tool snapshot; absence materializes current system defaults.
+    /// 可选完整供应商工具快照；缺省时物化当前系统默认值。
+    provider_tool_settings: Option<SubmissionProviderToolSettings>,
     /// Optional knowledge selection; absence preserves project inheritance.
     /// 可选知识库选择；缺省时保留项目继承。
     knowledge_selection: Option<SubmissionKnowledgeSelection>,
@@ -171,10 +183,9 @@ async fn apply_submission_session_settings(
     execution_mode: Option<&str>,
     settings: Option<&SubmissionSessionSettings>,
 ) -> Result<(), String> {
-    let Some(settings) = settings else {
-        return Ok(());
-    };
-    if settings.initial_goal.is_some()
+    if settings
+        .and_then(|settings| settings.initial_goal.as_ref())
+        .is_some()
         && execution_mode.is_some_and(|mode| mode.eq_ignore_ascii_case("plan"))
     {
         return Err(String::from(
@@ -182,10 +193,23 @@ async fn apply_submission_session_settings(
         ));
     }
     let configuration = runtime.configuration_snapshot()?;
-    if let Some(selections) = settings.provider_tool_selections.as_ref() {
-        validate_provider_tool_selections(runtime, &configuration, selections)?;
-    }
-    let knowledge_selection = if let Some(selection) = settings.knowledge_selection.as_ref() {
+    let provider_tool_settings =
+        settings.and_then(|settings| settings.provider_tool_settings.as_ref());
+    let enabled_capabilities = provider_tool_settings
+        .map(|settings| &settings.enabled_capabilities)
+        .unwrap_or(&configuration.provider_tool_enabled_capabilities);
+    let provider_tool_selections = provider_tool_settings
+        .map(|settings| &settings.selections)
+        .unwrap_or(&configuration.provider_tool_selections);
+    crate::public_ai_settings::validate_provider_tool_session_settings(
+        runtime,
+        &configuration,
+        enabled_capabilities,
+        provider_tool_selections,
+    )?;
+    let knowledge_selection = if let Some(selection) =
+        settings.and_then(|settings| settings.knowledge_selection.as_ref())
+    {
         let mode = match selection.mode.as_str() {
             "inherit" => SessionKnowledgeLibrarySelectionMode::Inherit,
             "explicit" => SessionKnowledgeLibrarySelectionMode::Explicit,
@@ -228,31 +252,34 @@ async fn apply_submission_session_settings(
         .session_runtime_state
         .get_mut(&session_id)
         .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
-    if let Some(policy) = settings.vmm_policy.as_ref() {
+    if let Some(policy) = settings.and_then(|settings| settings.vmm_policy.as_ref()) {
         runtime_state.vmm.precheck_enabled = submission_vmm_policy_value(&policy.precheck_mode)?;
         runtime_state.vmm.memory_writeback_enabled =
             submission_vmm_policy_value(&policy.memory_writeback_mode)?;
     }
-    if let Some(selections) = settings.provider_tool_selections.as_ref() {
-        runtime_state.provider_tool_selections = selections
-            .iter()
-            .map(|(capability, selection)| {
-                (
-                    provider_tool_capability_key(*capability),
-                    SessionProviderToolTargetSelection {
-                        connection_id: selection.connection_id.clone(),
-                        target_id: selection.target_id.clone(),
-                    },
-                )
-            })
-            .collect();
-        runtime_state.provider_tool_selections_overridden = true;
-    }
+    runtime_state.provider_tool_selections = provider_tool_selections
+        .iter()
+        .map(|(capability, selection)| {
+            (
+                provider_tool_capability_key(*capability),
+                SessionProviderToolTargetSelection {
+                    connection_id: selection.connection_id.clone(),
+                    target_id: selection.target_id.clone(),
+                },
+            )
+        })
+        .collect();
+    runtime_state.provider_tool_enabled_capabilities = enabled_capabilities
+        .iter()
+        .map(|capability| provider_tool_capability_key(*capability))
+        .collect();
+    runtime_state.provider_tool_settings_initialized = true;
+    runtime_state.provider_tool_selections_overridden = false;
     if let Some(selection) = knowledge_selection {
         runtime_state.knowledge_library_selection = selection;
     }
     runtime_state.updated_at = updated_at;
-    if let Some(goal) = settings.initial_goal.as_ref() {
+    if let Some(goal) = settings.and_then(|settings| settings.initial_goal.as_ref()) {
         persist_initial_submission_goal(
             controller_runtime,
             session_id,
@@ -378,6 +405,7 @@ mod submission_model_selection_tests {
             display_name: String::from("OpenRouter account"),
             secret_reference: String::from("secret-openrouter-account"),
             management_secret_reference: None,
+            service_origin_override: None,
             verified_protocols: BTreeSet::from([String::from("openai-chat-completions.v1")]),
             selected_protocol: String::from("openai-chat-completions.v1"),
             prompt_cache_by_protocol: BTreeMap::new(),

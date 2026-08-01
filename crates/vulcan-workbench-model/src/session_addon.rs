@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use vulcan_provider_config::config::ReasoningEffortLevel;
 
 use crate::{
@@ -813,8 +813,16 @@ pub struct SessionRuntimeControls {
     /// 按语义能力索引的会话级供应商工具目标选择。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub provider_tool_selections: BTreeMap<String, SessionProviderToolTargetSelection>,
-    /// Whether the session explicitly overrides global provider tool selections.
-    /// 会话是否显式覆盖全局供应商工具选择。
+    /// Provider tool capabilities enabled only for this session.
+    /// 仅为当前会话启用的供应商工具能力。
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub provider_tool_enabled_capabilities: BTreeSet<String>,
+    /// Whether provider tool defaults have been materialized into this session.
+    /// 供应商工具默认值是否已经物化到当前会话。
+    #[serde(default)]
+    pub provider_tool_settings_initialized: bool,
+    /// Legacy marker used only to recognize earlier session snapshots.
+    /// 仅用于识别早期会话快照的旧标记。
     #[serde(default)]
     pub provider_tool_selections_overridden: bool,
 }
@@ -841,6 +849,10 @@ impl SessionRuntimeControls {
             active_reasoning_effort: runtime_state.active_reasoning_effort,
             active_temperature: runtime_state.active_temperature,
             provider_tool_selections: runtime_state.provider_tool_selections.clone(),
+            provider_tool_enabled_capabilities: runtime_state
+                .provider_tool_enabled_capabilities
+                .clone(),
+            provider_tool_settings_initialized: runtime_state.provider_tool_settings_initialized,
             provider_tool_selections_overridden: runtime_state.provider_tool_selections_overridden,
         };
         controls.has_any_value().then_some(controls)
@@ -861,6 +873,9 @@ impl SessionRuntimeControls {
         runtime_state.active_reasoning_effort = self.active_reasoning_effort;
         runtime_state.active_temperature = self.active_temperature;
         runtime_state.provider_tool_selections = self.provider_tool_selections.clone();
+        runtime_state.provider_tool_enabled_capabilities =
+            self.provider_tool_enabled_capabilities.clone();
+        runtime_state.provider_tool_settings_initialized = self.provider_tool_settings_initialized;
         runtime_state.provider_tool_selections_overridden =
             self.provider_tool_selections_overridden;
     }
@@ -880,6 +895,8 @@ impl SessionRuntimeControls {
             || self.active_reasoning_effort.is_some()
             || self.active_temperature.is_some()
             || !self.provider_tool_selections.is_empty()
+            || !self.provider_tool_enabled_capabilities.is_empty()
+            || self.provider_tool_settings_initialized
             || self.provider_tool_selections_overridden
     }
 }

@@ -413,21 +413,24 @@ fn project_anthropic_request_controls(
     body: &mut Map<String, Value>,
 ) -> Result<(), ProtocolConversionError> {
     let mut tool_choice = match &request.tool_choice {
-        ToolChoicePolicy::Auto => json!({ "type": "auto" }),
-        ToolChoicePolicy::Required => json!({ "type": "any" }),
-        ToolChoicePolicy::Disabled => json!({ "type": "none" }),
+        ToolChoicePolicy::Auto => None,
+        ToolChoicePolicy::Required => Some(json!({ "type": "any" })),
+        ToolChoicePolicy::Disabled => Some(json!({ "type": "none" })),
         ToolChoicePolicy::Specific { tool_name } => {
             require_anthropic_registered_tool(request, tool_name)?;
-            json!({ "type": "tool", "name": tool_name })
+            Some(json!({ "type": "tool", "name": tool_name }))
         }
     };
     match request.parallel_tool_calls {
         ParallelToolCallPolicy::ProviderDefault | ParallelToolCallPolicy::Allowed => {}
         ParallelToolCallPolicy::Disabled => {
-            tool_choice["disable_parallel_tool_use"] = Value::Bool(true);
+            tool_choice.get_or_insert_with(|| json!({ "type": "auto" }))["disable_parallel_tool_use"] =
+                Value::Bool(true);
         }
     }
-    body.insert(String::from("tool_choice"), tool_choice);
+    if let Some(tool_choice) = tool_choice {
+        body.insert(String::from("tool_choice"), tool_choice);
+    }
     if !request.stop_sequences.is_empty() {
         body.insert(
             String::from("stop_sequences"),
@@ -1333,6 +1336,7 @@ mod tests {
             .encode(&request(PromptCachePolicy::ProviderDefault))
             .expect("request should encode");
         assert!(encoded.body.get("cache_control").is_none());
+        assert!(encoded.body.get("tool_choice").is_none());
     }
 
     /// Verifies schema-free JSON-object requests fall back to text JSON instead of failing protocol conversion.

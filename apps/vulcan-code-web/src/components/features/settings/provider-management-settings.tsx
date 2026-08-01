@@ -27,6 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { useI18n } from "@/i18n"
 import {
   loadPublicAiSettings,
   removePublicAiCustomProvider,
@@ -206,9 +207,9 @@ function CustomProviderTable(props: {
                   <TableRow key={provider.id}>
                     <TableCell className="whitespace-normal py-3 align-top">
                       <div className="flex items-center gap-3">
-                        <ProviderIcon className="size-[26px]" providerId={provider.id} />
+                        <ProviderIcon category={provider.category} className="size-[26px]" providerId={provider.id} />
                         <div className="min-w-0">
-                          <div className="font-medium">{provider.display_name}</div>
+                          <span className="font-medium">{provider.display_name}</span>
                           <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
                             {provider.id}
                           </div>
@@ -282,6 +283,16 @@ function SystemProviderTable(props: {
   loading: boolean
   providers: PublicAiProviderDescriptor[]
 }) {
+  const { t } = useI18n()
+  // orderedProviders keeps normal built-ins first and promotional entries last.
+  // orderedProviders 将常规内置供应商排在前面，将推广入口排在最后。
+  const orderedProviders = React.useMemo(() => props.providers
+    .map((provider, index) => ({ provider, index }))
+    .sort((left, right) => (
+      Number(Boolean(left.provider.promotion)) - Number(Boolean(right.provider.promotion))
+      || left.index - right.index
+    ))
+    .map(({ provider }) => provider), [props.providers])
   return (
     <section className="space-y-3">
       <div className="flex items-center gap-2">
@@ -306,7 +317,7 @@ function SystemProviderTable(props: {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {props.providers.map((provider) => {
+              {orderedProviders.map((provider) => {
                 // credentialCount counts credentials explicitly bound to this provider.
                 // credentialCount 统计明确绑定到此供应商的凭据。
                 const credentialCount = props.connections.filter(
@@ -319,9 +330,9 @@ function SystemProviderTable(props: {
                   <TableRow key={provider.id}>
                     <TableCell className="whitespace-normal py-3 align-top">
                       <div className="flex items-center gap-3">
-                        <ProviderIcon className="size-[26px]" providerId={provider.id} />
+                        <ProviderIcon category={provider.category} className="size-[26px]" providerId={provider.id} />
                         <div className="min-w-0">
-                          <div className="font-medium">{provider.display_name}</div>
+                          <span className="font-medium">{provider.display_name}</span>
                           <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
                             {provider.id}
                           </div>
@@ -330,6 +341,9 @@ function SystemProviderTable(props: {
                     </TableCell>
                     <TableCell className="whitespace-normal py-3 align-top">
                       <div className="text-sm text-muted-foreground">
+                        {provider.category === "relay"
+                          ? `${t("settings.providerCategory.relay")} · `
+                          : ""}
                         {provider.service_entries.length} 个服务入口
                       </div>
                       <div className="mt-2 flex flex-wrap gap-1.5">

@@ -35,7 +35,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_test_public_ai_inference_route",
     "service_save_public_ai_provider_tool_selection",
     "service_test_public_ai_provider_tool",
-    "service_save_public_ai_provider_tool_target_enabled",
+    "service_save_public_ai_provider_tool_capability_enabled",
     "service_public_ai_session_provider_tool_selections",
     "service_save_public_ai_session_provider_tool_selections",
     "service_save_public_ai_default_connection",
@@ -244,8 +244,8 @@ pub(super) async fn dispatch(
             service_test_public_ai_provider_tool(state, rpc_required_param(params, "request")?)
                 .await,
         ),
-        "service_save_public_ai_provider_tool_target_enabled" => rpc_json_result(
-            service_save_public_ai_provider_tool_target_enabled(
+        "service_save_public_ai_provider_tool_capability_enabled" => rpc_json_result(
+            service_save_public_ai_provider_tool_capability_enabled(
                 app,
                 state,
                 rpc_required_param(params, "request")?,
@@ -254,6 +254,7 @@ pub(super) async fn dispatch(
         ),
         "service_public_ai_session_provider_tool_selections" => {
             rpc_json_result(service_public_ai_session_provider_tool_selections(
+                app,
                 state,
                 rpc_required_param(params, "conversationId")?,
             ))

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img">
+  <defs>
+    <linearGradient id="fenno-gradient" x1="10" y1="8" x2="55" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4f7cff"/>
+      <stop offset=".55" stop-color="#3154df"/>
+      <stop offset="1" stop-color="#62e1e4"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#f6f8ff"/>
+  <path d="M49 11c-8 2-14 6-18 12l-5-8c-5 7-8 15-8 24 0 10 7 17 17 17 9 0 16-5 19-13-5 3-10 4-15 3-6-1-10-5-10-10 0-8 8-15 20-25Z" fill="url(#fenno-gradient)"/>
+  <path d="M29 35c4 3 9 3 14 0-2 5-5 8-9 8-3 0-5-3-5-8Z" fill="#f6f8ff"/>
+</svg>

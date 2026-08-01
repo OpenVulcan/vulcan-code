@@ -36,6 +36,7 @@ use super::{
     task_display_prompt_anchor_from_workspace, webui_trace, webui_trace_if_slow,
     webui_turn_completion_gate_from_state, workbench_surface_matches_conversation,
     workspace_session_summary_for_session, workspace_snapshot_contains_regular_session,
+    workspace_surface_allows_user_prompt_editing,
 };
 
 /// Applies one streamed conversation checkpoint to retained workspace memory.
@@ -894,10 +895,18 @@ fn emit_terminal_execution_report_workbench_deltas(
             .cloned()
             .collect::<Vec<_>>();
         let messages = if surface_matches {
+            let allow_user_prompt_editing =
+                workspace_surface_allows_user_prompt_editing(workspace, session_id, None);
             workspace
                 .session_messages
                 .get(&session_id)
-                .map(|entries| conversation_messages_from_session(&conversation_id, entries, false))
+                .map(|entries| {
+                    conversation_messages_from_session(
+                        &conversation_id,
+                        entries,
+                        allow_user_prompt_editing,
+                    )
+                })
                 .unwrap_or_default()
         } else {
             Vec::new()

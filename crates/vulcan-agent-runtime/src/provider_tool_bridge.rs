@@ -119,10 +119,9 @@ pub(crate) fn build_provider_tool_candidates(
     let available = runtime.available_provider_tool_targets(&configuration)?;
     let mut candidates = Vec::new();
     for (capability, selection) in &configuration.provider_tool_selections {
-        if configuration
-            .provider_tool_disabled_targets
-            .get(capability)
-            .is_some_and(|disabled| disabled.contains(selection))
+        if !configuration
+            .provider_tool_enabled_capabilities
+            .contains(capability)
         {
             continue;
         }
@@ -135,7 +134,10 @@ pub(crate) fn build_provider_tool_candidates(
             })
             .cloned()
         else {
-            continue;
+            return Err(format!(
+                "Provider tool capability `{:?}` retains unavailable target `{}` through account `{}`; select a valid model and account before sending.",
+                capability, selection.target_id, selection.connection_id
+            ));
         };
         candidates.push(build_provider_tool_candidate(
             Arc::clone(&runtime),
@@ -177,6 +179,11 @@ fn apply_session_provider_tool_selections(
             ))
         })
         .collect::<Result<_, String>>()?;
+    configuration.provider_tool_enabled_capabilities = configuration
+        .provider_tool_selections
+        .keys()
+        .copied()
+        .collect();
     Ok(())
 }
 

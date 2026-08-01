@@ -581,7 +581,7 @@ fn default_worker_agent() -> RuntimeAgentDefinition {
         routes: Vec::new(),
         fallback_delegate: None,
         model: None,
-        temperature: Some(0.2),
+        temperature: None,
         max_turns: None,
         runtime_policy: ExecutionRuntimePolicyRequest::default(),
     }
@@ -605,7 +605,7 @@ fn default_plan_agent() -> RuntimeAgentDefinition {
         routes: Vec::new(),
         fallback_delegate: None,
         model: None,
-        temperature: Some(0.1),
+        temperature: None,
         max_turns: None,
         runtime_policy: ExecutionRuntimePolicyRequest::default(),
     }
@@ -629,7 +629,7 @@ fn default_explore_agent() -> RuntimeAgentDefinition {
         routes: Vec::new(),
         fallback_delegate: None,
         model: None,
-        temperature: Some(0.1),
+        temperature: None,
         max_turns: None,
         runtime_policy: ExecutionRuntimePolicyRequest::default(),
     }
@@ -656,7 +656,7 @@ fn default_lua_agent() -> RuntimeAgentDefinition {
         routes: Vec::new(),
         fallback_delegate: None,
         model: None,
-        temperature: Some(0.15),
+        temperature: None,
         max_turns: None,
         runtime_policy: ExecutionRuntimePolicyRequest::default(),
     }
@@ -683,7 +683,7 @@ fn default_memory_agent() -> RuntimeAgentDefinition {
         routes: Vec::new(),
         fallback_delegate: None,
         model: None,
-        temperature: Some(0.1),
+        temperature: None,
         max_turns: None,
         runtime_policy: ExecutionRuntimePolicyRequest::default(),
     }
@@ -720,7 +720,7 @@ fn default_coordinator_agent() -> RuntimeAgentDefinition {
         ],
         fallback_delegate: Some(String::from(DEFAULT_WORKER_AGENT_ID)),
         model: None,
-        temperature: Some(0.15),
+        temperature: None,
         max_turns: None,
         runtime_policy: ExecutionRuntimePolicyRequest::default(),
     }
@@ -814,6 +814,23 @@ mod tests {
                 .agents
                 .iter()
                 .any(|agent| agent.id == EXPLORE_AGENT_ID)
+        );
+    }
+
+    /// Verifies built-in agents preserve provider sampling defaults instead of forcing temperature.
+    /// 验证内置代理保留供应商采样默认值，而不是强制指定温度。
+    #[test]
+    fn runtime_config_builtin_agents_do_not_force_temperature() {
+        let runtime_config = AgentRuntimeConfig::from_sources(
+            &ProviderConfigurationFile::default(),
+            &AgentProfileCatalog::default(),
+        );
+
+        assert!(
+            runtime_config
+                .agents
+                .iter()
+                .all(|agent| agent.temperature.is_none())
         );
     }
 

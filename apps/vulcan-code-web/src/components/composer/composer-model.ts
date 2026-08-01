@@ -7,6 +7,19 @@ import type {
   PublicAiProviderToolTargetSelection,
 } from "@/types";
 
+// ComposerProviderToolSettingsSnapshot freezes capability switches and exact routes separately.
+// ComposerProviderToolSettingsSnapshot 分别固定能力开关与精确路由。
+export interface ComposerProviderToolSettingsSnapshot {
+  // Capabilities enabled only for the target conversation.
+  // 仅为目标会话启用的能力。
+  enabledCapabilities: PublicAiProviderToolCapabilityKind[];
+  // Exact model and account retained for each configured capability.
+  // 每项已配置能力保留的精确模型与账号。
+  selections: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
+  >;
+}
+
 // ComposerModelSelectionSnapshot freezes the exact provider, model, and credential used by one submission.
 // ComposerModelSelectionSnapshot 固定单次提交使用的精确供应商、模型与凭据。
 export interface ComposerModelSelectionSnapshot {
@@ -60,11 +73,9 @@ export interface ComposerSessionSettingsSnapshot {
   // Optional explicit VMM policy pair.
   // 可选显式 VMM 策略对。
   vmmPolicy?: ComposerVmmPolicySnapshot;
-  // Optional complete capability override; an empty object explicitly disables all capability tools.
-  // 可选完整能力覆盖；空对象表示显式关闭全部能力工具。
-  providerToolSelections?: Partial<
-    Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
-  >;
+  // Optional complete provider-tool snapshot; absence materializes system defaults.
+  // 可选完整供应商工具快照；缺省时物化系统默认值。
+  providerToolSettings?: ComposerProviderToolSettingsSnapshot;
   // Optional knowledge-library override.
   // 可选知识库覆盖。
   knowledgeSelection?: ComposerKnowledgeSelectionSnapshot;

@@ -612,7 +612,12 @@ impl ProviderExecutionClient {
         secret: &CredentialExecutionSecret,
     ) -> Result<String, ProviderExecutionFailure> {
         let headers = execution_headers(route, &BTreeMap::new(), secret)?;
-        let url = native_request_url(native_route, route.entry.base_url.as_str(), endpoint)?;
+        let base_url = crate::connection_endpoint::resolved_connection_protocol_base_url(
+            &route.connection,
+            &route.entry,
+            &route.protocol_route,
+        );
+        let url = native_request_url(native_route, base_url.as_str(), endpoint)?;
         let response = self
             .http
             .post(url.as_str())

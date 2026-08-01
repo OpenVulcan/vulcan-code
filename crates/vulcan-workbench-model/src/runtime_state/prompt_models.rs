@@ -54,7 +54,7 @@ impl Default for PendingPromptRuntimeOptions {
     /// 返回早于显式快照的持久化队列项所使用的中性运行参数快照。
     fn default() -> Self {
         Self {
-            reasoning_effort: ReasoningEffortLevel::Medium,
+            reasoning_effort: ReasoningEffortLevel::Off,
             temperature: None,
             web_search_override: PendingPromptWebSearchOverride::default(),
             web_search_provider_id: None,

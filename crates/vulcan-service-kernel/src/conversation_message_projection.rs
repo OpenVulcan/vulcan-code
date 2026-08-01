@@ -233,4 +233,28 @@ mod tests {
 
         assert!(messages.is_empty());
     }
+
+    /// Verifies a terminal editability transition produces an immediate message upsert delta.
+    /// 验证终态可编辑性变化会立即生成消息更新增量。
+    #[test]
+    fn conversation_message_patch_exposes_editability_without_surface_reload() {
+        let conversation_id = SessionId::new_v4().to_string();
+        let user_message = SessionMessageEntry::new(SessionMessageKind::User, "", "edit me")
+            .with_runtime_metadata("user-prompt", "1780000000001");
+        let before = conversation_messages_from_session(
+            &conversation_id,
+            std::slice::from_ref(&user_message),
+            false,
+        );
+        let after = conversation_messages_from_session(&conversation_id, &[user_message], true);
+
+        let patch = build_conversation_messages_patched_delta(
+            &conversation_id,
+            before.as_slice(),
+            after.as_slice(),
+        )
+        .expect("editability change should produce a message patch");
+        assert_eq!(patch.upsert_messages.len(), 1);
+        assert!(patch.upsert_messages[0].editable_user_prompt);
+    }
 }

@@ -1,9 +1,13 @@
 import type { ReactElement } from "react"
 
 import antigravityIcon from "@/assets/provider-icons/provider-antigravity.svg"
+import apiKeyFunIcon from "@/assets/provider-icons/provider-apikeyfun.svg"
 import claudeIcon from "@/assets/provider-icons/provider-claude.svg"
+import claudeApiIcon from "@/assets/provider-icons/provider-claudeapi.svg"
+import code0Icon from "@/assets/provider-icons/provider-code0.svg"
 import codexIcon from "@/assets/provider-icons/provider-codex.svg"
 import deepSeekIcon from "@/assets/provider-icons/provider-deepseek.svg"
+import fennoAiIcon from "@/assets/provider-icons/provider-fennoai.svg"
 import geminiIcon from "@/assets/provider-icons/provider-gemini.svg"
 import grokDarkIcon from "@/assets/provider-icons/provider-grok-dark.svg"
 import grokLightIcon from "@/assets/provider-icons/provider-grok-light.svg"
@@ -13,26 +17,33 @@ import miniMaxIcon from "@/assets/provider-icons/provider-minimax.svg"
 import openAICompatibilityDarkIcon from "@/assets/provider-icons/provider-openai-compat-dark.svg"
 import openAICompatibilityLightIcon from "@/assets/provider-icons/provider-openai-compat-light.svg"
 import openRouterIcon from "@/assets/provider-icons/provider-openrouter.svg"
+import qiniuIcon from "@/assets/provider-icons/provider-qiniu.svg"
 import qwenIcon from "@/assets/provider-icons/provider-qwen.svg"
 import tavilyIcon from "@/assets/provider-icons/provider-tavily.svg"
 import vertexIcon from "@/assets/provider-icons/provider-vertex.svg"
 import zhipuIcon from "@/assets/provider-icons/provider-zhipu.svg"
 import { cn } from "@/lib/utils"
+import type { PublicAiProviderCategory } from "@/types"
 
 // ProviderIconKey is the closed frontend-owned provider artwork set.
 // ProviderIconKey 是由前端持有的供应商图标闭集。
 export type ProviderIconKey =
   | "antigravity"
+  | "apikeyfun"
   | "claude"
+  | "claudeapi"
+  | "code0"
   | "codex"
   | "compatibility"
   | "deepseek"
+  | "fennoai"
   | "gemini"
   | "grok"
   | "kimi"
   | "minimax"
   | "openrouter"
   | "qwen"
+  | "qiniu"
   | "tavily"
   | "vertex"
   | "zhipu"
@@ -58,7 +69,10 @@ interface ProviderIconAsset {
 // providerIconLibrary 是不可变的前端图标库。
 const providerIconLibrary: Readonly<Record<ProviderIconKey, ProviderIconAsset>> = {
   antigravity: { light: antigravityIcon },
+  apikeyfun: { light: apiKeyFunIcon, transparent: true },
   claude: { light: claudeIcon },
+  claudeapi: { light: claudeApiIcon, transparent: true },
+  code0: { light: code0Icon, transparent: true },
   codex: { light: codexIcon },
   compatibility: {
     light: openAICompatibilityLightIcon,
@@ -66,6 +80,7 @@ const providerIconLibrary: Readonly<Record<ProviderIconKey, ProviderIconAsset>> 
     transparent: true,
   },
   deepseek: { light: deepSeekIcon },
+  fennoai: { light: fennoAiIcon, transparent: true },
   gemini: { light: geminiIcon },
   grok: { light: grokLightIcon, dark: grokDarkIcon, transparent: true },
   kimi: {
@@ -77,6 +92,7 @@ const providerIconLibrary: Readonly<Record<ProviderIconKey, ProviderIconAsset>> 
   minimax: { light: miniMaxIcon },
   openrouter: { light: openRouterIcon, transparent: true },
   qwen: { light: qwenIcon },
+  qiniu: { light: qiniuIcon, transparent: true },
   tavily: { light: tavilyIcon, transparent: true },
   vertex: { light: vertexIcon },
   zhipu: { light: zhipuIcon },
@@ -86,15 +102,20 @@ const providerIconLibrary: Readonly<Record<ProviderIconKey, ProviderIconAsset>> 
 // providerIconMap 将稳定供应商标识绑定到系列图标。
 const providerIconMap: Readonly<Record<string, ProviderIconKey>> = {
   alibaba: "qwen",
+  apikeyfun: "apikeyfun",
   anthropic: "claude",
   claude: "claude",
+  claudeapi: "claudeapi",
+  code0: "code0",
   deepseek: "deepseek",
+  fennoai: "fennoai",
   google: "gemini",
   kimi: "kimi",
   minimax: "minimax",
   openai: "compatibility",
   openrouter: "openrouter",
   qwen: "qwen",
+  qiniu: "qiniu",
   tavily: "tavily",
   vertex: "vertex",
   xai: "grok",
@@ -144,6 +165,9 @@ interface ProviderIconProps extends ProviderIconIdentity {
   // Caller-owned square display-box class.
   // 调用方控制的方形展示框样式。
   className?: string
+  // Provider category controls the independent relay marker overlay.
+  // 供应商分类控制独立的中转站标识叠层。
+  category?: PublicAiProviderCategory
 }
 
 // ProviderIcon renders theme-aware provider artwork without exposing it as semantic content.
@@ -152,6 +176,7 @@ export function ProviderIcon({
   providerId,
   serviceEntryId,
   className,
+  category,
 }: ProviderIconProps): ReactElement {
   // iconKey is resolved only from stable provider identities.
   // iconKey 仅根据稳定供应商标识解析。
@@ -162,14 +187,18 @@ export function ProviderIcon({
 
   return (
     <span
-      aria-hidden="true"
+      aria-hidden={category === "relay" ? undefined : "true"}
+      aria-label={category === "relay" ? "Relay provider / 中转站" : undefined}
       className={cn(
-        "inline-flex size-[26px] shrink-0 items-center justify-center rounded-md bg-muted p-0.5",
+        "relative inline-flex size-[26px] shrink-0 items-center justify-center rounded-md bg-muted p-0.5",
         asset.transparent ? "bg-transparent" : "",
         asset.themeSurface ? "box-border rounded-md bg-black p-[5px] dark:bg-white" : "",
         className,
       )}
+      data-provider-category={category}
       data-provider-icon={iconKey}
+      role={category === "relay" ? "img" : undefined}
+      title={category === "relay" ? "Relay provider / 中转站" : undefined}
     >
       <img
         alt=""
@@ -184,6 +213,14 @@ export function ProviderIcon({
           draggable={false}
           src={asset.dark}
         />
+      ) : null}
+      {category === "relay" ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute -bottom-1 -right-1 inline-flex size-3.5 items-center justify-center rounded-full border border-background bg-amber-500 text-[8px] font-bold leading-none text-black shadow-sm"
+        >
+          R
+        </span>
       ) : null}
     </span>
   )

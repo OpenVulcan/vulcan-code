@@ -81,6 +81,9 @@ pub(super) struct PublicAiSettingsSnapshot {
     /// One explicit selected target per semantic provider tool capability.
     /// 每项语义供应商工具能力唯一显式选择的目标。
     provider_tool_selections: BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
+    /// Provider tool capabilities enabled by default for newly materialized sessions.
+    /// 为新物化会话默认启用的供应商工具能力。
+    provider_tool_enabled_capabilities: BTreeSet<ProviderToolCapabilityKind>,
     /// Exact internal inference routes available through current memory catalogs.
     /// 当前内存目录可用的精确内部推理路由。
     internal_inference_candidates: Vec<PublicAiInternalInferenceCandidate>,
@@ -168,9 +171,38 @@ pub(super) struct PublicAiProviderToolTargetSnapshot {
     /// Exact model- or service-native target contract.
     /// 精确的模型或服务原生目标契约。
     target: ProviderToolTarget,
-    /// Whether this current catalog target is enabled for session selection.
-    /// 当前目录目标是否已启用并可供会话选择。
-    enabled: bool,
+}
+
+/// Browser-facing conflict retained for one session provider tool capability.
+/// 面向浏览器保留的一项会话供应商工具能力冲突。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PublicAiSessionProviderToolConflict {
+    /// Exact semantic capability whose saved state is invalid.
+    /// 已保存状态无效的精确语义能力。
+    capability: ProviderToolCapabilityKind,
+    /// Stable machine-readable conflict kind.
+    /// 稳定的机器可读冲突类型。
+    kind: String,
+    /// Actionable user-visible diagnostic.
+    /// 可操作的用户可见诊断。
+    message: String,
+}
+
+/// Browser-facing complete provider tool snapshot owned by one session.
+/// 面向浏览器且由单个会话持有的完整供应商工具快照。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PublicAiSessionProviderToolSettingsSnapshot {
+    /// Capabilities enabled only for this session.
+    /// 仅为当前会话启用的能力。
+    enabled_capabilities: BTreeSet<ProviderToolCapabilityKind>,
+    /// Exact model and account selected for every retained capability.
+    /// 每项保留能力选择的精确模型与账号。
+    selections: BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
+    /// Invalid retained choices that require explicit user confirmation.
+    /// 需要用户显式确认的无效保留选择。
+    conflicts: Vec<PublicAiSessionProviderToolConflict>,
 }
 
 /// Browser-facing credential metadata that excludes the host secret-store reference.
@@ -198,6 +230,9 @@ pub(super) struct PublicAiConnectionSnapshot {
     /// Whether this connection has an optional provider-management credential.
     /// 此连接是否具有可选的供应商管理凭据。
     has_management_key: bool,
+    /// Optional credential-scoped service origin without secret material.
+    /// 不含秘密材料的可选凭据作用域服务源地址。
+    service_origin_override: Option<String>,
     /// Credential acquisition mode.
     /// 凭据获取方式。
     credential_mode: CredentialMode,
@@ -266,6 +301,7 @@ impl PublicAiConnectionSnapshot {
             billing_kind: credential_profile.billing_kind,
             usage_capability: credential_profile.account_usage_query,
             has_management_key: connection.management_secret_reference.is_some(),
+            service_origin_override: connection.service_origin_override.clone(),
             credential_mode: connection.credential_mode,
             credential_id: connection.credential_id.clone(),
             display_name: connection.display_name.clone(),
@@ -343,6 +379,9 @@ pub(super) struct PublicAiConnectionAddRequest {
     /// Optional provider-management key used only for allowance queries.
     /// 仅用于用量查询的可选供应商管理密钥。
     management_key: Option<String>,
+    /// Optional credential-scoped provider service origin.
+    /// 可选凭据作用域供应商服务源地址。
+    service_origin_override: Option<String>,
 }
 
 /// Updates editable metadata for one credential connection.
@@ -378,6 +417,9 @@ pub(super) struct PublicAiConnectionUpdateRequest {
     /// 是否移除现有供应商管理密钥。
     #[serde(default)]
     remove_management_key: bool,
+    /// Optional credential-scoped provider service origin.
+    /// 可选凭据作用域供应商服务源地址。
+    service_origin_override: Option<String>,
 }
 
 /// Updates the background account-usage refresh interval.
@@ -576,32 +618,32 @@ pub(super) struct PublicAiProviderToolTestRequest {
     arguments: serde_json::Value,
 }
 
-/// Changes whether one current provider tool target is available to sessions.
-/// 修改一个当前供应商工具目标是否可供会话使用。
+/// Changes whether one semantic provider tool capability is enabled by default.
+/// 修改一项语义供应商工具能力是否默认启用。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PublicAiProviderToolTargetEnabledSaveRequest {
+pub(super) struct PublicAiProviderToolCapabilityEnabledSaveRequest {
     /// Exact semantic capability.
     /// 精确语义能力。
     capability: ProviderToolCapabilityKind,
-    /// Exact current target.
-    /// 精确的当前目标。
-    selection: ProviderToolTargetSelection,
     /// Requested enabled state.
     /// 请求的启用状态。
     enabled: bool,
 }
 
-/// Replaces the complete single-select provider tool configuration for one session.
-/// 替换单个会话完整的供应商工具单选配置。
+/// Replaces the complete provider tool configuration for one session.
+/// 替换单个会话完整的供应商工具配置。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct PublicAiSessionProviderToolSelectionsSaveRequest {
     /// Conversation that owns the selection override.
     /// 拥有选择覆盖的会话。
     conversation_id: String,
-    /// Exact target selected for each enabled semantic capability.
-    /// 每项已启用语义能力所选择的精确目标。
+    /// Semantic capabilities enabled only for this session.
+    /// 仅为当前会话启用的语义能力。
+    enabled_capabilities: BTreeSet<ProviderToolCapabilityKind>,
+    /// Exact target retained independently from capability activation.
+    /// 与能力启用状态独立保留的精确目标。
     selections: BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
 }
 
@@ -719,6 +761,7 @@ pub(super) async fn service_save_public_ai_custom_provider(
         display_name: request.credential_display_name.trim().to_string(),
         secret_reference: secret_reference.clone(),
         management_secret_reference: None,
+        service_origin_override: None,
         verified_protocols: BTreeSet::from([route.protocol_profile_id.clone()]),
         selected_protocol: route.protocol_profile_id.clone(),
         prompt_cache_by_protocol: BTreeMap::new(),
@@ -1098,6 +1141,7 @@ pub(super) async fn service_commit_public_ai_oauth_connection(
             secret: None,
             management_key: None,
             remove_management_key: false,
+            service_origin_override: current.service_origin_override.clone(),
         };
         let mut validation_configuration = current_configuration.clone();
         if let Err(error) = apply_connection_update(
@@ -1177,6 +1221,7 @@ pub(super) async fn service_commit_public_ai_oauth_connection(
         request.selected_protocol,
         secret,
         None,
+        None,
     )
     .await
 }
@@ -1243,6 +1288,7 @@ pub(super) async fn service_add_public_ai_connection(
         request.selected_protocol,
         secret,
         request.management_key,
+        request.service_origin_override,
     )
     .await
 }
@@ -1260,6 +1306,7 @@ async fn add_public_ai_connection_with_secret(
     selected_protocol: String,
     secret: CredentialSecretEnvelope,
     management_key: Option<String>,
+    service_origin_override: Option<String>,
 ) -> Result<PublicAiSettingsSnapshot, String> {
     if provider_id != "openrouter"
         && management_key
@@ -1284,6 +1331,12 @@ async fn add_public_ai_connection_with_secret(
         .filter(|value| !value.trim().is_empty())
         .map(|_| format!("ai_management_secret_{}", uuid::Uuid::new_v4().simple()));
     let providers = runtime.effective_providers(&current_configuration)?;
+    let service_origin_override =
+        vulcan_provider_adapters::normalize_connection_service_origin_override(
+            provider_id.as_str(),
+            service_entry_id.as_str(),
+            service_origin_override.as_deref(),
+        )?;
     let provider = providers
         .provider(provider_id.as_str())
         .ok_or_else(|| format!("Provider `{provider_id}` is not registered."))?;
@@ -1338,6 +1391,7 @@ async fn add_public_ai_connection_with_secret(
         display_name: display_name.trim().to_string(),
         secret_reference: secret_reference.clone(),
         management_secret_reference: management_secret_reference.clone(),
+        service_origin_override,
         verified_protocols,
         selected_protocol,
         prompt_cache_by_protocol: BTreeMap::new(),
@@ -1594,6 +1648,12 @@ pub(super) async fn service_update_public_ai_connection(
         request.credential_profile_id = registration.credential_profile_id;
         request.credential_mode = CredentialMode::Token;
     }
+    request.service_origin_override =
+        vulcan_provider_adapters::normalize_connection_service_origin_override(
+            current.provider_id.as_str(),
+            request.service_entry_id.as_str(),
+            request.service_origin_override.as_deref(),
+        )?;
     let current_entry_kind = registered_service_entry_kind(
         runtime.as_ref(),
         &current_configuration,
@@ -1620,6 +1680,7 @@ pub(super) async fn service_update_public_ai_connection(
         || current.credential_profile_id != request.credential_profile_id
         || current.credential_mode != request.credential_mode
         || current.selected_protocol != request.selected_protocol
+        || current.service_origin_override != request.service_origin_override
         || request.secret.is_some();
     let secret_store = OsAiCredentialSecretStore;
     let replaced_secret = if let Some(secret) = request.secret.as_deref() {
@@ -1828,6 +1889,12 @@ fn apply_connection_update(
     candidate.credential_profile_id = request.credential_profile_id.clone();
     candidate.credential_mode = request.credential_mode;
     candidate.selected_protocol = request.selected_protocol.clone();
+    candidate.service_origin_override =
+        vulcan_provider_adapters::normalize_connection_service_origin_override(
+            candidate.provider_id.as_str(),
+            request.service_entry_id.as_str(),
+            request.service_origin_override.as_deref(),
+        )?;
     candidate.verified_protocols = entry
         .protocol_routes
         .iter()
@@ -3352,10 +3419,7 @@ pub(super) async fn service_save_public_ai_provider_tool_selection(
             candidate.connection_id == selection.connection_id
                 && candidate.target.target_id == selection.target_id
                 && candidate.target.contract.capability == request.capability
-        }) && !current_configuration
-            .provider_tool_disabled_targets
-            .get(&request.capability)
-            .is_some_and(|disabled| disabled.contains(selection));
+        });
         if !valid {
             return Err(format!(
                 "Provider tool target `{}` is not available through connection `{}` for capability `{:?}`.",
@@ -3421,57 +3485,37 @@ pub(super) async fn service_test_public_ai_provider_tool(
         .await
 }
 
-/// Saves the enabled state of one current provider tool target.
-/// 保存一个当前供应商工具目标的启用状态。
-pub(super) async fn service_save_public_ai_provider_tool_target_enabled(
+/// Saves the default enabled state of one semantic provider tool capability.
+/// 保存一项语义供应商工具能力的默认启用状态。
+pub(super) async fn service_save_public_ai_provider_tool_capability_enabled(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
-    request: PublicAiProviderToolTargetEnabledSaveRequest,
+    request: PublicAiProviderToolCapabilityEnabledSaveRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
     let available = runtime.available_provider_tool_targets(&current_configuration)?;
-    let valid = available.iter().any(|candidate| {
-        candidate.connection_id == request.selection.connection_id
-            && candidate.target.target_id == request.selection.target_id
-            && candidate.target.contract.capability == request.capability
-    });
-    if !valid {
+    if request.enabled
+        && !available
+            .iter()
+            .any(|candidate| candidate.target.contract.capability == request.capability)
+    {
         return Err(format!(
-            "Provider tool target `{}` is not available through connection `{}` for capability `{:?}`.",
-            request.selection.target_id, request.selection.connection_id, request.capability
+            "Provider tool capability `{:?}` has no available model and account.",
+            request.capability
         ));
     }
     let configuration = mutate_public_ai_configuration(
         &state,
-        "保存公共 AI 工具目标启用状态失败",
+        "保存公共 AI 工具能力启用状态失败",
         |configuration| {
             if request.enabled {
-                if let Some(disabled) = configuration
-                    .provider_tool_disabled_targets
-                    .get_mut(&request.capability)
-                {
-                    disabled.remove(&request.selection);
-                    if disabled.is_empty() {
-                        configuration
-                            .provider_tool_disabled_targets
-                            .remove(&request.capability);
-                    }
-                }
+                configuration
+                    .provider_tool_enabled_capabilities
+                    .insert(request.capability);
             } else {
                 configuration
-                    .provider_tool_disabled_targets
-                    .entry(request.capability)
-                    .or_default()
-                    .insert(request.selection.clone());
-                if configuration
-                    .provider_tool_selections
-                    .get(&request.capability)
-                    == Some(&request.selection)
-                {
-                    configuration
-                        .provider_tool_selections
-                        .remove(&request.capability);
-                }
+                    .provider_tool_enabled_capabilities
+                    .remove(&request.capability);
             }
             Ok(())
         },
@@ -3484,27 +3528,100 @@ pub(super) async fn service_save_public_ai_provider_tool_target_enabled(
 /// Returns the effective single-select provider tool configuration for one session.
 /// 返回单个会话生效的供应商工具单选配置。
 pub(super) fn service_public_ai_session_provider_tool_selections(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     conversation_id: String,
-) -> Result<BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>, String> {
+) -> Result<PublicAiSessionProviderToolSettingsSnapshot, String> {
     let session_id = conversation_id
         .parse::<crate::SessionId>()
         .map_err(|error| format!("Invalid conversation id `{conversation_id}`: {error}"))?;
     let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
-    let guard = state
-        .lock()
-        .map_err(|error| format!("Failed to lock service state: {error}"))?;
-    let runtime_state = guard
-        .workspace_snapshot
-        .as_ref()
-        .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
-        .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
-    let selections = if runtime_state.provider_tool_selections_overridden {
-        session_provider_tool_selections_from_runtime(runtime_state)?
-    } else {
-        configuration.provider_tool_selections.clone()
+    let (enabled_capabilities, selections, persistence_context) = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("Failed to lock service state: {error}"))?;
+        let workspace = guard
+            .workspace_snapshot
+            .as_mut()
+            .ok_or_else(|| String::from("Workspace is not initialized."))?;
+        let runtime_state = workspace
+            .session_runtime_state
+            .get_mut(&session_id)
+            .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
+        let initialized_now = if runtime_state.provider_tool_settings_initialized {
+            false
+        } else {
+            if runtime_state.provider_tool_selections_overridden {
+                runtime_state.provider_tool_enabled_capabilities = runtime_state
+                    .provider_tool_selections
+                    .keys()
+                    .cloned()
+                    .collect();
+            } else {
+                runtime_state.provider_tool_selections = configuration
+                    .provider_tool_selections
+                    .iter()
+                    .map(|(capability, selection)| {
+                        (
+                            provider_tool_capability_key(*capability),
+                            vulcan_workbench_model::SessionProviderToolTargetSelection {
+                                connection_id: selection.connection_id.clone(),
+                                target_id: selection.target_id.clone(),
+                            },
+                        )
+                    })
+                    .collect();
+                runtime_state.provider_tool_enabled_capabilities = configuration
+                    .provider_tool_enabled_capabilities
+                    .iter()
+                    .map(|capability| provider_tool_capability_key(*capability))
+                    .collect();
+            }
+            runtime_state.provider_tool_settings_initialized = true;
+            runtime_state.provider_tool_selections_overridden = false;
+            runtime_state.updated_at = crate::current_unix_millis_text();
+            true
+        };
+        let enabled_capabilities =
+            session_provider_tool_enabled_capabilities_from_runtime(runtime_state)?;
+        let selections = session_provider_tool_selections_from_runtime(runtime_state)?;
+        let persistence_context = initialized_now.then(|| {
+            (
+                guard.controller_runtime.clone(),
+                guard.workspace_snapshot.clone(),
+            )
+        });
+        (enabled_capabilities, selections, persistence_context)
     };
-    filter_current_enabled_provider_tool_selections(runtime.as_ref(), &configuration, &selections)
+    if let Some((Some(controller_runtime), Some(workspace_snapshot))) = persistence_context
+        && let Some(addon_state) = crate::session_addon_state_from_workspace_snapshot(
+            &workspace_snapshot,
+            session_id,
+            &[crate::SessionAddonNamespace::RuntimeControls],
+        )
+    {
+        crate::spawn_workspace_session_addon_state_persist_task(
+            app,
+            state,
+            controller_runtime,
+            workspace_snapshot,
+            session_id,
+            addon_state,
+            vec![crate::SessionAddonNamespace::RuntimeControls],
+            Some(String::from("provider_tool_settings_initialize")),
+        );
+    }
+    let conflicts = provider_tool_session_conflicts(
+        runtime.as_ref(),
+        &configuration,
+        &enabled_capabilities,
+        &selections,
+    )?;
+    Ok(PublicAiSessionProviderToolSettingsSnapshot {
+        enabled_capabilities,
+        selections,
+        conflicts,
+    })
 }
 
 /// Saves the complete single-select provider tool configuration for one session.
@@ -3513,7 +3630,7 @@ pub(super) fn service_save_public_ai_session_provider_tool_selections(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: PublicAiSessionProviderToolSelectionsSaveRequest,
-) -> Result<BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>, String> {
+) -> Result<PublicAiSessionProviderToolSettingsSnapshot, String> {
     let session_id = request
         .conversation_id
         .parse::<crate::SessionId>()
@@ -3524,7 +3641,12 @@ pub(super) fn service_save_public_ai_session_provider_tool_selections(
             )
         })?;
     let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
-    validate_provider_tool_selections(runtime.as_ref(), &configuration, &request.selections)?;
+    validate_provider_tool_session_settings(
+        runtime.as_ref(),
+        &configuration,
+        &request.enabled_capabilities,
+        &request.selections,
+    )?;
     let persistence_context = {
         let mut guard = state
             .lock()
@@ -3550,7 +3672,13 @@ pub(super) fn service_save_public_ai_session_provider_tool_selections(
                 )
             })
             .collect();
-        runtime_state.provider_tool_selections_overridden = true;
+        runtime_state.provider_tool_enabled_capabilities = request
+            .enabled_capabilities
+            .iter()
+            .map(|capability| provider_tool_capability_key(*capability))
+            .collect();
+        runtime_state.provider_tool_settings_initialized = true;
+        runtime_state.provider_tool_selections_overridden = false;
         runtime_state.updated_at = crate::current_unix_millis_text();
         (
             guard.controller_runtime.clone(),
@@ -3572,42 +3700,83 @@ pub(super) fn service_save_public_ai_session_provider_tool_selections(
             session_id,
             addon_state,
             vec![crate::SessionAddonNamespace::RuntimeControls],
-            Some(String::from("provider_tool_selections")),
+            Some(String::from("provider_tool_settings")),
         );
     }
-    Ok(request.selections)
+    Ok(PublicAiSessionProviderToolSettingsSnapshot {
+        enabled_capabilities: request.enabled_capabilities,
+        selections: request.selections,
+        conflicts: Vec::new(),
+    })
 }
 
-/// Validates that every selected target belongs to its exact capability.
-/// 校验每个选中目标均属于其精确能力。
-pub(crate) fn validate_provider_tool_selections(
+/// Validates one complete session provider tool snapshot before persistence or dispatch.
+/// 在持久化或分派前校验一份完整会话供应商工具快照。
+pub(crate) fn validate_provider_tool_session_settings(
     runtime: &PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
+    enabled_capabilities: &BTreeSet<ProviderToolCapabilityKind>,
     selections: &BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
 ) -> Result<(), String> {
+    let conflicts =
+        provider_tool_session_conflicts(runtime, configuration, enabled_capabilities, selections)?;
+    if conflicts.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "Provider tool session settings require confirmation: {}",
+        conflicts
+            .iter()
+            .map(|conflict| conflict.message.as_str())
+            .collect::<Vec<_>>()
+            .join("; ")
+    ))
+}
+
+/// Finds every unavailable or incomplete provider tool choice retained by one session.
+/// 查找单个会话保留的全部不可用或不完整供应商工具选择。
+fn provider_tool_session_conflicts(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+    enabled_capabilities: &BTreeSet<ProviderToolCapabilityKind>,
+    selections: &BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
+) -> Result<Vec<PublicAiSessionProviderToolConflict>, String> {
     let available = runtime.available_provider_tool_targets(configuration)?;
-    for (capability, selection) in selections {
-        let valid = available.iter().any(|candidate| {
+    let capabilities = enabled_capabilities.clone();
+    let mut conflicts = Vec::new();
+    for capability in capabilities {
+        let Some(selection) = selections.get(&capability) else {
+            conflicts.push(PublicAiSessionProviderToolConflict {
+                capability,
+                kind: String::from("missing_selection"),
+                message: format!(
+                    "Capability `{:?}` is enabled but has no selected model and account.",
+                    capability
+                ),
+            });
+            continue;
+        };
+        if !available.iter().any(|candidate| {
             candidate.connection_id == selection.connection_id
                 && candidate.target.target_id == selection.target_id
-                && candidate.target.contract.capability == *capability
-        }) && !configuration
-            .provider_tool_disabled_targets
-            .get(capability)
-            .is_some_and(|disabled| disabled.contains(selection));
-        if !valid {
-            return Err(format!(
-                "Provider tool target `{}` is not available through connection `{}` for capability `{:?}`.",
-                selection.target_id, selection.connection_id, capability
-            ));
+                && candidate.target.contract.capability == capability
+        }) {
+            conflicts.push(PublicAiSessionProviderToolConflict {
+                capability,
+                kind: String::from("target_unavailable"),
+                message: format!(
+                    "The saved model target `{}` or account `{}` for capability `{:?}` is no longer available; select them again before sending.",
+                    selection.target_id, selection.connection_id, capability
+                ),
+            });
         }
     }
-    Ok(())
+    Ok(conflicts)
 }
 
 /// Filters historical selections to targets that still exist and remain enabled.
 /// 将历史选择过滤为仍存在且保持启用的当前目标。
-fn filter_current_enabled_provider_tool_selections(
+fn filter_current_provider_tool_selections(
     runtime: &PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
     selections: &BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
@@ -3620,10 +3789,7 @@ fn filter_current_enabled_provider_tool_selections(
                 candidate.connection_id == selection.connection_id
                     && candidate.target.target_id == selection.target_id
                     && candidate.target.contract.capability == **capability
-            }) && !configuration
-                .provider_tool_disabled_targets
-                .get(capability)
-                .is_some_and(|disabled| disabled.contains(selection))
+            })
         })
         .map(|(capability, selection)| (*capability, selection.clone()))
         .collect())
@@ -3651,6 +3817,22 @@ fn session_provider_tool_selections_from_runtime(
                     target_id: selection.target_id.clone(),
                 },
             ))
+        })
+        .collect()
+}
+
+/// Converts one runtime-state capability set into the provider contract.
+/// 将一个运行状态能力集合转换为供应商契约。
+fn session_provider_tool_enabled_capabilities_from_runtime(
+    runtime_state: &vulcan_workbench_model::SessionRuntimeStateEntry,
+) -> Result<BTreeSet<ProviderToolCapabilityKind>, String> {
+    runtime_state
+        .provider_tool_enabled_capabilities
+        .iter()
+        .map(|capability| {
+            serde_json::from_value(serde_json::Value::String(capability.clone())).map_err(|error| {
+                format!("Session provider tool capability `{capability}` is invalid: {error}")
+            })
         })
         .collect()
 }
@@ -3808,7 +3990,7 @@ fn build_public_ai_settings_snapshot(
     let model_override_records = model_override_records_by_key.into_values().collect();
     let model_access_records = model_access_records_by_key.into_values().collect();
     let available_provider_tool_targets = runtime.available_provider_tool_targets(configuration)?;
-    let provider_tool_selections = filter_current_enabled_provider_tool_selections(
+    let provider_tool_selections = filter_current_provider_tool_selections(
         runtime,
         configuration,
         &configuration.provider_tool_selections,
@@ -3840,25 +4022,16 @@ fn build_public_ai_settings_snapshot(
         model_access_records,
         provider_tool_targets: available_provider_tool_targets
             .into_iter()
-            .map(|available| {
-                let capability = available.target.contract.capability;
-                let selection = ProviderToolTargetSelection {
-                    connection_id: available.connection_id.clone(),
-                    target_id: available.target.target_id.clone(),
-                };
-                let enabled = !configuration
-                    .provider_tool_disabled_targets
-                    .get(&capability)
-                    .is_some_and(|disabled| disabled.contains(&selection));
-                PublicAiProviderToolTargetSnapshot {
-                    connection_id: available.connection_id,
-                    connection_display_name: available.connection_display_name,
-                    target: available.target,
-                    enabled,
-                }
+            .map(|available| PublicAiProviderToolTargetSnapshot {
+                connection_id: available.connection_id,
+                connection_display_name: available.connection_display_name,
+                target: available.target,
             })
             .collect(),
         provider_tool_selections,
+        provider_tool_enabled_capabilities: configuration
+            .provider_tool_enabled_capabilities
+            .clone(),
         internal_inference_candidates,
         inference_profiles: configuration.inference_profiles.clone(),
         inference_route_diagnostics,
@@ -4750,5 +4923,27 @@ mod inference_settings_route_tests {
         .expect_err("a mismatched operation slot must fail");
 
         assert!(error.contains("stores operation `rerank_documents`"));
+    }
+
+    /// Verifies an enabled session capability without a model-account pair is an explicit conflict.
+    /// 验证缺少模型账号组合的已启用会话能力会形成显式冲突。
+    #[test]
+    fn session_provider_tool_settings_reject_missing_selection() {
+        let runtime = PublicAiRuntime::unavailable().expect("test public AI runtime");
+        let configuration = PersistedAiConfiguration::default();
+        let conflicts = provider_tool_session_conflicts(
+            &runtime,
+            &configuration,
+            &BTreeSet::from([ProviderToolCapabilityKind::WebSearch]),
+            &BTreeMap::new(),
+        )
+        .expect("conflict analysis");
+
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].kind, "missing_selection");
+        assert_eq!(
+            conflicts[0].capability,
+            ProviderToolCapabilityKind::WebSearch
+        );
     }
 }

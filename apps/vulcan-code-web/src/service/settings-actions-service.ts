@@ -11,6 +11,7 @@ import type {
   PublicAiProviderToolCapabilityKind,
   PublicAiProviderToolTestResult,
   PublicAiProviderToolTargetSelection,
+  PublicAiSessionProviderToolSettings,
   PublicAiOAuthChallenge,
   PublicAiOAuthCommitRequest,
   PublicAiOAuthStartRequest,
@@ -264,15 +265,14 @@ export async function testPublicAiProviderTool(request: {
   );
 }
 
-// savePublicAiProviderToolTargetEnabled changes whether one current target is available to sessions.
-// savePublicAiProviderToolTargetEnabled 修改一个当前目标是否可供会话使用。
-export async function savePublicAiProviderToolTargetEnabled(request: {
+// savePublicAiProviderToolCapabilityEnabled changes one system-level capability switch.
+// savePublicAiProviderToolCapabilityEnabled 修改一个系统级能力开关。
+export async function savePublicAiProviderToolCapabilityEnabled(request: {
   capability: PublicAiProviderToolCapabilityKind;
-  selection: PublicAiProviderToolTargetSelection;
   enabled: boolean;
 }): Promise<PublicAiSettingsSnapshot> {
   return serviceClient.request<PublicAiSettingsSnapshot>(
-    "service_save_public_ai_provider_tool_target_enabled",
+    "service_save_public_ai_provider_tool_capability_enabled",
     { request },
   );
 }
@@ -281,7 +281,7 @@ export async function savePublicAiProviderToolTargetEnabled(request: {
 // loadPublicAiSessionProviderToolSelections 加载单个会话生效的单选目标。
 export async function loadPublicAiSessionProviderToolSelections(
   conversationId: string,
-): Promise<Partial<Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>>> {
+): Promise<PublicAiSessionProviderToolSettings> {
   return serviceClient.request(
     "service_public_ai_session_provider_tool_selections",
     { conversationId },
@@ -292,10 +292,11 @@ export async function loadPublicAiSessionProviderToolSelections(
 // savePublicAiSessionProviderToolSelections 替换全部会话级单选目标。
 export async function savePublicAiSessionProviderToolSelections(request: {
   conversationId: string;
+  enabledCapabilities: PublicAiProviderToolCapabilityKind[];
   selections: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
   >;
-}): Promise<Partial<Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>>> {
+}): Promise<PublicAiSessionProviderToolSettings> {
   return serviceClient.request(
     "service_save_public_ai_session_provider_tool_selections",
     { request },

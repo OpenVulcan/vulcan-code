@@ -14,7 +14,7 @@ use vulcan_ai_contract::{
 
 /// Identifies the current persisted AI configuration schema.
 /// 标识当前持久化 AI 配置 Schema。
-pub const PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION: u32 = 1;
+pub const PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION: u32 = 2;
 
 /// Lists the reviewed OpenRouter models enabled by default.
 /// 列出默认启用的已审核 OpenRouter 模型。
@@ -243,9 +243,13 @@ pub struct PersistedAiConfiguration {
     /// 每种语义能力唯一显式选择的供应商工具目标。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub provider_tool_selections: BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
-    /// Explicitly disabled provider tool targets grouped by semantic capability.
-    /// 按语义能力分组的显式禁用供应商工具目标。
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    /// Semantic provider tool capabilities enabled by default for new sessions.
+    /// 为新会话默认启用的语义供应商工具能力。
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub provider_tool_enabled_capabilities: BTreeSet<ProviderToolCapabilityKind>,
+    /// Legacy target-scoped disabled state read only during schema migration.
+    /// 仅在 Schema 迁移期间读取的旧逐目标禁用状态。
+    #[serde(default, skip_serializing)]
     pub provider_tool_disabled_targets:
         BTreeMap<ProviderToolCapabilityKind, BTreeSet<ProviderToolTargetSelection>>,
 }
@@ -276,6 +280,7 @@ impl Default for PersistedAiConfiguration {
             internal_model_overrides: BTreeMap::new(),
             secondary_routes: BTreeMap::new(),
             provider_tool_selections: BTreeMap::new(),
+            provider_tool_enabled_capabilities: BTreeSet::new(),
             provider_tool_disabled_targets: BTreeMap::new(),
         }
     }
@@ -300,17 +305,32 @@ impl PersistedAiConfiguration {
                     Ok(true)
                 }
             }
-            0 => {
-                self.provider_tool_selections
-                    .remove(&ProviderToolCapabilityKind::EmbeddingCreate);
-                self.provider_tool_selections
-                    .remove(&ProviderToolCapabilityKind::RerankDocuments);
-                self.provider_tool_disabled_targets
-                    .remove(&ProviderToolCapabilityKind::EmbeddingCreate);
-                self.provider_tool_disabled_targets
-                    .remove(&ProviderToolCapabilityKind::RerankDocuments);
+            0 | 1 => {
+                if self.schema_version == 0 {
+                    self.provider_tool_selections
+                        .remove(&ProviderToolCapabilityKind::EmbeddingCreate);
+                    self.provider_tool_selections
+                        .remove(&ProviderToolCapabilityKind::RerankDocuments);
+                    self.provider_tool_disabled_targets
+                        .remove(&ProviderToolCapabilityKind::EmbeddingCreate);
+                    self.provider_tool_disabled_targets
+                        .remove(&ProviderToolCapabilityKind::RerankDocuments);
+                }
+                self.provider_tool_enabled_capabilities = self
+                    .provider_tool_selections
+                    .iter()
+                    .filter(|(capability, selection)| {
+                        !self
+                            .provider_tool_disabled_targets
+                            .get(capability)
+                            .is_some_and(|disabled| disabled.contains(selection))
+                    })
+                    .map(|(capability, _)| *capability)
+                    .collect();
+                self.provider_tool_disabled_targets.clear();
                 self.inference_profiles
-                    .insert(String::from("vmm"), InferenceProfile::default());
+                    .entry(String::from("vmm"))
+                    .or_default();
                 self.schema_version = PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION;
                 Ok(true)
             }
@@ -612,16 +632,124 @@ mod tests {
             Some(&search_target)
         );
         assert!(
+            configuration
+                .provider_tool_enabled_capabilities
+                .contains(&ProviderToolCapabilityKind::WebSearch)
+        );
+        assert!(
             !configuration
                 .provider_tool_selections
                 .contains_key(&ProviderToolCapabilityKind::EmbeddingCreate)
         );
+        assert!(configuration.provider_tool_disabled_targets.is_empty());
+        assert!(configuration.inference_profiles.contains_key("vmm"));
+    }
+
+    /// Verifies schema one converts only effective selected targets into capability switches.
+    /// 验证 Schema 一只把实际生效的已选目标转换为能力开关。
+    #[test]
+    fn schema_one_migrates_target_activation_to_capability_activation() {
+        let enabled_target = ProviderToolTargetSelection {
+            connection_id: String::from("enabled-account"),
+            target_id: String::from("enabled-target"),
+        };
+        let disabled_target = ProviderToolTargetSelection {
+            connection_id: String::from("disabled-account"),
+            target_id: String::from("disabled-target"),
+        };
+        let mut configuration = PersistedAiConfiguration {
+            schema_version: 1,
+            ..PersistedAiConfiguration::default()
+        };
+        configuration
+            .provider_tool_selections
+            .insert(ProviderToolCapabilityKind::WebSearch, enabled_target);
+        configuration.provider_tool_selections.insert(
+            ProviderToolCapabilityKind::WebExtract,
+            disabled_target.clone(),
+        );
+        configuration.provider_tool_disabled_targets.insert(
+            ProviderToolCapabilityKind::WebExtract,
+            BTreeSet::from([disabled_target]),
+        );
+
+        assert!(
+            configuration
+                .migrate_to_current_schema()
+                .expect("schema one migration")
+        );
+
+        assert!(
+            configuration
+                .provider_tool_enabled_capabilities
+                .contains(&ProviderToolCapabilityKind::WebSearch)
+        );
         assert!(
             !configuration
-                .provider_tool_disabled_targets
-                .contains_key(&ProviderToolCapabilityKind::RerankDocuments)
+                .provider_tool_enabled_capabilities
+                .contains(&ProviderToolCapabilityKind::WebExtract)
         );
-        assert!(configuration.inference_profiles.contains_key("vmm"));
+        assert!(configuration.provider_tool_disabled_targets.is_empty());
+    }
+
+    /// Verifies schema one migration preserves every configured VMM inference route.
+    /// 验证 Schema 一迁移会保留全部已配置的 VMM 推理路由。
+    #[test]
+    fn schema_one_migration_preserves_configured_vmm_inference_profile() {
+        let llm_route = InferenceRouteConfiguration {
+            provider_id: String::from("llm-provider"),
+            service_entry_id: String::from("llm-entry"),
+            connection_id: String::from("llm-connection"),
+            model_id: String::from("llm-model"),
+            binding: InferenceRouteBinding::Protocol {
+                protocol_profile_id: String::from("llm-protocol"),
+            },
+            operation: AiOperation::ConversationRespond,
+            usage_scope: InferenceUsageScope::ExternalService,
+        };
+        let embedding_route = InferenceRouteConfiguration {
+            provider_id: String::from("embedding-provider"),
+            service_entry_id: String::from("embedding-entry"),
+            connection_id: String::from("embedding-connection"),
+            model_id: String::from("embedding-model"),
+            binding: InferenceRouteBinding::Action {
+                action_binding_id: String::from("embedding-action"),
+            },
+            operation: AiOperation::EmbeddingCreate,
+            usage_scope: InferenceUsageScope::ExternalService,
+        };
+        let rerank_route = InferenceRouteConfiguration {
+            provider_id: String::from("rerank-provider"),
+            service_entry_id: String::from("rerank-entry"),
+            connection_id: String::from("rerank-connection"),
+            model_id: String::from("rerank-model"),
+            binding: InferenceRouteBinding::Action {
+                action_binding_id: String::from("rerank-action"),
+            },
+            operation: AiOperation::RerankDocuments,
+            usage_scope: InferenceUsageScope::ExternalService,
+        };
+        let expected_profile = InferenceProfile {
+            llm_routes: BTreeMap::from([(String::from("precheck_l1"), llm_route)]),
+            embedding: Some(embedding_route),
+            rerank: Some(rerank_route),
+        };
+        let mut configuration = PersistedAiConfiguration {
+            schema_version: 1,
+            inference_profiles: BTreeMap::from([(String::from("vmm"), expected_profile.clone())]),
+            ..PersistedAiConfiguration::default()
+        };
+
+        assert!(
+            configuration
+                .migrate_to_current_schema()
+                .expect("schema one migration")
+        );
+
+        assert_eq!(
+            configuration.inference_profiles.get("vmm"),
+            Some(&expected_profile)
+        );
     }
 
     /// Verifies unknown persisted schema generations are rejected without mutation.

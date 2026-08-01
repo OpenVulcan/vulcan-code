@@ -145,9 +145,12 @@ impl ProviderExecutionRoute {
     pub fn request_url(&self, encoded_path: &str) -> String {
         format!(
             "{}{}",
-            self.protocol_route
-                .resolved_base_url(&self.entry)
-                .trim_end_matches('/'),
+            crate::connection_endpoint::resolved_connection_protocol_base_url(
+                &self.connection,
+                &self.entry,
+                &self.protocol_route,
+            )
+            .trim_end_matches('/'),
             ensure_leading_slash(encoded_path)
         )
     }
@@ -774,6 +777,12 @@ fn validate_request_policy(
                     vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
                         | vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID
                 ))
+                || (route.entry.request_projector == RequestProjectorKind::DeepSeek
+                    && matches!(
+                        route.protocol_route.protocol_profile_id.as_str(),
+                        vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
+                            | vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID
+                    ))
                 || route.entry.request_projector == RequestProjectorKind::OpenRouter);
         let registered_minimax_reasoning_split = parameter_id
             == MINIMAX_REASONING_SPLIT_PARAMETER_ID
@@ -821,7 +830,13 @@ fn project_provider_request(
     if let Some(endpoint_path) = route.protocol_route.endpoint_path.as_ref() {
         encoded.path = endpoint_path.clone();
     }
-    project_sampling_temperature(request, &mut encoded)?;
+    // DeepSeek V4 enables thinking by default, where temperature is documented as ineffective.
+    // DeepSeek V4 默认启用思考模式，而官方文档说明该模式下温度参数不生效。
+    if route.entry.request_projector != RequestProjectorKind::DeepSeek
+        || request.reasoning_effort == Some(ReasoningEffort::None)
+    {
+        project_sampling_temperature(request, &mut encoded)?;
+    }
     match route.entry.request_projector {
         RequestProjectorKind::Direct | RequestProjectorKind::Google => {}
         RequestProjectorKind::MiniMax => {
@@ -2464,7 +2479,8 @@ mod tests {
     use crate::{
         CredentialMode,
         providers::{
-            deepseek_descriptor, kimi_descriptor, minimax_descriptor, openrouter_descriptor,
+            alibaba_descriptor, deepseek_descriptor, kimi_descriptor, minimax_descriptor,
+            openrouter_descriptor,
         },
     };
     use std::collections::{BTreeMap, BTreeSet};
@@ -2547,6 +2563,7 @@ mod tests {
             display_name: String::from("Primary"),
             secret_reference: String::from("secret"),
             management_secret_reference: None,
+            service_origin_override: None,
             verified_protocols: BTreeSet::from([protocol_id.to_string()]),
             selected_protocol: protocol_id.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),
@@ -2595,6 +2612,7 @@ mod tests {
             display_name: String::from("Primary"),
             secret_reference: String::from("secret"),
             management_secret_reference: None,
+            service_origin_override: None,
             verified_protocols: BTreeSet::from([protocol_id.to_string()]),
             selected_protocol: protocol_id.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),
@@ -2639,6 +2657,7 @@ mod tests {
             display_name: String::from("Primary"),
             secret_reference: String::from("secret"),
             management_secret_reference: None,
+            service_origin_override: None,
             verified_protocols: BTreeSet::from([protocol_id.to_string()]),
             selected_protocol: protocol_id.to_string(),
             prompt_cache_by_protocol: BTreeMap::new(),
@@ -2673,6 +2692,7 @@ mod tests {
             display_name: String::from("Kimi"),
             secret_reference: String::from("secret"),
             management_secret_reference: None,
+            service_origin_override: None,
             verified_protocols: BTreeSet::from([String::from(OPENAI_CHAT_PROFILE_ID)]),
             selected_protocol: String::from(OPENAI_CHAT_PROFILE_ID),
             prompt_cache_by_protocol: BTreeMap::new(),
@@ -2685,6 +2705,69 @@ mod tests {
             SecondaryRouteSelection::Automatic,
         )
         .expect("Kimi route should resolve")
+    }
+
+    /// Resolves one Alibaba Model Studio route with a credential-scoped workspace origin.
+    /// 使用凭据作用域工作空间源地址解析一条阿里云百炼路由。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `protocol_id` selects the exact OpenAI or Anthropic compatibility path.
+    /// `protocol_id` 选择精确 OpenAI 或 Anthropic 兼容路径。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A frozen Singapore route whose public origin is replaced by the credential setting.
+    /// 返回公共源地址已被凭据设置替换的冻结新加坡路由。
+    fn alibaba_workspace_route(protocol_id: &str) -> ProviderExecutionRoute {
+        let provider = alibaba_descriptor();
+        let entry = provider
+            .service_entries
+            .iter()
+            .find(|entry| entry.id == "model-studio-singapore")
+            .expect("Model Studio Singapore entry")
+            .clone();
+        let connection = CredentialConnection {
+            id: String::from("connection"),
+            provider_id: provider.id.clone(),
+            service_entry_id: entry.id.clone(),
+            credential_profile_id: String::from("api-key"),
+            credential_mode: CredentialMode::Token,
+            credential_id: String::from("credential"),
+            display_name: String::from("Workspace"),
+            secret_reference: String::from("secret"),
+            management_secret_reference: None,
+            service_origin_override: Some(String::from(
+                "https://ws-example.ap-southeast-1.maas.aliyuncs.com",
+            )),
+            verified_protocols: BTreeSet::from([protocol_id.to_string()]),
+            selected_protocol: protocol_id.to_string(),
+            prompt_cache_by_protocol: BTreeMap::new(),
+            usage_scope_override: None,
+        };
+        ProviderExecutionRoute::resolve(
+            provider,
+            entry,
+            connection,
+            SecondaryRouteSelection::Automatic,
+        )
+        .expect("Alibaba workspace route should resolve")
+    }
+
+    /// Verifies one workspace origin derives the correct protocol-specific request roots.
+    /// 验证同一个工作空间源地址派生正确的协议专属请求根地址。
+    #[test]
+    fn alibaba_workspace_origin_is_protocol_scoped() {
+        let chat = alibaba_workspace_route(OPENAI_CHAT_PROFILE_ID);
+        assert_eq!(
+            chat.request_url("/chat/completions"),
+            "https://ws-example.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
+        );
+        let anthropic = alibaba_workspace_route(ANTHROPIC_MESSAGES_PROFILE_ID);
+        assert_eq!(
+            anthropic.request_url("/v1/messages"),
+            "https://ws-example.ap-southeast-1.maas.aliyuncs.com/apps/anthropic/v1/messages"
+        );
     }
 
     /// Verifies SSE framing survives arbitrary UTF-8 and record chunk boundaries.
@@ -3066,12 +3149,40 @@ mod tests {
         let mut request = minimal_request();
         request.model_id = String::from("deepseek-v4-pro");
         request.reasoning_effort = Some(ReasoningEffort::None);
+        request.model_parameters.insert(
+            String::from(SAMPLING_TEMPERATURE_PARAMETER_ID),
+            ModelParameterValue::Decimal(String::from("0.2")),
+        );
 
         let encoded = client
             .encode_request(&deepseek_route(OPENAI_CHAT_PROFILE_ID), &request)
             .expect("DeepSeek Chat request should encode");
         assert_eq!(encoded.body["thinking"]["type"], "disabled");
+        assert_eq!(encoded.body["temperature"], 0.2);
         assert!(encoded.body.get("reasoning_effort").is_none());
+    }
+
+    /// Verifies DeepSeek thinking requests omit temperature because the provider ignores it.
+    /// 验证 DeepSeek 思考请求省略供应商不会生效的温度参数。
+    #[test]
+    fn deepseek_thinking_omits_ineffective_temperature() {
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let mut request = minimal_request();
+        request.model_id = String::from("deepseek-v4-flash");
+        request.reasoning_effort = Some(ReasoningEffort::High);
+        request.model_parameters.insert(
+            String::from(SAMPLING_TEMPERATURE_PARAMETER_ID),
+            ModelParameterValue::Decimal(String::from("0.2")),
+        );
+
+        let encoded = client
+            .encode_request(&deepseek_route(OPENAI_CHAT_PROFILE_ID), &request)
+            .expect("DeepSeek thinking request should encode");
+        assert_eq!(encoded.body["thinking"]["type"], "enabled");
+        assert!(encoded.body.get("temperature").is_none());
     }
 
     /// Verifies DeepSeek Anthropic projects both disabled and documented effort controls.
@@ -3086,10 +3197,15 @@ mod tests {
         let mut disabled = minimal_request();
         disabled.model_id = String::from("deepseek-v4-pro");
         disabled.reasoning_effort = Some(ReasoningEffort::None);
+        disabled.model_parameters.insert(
+            String::from(SAMPLING_TEMPERATURE_PARAMETER_ID),
+            ModelParameterValue::Decimal(String::from("1.3")),
+        );
         let disabled = client
             .encode_request(&route, &disabled)
             .expect("DeepSeek Anthropic disabled request should encode");
         assert_eq!(disabled.body["thinking"]["type"], "disabled");
+        assert_eq!(disabled.body["temperature"], 1.3);
         assert!(disabled.body.get("output_config").is_none());
 
         let mut enabled = minimal_request();

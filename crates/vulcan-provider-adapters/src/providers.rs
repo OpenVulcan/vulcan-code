@@ -2,9 +2,11 @@
 //! 内置首批供应商描述。
 
 use crate::{
-    AccountUsageQueryKind, AuthenticationProjection, CredentialBillingKind, CredentialMode,
-    CredentialProfile, ModelDiscoveryKind, OAuthProviderKind, ProtocolRoute, ProviderDescriptor,
-    ProviderKind, RequestProjectorKind, ServiceEntry, ServiceEntryKind,
+    AccountUsageQueryKind, AuthenticationProjection, CredentialBillingKind,
+    CredentialDirectoryVisibility, CredentialMode, CredentialProfile, ModelDiscoveryKind,
+    OAuthProviderKind, ProtocolRoute, ProviderCategory, ProviderDescriptor, ProviderKind,
+    ProviderPartnershipKind, ProviderPromotion, ProviderPromotionDisclosureKey,
+    RequestProjectorKind, ServiceEntry, ServiceEntryKind,
 };
 use std::collections::BTreeMap;
 use vulcan_ai_contract::InferenceUsageScope;
@@ -27,6 +29,9 @@ pub fn minimax_descriptor() -> ProviderDescriptor {
         id: String::from("minimax"),
         display_name: String::from("MiniMax"),
         kind: ProviderKind::System,
+        category: ProviderCategory::Official,
+        credential_directory_visibility: CredentialDirectoryVisibility::ConfiguredOnly,
+        promotion: None,
         service_entries: vec![
             service_entry(ServiceEntrySpec {
                 id: "global",
@@ -70,6 +75,9 @@ pub fn kimi_descriptor() -> ProviderDescriptor {
         id: String::from("kimi"),
         display_name: String::from("Kimi"),
         kind: ProviderKind::System,
+        category: ProviderCategory::Official,
+        credential_directory_visibility: CredentialDirectoryVisibility::ConfiguredOnly,
+        promotion: None,
         service_entries: vec![
             service_entry(ServiceEntrySpec {
                 id: "platform-cn",
@@ -164,6 +172,9 @@ pub fn deepseek_descriptor() -> ProviderDescriptor {
         id: String::from("deepseek"),
         display_name: String::from("DeepSeek"),
         kind: ProviderKind::System,
+        category: ProviderCategory::Official,
+        credential_directory_visibility: CredentialDirectoryVisibility::ConfiguredOnly,
+        promotion: None,
         service_entries: vec![service_entry(ServiceEntrySpec {
             id: "official-api",
             request_projector: RequestProjectorKind::DeepSeek,
@@ -204,8 +215,11 @@ pub fn deepseek_descriptor() -> ProviderDescriptor {
 pub fn alibaba_descriptor() -> ProviderDescriptor {
     ProviderDescriptor {
         id: String::from("alibaba"),
-        display_name: String::from("Alibaba Cloud Model Studio"),
+        display_name: String::from("Alibaba Cloud"),
         kind: ProviderKind::System,
+        category: ProviderCategory::CloudMaaS,
+        credential_directory_visibility: CredentialDirectoryVisibility::ConfiguredOnly,
+        promotion: None,
         service_entries: vec![
             alibaba_coding_plan_entry(
                 "coding-plan-cn",
@@ -221,6 +235,11 @@ pub fn alibaba_descriptor() -> ProviderDescriptor {
                 "token-plan-personal-cn",
                 "Token Plan Personal China",
                 "https://token-plan.cn-beijing.maas.aliyuncs.com",
+            ),
+            alibaba_token_plan_entry(
+                "token-plan-personal-global",
+                "Token Plan Personal International",
+                "https://token-plan.ap-southeast-1.maas.aliyuncs.com",
             ),
             alibaba_token_plan_entry(
                 "token-plan-team-cn",
@@ -258,6 +277,9 @@ pub fn openrouter_descriptor() -> ProviderDescriptor {
         id: String::from("openrouter"),
         display_name: String::from("OpenRouter"),
         kind: ProviderKind::System,
+        category: ProviderCategory::Relay,
+        credential_directory_visibility: CredentialDirectoryVisibility::ConfiguredOnly,
+        promotion: None,
         service_entries: vec![service_entry(ServiceEntrySpec {
             id: "public-api",
             request_projector: RequestProjectorKind::OpenRouter,
@@ -286,6 +308,218 @@ pub fn openrouter_descriptor() -> ProviderDescriptor {
     }
 }
 
+/// Creates the APIKEY.FUN relay provider descriptor.
+/// 创建 APIKEY.FUN 中转站供应商描述。
+///
+/// # Returns
+/// 返回值
+/// A pinned OpenAI-compatible relay entry using the provider's public gateway.
+/// 返回使用供应商公开网关的固定 OpenAI 兼容中转站入口。
+pub fn apikeyfun_descriptor() -> ProviderDescriptor {
+    ProviderDescriptor {
+        id: String::from("apikeyfun"),
+        display_name: String::from("APIKEY.FUN"),
+        kind: ProviderKind::System,
+        category: ProviderCategory::Relay,
+        credential_directory_visibility: CredentialDirectoryVisibility::PinnedOnboarding,
+        promotion: Some(neutral_promotion("https://apikey.fun/register")),
+        service_entries: vec![service_entry(ServiceEntrySpec {
+            id: "public-api",
+            request_projector: RequestProjectorKind::Direct,
+            display_name: "APIKEY.FUN Gateway",
+            base_url: "https://api.apikey.fun/v1",
+            credential_profiles: vec![token_profile(
+                "api-key",
+                "API Key",
+                CredentialBillingKind::ProviderManaged,
+                AccountUsageQueryKind::Unsupported,
+                None,
+            )],
+            authentication: AuthenticationProjection::BearerAuthorization,
+            request_headers: [],
+            model_discovery: ModelDiscoveryKind::OpenAi,
+            protocol_routes: [protocol_route(OPENAI_CHAT_PROFILE_ID, "/chat/completions")],
+        })],
+    }
+}
+
+/// Creates the ClaudeAPI relay provider descriptor.
+/// 创建 ClaudeAPI 中转站供应商描述。
+///
+/// # Returns
+/// 返回值
+/// A distinct relay provider exposing its documented Anthropic-compatible root.
+/// 返回公开其文档化 Anthropic 兼容根地址的独立中转站供应商。
+pub fn claudeapi_descriptor() -> ProviderDescriptor {
+    ProviderDescriptor {
+        id: String::from("claudeapi"),
+        display_name: String::from("ClaudeAPI"),
+        kind: ProviderKind::System,
+        category: ProviderCategory::Relay,
+        credential_directory_visibility: CredentialDirectoryVisibility::PinnedOnboarding,
+        promotion: Some(neutral_promotion("https://console.apito.ai")),
+        service_entries: vec![service_entry(ServiceEntrySpec {
+            id: "gateway",
+            request_projector: RequestProjectorKind::Direct,
+            display_name: "ClaudeAPI Gateway",
+            base_url: "https://gw.claudeapi.com/v1",
+            credential_profiles: vec![token_profile(
+                "api-key",
+                "API Key",
+                CredentialBillingKind::ProviderManaged,
+                AccountUsageQueryKind::Unsupported,
+                Some("sk-"),
+            )],
+            authentication: AuthenticationProjection::BearerAuthorization,
+            request_headers: [],
+            model_discovery: ModelDiscoveryKind::OpenAi,
+            protocol_routes: [protocol_route_with_overrides(
+                ANTHROPIC_MESSAGES_PROFILE_ID,
+                "/v1/messages",
+                Some("https://gw.claudeapi.com"),
+                Some(AuthenticationProjection::XApiKey),
+                [("anthropic-version", "2023-06-01")],
+                Some("https://gw.claudeapi.com/v1"),
+            )],
+        })],
+    }
+}
+
+/// Creates the Qiniu Cloud MaaS provider descriptor.
+/// 创建七牛云 MaaS 供应商描述。
+///
+/// # Returns
+/// 返回值
+/// An official cloud entry exposing documented OpenAI and Anthropic-compatible APIs.
+/// 返回公开已文档化 OpenAI 与 Anthropic 兼容接口的官方云服务入口。
+pub fn qiniu_descriptor() -> ProviderDescriptor {
+    ProviderDescriptor {
+        id: String::from("qiniu"),
+        display_name: String::from("七牛云"),
+        kind: ProviderKind::System,
+        category: ProviderCategory::CloudMaaS,
+        credential_directory_visibility: CredentialDirectoryVisibility::PinnedOnboarding,
+        promotion: Some(neutral_promotion("https://portal.qiniu.com/signup")),
+        service_entries: vec![service_entry(ServiceEntrySpec {
+            id: "token-api",
+            request_projector: RequestProjectorKind::Direct,
+            display_name: "七牛云 AI Token API",
+            base_url: "https://api.qnaigc.com/v1",
+            credential_profiles: vec![token_profile(
+                "api-key",
+                "API Key",
+                CredentialBillingKind::PayAsYouGo,
+                AccountUsageQueryKind::Unsupported,
+                None,
+            )],
+            authentication: AuthenticationProjection::BearerAuthorization,
+            request_headers: [],
+            model_discovery: ModelDiscoveryKind::OpenAi,
+            protocol_routes: [
+                protocol_route(OPENAI_CHAT_PROFILE_ID, "/chat/completions"),
+                protocol_route_with_overrides(
+                    ANTHROPIC_MESSAGES_PROFILE_ID,
+                    "/messages",
+                    None,
+                    Some(AuthenticationProjection::BearerAuthorization),
+                    [("anthropic-version", "2023-06-01")],
+                    None,
+                ),
+            ],
+        })],
+    }
+}
+
+/// Creates the FennoAI relay provider descriptor.
+/// 创建 FennoAI 中转站供应商描述。
+///
+/// # Returns
+/// 返回值
+/// A pinned gateway entry whose documented gateway accepts OpenAI and Anthropic credentials.
+/// 返回其已文档化网关接受 OpenAI 与 Anthropic 凭据的固定入口。
+pub fn fennoai_descriptor() -> ProviderDescriptor {
+    ProviderDescriptor {
+        id: String::from("fennoai"),
+        display_name: String::from("FennoAI"),
+        kind: ProviderKind::System,
+        category: ProviderCategory::Relay,
+        credential_directory_visibility: CredentialDirectoryVisibility::PinnedOnboarding,
+        promotion: Some(neutral_promotion("https://api.fenno.ai/register")),
+        service_entries: vec![service_entry(ServiceEntrySpec {
+            id: "gateway",
+            request_projector: RequestProjectorKind::Direct,
+            display_name: "Fenno AI Gateway",
+            base_url: "https://api.fenno.ai/v1",
+            credential_profiles: vec![token_profile(
+                "api-key",
+                "API Key",
+                CredentialBillingKind::ProviderManaged,
+                AccountUsageQueryKind::Unsupported,
+                None,
+            )],
+            authentication: AuthenticationProjection::BearerAuthorization,
+            request_headers: [],
+            model_discovery: ModelDiscoveryKind::OpenAi,
+            protocol_routes: [
+                protocol_route(OPENAI_CHAT_PROFILE_ID, "/chat/completions"),
+                protocol_route_with_overrides(
+                    ANTHROPIC_MESSAGES_PROFILE_ID,
+                    "/messages",
+                    None,
+                    Some(AuthenticationProjection::XApiKey),
+                    [("anthropic-version", "2023-06-01")],
+                    None,
+                ),
+            ],
+        })],
+    }
+}
+
+/// Creates the Code0 relay provider descriptor.
+/// 创建 Code0 中转站供应商描述。
+///
+/// # Returns
+/// 返回值
+/// A pinned relay entry exposing the provider's documented Anthropic and OpenAI roots.
+/// 返回公开供应商已文档化 Anthropic 与 OpenAI 根地址的固定中转站入口。
+pub fn code0_descriptor() -> ProviderDescriptor {
+    ProviderDescriptor {
+        id: String::from("code0"),
+        display_name: String::from("Code0"),
+        kind: ProviderKind::System,
+        category: ProviderCategory::Relay,
+        credential_directory_visibility: CredentialDirectoryVisibility::PinnedOnboarding,
+        promotion: Some(neutral_promotion("https://code0.ai")),
+        service_entries: vec![service_entry(ServiceEntrySpec {
+            id: "hong-kong",
+            request_projector: RequestProjectorKind::Direct,
+            display_name: "Code0 Hong Kong Gateway",
+            base_url: "https://hk.code0.ai/v1",
+            credential_profiles: vec![token_profile(
+                "api-key",
+                "API Key",
+                CredentialBillingKind::ProviderManaged,
+                AccountUsageQueryKind::Unsupported,
+                Some("sk-"),
+            )],
+            authentication: AuthenticationProjection::BearerAuthorization,
+            request_headers: [],
+            model_discovery: ModelDiscoveryKind::OpenAi,
+            protocol_routes: [
+                protocol_route(OPENAI_CHAT_PROFILE_ID, "/chat/completions"),
+                protocol_route_with_overrides(
+                    ANTHROPIC_MESSAGES_PROFILE_ID,
+                    "/v1/messages",
+                    Some("https://hk.code0.ai"),
+                    Some(AuthenticationProjection::XApiKey),
+                    [("anthropic-version", "2023-06-01")],
+                    Some("https://hk.code0.ai/v1"),
+                ),
+            ],
+        })],
+    }
+}
+
 /// Creates the Tavily provider-tools-only descriptor.
 /// 创建仅包含供应商工具的 Tavily 描述。
 ///
@@ -298,6 +532,9 @@ pub fn tavily_descriptor() -> ProviderDescriptor {
         id: String::from("tavily"),
         display_name: String::from("Tavily"),
         kind: ProviderKind::System,
+        category: ProviderCategory::Official,
+        credential_directory_visibility: CredentialDirectoryVisibility::ConfiguredOnly,
+        promotion: None,
         service_entries: vec![ServiceEntry {
             id: String::from("public-api"),
             display_name: String::from("Tavily Search API"),
@@ -332,6 +569,9 @@ pub fn openai_descriptor() -> ProviderDescriptor {
         id: String::from("openai"),
         display_name: String::from("OpenAI"),
         kind: ProviderKind::System,
+        category: ProviderCategory::Official,
+        credential_directory_visibility: CredentialDirectoryVisibility::ConfiguredOnly,
+        promotion: None,
         service_entries: vec![
             service_entry(ServiceEntrySpec {
                 id: "public-api",
@@ -396,6 +636,9 @@ pub fn anthropic_descriptor() -> ProviderDescriptor {
         id: String::from("anthropic"),
         display_name: String::from("Anthropic"),
         kind: ProviderKind::System,
+        category: ProviderCategory::Official,
+        credential_directory_visibility: CredentialDirectoryVisibility::ConfiguredOnly,
+        promotion: None,
         service_entries: vec![
             service_entry(ServiceEntrySpec {
                 id: "public-api",
@@ -460,6 +703,9 @@ pub fn google_descriptor() -> ProviderDescriptor {
         id: String::from("google"),
         display_name: String::from("Google"),
         kind: ProviderKind::System,
+        category: ProviderCategory::Official,
+        credential_directory_visibility: CredentialDirectoryVisibility::ConfiguredOnly,
+        promotion: None,
         service_entries: vec![
             service_entry(ServiceEntrySpec {
                 id: "gemini-api",
@@ -817,6 +1063,28 @@ fn all_usage_scopes() -> std::collections::BTreeSet<InferenceUsageScope> {
     .collect()
 }
 
+/// Creates neutral registration metadata without claiming a Vulcan referral relationship.
+/// 创建不宣称 Vulcan 推广关系的普通注册元数据。
+///
+/// # Parameters
+/// 参数
+/// `signup_url` is the exact public HTTPS registration or product entry.
+/// `signup_url` 是精确的公开 HTTPS 注册或产品入口。
+///
+/// # Returns
+/// 返回值
+/// Registration metadata that can receive a Vulcan-owned referral URL later.
+/// 返回后续可补充 Vulcan 自有推广链接的注册元数据。
+fn neutral_promotion(signup_url: &str) -> ProviderPromotion {
+    ProviderPromotion {
+        signup_url: signup_url.to_string(),
+        referral_url: None,
+        campaign_id: None,
+        partnership_kind: ProviderPartnershipKind::None,
+        disclosure_key: ProviderPromotionDisclosureKey::NeutralRegistration,
+    }
+}
+
 /// Carries one complete declarative provider service-entry specification.
 /// 承载一项完整的声明式供应商服务入口规格。
 struct ServiceEntrySpec<const H: usize, P> {
@@ -1103,6 +1371,7 @@ mod tests {
     #[test]
     fn alibaba_descriptor_preserves_complete_product_matrix() {
         let descriptor = alibaba_descriptor();
+        assert_eq!(descriptor.display_name, "Alibaba Cloud");
         assert_eq!(
             descriptor
                 .service_entries
@@ -1113,13 +1382,14 @@ mod tests {
                 "coding-plan-cn",
                 "coding-plan-global",
                 "token-plan-personal-cn",
+                "token-plan-personal-global",
                 "token-plan-team-cn",
                 "token-plan-team-global",
                 "model-studio-cn",
                 "model-studio-singapore",
             ]
         );
-        for entry in descriptor.service_entries.iter().take(5) {
+        for entry in descriptor.service_entries.iter().take(6) {
             assert_eq!(
                 entry.allowed_usage_scopes,
                 [InferenceUsageScope::InteractiveAgent]
@@ -1140,7 +1410,7 @@ mod tests {
                 Some(AuthenticationProjection::XApiKey)
             );
         }
-        for entry in descriptor.service_entries.iter().skip(2).take(3) {
+        for entry in descriptor.service_entries.iter().skip(2).take(4) {
             assert_eq!(
                 entry
                     .credential_profile("token-plan-api-key")
@@ -1150,7 +1420,7 @@ mod tests {
                 Some("sk-sp-")
             );
         }
-        for entry in descriptor.service_entries.iter().skip(5) {
+        for entry in descriptor.service_entries.iter().skip(6) {
             assert!(
                 entry
                     .allowed_usage_scopes

@@ -29,8 +29,16 @@ pub struct SessionRuntimeStateEntry {
     /// 按语义能力索引的会话级供应商工具目标选择。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub provider_tool_selections: BTreeMap<String, SessionProviderToolTargetSelection>,
-    /// Whether this session explicitly overrides the global provider tool selections.
-    /// 当前会话是否显式覆盖全局供应商工具选择。
+    /// Provider tool capabilities enabled only for this session.
+    /// 仅为当前会话启用的供应商工具能力。
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub provider_tool_enabled_capabilities: BTreeSet<String>,
+    /// Whether provider tool defaults have been materialized into this session.
+    /// 供应商工具默认值是否已经物化到当前会话。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub provider_tool_settings_initialized: bool,
+    /// Legacy marker used to migrate earlier session selection snapshots.
+    /// 用于迁移早期会话选择快照的旧标记。
     #[serde(default, skip_serializing_if = "is_false")]
     pub provider_tool_selections_overridden: bool,
     /// Last user-selected work mode key for this session.

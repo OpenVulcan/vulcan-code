@@ -114,6 +114,7 @@ fn alibaba_tool_targets() -> Vec<ProviderToolTarget> {
     }
     for service_entry_id in [
         "token-plan-personal-cn",
+        "token-plan-personal-global",
         "token-plan-team-cn",
         "token-plan-team-global",
     ] {
@@ -121,7 +122,11 @@ fn alibaba_tool_targets() -> Vec<ProviderToolTarget> {
             targets.push(alibaba_wan_image_target(service_entry_id, model_id));
         }
     }
-    for service_entry_id in ["token-plan-personal-cn", "token-plan-team-cn"] {
+    for service_entry_id in [
+        "token-plan-personal-cn",
+        "token-plan-personal-global",
+        "token-plan-team-cn",
+    ] {
         for model_id in ["happyhorse-1.1-t2v", "happyhorse-1.1-i2v"] {
             targets.push(alibaba_happyhorse_video_target(
                 service_entry_id,
@@ -159,7 +164,9 @@ fn alibaba_service_origin(service_entry_id: &str) -> &'static str {
         "token-plan-personal-cn" | "token-plan-team-cn" => {
             "https://token-plan.cn-beijing.maas.aliyuncs.com"
         }
-        "token-plan-team-global" => "https://token-plan.ap-southeast-1.maas.aliyuncs.com",
+        "token-plan-personal-global" | "token-plan-team-global" => {
+            "https://token-plan.ap-southeast-1.maas.aliyuncs.com"
+        }
         _ => unreachable!("Alibaba tool targets only use reviewed service entries"),
     }
 }
@@ -2466,7 +2473,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(image_targets.len(), 14);
+        assert_eq!(image_targets.len(), 16);
         assert_eq!(
             image_targets
                 .iter()
@@ -2483,7 +2490,7 @@ mod tests {
                     target.execution.adapter == ProviderToolAdapterKind::AlibabaWanImageGenerate
                 })
                 .count(),
-            6
+            8
         );
         assert!(image_targets.iter().all(|target| {
             target.contract.output.kind == ProviderToolOutputKind::Resources
@@ -2537,5 +2544,20 @@ mod tests {
             team_reference_video.is_none(),
             "Token Plan Team must not advertise a reference-video schema that requires an unverified upload carrier."
         );
+        let personal_global_video = targets
+            .iter()
+            .filter(|target| {
+                target.service_entry_id == "token-plan-personal-global"
+                    && matches!(
+                        target.upstream_target_id.as_str(),
+                        "happyhorse-1.1-t2v" | "happyhorse-1.1-i2v"
+                    )
+            })
+            .count();
+        assert_eq!(personal_global_video, 2);
+        assert!(targets.iter().all(|target| {
+            target.service_entry_id != "token-plan-personal-global"
+                || target.upstream_target_id != "happyhorse-1.1-r2v"
+        }));
     }
 }

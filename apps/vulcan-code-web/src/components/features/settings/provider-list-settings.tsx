@@ -1,10 +1,12 @@
 import * as React from "react"
-import { Boxes, KeyRound, Layers3, RefreshCw, Star, Trash2 } from "lucide-react"
+import { Boxes, ExternalLink, KeyRound, Layers3, Plus, RefreshCw, Star, Trash2 } from "lucide-react"
+import { toast } from "sonner"
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { CredentialUsageOverview } from "@/components/public-ai/credential-usage-overview"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import {
   Card,
   CardContent,
@@ -28,6 +30,11 @@ import {
 } from "@/components/ui/tooltip"
 import { AdaptiveToolPanel } from "@/components/workspace/adaptive-tool-panel"
 import { WorkspaceToolPanelMenu } from "@/components/workspace/workspace-tool-panel-menu"
+import { useI18n } from "@/i18n"
+import {
+  ExternalUrlConfirmationRequiredError,
+  openExternalUrl,
+} from "@/service/project-actions-service"
 import {
   addPublicAiConnection,
   cancelPublicAiOAuth,
@@ -71,7 +78,9 @@ export function CredentialManagementArea(props: {
   const [deletingConnection, setDeletingConnection] = React.useState<PublicAiConnection | null>(null)
   const [usageByConnection, setUsageByConnection] = React.useState<Record<string, PublicAiAccountUsage>>({})
   const [activeProviderId, setActiveProviderId] = React.useState<string>("")
+  const [creatingProviderId, setCreatingProviderId] = React.useState<string>("")
   const [menuExpanded, setMenuExpanded] = React.useState(true)
+  const { t } = useI18n()
 
   // refresh loads the authoritative persisted graph and current process-local catalogs.
   // refresh 加载权威持久化连接图与当前进程内目录。
@@ -122,11 +131,30 @@ export function CredentialManagementArea(props: {
     }
   }, [])
 
-  // credentialProviders contains only providers that own at least one configured credential.
-  // credentialProviders 仅包含至少拥有一个已配置凭据的供应商。
-  const credentialProviders = snapshot?.providers.filter((provider) => (
-    snapshot.connections.some((connection) => connection.provider_id === provider.id)
-  )) ?? []
+  // directoryProviders keeps configured providers first and zero-credential onboarding entries last.
+  // directoryProviders 将已配置供应商排在前面，将零凭据引导入口排在最后。
+  const directoryProviders = React.useMemo(() => {
+    if (!snapshot) {
+      return []
+    }
+    // configuredProviderIds is the exact provider set backed by real credentials.
+    // configuredProviderIds 是由真实凭据支持的精确供应商集合。
+    const configuredProviderIds = new Set(
+      snapshot.connections.map((connection) => connection.provider_id),
+    )
+    // configuredProviders retain registry order within the real-credential group.
+    // configuredProviders 在真实凭据分组内保持注册表顺序。
+    const configuredProviders = snapshot.providers.filter((provider) => (
+      configuredProviderIds.has(provider.id)
+    ))
+    // onboardingProviders retain only pinned entries without a credential.
+    // onboardingProviders 仅保留没有凭据的固定引导入口。
+    const onboardingProviders = snapshot.providers.filter((provider) => (
+      provider.credential_directory_visibility === "pinned_onboarding"
+      && !configuredProviderIds.has(provider.id)
+    ))
+    return [...configuredProviders, ...onboardingProviders]
+  }, [snapshot])
   // visibleConnections applies the exact left-menu provider filter.
   // visibleConnections 应用精确的左侧菜单供应商筛选。
   const visibleConnections = snapshot?.connections.filter((connection) => (
@@ -135,8 +163,59 @@ export function CredentialManagementArea(props: {
   // activeProviderLabel supplies the shared collapsed-menu pill label.
   // activeProviderLabel 为共享收起菜单胶囊提供标签。
   const activeProviderLabel = activeProviderId
-    ? credentialProviders.find((provider) => provider.id === activeProviderId)?.display_name ?? activeProviderId
+    ? directoryProviders.find((provider) => provider.id === activeProviderId)?.display_name ?? activeProviderId
     : "全部凭据"
+  // selectedOnboardingProvider exists only after the user selects one zero-credential entry.
+  // selectedOnboardingProvider 仅在用户选中一个零凭据入口后存在。
+  const selectedOnboardingProvider = directoryProviders.find((provider) => (
+    provider.credential_directory_visibility === "pinned_onboarding"
+    && activeProviderId === provider.id
+    && !snapshot?.connections.some((connection) => connection.provider_id === provider.id)
+  ))
+
+  // Reset a stale filter after the last credential of a configured-only provider is removed.
+  // 在仅已配置供应商的最后一个凭据被移除后重置过期筛选。
+  React.useEffect(() => {
+    if (activeProviderId && !directoryProviders.some((provider) => provider.id === activeProviderId)) {
+      setActiveProviderId("")
+    }
+  }, [activeProviderId, directoryProviders])
+
+  // openPromotion opens the exact registered signup or referral URL through the desktop host.
+  // openPromotion 通过桌面宿主打开已注册的精确注册或推广链接。
+  const openPromotion = React.useCallback(async (provider: PublicAiProviderDescriptor) => {
+    // promotion is the exact backend-validated public relationship metadata.
+    // promotion 是后端已校验的精确公开合作关系元数据。
+    const promotion = provider.promotion
+    // url prefers a Vulcan-owned referral only when the contract explicitly provides one.
+    // url 仅在契约显式提供时优先使用 Vulcan 自有推广链接。
+    const url = promotion?.referral_url ?? promotion?.signup_url
+    if (!url) {
+      return
+    }
+    try {
+      await openExternalUrl(url)
+    } catch (reason) {
+      if (reason instanceof ExternalUrlConfirmationRequiredError) {
+        toast.warning(t("settings.providerOnboarding.externalConfirmation"), {
+          description: reason.url,
+          duration: 15_000,
+          action: {
+            label: t("settings.providerOnboarding.externalOpenAnyway"),
+            onClick: () => {
+              void openExternalUrl(reason.url, true).catch((confirmedReason: unknown) => {
+                toast.error(t("settings.providerOnboarding.externalOpenFailed"), {
+                  description: errorMessage(confirmedReason),
+                })
+              })
+            },
+          },
+        })
+        return
+      }
+      setError(errorMessage(reason))
+    }
+  }, [t])
 
   // saveUsageRefreshInterval persists the background refresh cadence.
   // saveUsageRefreshInterval 持久化后台刷新频率。
@@ -178,14 +257,14 @@ export function CredentialManagementArea(props: {
             <span>全部凭据</span>
             <small>{snapshot?.connections.length ?? 0}</small>
           </button>
-          {credentialProviders.map((provider) => (
+          {directoryProviders.map((provider) => (
             <button
               className={`workspace-tool-panel-menu-row ${activeProviderId === provider.id ? "active" : ""}`}
               key={provider.id}
               onClick={() => setActiveProviderId(provider.id)}
               type="button"
             >
-              <ProviderIcon className="size-5" providerId={provider.id} />
+              <ProviderIcon category={provider.category} className="size-5" providerId={provider.id} />
               <span>{provider.display_name}</span>
               <small>{snapshot?.connections.filter((connection) => connection.provider_id === provider.id).length ?? 0}</small>
             </button>
@@ -219,12 +298,7 @@ export function CredentialManagementArea(props: {
             <strong>正在连接公共 AI 运行时</strong>
             <p>启动后会从各凭据实时获取模型，不读取本地模型缓存。</p>
           </article>
-        ) : snapshot.connections.length === 0 ? (
-          <article className="settings-card">
-            <strong>尚未添加模型账号</strong>
-            <p>点击“添加凭据”，选择供应商、服务入口、凭据方式与协议。</p>
-          </article>
-        ) : (
+        ) : visibleConnections.length > 0 ? (
           <div className="credential-management-list">
             {visibleConnections.map((connection) => {
               const provider = providerForConnection(snapshot, connection)
@@ -268,19 +342,46 @@ export function CredentialManagementArea(props: {
               )
             })}
           </div>
+        ) : selectedOnboardingProvider ? (
+          <ProviderOnboardingPanel
+            onAddCredential={() => {
+              setCreatingProviderId(selectedOnboardingProvider.id)
+              props.onProviderPickerOpenChange(true)
+            }}
+            onOpenPromotion={() => void openPromotion(selectedOnboardingProvider)}
+            provider={selectedOnboardingProvider}
+          />
+        ) : activeProviderId ? (
+          <div className="flex min-h-48 w-full flex-col items-center justify-center gap-2 text-center text-muted-foreground">
+            <strong>{t("settings.providerOnboarding.filteredEmpty")}</strong>
+            <p>{t("settings.providerOnboarding.filteredEmptyDescription")}</p>
+          </div>
+        ) : (
+          <div className="flex min-h-48 w-full flex-col items-center justify-center gap-2 text-center text-muted-foreground">
+            <strong>尚未添加模型账号</strong>
+            <p>点击“添加凭据”，选择供应商、服务入口、凭据方式与协议。</p>
+          </div>
         )}
         <PublicAiConnectionDialog
-        connection={null}
-        onOpenChange={props.onProviderPickerOpenChange}
-        onSaved={(next) => {
-          setSnapshot(next)
-          props.onProviderPickerOpenChange(false)
-        }}
-        open={props.pickerOpen}
-        providers={snapshot?.providers ?? []}
-      />
+          connection={null}
+          initialProviderId={creatingProviderId}
+          onOpenChange={(open) => {
+            props.onProviderPickerOpenChange(open)
+            if (!open) {
+              setCreatingProviderId("")
+            }
+          }}
+          onSaved={(next) => {
+            setSnapshot(next)
+            setCreatingProviderId("")
+            props.onProviderPickerOpenChange(false)
+          }}
+          open={props.pickerOpen}
+          providers={snapshot?.providers ?? []}
+        />
       <PublicAiConnectionDialog
         connection={editingConnection}
+        initialProviderId=""
         onOpenChange={(open) => {
           if (!open) {
             setEditingConnection(null)
@@ -313,6 +414,96 @@ export function CredentialManagementArea(props: {
         />
       </div>
     </AdaptiveToolPanel>
+  )
+}
+
+// ProviderOnboardingPanelProps defines one selected zero-credential provider introduction.
+// ProviderOnboardingPanelProps 定义一个已选中的零凭据供应商介绍区域。
+interface ProviderOnboardingPanelProps {
+  // onAddCredential opens the connection dialog preselected to this provider.
+  // onAddCredential 打开预选当前供应商的连接弹窗。
+  onAddCredential: () => void
+  // onOpenPromotion opens the provider-owned signup or referral destination.
+  // onOpenPromotion 打开供应商注册或推广目标地址。
+  onOpenPromotion: () => void
+  // provider is the exact pinned provider descriptor.
+  // provider 是精确的固定供应商描述。
+  provider: PublicAiProviderDescriptor
+}
+
+// ProviderOnboardingPanel renders one full-width introduction without card chrome.
+// ProviderOnboardingPanel 在不使用卡片外观的情况下渲染一个满宽介绍区域。
+function ProviderOnboardingPanel(props: ProviderOnboardingPanelProps) {
+  const { t } = useI18n()
+  // promotionLabel distinguishes configured referral relationships from neutral registration.
+  // promotionLabel 区分已配置推广关系与中性注册链接。
+  const promotionLabel = props.provider.promotion?.partnership_kind === "referral"
+    ? t("settings.providerOnboarding.referralSignup")
+    : t("settings.providerOnboarding.register")
+  // verifiedProtocols lists only protocol routes the backend explicitly marked usable.
+  // verifiedProtocols 仅列出后端明确标记为可用的协议路由。
+  const verifiedProtocols = Array.from(new Set(
+    props.provider.service_entries.flatMap((entry) => (
+      entry.protocol_routes
+        .filter((route) => route.verified)
+        .map((route) => protocolDisplayName(route.protocol_profile_id))
+    )),
+  ))
+  // disclosure selects the localized commercial disclosure from the exact partnership kind.
+  // disclosure 根据精确合作类型选择本地化商业披露。
+  const disclosure = props.provider.promotion
+    ? t(props.provider.promotion.disclosure_key)
+    : null
+
+  return (
+    <section className="w-full px-1 py-4">
+      <div className="flex items-start gap-4 border-b pb-6">
+        <ProviderIcon
+          category={props.provider.category}
+          className="size-12"
+          providerId={props.provider.id}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-xl font-semibold">{props.provider.display_name}</h2>
+            <Badge variant="secondary">{t("settings.providerOnboarding.notConfigured")}</Badge>
+          </div>
+          <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
+            {t("settings.providerOnboarding.description")}
+          </p>
+        </div>
+      </div>
+      <div className="grid w-full gap-6 py-6 md:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="space-y-3">
+          <p className="text-sm font-medium">
+            {props.provider.service_entries.length} {t("settings.providerOnboarding.serviceEntries")}
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {props.provider.service_entries.map((entry) => (
+              <Badge key={entry.id} variant="secondary">{entry.display_name}</Badge>
+            ))}
+          {verifiedProtocols.map((protocol) => (
+            <Badge key={protocol} variant="outline">{protocol}</Badge>
+          ))}
+          </div>
+          {props.provider.promotion ? (
+            <p className="text-sm text-muted-foreground">{disclosure}</p>
+          ) : null}
+        </div>
+        <div className="flex items-start gap-2 md:justify-end">
+          {props.provider.promotion ? (
+            <Button onClick={props.onOpenPromotion} size="sm" type="button" variant="outline">
+              <ExternalLink className="size-3.5" />
+              {promotionLabel}
+            </Button>
+          ) : null}
+          <Button onClick={props.onAddCredential} size="sm" type="button">
+            <Plus className="size-3.5" />
+            {t("settings.providerOnboarding.addCredential")}
+          </Button>
+        </div>
+      </div>
+    </section>
   )
 }
 
@@ -382,6 +573,7 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
       <CardHeader>
         <div className="flex items-start justify-between gap-3">
           <ProviderIcon
+            category={props.provider?.category}
             className="size-8 shrink-0"
             providerId={props.connection.provider_id}
             serviceEntryId={props.connection.service_entry_id}
@@ -655,6 +847,9 @@ function PublicAiConnectionDialog(props: {
   // Existing connection for edit mode.
   // 编辑模式下的现有连接。
   connection: PublicAiConnection | null
+  // Initial provider used only when creating a new connection from a pinned entry.
+  // 仅在从固定入口创建新连接时使用的初始供应商。
+  initialProviderId: string
   // Dialog visibility.
   // 弹窗可见性。
   open: boolean
@@ -668,6 +863,7 @@ function PublicAiConnectionDialog(props: {
   // 接收更新后的设置快照。
   onSaved: (snapshot: PublicAiSettingsSnapshot) => void
 }) {
+  const { t } = useI18n()
   const [providerId, setProviderId] = React.useState("")
   const [entryId, setEntryId] = React.useState("")
   const [credentialProfileId, setCredentialProfileId] = React.useState("")
@@ -676,6 +872,7 @@ function PublicAiConnectionDialog(props: {
   const [protocolId, setProtocolId] = React.useState("")
   const [secret, setSecret] = React.useState("")
   const [managementKey, setManagementKey] = React.useState("")
+  const [serviceOriginOverride, setServiceOriginOverride] = React.useState("")
   const [removeManagementKey, setRemoveManagementKey] = React.useState(false)
   const [oauthClientId, setOauthClientId] = React.useState("")
   const [oauthClientSecret, setOauthClientSecret] = React.useState("")
@@ -700,6 +897,8 @@ function PublicAiConnectionDialog(props: {
     ?? entry?.credential_profiles[0]
   const availableProtocols = entry?.protocol_routes.filter((route) => route.verified) ?? []
   const isProviderToolEntry = entry?.kind === "provider_tools"
+  const supportsServiceOriginOverride = provider?.id === "alibaba"
+    && (entry?.id === "model-studio-cn" || entry?.id === "model-studio-singapore")
 
   React.useEffect(() => {
     if (!props.open) {
@@ -707,7 +906,7 @@ function PublicAiConnectionDialog(props: {
     }
     const existingProvider = props.connection
       ? props.providers.find((item) => item.id === props.connection?.provider_id)
-      : props.providers[0]
+      : props.providers.find((item) => item.id === props.initialProviderId) ?? props.providers[0]
     const existingEntry = props.connection
       ? existingProvider?.service_entries.find((item) => item.id === props.connection?.service_entry_id)
       : existingProvider?.service_entries[0]
@@ -726,6 +925,7 @@ function PublicAiConnectionDialog(props: {
     )
     setSecret("")
     setManagementKey("")
+    setServiceOriginOverride(props.connection?.service_origin_override ?? "")
     setRemoveManagementKey(false)
     setOauthClientId("")
     setOauthClientSecret("")
@@ -734,7 +934,7 @@ function PublicAiConnectionDialog(props: {
     setOauthUserCode(null)
     setPendingAuthorization(null)
     setError(null)
-  }, [props.connection, props.open, props.providers])
+  }, [props.connection, props.initialProviderId, props.open, props.providers])
 
   React.useEffect(() => {
     if (!provider) {
@@ -875,6 +1075,9 @@ function PublicAiConnectionDialog(props: {
           ...(secret ? { secret } : {}),
           ...(managementKey ? { managementKey } : {}),
           ...(removeManagementKey ? { removeManagementKey: true } : {}),
+          ...(supportsServiceOriginOverride
+            ? { serviceOriginOverride: serviceOriginOverride.trim() }
+            : {}),
         })
         : await addPublicAiConnection({
           providerId: provider.id,
@@ -885,6 +1088,9 @@ function PublicAiConnectionDialog(props: {
           selectedProtocol: protocolId,
           secret,
           ...(managementKey ? { managementKey } : {}),
+          ...(supportsServiceOriginOverride && serviceOriginOverride.trim()
+            ? { serviceOriginOverride: serviceOriginOverride.trim() }
+            : {}),
         })
       props.onSaved(next)
     } catch (reason) {
@@ -907,6 +1113,8 @@ function PublicAiConnectionDialog(props: {
     managementKey,
     removeManagementKey,
     secret,
+    serviceOriginOverride,
+    supportsServiceOriginOverride,
   ])
 
   // cancelAuthorization cancels the exact active browser transaction.
@@ -950,11 +1158,14 @@ function PublicAiConnectionDialog(props: {
           <label className="settings-form-field">
             <span>供应商</span>
             <span className="provider-credential-select">
-              <ProviderIcon providerId={provider?.id} />
+              <ProviderIcon category={provider?.category} providerId={provider?.id} />
               <select
                 className="settings-input"
                 disabled={props.connection !== null}
-                onChange={(event) => setProviderId(event.target.value)}
+                onChange={(event) => {
+                  setProviderId(event.target.value)
+                  setServiceOriginOverride("")
+                }}
                 value={provider?.id ?? ""}
               >
                 {props.providers.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}
@@ -966,7 +1177,16 @@ function PublicAiConnectionDialog(props: {
             {provider?.id === "minimax" && credentialMode === "token" ? (
               <strong>保存时自动识别区域</strong>
             ) : (
-              <select className="settings-input" onChange={(event) => setEntryId(event.target.value)} value={entry?.id ?? ""}>
+              <select
+                className="settings-input"
+                onChange={(event) => {
+                  setEntryId(event.target.value)
+                  if (event.target.value !== entry?.id) {
+                    setServiceOriginOverride("")
+                  }
+                }}
+                value={entry?.id ?? ""}
+              >
                 {(provider?.service_entries ?? []).map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}
               </select>
             )}
@@ -1018,6 +1238,20 @@ function PublicAiConnectionDialog(props: {
                 type="password"
                 value={secret}
               />
+            </label>
+          ) : null}
+          {supportsServiceOriginOverride ? (
+            <label className="settings-form-field">
+              <span>{t("settings.providerConnection.serviceOrigin")}</span>
+              <Input
+                autoComplete="off"
+                onChange={(event) => setServiceOriginOverride(event.target.value)}
+                placeholder={entry?.id === "model-studio-cn"
+                  ? "https://{workspace-id}.cn-beijing.maas.aliyuncs.com"
+                  : "https://{workspace-id}.ap-southeast-1.maas.aliyuncs.com"}
+                value={serviceOriginOverride}
+              />
+              <small>{t("settings.providerConnection.serviceOriginDescription")}</small>
             </label>
           ) : null}
           {provider?.id === "openrouter" ? (

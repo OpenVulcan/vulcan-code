@@ -435,6 +435,50 @@
   touch-action: auto;
 }
 
+.settings-provider-tool-defaults {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--background);
+}
+
+.settings-provider-tool-defaults-header {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.settings-provider-tool-defaults-header > span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.settings-provider-tool-defaults-header small,
+.settings-provider-tool-defaults-grid > label > span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.settings-provider-tool-defaults-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(160px, 0.72fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.settings-provider-tool-defaults-grid > label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
 .settings-capability-route-row.dragging {
   opacity: 0.68;
   cursor: grabbing;

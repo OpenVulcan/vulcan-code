@@ -484,7 +484,7 @@ struct AlibabaStaticConversationModel {
     display_name: &'static str,
     /// Exact context-window ceiling.
     /// 精确上下文窗口上限。
-    context_limit: u64,
+    context_limit: Option<u64>,
     /// Optional verified output-token ceiling.
     /// 可选已验证输出 Token 上限。
     output_limit: Option<u64>,
@@ -542,6 +542,41 @@ pub fn build_alibaba_token_plan_catalog(
             false,
             false,
         ),
+    ];
+    const PERSONAL_GLOBAL: &[AlibabaStaticConversationModel] = &[
+        alibaba_static_model(
+            "qwen3.8-max-preview",
+            "Qwen3.8 Max Preview",
+            1_000_000,
+            Some(131_072),
+            true,
+            true,
+        ),
+        alibaba_static_model("qwen3.7-plus", "Qwen3.7 Plus", 1_000_000, None, true, true),
+        alibaba_static_model("qwen3.7-max", "Qwen3.7 Max", 1_000_000, None, false, false),
+        alibaba_static_model(
+            "qwen3.6-flash",
+            "Qwen3.6 Flash",
+            1_000_000,
+            None,
+            true,
+            false,
+        ),
+        alibaba_static_model(
+            "deepseek-v4-pro",
+            "DeepSeek V4 Pro",
+            1_000_000,
+            None,
+            false,
+            false,
+        ),
+        alibaba_static_model_without_verified_context(
+            "deepseek-v4-flash-0731",
+            "DeepSeek V4 Flash 0731",
+            false,
+            false,
+        ),
+        alibaba_static_model("glm-5.2", "GLM-5.2", 1_000_000, None, false, false),
     ];
     const TEAM_CN: &[AlibabaStaticConversationModel] = &[
         alibaba_static_model(
@@ -655,6 +690,7 @@ pub fn build_alibaba_token_plan_catalog(
     ];
     let definitions = match service_entry_id {
         "token-plan-personal-cn" => PERSONAL_CN,
+        "token-plan-personal-global" => PERSONAL_GLOBAL,
         "token-plan-team-cn" => TEAM_CN,
         "token-plan-team-global" => TEAM_GLOBAL,
         unsupported => {
@@ -911,8 +947,36 @@ const fn alibaba_static_model(
     AlibabaStaticConversationModel {
         id,
         display_name,
-        context_limit,
+        context_limit: Some(context_limit),
         output_limit,
+        image_input,
+        video_input,
+    }
+}
+
+/// Creates one static Alibaba model whose context ceiling is not yet published as exact evidence.
+/// 创建一个尚未发布精确上下文上限证据的阿里云静态模型。
+///
+/// # Parameters
+/// 参数
+/// The arguments preserve only the verified identity and input-modality facts.
+/// 参数仅保留已验证的模型身份与输入模态事实。
+///
+/// # Returns
+/// 返回值
+/// A static model definition without an invented context or output limit.
+/// 返回不虚构上下文或输出上限的静态模型定义。
+const fn alibaba_static_model_without_verified_context(
+    id: &'static str,
+    display_name: &'static str,
+    image_input: bool,
+    video_input: bool,
+) -> AlibabaStaticConversationModel {
+    AlibabaStaticConversationModel {
+        id,
+        display_name,
+        context_limit: None,
+        output_limit: None,
         image_input,
         video_input,
     }
@@ -973,9 +1037,13 @@ fn build_alibaba_static_conversation_catalog(
                 capabilities: ModelCapabilities {
                     operations: vec![AiOperation::ConversationRespond],
                     input_resources,
-                    context_limit: Some(definition.context_limit),
+                    context_limit: definition.context_limit,
                     output_limit: definition.output_limit,
-                    evidence_revision: format!("model-core.alibaba.{service_entry_id}.2026-07-30"),
+                    evidence_revision: if service_entry_id == "token-plan-personal-global" {
+                        String::from("alibaba.token-plan.personal-global.2026-08-01")
+                    } else {
+                        format!("model-core.alibaba.{service_entry_id}.2026-07-30")
+                    },
                     ..ModelCapabilities::default()
                 },
             };
@@ -1051,24 +1119,14 @@ pub fn parse_openai_model_catalog(
     let models = response
         .data
         .into_iter()
-        .map(|model| {
-            let reasoning =
-                fixed_reasoning_capabilities(FixedReasoningProvider::OpenAi, model.id.as_str());
-            ConnectionModel {
-                display_name: model.id.clone(),
-                id: model.id,
-                capabilities: ModelCapabilities {
-                    operations: vec![AiOperation::ConversationRespond],
-                    reasoning: reasoning.support,
-                    reasoning_efforts: reasoning.efforts,
-                    evidence_revision: if reasoning.support == CapabilitySupport::Unknown {
-                        String::from("openai.models.v1")
-                    } else {
-                        reasoning.evidence_revision.to_string()
-                    },
-                    ..ModelCapabilities::default()
-                },
-            }
+        .map(|model| ConnectionModel {
+            display_name: model.id.clone(),
+            id: model.id,
+            capabilities: ModelCapabilities {
+                operations: vec![AiOperation::ConversationRespond],
+                evidence_revision: String::from("openai-compatible.models.v1"),
+                ..ModelCapabilities::default()
+            },
         })
         .collect();
     Ok(ConnectionModelCatalog {
@@ -1095,12 +1153,31 @@ pub fn enrich_compatible_model_catalog(
 ) {
     for model in &mut catalog.models {
         match provider_id {
+            "openai" => enrich_openai_model(model),
             "kimi" => enrich_kimi_model(service_entry_id, protocol_id, model),
-            "deepseek" => enrich_deepseek_model(model),
+            "deepseek" => enrich_deepseek_model(protocol_id, model),
             "alibaba" => enrich_alibaba_model(service_entry_id, model),
             _ => {}
         }
     }
+}
+
+/// Applies official OpenAI reasoning metadata after provider identity is known.
+/// 在供应商身份已知后应用 OpenAI 官方思考元数据。
+///
+/// # Parameters
+/// 参数
+/// `model` is one model parsed from the official OpenAI catalog.
+/// `model` 是从 OpenAI 官方目录解析出的一个模型。
+fn enrich_openai_model(model: &mut ConnectionModel) {
+    let reasoning = fixed_reasoning_capabilities(FixedReasoningProvider::OpenAi, model.id.as_str());
+    model.capabilities.reasoning = reasoning.support;
+    model.capabilities.reasoning_efforts = reasoning.efforts;
+    model.capabilities.evidence_revision = if reasoning.support == CapabilitySupport::Unknown {
+        String::from("openai.models.v1")
+    } else {
+        reasoning.evidence_revision.to_string()
+    };
 }
 
 /// Applies the closed Kimi capability mapping copied from the verified Model Core catalog.
@@ -1236,9 +1313,9 @@ fn enrich_kimi_model(service_entry_id: &str, protocol_id: &str, model: &mut Conn
 ///
 /// # Parameters
 /// 参数
-/// `model` is one provider-returned model mutated only when its identity is known.
-/// `model` 是供应商返回的单个模型，仅在身份已知时原位更新。
-fn enrich_deepseek_model(model: &mut ConnectionModel) {
+/// `protocol_id` identifies the exact compatible interface and `model` is mutated only when known.
+/// `protocol_id` 标识精确兼容接口，`model` 仅在身份已知时原位更新。
+fn enrich_deepseek_model(protocol_id: &str, model: &mut ConnectionModel) {
     let display_name = match model.id.as_str() {
         "deepseek-v4-flash" => "DeepSeek V4 Flash",
         "deepseek-v4-pro" => "DeepSeek V4 Pro",
@@ -1256,7 +1333,51 @@ fn enrich_deepseek_model(model: &mut ConnectionModel) {
         ReasoningEffort::High,
         ReasoningEffort::Max,
     ];
+    model
+        .capabilities
+        .model_parameters
+        .extend(deepseek_model_parameters(model.id.as_str(), protocol_id));
     model.capabilities.evidence_revision = String::from("deepseek.api-docs.2026-07-30");
+}
+
+/// Builds optional DeepSeek sampling controls for the two documented compatible interfaces.
+/// 为 DeepSeek 两种已文档化兼容接口构建可选采样控制。
+///
+/// # Parameters
+/// 参数
+/// `model_id` is the exact V4 identity and `protocol_id` is the selected wire protocol.
+/// `model_id` 是精确的 V4 身份，`protocol_id` 是选中的线路协议。
+///
+/// # Returns
+/// 返回值
+/// A provider-default temperature definition for supported interfaces, otherwise an empty list.
+/// 对受支持接口返回使用供应商默认值的温度定义，否则返回空列表。
+fn deepseek_model_parameters(model_id: &str, protocol_id: &str) -> Vec<ModelParameterDefinition> {
+    if !matches!(
+        protocol_id,
+        OPENAI_CHAT_PROFILE_ID | ANTHROPIC_MESSAGES_PROFILE_ID
+    ) {
+        return Vec::new();
+    }
+    vec![ModelParameterDefinition {
+        id: String::from(SAMPLING_TEMPERATURE_PARAMETER_ID),
+        display_name: String::from("Temperature"),
+        description: String::from(
+            "Controls DeepSeek non-thinking sampling randomness from 0 through 2; provider default omits the field.",
+        ),
+        schema: ModelParameterSchema::Decimal {
+            minimum: Some(String::from("0")),
+            maximum: Some(String::from("2")),
+            exclusive_minimum: None,
+            exclusive_maximum: None,
+        },
+        default: ModelParameterDefault::ProviderDefault,
+        protocol_ids: vec![protocol_id.to_string()],
+        model_ids: vec![model_id.to_string()],
+        dependent_required: Vec::new(),
+        conflicts: Vec::new(),
+        evidence_revision: String::from("deepseek.api-docs.temperature.2026-07-30"),
+    }]
 }
 
 /// Applies Alibaba reasoning contracts only to exact model identities present in Model Core.
@@ -2522,6 +2643,31 @@ mod tests {
         assert!(build_alibaba_coding_plan_catalog("connection", "model-studio-cn", 8).is_err());
     }
 
+    /// Verifies the Personal International Token Plan keeps its exact published model identity.
+    /// 验证个人国际版 Token Plan 保留其精确发布模型身份。
+    #[test]
+    fn alibaba_personal_global_token_plan_catalog_is_registered() {
+        let catalog = build_alibaba_token_plan_catalog(
+            "connection",
+            "token-plan-personal-global",
+            ANTHROPIC_MESSAGES_PROFILE_ID,
+            8,
+        )
+        .expect("Personal International Token Plan must build");
+        assert_eq!(catalog.models.len(), 7);
+        let flash = catalog
+            .models
+            .iter()
+            .find(|model| model.id == "deepseek-v4-flash-0731")
+            .expect("DeepSeek V4 Flash 0731");
+        assert_eq!(flash.capabilities.context_limit, None);
+        assert_eq!(
+            flash.capabilities.evidence_revision,
+            "alibaba.token-plan.personal-global.2026-08-01"
+        );
+        assert!(catalog.models.iter().any(|model| model.id == "glm-5.2"));
+    }
+
     /// Verifies Alibaba Model Studio publishes only reviewed embedding and rerank contracts.
     /// 验证阿里云百炼 Model Studio 仅发布已审核的向量与重排契约。
     #[test]
@@ -2813,10 +2959,10 @@ mod tests {
         );
     }
 
-    /// Verifies OpenAI discovery preserves identity without inventing model capabilities.
-    /// 验证 OpenAI 发现保留模型身份且不臆造模型能力。
+    /// Verifies compatible discovery preserves identity without inventing provider capabilities.
+    /// 验证兼容目录发现保留模型身份且不臆造供应商能力。
     #[test]
-    fn openai_discovery_remains_conservative() {
+    fn openai_compatible_discovery_remains_conservative() {
         let catalog = parse_openai_model_catalog(
             "connection",
             1,
@@ -2834,12 +2980,61 @@ mod tests {
         );
         assert_eq!(
             catalog.models[0].capabilities.evidence_revision,
-            "openai.models.v1"
+            "openai-compatible.models.v1"
         );
     }
 
-    /// Verifies DeepSeek official discovery exposes a switch with only documented effort levels.
-    /// 验证 DeepSeek 官方模型发现暴露开关及仅文档化的思考档位。
+    /// Verifies a relay model name cannot acquire official OpenAI reasoning from wire format alone.
+    /// 验证中转站模型名不能仅凭 Wire 格式获得 OpenAI 官方思考能力。
+    #[test]
+    fn relay_discovery_does_not_inherit_official_openai_reasoning() {
+        let catalog = parse_openai_model_catalog(
+            "connection",
+            1,
+            r#"{"object":"list","data":[{"id":"gpt-5.6","object":"model","created":1,"owned_by":"relay"}]}"#,
+        )
+        .expect("compatible response should parse");
+
+        assert_eq!(
+            catalog.models[0].capabilities.reasoning,
+            CapabilitySupport::Unknown
+        );
+        assert!(catalog.models[0].capabilities.reasoning_efforts.is_empty());
+        assert_eq!(
+            catalog.models[0].capabilities.evidence_revision,
+            "openai-compatible.models.v1"
+        );
+    }
+
+    /// Verifies official OpenAI enrichment still applies after provider identity is known.
+    /// 验证供应商身份已知后仍会应用 OpenAI 官方能力修订。
+    #[test]
+    fn official_openai_enrichment_applies_reasoning() {
+        let mut catalog = parse_openai_model_catalog(
+            "connection",
+            1,
+            r#"{"object":"list","data":[{"id":"gpt-5.6","object":"model","created":1,"owned_by":"openai"}]}"#,
+        )
+        .expect("official response should parse");
+        enrich_compatible_model_catalog(
+            "openai",
+            "public-api",
+            OPENAI_CHAT_PROFILE_ID,
+            &mut catalog,
+        );
+
+        assert_ne!(
+            catalog.models[0].capabilities.reasoning,
+            CapabilitySupport::Unknown
+        );
+        assert_ne!(
+            catalog.models[0].capabilities.evidence_revision,
+            "openai-compatible.models.v1"
+        );
+    }
+
+    /// Verifies DeepSeek discovery exposes documented reasoning and optional temperature controls.
+    /// 验证 DeepSeek 模型发现暴露文档化的思考与可选温度控制。
     #[test]
     fn deepseek_official_discovery_exposes_toggle_reasoning() {
         let mut catalog = parse_openai_model_catalog(
@@ -2864,6 +3059,20 @@ mod tests {
                 ReasoningEffort::High,
                 ReasoningEffort::Max,
             ]
+        );
+        let temperature = capabilities
+            .model_parameters
+            .iter()
+            .find(|parameter| parameter.id == SAMPLING_TEMPERATURE_PARAMETER_ID)
+            .expect("DeepSeek Chat should expose documented temperature control");
+        assert_eq!(temperature.default, ModelParameterDefault::ProviderDefault);
+        assert_eq!(
+            temperature.protocol_ids,
+            vec![String::from(OPENAI_CHAT_PROFILE_ID)]
+        );
+        assert!(
+            deepseek_model_parameters("deepseek-v4-pro", OPENAI_RESPONSES_PROFILE_ID).is_empty(),
+            "DeepSeek official routes must not claim undocumented Responses support"
         );
     }
 

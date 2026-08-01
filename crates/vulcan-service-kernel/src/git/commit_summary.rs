@@ -78,7 +78,7 @@ pub(crate) async fn service_generate_git_commit_message(
         let reasoning_effort = runtime_state
             .active_reasoning_effort
             .or_else(|| active_reasoning_selection_effort(&summary_provider_configuration))
-            .unwrap_or(ReasoningEffortLevel::Medium);
+            .unwrap_or(ReasoningEffortLevel::Off);
         let extra_prompt = summary_provider_configuration
             .git_commit
             .summary_extra_prompt

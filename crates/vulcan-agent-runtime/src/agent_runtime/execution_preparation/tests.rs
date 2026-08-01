@@ -619,6 +619,7 @@ fn test_runtime_foundation(config: &ProviderConfigurationFile) -> RuntimeFoundat
             display_name: String::from("Account A"),
             secret_reference: String::from("secret-a"),
             management_secret_reference: None,
+            service_origin_override: None,
             verified_protocols: std::collections::BTreeSet::from([String::from(
                 vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
             )]),

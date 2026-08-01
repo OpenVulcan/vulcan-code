@@ -475,6 +475,7 @@ export function ModelAccountPickerControl(props: {
           <CardHeader>
             <div className="flex items-start gap-3">
               <ProviderIcon
+                category={provider?.category}
                 className="size-8 shrink-0"
                 providerId={connection?.provider_id ?? selectedAccount.providerId}
                 serviceEntryId={connection?.service_entry_id}

@@ -2,9 +2,9 @@
 //! 用户自定义 OpenAI 与 Anthropic 兼容供应商契约。
 
 use crate::{
-    AccountUsageQueryKind, AuthenticationProjection, CredentialBillingKind, CredentialMode,
-    CredentialProfile, ModelDiscoveryKind, ProtocolRoute, ProviderDescriptor, ProviderKind,
-    ServiceEntry,
+    AccountUsageQueryKind, AuthenticationProjection, CredentialBillingKind,
+    CredentialDirectoryVisibility, CredentialMode, CredentialProfile, ModelDiscoveryKind,
+    ProtocolRoute, ProviderCategory, ProviderDescriptor, ProviderKind, ServiceEntry,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -142,6 +142,9 @@ impl CustomProviderDefinition {
             id,
             display_name,
             kind: ProviderKind::Custom,
+            category: ProviderCategory::Unclassified,
+            credential_directory_visibility: CredentialDirectoryVisibility::ConfiguredOnly,
+            promotion: None,
             service_entries: vec![ServiceEntry {
                 id: String::from("default"),
                 display_name: String::from("Compatible API"),

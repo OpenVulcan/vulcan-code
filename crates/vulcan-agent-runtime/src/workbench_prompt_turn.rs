@@ -927,6 +927,18 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         vmm_session_memory,
         Some(&expected_turn_id),
     );
+    if runtime_state.provider_tool_settings_initialized {
+        for capability in &runtime_state.provider_tool_enabled_capabilities {
+            if !runtime_state
+                .provider_tool_selections
+                .contains_key(capability)
+            {
+                return Err(format!(
+                    "Provider tool capability `{capability}` is enabled but has no selected model and account; confirm the session capability settings before sending."
+                ));
+            }
+        }
+    }
     let request = ExecutionPreparationRequest {
         session_id,
         managed_codebase_memory: None,
@@ -940,9 +952,20 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         provider_id_override: None,
         model_id_override: None,
         connection_id_override: None,
-        provider_tool_selections_override: runtime_state
-            .provider_tool_selections_overridden
-            .then(|| runtime_state.provider_tool_selections.clone()),
+        provider_tool_selections_override: runtime_state.provider_tool_settings_initialized.then(
+            || {
+                runtime_state
+                    .provider_tool_selections
+                    .iter()
+                    .filter(|(capability, _)| {
+                        runtime_state
+                            .provider_tool_enabled_capabilities
+                            .contains(*capability)
+                    })
+                    .map(|(capability, selection)| (capability.clone(), selection.clone()))
+                    .collect()
+            },
+        ),
         subagent_prompt_context: None,
         task_session_store_root: None,
         session_title: input.start.session_title,
@@ -953,13 +976,13 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         context_compaction_policy: None,
         context_budget_override: None,
         execution_mode: input.start.execution_mode,
-        temperature: runtime_state.active_temperature,
+        temperature: None,
         reasoning_effort: input
             .start
             .reasoning_effort
             .or(input.runtime_reasoning_effort)
             .or(input.provider_reasoning_effort)
-            .unwrap_or(ReasoningEffortLevel::Medium),
+            .unwrap_or(ReasoningEffortLevel::Off),
         tool_exposure_override: Default::default(),
         tool_request_rejection_reason: None,
         tool_request_rejection_all_tools: false,

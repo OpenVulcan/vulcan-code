@@ -1,5 +1,6 @@
 import React from "react";
 import {
+  AlertTriangle,
   FileSearch,
   Image,
   Music,
@@ -14,6 +15,7 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
+  SelectValue,
 } from "@/components/ui/select";
 import {
   Dialog,
@@ -29,7 +31,10 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type { ComposerSelectOption } from "@/components/composer/composer-model";
+import type {
+  ComposerProviderToolSettingsSnapshot,
+  ComposerSelectOption,
+} from "@/components/composer/composer-model";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import {
@@ -40,7 +45,9 @@ import {
 import type {
   ContextUsageSnapshot,
   PublicAiProviderToolCapabilityKind,
+  PublicAiProviderToolTargetSnapshot,
   PublicAiProviderToolTargetSelection,
+  PublicAiSessionProviderToolConflict,
   PublicAiSettingsSnapshot,
 } from "@/types";
 
@@ -84,8 +91,8 @@ export function ContextUsageOrb(props: {
   );
 }
 
-// ComposerAiCapabilityControl restores the established session capability dialog with one target per capability.
-// ComposerAiCapabilityControl 恢复既有会话能力弹窗，并确保每项能力只选择一个目标。
+// ComposerAiCapabilityControl owns one materialized session snapshot with separate switches, models, and accounts.
+// ComposerAiCapabilityControl 持有一份将开关、模型与账号分离的已物化会话快照。
 export function ComposerAiCapabilityControl(props: {
   // Current persisted conversation, or null for a new conversation draft.
   // 当前持久化会话；新会话草稿时为空。
@@ -93,27 +100,25 @@ export function ComposerAiCapabilityControl(props: {
   // Accessible trigger label.
   // 触发器无障碍标签。
   ariaLabel: string;
-  // Optional draft override captured before the conversation exists.
-  // 会话创建前捕获的可选草稿覆盖。
-  draftSelections?: Partial<
-    Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
-  >;
-  // Saves one complete draft override without calling a session RPC.
-  // 在不调用会话 RPC 的情况下保存完整草稿覆盖。
-  onDraftSelectionsChange?: (
-    selections: Partial<
-      Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
-    >,
-  ) => void;
+  // Optional complete draft snapshot captured before the conversation exists.
+  // 会话创建前捕获的可选完整草稿快照。
+  draftSettings?: ComposerProviderToolSettingsSnapshot;
+  // Saves one complete draft snapshot without calling a session RPC.
+  // 在不调用会话 RPC 的情况下保存完整草稿快照。
+  onDraftSettingsChange?: (settings: ComposerProviderToolSettingsSnapshot) => void;
+  // Reports whether unresolved session choices must block sending.
+  // 报告未解决的会话选择是否必须阻止发送。
+  onConflictChange?: (blocked: boolean) => void;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = React.useState(false);
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null);
   const [selectedCapability, setSelectedCapability] =
     React.useState<PublicAiProviderToolCapabilityKind>("web_search");
-  const [draft, setDraft] = React.useState<Partial<
-    Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
-  >>({});
+  const [draft, setDraft] = React.useState<ComposerProviderToolSettingsSnapshot>({
+    enabledCapabilities: [],
+    selections: {},
+  });
   const [baselineSignature, setBaselineSignature] = React.useState("{}");
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -126,18 +131,26 @@ export function ComposerAiCapabilityControl(props: {
         ? loadPublicAiSessionProviderToolSelections(props.conversationId)
         : Promise.resolve(null),
     ])
-      .then(([nextSnapshot, sessionSelections]) => {
+      .then(([nextSnapshot, sessionSettings]) => {
         if (!active) {
           return;
         }
-        const nextDraft = filterEnabledCurrentSelections(
-          nextSnapshot,
-          sessionSelections ?? props.draftSelections ?? nextSnapshot.providerToolSelections,
-        );
+        const nextDraft = sessionSettings
+          ? {
+              enabledCapabilities: sessionSettings.enabledCapabilities,
+              selections: sessionSettings.selections,
+            }
+          : props.draftSettings ?? {
+              enabledCapabilities: nextSnapshot.providerToolEnabledCapabilities,
+              selections: nextSnapshot.providerToolSelections,
+            };
         const capabilities = orderedProviderToolCapabilities(nextSnapshot);
         setSnapshot(nextSnapshot);
         setDraft(nextDraft);
-        setBaselineSignature(providerToolSelectionsSignature(nextDraft));
+        setBaselineSignature(providerToolSettingsSignature(nextDraft));
+        if (!props.conversationId && !props.draftSettings) {
+          props.onDraftSettingsChange?.(nextDraft);
+        }
         setSelectedCapability((current) => (
           capabilities.includes(current) ? current : capabilities[0] ?? "web_search"
         ));
@@ -151,20 +164,35 @@ export function ComposerAiCapabilityControl(props: {
     return () => {
       active = false;
     };
-  }, [open, props.conversationId, props.draftSelections]);
+  }, [open, props.conversationId, props.draftSettings, props.onDraftSettingsChange]);
 
   const capabilities = snapshot ? orderedProviderToolCapabilities(snapshot) : [];
-  const selectedTargets = snapshot?.providerToolTargets.filter(
-    (target) => target.enabled
-      && target.target.contract.capability === selectedCapability,
+  const capabilityTargets = snapshot?.providerToolTargets.filter(
+    (target) => target.target.contract.capability === selectedCapability,
   ) ?? [];
-  const enabledCount = Object.keys(draft).length;
+  const selectedModels = uniqueProviderToolModels(capabilityTargets);
+  const selectedSelection = draft.selections[selectedCapability];
+  const selectedModel = selectedModels.find(
+    (target) => target.target.target_id === selectedSelection?.target_id,
+  ) ?? null;
+  const selectedAccounts = selectedModel
+    ? capabilityTargets.filter((target) => target.target.target_id === selectedModel.target.target_id)
+    : [];
+  const selectedAccount = selectedAccounts.find(
+    (target) => target.connectionId === selectedSelection?.connection_id,
+  ) ?? null;
+  const localConflicts = snapshot ? providerToolSettingsConflicts(snapshot, draft) : [];
+  const conflicts = localConflicts;
+  const enabledCount = draft.enabledCapabilities.length;
   const hasUnsavedChanges =
-    providerToolSelectionsSignature(draft) !== baselineSignature;
+    providerToolSettingsSignature(draft) !== baselineSignature;
+  React.useEffect(() => {
+    props.onConflictChange?.(conflicts.length > 0);
+  }, [conflicts.length, props.onConflictChange]);
   const save = React.useCallback(async () => {
     if (!props.conversationId) {
-      props.onDraftSelectionsChange?.(draft);
-      setBaselineSignature(providerToolSelectionsSignature(draft));
+      props.onDraftSettingsChange?.(draft);
+      setBaselineSignature(providerToolSettingsSignature(draft));
       setOpen(false);
       return;
     }
@@ -172,10 +200,15 @@ export function ComposerAiCapabilityControl(props: {
     try {
       const next = await savePublicAiSessionProviderToolSelections({
         conversationId: props.conversationId,
-        selections: draft,
+        enabledCapabilities: draft.enabledCapabilities,
+        selections: draft.selections,
       });
-      setDraft(next);
-      setBaselineSignature(providerToolSelectionsSignature(next));
+      const nextDraft = {
+        enabledCapabilities: next.enabledCapabilities,
+        selections: next.selections,
+      };
+      setDraft(nextDraft);
+      setBaselineSignature(providerToolSettingsSignature(nextDraft));
       setError(null);
       setOpen(false);
     } catch (reason) {
@@ -186,7 +219,7 @@ export function ComposerAiCapabilityControl(props: {
   }, [
     draft,
     props.conversationId,
-    props.onDraftSelectionsChange,
+    props.onDraftSettingsChange,
   ]);
 
   return (
@@ -199,14 +232,16 @@ export function ComposerAiCapabilityControl(props: {
               className="composer-capability-trigger composer-select-trigger capability"
               type="button"
             >
-              <span className="composer-select-icon"><SlidersHorizontal size={15} /></span>
+              <span className="composer-select-icon">
+                {conflicts.length ? <AlertTriangle size={15} /> : <SlidersHorizontal size={15} />}
+              </span>
               <span className="composer-select-copy">
                 <span className="composer-capability-icon-row">
                   {capabilities.map((capability) => (
                     <span
                       className={cn(
                         "composer-capability-colored-icon",
-                        draft[capability] ? "enabled" : "disabled",
+                        draft.enabledCapabilities.includes(capability) ? "enabled" : "disabled",
                       )}
                       key={capability}
                       style={{
@@ -224,7 +259,7 @@ export function ComposerAiCapabilityControl(props: {
         <TooltipContent className="composer-control-tooltip" side="top">
           <strong>{t("composer.capability.tooltipTitle")}</strong>
           <span>
-            {enabledCount} / {capabilities.length}
+            {conflicts.length ? t("composer.capability.conflict.tooltip") : `${enabledCount} / ${capabilities.length}`}
           </span>
         </TooltipContent>
       </Tooltip>
@@ -236,14 +271,21 @@ export function ComposerAiCapabilityControl(props: {
           </DialogDescription>
         </DialogHeader>
         {error ? <p className="settings-muted-line settings-error-text">{error}</p> : null}
+        {conflicts.length ? (
+          <div className="composer-capability-conflict-banner">
+            <AlertTriangle aria-hidden="true" size={16} />
+            <span>{t("composer.capability.conflict.banner")}</span>
+          </div>
+        ) : null}
         <div className="composer-capability-dialog-grid">
           <aside className="composer-capability-dialog-left">
             {capabilities.map((capability) => {
-              const enabled = Boolean(draft[capability]);
-              const targetCount = snapshot?.providerToolTargets.filter(
-                (target) => target.enabled
-                  && target.target.contract.capability === capability,
-              ).length ?? 0;
+              const enabled = draft.enabledCapabilities.includes(capability);
+              const targets = snapshot?.providerToolTargets.filter(
+                (target) => target.target.contract.capability === capability,
+              ) ?? [];
+              const targetCount = uniqueProviderToolModels(targets).length;
+              const conflict = conflicts.find((item) => item.capability === capability);
               return (
                 <div
                   className={cn(
@@ -262,22 +304,23 @@ export function ComposerAiCapabilityControl(props: {
                       event.stopPropagation();
                       const checked = event.currentTarget.checked;
                       setDraft((current) => {
-                        const next = { ...current };
+                        const enabledCapabilities = new Set(current.enabledCapabilities);
                         if (!checked) {
-                          delete next[capability];
-                          return next;
+                          enabledCapabilities.delete(capability);
+                          return { ...current, enabledCapabilities: Array.from(enabledCapabilities).sort() };
                         }
-                        const first = snapshot?.providerToolTargets.find(
-                          (target) => target.enabled
-                            && target.target.contract.capability === capability,
-                        );
+                        enabledCapabilities.add(capability);
+                        const first = targets[0];
                         if (first) {
-                          next[capability] = {
-                            connection_id: first.connectionId,
-                            target_id: first.target.target_id,
+                          return {
+                            enabledCapabilities: Array.from(enabledCapabilities).sort(),
+                            selections: current.selections[capability] ? current.selections : {
+                              ...current.selections,
+                              [capability]: selectionForTarget(first),
+                            },
                           };
                         }
-                        return next;
+                        return { ...current, enabledCapabilities: Array.from(enabledCapabilities).sort() };
                       });
                     }}
                     onClick={(event) => event.stopPropagation()}
@@ -295,6 +338,13 @@ export function ComposerAiCapabilityControl(props: {
                     <span className="composer-capability-kind-copy">
                       <span>{providerToolCapabilityLabel(capability, t)}</span>
                       <small>{targetCount} {t("settings.providerTools.targets")}</small>
+                      {conflict ? (
+                        <small className="settings-error-text">
+                          {t(conflict.kind === "missing_selection"
+                            ? "composer.capability.conflict.missingSelection"
+                            : "composer.capability.conflict.targetUnavailable")}
+                        </small>
+                      ) : null}
                     </span>
                   </span>
                 </div>
@@ -302,37 +352,71 @@ export function ComposerAiCapabilityControl(props: {
             })}
           </aside>
           <section className="composer-capability-dialog-right">
-            {selectedTargets.length ? (
-              <div className="composer-capability-target-table">
-                {selectedTargets.map((target) => {
-                  const selection = draft[selectedCapability];
-                  const checked = selection?.connection_id === target.connectionId
-                    && selection.target_id === target.target.target_id;
-                  return (
-                    <label
-                      className="composer-capability-target-row"
-                      key={`${target.connectionId}/${target.target.target_id}`}
-                    >
-                      <input
-                        checked={checked}
-                        disabled={saving}
-                        name={`composer-capability-${selectedCapability}`}
-                        onChange={() => setDraft((current) => ({
+            {selectedModels.length ? (
+              <div className="composer-capability-route-selectors">
+                <label>
+                  <span>{t("settings.providerTools.model")}</span>
+                  <Select
+                    disabled={saving}
+                    onValueChange={(targetId) => {
+                      const compatible = capabilityTargets.filter(
+                        (target) => target.target.target_id === targetId,
+                      );
+                      const target = compatible.find(
+                        (candidate) => candidate.connectionId === selectedAccount?.connectionId,
+                      ) ?? compatible[0];
+                      if (target) {
+                        setDraft((current) => ({
                           ...current,
-                          [selectedCapability]: {
-                            connection_id: target.connectionId,
-                            target_id: target.target.target_id,
+                          selections: {
+                            ...current.selections,
+                            [selectedCapability]: selectionForTarget(target),
                           },
-                        }))}
-                        type="radio"
-                      />
-                      <span className="composer-capability-target-copy">
-                        <span>{target.target.display_name}</span>
-                        <small>{target.connectionDisplayName}</small>
-                      </span>
-                    </label>
-                  );
-                })}
+                        }));
+                      }
+                    }}
+                    value={selectedModel?.target.target_id ?? ""}
+                  >
+                    <SelectTrigger><SelectValue placeholder={t("settings.providerTools.selectModel")} /></SelectTrigger>
+                    <SelectContent>
+                      {selectedModels.map((target) => (
+                        <SelectItem key={target.target.target_id} value={target.target.target_id}>
+                          {target.target.display_name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </label>
+                <label>
+                  <span>{t("settings.providerTools.account")}</span>
+                  <Select
+                    disabled={saving || !selectedModel}
+                    onValueChange={(connectionId) => {
+                      const target = selectedAccounts.find(
+                        (candidate) => candidate.connectionId === connectionId,
+                      );
+                      if (target) {
+                        setDraft((current) => ({
+                          ...current,
+                          selections: {
+                            ...current.selections,
+                            [selectedCapability]: selectionForTarget(target),
+                          },
+                        }));
+                      }
+                    }}
+                    value={selectedAccount?.connectionId ?? ""}
+                  >
+                    <SelectTrigger><SelectValue placeholder={t("settings.providerTools.selectAccount")} /></SelectTrigger>
+                    <SelectContent>
+                      {selectedAccounts.map((target) => (
+                        <SelectItem key={target.connectionId} value={target.connectionId}>
+                          {target.connectionDisplayName}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </label>
               </div>
             ) : (
               <div className="composer-capability-dialog-empty">
@@ -349,7 +433,7 @@ export function ComposerAiCapabilityControl(props: {
           </span>
           <button
             className="skill-action-button"
-            disabled={saving || !hasUnsavedChanges}
+            disabled={saving || !hasUnsavedChanges || conflicts.length > 0}
             onClick={() => void save()}
             type="button"
           >
@@ -363,21 +447,22 @@ export function ComposerAiCapabilityControl(props: {
   );
 }
 
-// providerToolSelectionsSignature serializes a selection map deterministically for dirty checks.
-// providerToolSelectionsSignature 以确定性方式序列化选择映射，用于脏检查。
-function providerToolSelectionsSignature(
-  selections: Partial<
-    Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
-  >,
+// providerToolSettingsSignature serializes one complete snapshot deterministically for dirty checks.
+// providerToolSettingsSignature 以确定性方式序列化完整快照用于脏检查。
+function providerToolSettingsSignature(
+  settings: ComposerProviderToolSettingsSnapshot,
 ): string {
   return JSON.stringify(
-    Object.entries(selections)
+    [
+      [...settings.enabledCapabilities].sort(),
+      Object.entries(settings.selections)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([capability, selection]) => [
         capability,
         selection?.connection_id ?? "",
         selection?.target_id ?? "",
       ]),
+    ],
   );
 }
 
@@ -388,32 +473,69 @@ function orderedProviderToolCapabilities(
 ): PublicAiProviderToolCapabilityKind[] {
   return Array.from(new Set(
     snapshot.providerToolTargets
-      .filter((target) => target.enabled)
       .map((target) => target.target.contract.capability),
   )).sort();
 }
 
-// filterEnabledCurrentSelections drops historical, removed, and globally disabled targets.
-// filterEnabledCurrentSelections 过滤历史、已移除及全局禁用的目标。
-function filterEnabledCurrentSelections(
+// providerToolSettingsConflicts reports stale choices without silently replacing them.
+// providerToolSettingsConflicts 报告过期选择且不静默替换。
+export function providerToolSettingsConflicts(
   snapshot: PublicAiSettingsSnapshot,
-  selections: Partial<
-    Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
-  >,
-): Partial<Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>> {
+  settings: ComposerProviderToolSettingsSnapshot,
+): PublicAiSessionProviderToolConflict[] {
   const current = new Map(snapshot.providerToolTargets
-    .filter((target) => target.enabled)
     .map((target) => [
       `${target.connectionId.length}:${target.connectionId}:${target.target.target_id.length}:${target.target.target_id}`,
       target.target.contract.capability,
     ]));
-  return Object.fromEntries(Object.entries(selections).filter(([capability, selection]) => {
+  const capabilities = new Set<PublicAiProviderToolCapabilityKind>(settings.enabledCapabilities);
+  const conflicts: PublicAiSessionProviderToolConflict[] = [];
+  for (const capability of capabilities) {
+    const selection = settings.selections[capability];
     if (!selection) {
-      return false;
+      conflicts.push({
+        capability,
+        kind: "missing_selection",
+        message: `Capability ${capability} has no selected model and account.`,
+      });
+      continue;
     }
     const key = `${selection.connection_id.length}:${selection.connection_id}:${selection.target_id.length}:${selection.target_id}`;
-    return current.get(key) === capability;
-  }));
+    if (current.get(key) !== capability) {
+      conflicts.push({
+        capability,
+        kind: "target_unavailable",
+        message: `The saved model or account for ${capability} is no longer available.`,
+      });
+    }
+  }
+  return conflicts;
+}
+
+// uniqueProviderToolModels collapses account-expanded targets into one row per model.
+// uniqueProviderToolModels 将按账号展开的目标折叠为每个模型一行。
+function uniqueProviderToolModels(
+  targets: PublicAiProviderToolTargetSnapshot[],
+): PublicAiProviderToolTargetSnapshot[] {
+  const models = new Map<string, PublicAiProviderToolTargetSnapshot>();
+  for (const target of targets) {
+    if (!models.has(target.target.target_id)) models.set(target.target.target_id, target);
+  }
+  return Array.from(models.values()).sort((left, right) => (
+    left.target.display_name.localeCompare(right.target.display_name)
+    || left.target.target_id.localeCompare(right.target.target_id)
+  ));
+}
+
+// selectionForTarget projects one browser target into the exact persisted selection.
+// selectionForTarget 将一个浏览器目标投影为精确持久化选择。
+function selectionForTarget(
+  target: PublicAiProviderToolTargetSnapshot,
+): PublicAiProviderToolTargetSelection {
+  return {
+    connection_id: target.connectionId,
+    target_id: target.target.target_id,
+  };
 }
 
 // providerToolCapabilityColor restores the established capability color tokens.

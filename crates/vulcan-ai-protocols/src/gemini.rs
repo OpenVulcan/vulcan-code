@@ -300,7 +300,7 @@ fn project_gemini_request_controls(
     request: &AiExecutionRequest,
     body: &mut Map<String, Value>,
 ) -> Result<(), ProtocolConversionError> {
-    if !request.tools.is_empty() || !matches!(request.tool_choice, ToolChoicePolicy::Auto) {
+    if !matches!(request.tool_choice, ToolChoicePolicy::Auto) {
         let function_calling_config = match &request.tool_choice {
             ToolChoicePolicy::Auto => json!({ "mode": "AUTO" }),
             ToolChoicePolicy::Required => json!({ "mode": "ANY" }),
@@ -326,6 +326,28 @@ fn project_gemini_request_controls(
             "Gemini GenerateContent has no registered serial-tool-call projector.",
         ));
     }
+    match request.reasoning_output {
+        ReasoningOutputPolicy::Hidden if request.reasoning_effort.is_none() => {
+            return Err(ProtocolConversionError::new(
+                "Gemini hidden reasoning output requires an active reasoning effort.",
+            ));
+        }
+        ReasoningOutputPolicy::SummaryAuto => {
+            return Err(ProtocolConversionError::new(
+                "Gemini GenerateContent has no registered automatic reasoning-summary projector.",
+            ));
+        }
+        ReasoningOutputPolicy::ProviderDefault
+        | ReasoningOutputPolicy::Hidden
+        | ReasoningOutputPolicy::Detailed => {}
+    }
+    let needs_generation_config =
+        !matches!(request.structured_output, StructuredOutputPolicy::None)
+            || !request.stop_sequences.is_empty()
+            || matches!(request.reasoning_output, ReasoningOutputPolicy::Hidden);
+    if !needs_generation_config {
+        return Ok(());
+    }
     let generation_config = body
         .entry(String::from("generationConfig"))
         .or_insert_with(|| Value::Object(Map::new()));
@@ -345,18 +367,9 @@ fn project_gemini_request_controls(
     match request.reasoning_output {
         ReasoningOutputPolicy::ProviderDefault | ReasoningOutputPolicy::Detailed => {}
         ReasoningOutputPolicy::Hidden => {
-            if request.reasoning_effort.is_none() {
-                return Err(ProtocolConversionError::new(
-                    "Gemini hidden reasoning output requires an active reasoning effort.",
-                ));
-            }
             generation_config["thinkingConfig"]["includeThoughts"] = Value::Bool(false);
         }
-        ReasoningOutputPolicy::SummaryAuto => {
-            return Err(ProtocolConversionError::new(
-                "Gemini GenerateContent has no registered automatic reasoning-summary projector.",
-            ));
-        }
+        ReasoningOutputPolicy::SummaryAuto => unreachable!("validated before projection"),
     }
     Ok(())
 }
@@ -987,6 +1000,7 @@ mod tests {
             encoded.body["generationConfig"]["thinkingConfig"]["includeThoughts"],
             true
         );
+        assert!(encoded.body.get("toolConfig").is_none());
     }
 
     /// Verifies GenerateContent projects native search and managed code execution separately.

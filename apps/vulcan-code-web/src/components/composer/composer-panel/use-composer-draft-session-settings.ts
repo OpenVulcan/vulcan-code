@@ -3,14 +3,11 @@ import React from "react";
 import type {
   ComposerInitialGoalSnapshot,
   ComposerKnowledgeSelectionSnapshot,
+  ComposerProviderToolSettingsSnapshot,
   ComposerSessionSettingsSnapshot,
   ComposerVmmPolicySnapshot,
 } from "@/components/composer/composer-model";
-import type {
-  PublicAiProviderToolCapabilityKind,
-  PublicAiProviderToolTargetSelection,
-  SessionGoalSummary,
-} from "@/types";
+import type { SessionGoalSummary } from "@/types";
 
 // DraftSessionSettingsEntry contains only overrides explicitly authored for one new-conversation slot.
 // DraftSessionSettingsEntry 仅包含为一个新会话草稿槽显式编写的覆盖项。
@@ -20,9 +17,7 @@ interface DraftSessionSettingsEntry {
   vmmPolicy?: ComposerVmmPolicySnapshot;
   // Explicit complete provider-tool override.
   // 显式完整供应商工具覆盖。
-  providerToolSelections?: Partial<
-    Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>
-  >;
+  providerToolSettings?: ComposerProviderToolSettingsSnapshot;
   // Explicit knowledge selection.
   // 显式知识库选择。
   knowledgeSelection?: ComposerKnowledgeSelectionSnapshot;
@@ -72,7 +67,7 @@ export interface ComposerDraftSessionSettingsController {
   vmmPolicy: ComposerVmmPolicySnapshot | null;
   // Provider-tool override shown for the current draft.
   // 当前草稿展示的供应商工具覆盖。
-  providerToolSelections: DraftSessionSettingsEntry["providerToolSelections"];
+  providerToolSettings: DraftSessionSettingsEntry["providerToolSettings"];
   // Knowledge selection shown for the current draft.
   // 当前草稿展示的知识库选择。
   knowledgeSelection: ComposerKnowledgeSelectionSnapshot | null;
@@ -84,8 +79,8 @@ export interface ComposerDraftSessionSettingsController {
   setVmmPolicy: (policy: string, mode: string) => void;
   // Replaces the complete provider-tool override.
   // 替换完整供应商工具覆盖。
-  setProviderToolSelections: (
-    selections: NonNullable<DraftSessionSettingsEntry["providerToolSelections"]>,
+  setProviderToolSettings: (
+    settings: NonNullable<DraftSessionSettingsEntry["providerToolSettings"]>,
   ) => void;
   // Replaces the draft knowledge selection.
   // 替换草稿知识库选择。
@@ -161,10 +156,10 @@ export function useComposerDraftSessionSettings(
       return entry;
     });
   }, [updateCurrent]);
-  const setProviderToolSelections = React.useCallback((
-    selections: NonNullable<DraftSessionSettingsEntry["providerToolSelections"]>,
+  const setProviderToolSettings = React.useCallback((
+    settings: NonNullable<DraftSessionSettingsEntry["providerToolSettings"]>,
   ) => {
-    updateCurrent((entry) => ({ ...entry, providerToolSelections: selections }));
+    updateCurrent((entry) => ({ ...entry, providerToolSettings: settings }));
   }, [updateCurrent]);
   const setKnowledgeSelection = React.useCallback((selection: ComposerKnowledgeSelectionSnapshot) => {
     updateCurrent((entry) => ({ ...entry, knowledgeSelection: selection }));
@@ -206,11 +201,11 @@ export function useComposerDraftSessionSettings(
     : null;
   return {
     vmmPolicy: current.vmmPolicy ?? null,
-    providerToolSelections: current.providerToolSelections,
+    providerToolSettings: current.providerToolSettings,
     knowledgeSelection: current.knowledgeSelection ?? null,
     initialGoalSummary,
     setVmmPolicy,
-    setProviderToolSelections,
+    setProviderToolSettings,
     setKnowledgeSelection,
     setInitialGoal,
     clearInitialGoal,

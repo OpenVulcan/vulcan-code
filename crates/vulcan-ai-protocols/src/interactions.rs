@@ -52,13 +52,16 @@ impl ProtocolProfile for GeminiInteractionsProfile {
             ));
         }
         let (system_instruction, input) = encode_interactions_input(&request.messages)?;
+        let tools = encode_interactions_tools(request)?;
         let mut body = json!({
             "model": request.model_id,
             "input": input,
-            "tools": encode_interactions_tools(request)?,
             "stream": true,
             "store": false,
         });
+        if !tools.is_empty() {
+            body["tools"] = Value::Array(tools);
+        }
         if let Some(system_instruction) = system_instruction {
             body["system_instruction"] = Value::String(system_instruction);
         }
@@ -121,23 +124,26 @@ fn project_interactions_request_controls(
     request: &AiExecutionRequest,
     body: &mut Value,
 ) -> Result<(), ProtocolConversionError> {
-    let generation_config = body
-        .as_object_mut()
-        .expect("Interactions request body is always an object")
-        .entry(String::from("generation_config"))
-        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    let mut generation_controls = serde_json::Map::new();
     match &request.tool_choice {
         ToolChoicePolicy::Auto => {}
-        ToolChoicePolicy::Required => generation_config["tool_choice"] = json!("any"),
-        ToolChoicePolicy::Disabled => generation_config["tool_choice"] = json!("none"),
+        ToolChoicePolicy::Required => {
+            generation_controls.insert(String::from("tool_choice"), json!("any"));
+        }
+        ToolChoicePolicy::Disabled => {
+            generation_controls.insert(String::from("tool_choice"), json!("none"));
+        }
         ToolChoicePolicy::Specific { tool_name } => {
             require_interactions_registered_tool(request, tool_name)?;
-            generation_config["tool_choice"] = json!({
-                "allowed_tools": {
-                    "mode": "any",
-                    "tools": [tool_name],
-                }
-            });
+            generation_controls.insert(
+                String::from("tool_choice"),
+                json!({
+                    "allowed_tools": {
+                        "mode": "any",
+                        "tools": [tool_name],
+                    }
+                }),
+            );
         }
     }
     if matches!(
@@ -149,15 +155,34 @@ fn project_interactions_request_controls(
         ));
     }
     if !request.stop_sequences.is_empty() {
-        generation_config["stop_sequences"] = json!(request.stop_sequences);
+        generation_controls.insert(
+            String::from("stop_sequences"),
+            json!(request.stop_sequences),
+        );
     }
-    generation_config["thinking_summaries"] = match request.reasoning_output {
-        ReasoningOutputPolicy::ProviderDefault | ReasoningOutputPolicy::SummaryAuto => {
-            json!("auto")
+    match request.reasoning_output {
+        ReasoningOutputPolicy::ProviderDefault => {}
+        ReasoningOutputPolicy::SummaryAuto | ReasoningOutputPolicy::Detailed => {
+            generation_controls.insert(String::from("thinking_summaries"), json!("auto"));
         }
-        ReasoningOutputPolicy::Hidden => json!("none"),
-        ReasoningOutputPolicy::Detailed => json!("auto"),
-    };
+        ReasoningOutputPolicy::Hidden => {
+            generation_controls.insert(String::from("thinking_summaries"), json!("none"));
+        }
+    }
+    if !generation_controls.is_empty() {
+        let generation_config = body
+            .as_object_mut()
+            .expect("Interactions request body is always an object")
+            .entry(String::from("generation_config"))
+            .or_insert_with(|| Value::Object(serde_json::Map::new()))
+            .as_object_mut()
+            .ok_or_else(|| {
+                ProtocolConversionError::new(
+                    "Gemini Interactions generation_config must be an object.",
+                )
+            })?;
+        generation_config.extend(generation_controls);
+    }
     match &request.structured_output {
         StructuredOutputPolicy::None => {}
         StructuredOutputPolicy::JsonObject => {
@@ -995,14 +1020,31 @@ mod tests {
         assert_eq!(encoded.body["input"][2]["type"], "function_result");
         assert_eq!(encoded.body["tools"][0]["name"], "lookup");
         assert_eq!(encoded.body["generation_config"]["thinking_level"], "high");
-        assert_eq!(
-            encoded.body["generation_config"]["thinking_summaries"],
-            "auto"
+        assert!(
+            encoded.body["generation_config"]
+                .get("thinking_summaries")
+                .is_none()
         );
         assert_eq!(
             encoded.headers.get("api-revision").map(String::as_str),
             Some(GEMINI_INTERACTIONS_API_REVISION)
         );
+    }
+
+    /// Verifies provider-default Interactions requests omit empty optional control fields.
+    /// 验证供应商默认的 Interactions 请求会省略空的可选控制字段。
+    #[test]
+    fn interactions_omits_unconfigured_optional_defaults() {
+        let mut request = request();
+        request.messages.truncate(2);
+        request.tools.clear();
+        request.output_token_limit = None;
+
+        let encoded = GeminiInteractionsProfile
+            .encode(&request)
+            .expect("default Interactions request should encode");
+        assert!(encoded.body.get("tools").is_none());
+        assert!(encoded.body.get("generation_config").is_none());
     }
 
     /// Verifies Interactions projects its native search and code-execution tool identifiers.

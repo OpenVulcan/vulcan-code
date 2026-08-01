@@ -482,6 +482,10 @@ pub struct CredentialConnection {
     /// 仅用于供应商账号管理查询的可选秘密存储引用。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub management_secret_reference: Option<String>,
+    /// Optional credential-scoped service origin for a provider-defined configurable entry.
+    /// 供应商声明可配置入口使用的可选凭据作用域服务源地址。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_origin_override: Option<String>,
     /// Verified protocol profile identifiers.
     /// 已验证协议 Profile 标识。
     pub verified_protocols: BTreeSet<String>,

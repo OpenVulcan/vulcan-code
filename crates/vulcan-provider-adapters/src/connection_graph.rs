@@ -273,6 +273,16 @@ fn validate_connection(
     registry: &ProviderRegistry,
     connection: &CredentialConnection,
 ) -> Result<(), String> {
+    let normalized_service_origin = crate::normalize_connection_service_origin_override(
+        connection.provider_id.as_str(),
+        connection.service_entry_id.as_str(),
+        connection.service_origin_override.as_deref(),
+    )?;
+    if normalized_service_origin != connection.service_origin_override {
+        return Err(String::from(
+            "The credential-scoped service origin is not in canonical form.",
+        ));
+    }
     let provider = registry
         .provider(connection.provider_id.as_str())
         .ok_or_else(|| format!("Provider `{}` is not registered.", connection.provider_id))?;
@@ -363,6 +373,7 @@ mod tests {
             display_name: id.to_string(),
             secret_reference: format!("secret-{id}"),
             management_secret_reference: None,
+            service_origin_override: None,
             verified_protocols: BTreeSet::from([
                 ANTHROPIC_MESSAGES_PROFILE_ID.to_string(),
                 OPENAI_CHAT_PROFILE_ID.to_string(),

@@ -36,6 +36,9 @@ export interface ComposerPanelToolbarRightProps {
   // Current attachment count.
   // 当前附件数量。
   attachmentCount: number;
+  // Whether unresolved capability choices block a new submission.
+  // 未解决的能力选择是否阻止新提交。
+  sendBlocked: boolean;
   // Reasoning selector open signal.
   // 推理选择器打开信号。
   reasoningPickerOpenSignal: number;
@@ -97,6 +100,7 @@ export function ComposerPanelToolbarRight(props: ComposerPanelToolbarRightProps)
       <Button
         aria-label={stopOnly ? props.stopAriaLabel : props.sendAriaLabel}
         className={cn("send-button", stopOnly && "running")}
+        disabled={!stopOnly && props.sendBlocked}
         onClick={props.onSend}
         size="icon"
         type="button"

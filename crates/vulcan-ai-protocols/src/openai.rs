@@ -45,15 +45,18 @@ impl ProtocolProfile for OpenAiChatProfile {
         crate::shared::require_no_native_tools(request, self.id())?;
         require_default_cache_policy(&request.prompt_cache, self.id())?;
         let messages = encode_messages(request)?;
+        let tools = encode_openai_tools(request);
         let mut body = json!({
             "model": request.model_id,
             "messages": messages,
-            "tools": encode_openai_tools(request),
             "stream": true,
             "stream_options": {
                 "include_usage": true,
             },
         });
+        if !tools.is_empty() {
+            body["tools"] = Value::Array(tools);
+        }
         if let Some(limit) = request.output_token_limit {
             body["max_completion_tokens"] = json!(limit);
         }
@@ -110,13 +113,16 @@ impl ProtocolProfile for OpenAiResponsesProfile {
         // Standard Responses keeps store=false; therefore it replays complete public history instead of referencing server-retained state.
         // 标准 Responses 保持 store=false；因此重放完整公共历史，而不是引用服务端保留状态。
         let input = encode_responses_input(request, true, None)?;
+        let tools = encode_responses_tools(request);
         let mut body = json!({
             "model": request.model_id,
             "input": input,
-            "tools": encode_responses_tools(request),
             "stream": true,
             "store": false,
         });
+        if !tools.is_empty() {
+            body["tools"] = Value::Array(tools);
+        }
         if let Some(limit) = request.output_token_limit {
             body["max_output_tokens"] = json!(limit);
         }
@@ -174,14 +180,17 @@ impl ProtocolProfile for OpenAiCodexResponsesProfile {
         let continuation = validated_responses_continuation(request, self.id())?;
         let input = encode_responses_input(request, false, continuation)?;
         let instructions = encode_codex_instructions(request)?;
+        let tools = encode_codex_responses_tools(request);
         let mut body = json!({
             "model": request.model_id,
             "instructions": instructions,
             "input": input,
-            "tools": encode_codex_responses_tools(request),
             "stream": true,
             "store": false,
         });
+        if !tools.is_empty() {
+            body["tools"] = Value::Array(tools);
+        }
         if let Some(continuation) = continuation {
             body["previous_response_id"] = Value::String(continuation.provider_message_id.clone());
         }
@@ -191,14 +200,6 @@ impl ProtocolProfile for OpenAiCodexResponsesProfile {
             });
             project_responses_reasoning_output(request.reasoning_output, &mut body["reasoning"])?;
             body["include"] = json!(["reasoning.encrypted_content"]);
-        }
-        if !request.tools.is_empty()
-            && matches!(
-                request.parallel_tool_calls,
-                ParallelToolCallPolicy::ProviderDefault
-            )
-        {
-            body["parallel_tool_calls"] = Value::Bool(true);
         }
         project_responses_request_controls(request, &mut body)?;
         let mut headers = std::collections::BTreeMap::new();
@@ -242,7 +243,9 @@ fn project_chat_request_controls(
     request: &AiExecutionRequest,
     body: &mut Value,
 ) -> Result<(), ProtocolConversionError> {
-    body["tool_choice"] = encode_chat_tool_choice(request)?;
+    if !matches!(request.tool_choice, ToolChoicePolicy::Auto) {
+        body["tool_choice"] = encode_chat_tool_choice(request)?;
+    }
     match request.parallel_tool_calls {
         ParallelToolCallPolicy::ProviderDefault => {}
         ParallelToolCallPolicy::Allowed => body["parallel_tool_calls"] = Value::Bool(true),
@@ -296,7 +299,9 @@ fn project_responses_request_controls(
     request: &AiExecutionRequest,
     body: &mut Value,
 ) -> Result<(), ProtocolConversionError> {
-    body["tool_choice"] = encode_responses_tool_choice(request)?;
+    if !matches!(request.tool_choice, ToolChoicePolicy::Auto) {
+        body["tool_choice"] = encode_responses_tool_choice(request)?;
+    }
     match request.parallel_tool_calls {
         ParallelToolCallPolicy::ProviderDefault => {}
         ParallelToolCallPolicy::Allowed => body["parallel_tool_calls"] = Value::Bool(true),
@@ -1138,7 +1143,7 @@ mod tests {
             encoded.body["input"][1]["encrypted_content"],
             "encrypted-replay"
         );
-        assert_eq!(encoded.body["parallel_tool_calls"], true);
+        assert!(encoded.body.get("parallel_tool_calls").is_none());
         assert!(encoded.body.get("max_output_tokens").is_none());
         assert_eq!(encoded.body["tools"][0]["name"], "lookup");
         assert!(encoded.body["tools"][0].get("function").is_none());
@@ -1277,6 +1282,26 @@ mod tests {
             .expect("Chat request should encode");
         assert_eq!(encoded.body["reasoning_effort"], "minimal");
         assert_eq!(encoded.body["stream_options"]["include_usage"], true);
+    }
+
+    /// Verifies provider-default requests omit empty tools and automatic tool choice controls.
+    /// 验证供应商默认请求会省略空工具与自动工具选择控制。
+    #[test]
+    fn openai_profiles_omit_unconfigured_tool_defaults() {
+        let mut request = codex_request();
+        request.tools.clear();
+
+        let chat = OpenAiChatProfile
+            .encode(&request)
+            .expect("Chat request should encode");
+        assert!(chat.body.get("tools").is_none());
+        assert!(chat.body.get("tool_choice").is_none());
+
+        let responses = OpenAiResponsesProfile
+            .encode(&request)
+            .expect("Responses request should encode");
+        assert!(responses.body.get("tools").is_none());
+        assert!(responses.body.get("tool_choice").is_none());
     }
 
     /// Verifies Responses drops reasoning history signed by another provider family.

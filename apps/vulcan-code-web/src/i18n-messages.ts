@@ -1676,6 +1676,26 @@ export type TranslationKey =
   | "settings.group.aiCapabilities"
   | "settings.modelProviders"
   | "settings.credentialManagement"
+  | "settings.providerCategory.official"
+  | "settings.providerCategory.cloudMaaS"
+  | "settings.providerCategory.relay"
+  | "settings.providerCategory.unclassified"
+  | "settings.providerOnboarding.notConfigured"
+  | "settings.providerOnboarding.description"
+  | "settings.providerOnboarding.serviceEntries"
+  | "settings.providerOnboarding.register"
+  | "settings.providerOnboarding.referralSignup"
+  | "settings.providerOnboarding.addCredential"
+  | "settings.providerConnection.serviceOrigin"
+  | "settings.providerConnection.serviceOriginDescription"
+  | "settings.providerOnboarding.filteredEmpty"
+  | "settings.providerOnboarding.filteredEmptyDescription"
+  | "settings.providerOnboarding.externalConfirmation"
+  | "settings.providerOnboarding.externalOpenAnyway"
+  | "settings.providerOnboarding.externalOpenFailed"
+  | "settings.providerPromotion.neutralDisclosure"
+  | "settings.providerPromotion.referralDisclosure"
+  | "settings.providerPromotion.sponsoredDisclosure"
   | "settings.modelList"
   | "settings.providerRetry"
   | "settings.aiVendors"
@@ -1837,6 +1857,16 @@ export type TranslationKey =
   | "settings.providerTools.dialogDescription"
   | "settings.providerTools.providers"
   | "settings.providerTools.targets"
+  | "settings.providerTools.systemDefault"
+  | "settings.providerTools.systemDefaultHint"
+  | "settings.providerTools.model"
+  | "settings.providerTools.account"
+  | "settings.providerTools.selectModel"
+  | "settings.providerTools.selectAccount"
+  | "composer.capability.conflict.tooltip"
+  | "composer.capability.conflict.banner"
+  | "composer.capability.conflict.missingSelection"
+  | "composer.capability.conflict.targetUnavailable"
   | "settings.providerTools.disable"
   | "settings.providerTools.cancel"
   | "settings.providerTools.save"
@@ -3769,6 +3799,26 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.group.aiCapabilities": "AI 能力",
     "settings.modelProviders": "供应商管理",
     "settings.credentialManagement": "凭据管理",
+    "settings.providerCategory.official": "官方",
+    "settings.providerCategory.cloudMaaS": "云服务",
+    "settings.providerCategory.relay": "中转站",
+    "settings.providerCategory.unclassified": "未分类",
+    "settings.providerOnboarding.notConfigured": "待添加凭据",
+    "settings.providerOnboarding.description": "供应商入口固定展示；添加真实凭据后才会参与模型同步与调用。",
+    "settings.providerOnboarding.serviceEntries": "个可用服务入口",
+    "settings.providerOnboarding.register": "注册",
+    "settings.providerOnboarding.referralSignup": "推广注册",
+    "settings.providerOnboarding.addCredential": "添加凭据",
+    "settings.providerConnection.serviceOrigin": "工作空间专属入口（可选）",
+    "settings.providerConnection.serviceOriginDescription": "可粘贴控制台显示的完整 OpenAI 或 Anthropic 地址；留空时使用公共入口。该设置只作用于当前凭据。",
+    "settings.providerOnboarding.filteredEmpty": "当前供应商没有凭据",
+    "settings.providerOnboarding.filteredEmptyDescription": "可切换到其他供应商，或通过顶部按钮添加新凭据。",
+    "settings.providerOnboarding.externalConfirmation": "即将打开供应商外部注册页面，是否继续？",
+    "settings.providerOnboarding.externalOpenAnyway": "仍要打开",
+    "settings.providerOnboarding.externalOpenFailed": "打开供应商注册页面失败",
+    "settings.providerPromotion.neutralDisclosure": "普通注册链接，不包含 Vulcan 收益归因。",
+    "settings.providerPromotion.referralDisclosure": "推广链接；注册可能为 Vulcan 带来收益，但不会影响模型排序或调用路由。",
+    "settings.providerPromotion.sponsoredDisclosure": "赞助合作入口；合作关系不会影响模型排序或调用路由。",
     "settings.modelList": "模型列表",
     "settings.providerRetry": "请求重试",
     "settings.aiVendors": "能力供应商",
@@ -3930,6 +3980,16 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerTools.dialogDescription": "左侧选择供应商，右侧为当前能力选择唯一目标。",
     "settings.providerTools.providers": "供应商",
     "settings.providerTools.targets": "目标列表",
+    "settings.providerTools.systemDefault": "系统默认配置",
+    "settings.providerTools.systemDefaultHint": "能力开关、默认模型与默认账号相互独立；新会话创建时复制此配置。",
+    "settings.providerTools.model": "模型",
+    "settings.providerTools.account": "账号",
+    "settings.providerTools.selectModel": "请选择模型",
+    "settings.providerTools.selectAccount": "请选择账号",
+    "composer.capability.conflict.tooltip": "能力设置需要重新确认",
+    "composer.capability.conflict.banner": "已保存的模型或账号不再可用，请重新选择并保存后再发送。",
+    "composer.capability.conflict.missingSelection": "此能力尚未选择模型和账号。",
+    "composer.capability.conflict.targetUnavailable": "已保存的模型或账号不再可用。",
     "settings.providerTools.disable": "不启用",
     "settings.providerTools.cancel": "取消",
     "settings.providerTools.save": "保存",
@@ -5859,6 +5919,26 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.group.aiCapabilities": "AI capabilities",
     "settings.modelProviders": "Provider management",
     "settings.credentialManagement": "Credential management",
+    "settings.providerCategory.official": "Official",
+    "settings.providerCategory.cloudMaaS": "Cloud service",
+    "settings.providerCategory.relay": "Relay",
+    "settings.providerCategory.unclassified": "Unclassified",
+    "settings.providerOnboarding.notConfigured": "Credential required",
+    "settings.providerOnboarding.description": "This provider stays visible; it joins model sync and execution only after a real credential is added.",
+    "settings.providerOnboarding.serviceEntries": "available service entries",
+    "settings.providerOnboarding.register": "Register",
+    "settings.providerOnboarding.referralSignup": "Referral signup",
+    "settings.providerOnboarding.addCredential": "Add credential",
+    "settings.providerConnection.serviceOrigin": "Workspace-dedicated endpoint (optional)",
+    "settings.providerConnection.serviceOriginDescription": "Paste the full OpenAI or Anthropic URL shown by the console, or leave it empty to use the shared endpoint. This setting applies only to this credential.",
+    "settings.providerOnboarding.filteredEmpty": "No credential for this provider",
+    "settings.providerOnboarding.filteredEmptyDescription": "Switch providers or use the header action to add a credential.",
+    "settings.providerOnboarding.externalConfirmation": "Open the provider's external signup page?",
+    "settings.providerOnboarding.externalOpenAnyway": "Open anyway",
+    "settings.providerOnboarding.externalOpenFailed": "Failed to open provider signup page",
+    "settings.providerPromotion.neutralDisclosure": "Neutral signup link with no Vulcan revenue attribution.",
+    "settings.providerPromotion.referralDisclosure": "Referral link; signup may benefit Vulcan but never changes model ranking or routing.",
+    "settings.providerPromotion.sponsoredDisclosure": "Sponsored entry; the relationship never changes model ranking or routing.",
     "settings.modelList": "Model list",
     "settings.providerRetry": "Request retry",
     "settings.aiVendors": "Capability vendors",
@@ -6020,6 +6100,16 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerTools.dialogDescription": "Choose a provider on the left and one target for this capability on the right.",
     "settings.providerTools.providers": "Providers",
     "settings.providerTools.targets": "Targets",
+    "settings.providerTools.systemDefault": "System defaults",
+    "settings.providerTools.systemDefaultHint": "The capability switch, default model, and default account are independent; new conversations copy this snapshot.",
+    "settings.providerTools.model": "Model",
+    "settings.providerTools.account": "Account",
+    "settings.providerTools.selectModel": "Select a model",
+    "settings.providerTools.selectAccount": "Select an account",
+    "composer.capability.conflict.tooltip": "Capability settings require confirmation",
+    "composer.capability.conflict.banner": "A saved model or account is no longer available. Select and save a valid replacement before sending.",
+    "composer.capability.conflict.missingSelection": "No model and account are selected for this capability.",
+    "composer.capability.conflict.targetUnavailable": "The saved model or account is no longer available.",
     "settings.providerTools.disable": "Disable",
     "settings.providerTools.cancel": "Cancel",
     "settings.providerTools.save": "Save",

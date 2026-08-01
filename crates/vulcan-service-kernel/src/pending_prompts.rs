@@ -320,7 +320,7 @@ fn pending_prompt_runtime_options_from_submission(
         reasoning_effort: reasoning_effort
             .and_then(parse_reasoning_effort)
             .or_else(|| active_reasoning_selection_effort(provider_configuration))
-            .unwrap_or(ReasoningEffortLevel::Medium),
+            .unwrap_or(ReasoningEffortLevel::Off),
         temperature: None,
         web_search_override: Default::default(),
         web_search_provider_id: None,
@@ -697,5 +697,24 @@ mod tests {
             pending_prompt_preview_text("   ", &[preview_test_attachment()]),
             "1 个附件 · 附件消息"
         );
+    }
+}
+
+#[cfg(test)]
+mod provider_default_tests {
+    use super::*;
+
+    /// Verifies queued prompts do not invent a reasoning effort when no selection exists.
+    /// 验证排队提示词在没有选择时不会臆造推理强度。
+    #[test]
+    fn queued_prompt_without_selection_preserves_provider_reasoning_default() {
+        let options = pending_prompt_runtime_options_from_submission(
+            &ProviderConfigurationFile::default(),
+            None,
+        )
+        .expect("provider-default queued prompt options should resolve");
+
+        assert_eq!(options.reasoning_effort, ReasoningEffortLevel::Off);
+        assert!(options.temperature.is_none());
     }
 }
