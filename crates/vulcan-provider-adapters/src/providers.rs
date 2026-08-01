@@ -1210,7 +1210,7 @@ fn protocol_route_with_overrides<const H: usize>(
             request_headers.map(|(name, value)| (name.to_string(), value.to_string())),
         ),
         authentication,
-        model_discovery: Some(ModelDiscoveryKind::OpenAi),
+        model_discovery: None,
         model_discovery_path: None,
         model_discovery_base_url_override: model_discovery_base_url_override.map(str::to_string),
         verified: true,
@@ -1273,7 +1273,8 @@ mod tests {
         ANTHROPIC_MESSAGES_PROFILE_ID, alibaba_descriptor, kimi_descriptor, minimax_descriptor,
     };
     use crate::{
-        AccountUsageQueryKind, AuthenticationProjection, CredentialMode, OAuthProviderKind,
+        AccountUsageQueryKind, AuthenticationProjection, CredentialMode, ModelDiscoveryKind,
+        OAuthProviderKind,
     };
     use vulcan_ai_contract::InferenceUsageScope;
 
@@ -1409,6 +1410,10 @@ mod tests {
                 anthropic.authentication,
                 Some(AuthenticationProjection::XApiKey)
             );
+            assert_eq!(
+                anthropic.resolved_model_discovery(entry.model_discovery),
+                ModelDiscoveryKind::AlibabaCodingPlanStatic
+            );
         }
         for entry in descriptor.service_entries.iter().skip(2).take(4) {
             assert_eq!(
@@ -1418,6 +1423,15 @@ mod tests {
                     .key_prefix
                     .as_deref(),
                 Some("sk-sp-")
+            );
+            let anthropic = entry
+                .protocol_routes
+                .iter()
+                .find(|route| route.protocol_profile_id == ANTHROPIC_MESSAGES_PROFILE_ID)
+                .expect("Token Plan Anthropic route");
+            assert_eq!(
+                anthropic.resolved_model_discovery(entry.model_discovery),
+                ModelDiscoveryKind::AlibabaTokenPlanStatic
             );
         }
         for entry in descriptor.service_entries.iter().skip(6) {
@@ -1435,6 +1449,15 @@ mod tests {
                 entry
                     .allowed_usage_scopes
                     .contains(&InferenceUsageScope::ExternalService)
+            );
+            let anthropic = entry
+                .protocol_routes
+                .iter()
+                .find(|route| route.protocol_profile_id == ANTHROPIC_MESSAGES_PROFILE_ID)
+                .expect("Model Studio Anthropic route");
+            assert_eq!(
+                anthropic.resolved_model_discovery(entry.model_discovery),
+                ModelDiscoveryKind::AlibabaModelStudioStatic
             );
         }
     }
