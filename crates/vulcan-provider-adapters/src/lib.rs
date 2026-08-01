@@ -3,10 +3,12 @@
 
 mod alibaba_provider_tools;
 pub mod client;
+mod common_model_capabilities;
 pub mod configuration;
 mod connection_endpoint;
 pub mod connection_graph;
 pub mod credentials;
+pub mod custom_model;
 pub mod custom_provider;
 pub mod discovery;
 pub mod execution;
@@ -22,10 +24,12 @@ pub mod runtime;
 pub mod tool_catalog;
 
 pub use client::*;
+pub use common_model_capabilities::*;
 pub use configuration::*;
 pub use connection_endpoint::normalize_connection_service_origin_override;
 pub use connection_graph::*;
 pub use credentials::*;
+pub use custom_model::*;
 pub use custom_provider::*;
 pub use discovery::*;
 pub use execution::*;

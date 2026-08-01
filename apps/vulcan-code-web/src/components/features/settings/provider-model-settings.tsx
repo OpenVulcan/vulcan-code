@@ -29,6 +29,7 @@ import {
 } from "@/components/features/settings/provider-model-routes"
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { PublicAiModelOverridesDialog } from "@/components/features/settings/public-ai-model-overrides-dialog"
+import { PublicAiModelCapabilityDialog } from "@/components/features/settings/public-ai-model-capability-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -73,6 +74,7 @@ export function ModelListSettingsArea() {
   const [error, setError] = React.useState<string | null>(null)
   const [selectedProviderId, setSelectedProviderId] = React.useState<string | null>(null)
   const [editingRoute, setEditingRoute] = React.useState<PublicModelProtocolRoute | null>(null)
+  const [editingCapabilityModel, setEditingCapabilityModel] = React.useState<PublicAiModel | null>(null)
   const [pendingMutationKey, setPendingMutationKey] = React.useState<string | null>(null)
   const [menuExpanded, setMenuExpanded] = React.useState(true)
   const [searchQuery, setSearchQuery] = React.useState("")
@@ -379,6 +381,16 @@ export function ModelListSettingsArea() {
                       </Tabs>
                     </div>
                     <div className="settings-model-switches">
+                      <Button
+                        aria-label={`${t("settings.modelCapabilities.title")} ${representative.model.display_name}`}
+                        onClick={() => setEditingCapabilityModel(representative.model)}
+                        size="sm"
+                        type="button"
+                        variant="outline"
+                      >
+                        <SlidersHorizontal aria-hidden="true" size={14} />
+                        {t("settings.modelCapabilities.shortLabel")}
+                      </Button>
                       <label className="settings-model-switch-control">
                         <span>{t("settings.models.status")}</span>
                         <Switch
@@ -444,6 +456,25 @@ export function ModelListSettingsArea() {
           && record.protocolId === editingRoute?.protocolId
         ))?.overrides}
         protocolId={editingRoute?.protocolId ?? null}
+        providerDisplayName={selectedGroup?.provider.display_name ?? null}
+        providerId={selectedGroup?.provider.id ?? null}
+      />
+      <PublicAiModelCapabilityDialog
+        model={editingCapabilityModel}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditingCapabilityModel(null)
+          }
+        }}
+        onSaved={(next) => {
+          setSnapshot(next)
+          setEditingCapabilityModel(null)
+        }}
+        open={editingCapabilityModel !== null}
+        overrides={snapshot?.modelCapabilityOverrideRecords?.find((record) => (
+          record.providerId === selectedGroup?.provider.id
+          && record.modelId === editingCapabilityModel?.id
+        ))?.overrides}
         providerDisplayName={selectedGroup?.provider.display_name ?? null}
         providerId={selectedGroup?.provider.id ?? null}
       />

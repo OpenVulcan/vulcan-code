@@ -1119,14 +1119,18 @@ pub fn parse_openai_model_catalog(
     let models = response
         .data
         .into_iter()
-        .map(|model| ConnectionModel {
-            display_name: model.id.clone(),
-            id: model.id,
-            capabilities: ModelCapabilities {
+        .map(|model| {
+            let mut capabilities = ModelCapabilities {
                 operations: vec![AiOperation::ConversationRespond],
                 evidence_revision: String::from("openai-compatible.models.v1"),
                 ..ModelCapabilities::default()
-            },
+            };
+            crate::apply_common_model_capability_defaults(model.id.as_str(), &mut capabilities);
+            ConnectionModel {
+                display_name: model.id.clone(),
+                id: model.id,
+                capabilities,
+            }
         })
         .collect();
     Ok(ConnectionModelCatalog {
@@ -1152,6 +1156,7 @@ pub fn enrich_compatible_model_catalog(
     catalog: &mut ConnectionModelCatalog,
 ) {
     for model in &mut catalog.models {
+        crate::apply_common_model_capability_defaults(model.id.as_str(), &mut model.capabilities);
         match provider_id {
             "openai" => enrich_openai_model(model),
             "kimi" => enrich_kimi_model(service_entry_id, protocol_id, model),
@@ -2049,6 +2054,18 @@ fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabi
         .as_ref()
         .map(|architecture| resource_kinds(architecture.output_modalities.as_slice()))
         .unwrap_or_default();
+    // supports_text_conversation requires both sides of the exact OpenRouter architecture contract.
+    // supports_text_conversation 要求 OpenRouter 精确架构契约的输入与输出两侧都声明文本。
+    let supports_text_conversation = model.architecture.as_ref().is_some_and(|architecture| {
+        architecture
+            .input_modalities
+            .iter()
+            .any(|modality| modality == "text")
+            && architecture
+                .output_modalities
+                .iter()
+                .any(|modality| modality == "text")
+    });
     let mut model_parameters = Vec::new();
     let reasoning_efforts = model
         .reasoning
@@ -2133,7 +2150,10 @@ fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabi
         });
     }
     ModelCapabilities {
-        operations: vec![AiOperation::ConversationRespond],
+        operations: supports_text_conversation
+            .then_some(AiOperation::ConversationRespond)
+            .into_iter()
+            .collect(),
         input_resources,
         output_resources,
         embedding: None,
@@ -2854,6 +2874,30 @@ mod tests {
         );
     }
 
+    /// Verifies OpenRouter exposes conversation only when both text modalities are declared.
+    /// 验证 OpenRouter 仅在输入与输出均声明文本模态时公开会话能力。
+    #[test]
+    fn openrouter_conversation_requires_text_input_and_output() {
+        let catalog = parse_openrouter_model_catalog(
+            "connection",
+            1,
+            r#"{"data":[{"id":"example/chat","name":"Chat","context_length":8192,"supported_parameters":[],"architecture":{"input_modalities":["text"],"output_modalities":["text"]}},{"id":"example/embed","name":"Embed","context_length":8192,"supported_parameters":[],"architecture":{"input_modalities":["text"],"output_modalities":["embeddings"]}},{"id":"example/image-only","name":"Image Only","context_length":8192,"supported_parameters":[],"architecture":{"input_modalities":["image"],"output_modalities":["text"]}}]}"#,
+        )
+        .expect("documented modality records should parse");
+
+        let operations = catalog
+            .models
+            .iter()
+            .map(|model| (model.id.as_str(), model.capabilities.operations.as_slice()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            operations["example/chat"],
+            [AiOperation::ConversationRespond]
+        );
+        assert!(operations["example/embed"].is_empty());
+        assert!(operations["example/image-only"].is_empty());
+    }
+
     /// Verifies atomic OpenRouter discovery separates conversation, embedding, and rerank evidence.
     /// 验证 OpenRouter 原子发现会分离会话、向量与重排证据。
     #[test]
@@ -2981,6 +3025,25 @@ mod tests {
         assert_eq!(
             catalog.models[0].capabilities.evidence_revision,
             "openai-compatible.models.v1"
+        );
+    }
+
+    /// Verifies an exact public embedding identity never enters compatible conversation catalogs.
+    /// 验证精确的公共向量模型身份不会进入兼容协议会话目录。
+    #[test]
+    fn openai_compatible_embedding_identity_is_not_a_conversation_model() {
+        let catalog = parse_openai_model_catalog(
+            "connection",
+            1,
+            r#"{"object":"list","data":[{"id":"text-embedding-3-small","object":"model","created":1,"owned_by":"relay"}]}"#,
+        )
+        .expect("documented embedding identity should parse");
+
+        assert!(
+            !catalog.models[0]
+                .capabilities
+                .operations
+                .contains(&AiOperation::ConversationRespond)
         );
     }
 

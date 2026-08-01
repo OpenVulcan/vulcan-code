@@ -3,6 +3,8 @@ import type {
   PublicAiConnectionAddRequest,
   PublicAiConnectionUpdateRequest,
   PublicAiCustomProviderSaveRequest,
+  PublicAiCustomModelDefinition,
+  PublicAiModelCapabilityOverrides,
   PublicAiModelOverrides,
   PublicAiInferenceRoute,
   PublicAiInferenceTestResult,
@@ -112,6 +114,31 @@ export async function removePublicAiCustomProvider(
   return serviceClient.request<PublicAiSettingsSnapshot>(
     "service_remove_public_ai_custom_provider",
     { request: { providerId } },
+  );
+}
+
+// savePublicAiCustomModels replaces the complete credential-independent custom model set.
+// savePublicAiCustomModels 替换完整的凭据无关自定义模型集合。
+export async function savePublicAiCustomModels(
+  providerId: string,
+  models: PublicAiCustomModelDefinition[],
+): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_custom_models",
+    { request: { providerId, models } },
+  );
+}
+
+// savePublicAiModelCapabilityOverrides saves one capability difference or restores defaults.
+// savePublicAiModelCapabilityOverrides 保存一项能力差异或恢复默认值。
+export async function savePublicAiModelCapabilityOverrides(request: {
+  providerId: string;
+  modelId: string;
+  overrides?: PublicAiModelCapabilityOverrides;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_model_capability_overrides",
+    { request },
   );
 }
 

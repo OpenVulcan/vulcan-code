@@ -17,13 +17,14 @@ use vulcan_ai_contract::{
 use vulcan_provider_adapters::{
     AccountUsageQueryKind, ActiveAiModelSelection, ConnectionModelCatalog, CredentialBillingKind,
     CredentialConnection, CredentialMode, CredentialSecretEnvelope, CredentialSecretResolver,
-    CredentialSecretStore, CustomProviderAuthentication, CustomProviderDefinition,
-    CustomProviderProtocol, InferenceProfile, InferenceRouteBinding, InferenceRouteConfiguration,
-    InternalModelOverrides, ModelExecutionOverrides, OAuthAuthorizationChallenge,
-    OAuthClientConfiguration, OAuthTransactionPhase, OAuthTransactionSnapshot,
-    PersistedAiConfiguration, ProviderDescriptor, ProviderKind, ProviderToolCapabilityKind,
-    ProviderToolExecutionResult, ProviderToolTarget, ProviderToolTargetSelection, PublicAiRuntime,
-    ServiceEntryKind, registered_native_action_binding_id,
+    CredentialSecretStore, CustomModelDefinition, CustomProviderAuthentication,
+    CustomProviderDefinition, CustomProviderProtocol, InferenceProfile, InferenceRouteBinding,
+    InferenceRouteConfiguration, InternalModelOverrides, ModelCapabilityOverrides,
+    ModelExecutionOverrides, OAuthAuthorizationChallenge, OAuthClientConfiguration,
+    OAuthTransactionPhase, OAuthTransactionSnapshot, PersistedAiConfiguration, ProviderDescriptor,
+    ProviderKind, ProviderToolCapabilityKind, ProviderToolExecutionResult, ProviderToolTarget,
+    ProviderToolTargetSelection, PublicAiRuntime, ServiceEntryKind,
+    registered_native_action_binding_id,
 };
 use vulcan_service_api::{ServiceEventEmitter, WorkbenchSnapshot};
 
@@ -75,6 +76,15 @@ pub(super) struct PublicAiSettingsSnapshot {
     /// Effective model access records derived from runtime catalogs and persisted choices.
     /// 从运行时目录与持久化选择派生的有效模型访问记录。
     model_access_records: Vec<PublicAiModelAccessRecord>,
+    /// User-owned custom models grouped by provider without credential duplication.
+    /// 按供应商分组且不复制凭据的用户自有自定义模型。
+    custom_models: BTreeMap<String, BTreeMap<String, CustomModelDefinition>>,
+    /// User capability differences stored separately from immutable catalogs.
+    /// 与不可变目录分离保存的用户能力差异。
+    model_capability_overrides: BTreeMap<String, ModelCapabilityOverrides>,
+    /// Explicit capability difference records that avoid composite-key parsing in the browser.
+    /// 避免浏览器解析组合键的显式能力差异记录。
+    model_capability_override_records: Vec<PublicAiModelCapabilityOverrideRecord>,
     /// Available exact provider tool targets through configured credentials.
     /// 通过已配置凭据可用的精确供应商工具目标。
     provider_tool_targets: Vec<PublicAiProviderToolTargetSnapshot>,
@@ -348,6 +358,22 @@ pub(super) struct PublicAiModelAccessRecord {
     /// Code-owned provider default before applying a user choice.
     /// 应用用户选择前由代码拥有的供应商默认值。
     default_enabled: bool,
+}
+
+/// Browser-facing model capability difference without a composite key.
+/// 面向浏览器且不含组合键的模型能力差异。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PublicAiModelCapabilityOverrideRecord {
+    /// Exact provider identifier.
+    /// 精确供应商标识。
+    provider_id: String,
+    /// Exact model identifier.
+    /// 精确模型标识。
+    model_id: String,
+    /// User-owned capability differences.
+    /// 用户自有能力差异。
+    overrides: ModelCapabilityOverrides,
 }
 
 /// Adds one credential connection and its secret.
@@ -724,6 +750,35 @@ pub(super) struct PublicAiCustomProviderRemoveRequest {
     provider_id: String,
 }
 
+/// Replaces the complete user-owned model set for one custom provider.
+/// 替换一个自定义供应商的完整用户自有模型集合。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiCustomModelsSaveRequest {
+    /// Exact custom provider identifier.
+    /// 精确自定义供应商标识。
+    provider_id: String,
+    /// Complete replacement model set.
+    /// 完整替换模型集合。
+    models: Vec<CustomModelDefinition>,
+}
+
+/// Saves or clears one provider-model capability difference.
+/// 保存或清除一个供应商模型能力差异。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiModelCapabilityOverridesSaveRequest {
+    /// Exact provider identifier.
+    /// 精确供应商标识。
+    provider_id: String,
+    /// Exact model identifier.
+    /// 精确模型标识。
+    model_id: String,
+    /// Replacement difference, or null to restore immutable defaults.
+    /// 替换差异；为 null 时恢复不可变默认值。
+    overrides: Option<ModelCapabilityOverrides>,
+}
+
 /// Creates or updates one custom provider without changing any credential.
 /// 创建或更新一个自定义供应商且不改变任何凭据。
 pub(super) async fn service_save_public_ai_custom_provider(
@@ -914,6 +969,15 @@ pub(super) async fn service_remove_public_ai_custom_provider(
                     "Custom provider `{provider_id}` still has credentials and cannot be removed."
                 ));
             }
+            if configuration
+                .custom_models
+                .get(provider_id.as_str())
+                .is_some_and(|models| !models.is_empty())
+            {
+                return Err(format!(
+                    "Custom provider `{provider_id}` still has model definitions. Remove its models before removing the provider."
+                ));
+            }
             let removed = configuration
                 .custom_providers
                 .remove(provider_id.as_str())
@@ -923,12 +987,244 @@ pub(super) async fn service_remove_public_ai_custom_provider(
                     "Provider `{provider_id}` is not a user-defined provider."
                 ));
             }
+            configuration.remove_provider_owned_model_settings(provider_id.as_str());
             Ok(())
         })
         .await?;
     let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
     publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
     build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Replaces the user-owned model definitions for one custom provider.
+/// 替换一个自定义供应商的用户自有模型定义。
+///
+/// # Parameters
+/// 参数
+///
+/// `app` publishes the refreshed workbench, `state` owns persisted configuration and runtime
+/// catalogs, and `request` carries the complete replacement set.
+/// `app` 发布刷新的工作台，`state` 持有持久化配置与运行时目录，`request` 携带完整替换集合。
+///
+/// # Returns
+/// 返回值
+///
+/// Returns the rebuilt browser snapshot after validation and overlay reapplication.
+/// 校验并重新应用覆盖后返回重建的浏览器快照。
+pub(super) async fn service_save_public_ai_custom_models(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiCustomModelsSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    validate_non_empty("providerId", request.provider_id.as_str())?;
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    let provider = current_configuration
+        .custom_providers
+        .get(request.provider_id.as_str())
+        .ok_or_else(|| {
+            format!(
+                "Custom provider `{}` is not configured.",
+                request.provider_id
+            )
+        })?;
+    if provider.kind != ProviderKind::Custom {
+        return Err(format!(
+            "Provider `{}` is not a user-defined provider.",
+            request.provider_id
+        ));
+    }
+
+    let mut replacement = BTreeMap::new();
+    for model in request.models {
+        model.validate()?;
+        let model_id = model.id.clone();
+        if replacement.insert(model_id.clone(), model).is_some() {
+            return Err(format!(
+                "Custom provider `{}` contains duplicate model `{model_id}`.",
+                request.provider_id
+            ));
+        }
+    }
+    let removed_model_ids = current_configuration
+        .custom_models
+        .get(request.provider_id.as_str())
+        .into_iter()
+        .flat_map(|models| models.keys())
+        .filter(|model_id| !replacement.contains_key(model_id.as_str()))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let referenced_removed_models = referenced_custom_model_ids(
+        &current_configuration,
+        request.provider_id.as_str(),
+        &removed_model_ids,
+    );
+    let mut referenced_removed_models = referenced_removed_models;
+    // Loaded session selections are runtime-owned and must be checked separately from persisted defaults.
+    // 已加载会话选择由运行时持有，必须与持久化默认值分开检查。
+    {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("Failed to lock service state: {error}"))?;
+        if let Some(workspace) = guard.workspace_snapshot.as_ref() {
+            for runtime_state in workspace
+                .session_runtime_state
+                .values()
+                .chain(workspace.archived_session_runtime_state.values())
+            {
+                if runtime_state.active_provider_id.as_deref() == Some(request.provider_id.as_str())
+                    && runtime_state
+                        .active_model_id
+                        .as_ref()
+                        .is_some_and(|model_id| removed_model_ids.contains(model_id.as_str()))
+                    && let Some(model_id) = runtime_state.active_model_id.as_ref()
+                {
+                    referenced_removed_models.insert(model_id.clone());
+                }
+            }
+        }
+    }
+    if !referenced_removed_models.is_empty() {
+        return Err(format!(
+            "Custom models still referenced by an active or internal route cannot be removed: {}.",
+            referenced_removed_models
+                .into_iter()
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
+    let provider_id = request.provider_id;
+    let configuration = mutate_public_ai_configuration_in_transaction(
+        &state,
+        "保存自定义模型失败",
+        |configuration| {
+            if replacement.is_empty() {
+                configuration.custom_models.remove(provider_id.as_str());
+            } else {
+                configuration
+                    .custom_models
+                    .insert(provider_id.clone(), replacement.clone());
+            }
+            for model_id in &removed_model_ids {
+                configuration.remove_model_owned_settings(provider_id.as_str(), model_id.as_str());
+            }
+            Ok(())
+        },
+    )?;
+    runtime.reapply_model_catalog_overlays(&configuration)?;
+    drop(transaction);
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Saves or clears one user-owned model capability difference.
+/// 保存或清除一项用户自有模型能力差异。
+///
+/// # Parameters
+/// 参数
+///
+/// `app` publishes the refreshed workbench, `state` owns catalogs and configuration, and
+/// `request` identifies the provider model plus the optional replacement overlay.
+/// `app` 发布刷新的工作台，`state` 持有目录与配置，`request` 标识供应商模型及可选替换覆盖。
+///
+/// # Returns
+/// 返回值
+///
+/// Returns the rebuilt browser snapshot after the immutable source catalog is reprojected.
+/// 在不可变源目录上重新投影后返回重建的浏览器快照。
+pub(super) async fn service_save_public_ai_model_capability_overrides(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiModelCapabilityOverridesSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    validate_non_empty("providerId", request.provider_id.as_str())?;
+    validate_non_empty("modelId", request.model_id.as_str())?;
+    if request
+        .overrides
+        .as_ref()
+        .and_then(|overrides| overrides.context_limit)
+        == Some(0)
+    {
+        return Err(String::from("The context limit must be greater than zero."));
+    }
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    let catalogs = runtime.catalog_snapshot()?;
+    let model_exists = current_configuration
+        .connection_graph
+        .connections
+        .values()
+        .filter(|connection| connection.provider_id == request.provider_id)
+        .any(|connection| {
+            catalogs.get(connection.id.as_str()).is_some_and(|catalog| {
+                catalog
+                    .models
+                    .iter()
+                    .any(|model| model.id == request.model_id)
+            })
+        });
+    if !model_exists {
+        return Err(format!(
+            "Provider `{}` does not expose synchronized model `{}`.",
+            request.provider_id, request.model_id
+        ));
+    }
+    let key = PersistedAiConfiguration::provider_model_key(
+        request.provider_id.as_str(),
+        request.model_id.as_str(),
+    );
+    let configuration = mutate_public_ai_configuration_in_transaction(
+        &state,
+        "保存模型能力覆盖失败",
+        |configuration| {
+            if let Some(overrides) = request.overrides.clone() {
+                configuration
+                    .model_capability_overrides
+                    .insert(key.clone(), overrides);
+            } else {
+                configuration
+                    .model_capability_overrides
+                    .remove(key.as_str());
+            }
+            Ok(())
+        },
+    )?;
+    runtime.reapply_model_catalog_overlays(&configuration)?;
+    drop(transaction);
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Finds removed custom models still owned by active or internal inference routes.
+/// 查找仍被当前选择或内部推理路由持有的已移除自定义模型。
+fn referenced_custom_model_ids(
+    configuration: &PersistedAiConfiguration,
+    provider_id: &str,
+    removed_model_ids: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut referenced = BTreeSet::new();
+    if let Some(active) = configuration.active.as_ref()
+        && active.provider_id == provider_id
+        && removed_model_ids.contains(active.model_id.as_str())
+    {
+        referenced.insert(active.model_id.clone());
+    }
+    for profile in configuration.inference_profiles.values() {
+        let routes = profile
+            .llm_routes
+            .values()
+            .chain(profile.embedding.iter())
+            .chain(profile.rerank.iter());
+        for route in routes {
+            if route.provider_id == provider_id
+                && removed_model_ids.contains(route.model_id.as_str())
+            {
+                referenced.insert(route.model_id.clone());
+            }
+        }
+    }
+    referenced
 }
 
 /// Starts one exact provider OAuth flow without persisting transaction state.
@@ -3974,6 +4270,8 @@ fn first_enabled_model_selection(
                             configuration.model_is_enabled(
                                 connection.provider_id.as_str(),
                                 model.id.as_str(),
+                            ) && vulcan_provider_adapters::model_supports_text_conversation(
+                                &model.capabilities,
                             )
                         })
                         .map(|model| ActiveAiModelSelection {
@@ -4041,6 +4339,7 @@ fn build_public_ai_settings_snapshot(
     let providers = runtime.effective_providers(configuration)?;
     let mut model_override_records_by_key = BTreeMap::new();
     let mut model_access_records_by_key = BTreeMap::new();
+    let mut model_capability_override_records_by_key = BTreeMap::new();
     for (connection_id, catalog) in &catalogs {
         let Some(connection) = configuration
             .connection_graph
@@ -4055,17 +4354,37 @@ fn build_public_ai_settings_snapshot(
                 model.id.as_str(),
             );
             model_access_records_by_key
-                .entry(access_key)
+                .entry(access_key.clone())
                 .or_insert_with(|| PublicAiModelAccessRecord {
                     provider_id: connection.provider_id.clone(),
                     model_id: model.id.clone(),
                     enabled: configuration
                         .model_is_enabled(connection.provider_id.as_str(), model.id.as_str()),
-                    default_enabled: vulcan_provider_adapters::default_model_enabled(
-                        connection.provider_id.as_str(),
-                        model.id.as_str(),
-                    ),
+                    default_enabled: configuration
+                        .custom_model(connection.provider_id.as_str(), model.id.as_str())
+                        .map_or_else(
+                            || {
+                                vulcan_provider_adapters::default_model_enabled(
+                                    connection.provider_id.as_str(),
+                                    model.id.as_str(),
+                                )
+                            },
+                            |definition| definition.enabled,
+                        ),
                 });
+            if let Some(overrides) = configuration
+                .model_capability_overrides
+                .get(access_key.as_str())
+                .cloned()
+            {
+                model_capability_override_records_by_key
+                    .entry(access_key.clone())
+                    .or_insert_with(|| PublicAiModelCapabilityOverrideRecord {
+                        provider_id: connection.provider_id.clone(),
+                        model_id: model.id.clone(),
+                        overrides,
+                    });
+            }
             let key = PersistedAiConfiguration::provider_model_protocol_key(
                 connection.provider_id.as_str(),
                 model.id.as_str(),
@@ -4085,6 +4404,9 @@ fn build_public_ai_settings_snapshot(
     }
     let model_override_records = model_override_records_by_key.into_values().collect();
     let model_access_records = model_access_records_by_key.into_values().collect();
+    let model_capability_override_records = model_capability_override_records_by_key
+        .into_values()
+        .collect();
     let available_provider_tool_targets = runtime.available_provider_tool_targets(configuration)?;
     let provider_tool_selections = filter_current_provider_tool_selections(
         runtime,
@@ -4116,6 +4438,9 @@ fn build_public_ai_settings_snapshot(
         model_overrides: configuration.model_overrides.clone(),
         model_override_records,
         model_access_records,
+        custom_models: configuration.custom_models.clone(),
+        model_capability_overrides: configuration.model_capability_overrides.clone(),
+        model_capability_override_records,
         provider_tool_targets: available_provider_tool_targets
             .into_iter()
             .map(|available| PublicAiProviderToolTargetSnapshot {

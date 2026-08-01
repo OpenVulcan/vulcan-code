@@ -3,9 +3,10 @@
 
 use crate::{
     AuthenticationProjection, CredentialConnection, CredentialExecutionSecret,
-    MINIMAX_REASONING_SPLIT_PARAMETER_ID, OPENROUTER_REASONING_MAX_TOKENS_PARAMETER_ID,
-    ProtocolRoute, ProviderDescriptor, ProviderToolTarget, RequestProjectorKind,
-    SAMPLING_TEMPERATURE_PARAMETER_ID, SecondaryRouteSelection, ServiceEntry,
+    CustomModelRequestProjection, MINIMAX_REASONING_SPLIT_PARAMETER_ID,
+    OPENROUTER_REASONING_MAX_TOKENS_PARAMETER_ID, ProtocolRoute, ProviderDescriptor,
+    ProviderToolTarget, RequestProjectorKind, SAMPLING_TEMPERATURE_PARAMETER_ID,
+    SecondaryRouteSelection, ServiceEntry,
 };
 use async_stream::try_stream;
 use futures_util::{Stream, StreamExt};
@@ -49,6 +50,9 @@ pub struct ProviderExecutionRoute {
     /// Optional provider-declared secondary route.
     /// 可选供应商声明二级路由。
     pub secondary_route: SecondaryRouteSelection,
+    /// Optional user-owned safe projection for one exact custom model.
+    /// 可选的单个精确自定义模型用户自有安全投影。
+    pub custom_model_projection: Option<CustomModelRequestProjection>,
 }
 
 impl ProviderExecutionRoute {
@@ -132,6 +136,7 @@ impl ProviderExecutionRoute {
             connection,
             protocol_route,
             secondary_route,
+            custom_model_projection: None,
         })
     }
 
@@ -792,9 +797,14 @@ fn validate_request_policy(
         let registered_openrouter_reasoning_budget = parameter_id
             == OPENROUTER_REASONING_MAX_TOKENS_PARAMETER_ID
             && route.entry.request_projector == RequestProjectorKind::OpenRouter;
+        let registered_custom_parameter = route
+            .custom_model_projection
+            .as_ref()
+            .is_some_and(|projection| projection.model_parameter_paths.contains_key(parameter_id));
         if !registered_temperature_route
             && !registered_minimax_reasoning_split
             && !registered_openrouter_reasoning_budget
+            && !registered_custom_parameter
         {
             return Err(pre_dispatch_failure(format!(
                 "Model-specific parameter `{parameter_id}` has no registered route projector."
@@ -855,7 +865,130 @@ fn project_provider_request(
             project_alibaba_request(route, request, &mut encoded)?;
         }
     }
+    if let Some(projection) = route.custom_model_projection.as_ref() {
+        project_custom_model_request(projection, request, &mut encoded)?;
+    }
     Ok(encoded)
+}
+
+/// Applies one validated custom model projection after standard protocol encoding.
+/// 在标准协议编码后应用一个已校验的自定义模型投影。
+fn project_custom_model_request(
+    projection: &CustomModelRequestProjection,
+    request: &AiExecutionRequest,
+    encoded: &mut EncodedWireRequest,
+) -> Result<(), ProviderExecutionFailure> {
+    for (path, value) in &projection.defaults {
+        set_json_path(&mut encoded.body, path, value.clone(), false)?;
+    }
+    for (parameter_id, path) in &projection.model_parameter_paths {
+        if let Some(value) = request.model_parameters.get(parameter_id) {
+            let value = model_parameter_json_value(value)?;
+            set_json_path(&mut encoded.body, path, value, true)?;
+        }
+    }
+    if let Some(reasoning_effort) = request.reasoning_effort
+        && let Some(mutation) = projection.reasoning.get(&reasoning_effort)
+    {
+        for path in &mutation.delete {
+            delete_json_path(&mut encoded.body, path)?;
+        }
+        for (path, value) in &mutation.set {
+            set_json_path(&mut encoded.body, path, value.clone(), true)?;
+        }
+    }
+    for path in &projection.delete {
+        delete_json_path(&mut encoded.body, path)?;
+    }
+    for (path, value) in &projection.overrides {
+        set_json_path(&mut encoded.body, path, value.clone(), true)?;
+    }
+    Ok(())
+}
+
+/// Converts one strongly typed model value into its provider JSON value.
+/// 将一个强类型模型值转换为供应商 JSON 值。
+fn model_parameter_json_value(
+    value: &ModelParameterValue,
+) -> Result<Value, ProviderExecutionFailure> {
+    match value {
+        ModelParameterValue::Boolean(value) => Ok(Value::Bool(*value)),
+        ModelParameterValue::Integer(value) => Ok(Value::Number((*value).into())),
+        ModelParameterValue::Decimal(value) => serde_json::from_str(value).map_err(|error| {
+            pre_dispatch_failure(format!(
+                "Custom decimal model parameter `{value}` is invalid JSON: {error}"
+            ))
+        }),
+        ModelParameterValue::String(value) => Ok(Value::String(value.clone())),
+        ModelParameterValue::Array(values) => values
+            .iter()
+            .map(model_parameter_json_value)
+            .collect::<Result<Vec<_>, _>>()
+            .map(Value::Array),
+        ModelParameterValue::Object(values) => values
+            .iter()
+            .map(|(key, value)| Ok((key.clone(), model_parameter_json_value(value)?)))
+            .collect::<Result<serde_json::Map<_, _>, ProviderExecutionFailure>>()
+            .map(Value::Object),
+    }
+}
+
+/// Sets one validated dot-separated object path.
+/// 设置一条已校验的点分隔对象路径。
+fn set_json_path(
+    root: &mut Value,
+    path: &str,
+    value: Value,
+    replace: bool,
+) -> Result<(), ProviderExecutionFailure> {
+    let segments = path.split('.').collect::<Vec<_>>();
+    let (leaf, parents) = segments
+        .split_last()
+        .ok_or_else(|| pre_dispatch_failure("Custom request path is empty."))?;
+    let mut current = root;
+    for segment in parents {
+        let object = current.as_object_mut().ok_or_else(|| {
+            pre_dispatch_failure(format!(
+                "Custom request path `{path}` crosses a non-object value."
+            ))
+        })?;
+        current = object
+            .entry((*segment).to_string())
+            .or_insert_with(|| Value::Object(Default::default()));
+    }
+    let object = current.as_object_mut().ok_or_else(|| {
+        pre_dispatch_failure(format!(
+            "Custom request path `{path}` targets a non-object parent."
+        ))
+    })?;
+    if object.contains_key(*leaf) && !replace {
+        return Ok(());
+    }
+    object.insert((*leaf).to_string(), value);
+    Ok(())
+}
+
+/// Deletes one validated dot-separated object path when present.
+/// 在存在时删除一条已校验的点分隔对象路径。
+fn delete_json_path(root: &mut Value, path: &str) -> Result<(), ProviderExecutionFailure> {
+    let segments = path.split('.').collect::<Vec<_>>();
+    let (leaf, parents) = segments
+        .split_last()
+        .ok_or_else(|| pre_dispatch_failure("Custom request path is empty."))?;
+    let mut current = root;
+    for segment in parents {
+        let Some(object) = current.as_object_mut() else {
+            return Ok(());
+        };
+        let Some(next) = object.get_mut(*segment) else {
+            return Ok(());
+        };
+        current = next;
+    }
+    if let Some(object) = current.as_object_mut() {
+        object.remove(*leaf);
+    }
+    Ok(())
 }
 
 /// Projects the shared sampling-temperature parameter into one registered provider body.
@@ -3377,5 +3510,53 @@ mod tests {
             Some("Bearer secret")
         );
         assert!(!openai_headers.contains_key("x-api-key"));
+    }
+
+    /// Verifies custom model projections apply typed parameters, reasoning, deletion, and overrides deterministically.
+    /// 验证自定义模型投影会确定性地应用强类型参数、推理、删除与强制覆盖。
+    #[test]
+    fn custom_model_projection_applies_registered_request_mutations() {
+        let mut request = minimal_request();
+        request.reasoning_effort = Some(ReasoningEffort::High);
+        request.model_parameters.insert(
+            String::from("vendor.temperature"),
+            ModelParameterValue::Decimal(String::from("0.3")),
+        );
+        let projection = CustomModelRequestProjection {
+            reasoning: BTreeMap::from([(
+                ReasoningEffort::High,
+                crate::CustomRequestMutation {
+                    set: BTreeMap::from([(
+                        String::from("thinking.mode"),
+                        Value::String(String::from("enabled")),
+                    )]),
+                    delete: Vec::new(),
+                },
+            )]),
+            model_parameter_paths: BTreeMap::from([(
+                String::from("vendor.temperature"),
+                String::from("sampling.temperature"),
+            )]),
+            defaults: BTreeMap::from([(String::from("vendor.keep"), Value::Bool(true))]),
+            overrides: BTreeMap::from([(
+                String::from("vendor.forced"),
+                Value::String(String::from("yes")),
+            )]),
+            delete: vec![String::from("remove_me")],
+        };
+        let mut encoded = EncodedWireRequest {
+            path: String::from("/v1/chat/completions"),
+            headers: BTreeMap::new(),
+            body: json!({"model": "custom-model", "messages": [], "remove_me": true}),
+        };
+
+        project_custom_model_request(&projection, &request, &mut encoded)
+            .expect("custom projection should succeed");
+
+        assert_eq!(encoded.body["thinking"]["mode"], "enabled");
+        assert_eq!(encoded.body["sampling"]["temperature"], json!(0.3));
+        assert_eq!(encoded.body["vendor"]["keep"], true);
+        assert_eq!(encoded.body["vendor"]["forced"], "yes");
+        assert!(encoded.body.get("remove_me").is_none());
     }
 }

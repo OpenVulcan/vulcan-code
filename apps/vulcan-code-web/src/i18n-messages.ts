@@ -1803,6 +1803,88 @@ export type TranslationKey =
   | "settings.modelOverrides.noParameters"
   | "settings.modelOverrides.unsupportedParameter"
   | "settings.modelOverrides.enabled"
+  | "settings.customModels.title"
+  | "settings.customModels.description"
+  | "settings.customModels.search"
+  | "settings.customModels.filterAll"
+  | "settings.customModels.filterEnabled"
+  | "settings.customModels.filterDisabled"
+  | "settings.customModels.importDiscovered"
+  | "settings.customModels.importTitle"
+  | "settings.customModels.importDescription"
+  | "settings.customModels.importSelected"
+  | "settings.customModels.addManual"
+  | "settings.customModels.enableAll"
+  | "settings.customModels.disableAll"
+  | "settings.customModels.enabled"
+  | "settings.customModels.disabled"
+  | "settings.customModels.empty"
+  | "settings.customModels.noModelsToImport"
+  | "settings.customModels.removeConfirm"
+  | "settings.customProviders.removeTitle"
+  | "settings.customProviders.removeDescription"
+  | "settings.customProviders.modelCount"
+  | "settings.customProviders.manageModels"
+  | "settings.customProviders.manageModelsFor"
+  | "settings.customModels.identityRequired"
+  | "settings.customModels.duplicateId"
+  | "settings.customModels.parametersInvalid"
+  | "settings.customModels.basic"
+  | "settings.customModels.basicHint"
+  | "settings.customModels.modelId"
+  | "settings.customModels.displayName"
+  | "settings.customModels.contextLimit"
+  | "settings.customModels.outputLimit"
+  | "settings.customModels.modalities"
+  | "settings.customModels.modalitiesHint"
+  | "settings.customModels.input"
+  | "settings.customModels.output"
+  | "settings.customModels.behavior"
+  | "settings.customModels.behaviorHint"
+  | "settings.customModels.toolCalling"
+  | "settings.customModels.parallelTools"
+  | "settings.customModels.reasoning"
+  | "settings.customModels.reasoningControl"
+  | "settings.customModels.supportUnknown"
+  | "settings.customModels.supportNative"
+  | "settings.customModels.supportEquivalent"
+  | "settings.customModels.supportLossy"
+  | "settings.customModels.supportUnsupported"
+  | "settings.customModels.controlUnknown"
+  | "settings.customModels.controlFixedOff"
+  | "settings.customModels.controlFixedOn"
+  | "settings.customModels.controlToggle"
+  | "settings.customModels.controlEffortSelection"
+  | "settings.customModels.controlProviderAdaptive"
+  | "settings.customModels.reasoningEfforts"
+  | "settings.customModels.effortNone"
+  | "settings.customModels.effortAdaptive"
+  | "settings.customModels.effortMinimal"
+  | "settings.customModels.effortLow"
+  | "settings.customModels.effortMedium"
+  | "settings.customModels.effortHigh"
+  | "settings.customModels.effortExtraHigh"
+  | "settings.customModels.effortMax"
+  | "settings.customModels.effortUltra"
+  | "settings.customModels.advanced"
+  | "settings.customModels.advancedHint"
+  | "settings.customModels.parameters"
+  | "settings.customModels.projection"
+  | "settings.customModels.projectionInvalid"
+  | "settings.customModels.remove"
+  | "settings.customModels.selectHint"
+  | "settings.customModels.save"
+  | "settings.modelCapabilities.title"
+  | "settings.modelCapabilities.shortLabel"
+  | "settings.modelCapabilities.overlayHint"
+  | "settings.modelCapabilities.contextLimit"
+  | "settings.modelCapabilities.overrideContext"
+  | "settings.modelCapabilities.contextHint"
+  | "settings.modelCapabilities.contextInvalid"
+  | "settings.modelCapabilities.inputResources"
+  | "settings.modelCapabilities.outputResources"
+  | "settings.modelCapabilities.overrideResources"
+  | "settings.modelCapabilities.restore"
   | "settings.models.enabled"
   | "settings.models.disabled"
   | "settings.models.toggle"
@@ -3983,6 +4065,88 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.modelOverrides.noParameters": "当前协议没有额外模型参数。",
     "settings.modelOverrides.unsupportedParameter": "该复杂参数尚未注册可视化编辑器",
     "settings.modelOverrides.enabled": "启用",
+    "settings.customModels.title": "{provider} · 模型管理",
+    "settings.customModels.description": "模型定义独立于凭据保存；目录导入和手动修改只写用户覆盖，不会改写同步来源。",
+    "settings.customModels.search": "搜索模型名称或 ID",
+    "settings.customModels.filterAll": "全部模型",
+    "settings.customModels.filterEnabled": "仅已启用",
+    "settings.customModels.filterDisabled": "仅已关闭",
+    "settings.customModels.importDiscovered": "从当前目录导入缺失模型",
+    "settings.customModels.importTitle": "选择要导入的模型",
+    "settings.customModels.importDescription": "仅选中的目录模型会复制到用户覆盖层；同步来源不会被修改。",
+    "settings.customModels.importSelected": "导入 {count} 个模型",
+    "settings.customModels.addManual": "手动添加模型",
+    "settings.customModels.enableAll": "全部启用",
+    "settings.customModels.disableAll": "全部禁用",
+    "settings.customModels.enabled": "启用",
+    "settings.customModels.disabled": "关闭",
+    "settings.customModels.empty": "当前筛选条件下没有模型。",
+    "settings.customModels.noModelsToImport": "当前目录没有可追加的新模型。",
+    "settings.customModels.removeConfirm": "确定从自定义供应商中移除模型“{name}”吗？仍被会话或内部推理引用时后端会拒绝保存。",
+    "settings.customProviders.removeTitle": "移除供应商",
+    "settings.customProviders.removeDescription": "确定移除自定义供应商“{name}”吗？系统会先检查凭据、模型和运行中引用，存在引用时不会删除。",
+    "settings.customProviders.modelCount": "{count} 个模型",
+    "settings.customProviders.manageModels": "管理模型",
+    "settings.customProviders.manageModelsFor": "管理 {provider} 的模型",
+    "settings.customModels.identityRequired": "每个模型都必须填写模型 ID 和显示名称。",
+    "settings.customModels.duplicateId": "模型 ID 必须唯一，请修改重复的 ID：{model}。",
+    "settings.customModels.parametersInvalid": "模型参数必须是 JSON 数组。",
+    "settings.customModels.basic": "基础信息",
+    "settings.customModels.basicHint": "上下文默认采用公共能力库；手动模型从 200,000 开始，可直接修改。",
+    "settings.customModels.modelId": "模型 ID",
+    "settings.customModels.displayName": "显示名称",
+    "settings.customModels.contextLimit": "上下文限制",
+    "settings.customModels.outputLimit": "输出 Token 限制（可选）",
+    "settings.customModels.modalities": "输入与输出",
+    "settings.customModels.modalitiesHint": "文本是所有会话模型的基础能力；这里只声明额外资源模态。",
+    "settings.customModels.input": "输入资源",
+    "settings.customModels.output": "输出资源",
+    "settings.customModels.behavior": "工具与思考",
+    "settings.customModels.behaviorHint": "严格声明供应商实际支持形态；未知不会被当作支持。",
+    "settings.customModels.toolCalling": "工具调用",
+    "settings.customModels.parallelTools": "并行工具调用",
+    "settings.customModels.reasoning": "思考支持",
+    "settings.customModels.reasoningControl": "思考控制方式",
+    "settings.customModels.supportUnknown": "尚未声明",
+    "settings.customModels.supportNative": "原生支持",
+    "settings.customModels.supportEquivalent": "等效支持",
+    "settings.customModels.supportLossy": "有限兼容",
+    "settings.customModels.supportUnsupported": "不支持",
+    "settings.customModels.controlUnknown": "尚未声明",
+    "settings.customModels.controlFixedOff": "固定关闭",
+    "settings.customModels.controlFixedOn": "固定开启",
+    "settings.customModels.controlToggle": "允许开关",
+    "settings.customModels.controlEffortSelection": "思考档位",
+    "settings.customModels.controlProviderAdaptive": "供应商自适应",
+    "settings.customModels.reasoningEfforts": "可选思考档位",
+    "settings.customModels.effortNone": "关闭",
+    "settings.customModels.effortAdaptive": "自适应",
+    "settings.customModels.effortMinimal": "最小",
+    "settings.customModels.effortLow": "低",
+    "settings.customModels.effortMedium": "中",
+    "settings.customModels.effortHigh": "高",
+    "settings.customModels.effortExtraHigh": "超高",
+    "settings.customModels.effortMax": "最大",
+    "settings.customModels.effortUltra": "极致",
+    "settings.customModels.advanced": "高级协议映射",
+    "settings.customModels.advancedHint": "仅在确认供应商请求字段后填写。宿主持有字段会由后端拒绝，避免覆盖模型、消息和工具。",
+    "settings.customModels.parameters": "模型参数定义（JSON 数组）",
+    "settings.customModels.projection": "请求投影（JSON 对象）",
+    "settings.customModels.projectionInvalid": "请求投影必须是 JSON 对象。",
+    "settings.customModels.remove": "移除当前模型",
+    "settings.customModels.selectHint": "从左侧选择模型，或从目录导入、手动添加一个模型。",
+    "settings.customModels.save": "保存模型",
+    "settings.modelCapabilities.title": "默认能力覆盖",
+    "settings.modelCapabilities.shortLabel": "能力",
+    "settings.modelCapabilities.overlayHint": "只保存差异，不修改供应商目录和公共能力库。",
+  "settings.modelCapabilities.contextLimit": "上下文限制",
+  "settings.modelCapabilities.overrideContext": "覆盖公共库或供应商声明的上下文限制",
+    "settings.modelCapabilities.contextHint": "没有独立声明时公共库回退为 200,000；此处可以按实际套餐向下或向上覆盖。",
+    "settings.modelCapabilities.contextInvalid": "上下文限制必须是大于 0 的整数。",
+    "settings.modelCapabilities.inputResources": "输入资源覆盖",
+    "settings.modelCapabilities.outputResources": "输出资源覆盖",
+    "settings.modelCapabilities.overrideResources": "启用完整集合覆盖（可显式选择空集合）",
+    "settings.modelCapabilities.restore": "恢复来源默认值",
     "settings.models.enabled": "已启用",
     "settings.models.disabled": "已关闭",
     "settings.models.toggle": "切换模型启用状态",
@@ -6160,6 +6324,88 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.modelOverrides.noParameters": "This protocol has no additional model parameters.",
     "settings.modelOverrides.unsupportedParameter": "No visual editor is registered for this complex parameter",
     "settings.modelOverrides.enabled": "Enabled",
+    "settings.customModels.title": "{provider} · Model management",
+    "settings.customModels.description": "Model definitions are stored independently from credentials. Imports and manual edits write user overlays only and never modify synchronized sources.",
+    "settings.customModels.search": "Search model name or ID",
+    "settings.customModels.filterAll": "All models",
+    "settings.customModels.filterEnabled": "Enabled only",
+    "settings.customModels.filterDisabled": "Disabled only",
+    "settings.customModels.importDiscovered": "Import missing models from the live catalog",
+    "settings.customModels.importTitle": "Choose models to import",
+    "settings.customModels.importDescription": "Only selected catalog models are copied into the user overlay. The synchronized source remains unchanged.",
+    "settings.customModels.importSelected": "Import {count} models",
+    "settings.customModels.addManual": "Add a model manually",
+    "settings.customModels.enableAll": "Enable all",
+    "settings.customModels.disableAll": "Disable all",
+    "settings.customModels.enabled": "Enabled",
+    "settings.customModels.disabled": "Disabled",
+    "settings.customModels.empty": "No models match the current filter.",
+    "settings.customModels.noModelsToImport": "The live catalog has no new models to append.",
+    "settings.customModels.removeConfirm": "Remove model “{name}” from this custom provider? The service will reject the save if a session or internal route still references it.",
+    "settings.customProviders.removeTitle": "Remove provider",
+    "settings.customProviders.removeDescription": "Remove custom provider “{name}”? Credentials, models, and active runtime references are checked first; referenced providers are not deleted.",
+    "settings.customProviders.modelCount": "{count} models",
+    "settings.customProviders.manageModels": "Manage models",
+    "settings.customProviders.manageModelsFor": "Manage models for {provider}",
+    "settings.customModels.identityRequired": "Every model requires a model ID and display name.",
+    "settings.customModels.duplicateId": "Model IDs must be unique. Rename the duplicate ID: {model}.",
+    "settings.customModels.parametersInvalid": "Model parameters must be a JSON array.",
+    "settings.customModels.basic": "Basics",
+    "settings.customModels.basicHint": "Context defaults come from the common capability library. Manual models start at 200,000 and remain directly editable.",
+    "settings.customModels.modelId": "Model ID",
+    "settings.customModels.displayName": "Display name",
+    "settings.customModels.contextLimit": "Context limit",
+    "settings.customModels.outputLimit": "Output token limit (optional)",
+    "settings.customModels.modalities": "Input and output",
+    "settings.customModels.modalitiesHint": "Text is the base capability for conversation models. Declare only additional resource modalities here.",
+    "settings.customModels.input": "Input resources",
+    "settings.customModels.output": "Output resources",
+    "settings.customModels.behavior": "Tools and reasoning",
+    "settings.customModels.behaviorHint": "Declare only behavior the provider actually supports. Unknown is never treated as supported.",
+    "settings.customModels.toolCalling": "Tool calling",
+    "settings.customModels.parallelTools": "Parallel tool calling",
+    "settings.customModels.reasoning": "Reasoning support",
+    "settings.customModels.reasoningControl": "Reasoning control",
+    "settings.customModels.supportUnknown": "Not declared",
+    "settings.customModels.supportNative": "Native",
+    "settings.customModels.supportEquivalent": "Equivalent",
+    "settings.customModels.supportLossy": "Limited compatibility",
+    "settings.customModels.supportUnsupported": "Unsupported",
+    "settings.customModels.controlUnknown": "Not declared",
+    "settings.customModels.controlFixedOff": "Always off",
+    "settings.customModels.controlFixedOn": "Always on",
+    "settings.customModels.controlToggle": "Toggle",
+    "settings.customModels.controlEffortSelection": "Effort selection",
+    "settings.customModels.controlProviderAdaptive": "Provider adaptive",
+    "settings.customModels.reasoningEfforts": "Selectable reasoning efforts",
+    "settings.customModels.effortNone": "Off",
+    "settings.customModels.effortAdaptive": "Adaptive",
+    "settings.customModels.effortMinimal": "Minimal",
+    "settings.customModels.effortLow": "Low",
+    "settings.customModels.effortMedium": "Medium",
+    "settings.customModels.effortHigh": "High",
+    "settings.customModels.effortExtraHigh": "Extra high",
+    "settings.customModels.effortMax": "Maximum",
+    "settings.customModels.effortUltra": "Ultra",
+    "settings.customModels.advanced": "Advanced protocol mapping",
+    "settings.customModels.advancedHint": "Fill this only after confirming provider request fields. Host-owned fields are rejected by the service to protect model, message, and tool payloads.",
+    "settings.customModels.parameters": "Model parameter definitions (JSON array)",
+    "settings.customModels.projection": "Request projection (JSON object)",
+    "settings.customModels.projectionInvalid": "The request projection must be a JSON object.",
+    "settings.customModels.remove": "Remove current model",
+    "settings.customModels.selectHint": "Select a model on the left, import from the catalog, or add one manually.",
+    "settings.customModels.save": "Save models",
+    "settings.modelCapabilities.title": "Default capability override",
+    "settings.modelCapabilities.shortLabel": "Capabilities",
+    "settings.modelCapabilities.overlayHint": "Stores differences only; provider catalogs and the common capability library remain unchanged.",
+  "settings.modelCapabilities.contextLimit": "Context limit",
+  "settings.modelCapabilities.overrideContext": "Override the context limit declared by the common library or provider",
+    "settings.modelCapabilities.contextHint": "When no exact declaration exists the common library falls back to 200,000. Override it here for the actual plan.",
+    "settings.modelCapabilities.contextInvalid": "The context limit must be an integer greater than zero.",
+    "settings.modelCapabilities.inputResources": "Input resource override",
+    "settings.modelCapabilities.outputResources": "Output resource override",
+    "settings.modelCapabilities.overrideResources": "Override the complete set (an explicit empty set is allowed)",
+    "settings.modelCapabilities.restore": "Restore source defaults",
     "settings.models.enabled": "Enabled",
     "settings.models.disabled": "Disabled",
     "settings.models.toggle": "Toggle model availability",

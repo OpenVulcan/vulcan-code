@@ -116,6 +116,41 @@ export interface PublicAiCustomProviderSaveRequest {
   secret: string;
 }
 
+// PublicAiCustomRequestMutation describes one provider-owned request-body mutation.
+// PublicAiCustomRequestMutation 描述一项供应商自有的请求体变更。
+export interface PublicAiCustomRequestMutation {
+  set: Record<string, unknown>;
+  delete: string[];
+}
+
+// PublicAiCustomModelRequestProjection maps model controls onto one custom provider protocol.
+// PublicAiCustomModelRequestProjection 将模型控制映射到一个自定义供应商协议。
+export interface PublicAiCustomModelRequestProjection {
+  reasoning: Record<string, PublicAiCustomRequestMutation>;
+  model_parameter_paths: Record<string, string>;
+  defaults: Record<string, unknown>;
+  overrides: Record<string, unknown>;
+  delete: string[];
+}
+
+// PublicAiCustomModelDefinition is one credential-independent user model overlay.
+// PublicAiCustomModelDefinition 是一个与凭据无关的用户模型覆盖定义。
+export interface PublicAiCustomModelDefinition {
+  id: string;
+  display_name: string;
+  enabled: boolean;
+  capabilities: PublicAiModelCapabilities;
+  request_projection: PublicAiCustomModelRequestProjection;
+}
+
+// PublicAiModelCapabilityOverrides stores only user differences from immutable capability data.
+// PublicAiModelCapabilityOverrides 仅保存用户相对于不可变能力数据的差异。
+export interface PublicAiModelCapabilityOverrides {
+  context_limit?: number;
+  input_resources?: PublicAiResourceKind[];
+  output_resources?: PublicAiResourceKind[];
+}
+
 // PublicAiConnection carries redacted credential connection metadata.
 // PublicAiConnection 承载脱敏凭据连接元数据。
 export interface PublicAiConnection {
@@ -283,6 +318,14 @@ export interface PublicAiModelAccessRecord {
   modelId: string;
   enabled: boolean;
   defaultEnabled: boolean;
+}
+
+// PublicAiModelCapabilityOverrideRecord identifies one capability difference without key parsing.
+// PublicAiModelCapabilityOverrideRecord 无需解析键即可标识一项能力差异。
+export interface PublicAiModelCapabilityOverrideRecord {
+  providerId: string;
+  modelId: string;
+  overrides: PublicAiModelCapabilityOverrides;
 }
 
 // PublicAiProviderToolCapabilityKind identifies one single-select semantic provider tool.
@@ -541,6 +584,9 @@ export interface PublicAiSettingsSnapshot {
   modelOverrides: Record<string, PublicAiModelOverrides>;
   modelOverrideRecords: PublicAiModelOverrideRecord[];
   modelAccessRecords: PublicAiModelAccessRecord[];
+  customModels?: Record<string, Record<string, PublicAiCustomModelDefinition>>;
+  modelCapabilityOverrides?: Record<string, PublicAiModelCapabilityOverrides>;
+  modelCapabilityOverrideRecords?: PublicAiModelCapabilityOverrideRecord[];
   providerToolTargets: PublicAiProviderToolTargetSnapshot[];
   providerToolSelections: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>

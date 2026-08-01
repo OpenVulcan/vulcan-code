@@ -6,7 +6,7 @@ use crate::provider_task::{
     ProviderAsyncTaskRecoveryContext, ProviderAsyncTaskRoute, ProviderTaskRecoveryStore,
 };
 use crate::{
-    ActiveAiModelSelection, ConnectionModelCatalog, CredentialConnection,
+    ActiveAiModelSelection, ConnectionModel, ConnectionModelCatalog, CredentialConnection,
     CredentialExecutionSecret, CredentialSecretEnvelope, HttpProviderMetadataClient,
     InferenceRouteBinding, InferenceRouteConfiguration, OAuthAuthorizationRuntime,
     PersistedAiConfiguration, ProviderExecutionClient, ProviderExecutionFailure,
@@ -25,7 +25,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 use vulcan_ai_contract::{
     AccountUsageSnapshot, AiExecutionRequest, AiOperation, EmbeddingRequest, EmbeddingResponse,
-    InferenceUsageScope, PromptCachePolicy, RerankRequest, RerankResponse,
+    InferenceUsageScope, ModelCapabilities, PromptCachePolicy, RerankRequest, RerankResponse,
 };
 use vulcan_ai_protocols::ProtocolRegistry;
 
@@ -48,6 +48,25 @@ const PROVIDER_ASYNC_TASK_POLL_INTERVAL: Duration = Duration::from_secs(15);
 /// Maximum wall time for one provider task poll or cancellation observation.
 /// 单次供应商任务轮询或取消观测的最大墙钟时间。
 const PROVIDER_ASYNC_TASK_OBSERVATION_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Reports whether one model contract supports bidirectional text conversation.
+/// 报告一个模型契约是否支持双向文本会话。
+///
+/// # Parameters
+/// 参数
+/// `capabilities` is the exact provider-neutral model contract.
+/// `capabilities` 是精确的供应商无关模型契约。
+///
+/// # Returns
+/// 返回值
+/// `true` only when the model explicitly exposes the conversation operation; text is the base
+/// payload of that operation while resource vectors intentionally contain only non-text media.
+/// 仅当模型显式公开会话操作时返回 `true`；文本是该操作的基础载荷，资源向量按契约仅保存非文本媒体。
+pub fn model_supports_text_conversation(capabilities: &ModelCapabilities) -> bool {
+    capabilities
+        .operations
+        .contains(&AiOperation::ConversationRespond)
+}
 
 /// Awaits one provider-task network operation without allowing it to block the recovery scheduler forever.
 /// 等待一次供应商任务网络操作，同时避免其永久阻塞恢复调度器。
@@ -230,6 +249,12 @@ pub struct PublicAiRuntime {
     /// Runtime-only credential-scoped model catalogs.
     /// 仅运行时存在的凭据作用域模型目录。
     catalogs: Arc<RwLock<RuntimeConnectionCatalogs>>,
+    /// Immutable provider-discovery catalogs before user overlays are applied.
+    /// 应用用户覆盖前的不可变供应商发现目录。
+    source_catalogs: Arc<RwLock<RuntimeConnectionCatalogs>>,
+    /// Serializes source/effective catalog replacement so overlay rebuilds cannot overwrite a newer refresh.
+    /// 串行化源目录与有效目录替换，避免覆盖重建写回并覆盖更新的刷新结果。
+    catalog_mutation_lock: Arc<StdMutex<()>>,
     /// Latest controlled synchronization error per connection.
     /// 每个连接最近一次受控同步错误。
     catalog_errors: Arc<RwLock<BTreeMap<String, String>>>,
@@ -277,6 +302,8 @@ impl PublicAiRuntime {
             oauth: Arc::new(OAuthAuthorizationRuntime::new(http)),
             protocols,
             catalogs: Arc::new(RwLock::new(RuntimeConnectionCatalogs::default())),
+            source_catalogs: Arc::new(RwLock::new(RuntimeConnectionCatalogs::default())),
+            catalog_mutation_lock: Arc::new(StdMutex::new(())),
             catalog_errors: Arc::new(RwLock::new(BTreeMap::new())),
             usage_cache: Arc::new(RwLock::new(BTreeMap::new())),
             secondary_route_cache: Arc::new(RwLock::new(BTreeMap::new())),
@@ -488,6 +515,7 @@ impl PublicAiRuntime {
                     .filter(|model| {
                         configuration
                             .model_is_enabled(connection.provider_id.as_str(), model.id.as_str())
+                            && model_supports_text_conversation(&model.capabilities)
                     })
                     .map(move |model| format!("{}/{}", connection.provider_id, model.id))
             })
@@ -517,6 +545,14 @@ impl PublicAiRuntime {
     /// `connection_id` identifies the exact deleted connection.
     /// `connection_id` 标识被删除的精确连接。
     pub fn remove_connection_catalog(&self, connection_id: &str) -> Result<(), String> {
+        let _mutation_guard = self
+            .catalog_mutation_lock
+            .lock()
+            .map_err(|_| String::from("The AI catalog mutation lock is poisoned."))?;
+        self.source_catalogs
+            .write()
+            .map_err(|_| String::from("The source AI model catalog lock is poisoned."))?
+            .remove(connection_id);
         self.catalogs
             .write()
             .map_err(|_| String::from("The AI model catalog lock is poisoned."))?
@@ -567,22 +603,119 @@ impl PublicAiRuntime {
             .metadata_client
             .discover_models(&provider, &entry, &connection, &secret, generation)
             .await;
-        let catalog = match discovery {
+        let source_catalog = match discovery {
             Ok(catalog) => catalog,
             Err(error) => {
                 self.catalog_errors
                     .write()
                     .map_err(|_| String::from("The AI catalog error lock is poisoned."))?
                     .insert(connection_id.to_string(), error.clone());
+                self.install_manual_custom_catalog_without_discovery(
+                    configuration,
+                    &connection,
+                    generation,
+                )?;
                 return Err(error);
             }
         };
+        let _mutation_guard = self
+            .catalog_mutation_lock
+            .lock()
+            .map_err(|_| String::from("The AI catalog mutation lock is poisoned."))?;
+        self.source_catalogs
+            .write()
+            .map_err(|_| String::from("The source AI model catalog lock is poisoned."))?
+            .replace(source_catalog.clone());
+        let mut catalog = source_catalog;
+        apply_model_catalog_overlays(configuration, provider.id.as_str(), &mut catalog)?;
         self.replace_catalog(catalog.clone())?;
         self.catalog_errors
             .write()
             .map_err(|_| String::from("The AI catalog error lock is poisoned."))?
             .remove(connection_id);
         Ok(catalog)
+    }
+
+    /// Rebuilds every effective in-memory catalog from immutable discovery snapshots.
+    /// 从不可变发现快照重建每个有效内存目录。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration` supplies the latest custom models and user capability differences.
+    /// `configuration` 提供最新自定义模型与用户能力差异。
+    pub fn reapply_model_catalog_overlays(
+        &self,
+        configuration: &PersistedAiConfiguration,
+    ) -> Result<(), String> {
+        let _mutation_guard = self
+            .catalog_mutation_lock
+            .lock()
+            .map_err(|_| String::from("The AI catalog mutation lock is poisoned."))?;
+        let source_catalogs = self
+            .source_catalogs
+            .read()
+            .map_err(|_| String::from("The source AI model catalog lock is poisoned."))?
+            .snapshot();
+        let mut effective = RuntimeConnectionCatalogs::default();
+        for connection in configuration.connection_graph.connections.values() {
+            let Some(mut catalog) = source_catalogs
+                .get(connection.id.as_str())
+                .cloned()
+                .or_else(|| manual_custom_catalog(configuration, connection, 1))
+            else {
+                continue;
+            };
+            apply_model_catalog_overlays(
+                configuration,
+                connection.provider_id.as_str(),
+                &mut catalog,
+            )?;
+            effective.replace(catalog);
+        }
+        *self
+            .catalogs
+            .write()
+            .map_err(|_| String::from("The AI model catalog lock is poisoned."))? = effective;
+        Ok(())
+    }
+
+    /// Installs validated manual models when provider discovery has no usable source catalog.
+    /// 当供应商发现没有可用源目录时安装已校验的手工模型。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration` owns custom definitions, `connection` selects one credential, and
+    /// `generation` preserves the current refresh generation.
+    /// `configuration` 持有自定义定义，`connection` 选择一个凭据，`generation` 保留当前刷新代次。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success when no fallback is needed or the manual-only effective catalog is installed.
+    /// 无需回退或仅含手工模型的有效目录安装完成时返回成功。
+    fn install_manual_custom_catalog_without_discovery(
+        &self,
+        configuration: &PersistedAiConfiguration,
+        connection: &CredentialConnection,
+        generation: u64,
+    ) -> Result<(), String> {
+        let _mutation_guard = self
+            .catalog_mutation_lock
+            .lock()
+            .map_err(|_| String::from("The AI catalog mutation lock is poisoned."))?;
+        let has_source_catalog = self
+            .source_catalogs
+            .read()
+            .map_err(|_| String::from("The source AI model catalog lock is poisoned."))?
+            .get(connection.id.as_str())
+            .is_some();
+        if has_source_catalog {
+            return Ok(());
+        }
+        let Some(mut catalog) = manual_custom_catalog(configuration, connection, generation) else {
+            return Ok(());
+        };
+        apply_model_catalog_overlays(configuration, connection.provider_id.as_str(), &mut catalog)?;
+        self.replace_catalog(catalog)
     }
 
     /// Queries normalized account usage for one exact credential connection.
@@ -2137,8 +2270,15 @@ impl PublicAiRuntime {
                 operation.as_str()
             ));
         }
+        if required_internal_operation.is_none()
+            && !model_supports_text_conversation(&model.capabilities)
+        {
+            return Err(format!(
+                "Model `{model_id}` does not expose bidirectional text conversation."
+            ));
+        }
         let provider = self
-            .providers
+            .effective_providers(configuration)?
             .provider(provider_id)
             .cloned()
             .ok_or_else(|| format!("Provider `{provider_id}` is not registered."))?;
@@ -2184,9 +2324,12 @@ impl PublicAiRuntime {
             .get(secondary_route_key.as_str())
             .cloned()
             .unwrap_or(SecondaryRouteSelection::Automatic);
-        let route =
+        let mut route =
             ProviderExecutionRoute::resolve(provider, entry, connection.clone(), secondary_route)
                 .map_err(|failure| failure.error.message.clone())?;
+        route.custom_model_projection = configuration
+            .custom_model(provider_id, model_id)
+            .map(|definition| definition.request_projection.clone());
         Ok(ResolvedPublicAiSelection {
             route,
             model,
@@ -2194,6 +2337,84 @@ impl PublicAiRuntime {
             catalog_revision,
         })
     }
+}
+
+/// Builds an empty discovery baseline only when one provider owns manual model definitions.
+/// 仅在某个供应商拥有手工模型定义时构建空的发现基线。
+///
+/// # Parameters
+/// 参数
+/// `configuration` owns custom definitions, `connection` identifies the target credential, and
+/// `generation` is the process-local catalog generation.
+/// `configuration` 持有自定义定义，`connection` 标识目标凭据，`generation` 为进程内目录代次。
+///
+/// # Returns
+/// 返回值
+/// An empty credential-scoped baseline when manual definitions exist; otherwise `None`.
+/// 存在手工定义时返回空的凭据作用域基线，否则返回 `None`。
+fn manual_custom_catalog(
+    configuration: &PersistedAiConfiguration,
+    connection: &CredentialConnection,
+    generation: u64,
+) -> Option<ConnectionModelCatalog> {
+    configuration
+        .custom_models
+        .get(connection.provider_id.as_str())
+        .filter(|definitions| !definitions.is_empty())
+        .map(|_| ConnectionModelCatalog {
+            connection_id: connection.id.clone(),
+            models: Vec::new(),
+            generation,
+        })
+}
+
+/// Applies immutable common defaults, custom definitions, and user differences to one catalog.
+/// 将不可变公共默认、自定义定义与用户差异应用到一个目录。
+///
+/// # Parameters
+/// 参数
+/// `configuration` owns user data, `provider_id` is exact, and `catalog` is rebuilt in place.
+/// `configuration` 持有用户数据，`provider_id` 为精确标识，`catalog` 会被原地重建。
+fn apply_model_catalog_overlays(
+    configuration: &PersistedAiConfiguration,
+    provider_id: &str,
+    catalog: &mut ConnectionModelCatalog,
+) -> Result<(), String> {
+    let mut models = catalog
+        .models
+        .drain(..)
+        .map(|mut model| {
+            crate::apply_common_model_context_default(model.id.as_str(), &mut model.capabilities);
+            configuration.apply_model_capability_overrides(
+                provider_id,
+                model.id.as_str(),
+                &mut model.capabilities,
+            );
+            (model.id.clone(), model)
+        })
+        .collect::<BTreeMap<_, _>>();
+    if let Some(custom_models) = configuration.custom_models.get(provider_id) {
+        for definition in custom_models.values() {
+            definition.validate()?;
+            let mut capabilities = definition.capabilities.clone();
+            crate::apply_common_model_context_default(definition.id.as_str(), &mut capabilities);
+            configuration.apply_model_capability_overrides(
+                provider_id,
+                definition.id.as_str(),
+                &mut capabilities,
+            );
+            models.insert(
+                definition.id.clone(),
+                ConnectionModel {
+                    id: definition.id.clone(),
+                    display_name: definition.display_name.clone(),
+                    capabilities,
+                },
+            );
+        }
+    }
+    catalog.models = models.into_values().collect();
+    Ok(())
 }
 
 /// Applies closed adapter-declared defaults before freezing an execution selection.
@@ -2540,6 +2761,113 @@ mod tests {
         (runtime, configuration)
     }
 
+    /// Verifies rebuilding user overlays never mutates the immutable synchronized catalog snapshot.
+    /// 验证重建用户覆盖绝不会修改不可变的已同步目录快照。
+    #[test]
+    fn model_overlay_rebuild_preserves_source_catalog() {
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .connection_graph
+            .add_connection(runtime.providers(), connection("one"))
+            .expect("connection should register");
+        let source = catalog("one");
+        runtime
+            .source_catalogs
+            .write()
+            .expect("source catalog lock should remain healthy")
+            .replace(source.clone());
+        runtime
+            .replace_catalog(source)
+            .expect("effective source catalog should install");
+        configuration.model_capability_overrides.insert(
+            PersistedAiConfiguration::provider_model_key("openrouter", "vendor/model"),
+            crate::ModelCapabilityOverrides {
+                context_limit: Some(4_096),
+                input_resources: Some(vec![vulcan_ai_contract::ResourceKind::Image]),
+                output_resources: None,
+            },
+        );
+
+        runtime
+            .reapply_model_catalog_overlays(&configuration)
+            .expect("overlay rebuild should succeed");
+
+        let immutable_context = runtime
+            .source_catalogs
+            .read()
+            .expect("source catalog lock should remain healthy")
+            .get("one")
+            .and_then(|catalog| catalog.models.first())
+            .and_then(|model| model.capabilities.context_limit);
+        let effective = runtime
+            .catalog_snapshot()
+            .expect("effective catalog should remain readable");
+        let effective_model = effective
+            .get("one")
+            .and_then(|catalog| catalog.models.first())
+            .expect("effective model should exist");
+        assert_eq!(immutable_context, Some(8_192));
+        assert_eq!(effective_model.capabilities.context_limit, Some(4_096));
+        assert_eq!(
+            effective_model.capabilities.input_resources,
+            vec![vulcan_ai_contract::ResourceKind::Image]
+        );
+    }
+
+    /// Verifies manual models remain usable when a provider has no discovered source catalog.
+    /// 验证供应商没有发现源目录时手工模型仍然可用。
+    #[test]
+    fn manual_custom_model_builds_catalog_without_provider_discovery() {
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .connection_graph
+            .add_connection(runtime.providers(), connection("one"))
+            .expect("connection should register");
+        configuration
+            .custom_models
+            .entry(String::from("openrouter"))
+            .or_default()
+            .insert(
+                String::from("manual/chat"),
+                crate::CustomModelDefinition {
+                    id: String::from("manual/chat"),
+                    display_name: String::from("Manual Chat"),
+                    enabled: true,
+                    capabilities: ModelCapabilities {
+                        operations: vec![AiOperation::ConversationRespond],
+                        context_limit: Some(200_000),
+                        ..ModelCapabilities::default()
+                    },
+                    request_projection: crate::CustomModelRequestProjection::default(),
+                },
+            );
+
+        runtime
+            .reapply_model_catalog_overlays(&configuration)
+            .expect("manual-only catalog should rebuild");
+
+        assert!(
+            runtime
+                .source_catalogs
+                .read()
+                .expect("source catalog lock should remain healthy")
+                .get("one")
+                .is_none(),
+            "manual fallback must not masquerade as provider discovery"
+        );
+        let catalogs = runtime
+            .catalog_snapshot()
+            .expect("effective catalog should remain readable");
+        let model = catalogs
+            .get("one")
+            .and_then(|catalog| catalog.models.first())
+            .expect("manual model should be installed");
+        assert_eq!(model.id, "manual/chat");
+        assert_eq!(model.capabilities.context_limit, Some(200_000));
+    }
+
     /// Verifies a provider-task network future cannot block its caller beyond the exact host limit.
     /// 验证供应商任务网络 Future 无法阻塞调用方超过精确宿主限制。
     #[tokio::test]
@@ -2590,6 +2918,60 @@ mod tests {
             .resolve_model_selection(&configuration, "openrouter", "vendor/model")
             .expect("stable first account should resolve");
         assert_eq!(selection.route.connection.id, "one");
+    }
+
+    /// Verifies workbench selectors and resolution reject operation-only internal models.
+    /// 验证工作台选择器与解析会拒绝仅供内部操作使用的模型。
+    #[test]
+    fn workbench_models_require_bidirectional_text_conversation() {
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .connection_graph
+            .add_connection(runtime.providers(), connection("one"))
+            .expect("connection should register");
+        configuration.set_model_enabled("openrouter", "vendor/chat", true);
+        configuration.set_model_enabled("openrouter", "vendor/embedding", true);
+        runtime
+            .replace_catalog(ConnectionModelCatalog {
+                connection_id: String::from("one"),
+                models: vec![
+                    ConnectionModel {
+                        id: String::from("vendor/chat"),
+                        display_name: String::from("Chat"),
+                        capabilities: ModelCapabilities {
+                            operations: vec![AiOperation::ConversationRespond],
+                            ..ModelCapabilities::default()
+                        },
+                    },
+                    ConnectionModel {
+                        id: String::from("vendor/embedding"),
+                        display_name: String::from("Embedding"),
+                        capabilities: ModelCapabilities {
+                            operations: vec![AiOperation::EmbeddingCreate],
+                            ..ModelCapabilities::default()
+                        },
+                    },
+                ],
+                generation: 1,
+            })
+            .expect("mixed catalog should install");
+
+        assert_eq!(
+            runtime
+                .available_model_selectors(&configuration)
+                .expect("selectors should resolve"),
+            BTreeSet::from([String::from("openrouter/vendor/chat")])
+        );
+        let Err(error) = runtime.resolve_connection_model_selection(
+            &configuration,
+            "one",
+            "openrouter",
+            "vendor/embedding",
+        ) else {
+            panic!("embedding-only model must not resolve as a workbench model");
+        };
+        assert!(error.contains("does not expose bidirectional text conversation"));
     }
 
     /// Verifies a removed remembered account degrades to another account exposing the same model.

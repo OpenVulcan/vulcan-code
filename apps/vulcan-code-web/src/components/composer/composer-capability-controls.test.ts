@@ -17,6 +17,9 @@ function settingsFixture(): PublicAiSettingsSnapshot {
     modelOverrides: {},
     modelOverrideRecords: [],
     modelAccessRecords: [],
+    customModels: {},
+    modelCapabilityOverrides: {},
+    modelCapabilityOverrideRecords: [],
     providerToolTargets: [{
       connectionId: "account-a",
       connectionDisplayName: "Account A",

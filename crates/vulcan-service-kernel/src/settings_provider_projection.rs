@@ -105,6 +105,11 @@ pub(crate) fn public_ai_provider_rows_for_selection(
                 catalog
                     .models
                     .iter()
+                    .filter(|model| {
+                        vulcan_provider_adapters::model_supports_text_conversation(
+                            &model.capabilities,
+                        )
+                    })
                     .map(|model| {
                         let settings_key =
                             vulcan_provider_adapters::PersistedAiConfiguration::connection_model_key(

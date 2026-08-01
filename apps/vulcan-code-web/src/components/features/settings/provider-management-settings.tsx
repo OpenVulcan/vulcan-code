@@ -1,6 +1,7 @@
 import * as React from "react"
 import {
   LoaderCircle,
+  ListTree,
   LockKeyhole,
   Pencil,
   Plus,
@@ -9,9 +10,28 @@ import {
 } from "lucide-react"
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
+import { CustomProviderModelsDialog } from "@/components/features/settings/custom-provider-models-dialog"
 import { localizedProviderDescription } from "@/components/features/settings/provider-presentation"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   Dialog,
   DialogContent,
@@ -48,10 +68,14 @@ import type {
 // ProviderManagementArea renders the complete provider registry without credential details.
 // ProviderManagementArea 渲染不含凭据详情的完整供应商注册表。
 export function ProviderManagementArea() {
+  const { t } = useI18n()
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null)
   const [editingProvider, setEditingProvider] = React.useState<PublicAiProviderDescriptor | null>(null)
   const [dialogOpen, setDialogOpen] = React.useState(false)
+  const [modelsProvider, setModelsProvider] = React.useState<PublicAiProviderDescriptor | null>(null)
+  const [modelsDialogOpen, setModelsDialogOpen] = React.useState(false)
   const [busyProviderId, setBusyProviderId] = React.useState<string | null>(null)
+  const [providerToRemove, setProviderToRemove] = React.useState<PublicAiProviderDescriptor | null>(null)
   const [error, setError] = React.useState<string | null>(null)
 
   // refresh loads the effective system and custom provider registry.
@@ -83,12 +107,34 @@ export function ProviderManagementArea() {
     setDialogOpen(true)
   }, [])
 
+  // openModels opens the credential-independent model overlay manager.
+  // openModels 打开与凭据无关的模型覆盖管理器。
+  const openModels = React.useCallback((provider: PublicAiProviderDescriptor) => {
+    setModelsProvider(provider)
+    setModelsDialogOpen(true)
+  }, [])
+
+  // handleProviderSaved refreshes state and guides newly created providers into model setup.
+  // handleProviderSaved 刷新状态，并引导新建供应商继续完成模型配置。
+  const handleProviderSaved = React.useCallback((nextSnapshot: PublicAiSettingsSnapshot) => {
+    const previousSnapshot = snapshot
+    setSnapshot(nextSnapshot)
+    if (!previousSnapshot) {
+      return
+    }
+    const previousProviderIds = new Set(previousSnapshot.providers.map((provider) => provider.id))
+    const createdProviders = nextSnapshot.providers.filter((provider) => (
+      provider.kind === "custom" && !previousProviderIds.has(provider.id)
+    ))
+    if (createdProviders.length === 1) {
+      setModelsProvider(createdProviders[0])
+      setModelsDialogOpen(true)
+    }
+  }, [snapshot])
+
   // removeProvider removes one custom provider only when no credential references it.
   // removeProvider 仅在没有凭据引用时移除一个自定义供应商。
   const removeProvider = React.useCallback(async (provider: PublicAiProviderDescriptor) => {
-    if (!window.confirm(`确定移除自定义供应商“${provider.display_name}”吗？`)) {
-      return
-    }
     setBusyProviderId(provider.id)
     setError(null)
     try {
@@ -97,6 +143,7 @@ export function ProviderManagementArea() {
       setError(errorMessage(reason))
     } finally {
       setBusyProviderId(null)
+      setProviderToRemove(null)
     }
   }, [])
 
@@ -125,10 +172,12 @@ export function ProviderManagementArea() {
       <CustomProviderTable
         busyProviderId={busyProviderId}
         connections={snapshot?.connections ?? []}
+        customModels={snapshot?.customModels ?? {}}
         loading={!snapshot}
         onCreate={openCreate}
         onEdit={openEdit}
-        onRemove={(provider) => void removeProvider(provider)}
+        onManageModels={openModels}
+        onRemove={setProviderToRemove}
         providers={customProviders}
       />
 
@@ -140,10 +189,42 @@ export function ProviderManagementArea() {
 
       <CustomProviderDialog
         onOpenChange={setDialogOpen}
-        onSaved={setSnapshot}
+        onSaved={handleProviderSaved}
         open={dialogOpen}
         provider={editingProvider}
       />
+      <CustomProviderModelsDialog
+        onOpenChange={setModelsDialogOpen}
+        onSaved={setSnapshot}
+        open={modelsDialogOpen}
+        provider={modelsProvider}
+        snapshot={snapshot}
+      />
+      <AlertDialog onOpenChange={(open) => !open && setProviderToRemove(null)} open={providerToRemove !== null}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("settings.customProviders.removeTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("settings.customProviders.removeDescription").replace("{name}", providerToRemove?.display_name ?? "")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("memory.common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={providerToRemove ? busyProviderId === providerToRemove.id : true}
+              onClick={(event) => {
+                event.preventDefault()
+                if (providerToRemove) {
+                  void removeProvider(providerToRemove)
+                }
+              }}
+              variant="destructive"
+            >
+              {t("settings.customProviders.removeTitle")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
@@ -153,12 +234,15 @@ export function ProviderManagementArea() {
 function CustomProviderTable(props: {
   busyProviderId: string | null
   connections: PublicAiSettingsSnapshot["connections"]
+  customModels: NonNullable<PublicAiSettingsSnapshot["customModels"]>
   loading: boolean
   onCreate: () => void
   onEdit: (provider: PublicAiProviderDescriptor) => void
+  onManageModels: (provider: PublicAiProviderDescriptor) => void
   onRemove: (provider: PublicAiProviderDescriptor) => void
   providers: PublicAiProviderDescriptor[]
 }) {
+  const { t } = useI18n()
   return (
     <section className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -206,6 +290,9 @@ function CustomProviderTable(props: {
                 const credentialCount = props.connections.filter(
                   (connection) => connection.provider_id === provider.id,
                 ).length
+                // modelCount counts provider-owned model overlays independently from credentials.
+                // modelCount 独立于凭据统计供应商自有模型覆盖。
+                const modelCount = Object.keys(props.customModels[provider.id] ?? {}).length
                 // protocolNames is the unique protocol set declared by all service entries.
                 // protocolNames 是所有服务入口声明的唯一协议集合。
                 const protocolNames = uniqueProtocolNames(provider)
@@ -235,7 +322,7 @@ function CustomProviderTable(props: {
                       </div>
                     </TableCell>
                     <TableCell className="whitespace-normal py-3 align-top text-sm text-muted-foreground">
-                      <div>{provider.service_entries.length} 个服务入口</div>
+                      <div>{t("settings.customProviders.modelCount").replace("{count}", String(modelCount))}</div>
                       <div className="mt-1">{credentialCount} 个凭据</div>
                     </TableCell>
                     <TableCell className="py-3 text-center align-top">
@@ -245,6 +332,16 @@ function CustomProviderTable(props: {
                     </TableCell>
                     <TableCell className="py-3 text-right align-top">
                       <div className="flex justify-end gap-1">
+                        <Button
+                          aria-label={t("settings.customProviders.manageModelsFor").replace("{provider}", provider.display_name)}
+                          onClick={() => props.onManageModels(provider)}
+                          size="icon-sm"
+                          title={t("settings.customProviders.manageModels")}
+                          type="button"
+                          variant="outline"
+                        >
+                          <ListTree className="size-4" />
+                        </Button>
                         <Button
                           aria-label={`编辑 ${provider.display_name}`}
                           onClick={() => props.onEdit(provider)}
@@ -457,48 +554,44 @@ function CustomProviderDialog(props: {
         </DialogHeader>
         <label className="settings-form-field">
           <span>显示名称</span>
-          <input className="settings-input" onChange={(event) => setDisplayName(event.target.value)} value={displayName} />
+          <Input onChange={(event) => setDisplayName(event.target.value)} value={displayName} />
         </label>
         <label className="settings-form-field">
           <span>基础 URL</span>
-          <input className="settings-input" onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://example.com/v1" value={baseUrl} />
+          <Input onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://example.com/v1" value={baseUrl} />
         </label>
         <label className="settings-form-field">
           <span>鉴权请求头</span>
-          <select
-            className="settings-input"
-            onChange={(event) => setAuthentication(event.target.value as "bearer_authorization" | "x_api_key")}
-            value={authentication}
-          >
-            <option value="bearer_authorization">Authorization: Bearer</option>
-            <option value="x_api_key">x-api-key</option>
-          </select>
+          <Select onValueChange={(value) => setAuthentication(value as "bearer_authorization" | "x_api_key")} value={authentication}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="bearer_authorization">Authorization: Bearer</SelectItem>
+              <SelectItem value="x_api_key">x-api-key</SelectItem>
+            </SelectContent>
+          </Select>
         </label>
         <label className="settings-form-field">
           <span>调用协议</span>
-          <select
-            className="settings-input"
-            onChange={(event) => setProtocol(event.target.value as PublicAiCustomProviderProtocol)}
-            value={protocol}
-          >
-            {customProtocolOptions.map((option) => (
-              <option key={option.id} value={option.id}>{option.label}</option>
-            ))}
-          </select>
+          <Select onValueChange={(value) => setProtocol(value as PublicAiCustomProviderProtocol)} value={protocol}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {customProtocolOptions.map((option) => (
+                <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </label>
         <label className="settings-form-field">
           <span>{props.provider ? "验证凭据名称" : "首个凭据名称"}</span>
-          <input
-            className="settings-input"
+          <Input
             onChange={(event) => setCredentialDisplayName(event.target.value)}
             value={credentialDisplayName}
           />
         </label>
         <label className="settings-form-field">
           <span>API Key</span>
-          <input
+          <Input
             autoComplete="off"
-            className="settings-input"
             onChange={(event) => setSecret(event.target.value)}
             placeholder={props.provider ? "仅用于验证本次配置，不会新增凭据" : "保存前必须通过模型目录验证"}
             type="password"
