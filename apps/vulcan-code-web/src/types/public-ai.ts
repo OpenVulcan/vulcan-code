@@ -137,8 +137,9 @@ export interface PublicAiCustomProviderSaveRequest {
   baseUrl: string;
   protocol: PublicAiCustomProviderProtocol;
   authentication: "bearer_authorization" | "x_api_key";
-  credentialDisplayName: string;
-  secret: string;
+  credentialDisplayName?: string;
+  secret?: string;
+  validationConnectionId?: string;
   modelDiscoveryMode: PublicAiCustomProviderModelDiscoveryMode;
   modelDiscoveryPath?: string;
   allowManualFallback?: boolean;
@@ -222,8 +223,7 @@ export type PublicAiCustomModelTemplateDecision =
 export interface PublicAiCommonModelTemplateSuggestion {
   template_key: string;
   template_revision: string;
-  match_kind: "exact" | "alias" | "provider_agnostic" | "similar";
-  confidence: number;
+  match_kind: "exact" | "alias" | "provider_agnostic";
   context_limit: number;
   supports_text_input: boolean;
   supports_text_output: boolean;
@@ -286,6 +286,19 @@ export interface PublicAiCustomModelConnectionAvailabilityRecord {
   connectionId: string;
   modelId: string;
   enabled: boolean;
+}
+
+// PublicAiModelDirectoryKind identifies whether one account model list is fixed, dynamic, manual, or unavailable.
+// PublicAiModelDirectoryKind 标识一个账号模型列表是固定、动态、手工还是不可用。
+export type PublicAiModelDirectoryKind = "fixed" | "dynamic" | "manual" | "unavailable";
+
+// PublicAiConnectionModelAccessPolicyRecord carries one account's inherited and sparse model decisions.
+// PublicAiConnectionModelAccessPolicyRecord 承载一个账号的继承状态与稀疏模型决定。
+export interface PublicAiConnectionModelAccessPolicyRecord {
+  connectionId: string;
+  defaultEnabled: boolean;
+  modelEnabledOverrides: Record<string, boolean>;
+  directoryKind: PublicAiModelDirectoryKind;
 }
 
 // PublicAiConnection carries redacted credential connection metadata.
@@ -749,6 +762,7 @@ export interface PublicAiSettingsSnapshot {
   active?: PublicAiActiveSelection;
   catalogs: Record<string, PublicAiConnectionCatalog>;
   sourceCatalogs: Record<string, PublicAiConnectionCatalog>;
+  modelSupportCatalogs: Record<string, PublicAiConnectionCatalog>;
   catalogStatuses: Record<string, PublicAiCatalogDiscoveryStatus>;
   catalogErrors: Record<string, string>;
   modelOverrides: Record<string, PublicAiModelOverrides>;
@@ -758,6 +772,7 @@ export interface PublicAiSettingsSnapshot {
   customProviderModelDefaults?: Record<string, PublicAiCustomProviderModelDefaults>;
   customModelTemplateDecisionRecords?: PublicAiCustomModelTemplateDecisionRecord[];
   customModelConnectionAvailabilityRecords?: PublicAiCustomModelConnectionAvailabilityRecord[];
+  connectionModelAccessPolicyRecords: PublicAiConnectionModelAccessPolicyRecord[];
   modelCapabilityOverrides?: Record<string, PublicAiModelCapabilityOverrides>;
   modelCapabilityOverrideRecords?: PublicAiModelCapabilityOverrideRecord[];
   providerToolTargets: PublicAiProviderToolTargetSnapshot[];

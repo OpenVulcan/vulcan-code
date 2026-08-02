@@ -1,8 +1,9 @@
 import * as React from "react"
-import { Boxes, ExternalLink, KeyRound, Layers3, Plus, RefreshCw, Star, Trash2 } from "lucide-react"
+import { Boxes, ExternalLink, KeyRound, Layers3, ListChecks, Plus, RefreshCw, Star, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
+import { CredentialModelAccessDialog } from "@/components/features/settings/credential-model-access-dialog"
 import { localizedServiceEntryPresentation } from "@/components/features/settings/provider-presentation"
 import { CredentialUsageOverview } from "@/components/public-ai/credential-usage-overview"
 import { Badge } from "@/components/ui/badge"
@@ -76,6 +77,7 @@ export function CredentialManagementArea(props: {
   const [busyConnectionId, setBusyConnectionId] = React.useState<string | null>(null)
   const [editingConnection, setEditingConnection] = React.useState<PublicAiConnection | null>(null)
   const [deletingConnection, setDeletingConnection] = React.useState<PublicAiConnection | null>(null)
+  const [modelAccessConnection, setModelAccessConnection] = React.useState<PublicAiConnection | null>(null)
   const [usageByConnection, setUsageByConnection] = React.useState<Record<string, PublicAiAccountUsage>>({})
   const [activeProviderId, setActiveProviderId] = React.useState<string>("")
   const [creatingProviderId, setCreatingProviderId] = React.useState<string>("")
@@ -230,6 +232,13 @@ export function CredentialManagementArea(props: {
     }
   }, [])
 
+  const modelAccessProvider = snapshot && modelAccessConnection
+    ? providerForConnection(snapshot, modelAccessConnection)
+    : undefined
+  const modelAccessEntry = modelAccessConnection
+    ? entryForConnection(modelAccessProvider, modelAccessConnection)
+    : undefined
+
   return (
     <AdaptiveToolPanel
       className="workspace-tool-panel-page workspace-skills-settings credential-management-layout"
@@ -322,6 +331,7 @@ export function CredentialManagementArea(props: {
                   key={connection.id}
                   onDelete={() => setDeletingConnection(connection)}
                   onEdit={() => setEditingConnection(connection)}
+                  onManageModels={() => setModelAccessConnection(connection)}
                   onRefreshUsage={() => void refreshUsage(connection.id)}
                   onSetDefault={() => void runConnectionAction(
                     connection.id,
@@ -377,6 +387,19 @@ export function CredentialManagementArea(props: {
           open={props.pickerOpen}
           providers={snapshot?.providers ?? []}
         />
+      <CredentialModelAccessDialog
+        connection={modelAccessConnection}
+        entry={modelAccessEntry}
+        onOpenChange={(open) => {
+          if (!open) {
+            setModelAccessConnection(null)
+          }
+        }}
+        onSnapshotChange={setSnapshot}
+        open={modelAccessConnection !== null}
+        provider={modelAccessProvider}
+        snapshot={snapshot}
+      />
       <PublicAiConnectionDialog
         connection={editingConnection}
         initialProviderId=""
@@ -535,6 +558,9 @@ interface CredentialAccountCardProps {
   // onRefreshUsage queries current account usage.
   // onRefreshUsage 查询当前账号用量。
   onRefreshUsage: () => void
+  // onManageModels opens account-scoped model access management.
+  // onManageModels 打开账号作用域模型访问管理。
+  onManageModels: () => void
   // onSetDefault selects this account as provider default.
   // onSetDefault 将此账号设为供应商默认账号。
   onSetDefault: () => void
@@ -618,6 +644,15 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
       </CardContent>
 
       <CardFooter className="mt-auto shrink-0 flex-wrap justify-end gap-2 px-3 py-1.5">
+        {props.entry?.kind !== "provider_tools" ? (
+          <CredentialIconAction
+            disabled={props.busy || props.connection.pending_validation}
+            label={t("settings.credentialModels.manage")}
+            onClick={props.onManageModels}
+          >
+            <ListChecks className="size-4" />
+          </CredentialIconAction>
+        ) : null}
         {props.entry?.kind !== "provider_tools" ? (
           <CredentialIconAction
             disabled={props.busy || props.connection.pending_validation}

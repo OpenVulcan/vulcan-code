@@ -1818,6 +1818,30 @@ export type TranslationKey =
   | "settings.customModels.disableAll"
   | "settings.customModels.enabled"
   | "settings.customModels.disabled"
+  | "settings.credentialModels.manage"
+  | "settings.credentialModels.title"
+  | "settings.credentialModels.description"
+  | "settings.credentialModels.search"
+  | "settings.credentialModels.filterAll"
+  | "settings.credentialModels.filterEnabled"
+  | "settings.credentialModels.filterDisabled"
+  | "settings.credentialModels.enableAll"
+  | "settings.credentialModels.disableAll"
+  | "settings.credentialModels.sync"
+  | "settings.credentialModels.syncing"
+  | "settings.credentialModels.count"
+  | "settings.credentialModels.empty"
+  | "settings.credentialModels.noResults"
+  | "settings.credentialModels.directoryFixed"
+  | "settings.credentialModels.directoryDynamic"
+  | "settings.credentialModels.directoryManual"
+  | "settings.credentialModels.directoryUnavailable"
+  | "settings.credentialModels.disableConfirmTitle"
+  | "settings.credentialModels.disableConfirmDescription"
+  | "settings.credentialModels.cancel"
+  | "settings.credentialModels.confirmDisable"
+  | "settings.credentialModels.futureEnabled"
+  | "settings.credentialModels.futureDisabled"
   | "settings.customModels.empty"
   | "settings.customModels.noModelsToImport"
   | "settings.customModels.removeConfirm"
@@ -1849,6 +1873,7 @@ export type TranslationKey =
   | "settings.customProviders.validationEditDescription"
   | "settings.customProviders.validationCreateDescription"
   | "settings.customProviders.validationCredentialName"
+  | "settings.customProviders.validationCredentialRequired"
   | "settings.customProviders.firstCredentialName"
   | "settings.customProviders.apiKey"
   | "settings.customProviders.apiKeyEditPlaceholder"
@@ -1957,17 +1982,14 @@ export type TranslationKey =
   | "settings.customModels.templateMatch.exact"
   | "settings.customModels.templateMatch.alias"
   | "settings.customModels.templateMatch.provider_agnostic"
-  | "settings.customModels.templateMatch.similar"
   | "settings.customModels.discoveryTitle"
   | "settings.customModels.discoverySummary"
   | "settings.customModels.reviewTemplates"
   | "settings.customModels.reviewTemplatesTitle"
   | "settings.customModels.reviewTemplatesDescription"
   | "settings.customModels.reviewExact"
-  | "settings.customModels.reviewSimilar"
   | "settings.customModels.reviewMissing"
   | "settings.customModels.reviewExactDescription"
-  | "settings.customModels.reviewSimilarDescription"
   | "settings.customModels.reviewMissingDescription"
   | "settings.customModels.reviewComplete"
   | "settings.customModels.applyAllExact"
@@ -4253,6 +4275,30 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.disableAll": "全部禁用",
     "settings.customModels.enabled": "启用",
     "settings.customModels.disabled": "关闭",
+    "settings.credentialModels.manage": "管理此账号的模型",
+    "settings.credentialModels.title": "账号模型",
+    "settings.credentialModels.description": "只控制此账号可调用的模型，不会修改供应商目录，也不会影响同一供应商的其他账号。",
+    "settings.credentialModels.search": "搜索模型名称或 ID",
+    "settings.credentialModels.filterAll": "全部",
+    "settings.credentialModels.filterEnabled": "已启用",
+    "settings.credentialModels.filterDisabled": "已关闭",
+    "settings.credentialModels.enableAll": "全部启用",
+    "settings.credentialModels.disableAll": "全部关闭",
+    "settings.credentialModels.sync": "同步目录",
+    "settings.credentialModels.syncing": "正在同步",
+    "settings.credentialModels.count": "已启用 {enabled} / {total}",
+    "settings.credentialModels.empty": "此账号目前没有可管理的模型。",
+    "settings.credentialModels.noResults": "没有符合当前搜索和筛选条件的模型。",
+    "settings.credentialModels.directoryFixed": "内置目录",
+    "settings.credentialModels.directoryDynamic": "账号目录",
+    "settings.credentialModels.directoryManual": "手工目录",
+    "settings.credentialModels.directoryUnavailable": "无模型目录",
+    "settings.credentialModels.disableConfirmTitle": "关闭此账号的全部模型？",
+    "settings.credentialModels.disableConfirmDescription": "此账号将不再参与模型路由；新会话和已加载会话会改用仍可用的账号。供应商目录与其他账号不会改变。",
+    "settings.credentialModels.cancel": "取消",
+    "settings.credentialModels.confirmDisable": "关闭全部模型",
+    "settings.credentialModels.futureEnabled": "后续同步发现的新模型会自动启用。",
+    "settings.credentialModels.futureDisabled": "后续同步发现的新模型保持关闭，直到你手动启用。",
     "settings.customModels.empty": "当前筛选条件下没有模型。",
     "settings.customModels.noModelsToImport": "当前目录没有可追加的新模型。",
     "settings.customModels.removeConfirm": "确定从自定义供应商中移除模型“{name}”吗？仍被会话或内部推理引用时后端会拒绝保存。",
@@ -4281,9 +4327,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customProviders.modelsEndpoint": "目录端点：",
     "settings.customProviders.manualOnly": "不访问远程目录",
     "settings.customProviders.validationTitle": "使用真实凭据验证",
-    "settings.customProviders.validationEditDescription": "凭据只用于验证这次入口修改，不会创建新账号或替换现有账号。",
+    "settings.customProviders.validationEditDescription": "选择一个已有账号验证这次入口修改；不会创建新账号、要求重新输入密钥或替换现有凭据。",
     "settings.customProviders.validationCreateDescription": "验证成功后，该凭据会作为此供应商的首个账号保存。",
     "settings.customProviders.validationCredentialName": "验证凭据名称",
+    "settings.customProviders.validationCredentialRequired": "选择一个已有账号",
     "settings.customProviders.firstCredentialName": "首个凭据名称",
     "settings.customProviders.apiKey": "API Key",
     "settings.customProviders.apiKeyEditPlaceholder": "仅用于验证本次配置",
@@ -4374,7 +4421,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.defaultsContextInvalid": "上下文限制必须是大于 0 的整数。",
     "settings.customModels.defaultsOutputInvalid": "输出限制必须是大于 0 且不超过上下文限制的整数。",
     "settings.customModels.defaultsSave": "保存供应商默认值",
-    "settings.customModels.templateSearching": "正在本地能力库中查找相似模型…",
+    "settings.customModels.templateSearching": "正在本地能力库中检查精确模型匹配…",
     "settings.customModels.templateUpdateAvailable": "公共能力模板已有新版本",
     "settings.customModels.templateUpdateDescription": "当前模型继续使用已确认的旧快照；只有点击应用更新后才会切换到新版本。",
     "settings.customModels.templateCurrent": "当前快照",
@@ -4392,17 +4439,14 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.templateMatch.exact": "模型 ID 完全匹配",
     "settings.customModels.templateMatch.alias": "已知别名匹配",
     "settings.customModels.templateMatch.provider_agnostic": "忽略供应商前缀后匹配",
-    "settings.customModels.templateMatch.similar": "名称相似，需人工确认",
     "settings.customModels.discoveryTitle": "账号目录同步",
     "settings.customModels.discoverySummary": "{accounts} 个账号共发现 {models} 个模型，{failed} 个账号需要处理；目录只缓存在内存中。",
     "settings.customModels.reviewTemplates": "审查能力建议",
     "settings.customModels.reviewTemplatesTitle": "审查模型能力建议",
-    "settings.customModels.reviewTemplatesDescription": "精确键、明确别名与去供应商前缀后的精确命中可批量应用；名称相似项必须逐项确认。",
+    "settings.customModels.reviewTemplatesDescription": "只显示精确键、明确别名与去供应商前缀后的唯一精确命中；未命中的模型保留供应商默认值。",
     "settings.customModels.reviewExact": "可批量应用",
-    "settings.customModels.reviewSimilar": "需要逐项确认",
     "settings.customModels.reviewMissing": "使用供应商默认值",
     "settings.customModels.reviewExactDescription": "精确或确定性命中",
-    "settings.customModels.reviewSimilarDescription": "相似命中：请逐项确认差异",
     "settings.customModels.reviewMissingDescription": "无命中：继续使用 200K/32K 纯文本供应商默认值",
     "settings.customModels.reviewComplete": "当前模型均已审查，或没有待处理的模板建议。",
     "settings.customModels.applyAllExact": "应用全部确定性建议（{count}）",
@@ -6685,6 +6729,30 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.disableAll": "Disable all",
     "settings.customModels.enabled": "Enabled",
     "settings.customModels.disabled": "Disabled",
+    "settings.credentialModels.manage": "Manage models for this account",
+    "settings.credentialModels.title": "Account models",
+    "settings.credentialModels.description": "Controls only the models callable through this account. It does not modify the provider catalog or sibling accounts.",
+    "settings.credentialModels.search": "Search model name or ID",
+    "settings.credentialModels.filterAll": "All",
+    "settings.credentialModels.filterEnabled": "Enabled",
+    "settings.credentialModels.filterDisabled": "Disabled",
+    "settings.credentialModels.enableAll": "Enable all",
+    "settings.credentialModels.disableAll": "Disable all",
+    "settings.credentialModels.sync": "Sync catalog",
+    "settings.credentialModels.syncing": "Syncing",
+    "settings.credentialModels.count": "{enabled} of {total} enabled",
+    "settings.credentialModels.empty": "This account has no manageable models yet.",
+    "settings.credentialModels.noResults": "No models match the current search and filter.",
+    "settings.credentialModels.directoryFixed": "Built-in catalog",
+    "settings.credentialModels.directoryDynamic": "Account catalog",
+    "settings.credentialModels.directoryManual": "Manual catalog",
+    "settings.credentialModels.directoryUnavailable": "No model catalog",
+    "settings.credentialModels.disableConfirmTitle": "Disable every model on this account?",
+    "settings.credentialModels.disableConfirmDescription": "This account will stop participating in model routing. New and loaded sessions will move to an available account. The provider catalog and sibling accounts are unchanged.",
+    "settings.credentialModels.cancel": "Cancel",
+    "settings.credentialModels.confirmDisable": "Disable all models",
+    "settings.credentialModels.futureEnabled": "New models discovered by later syncs will be enabled automatically.",
+    "settings.credentialModels.futureDisabled": "New models discovered by later syncs stay disabled until you enable them.",
     "settings.customModels.empty": "No models match the current filter.",
     "settings.customModels.noModelsToImport": "The live catalog has no new models to append.",
     "settings.customModels.removeConfirm": "Remove model “{name}” from this custom provider? The service will reject the save if a session or internal route still references it.",
@@ -6713,9 +6781,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customProviders.modelsEndpoint": "Catalog endpoint:",
     "settings.customProviders.manualOnly": "No remote catalog request",
     "settings.customProviders.validationTitle": "Validate with a real credential",
-    "settings.customProviders.validationEditDescription": "The credential validates this endpoint change only; it does not create a new account or replace existing accounts.",
+    "settings.customProviders.validationEditDescription": "Choose an existing account to validate this endpoint change. No account is created, no key is re-entered, and no credential is replaced.",
     "settings.customProviders.validationCreateDescription": "After validation, this credential is securely saved as the provider's first account.",
     "settings.customProviders.validationCredentialName": "Validation credential name",
+    "settings.customProviders.validationCredentialRequired": "Choose an existing account",
     "settings.customProviders.firstCredentialName": "First credential name",
     "settings.customProviders.apiKey": "API Key",
     "settings.customProviders.apiKeyEditPlaceholder": "Used only for this validation",
@@ -6806,7 +6875,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.defaultsContextInvalid": "Context limit must be a positive integer.",
     "settings.customModels.defaultsOutputInvalid": "Output limit must be a positive integer no greater than the context limit.",
     "settings.customModels.defaultsSave": "Save provider defaults",
-    "settings.customModels.templateSearching": "Searching the local capability library for similar models…",
+    "settings.customModels.templateSearching": "Checking the local capability library for an exact model match…",
     "settings.customModels.templateUpdateAvailable": "A newer common capability template is available",
     "settings.customModels.templateUpdateDescription": "This model keeps its reviewed snapshot until you explicitly apply the newer revision.",
     "settings.customModels.templateCurrent": "Current snapshot",
@@ -6824,17 +6893,14 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.templateMatch.exact": "Exact model ID match",
     "settings.customModels.templateMatch.alias": "Known alias match",
     "settings.customModels.templateMatch.provider_agnostic": "Matched without provider prefix",
-    "settings.customModels.templateMatch.similar": "Similar name; confirmation required",
     "settings.customModels.discoveryTitle": "Account catalog sync",
     "settings.customModels.discoverySummary": "{accounts} accounts expose {models} models; {failed} accounts need attention. Catalogs remain memory-only.",
     "settings.customModels.reviewTemplates": "Review capability hints",
     "settings.customModels.reviewTemplatesTitle": "Review model capability hints",
-    "settings.customModels.reviewTemplatesDescription": "Exact keys, explicit aliases, and exact provider-prefix matches may be applied in bulk. Similar names always require individual review.",
+    "settings.customModels.reviewTemplatesDescription": "Only exact keys, explicit aliases, and unique exact matches without a provider prefix are shown. Unmatched models keep provider defaults.",
     "settings.customModels.reviewExact": "Safe for bulk apply",
-    "settings.customModels.reviewSimilar": "Needs individual review",
     "settings.customModels.reviewMissing": "Uses provider defaults",
     "settings.customModels.reviewExactDescription": "Exact or deterministic matches",
-    "settings.customModels.reviewSimilarDescription": "Similar matches: review each difference",
     "settings.customModels.reviewMissingDescription": "No match: keep the 200K/32K text-only provider defaults",
     "settings.customModels.reviewComplete": "Every current model has been reviewed, or no template hint needs action.",
     "settings.customModels.applyAllExact": "Apply all deterministic hints ({count})",

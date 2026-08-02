@@ -883,28 +883,7 @@ impl PublicAiRuntime {
             .catalog_mutation_lock
             .lock()
             .map_err(|_| String::from("The AI catalog mutation lock is poisoned."))?;
-        let source_catalogs = self
-            .source_catalogs
-            .read()
-            .map_err(|_| String::from("The source AI model catalog lock is poisoned."))?
-            .snapshot();
-        let mut effective = RuntimeConnectionCatalogs::default();
-        for connection in configuration.connection_graph.connections.values() {
-            let Some(mut catalog) = source_catalogs
-                .get(connection.id.as_str())
-                .cloned()
-                .or_else(|| manual_custom_catalog(configuration, connection, 1))
-            else {
-                continue;
-            };
-            apply_model_catalog_overlays(
-                configuration,
-                connection.provider_id.as_str(),
-                &mut catalog,
-            )?;
-            validate_resolved_catalog_limits(&catalog)?;
-            effective.replace(catalog);
-        }
+        let effective = self.resolve_model_catalog_overlays(configuration)?;
         *self
             .catalogs
             .write()
@@ -929,11 +908,53 @@ impl PublicAiRuntime {
         &self,
         configuration: &PersistedAiConfiguration,
     ) -> Result<(), String> {
+        self.resolve_model_catalog_overlays(configuration)
+            .map(|_| ())
+    }
+
+    /// Resolves every currently reconstructable account catalog without mutating runtime state.
+    /// 在不修改运行时状态的前提下解析当前全部可重建账号目录。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration` is the complete candidate configuration whose overlays are evaluated.
+    /// `configuration` 是待求值覆盖的完整候选配置。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A stable connection-to-effective-catalog snapshot suitable for validation and fallback decisions.
+    /// 返回稳定的连接到有效目录快照，可用于校验与降级决策。
+    pub fn resolved_model_catalog_snapshot(
+        &self,
+        configuration: &PersistedAiConfiguration,
+    ) -> Result<BTreeMap<String, ConnectionModelCatalog>, String> {
+        Ok(self
+            .resolve_model_catalog_overlays(configuration)?
+            .snapshot())
+    }
+
+    /// Applies one candidate configuration to immutable source catalogs in memory.
+    /// 在内存中把一份候选配置应用到不可变源目录。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration` supplies account access, manual membership, and capability differences.
+    /// `configuration` 提供账号访问、手工成员关系与能力差异。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Complete effective catalogs after every limit has passed strict validation.
+    /// 返回全部限制通过严格校验后的完整有效目录。
+    fn resolve_model_catalog_overlays(
+        &self,
+        configuration: &PersistedAiConfiguration,
+    ) -> Result<RuntimeConnectionCatalogs, String> {
         let source_catalogs = self
             .source_catalogs
             .read()
             .map_err(|_| String::from("The source AI model catalog lock is poisoned."))?
             .snapshot();
+        let mut effective = RuntimeConnectionCatalogs::default();
         for connection in configuration.connection_graph.connections.values() {
             let Some(mut catalog) = source_catalogs
                 .get(connection.id.as_str())
@@ -948,8 +969,9 @@ impl PublicAiRuntime {
                 &mut catalog,
             )?;
             validate_resolved_catalog_limits(&catalog)?;
+            effective.replace(catalog);
         }
-        Ok(())
+        Ok(effective)
     }
 
     /// Determines whether one exact connection still exposes a model after applying candidate overlays.
@@ -2899,6 +2921,13 @@ fn apply_model_catalog_overlays(
             );
         }
     }
+    // Account access is evaluated after support membership and capability resolution so it can
+    // hide every fixed, discovered, or manually admitted model without mutating source evidence.
+    // 账号访问策略在支持成员关系与能力解析后求值，因此可以隐藏任意固定、发现或手工准入模型，
+    // 同时不会修改原始证据。
+    models.retain(|model_id, _| {
+        configuration.connection_model_is_enabled(catalog.connection_id.as_str(), model_id)
+    });
     catalog.models = models.into_values().collect();
     Ok(())
 }
@@ -3551,11 +3580,15 @@ mod tests {
             .connection_graph
             .add_connection(runtime.providers(), connection("two"))
             .expect("second connection should register");
+        let first_catalog = catalog("one");
+        install_source_catalog(&runtime, first_catalog.clone());
         runtime
-            .replace_catalog(catalog("one"))
+            .replace_catalog(first_catalog)
             .expect("first catalog should install");
+        let second_catalog = catalog("two");
+        install_source_catalog(&runtime, second_catalog.clone());
         runtime
-            .replace_catalog(catalog("two"))
+            .replace_catalog(second_catalog)
             .expect("second catalog should install");
         configuration.set_model_enabled("openrouter", "vendor/model", true);
         (runtime, configuration)
@@ -3613,6 +3646,101 @@ mod tests {
         assert_eq!(
             effective_model.capabilities.input_resources,
             vec![vulcan_ai_contract::ResourceKind::Image]
+        );
+    }
+
+    /// Verifies disabling one account-model pair leaves a sibling account and source evidence unchanged.
+    /// 验证禁用一个账号模型组合不会影响同供应商其他账号或原始证据。
+    #[test]
+    fn connection_model_access_isolated_between_accounts() {
+        let (runtime, mut configuration) = two_account_runtime();
+        configuration.set_connection_model_enabled("one", "vendor/model", false);
+
+        runtime
+            .reapply_model_catalog_overlays(&configuration)
+            .expect("account access overlay should resolve");
+
+        let effective = runtime
+            .catalog_snapshot()
+            .expect("effective catalogs should remain readable");
+        assert!(
+            effective
+                .get("one")
+                .expect("first account catalog should exist")
+                .models
+                .is_empty()
+        );
+        assert_eq!(
+            effective
+                .get("two")
+                .expect("second account catalog should exist")
+                .models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["vendor/model"]
+        );
+
+        let source = runtime
+            .source_catalog_snapshot()
+            .expect("source catalogs should remain readable");
+        assert_eq!(
+            source
+                .get("one")
+                .expect("first source catalog should exist")
+                .models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["vendor/model"]
+        );
+    }
+
+    /// Verifies a disabled account default applies to a model discovered after the decision.
+    /// 验证禁用账号默认值会应用到决定之后才发现的模型。
+    #[test]
+    fn disabled_connection_default_hides_future_discovery() {
+        let (runtime, mut configuration) = two_account_runtime();
+        configuration.set_connection_models_enabled("one", false);
+        let future_catalog = parse_openrouter_model_catalog(
+            "one",
+            2,
+            r#"{"data":[{"id":"vendor/future-model","name":"Future Model","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}}]}"#,
+        )
+        .expect("future model fixture should parse");
+        install_source_catalog(&runtime, future_catalog.clone());
+        runtime
+            .replace_catalog(future_catalog)
+            .expect("future source catalog should install");
+
+        runtime
+            .reapply_model_catalog_overlays(&configuration)
+            .expect("future model overlay should resolve");
+        assert!(
+            runtime
+                .catalog_snapshot()
+                .expect("effective catalogs should remain readable")
+                .get("one")
+                .expect("first account catalog should exist")
+                .models
+                .is_empty()
+        );
+
+        configuration.set_connection_model_enabled("one", "vendor/future-model", true);
+        runtime
+            .reapply_model_catalog_overlays(&configuration)
+            .expect("explicit future model enable should resolve");
+        assert_eq!(
+            runtime
+                .catalog_snapshot()
+                .expect("effective catalogs should remain readable")
+                .get("one")
+                .expect("first account catalog should exist")
+                .models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["vendor/future-model"]
         );
     }
 

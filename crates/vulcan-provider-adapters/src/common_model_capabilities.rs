@@ -3,7 +3,7 @@
 
 use crate::{CUSTOM_MODEL_TEMPLATE_REVISION, CustomModelTemplateSelection};
 use serde::{Deserialize, Serialize};
-use std::{cmp::Reverse, collections::BTreeMap, sync::OnceLock};
+use std::{collections::BTreeMap, sync::OnceLock};
 use vulcan_ai_contract::{ModelCapabilities, ResourceKind};
 
 /// Conservative context window used when no exact model record exists.
@@ -100,6 +100,24 @@ struct CommonModelCapabilityIndex {
     /// Alias to canonical-key mappings.
     /// 别名到规范键的映射。
     aliases: BTreeMap<String, String>,
+    /// Separator-normalized full identifiers that resolve without ambiguity.
+    /// 分隔符规范化后且不存在歧义的完整模型标识。
+    canonical_identifiers: BTreeMap<String, Option<DeterministicTemplateMatch>>,
+    /// Provider-independent identifier tails that resolve without ambiguity.
+    /// 去除供应商命名空间后且不存在歧义的模型标识尾部。
+    canonical_tails: BTreeMap<String, Option<String>>,
+}
+
+/// Identifies one deterministic full-identifier match.
+/// 标识一次确定性的完整模型标识匹配。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DeterministicTemplateMatch {
+    /// Canonical template key selected by the match.
+    /// 匹配选中的规范模板键。
+    template_key: String,
+    /// Exact classification exposed to the consumer.
+    /// 暴露给消费者的精确匹配分类。
+    match_kind: CommonModelTemplateMatchKind,
 }
 
 /// Reports the resolved public defaults and whether an exact catalog match occurred.
@@ -140,9 +158,6 @@ pub enum CommonModelTemplateMatchKind {
     /// Exact model-name-tail match after removing a provider prefix.
     /// 移除供应商前缀后的精确模型名尾部匹配。
     ProviderAgnostic,
-    /// Similar local-catalog candidate requiring explicit user confirmation.
-    /// 需要用户明确确认的本地目录相似候选。
-    Similar,
 }
 
 /// Describes one offline common-capability template recommendation.
@@ -159,9 +174,6 @@ pub struct CommonModelTemplateSuggestion {
     /// Match classification shown to the user.
     /// 向用户显示的匹配分类。
     pub match_kind: CommonModelTemplateMatchKind,
-    /// Integer confidence score from zero through one hundred.
-    /// 从零到一百的整数置信分数。
-    pub confidence: u8,
     /// Context window carried by the template.
     /// 模板携带的上下文窗口。
     pub context_limit: u64,
@@ -200,8 +212,8 @@ impl CommonModelTemplateSuggestion {
     }
 }
 
-/// Returns up to three offline common templates relevant to one model identifier.
-/// 返回至多三个与模型标识相关的离线公共模板。
+/// Returns the only deterministic offline common template for one model identifier.
+/// 返回一个模型标识唯一确定的离线公共模板。
 ///
 /// # Parameters
 /// 参数
@@ -210,76 +222,18 @@ impl CommonModelTemplateSuggestion {
 ///
 /// # Returns
 /// 返回值
-/// Ordered exact, provider-agnostic, or similar candidates; an empty list means no safe hint.
-/// 返回排序后的精确、供应商无关或相似候选；空列表表示没有安全提示。
+/// One exact candidate, or an empty list when no unambiguous match exists.
+/// 返回一个精确候选；不存在无歧义匹配时返回空列表。
 pub fn suggest_common_model_templates(model_id: &str) -> Vec<CommonModelTemplateSuggestion> {
-    let normalized = normalize_model_key(model_id);
-    if normalized.is_empty() {
-        return Vec::new();
-    }
-    let index = common_model_capability_index();
-    if let Some(record) = index.records.get(normalized.as_str()) {
-        return vec![template_suggestion(
-            record,
-            CommonModelTemplateMatchKind::Exact,
-            100,
-        )];
-    }
-    if let Some(canonical) = index.aliases.get(normalized.as_str())
-        && let Some(record) = index.records.get(canonical)
-    {
-        return vec![template_suggestion(
-            record,
-            CommonModelTemplateMatchKind::Alias,
-            100,
-        )];
-    }
-
-    let normalized_tail = model_identifier_tail(normalized.as_str());
-    let mut provider_agnostic = index
-        .records
-        .values()
-        .filter(|record| {
-            model_identifier_tail(record.key.trim_start_matches('~')) == normalized_tail
-                || record.aliases.iter().any(|alias| {
-                    model_identifier_tail(alias.trim_start_matches('~')) == normalized_tail
-                })
+    deterministic_template_match(model_id)
+        .and_then(|matched| {
+            common_model_capability_index()
+                .records
+                .get(matched.template_key.as_str())
+                .map(|record| template_suggestion(record, matched.match_kind))
         })
-        .map(|record| {
-            template_suggestion(record, CommonModelTemplateMatchKind::ProviderAgnostic, 92)
-        })
-        .collect::<Vec<_>>();
-    provider_agnostic.sort_by(|left, right| left.template_key.cmp(&right.template_key));
-    provider_agnostic.dedup_by(|left, right| left.template_key == right.template_key);
-    if !provider_agnostic.is_empty() {
-        provider_agnostic.truncate(3);
-        return provider_agnostic;
-    }
-
-    let mut similar = index
-        .records
-        .values()
-        .filter_map(|record| {
-            if !template_similarity_is_compatible(normalized.as_str(), record) {
-                return None;
-            }
-            let score = model_identifier_similarity(
-                normalized.as_str(),
-                record.key.trim_start_matches('~'),
-            );
-            (score >= 65)
-                .then(|| template_suggestion(record, CommonModelTemplateMatchKind::Similar, score))
-        })
-        .collect::<Vec<_>>();
-    similar.sort_by_key(|candidate| {
-        (
-            Reverse(candidate.confidence),
-            candidate.template_key.clone(),
-        )
-    });
-    similar.dedup_by(|left, right| left.template_key == right.template_key);
-    similar.truncate(3);
-    similar
+        .into_iter()
+        .collect()
 }
 
 /// Returns public defaults for one exact model identifier.
@@ -295,14 +249,9 @@ pub fn suggest_common_model_templates(model_id: &str) -> Vec<CommonModelTemplate
 /// The exact catalog result or the conservative 200K text-only fallback.
 /// 返回精确目录结果或保守的 200K 纯文本默认值。
 pub fn resolve_common_model_capabilities(model_id: &str) -> CommonModelCapabilityResolution {
-    let normalized = normalize_model_key(model_id);
     let index = common_model_capability_index();
-    let canonical = index
-        .records
-        .contains_key(normalized.as_str())
-        .then_some(normalized.as_str())
-        .or_else(|| index.aliases.get(normalized.as_str()).map(String::as_str));
-    let record = canonical.and_then(|key| index.records.get(key));
+    let record = deterministic_template_match(model_id)
+        .and_then(|matched| index.records.get(matched.template_key.as_str()));
     match record {
         Some(record) => CommonModelCapabilityResolution {
             matched: true,
@@ -459,7 +408,32 @@ fn common_model_capability_index() -> &'static CommonModelCapabilityIndex {
                 );
             }
         }
-        CommonModelCapabilityIndex { records, aliases }
+        let mut canonical_identifiers = BTreeMap::new();
+        let mut canonical_tails = BTreeMap::new();
+        for (key, record) in &records {
+            register_deterministic_identifier(
+                &mut canonical_identifiers,
+                &mut canonical_tails,
+                record.key.as_str(),
+                key.as_str(),
+                CommonModelTemplateMatchKind::Exact,
+            );
+            for alias in &record.aliases {
+                register_deterministic_identifier(
+                    &mut canonical_identifiers,
+                    &mut canonical_tails,
+                    alias.as_str(),
+                    key.as_str(),
+                    CommonModelTemplateMatchKind::Alias,
+                );
+            }
+        }
+        CommonModelCapabilityIndex {
+            records,
+            aliases,
+            canonical_identifiers,
+            canonical_tails,
+        }
     })
 }
 
@@ -469,18 +443,161 @@ fn normalize_model_key(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
 
+/// Canonicalizes case and punctuation without guessing a different model name.
+/// 仅规范化大小写与标点，不猜测其他模型名称。
+fn canonical_model_identifier(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .split(['/', ':'])
+        .map(canonical_model_segment)
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Canonicalizes one namespace segment by collapsing punctuation into one hyphen.
+/// 将一个命名空间片段中的标点折叠为单个连字符。
+fn canonical_model_segment(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut separator_pending = false;
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() {
+            if separator_pending && !output.is_empty() {
+                output.push('-');
+            }
+            output.push(character);
+            separator_pending = false;
+        } else if !output.is_empty() {
+            separator_pending = true;
+        }
+    }
+    output
+}
+
+/// Returns the provider-independent tail of one canonical identifier.
+/// 返回规范模型标识中与供应商无关的尾部。
+fn canonical_model_tail(value: &str) -> &str {
+    value.rsplit('/').next().unwrap_or(value)
+}
+
+/// Registers one deterministic identifier while turning cross-template collisions into no-match entries.
+/// 注册一个确定性标识，并将跨模板冲突转换为不可匹配条目。
+fn register_deterministic_identifier(
+    identifiers: &mut BTreeMap<String, Option<DeterministicTemplateMatch>>,
+    tails: &mut BTreeMap<String, Option<String>>,
+    identifier: &str,
+    template_key: &str,
+    match_kind: CommonModelTemplateMatchKind,
+) {
+    let canonical = canonical_model_identifier(identifier);
+    if canonical.is_empty() {
+        return;
+    }
+    register_full_match(
+        identifiers,
+        canonical.clone(),
+        DeterministicTemplateMatch {
+            template_key: template_key.to_string(),
+            match_kind,
+        },
+    );
+    register_tail_match(
+        tails,
+        canonical_model_tail(canonical.as_str()).to_string(),
+        template_key.to_string(),
+    );
+}
+
+/// Preserves one unique full match and rejects canonical collisions.
+/// 保留唯一完整匹配并拒绝规范化冲突。
+fn register_full_match(
+    identifiers: &mut BTreeMap<String, Option<DeterministicTemplateMatch>>,
+    canonical: String,
+    incoming: DeterministicTemplateMatch,
+) {
+    match identifiers.get_mut(canonical.as_str()) {
+        None => {
+            identifiers.insert(canonical, Some(incoming));
+        }
+        Some(None) => {}
+        Some(Some(existing)) if existing.template_key != incoming.template_key => {
+            identifiers.insert(canonical, None);
+        }
+        Some(Some(existing))
+            if existing.match_kind == CommonModelTemplateMatchKind::Alias
+                && incoming.match_kind == CommonModelTemplateMatchKind::Exact =>
+        {
+            *existing = incoming;
+        }
+        Some(Some(_)) => {}
+    }
+}
+
+/// Preserves one unique namespace-free match and rejects cross-template collisions.
+/// 保留唯一无命名空间匹配并拒绝跨模板冲突。
+fn register_tail_match(
+    tails: &mut BTreeMap<String, Option<String>>,
+    tail: String,
+    template_key: String,
+) {
+    match tails.get_mut(tail.as_str()) {
+        None => {
+            tails.insert(tail, Some(template_key));
+        }
+        Some(None) => {}
+        Some(Some(existing)) if existing != &template_key => {
+            tails.insert(tail, None);
+        }
+        Some(Some(_)) => {}
+    }
+}
+
+/// Resolves only exact keys, explicit aliases, punctuation-normalized equals, or unique namespace tails.
+/// 仅解析精确键、显式别名、标点规范化相等或唯一命名空间尾部。
+fn deterministic_template_match(model_id: &str) -> Option<DeterministicTemplateMatch> {
+    let normalized = normalize_model_key(model_id);
+    if normalized.is_empty() {
+        return None;
+    }
+    let index = common_model_capability_index();
+    if index.records.contains_key(normalized.as_str()) {
+        return Some(DeterministicTemplateMatch {
+            template_key: normalized,
+            match_kind: CommonModelTemplateMatchKind::Exact,
+        });
+    }
+    if let Some(template_key) = index.aliases.get(normalized.as_str()) {
+        return Some(DeterministicTemplateMatch {
+            template_key: template_key.clone(),
+            match_kind: CommonModelTemplateMatchKind::Alias,
+        });
+    }
+
+    let canonical = canonical_model_identifier(model_id);
+    if let Some(Some(matched)) = index.canonical_identifiers.get(canonical.as_str()) {
+        return Some(matched.clone());
+    }
+    index
+        .canonical_tails
+        .get(canonical_model_tail(canonical.as_str()))
+        .and_then(Option::as_ref)
+        .map(|template_key| DeterministicTemplateMatch {
+            template_key: template_key.clone(),
+            match_kind: CommonModelTemplateMatchKind::ProviderAgnostic,
+        })
+}
+
 /// Builds one public recommendation from an immutable catalog record.
 /// 从不可变目录记录构建一项公共建议。
 fn template_suggestion(
     record: &CommonModelCapabilityRecord,
     match_kind: CommonModelTemplateMatchKind,
-    confidence: u8,
 ) -> CommonModelTemplateSuggestion {
     CommonModelTemplateSuggestion {
         template_key: record.key.clone(),
         template_revision: String::from(CUSTOM_MODEL_TEMPLATE_REVISION),
         match_kind,
-        confidence,
         context_limit: record.context_window,
         supports_text_input: record.input_modalities.contains(&CommonModelModality::Text),
         supports_text_output: record
@@ -489,181 +606,6 @@ fn template_suggestion(
         input_resources: resource_kinds(record.input_modalities.as_slice()),
         output_resources: resource_kinds(record.output_modalities.as_slice()),
     }
-}
-
-/// Returns the provider-independent tail of one normalized model identifier.
-/// 返回一个规范化模型标识中与供应商无关的尾部。
-fn model_identifier_tail(value: &str) -> &str {
-    value
-        .rsplit(['/', ':'])
-        .next()
-        .unwrap_or(value)
-        .trim_start_matches('~')
-}
-
-/// Scores two model identifiers by ordered name containment and token overlap.
-/// 按名称包含关系与词元重叠度为两个模型标识评分。
-fn model_identifier_similarity(left: &str, right: &str) -> u8 {
-    let left_tail = model_identifier_tail(left);
-    let right_tail = model_identifier_tail(right);
-    if left_tail == right_tail {
-        return 92;
-    }
-    if left_tail.len() >= 5
-        && right_tail.len() >= 5
-        && (left_tail.contains(right_tail) || right_tail.contains(left_tail))
-    {
-        return 82;
-    }
-    let left_tokens = model_identifier_tokens(left_tail);
-    let right_tokens = model_identifier_tokens(right_tail);
-    if left_tokens.is_empty() || right_tokens.is_empty() {
-        return 0;
-    }
-    let intersection = left_tokens
-        .iter()
-        .filter(|token| right_tokens.contains(token))
-        .count();
-    let union = left_tokens.len() + right_tokens.len() - intersection;
-    ((intersection * 100) / union.max(1)).min(100) as u8
-}
-
-/// Splits one model identifier into stable lowercase alphanumeric tokens.
-/// 将一个模型标识拆分为稳定的小写字母数字词元。
-fn model_identifier_tokens(value: &str) -> Vec<String> {
-    value
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .filter(|segment| !segment.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
-/// Classifies one template recommendation into a coarse operation family.
-/// 将一项模板建议归类为粗粒度操作类别。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ModelTemplateCategory {
-    /// Bidirectional text or multimodal conversation.
-    /// 双向文本或多模态会话。
-    Conversation,
-    /// Vector embedding generation.
-    /// 向量生成。
-    Embedding,
-    /// Document reranking.
-    /// 文档重排。
-    Rerank,
-    /// Non-text media generation or transformation.
-    /// 非文本媒体生成或转换。
-    Media,
-}
-
-/// Rejects fuzzy candidates that cross operation categories or explicit major versions.
-/// 拒绝跨操作类别或跨明确主要版本的模糊候选。
-///
-/// # Parameters
-/// 参数
-/// `model_id` is the user-entered identifier and `record` is one immutable candidate.
-/// `model_id` 是用户输入的标识，`record` 是一个不可变候选。
-///
-/// # Returns
-/// 返回值
-/// `true` only when a fuzzy recommendation is safe enough to show for confirmation.
-/// 仅当模糊建议足够安全、可供用户确认时返回 `true`。
-fn template_similarity_is_compatible(model_id: &str, record: &CommonModelCapabilityRecord) -> bool {
-    if inferred_identifier_category(model_id) != record_template_category(record) {
-        return false;
-    }
-
-    let requested_versions = model_major_versions(model_identifier_tail(model_id));
-    let candidate_versions = model_major_versions(model_identifier_tail(record.key.as_str()));
-    !requested_versions.iter().any(|(family, version)| {
-        candidate_versions
-            .get(family)
-            .is_some_and(|candidate| candidate != version)
-    })
-}
-
-/// Infers only the closed category markers encoded in one user-entered identifier.
-/// 仅推导用户输入标识中编码的封闭类别标记。
-fn inferred_identifier_category(model_id: &str) -> ModelTemplateCategory {
-    let tokens = model_identifier_tokens(model_identifier_tail(model_id));
-    if tokens.iter().any(|token| token.contains("embedding")) {
-        ModelTemplateCategory::Embedding
-    } else if tokens.iter().any(|token| token.contains("rerank")) {
-        ModelTemplateCategory::Rerank
-    } else if tokens.iter().any(|token| {
-        matches!(
-            token.as_str(),
-            "image" | "video" | "audio" | "speech" | "tts" | "flux"
-        )
-    }) {
-        ModelTemplateCategory::Media
-    } else {
-        ModelTemplateCategory::Conversation
-    }
-}
-
-/// Resolves one immutable record's category from its identifier and declared output modalities.
-/// 根据不可变记录的标识及已声明输出模态解析其类别。
-fn record_template_category(record: &CommonModelCapabilityRecord) -> ModelTemplateCategory {
-    let identifier_category = inferred_identifier_category(record.key.as_str());
-    if identifier_category != ModelTemplateCategory::Conversation {
-        return identifier_category;
-    }
-    if !record
-        .output_modalities
-        .contains(&CommonModelModality::Text)
-    {
-        return ModelTemplateCategory::Media;
-    }
-    ModelTemplateCategory::Conversation
-}
-
-/// Extracts comparable major-version markers without treating parameter counts as versions.
-/// 提取可比较的主要版本标记，且不会把参数量当作版本。
-fn model_major_versions(value: &str) -> BTreeMap<String, u64> {
-    let tokens = model_identifier_tokens(value);
-    let mut versions = BTreeMap::new();
-    for (index, token) in tokens.iter().enumerate() {
-        if let Some((family, version)) = split_inline_major_version(token) {
-            versions.entry(family).or_insert(version);
-            continue;
-        }
-        if token
-            .chars()
-            .all(|character| character.is_ascii_alphabetic())
-            && let Some(next) = tokens.get(index + 1)
-            && let Some(version) = leading_version_number(next)
-        {
-            versions.entry(token.clone()).or_insert(version);
-        }
-    }
-    versions
-}
-
-/// Splits an alphanumeric family token such as `qwen3` or `v4` into a major marker.
-/// 将 `qwen3` 或 `v4` 这类字母数字族标记拆分为主要版本。
-fn split_inline_major_version(token: &str) -> Option<(String, u64)> {
-    let digit_index = token
-        .char_indices()
-        .find_map(|(index, character)| character.is_ascii_digit().then_some(index))?;
-    if digit_index == 0 {
-        return None;
-    }
-    let family = token[..digit_index].to_string();
-    let version = leading_version_number(&token[digit_index..])?;
-    Some((family, version))
-}
-
-/// Reads the leading decimal integer from one normalized version token.
-/// 从一个规范化版本词元中读取前导十进制整数。
-fn leading_version_number(token: &str) -> Option<u64> {
-    let digits = token
-        .chars()
-        .take_while(|character| character.is_ascii_digit())
-        .collect::<String>();
-    (!digits.is_empty())
-        .then(|| digits.parse::<u64>().ok())
-        .flatten()
 }
 
 /// Projects non-text modalities into the provider-neutral resource vocabulary.
@@ -754,30 +696,35 @@ mod tests {
         assert!(capabilities.output_resources.is_empty());
     }
 
-    /// Verifies fuzzy recommendations never cross embedding, rerank, media, and conversation families.
-    /// 验证模糊建议不会跨越向量、重排、媒体与会话类别。
+    /// Verifies punctuation and letter case normalize to one exact template.
+    /// 验证标点与字母大小写会规范化到同一个精确模板。
     #[test]
-    fn fuzzy_templates_do_not_cross_operation_categories() {
-        let suggestions = suggest_common_model_templates("openai/text-embedding-3-small-preview");
-        assert!(!suggestions.is_empty());
-        assert!(
-            suggestions
-                .iter()
-                .all(|suggestion| suggestion.template_key.contains("embedding"))
-        );
+    fn punctuation_and_case_normalization_remains_exact() {
+        let suggestions = suggest_common_model_templates("DeepSeek:DeepSeek V3,2");
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].template_key, "deepseek/deepseek-v3.2");
     }
 
-    /// Verifies fuzzy recommendations do not cross an explicitly encoded major version.
-    /// 验证模糊建议不会跨越标识中明确编码的主要版本。
+    /// Verifies the explicit GPT-5.3 Codex Spark record exposes its 128K context window.
+    /// 验证显式 GPT-5.3 Codex Spark 记录公开其 128K 上下文窗口。
     #[test]
-    fn fuzzy_templates_do_not_cross_major_versions() {
-        let record = common_model_capability_index()
-            .records
-            .get("deepseek/deepseek-v3.2")
-            .expect("v3 fixture should exist");
-        assert!(!template_similarity_is_compatible(
-            "deepseek/deepseek-v4.2",
-            record
-        ));
+    fn gpt_five_three_codex_spark_uses_explicit_context() {
+        let resolution = resolve_common_model_capabilities("GPT 5,3 Codex Spark");
+        assert!(resolution.matched);
+        assert_eq!(resolution.context_window, 131_072);
+        assert!(resolution.supports_text_input);
+        assert!(resolution.supports_text_output);
+    }
+
+    /// Verifies partial and version-adjacent names never produce guesses.
+    /// 验证部分名称和相邻版本名称绝不会产生猜测。
+    #[test]
+    fn partial_and_adjacent_version_names_do_not_match() {
+        let partial = suggest_common_model_templates("deepseek-v3-preview");
+        assert!(
+            partial.is_empty(),
+            "unexpected deterministic match: {partial:#?}"
+        );
+        assert!(suggest_common_model_templates("deepseek/deepseek-v4.2").is_empty());
     }
 }

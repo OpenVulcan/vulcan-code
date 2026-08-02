@@ -1,16 +1,7 @@
 import * as React from "react"
 import {
-  ArrowDownToLine,
-  ArrowUpFromLine,
-  AudioLines,
-  Binary,
-  File,
-  Image as ImageIcon,
-  ListOrdered,
   Search,
   SlidersHorizontal,
-  Type,
-  Video,
 } from "lucide-react"
 
 import {
@@ -18,10 +9,7 @@ import {
   type FilterableProviderModel,
   type ModelEnabledFilter,
 } from "@/components/features/settings/provider-model-filter"
-import {
-  providerModelModalities,
-  type ProviderModelModality,
-} from "@/components/features/settings/provider-model-modalities"
+import { ProviderModelModalitySummary } from "@/components/features/settings/provider-model-modality-summary"
 import {
   buildProviderModelGroups,
   compactServiceEntryName,
@@ -374,7 +362,7 @@ export function ModelListSettingsArea() {
                                 {protocolDisplayName(route.protocolId)}
                                 <SlidersHorizontal aria-hidden="true" size={14} />
                               </span>
-                              <ModelModalitySummary model={route.model} />
+            <ProviderModelModalitySummary model={route.model} />
                             </Button>
                           </TabsContent>
                         ))}
@@ -483,120 +471,10 @@ export function ModelListSettingsArea() {
   )
 }
 
-// ModelModalitySummary renders compact, tooltip-backed modality icons for one protocol route.
-// ModelModalitySummary 为一个协议路由渲染带提示的紧凑模态图标。
-function ModelModalitySummary(props: { model: PublicAiModel }) {
-  const { t } = useI18n()
-  const modalities = providerModelModalities(props.model)
-  if (modalities.input.length === 0 && modalities.output.length === 0) {
-    return null
-  }
-  return (
-    <span className="settings-model-modality-summary">
-      {modalities.input.length > 0 ? (
-        <span className="settings-model-modality-group">
-          <ModalityIcon
-            icon={<ArrowDownToLine aria-hidden="true" />}
-            label={t("settings.models.inputModalities")}
-            muted
-          />
-          {modalities.input.map((modality) => (
-            <ModalityIcon
-              icon={modelModalityIcon(modality)}
-              key={`input/${modality}`}
-              label={modelModalityLabel(modality, t)}
-            />
-          ))}
-        </span>
-      ) : null}
-      {modalities.output.length > 0 ? (
-        <span className="settings-model-modality-group">
-          <ModalityIcon
-            icon={<ArrowUpFromLine aria-hidden="true" />}
-            label={t("settings.models.outputModalities")}
-            muted
-          />
-          {modalities.output.map((modality) => (
-            <ModalityIcon
-              icon={modelModalityIcon(modality)}
-              key={`output/${modality}`}
-              label={modelModalityLabel(modality, t)}
-            />
-          ))}
-        </span>
-      ) : null}
-    </span>
-  )
-}
-
-// ModalityIcon renders one accessible icon with its full meaning available on hover.
-// ModalityIcon 渲染一个可访问图标，并在悬停时提供完整含义。
-function ModalityIcon(props: { icon: React.ReactNode; label: string; muted?: boolean }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          aria-label={props.label}
-          className={`settings-model-modality-icon ${props.muted ? "muted" : ""}`}
-          role="img"
-        >
-          {props.icon}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="top" sideOffset={5}>{props.label}</TooltipContent>
-    </Tooltip>
-  )
-}
-
-// modelModalityIcon maps one closed modality identifier to its compact visual symbol.
-// modelModalityIcon 将一个封闭模态标识映射为紧凑视觉符号。
-function modelModalityIcon(modality: ProviderModelModality): React.ReactNode {
-  switch (modality) {
-    case "text":
-      return <Type aria-hidden="true" />
-    case "image":
-      return <ImageIcon aria-hidden="true" />
-    case "audio":
-      return <AudioLines aria-hidden="true" />
-    case "video":
-      return <Video aria-hidden="true" />
-    case "file":
-      return <File aria-hidden="true" />
-    case "embedding":
-      return <Binary aria-hidden="true" />
-    case "rerank":
-      return <ListOrdered aria-hidden="true" />
-  }
-}
-
 // modelRouteValue returns the stable tab value for one exact service-entry protocol route.
 // modelRouteValue 返回一个精确服务入口协议路由的稳定页签值。
 function modelRouteValue(route: PublicModelProtocolRoute): string {
   return `${route.serviceEntryId}/${route.protocolId}`
-}
-
-// modelModalityLabel maps one closed modality identifier to its localized label.
-// modelModalityLabel 将一个封闭模态标识映射为本地化标签。
-function modelModalityLabel(
-  modality: ProviderModelModality,
-  t: ReturnType<typeof useI18n>["t"],
-): string {
-  switch (modality) {
-    case "text":
-      return t("settings.models.modality.text")
-    case "image":
-      return t("settings.models.modality.image")
-    case "audio":
-      return t("settings.models.modality.audio")
-    case "video":
-      return t("settings.models.modality.video")
-    case "file":
-      return t("settings.models.modality.file")
-    case "embedding":
-      return t("settings.models.modality.embedding")
-    case "rerank":
-      return t("settings.models.modality.rerank")
-  }
 }
 
 // internalOperationsForModel returns deduplicated operation switches for one provider model.

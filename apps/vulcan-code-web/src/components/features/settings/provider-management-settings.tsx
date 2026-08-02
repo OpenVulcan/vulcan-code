@@ -70,6 +70,7 @@ import type {
   PublicAiCustomProviderProbeResult,
   PublicAiCustomProviderProtocol,
   PublicAiCustomProviderSaveRequest,
+  PublicAiConnection,
   PublicAiModelCapabilityEvidence,
   PublicAiProviderDescriptor,
   PublicAiServiceEntry,
@@ -199,6 +200,7 @@ export function ProviderManagementArea() {
       />
 
       <CustomProviderDialog
+        connections={snapshot?.connections ?? []}
         onOpenChange={setDialogOpen}
         onSaved={handleProviderSaved}
         open={dialogOpen}
@@ -498,6 +500,7 @@ function SystemProviderTable(props: {
 // CustomProviderDialog edits the exact public custom-provider contract.
 // CustomProviderDialog 编辑精确的公开自定义供应商契约。
 function CustomProviderDialog(props: {
+  connections: PublicAiConnection[]
   onOpenChange: (open: boolean) => void
   onSaved: (snapshot: PublicAiSettingsSnapshot) => void
   open: boolean
@@ -512,6 +515,7 @@ function CustomProviderDialog(props: {
   const [modelDiscoveryPath, setModelDiscoveryPath] = React.useState("")
   const [credentialDisplayName, setCredentialDisplayName] = React.useState("")
   const [secret, setSecret] = React.useState("")
+  const [validationConnectionId, setValidationConnectionId] = React.useState("")
   const [step, setStep] = React.useState<"connection" | "credential" | "result">("connection")
   const [probeResult, setProbeResult] = React.useState<PublicAiCustomProviderProbeResult | null>(null)
   const [probing, setProbing] = React.useState(false)
@@ -532,11 +536,14 @@ function CustomProviderDialog(props: {
     setModelDiscoveryPath(entry?.protocol_routes[0]?.model_discovery_path ?? "")
     setCredentialDisplayName(props.provider?.display_name ?? "")
     setSecret("")
+    setValidationConnectionId(
+      props.connections.find((connection) => connection.provider_id === props.provider?.id)?.id ?? "",
+    )
     setStep("connection")
     setProbeResult(null)
     setPendingConfirmation(null)
     setError(null)
-  }, [props.open, props.provider])
+  }, [props.connections, props.open, props.provider])
 
   // continueToCredential validates the endpoint contract before asking for a secret.
   // continueToCredential 在请求秘密前校验入口契约。
@@ -564,18 +571,26 @@ function CustomProviderDialog(props: {
     baseUrl: baseUrl.trim(),
     protocol,
     authentication,
-    credentialDisplayName: credentialDisplayName.trim(),
-    secret: secret.trim(),
+    ...(props.provider
+      ? { validationConnectionId }
+      : {
+          credentialDisplayName: credentialDisplayName.trim(),
+          secret: secret.trim(),
+        }),
     modelDiscoveryMode,
     modelDiscoveryPath: modelDiscoveryMode === "custom_path" ? modelDiscoveryPath.trim() : undefined,
     allowManualFallback: acceptance === "manual",
     allowPendingValidation: acceptance === "pending",
-  }), [authentication, baseUrl, credentialDisplayName, displayName, modelDiscoveryMode, modelDiscoveryPath, props.provider?.id, protocol, secret])
+  }), [authentication, baseUrl, credentialDisplayName, displayName, modelDiscoveryMode, modelDiscoveryPath, props.provider, protocol, secret, validationConnectionId])
 
   // probe verifies authentication and model discovery without persisting the provider or secret.
   // probe 在不持久化供应商或秘密的情况下验证鉴权与模型发现。
   const probe = React.useCallback(async () => {
-    if (!credentialDisplayName.trim() || !secret.trim()) {
+    if (props.provider && !validationConnectionId) {
+      setError(t("settings.customProviders.validationCredentialRequired"))
+      return
+    }
+    if (!props.provider && (!credentialDisplayName.trim() || !secret.trim())) {
       setError(t("settings.customProviders.credentialRequired"))
       return
     }
@@ -589,7 +604,7 @@ function CustomProviderDialog(props: {
     } finally {
       setProbing(false)
     }
-  }, [credentialDisplayName, requestBody, secret, t])
+  }, [credentialDisplayName, props.provider, requestBody, secret, t, validationConnectionId])
 
   // save persists only the explicit action represented by the result screen.
   // save 仅持久化结果页明确表示的操作。
@@ -610,6 +625,12 @@ function CustomProviderDialog(props: {
   const protocolEndpoint = customProviderEndpointPreview(baseUrl, protocol)
   const discoveryEndpoint = customProviderDiscoveryEndpointPreview(baseUrl, modelDiscoveryMode, modelDiscoveryPath)
   const acceptedWithoutOverride = probeResult?.status.state === "ready"
+  const providerConnections = props.connections.filter(
+    (connection) => connection.provider_id === props.provider?.id,
+  )
+  const validationConnection = providerConnections.find(
+    (connection) => connection.id === validationConnectionId,
+  )
 
   return (
     <Dialog onOpenChange={props.onOpenChange} open={props.open}>
@@ -641,7 +662,7 @@ function CustomProviderDialog(props: {
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="settings-form-field">
                 <span>{t("settings.customProviders.protocol")}</span>
-                <Select onValueChange={(value) => setProtocol(value as PublicAiCustomProviderProtocol)} value={protocol}>
+                <Select disabled={Boolean(props.provider)} onValueChange={(value) => setProtocol(value as PublicAiCustomProviderProtocol)} value={protocol}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {customProtocolOptions.map((option) => (
@@ -692,14 +713,32 @@ function CustomProviderDialog(props: {
               <AlertTitle>{t("settings.customProviders.validationTitle")}</AlertTitle>
               <AlertDescription>{t(props.provider ? "settings.customProviders.validationEditDescription" : "settings.customProviders.validationCreateDescription")}</AlertDescription>
             </Alert>
-            <label className="settings-form-field">
-              <span>{t(props.provider ? "settings.customProviders.validationCredentialName" : "settings.customProviders.firstCredentialName")}</span>
-              <Input onChange={(event) => setCredentialDisplayName(event.target.value)} value={credentialDisplayName} />
-            </label>
-            <label className="settings-form-field">
-              <span>{t("settings.customProviders.apiKey")}</span>
-              <Input autoComplete="off" onChange={(event) => setSecret(event.target.value)} placeholder={t(props.provider ? "settings.customProviders.apiKeyEditPlaceholder" : "settings.customProviders.apiKeyCreatePlaceholder")} type="password" value={secret} />
-            </label>
+            {props.provider ? (
+              <label className="settings-form-field">
+                <span>{t("settings.customProviders.validationCredential")}</span>
+                <Select onValueChange={setValidationConnectionId} value={validationConnectionId}>
+                  <SelectTrigger><SelectValue placeholder={t("settings.customProviders.validationCredentialRequired")} /></SelectTrigger>
+                  <SelectContent>
+                    {providerConnections.map((connection) => (
+                      <SelectItem key={connection.id} value={connection.id}>
+                        {connection.display_name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+            ) : (
+              <>
+                <label className="settings-form-field">
+                  <span>{t("settings.customProviders.firstCredentialName")}</span>
+                  <Input onChange={(event) => setCredentialDisplayName(event.target.value)} value={credentialDisplayName} />
+                </label>
+                <label className="settings-form-field">
+                  <span>{t("settings.customProviders.apiKey")}</span>
+                  <Input autoComplete="off" onChange={(event) => setSecret(event.target.value)} placeholder={t("settings.customProviders.apiKeyCreatePlaceholder")} type="password" value={secret} />
+                </label>
+              </>
+            )}
           </div>
         ) : null}
 
@@ -713,7 +752,7 @@ function CustomProviderDialog(props: {
             <div className="grid gap-3 rounded-xl border p-4 sm:grid-cols-2">
               <div><p className="text-xs text-muted-foreground">{t("settings.customProviders.validationModelCount")}</p><p className="font-medium">{probeResult.status.model_count}</p></div>
               <div><p className="text-xs text-muted-foreground">{t("settings.customProviders.validationPageCount")}</p><p className="font-medium">{probeResult.catalog?.page_count ?? 0}</p></div>
-              <div><p className="text-xs text-muted-foreground">{t("settings.customProviders.validationCredential")}</p><p className="truncate font-medium">{credentialDisplayName.trim()}</p></div>
+              <div><p className="text-xs text-muted-foreground">{t("settings.customProviders.validationCredential")}</p><p className="truncate font-medium">{validationConnection?.display_name ?? credentialDisplayName.trim()}</p></div>
               <div><p className="text-xs text-muted-foreground">{t("settings.customProviders.validationObservedAt")}</p><p className="font-medium">{formatCustomProviderObservationTime(probeResult.status.observed_at_ms)}</p></div>
             </div>
             {probeResult.catalog && probeResult.catalog.models.length > 0 ? (

@@ -110,6 +110,10 @@ function snapshotFixture(): PublicAiSettingsSnapshot {
       alpha: { connection_id: "alpha", models: [alphaShared], generation: 2, page_count: 1, discovery_schema_revision: "test.models.v1" },
       beta: { connection_id: "beta", models: [betaShared, betaOnly], generation: 3, page_count: 2, discovery_schema_revision: "test.models.v1" },
     },
+    modelSupportCatalogs: {
+      alpha: { connection_id: "alpha", models: [alphaShared], generation: 2, page_count: 1, discovery_schema_revision: "test.models.v1" },
+      beta: { connection_id: "beta", models: [betaShared, betaOnly], generation: 3, page_count: 2, discovery_schema_revision: "test.models.v1" },
+    },
     catalogStatuses: {
       alpha: { state: "ready", model_count: 1, generation: 2, observed_at_ms: 10 },
       beta: { state: "ready", model_count: 2, generation: 3, observed_at_ms: 20 },
@@ -128,6 +132,7 @@ function snapshotFixture(): PublicAiSettingsSnapshot {
     customModelConnectionAvailabilityRecords: [
       { connectionId: "beta", modelId: "shared/chat", enabled: false },
     ],
+    connectionModelAccessPolicyRecords: [],
     modelCapabilityOverrides: {},
     modelCapabilityOverrideRecords: [],
     providerToolTargets: [],

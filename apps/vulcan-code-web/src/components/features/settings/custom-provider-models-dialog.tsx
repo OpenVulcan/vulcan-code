@@ -732,8 +732,8 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
   )
 }
 
-// TemplateReviewDialog groups exact, similar, and missing offline capability suggestions.
-// TemplateReviewDialog 对精确、相似和无命中的离线能力建议进行分组。
+// TemplateReviewDialog groups deterministic matches and unmatched offline capability records.
+// TemplateReviewDialog 对确定性命中与无命中的离线能力记录进行分组。
 function TemplateReviewDialog(props: {
   onOpenChange: (open: boolean) => void
   onSaved: (snapshot: PublicAiSettingsSnapshot) => void
@@ -796,8 +796,7 @@ function TemplateReviewDialog(props: {
   // undecidedRecords excludes decisions already explicitly accepted or rejected by the user.
   // undecidedRecords 排除用户已经明确接受或拒绝的决策。
   const undecidedRecords = records.filter((record) => !rowById.get(record.modelId)?.templateDecision)
-  const exactRecords = undecidedRecords.filter((record) => record.suggestions[0]?.match_kind !== "similar" && record.suggestions.length > 0)
-  const similarRecords = undecidedRecords.filter((record) => record.suggestions[0]?.match_kind === "similar")
+  const exactRecords = undecidedRecords.filter((record) => record.suggestions.length > 0)
   const missingRecords = undecidedRecords.filter((record) => record.suggestions.length === 0)
 
   // saveDecisions sends reviewed decisions as one atomic provider-scoped update.
@@ -829,9 +828,8 @@ function TemplateReviewDialog(props: {
           <DialogTitle>{t("settings.customModels.reviewTemplatesTitle")}</DialogTitle>
           <DialogDescription>{t("settings.customModels.reviewTemplatesDescription")}</DialogDescription>
         </DialogHeader>
-        <div className="grid grid-cols-3 gap-3 border-b p-4">
+        <div className="grid grid-cols-2 gap-3 border-b p-4">
           <TemplateReviewCount label={t("settings.customModels.reviewExact")} value={exactRecords.length} />
-          <TemplateReviewCount label={t("settings.customModels.reviewSimilar")} value={similarRecords.length} />
           <TemplateReviewCount label={t("settings.customModels.reviewMissing")} value={missingRecords.length} />
         </div>
         <ScrollArea className="min-h-0 flex-1">
@@ -840,25 +838,6 @@ function TemplateReviewDialog(props: {
             {!loading && exactRecords.length > 0 ? (
               <TemplateReviewSection title={t("settings.customModels.reviewExactDescription")}>
                 {exactRecords.map((record) => <TemplateReviewRow key={record.modelId} record={record} />)}
-              </TemplateReviewSection>
-            ) : null}
-            {!loading && similarRecords.length > 0 ? (
-              <TemplateReviewSection title={t("settings.customModels.reviewSimilarDescription")}>
-                {similarRecords.map((record) => {
-                  const suggestion = record.suggestions[0]
-                  return (
-                    <TemplateReviewRow
-                      actions={suggestion ? (
-                        <div className="flex gap-2">
-                          <Button disabled={saving} onClick={() => void saveDecisions([{ modelId: record.modelId, decision: appliedTemplateDecision(suggestion) }])} size="sm" type="button">{t("settings.customModels.templateApply")}</Button>
-                          <Button disabled={saving} onClick={() => void saveDecisions([{ modelId: record.modelId, decision: rejectedTemplateDecision(suggestion) }])} size="sm" type="button" variant="outline">{t("settings.customModels.templateKeepDefaults")}</Button>
-                        </div>
-                      ) : null}
-                      key={record.modelId}
-                      record={record}
-                    />
-                  )
-                })}
               </TemplateReviewSection>
             ) : null}
             {!loading && missingRecords.length > 0 ? (
@@ -933,16 +912,6 @@ function appliedTemplateDecision(suggestion: PublicAiCommonModelTemplateSuggesti
       input_resources: suggestion.input_resources,
       output_resources: suggestion.output_resources,
     },
-  }
-}
-
-// rejectedTemplateDecision records an explicit choice to keep provider defaults.
-// rejectedTemplateDecision 记录一项显式保留供应商默认值的选择。
-function rejectedTemplateDecision(suggestion: PublicAiCommonModelTemplateSuggestion): PublicAiCustomModelTemplateDecision {
-  return {
-    decision: "rejected",
-    template_key: suggestion.template_key,
-    template_revision: suggestion.template_revision,
   }
 }
 
@@ -1543,7 +1512,9 @@ function ManualModelDialog(props: {
                   <RadioGroupItem value={suggestion.template_key} />
                   <span>
                     <span className="block text-sm font-medium">{suggestion.template_key}</span>
-                    <span className="block text-xs text-muted-foreground">{suggestion.context_limit.toLocaleString()} Token · {suggestion.match_kind}</span>
+                    <span className="block text-xs text-muted-foreground">
+                      {suggestion.context_limit.toLocaleString()} Token · {t(`settings.customModels.templateMatch.${suggestion.match_kind}`)}
+                    </span>
                   </span>
                 </label>
               ))}

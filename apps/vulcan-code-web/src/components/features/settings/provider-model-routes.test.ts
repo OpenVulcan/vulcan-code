@@ -100,6 +100,10 @@ describe("buildProviderModelGroups", () => {
         [defaultConnection.id]: catalogFixture(defaultConnection.id),
         [fastConnection.id]: catalogFixture(fastConnection.id),
       },
+      modelSupportCatalogs: {
+        [defaultConnection.id]: catalogFixture(defaultConnection.id),
+        [fastConnection.id]: catalogFixture(fastConnection.id),
+      },
     })
 
     expect(groups[0]?.models.get("model-1")).toMatchObject([
@@ -114,10 +118,29 @@ describe("buildProviderModelGroups", () => {
       providers: [providerFixture],
       connections: [defaultConnection],
       catalogs: { [defaultConnection.id]: catalogFixture(defaultConnection.id) },
+      modelSupportCatalogs: { [defaultConnection.id]: catalogFixture(defaultConnection.id) },
     })
 
     expect(groups[0]?.models.get("model-1")).toHaveLength(1)
     expect(groups[0]?.models.get("model-1")?.[0]?.serviceEntryId).toBe("default-api")
+  })
+
+  it("keeps a supported model visible when every account has disabled it", () => {
+    const connection = connectionFixture("disabled-account", "default-api")
+    const disabledCatalog = {
+      ...catalogFixture(connection.id),
+      models: [],
+    }
+    const groups = buildProviderModelGroups({
+      providers: [providerFixture],
+      connections: [connection],
+      catalogs: { [connection.id]: disabledCatalog },
+      modelSupportCatalogs: { [connection.id]: catalogFixture(connection.id) },
+    })
+
+    expect(groups[0]?.models.get("model-1")).toMatchObject([
+      { serviceEntryId: "default-api", accountCount: 0 },
+    ])
   })
 })
 

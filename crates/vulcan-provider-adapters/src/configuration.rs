@@ -16,7 +16,7 @@ use vulcan_ai_contract::{
 
 /// Identifies the current persisted AI configuration schema.
 /// 标识当前持久化 AI 配置 Schema。
-pub const PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION: u32 = 6;
+pub const PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION: u32 = 7;
 
 /// Stores only user-declared differences from immutable model capability sources.
 /// 仅保存用户相对于不可变模型能力来源声明的差异。
@@ -232,6 +232,87 @@ pub struct InternalModelOverrides {
     pub rerank_return_content: Option<bool>,
 }
 
+/// Stores one credential account's default model access and sparse per-model differences.
+/// 保存一个凭据账号的默认模型访问状态与稀疏逐模型差异。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConnectionModelAccessPolicy {
+    /// Default enabled state inherited by every current and future supported model.
+    /// 当前及未来所有受支持模型继承的默认启用状态。
+    #[serde(default = "default_connection_model_enabled")]
+    pub default_enabled: bool,
+    /// Exact model decisions that differ from the account default.
+    /// 与账号默认状态不同的精确模型决定。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_enabled_overrides: BTreeMap<String, bool>,
+}
+
+impl Default for ConnectionModelAccessPolicy {
+    /// Builds an account policy that enables supported models by default.
+    /// 构建默认启用受支持模型的账号策略。
+    fn default() -> Self {
+        Self {
+            default_enabled: true,
+            model_enabled_overrides: BTreeMap::new(),
+        }
+    }
+}
+
+impl ConnectionModelAccessPolicy {
+    /// Resolves the effective enabled state for one exact model.
+    /// 解析一个精确模型的有效启用状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `model_id` is the exact provider model identifier.
+    /// `model_id` 是精确供应商模型标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The sparse override when present, otherwise the account default.
+    /// 存在时返回稀疏覆盖，否则返回账号默认值。
+    pub fn model_is_enabled(&self, model_id: &str) -> bool {
+        self.model_enabled_overrides
+            .get(model_id)
+            .copied()
+            .unwrap_or(self.default_enabled)
+    }
+
+    /// Stores one model decision while retaining only differences from the account default.
+    /// 保存一个模型决定，并仅保留与账号默认值不同的差异。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `model_id` identifies the exact model and `enabled` is the desired state.
+    /// `model_id` 标识精确模型，`enabled` 是期望状态。
+    pub fn set_model_enabled(&mut self, model_id: &str, enabled: bool) {
+        if enabled == self.default_enabled {
+            self.model_enabled_overrides.remove(model_id);
+        } else {
+            self.model_enabled_overrides
+                .insert(model_id.to_string(), enabled);
+        }
+    }
+
+    /// Replaces the account-wide default and removes now-redundant model differences.
+    /// 替换账号级默认值并移除现已冗余的逐模型差异。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `enabled` becomes the state inherited by every supported model.
+    /// `enabled` 成为所有受支持模型继承的状态。
+    pub fn set_all_models_enabled(&mut self, enabled: bool) {
+        self.default_enabled = enabled;
+        self.model_enabled_overrides.clear();
+    }
+}
+
+/// Returns the safe default account model access state.
+/// 返回安全的账号模型访问默认状态。
+fn default_connection_model_enabled() -> bool {
+    true
+}
+
 /// Stores all new AI configuration while excluding runtime-discovered model catalogs.
 /// 保存全部新 AI 配置，同时排除运行时发现的模型目录。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -264,6 +345,10 @@ pub struct PersistedAiConfiguration {
     /// 按连接与模型索引的自定义模型显式可用性差异。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub custom_model_connection_enabled_overrides: BTreeMap<String, bool>,
+    /// Account-level model access policies keyed by exact connection identifier.
+    /// 按精确连接标识索引的账号级模型访问策略。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub connection_model_access_policies: BTreeMap<String, ConnectionModelAccessPolicy>,
     /// Credential connections isolated until one explicit paid model validation succeeds.
     /// 在一次显式付费模型验证成功前保持隔离的凭据连接。
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
@@ -337,6 +422,7 @@ impl Default for PersistedAiConfiguration {
             custom_provider_model_defaults: BTreeMap::new(),
             custom_model_template_decisions: BTreeMap::new(),
             custom_model_connection_enabled_overrides: BTreeMap::new(),
+            connection_model_access_policies: BTreeMap::new(),
             pending_validation_connection_ids: BTreeSet::new(),
             active: None,
             connection_graph: PersistedConnectionGraph::default(),
@@ -375,6 +461,10 @@ impl PersistedAiConfiguration {
                         .insert(String::from("vmm"), InferenceProfile::default());
                     Ok(true)
                 }
+            }
+            6 => {
+                self.schema_version = PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION;
+                Ok(true)
             }
             3..=5 => {
                 self.migrate_legacy_custom_model_capabilities();
@@ -640,6 +730,99 @@ impl PersistedAiConfiguration {
         self.custom_model_connection_enabled_overrides
             .get(Self::connection_model_key(connection_id, model_id).as_str())
             .copied()
+    }
+
+    /// Returns one account model access policy, falling back to the enabled default.
+    /// 返回一个账号模型访问策略，缺失时回退到默认启用策略。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `connection_id` identifies one exact credential account.
+    /// `connection_id` 标识一个精确凭据账号。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The persisted policy or a safe in-memory default.
+    /// 返回持久化策略或安全的内存默认值。
+    pub fn connection_model_access_policy(
+        &self,
+        connection_id: &str,
+    ) -> ConnectionModelAccessPolicy {
+        self.connection_model_access_policies
+            .get(connection_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Reports whether one exact account model is enabled by user policy.
+    /// 报告一个精确账号模型是否被用户策略启用。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `connection_id` and `model_id` identify one exact account-model pair.
+    /// `connection_id` 与 `model_id` 标识一个精确账号模型组合。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The sparse account decision or the account default.
+    /// 返回稀疏账号决定或账号默认值。
+    pub fn connection_model_is_enabled(&self, connection_id: &str, model_id: &str) -> bool {
+        self.connection_model_access_policies
+            .get(connection_id)
+            .is_none_or(|policy| policy.model_is_enabled(model_id))
+    }
+
+    /// Saves one exact account-model enabled decision using sparse persistence.
+    /// 使用稀疏持久化保存一个精确账号模型启用决定。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `connection_id`, `model_id`, and `enabled` identify the exact user decision.
+    /// `connection_id`、`model_id` 与 `enabled` 标识精确用户决定。
+    pub fn set_connection_model_enabled(
+        &mut self,
+        connection_id: &str,
+        model_id: &str,
+        enabled: bool,
+    ) {
+        let policy = self
+            .connection_model_access_policies
+            .entry(connection_id.to_string())
+            .or_default();
+        policy.set_model_enabled(model_id, enabled);
+        if *policy == ConnectionModelAccessPolicy::default() {
+            self.connection_model_access_policies.remove(connection_id);
+        }
+    }
+
+    /// Sets the account-wide model default and clears obsolete per-model differences.
+    /// 设置账号级模型默认值并清理过时的逐模型差异。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `connection_id` identifies one credential and `enabled` is the new inherited state.
+    /// `connection_id` 标识一个凭据，`enabled` 是新的继承状态。
+    pub fn set_connection_models_enabled(&mut self, connection_id: &str, enabled: bool) {
+        if enabled {
+            self.connection_model_access_policies.remove(connection_id);
+            return;
+        }
+        let policy = self
+            .connection_model_access_policies
+            .entry(connection_id.to_string())
+            .or_default();
+        policy.set_all_models_enabled(false);
+    }
+
+    /// Removes every model access decision owned by one deleted credential account.
+    /// 移除一个已删除凭据账号拥有的全部模型访问决定。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `connection_id` identifies the deleted credential account.
+    /// `connection_id` 标识已删除凭据账号。
+    pub fn remove_connection_model_access_policy(&mut self, connection_id: &str) {
+        self.connection_model_access_policies.remove(connection_id);
     }
 
     /// Reports whether one connection is isolated pending explicit model validation.
@@ -999,6 +1182,60 @@ mod tests {
         configuration.set_model_enabled("openrouter", "vendor/unreviewed-model", false);
         assert!(configuration.model_enabled_overrides.is_empty());
         assert!(!configuration.model_is_enabled("openrouter", "vendor/unreviewed-model"));
+    }
+
+    /// Verifies one account stores only model decisions that differ from its inherited default.
+    /// 验证一个账号仅保存与其继承默认值不同的模型决定。
+    #[test]
+    fn connection_model_access_policy_persists_sparse_differences() {
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.set_connection_model_enabled("account-a", "model-a", false);
+        assert!(!configuration.connection_model_is_enabled("account-a", "model-a"));
+        assert!(configuration.connection_model_is_enabled("account-a", "model-b"));
+        assert_eq!(
+            configuration
+                .connection_model_access_policies
+                .get("account-a")
+                .expect("account policy must exist")
+                .model_enabled_overrides,
+            BTreeMap::from([(String::from("model-a"), false)])
+        );
+
+        configuration.set_connection_model_enabled("account-a", "model-a", true);
+        assert!(configuration.connection_model_access_policies.is_empty());
+    }
+
+    /// Verifies a bulk-disabled account keeps future discovered models disabled until the user changes it.
+    /// 验证批量禁用账号会让未来发现的模型继续保持禁用，直到用户主动更改。
+    #[test]
+    fn connection_model_access_default_applies_to_future_models() {
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.set_connection_models_enabled("account-a", false);
+        assert!(!configuration.connection_model_is_enabled("account-a", "future-model"));
+
+        configuration.set_connection_model_enabled("account-a", "future-model", true);
+        assert!(configuration.connection_model_is_enabled("account-a", "future-model"));
+        assert!(!configuration.connection_model_is_enabled("account-a", "another-future-model"));
+    }
+
+    /// Verifies schema six loads without account policy data and migrates to schema seven exactly.
+    /// 验证 Schema 6 在没有账号策略数据时可加载，并精确迁移到 Schema 7。
+    #[test]
+    fn schema_six_migration_initializes_connection_model_access_policies() {
+        let mut historical: PersistedAiConfiguration =
+            serde_json::from_str(r#"{"schema_version":6}"#)
+                .expect("schema six fixture must deserialize");
+        assert!(historical.connection_model_access_policies.is_empty());
+        assert!(
+            historical
+                .migrate_to_current_schema()
+                .expect("schema six must migrate")
+        );
+        assert_eq!(
+            historical.schema_version,
+            PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
+        );
+        assert!(historical.connection_model_access_policies.is_empty());
     }
 
     /// Verifies custom model availability uses the definition default and persists only deviations.

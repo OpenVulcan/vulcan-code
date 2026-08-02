@@ -47,10 +47,13 @@ export function compactServiceEntryName(displayName: string): string {
     .trim()
 }
 
-// buildProviderModelGroups derives provider, model, service-entry, and protocol rows from configured-account catalogs.
-// buildProviderModelGroups 从已配置账号目录派生供应商、模型、服务入口与协议行。
+// buildProviderModelGroups derives stable provider routes from support catalogs and counts enabled accounts from effective catalogs.
+// buildProviderModelGroups 从支持目录派生稳定供应商路由，并从有效目录统计已启用账号。
 export function buildProviderModelGroups(
-  snapshot: Pick<PublicAiSettingsSnapshot, "providers" | "connections" | "catalogs">,
+  snapshot: Pick<
+    PublicAiSettingsSnapshot,
+    "providers" | "connections" | "catalogs" | "modelSupportCatalogs"
+  >,
 ): PublicProviderModels[] {
   return snapshot.providers
     .map((provider) => {
@@ -59,24 +62,28 @@ export function buildProviderModelGroups(
         if (connection.provider_id !== provider.id) {
           continue
         }
-        const catalog = snapshot.catalogs[connection.id]
+        const effectiveCatalog = snapshot.catalogs[connection.id]
+        const supportCatalog = snapshot.modelSupportCatalogs[connection.id] ?? effectiveCatalog
         const serviceEntry = provider.service_entries.find(
           (entry) => entry.id === connection.service_entry_id,
         )
-        if (!catalog || !serviceEntry) {
+        if (!supportCatalog || !serviceEntry) {
           continue
         }
-        for (const model of catalog.models) {
+        const enabledModelIds = new Set(effectiveCatalog?.models.map((model) => model.id) ?? [])
+        for (const model of supportCatalog.models) {
           const routes = models.get(model.id) ?? []
           const existing = routes.find((route) => (
             route.serviceEntryId === connection.service_entry_id
             && route.protocolId === connection.selected_protocol
           ))
           if (existing) {
-            existing.accountCount += 1
+            if (enabledModelIds.has(model.id)) {
+              existing.accountCount += 1
+            }
           } else {
             routes.push({
-              accountCount: 1,
+              accountCount: enabledModelIds.has(model.id) ? 1 : 0,
               model,
               protocolId: connection.selected_protocol,
               serviceEntryId: serviceEntry.id,

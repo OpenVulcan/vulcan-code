@@ -166,7 +166,7 @@ export function CustomModelTemplateCard(props: CustomModelTemplateCardProps) {
       <Sparkles className="size-4" />
       <AlertTitle className="flex flex-wrap items-center gap-2">
         {t("settings.customModels.templateSuggested")}
-        <Badge variant={firstSuggestion.match_kind === "similar" ? "outline" : "secondary"}>
+        <Badge variant="secondary">
           {t(`settings.customModels.templateMatch.${firstSuggestion.match_kind}`)}
         </Badge>
       </AlertTitle>

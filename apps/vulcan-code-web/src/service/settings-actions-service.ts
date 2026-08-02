@@ -233,6 +233,31 @@ export async function savePublicAiCustomModelConnectionAvailability(request: {
   );
 }
 
+// savePublicAiConnectionModelEnabled persists one exact account-model access decision.
+// savePublicAiConnectionModelEnabled 持久化一项精确账号模型访问决定。
+export async function savePublicAiConnectionModelEnabled(request: {
+  connectionId: string;
+  modelId: string;
+  enabled: boolean;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_connection_model_enabled",
+    { request },
+  );
+}
+
+// savePublicAiConnectionModelsEnabled replaces one account's inherited model access state.
+// savePublicAiConnectionModelsEnabled 替换一个账号继承的模型访问状态。
+export async function savePublicAiConnectionModelsEnabled(request: {
+  connectionId: string;
+  enabled: boolean;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_connection_models_enabled",
+    { request },
+  );
+}
+
 // savePublicAiModelCapabilityOverrides saves one capability difference or restores defaults.
 // savePublicAiModelCapabilityOverrides 保存一项能力差异或恢复默认值。
 export async function savePublicAiModelCapabilityOverrides(request: {
