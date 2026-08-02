@@ -627,19 +627,21 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
             <Boxes className="size-4" />
           </CredentialIconAction>
         ) : null}
-        {!props.isDefault ? (
-          <CredentialIconAction
-            disabled={props.busy || props.connection.pending_validation}
-            label={props.connection.pending_validation
-              ? t("settings.customModels.pendingCannotDefault")
+        <CredentialIconAction
+          disabled={props.busy || props.connection.pending_validation || props.isDefault}
+          label={props.connection.pending_validation
+            ? t("settings.customModels.pendingCannotDefault")
+            : props.isDefault
+              ? "当前默认账号"
               : "设为默认账号"}
-            onClick={props.onSetDefault}
-          >
-            <Star className="size-4" />
-          </CredentialIconAction>
-        ) : (
-          <Badge variant="secondary">默认</Badge>
-        )}
+          onClick={props.onSetDefault}
+        >
+          <Star
+            className={props.isDefault
+              ? "size-4 fill-yellow-400 text-yellow-500"
+              : "size-4"}
+          />
+        </CredentialIconAction>
         <CredentialIconAction label="编辑凭据" onClick={props.onEdit}>
           <KeyRound className="size-4" />
         </CredentialIconAction>

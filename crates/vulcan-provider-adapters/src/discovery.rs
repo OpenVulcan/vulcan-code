@@ -2190,6 +2190,9 @@ fn minimax_model_parameters(model_id: &str, protocol_id: &str) -> Vec<ModelParam
 /// Builds the minimum safe capability set for an unverified OpenRouter model.
 /// 为未验证的 OpenRouter 模型构建最小安全能力集合。
 fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabilities {
+    // Resolve model-wide and primary-provider limits before projecting catalog capabilities.
+    // 在投影目录能力前解析模型级与首选供应商级限制。
+    let context_limit = openrouter_effective_context_limit(model);
     let supports = |parameter: &str| {
         model
             .supported_parameters
@@ -2334,15 +2337,56 @@ fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabi
             reasoning_efforts.as_slice(),
         ),
         reasoning_efforts,
-        context_limit: model.context_length,
-        output_limit: model
-            .top_provider
-            .as_ref()
-            .and_then(|provider| provider.max_completion_tokens),
+        context_limit,
+        output_limit: openrouter_effective_output_limit(model, context_limit),
         prompt_cache: PromptCacheCapability::default(),
         model_parameters,
         evidence_revision: String::from("openrouter-models-api-2026-07"),
     }
+}
+
+/// Resolves the safe context boundary shared by OpenRouter model and top-provider metadata.
+/// 解析 OpenRouter 模型级与首选端点元数据共同允许的安全上下文边界。
+///
+/// `model` is the exact model entry returned by OpenRouter's Models API.
+/// `model` 是 OpenRouter Models API 返回的精确模型条目。
+/// Returns the strictest declared context limit, or the only declared limit when one side is absent.
+/// 返回两侧已声明限制中的较严格值；仅一侧声明时返回该值。
+fn openrouter_effective_context_limit(model: &OpenRouterModelEntry) -> Option<u64> {
+    // Read the provider-specific context paired with max_completion_tokens in the same object.
+    // 读取与 max_completion_tokens 位于同一对象中的端点专属上下文。
+    let provider_context_limit = model
+        .top_provider
+        .as_ref()
+        .and_then(|provider| provider.context_length);
+    match (model.context_length, provider_context_limit) {
+        (Some(model_limit), Some(provider_limit)) => Some(model_limit.min(provider_limit)),
+        (Some(model_limit), None) => Some(model_limit),
+        (None, Some(provider_limit)) => Some(provider_limit),
+        (None, None) => None,
+    }
+}
+
+/// Bounds OpenRouter's top-provider completion limit by the resolved context boundary.
+/// 使用已解析的上下文边界约束 OpenRouter 首选端点输出上限。
+///
+/// `model` is the exact model entry returned by OpenRouter's Models API.
+/// `model` 是 OpenRouter Models API 返回的精确模型条目。
+/// `context_limit` is the safe model/provider context intersection.
+/// `context_limit` 是模型与端点上下文的安全交集。
+/// Returns a catalog-safe completion limit while preserving an omitted upstream value as unknown.
+/// 返回可安全写入目录的输出上限，并将上游未声明值继续保留为未知。
+fn openrouter_effective_output_limit(
+    model: &OpenRouterModelEntry,
+    context_limit: Option<u64>,
+) -> Option<u64> {
+    // Preserve omission as unknown instead of manufacturing a provider capability.
+    // 将未声明继续保留为未知，不制造供应商能力事实。
+    let output_limit = model
+        .top_provider
+        .as_ref()
+        .and_then(|provider| provider.max_completion_tokens)?;
+    Some(context_limit.map_or(output_limit, |limit| output_limit.min(limit)))
 }
 
 /// Resolves an exact UI control mode from verified reasoning support and effort values.
@@ -2824,8 +2868,13 @@ struct OpenRouterArchitecture {
 /// OpenRouter 文档化首选端点子集。
 #[derive(Debug, Deserialize)]
 struct OpenRouterTopProvider {
+    /// Provider-specific context limit paired with max_completion_tokens.
+    /// 与 max_completion_tokens 配对的端点专属上下文限制。
+    #[serde(default)]
+    context_length: Option<u64>,
     /// Maximum completion tokens reported for the top endpoint.
     /// 首选端点报告的最大补全 Token。
+    #[serde(default)]
     max_completion_tokens: Option<u64>,
 }
 
@@ -3077,6 +3126,23 @@ mod tests {
                 .iter()
                 .any(|parameter| parameter.id == OPENROUTER_REASONING_MAX_TOKENS_PARAMETER_ID)
         );
+    }
+
+    /// Verifies inconsistent OpenRouter completion metadata cannot invalidate the whole account catalog.
+    /// 验证 OpenRouter 不一致的输出元数据不会使整个账号目录失效。
+    #[test]
+    fn openrouter_discovery_bounds_completion_limit_by_context() {
+        // Parse documented field scopes with a deliberately inconsistent provider output limit.
+        // 使用文档化字段作用域解析一组刻意不一致的端点输出上限。
+        let catalog = parse_openrouter_model_catalog(
+            "connection",
+            1,
+            r#"{"data":[{"id":"google/gemini-3.1-flash-lite-image","name":"Google: Nano Banana 2 Lite","context_length":65536,"supported_parameters":["max_tokens"],"architecture":{"input_modalities":["text","image"],"output_modalities":["text","image"]},"top_provider":{"context_length":131072,"max_completion_tokens":131072}}]}"#,
+        )
+        .expect("OpenRouter metadata should be normalized into a safe catalog");
+
+        assert_eq!(catalog.models[0].capabilities.context_limit, Some(65_536));
+        assert_eq!(catalog.models[0].capabilities.output_limit, Some(65_536));
     }
 
     /// Verifies OpenRouter exposes conversation only when both text modalities are declared.
