@@ -26,6 +26,7 @@ const providerFixture: PublicAiProviderDescriptor = {
       base_url: "https://default.example/v1",
       credential_profiles: [],
       authentication: "bearer_authorization",
+      model_discovery: "open_ai",
       protocol_routes: [],
     },
     {
@@ -35,6 +36,7 @@ const providerFixture: PublicAiProviderDescriptor = {
       base_url: "https://fast.example/v1",
       credential_profiles: [],
       authentication: "bearer_authorization",
+      model_discovery: "open_ai",
       protocol_routes: [],
     },
   ],
@@ -57,6 +59,7 @@ function connectionFixture(id: string, serviceEntryId: string): PublicAiConnecti
     verified_protocols: ["openai-chat-completions.v1"],
     selected_protocol: "openai-chat-completions.v1",
     prompt_cache_by_protocol: {},
+    pending_validation: false,
   }
 }
 
@@ -66,6 +69,8 @@ function catalogFixture(connectionId: string): PublicAiConnectionCatalog {
   return {
     connection_id: connectionId,
     generation: 1,
+    page_count: 1,
+    discovery_schema_revision: "test.models.v1",
     models: [{
       id: "model-1",
       display_name: "Model 1",

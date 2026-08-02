@@ -1,5 +1,7 @@
 import * as React from "react"
 import {
+  CircleAlert,
+  CircleCheckBig,
   LoaderCircle,
   ListTree,
   LockKeyhole,
@@ -12,6 +14,7 @@ import {
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { CustomProviderModelsDialog } from "@/components/features/settings/custom-provider-models-dialog"
 import { localizedProviderDescription } from "@/components/features/settings/provider-presentation"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -25,6 +28,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Select,
   SelectContent,
@@ -54,14 +58,21 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { useI18n } from "@/i18n"
+import type { TranslationKey } from "@/i18n-messages"
 import {
   loadPublicAiSettings,
+  probePublicAiCustomProvider,
   removePublicAiCustomProvider,
   savePublicAiCustomProvider,
 } from "@/service/settings-actions-service"
 import type {
+  PublicAiCustomProviderModelDiscoveryMode,
+  PublicAiCustomProviderProbeResult,
   PublicAiCustomProviderProtocol,
+  PublicAiCustomProviderSaveRequest,
+  PublicAiModelCapabilityEvidence,
   PublicAiProviderDescriptor,
+  PublicAiServiceEntry,
   PublicAiSettingsSnapshot,
 } from "@/types"
 
@@ -492,13 +503,20 @@ function CustomProviderDialog(props: {
   open: boolean
   provider: PublicAiProviderDescriptor | null
 }) {
+  const { t } = useI18n()
   const [displayName, setDisplayName] = React.useState("")
   const [baseUrl, setBaseUrl] = React.useState("")
   const [protocol, setProtocol] = React.useState<PublicAiCustomProviderProtocol>("open_ai_responses")
   const [authentication, setAuthentication] = React.useState<"bearer_authorization" | "x_api_key">("bearer_authorization")
+  const [modelDiscoveryMode, setModelDiscoveryMode] = React.useState<PublicAiCustomProviderModelDiscoveryMode>("standard")
+  const [modelDiscoveryPath, setModelDiscoveryPath] = React.useState("")
   const [credentialDisplayName, setCredentialDisplayName] = React.useState("")
   const [secret, setSecret] = React.useState("")
+  const [step, setStep] = React.useState<"connection" | "credential" | "result">("connection")
+  const [probeResult, setProbeResult] = React.useState<PublicAiCustomProviderProbeResult | null>(null)
+  const [probing, setProbing] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
+  const [pendingConfirmation, setPendingConfirmation] = React.useState<"manual" | "pending" | null>(null)
   const [error, setError] = React.useState<string | null>(null)
 
   React.useEffect(() => {
@@ -510,30 +528,76 @@ function CustomProviderDialog(props: {
     setBaseUrl(entry?.base_url ?? "")
     setAuthentication(entry?.authentication === "x_api_key" ? "x_api_key" : "bearer_authorization")
     setProtocol(customProtocolFromProfile(entry?.protocol_routes[0]?.protocol_profile_id ?? "") ?? "open_ai_responses")
+    setModelDiscoveryMode(customProviderDiscoveryMode(entry))
+    setModelDiscoveryPath(entry?.protocol_routes[0]?.model_discovery_path ?? "")
     setCredentialDisplayName(props.provider?.display_name ?? "")
     setSecret("")
+    setStep("connection")
+    setProbeResult(null)
+    setPendingConfirmation(null)
     setError(null)
   }, [props.open, props.provider])
 
-  // save requires authenticated model discovery before persisting the descriptor.
-  // save 要求先完成鉴权模型发现，再持久化描述符。
-  const save = React.useCallback(async () => {
-    if (!displayName.trim() || !baseUrl.trim() || !credentialDisplayName.trim() || !secret.trim()) {
-      setError("请填写显示名称、基础 URL、凭据名称和有效 API Key。")
+  // continueToCredential validates the endpoint contract before asking for a secret.
+  // continueToCredential 在请求秘密前校验入口契约。
+  const continueToCredential = React.useCallback(() => {
+    const validationError = validateCustomProviderConnectionStep({
+      baseUrl,
+      displayName,
+      modelDiscoveryMode,
+      modelDiscoveryPath,
+    })
+    if (validationError) {
+      setError(t(validationError))
       return
     }
+    setError(null)
+    setProbeResult(null)
+    setStep("credential")
+  }, [baseUrl, displayName, modelDiscoveryMode, modelDiscoveryPath, t])
+
+  // requestBody builds the exact typed service request from the current form.
+  // requestBody 从当前表单构造精确的类型化服务请求。
+  const requestBody = React.useCallback((acceptance?: "manual" | "pending"): PublicAiCustomProviderSaveRequest => ({
+    providerId: props.provider?.id,
+    displayName: displayName.trim(),
+    baseUrl: baseUrl.trim(),
+    protocol,
+    authentication,
+    credentialDisplayName: credentialDisplayName.trim(),
+    secret: secret.trim(),
+    modelDiscoveryMode,
+    modelDiscoveryPath: modelDiscoveryMode === "custom_path" ? modelDiscoveryPath.trim() : undefined,
+    allowManualFallback: acceptance === "manual",
+    allowPendingValidation: acceptance === "pending",
+  }), [authentication, baseUrl, credentialDisplayName, displayName, modelDiscoveryMode, modelDiscoveryPath, props.provider?.id, protocol, secret])
+
+  // probe verifies authentication and model discovery without persisting the provider or secret.
+  // probe 在不持久化供应商或秘密的情况下验证鉴权与模型发现。
+  const probe = React.useCallback(async () => {
+    if (!credentialDisplayName.trim() || !secret.trim()) {
+      setError(t("settings.customProviders.credentialRequired"))
+      return
+    }
+    setProbing(true)
+    setError(null)
+    try {
+      setProbeResult(await probePublicAiCustomProvider(requestBody()))
+      setStep("result")
+    } catch (reason) {
+      setError(errorMessage(reason))
+    } finally {
+      setProbing(false)
+    }
+  }, [credentialDisplayName, requestBody, secret, t])
+
+  // save persists only the explicit action represented by the result screen.
+  // save 仅持久化结果页明确表示的操作。
+  const save = React.useCallback(async (acceptance?: "manual" | "pending") => {
     setSaving(true)
     setError(null)
     try {
-      const nextSnapshot = await savePublicAiCustomProvider({
-        providerId: props.provider?.id,
-        displayName: displayName.trim(),
-        baseUrl: baseUrl.trim(),
-        protocol,
-        authentication,
-        credentialDisplayName: credentialDisplayName.trim(),
-        secret: secret.trim(),
-      })
+      const nextSnapshot = await savePublicAiCustomProvider(requestBody(acceptance))
       props.onSaved(nextSnapshot)
       props.onOpenChange(false)
     } catch (reason) {
@@ -541,75 +605,371 @@ function CustomProviderDialog(props: {
     } finally {
       setSaving(false)
     }
-  }, [authentication, baseUrl, credentialDisplayName, displayName, props, protocol, secret])
+  }, [props, requestBody])
+
+  const protocolEndpoint = customProviderEndpointPreview(baseUrl, protocol)
+  const discoveryEndpoint = customProviderDiscoveryEndpointPreview(baseUrl, modelDiscoveryMode, modelDiscoveryPath)
+  const acceptedWithoutOverride = probeResult?.status.state === "ready"
 
   return (
     <Dialog onOpenChange={props.onOpenChange} open={props.open}>
-      <DialogContent className="sm:max-w-[560px]">
+      <DialogContent className="max-h-[min(760px,calc(100vh-2rem))] overflow-y-auto sm:max-w-[620px]">
         <DialogHeader>
-          <DialogTitle>{props.provider ? "编辑自定义供应商" : "添加自定义供应商"}</DialogTitle>
+          <DialogTitle>{t(props.provider ? "settings.customProviders.editTitle" : "settings.customProviders.addTitle")}</DialogTitle>
           <DialogDescription>
-            一个基础 URL 只绑定一种协议。保存前会使用 API Key 拉取模型目录；新增时验证成功的 Key 将作为首个凭据保存。
+            {t("settings.customProviders.dialogDescription")}
           </DialogDescription>
         </DialogHeader>
-        <label className="settings-form-field">
-          <span>显示名称</span>
-          <Input onChange={(event) => setDisplayName(event.target.value)} value={displayName} />
-        </label>
-        <label className="settings-form-field">
-          <span>基础 URL</span>
-          <Input onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://example.com/v1" value={baseUrl} />
-        </label>
-        <label className="settings-form-field">
-          <span>鉴权请求头</span>
-          <Select onValueChange={(value) => setAuthentication(value as "bearer_authorization" | "x_api_key")} value={authentication}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="bearer_authorization">Authorization: Bearer</SelectItem>
-              <SelectItem value="x_api_key">x-api-key</SelectItem>
-            </SelectContent>
-          </Select>
-        </label>
-        <label className="settings-form-field">
-          <span>调用协议</span>
-          <Select onValueChange={(value) => setProtocol(value as PublicAiCustomProviderProtocol)} value={protocol}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {customProtocolOptions.map((option) => (
-                <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </label>
-        <label className="settings-form-field">
-          <span>{props.provider ? "验证凭据名称" : "首个凭据名称"}</span>
-          <Input
-            onChange={(event) => setCredentialDisplayName(event.target.value)}
-            value={credentialDisplayName}
-          />
-        </label>
-        <label className="settings-form-field">
-          <span>API Key</span>
-          <Input
-            autoComplete="off"
-            onChange={(event) => setSecret(event.target.value)}
-            placeholder={props.provider ? "仅用于验证本次配置，不会新增凭据" : "保存前必须通过模型目录验证"}
-            type="password"
-            value={secret}
-          />
-        </label>
+        <div className="grid grid-cols-3 gap-2" aria-label={t("settings.customProviders.progressLabel")}>
+          {(["connection", "credential", "result"] as const).map((candidate, index) => (
+            <div className={`rounded-lg border px-3 py-2 text-xs ${candidate === step ? "border-foreground bg-muted font-medium" : "text-muted-foreground"}`} key={candidate}>
+              {index + 1}. {t(customProviderStepLabelKeys[candidate])}
+            </div>
+          ))}
+        </div>
+
+        {step === "connection" ? (
+          <div className="grid gap-4">
+            <label className="settings-form-field">
+              <span>{t("settings.customProviders.displayName")}</span>
+              <Input onChange={(event) => setDisplayName(event.target.value)} value={displayName} />
+            </label>
+            <label className="settings-form-field">
+              <span>{t("settings.customProviders.baseUrl")}</span>
+              <Input onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://example.com/v1" value={baseUrl} />
+            </label>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="settings-form-field">
+                <span>{t("settings.customProviders.protocol")}</span>
+                <Select onValueChange={(value) => setProtocol(value as PublicAiCustomProviderProtocol)} value={protocol}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {customProtocolOptions.map((option) => (
+                      <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+              <label className="settings-form-field">
+                <span>{t("settings.customProviders.authentication")}</span>
+                <Select onValueChange={(value) => setAuthentication(value as "bearer_authorization" | "x_api_key")} value={authentication}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="bearer_authorization">Authorization: Bearer</SelectItem>
+                    <SelectItem value="x_api_key">x-api-key</SelectItem>
+                  </SelectContent>
+                </Select>
+              </label>
+            </div>
+            <label className="settings-form-field">
+              <span>{t("settings.customProviders.discoveryMode")}</span>
+              <Select onValueChange={(value) => setModelDiscoveryMode(value as PublicAiCustomProviderModelDiscoveryMode)} value={modelDiscoveryMode}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="standard">{t("settings.customProviders.discoveryStandard")}</SelectItem>
+                  <SelectItem value="custom_path">{t("settings.customProviders.discoveryCustomPath")}</SelectItem>
+                  <SelectItem value="manual">{t("settings.customProviders.discoveryManual")}</SelectItem>
+                </SelectContent>
+              </Select>
+            </label>
+            {modelDiscoveryMode === "custom_path" ? (
+              <label className="settings-form-field">
+                <span>{t("settings.customProviders.discoveryPath")}</span>
+                <Input onChange={(event) => setModelDiscoveryPath(event.target.value)} placeholder="/models" value={modelDiscoveryPath} />
+              </label>
+            ) : null}
+            <div className="rounded-xl border bg-muted/30 p-3 text-xs text-muted-foreground">
+              <p><span className="font-medium text-foreground">{t("settings.customProviders.protocolEndpoint")}</span> {protocolEndpoint || "—"}</p>
+              <p className="mt-1"><span className="font-medium text-foreground">{t("settings.customProviders.modelsEndpoint")}</span> {discoveryEndpoint || t("settings.customProviders.manualOnly")}</p>
+            </div>
+          </div>
+        ) : null}
+
+        {step === "credential" ? (
+          <div className="grid gap-4">
+            <Alert>
+              <CircleAlert className="size-4" />
+              <AlertTitle>{t("settings.customProviders.validationTitle")}</AlertTitle>
+              <AlertDescription>{t(props.provider ? "settings.customProviders.validationEditDescription" : "settings.customProviders.validationCreateDescription")}</AlertDescription>
+            </Alert>
+            <label className="settings-form-field">
+              <span>{t(props.provider ? "settings.customProviders.validationCredentialName" : "settings.customProviders.firstCredentialName")}</span>
+              <Input onChange={(event) => setCredentialDisplayName(event.target.value)} value={credentialDisplayName} />
+            </label>
+            <label className="settings-form-field">
+              <span>{t("settings.customProviders.apiKey")}</span>
+              <Input autoComplete="off" onChange={(event) => setSecret(event.target.value)} placeholder={t(props.provider ? "settings.customProviders.apiKeyEditPlaceholder" : "settings.customProviders.apiKeyCreatePlaceholder")} type="password" value={secret} />
+            </label>
+          </div>
+        ) : null}
+
+        {step === "result" && probeResult ? (
+          <div className="grid gap-4">
+            <Alert variant={probeResult.status.state === "authentication_failed" ? "destructive" : "default"}>
+              {acceptedWithoutOverride ? <CircleCheckBig className="size-4" /> : <CircleAlert className="size-4" />}
+              <AlertTitle>{t(`settings.customModels.discovery.${discoveryStateTranslationSegment(probeResult.status.state)}`)}</AlertTitle>
+              <AlertDescription>{probeResult.status.message || t("settings.customProviders.validationResultDescription")}</AlertDescription>
+            </Alert>
+            <div className="grid gap-3 rounded-xl border p-4 sm:grid-cols-2">
+              <div><p className="text-xs text-muted-foreground">{t("settings.customProviders.validationModelCount")}</p><p className="font-medium">{probeResult.status.model_count}</p></div>
+              <div><p className="text-xs text-muted-foreground">{t("settings.customProviders.validationPageCount")}</p><p className="font-medium">{probeResult.catalog?.page_count ?? 0}</p></div>
+              <div><p className="text-xs text-muted-foreground">{t("settings.customProviders.validationCredential")}</p><p className="truncate font-medium">{credentialDisplayName.trim()}</p></div>
+              <div><p className="text-xs text-muted-foreground">{t("settings.customProviders.validationObservedAt")}</p><p className="font-medium">{formatCustomProviderObservationTime(probeResult.status.observed_at_ms)}</p></div>
+            </div>
+            {probeResult.catalog && probeResult.catalog.models.length > 0 ? (
+              <CustomProviderProbeCatalogPreview result={probeResult} />
+            ) : null}
+            {probeResult.manualFallbackAvailable ? <p className="text-sm text-muted-foreground">{t("settings.customProviders.manualFallbackHint")}</p> : null}
+            {probeResult.pendingSaveAvailable ? <p className="text-sm text-muted-foreground">{t("settings.customProviders.pendingSaveHint")}</p> : null}
+          </div>
+        ) : null}
+
         {error ? <p className="settings-muted-line settings-error-text">{error}</p> : null}
         <DialogFooter>
-          <Button onClick={() => props.onOpenChange(false)} type="button" variant="outline">
-            取消
-          </Button>
-          <Button disabled={saving} onClick={() => void save()} type="button">
-            {saving ? "保存中…" : "保存供应商"}
-          </Button>
+          {step === "connection" ? <Button onClick={() => props.onOpenChange(false)} type="button" variant="outline">{t("memory.common.cancel")}</Button> : <Button disabled={probing || saving} onClick={() => setStep(step === "result" ? "credential" : "connection")} type="button" variant="outline">{t("settings.customProviders.back")}</Button>}
+          {step === "connection" ? <Button onClick={continueToCredential} type="button">{t("settings.customProviders.next")}</Button> : null}
+          {step === "credential" ? <Button disabled={probing} onClick={() => void probe()} type="button">{probing ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}{t(probing ? "settings.customProviders.probing" : "settings.customProviders.probe")}</Button> : null}
+          {step === "result" && acceptedWithoutOverride ? <Button disabled={saving} onClick={() => void save()} type="button">{t(saving ? "settings.customProviders.saving" : "settings.customProviders.saveVerified")}</Button> : null}
+          {step === "result" && probeResult?.manualFallbackAvailable ? <Button disabled={saving} onClick={() => setPendingConfirmation("manual")} type="button">{t(saving ? "settings.customProviders.saving" : "settings.customProviders.saveManual")}</Button> : null}
+          {step === "result" && probeResult?.pendingSaveAvailable ? <Button disabled={saving} onClick={() => setPendingConfirmation("pending")} type="button" variant="secondary">{t(saving ? "settings.customProviders.saving" : "settings.customProviders.savePending")}</Button> : null}
         </DialogFooter>
+        <AlertDialog
+          onOpenChange={(open) => {
+            if (!open && !saving) setPendingConfirmation(null)
+          }}
+          open={pendingConfirmation !== null}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t("settings.customProviders.pendingConfirmTitle")}</AlertDialogTitle>
+              <AlertDialogDescription>{t("settings.customProviders.pendingConfirmDescription")}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={saving}>{t("memory.common.cancel")}</AlertDialogCancel>
+              <AlertDialogAction
+                disabled={saving || pendingConfirmation === null}
+                onClick={() => {
+                  if (pendingConfirmation) void save(pendingConfirmation)
+                }}
+              >
+                {saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
+                {t("settings.customProviders.confirmPending")}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </DialogContent>
     </Dialog>
   )
+}
+
+// CustomProviderProbeCatalogPreview confirms discovered model identities before persistence.
+// CustomProviderProbeCatalogPreview 在持久化前确认已发现的模型身份。
+function CustomProviderProbeCatalogPreview(props: { result: PublicAiCustomProviderProbeResult }) {
+  const { t } = useI18n()
+  // models is the exact credential-scoped probe catalog and is never a persisted local copy.
+  // models 是精确凭据作用域探测目录，绝不是持久化的本地副本。
+  const models = props.result.catalog?.models ?? []
+  return (
+    <section className="overflow-hidden rounded-xl border">
+      <div className="flex items-center justify-between gap-3 border-b bg-muted/30 px-4 py-2.5">
+        <div className="min-w-0">
+          <h3 className="text-sm font-medium">{t("settings.customProviders.validationModelsTitle")}</h3>
+          <p className="truncate font-mono text-[11px] text-muted-foreground">
+            {props.result.catalog?.discovery_schema_revision}
+          </p>
+        </div>
+        <Badge variant="secondary">{models.length}</Badge>
+      </div>
+      <ScrollArea className="h-52">
+        <div className="divide-y">
+          {models.map((model) => (
+            <div className="flex items-center justify-between gap-3 px-4 py-2.5" key={model.id}>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium">{model.display_name}</p>
+                <p className="truncate font-mono text-xs text-muted-foreground">{model.id}</p>
+              </div>
+              <Badge variant={modelEvidenceCompleteness(model.capability_evidence) === 4 ? "secondary" : "outline"}>
+                {t("settings.customProviders.validationEvidence")
+                  .replace("{known}", String(modelEvidenceCompleteness(model.capability_evidence)))
+                  .replace("{total}", "4")}
+              </Badge>
+            </div>
+          ))}
+        </div>
+      </ScrollArea>
+      <p className="border-t bg-muted/20 px-4 py-2 text-xs text-muted-foreground">
+        {t("settings.customProviders.validationModelsHint")}
+      </p>
+    </section>
+  )
+}
+
+// modelEvidenceCompleteness counts only explicitly declared capability dimensions.
+// modelEvidenceCompleteness 仅统计上游明确声明的能力维度。
+function modelEvidenceCompleteness(evidence: PublicAiModelCapabilityEvidence | undefined): number {
+  if (!evidence) {
+    return 0
+  }
+  return [
+    evidence.context_limit_declared,
+    evidence.output_limit_declared,
+    evidence.input_modalities_declared,
+    evidence.output_modalities_declared,
+  ].filter(Boolean).length
+}
+
+// formatCustomProviderObservationTime renders a stable local timestamp for one probe.
+// formatCustomProviderObservationTime 为一次探测渲染稳定的本地时间戳。
+function formatCustomProviderObservationTime(observedAtMs: number): string {
+  return observedAtMs > 0 ? new Date(observedAtMs).toLocaleString() : "—"
+}
+
+// CustomProviderConnectionDraft contains fields validated before credential collection.
+// CustomProviderConnectionDraft 包含收集凭据前需要校验的字段。
+interface CustomProviderConnectionDraft {
+  baseUrl: string
+  displayName: string
+  modelDiscoveryMode: PublicAiCustomProviderModelDiscoveryMode
+  modelDiscoveryPath: string
+}
+
+// validateCustomProviderConnectionStep returns the exact localized error key for invalid endpoint input.
+// validateCustomProviderConnectionStep 为无效入口输入返回精确的本地化错误键。
+//
+// Parameters
+// 参数
+// `draft` is the provider identity, base URL, and model-discovery selection entered by the user.
+// `draft` 是用户填写的供应商身份、基础 URL 与模型发现选择。
+//
+// Returns
+// 返回值
+// The corresponding translation key, or `null` when the first step is valid.
+// 返回对应翻译键；第一步有效时返回 `null`。
+function validateCustomProviderConnectionStep(draft: CustomProviderConnectionDraft): TranslationKey | null {
+  if (!draft.displayName.trim()) {
+    return "settings.customProviders.displayNameRequired"
+  }
+  try {
+    const parsed = new URL(draft.baseUrl.trim())
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return "settings.customProviders.baseUrlInvalid"
+    }
+  } catch {
+    return "settings.customProviders.baseUrlInvalid"
+  }
+  if (draft.modelDiscoveryMode === "custom_path") {
+    const path = draft.modelDiscoveryPath.trim()
+    if (!path.startsWith("/") || path.includes("://") || path.split("/").includes("..")) {
+      return "settings.customProviders.discoveryPathInvalid"
+    }
+  }
+  return null
+}
+
+// customProviderDiscoveryMode reconstructs the persisted discovery choice from one exact service entry.
+// customProviderDiscoveryMode 从一个精确服务入口重建持久化的发现选择。
+//
+// Parameters
+// 参数
+// `entry` is the single custom-provider service entry, when editing an existing definition.
+// `entry` 是编辑现有定义时的唯一自定义供应商服务入口。
+//
+// Returns
+// 返回值
+// The user-facing discovery mode represented by the runtime descriptor.
+// 返回运行时描述所表示的用户发现模式。
+function customProviderDiscoveryMode(entry: PublicAiServiceEntry | undefined): PublicAiCustomProviderModelDiscoveryMode {
+  if (entry?.model_discovery === "manual") {
+    return "manual"
+  }
+  if (entry?.protocol_routes[0]?.model_discovery_path) {
+    return "custom_path"
+  }
+  return "standard"
+}
+
+// customProviderEndpointPreview joins the exact protocol path to the user-entered base URL.
+// customProviderEndpointPreview 将精确协议路径拼接到用户输入的基础 URL。
+//
+// Parameters
+// 参数
+// `baseUrl` is the unpersisted service origin and `protocol` selects one fixed route path.
+// `baseUrl` 是尚未持久化的服务源，`protocol` 选择一条固定路由路径。
+//
+// Returns
+// 返回值
+// A display-only endpoint preview, or an empty string when no base URL exists.
+// 返回仅用于展示的端点预览；没有基础 URL 时返回空字符串。
+function customProviderEndpointPreview(baseUrl: string, protocol: PublicAiCustomProviderProtocol): string {
+  const path = protocol === "anthropic_messages"
+    ? "/messages"
+    : protocol === "open_ai_chat"
+      ? "/chat/completions"
+      : "/responses"
+  return joinCustomProviderUrl(baseUrl, path)
+}
+
+// customProviderDiscoveryEndpointPreview returns the selected model-catalog endpoint preview.
+// customProviderDiscoveryEndpointPreview 返回所选模型目录端点预览。
+//
+// Parameters
+// 参数
+// `baseUrl` is the service origin, `mode` is the discovery strategy, and `customPath` is the optional declared path.
+// `baseUrl` 是服务源，`mode` 是发现策略，`customPath` 是可选的声明路径。
+//
+// Returns
+// 返回值
+// A display-only URL, or an empty string for manual discovery.
+// 返回仅用于展示的 URL；手工发现时返回空字符串。
+function customProviderDiscoveryEndpointPreview(
+  baseUrl: string,
+  mode: PublicAiCustomProviderModelDiscoveryMode,
+  customPath: string,
+): string {
+  if (mode === "manual") {
+    return ""
+  }
+  return joinCustomProviderUrl(baseUrl, mode === "custom_path" ? customPath : "/models")
+}
+
+// joinCustomProviderUrl normalizes one display-only base/path pair without changing persisted values.
+// joinCustomProviderUrl 规范化一组仅用于展示的基础 URL 与路径且不修改持久化值。
+//
+// Parameters
+// 参数
+// `baseUrl` is the raw base and `path` is one same-origin absolute endpoint path.
+// `baseUrl` 是原始基础 URL，`path` 是一个同源绝对端点路径。
+//
+// Returns
+// 返回值
+// The joined preview URL, or an empty string when either side is incomplete.
+// 返回拼接后的预览 URL；任一侧不完整时返回空字符串。
+function joinCustomProviderUrl(baseUrl: string, path: string): string {
+  const normalizedBase = baseUrl.trim().replace(/\/+$/, "")
+  const normalizedPath = path.trim()
+  if (!normalizedBase || !normalizedPath) {
+    return ""
+  }
+  return `${normalizedBase}/${normalizedPath.replace(/^\/+/, "")}`
+}
+
+// discoveryStateTranslationSegment maps the closed backend state to its translation-key suffix.
+// discoveryStateTranslationSegment 将封闭后端状态映射为翻译键后缀。
+//
+// Parameters
+// 参数
+// `state` is one serialized discovery state returned by the service.
+// `state` 是服务返回的一项序列化发现状态。
+//
+// Returns
+// 返回值
+// The exact suffix registered in the i18n catalog.
+// 返回 i18n 目录中注册的精确后缀。
+function discoveryStateTranslationSegment(
+  state: PublicAiCustomProviderProbeResult["status"]["state"],
+): "notChecked" | "ready" | "empty" | "unsupported" | "authenticationFailed" | "rateLimited" | "temporarilyUnavailable" | "invalidResponse" | "stale" | "failed" {
+  return discoveryStateTranslationSegments[state]
 }
 
 // ProviderSummaryTooltip renders one compact count whose hover card lists exact values.
@@ -695,6 +1055,37 @@ const customProtocolOptions: Array<{ id: PublicAiCustomProviderProtocol; label: 
   { id: "open_ai_chat", label: "OpenAI Chat Completions" },
   { id: "open_ai_responses", label: "OpenAI Responses" },
 ]
+
+// customProviderStepLabelKeys keeps step labels inside the closed translation-key contract.
+// customProviderStepLabelKeys 将步骤标签保持在封闭翻译键契约内。
+const customProviderStepLabelKeys = {
+  connection: "settings.customProviders.step.connection",
+  credential: "settings.customProviders.step.credential",
+  result: "settings.customProviders.step.result",
+} as const
+
+// customProviderDiscoveryModeLabelKeys maps user discovery choices to localized labels.
+// customProviderDiscoveryModeLabelKeys 将用户发现选择映射为本地化标签。
+const customProviderDiscoveryModeLabelKeys = {
+  standard: "settings.customProviders.discovery.standard",
+  custom_path: "settings.customProviders.discovery.custom_path",
+  manual: "settings.customProviders.discovery.manual",
+} as const
+
+// discoveryStateTranslationSegments maps serialized states to camel-cased i18n suffixes.
+// discoveryStateTranslationSegments 将序列化状态映射为驼峰形式的 i18n 后缀。
+const discoveryStateTranslationSegments = {
+  not_checked: "notChecked",
+  ready: "ready",
+  empty: "empty",
+  unsupported: "unsupported",
+  authentication_failed: "authenticationFailed",
+  rate_limited: "rateLimited",
+  temporarily_unavailable: "temporarilyUnavailable",
+  invalid_response: "invalidResponse",
+  stale: "stale",
+  failed: "failed",
+} as const
 
 // protocolDisplayNames is the complete user-visible label map for registered first-batch profiles.
 // protocolDisplayNames 是首批已注册 Profile 的完整用户可见名称映射。

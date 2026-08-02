@@ -209,6 +209,7 @@ impl ProviderRegistry {
                     "Custom provider `{provider_id}` must use the `custom:` identifier prefix."
                 ));
             }
+            crate::custom_provider::validate_persisted_custom_provider_descriptor(provider)?;
             registry.register(provider.clone())?;
         }
         Ok(registry)
@@ -401,7 +402,12 @@ mod tests {
         CredentialDirectoryVisibility, ProviderCategory, ProviderPartnershipKind,
         ProviderPromotionDisclosureKey, ProviderRegistry,
     };
-    use crate::{AccountUsageQueryKind, AuthenticationProjection, RequestProjectorKind};
+    use crate::{
+        AccountUsageQueryKind, AuthenticationProjection, CustomProviderAuthentication,
+        CustomProviderDefinition, CustomProviderModelDiscoveryMode, CustomProviderProtocol,
+        RequestProjectorKind,
+    };
+    use std::collections::BTreeMap;
 
     /// Verifies a mismatched built-in projector is rejected before runtime dispatch.
     /// 验证不匹配的内置投影器会在运行时分派前被拒绝。
@@ -414,6 +420,32 @@ mod tests {
             .register(provider)
             .expect_err("mismatched projector must fail");
         assert!(error.contains("registry owner"));
+    }
+
+    /// Verifies effective-registry construction revalidates persisted custom-provider security.
+    /// 验证有效注册表构建会重新校验持久化自定义供应商安全边界。
+    #[test]
+    fn effective_registry_rejects_tampered_custom_provider() {
+        let mut descriptor = CustomProviderDefinition {
+            id: String::from("custom:tampered"),
+            display_name: String::from("Tampered"),
+            base_url: String::from("https://example.com/v1"),
+            protocol: CustomProviderProtocol::OpenAiChat,
+            authentication: CustomProviderAuthentication::BearerAuthorization,
+            model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
+            model_discovery_path: None,
+        }
+        .into_descriptor()
+        .expect("custom provider fixture should be valid");
+        descriptor.service_entries[0].base_url =
+            String::from("https://user:private@example.com/v1");
+
+        let error =
+            ProviderRegistry::effective(&BTreeMap::from([(descriptor.id.clone(), descriptor)]))
+                .expect_err("tampered persisted provider must fail registry construction");
+
+        assert!(error.contains("credentials"));
+        assert!(!error.contains("private"));
     }
 
     /// Verifies native onboarding providers have exact business classifications without fake credentials.

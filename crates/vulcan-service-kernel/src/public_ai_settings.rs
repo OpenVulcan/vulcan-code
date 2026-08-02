@@ -1,6 +1,7 @@
 //! Public AI connection settings and runtime metadata services.
 //! 公共 AI 连接设置与运行时元数据服务。
 
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -8,23 +9,27 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use vulcan_ai_contract::{
-    AccountUsageAvailability, AccountUsageSnapshot, AiOperation, EmbeddingEncoding, EmbeddingInput,
-    EmbeddingInputContent, EmbeddingOutputKind, EmbeddingPayload, EmbeddingRequest, EmbeddingTask,
+    AccountUsageAvailability, AccountUsageSnapshot, AiExecutionRequest, AiMessage, AiOperation,
+    AiStreamEvent, ContentItem, EmbeddingEncoding, EmbeddingInput, EmbeddingInputContent,
+    EmbeddingOutputKind, EmbeddingPayload, EmbeddingRequest, EmbeddingTask,
     INFERENCE_CONTRACT_VERSION, InferenceCallerBudget, InferenceCallerContext, InferencePermission,
-    InferenceUsageScope, ModelCapabilities, PromptCachePolicy, ReasoningControlMode,
-    ReasoningEffort, RerankRequest, RerankScoreSemantics, RerankText, RerankTruncation,
+    InferenceUsageScope, MessageRole, ModelCapabilities, ParallelToolCallPolicy, PromptCachePolicy,
+    ReasoningControlMode, ReasoningEffort, ReasoningOutputPolicy, RerankRequest,
+    RerankScoreSemantics, RerankText, RerankTruncation, StructuredOutputPolicy, ToolChoicePolicy,
 };
 use vulcan_provider_adapters::{
-    AccountUsageQueryKind, ActiveAiModelSelection, ConnectionModelCatalog, CredentialBillingKind,
+    AccountUsageQueryKind, ActiveAiModelSelection, CatalogDiscoveryState, CatalogDiscoveryStatus,
+    CommonModelTemplateSuggestion, ConnectionModelCatalog, CredentialBillingKind,
     CredentialConnection, CredentialMode, CredentialSecretEnvelope, CredentialSecretResolver,
-    CredentialSecretStore, CustomModelDefinition, CustomProviderAuthentication,
-    CustomProviderDefinition, CustomProviderProtocol, InferenceProfile, InferenceRouteBinding,
-    InferenceRouteConfiguration, InternalModelOverrides, ModelCapabilityOverrides,
-    ModelExecutionOverrides, OAuthAuthorizationChallenge, OAuthClientConfiguration,
-    OAuthTransactionPhase, OAuthTransactionSnapshot, PersistedAiConfiguration, ProviderDescriptor,
-    ProviderKind, ProviderToolCapabilityKind, ProviderToolExecutionResult, ProviderToolTarget,
-    ProviderToolTargetSelection, PublicAiRuntime, ServiceEntryKind,
-    registered_native_action_binding_id,
+    CredentialSecretStore, CustomModelDefinition, CustomModelTemplateDecision,
+    CustomProviderAuthentication, CustomProviderDefinition, CustomProviderModelDefaults,
+    CustomProviderModelDiscoveryMode, CustomProviderProtocol, InferenceProfile,
+    InferenceRouteBinding, InferenceRouteConfiguration, InternalModelOverrides,
+    ModelCapabilityOverrides, ModelExecutionOverrides, OAuthAuthorizationChallenge,
+    OAuthClientConfiguration, OAuthTransactionPhase, OAuthTransactionSnapshot,
+    PersistedAiConfiguration, ProviderDescriptor, ProviderKind, ProviderToolCapabilityKind,
+    ProviderToolExecutionResult, ProviderToolTarget, ProviderToolTargetSelection, PublicAiRuntime,
+    ServiceEntryKind, registered_native_action_binding_id,
 };
 use vulcan_service_api::{ServiceEventEmitter, WorkbenchSnapshot};
 
@@ -64,6 +69,12 @@ pub(super) struct PublicAiSettingsSnapshot {
     /// Process-local connection model catalogs.
     /// 进程内的连接模型目录。
     catalogs: BTreeMap<String, ConnectionModelCatalog>,
+    /// Immutable provider-discovery catalogs before user overlays.
+    /// 应用用户覆盖前的不可变供应商发现目录。
+    source_catalogs: BTreeMap<String, ConnectionModelCatalog>,
+    /// Closed process-local discovery status per credential connection.
+    /// 每个凭据连接的封闭进程内发现状态。
+    catalog_statuses: BTreeMap<String, CatalogDiscoveryStatus>,
     /// Latest process-local model synchronization errors.
     /// 最近的进程内模型同步错误。
     catalog_errors: BTreeMap<String, String>,
@@ -79,6 +90,16 @@ pub(super) struct PublicAiSettingsSnapshot {
     /// User-owned custom models grouped by provider without credential duplication.
     /// 按供应商分组且不复制凭据的用户自有自定义模型。
     custom_models: BTreeMap<String, BTreeMap<String, CustomModelDefinition>>,
+    /// Capability defaults grouped by custom provider identifier.
+    /// 按自定义供应商标识分组的能力默认值。
+    custom_provider_model_defaults: BTreeMap<String, CustomProviderModelDefaults>,
+    /// Explicit template decisions without browser-side composite-key parsing.
+    /// 不需要浏览器解析组合键的显式模板决策记录。
+    custom_model_template_decision_records: Vec<PublicAiCustomModelTemplateDecisionRecord>,
+    /// Explicit per-account manual-model availability differences.
+    /// 显式逐账号手工模型可用性差异。
+    custom_model_connection_availability_records:
+        Vec<PublicAiCustomModelConnectionAvailabilityRecord>,
     /// User capability differences stored separately from immutable catalogs.
     /// 与不可变目录分离保存的用户能力差异。
     model_capability_overrides: BTreeMap<String, ModelCapabilityOverrides>,
@@ -106,6 +127,38 @@ pub(super) struct PublicAiSettingsSnapshot {
     /// Persisted operation-specific internal model defaults.
     /// 持久化的操作专属内部模型默认值。
     internal_model_overrides: BTreeMap<String, InternalModelOverrides>,
+}
+
+/// Browser-facing reviewed template decision for one custom-provider model.
+/// 面向浏览器的一个自定义供应商模型已审查模板决策。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PublicAiCustomModelTemplateDecisionRecord {
+    /// Exact custom provider identifier.
+    /// 精确自定义供应商标识。
+    provider_id: String,
+    /// Exact upstream model identifier.
+    /// 精确上游模型标识。
+    model_id: String,
+    /// Persisted reviewed decision.
+    /// 持久化的已审查决策。
+    decision: CustomModelTemplateDecision,
+}
+
+/// Browser-facing per-account custom-model availability difference.
+/// 面向浏览器的逐账号自定义模型可用性差异。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PublicAiCustomModelConnectionAvailabilityRecord {
+    /// Exact credential connection identifier.
+    /// 精确凭据连接标识。
+    connection_id: String,
+    /// Exact upstream model identifier.
+    /// 精确上游模型标识。
+    model_id: String,
+    /// Explicit availability choice.
+    /// 显式可用性选择。
+    enabled: bool,
 }
 
 /// Browser-facing diagnostic for one persisted inference-profile route.
@@ -261,6 +314,9 @@ pub(super) struct PublicAiConnectionSnapshot {
     /// Protocol-scoped public cache policies.
     /// 协议作用域的公共缓存策略。
     prompt_cache_by_protocol: BTreeMap<String, PromptCachePolicy>,
+    /// Whether normal routing is blocked until an explicit paid model validation succeeds.
+    /// 在显式付费模型验证成功前是否阻止常规路由。
+    pending_validation: bool,
 }
 
 impl PublicAiConnectionSnapshot {
@@ -318,6 +374,8 @@ impl PublicAiConnectionSnapshot {
             verified_protocols: connection.verified_protocols.clone(),
             selected_protocol: connection.selected_protocol.clone(),
             prompt_cache_by_protocol: connection.prompt_cache_by_protocol.clone(),
+            pending_validation: configuration
+                .connection_is_pending_validation(connection.id.as_str()),
         })
     }
 }
@@ -738,6 +796,79 @@ pub(super) struct PublicAiCustomProviderSaveRequest {
     /// Secret used for authenticated model discovery.
     /// 用于鉴权模型发现的秘密。
     secret: String,
+    /// Selected model-directory discovery behavior.
+    /// 选定的模型目录发现行为。
+    #[serde(default)]
+    model_discovery_mode: CustomProviderModelDiscoveryMode,
+    /// Same-origin relative discovery path used by custom-path mode.
+    /// 自定义路径模式使用的同源相对发现路径。
+    #[serde(default)]
+    model_discovery_path: Option<String>,
+    /// Allows an explicitly confirmed manual fallback after unsupported, invalid, or empty discovery.
+    /// 允许在目录不受支持、格式无效或为空后使用已明确确认的手工回退。
+    #[serde(default)]
+    allow_manual_fallback: bool,
+    /// Allows saving a pending provider after a retryable discovery failure.
+    /// 允许在可重试发现失败后将供应商保存为待验证状态。
+    #[serde(default)]
+    allow_pending_validation: bool,
+}
+
+/// Returns one typed, non-persistent custom-provider validation observation.
+/// 返回一项类型化且不持久化的自定义供应商验证观测。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PublicAiCustomProviderProbeResult {
+    /// Closed discovery state without credential material.
+    /// 不含凭据材料的封闭发现状态。
+    status: CatalogDiscoveryStatus,
+    /// Raw models explicitly returned by the candidate credential.
+    /// 候选凭据明确返回的原始模型。
+    catalog: Option<ConnectionModelCatalog>,
+    /// Whether the user may explicitly continue with manual models.
+    /// 用户是否可以明确继续使用手工模型。
+    manual_fallback_available: bool,
+    /// Whether the user may explicitly persist this candidate for later retry.
+    /// 用户是否可以明确持久化候选项以便稍后重试。
+    pending_save_available: bool,
+}
+
+/// Requests one explicit, potentially billable custom-provider model validation.
+/// 请求一次显式且可能计费的自定义供应商模型验证。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiCustomModelValidationRequest {
+    /// Exact custom provider identifier.
+    /// 精确自定义供应商标识。
+    provider_id: String,
+    /// Exact credential connection under validation.
+    /// 接受验证的精确凭据连接。
+    connection_id: String,
+    /// Exact bidirectional-text model identifier.
+    /// 精确双向文本模型标识。
+    model_id: String,
+}
+
+/// Returns compact facts after one explicit custom-model validation succeeds.
+/// 在一次显式自定义模型验证成功后返回紧凑事实。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PublicAiCustomModelValidationResult {
+    /// Exact provider validated by the request.
+    /// 请求验证的精确供应商。
+    provider_id: String,
+    /// Exact credential connection validated by the request.
+    /// 请求验证的精确凭据连接。
+    connection_id: String,
+    /// Exact model validated by the request.
+    /// 请求验证的精确模型。
+    model_id: String,
+    /// Trimmed provider text returned by the validation request.
+    /// 验证请求返回的已去除首尾空白供应商文本。
+    response_text: String,
+    /// Unicode scalar count in the returned validation text.
+    /// 返回验证文本中的 Unicode 标量数量。
+    response_characters: usize,
 }
 
 /// Removes one user-defined compatible provider.
@@ -761,6 +892,118 @@ pub(super) struct PublicAiCustomModelsSaveRequest {
     /// Complete replacement model set.
     /// 完整替换模型集合。
     models: Vec<CustomModelDefinition>,
+    /// Explicit reviewed template decisions committed with the replacement model set.
+    /// 与替换模型集合一同提交的显式已审查模板决策。
+    #[serde(default)]
+    template_decisions: Vec<PublicAiCustomModelTemplateDecisionBatchItem>,
+}
+
+/// Saves provider-wide fallback capabilities for one custom provider.
+/// 保存一个自定义供应商的供应商级回退能力。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiCustomProviderModelDefaultsSaveRequest {
+    /// Exact custom provider identifier.
+    /// 精确自定义供应商标识。
+    provider_id: String,
+    /// Complete provider fallback contract.
+    /// 完整供应商回退契约。
+    defaults: CustomProviderModelDefaults,
+}
+
+/// Saves or clears one reviewed common-template decision.
+/// 保存或清除一项已审查公共模板决策。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiCustomModelTemplateDecisionSaveRequest {
+    /// Exact custom provider identifier.
+    /// 精确自定义供应商标识。
+    provider_id: String,
+    /// Exact upstream model identifier.
+    /// 精确上游模型标识。
+    model_id: String,
+    /// Replacement decision, or null to return to an undecided state.
+    /// 替换决策；为 null 时恢复未决定状态。
+    decision: Option<CustomModelTemplateDecision>,
+}
+
+/// Queries offline common-capability template suggestions for one model identifier.
+/// 查询一个模型标识的离线公共能力模板建议。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiCustomModelTemplateSuggestionsRequest {
+    /// Exact model identifier entered by the user or discovered from the provider.
+    /// 用户输入或供应商发现的精确模型标识。
+    model_id: String,
+}
+
+/// Maximum number of offline template lookups accepted by one browser request.
+/// 单次浏览器请求允许执行的离线模板查询数量上限。
+const MAX_CUSTOM_MODEL_TEMPLATE_BATCH_SIZE: usize = 2_000;
+
+/// Queries offline template suggestions for a bounded set of model identifiers.
+/// 为一组有界模型标识查询离线模板建议。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiCustomModelTemplateSuggestionsBatchRequest {
+    /// Exact model identifiers shown by one custom-provider catalog union.
+    /// 一个自定义供应商目录并集中显示的精确模型标识。
+    model_ids: Vec<String>,
+}
+
+/// Carries offline suggestions for one exact model without map-key parsing.
+/// 承载一个精确模型的离线建议且无需解析映射键。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PublicAiCustomModelTemplateSuggestionsRecord {
+    /// Exact model identifier used for the lookup.
+    /// 用于查询的精确模型标识。
+    model_id: String,
+    /// Ordered immutable template candidates.
+    /// 按顺序排列的不可变模板候选。
+    suggestions: Vec<CommonModelTemplateSuggestion>,
+}
+
+/// Stores one model decision inside an atomic provider-scoped batch.
+/// 在一个供应商作用域原子批次中保存一项模型决策。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiCustomModelTemplateDecisionBatchItem {
+    /// Exact upstream model identifier.
+    /// 精确上游模型标识。
+    model_id: String,
+    /// Explicit reviewed decision to persist.
+    /// 需要持久化的显式已审查决策。
+    decision: CustomModelTemplateDecision,
+}
+
+/// Saves a bounded set of reviewed template decisions atomically.
+/// 原子保存一组有界的已审查模板决策。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiCustomModelTemplateDecisionsBatchSaveRequest {
+    /// Exact custom provider identifier.
+    /// 精确自定义供应商标识。
+    provider_id: String,
+    /// Distinct reviewed decisions.
+    /// 互不重复的已审查决策。
+    decisions: Vec<PublicAiCustomModelTemplateDecisionBatchItem>,
+}
+
+/// Saves or clears one per-account manual-model availability difference.
+/// 保存或清除一项逐账号手工模型可用性差异。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiCustomModelConnectionAvailabilitySaveRequest {
+    /// Exact credential connection identifier.
+    /// 精确凭据连接标识。
+    connection_id: String,
+    /// Exact manually declared model identifier.
+    /// 精确手工声明模型标识。
+    model_id: String,
+    /// Explicit state, or null to restore discovery-derived behavior.
+    /// 显式状态；为 null 时恢复发现派生行为。
+    enabled: Option<bool>,
 }
 
 /// Saves or clears one provider-model capability difference.
@@ -779,13 +1022,58 @@ pub(super) struct PublicAiModelCapabilityOverridesSaveRequest {
     overrides: Option<ModelCapabilityOverrides>,
 }
 
-/// Creates or updates one custom provider without changing any credential.
-/// 创建或更新一个自定义供应商且不改变任何凭据。
-pub(super) async fn service_save_public_ai_custom_provider(
-    app: ServiceEventEmitter,
-    state: SharedServiceBridgeState,
-    request: PublicAiCustomProviderSaveRequest,
-) -> Result<PublicAiSettingsSnapshot, String> {
+/// Carries one isolated custom-provider candidate through validation and optional persistence.
+/// 承载一个隔离的自定义供应商候选项，供验证及可选持久化使用。
+struct PreparedCustomProviderCandidate {
+    /// Stable candidate provider identifier.
+    /// 稳定的候选供应商标识。
+    provider_id: String,
+    /// Strict projected provider descriptor.
+    /// 严格投影后的供应商描述。
+    descriptor: ProviderDescriptor,
+    /// Temporary connection used by the metadata request.
+    /// 元数据请求使用的临时连接。
+    connection: CredentialConnection,
+    /// Opaque temporary secret reference.
+    /// 不透明的临时秘密引用。
+    secret_reference: String,
+    /// Validated candidate secret envelope.
+    /// 已校验的候选秘密封装。
+    secret: CredentialSecretEnvelope,
+    /// Whether the request edits one existing provider.
+    /// 请求是否编辑一个现有供应商。
+    updating_existing: bool,
+}
+
+/// Stores one candidate observation before the caller decides whether it may be persisted.
+/// 保存一项候选观测，供调用方决定是否可以持久化。
+struct CustomProviderCandidateObservation {
+    /// Typed process-local discovery status.
+    /// 类型化的进程内发现状态。
+    status: CatalogDiscoveryStatus,
+    /// Raw provider catalog before Vulcan overlays.
+    /// 应用 Vulcan 覆盖前的原始供应商目录。
+    catalog: Option<ConnectionModelCatalog>,
+    /// Original refresh failure retained for save-policy diagnostics.
+    /// 为保存策略诊断保留的原始刷新失败。
+    refresh_error: Option<String>,
+}
+
+/// Builds one strict candidate and its temporary credential connection.
+/// 构建一个严格候选项及其临时凭据连接。
+///
+/// # Parameters
+/// 参数
+/// `request` contains the exact user-entered provider and credential contract.
+/// `request` 包含用户输入的精确供应商与凭据契约。
+///
+/// # Returns
+/// 返回值
+/// Returns a fully validated candidate that has not touched runtime or persistence state.
+/// 返回一个尚未接触运行时或持久化状态的完整已校验候选项。
+fn prepare_custom_provider_candidate(
+    request: &PublicAiCustomProviderSaveRequest,
+) -> Result<PreparedCustomProviderCandidate, String> {
     validate_non_empty("displayName", request.display_name.as_str())?;
     validate_non_empty(
         "credentialDisplayName",
@@ -799,10 +1087,12 @@ pub(super) async fn service_save_public_ai_custom_provider(
         .unwrap_or_else(|| format!("custom:{}", uuid::Uuid::new_v4().simple()));
     let descriptor = CustomProviderDefinition {
         id: provider_id.clone(),
-        display_name: request.display_name,
-        base_url: request.base_url,
+        display_name: request.display_name.clone(),
+        base_url: request.base_url.clone(),
         protocol: request.protocol,
         authentication: request.authentication,
+        model_discovery_mode: request.model_discovery_mode,
+        model_discovery_path: request.model_discovery_path.clone(),
     }
     .into_descriptor()?;
     let entry = descriptor
@@ -820,7 +1110,7 @@ pub(super) async fn service_save_public_ai_custom_provider(
     let connection_id = format!("connection_{}", uuid::Uuid::new_v4().simple());
     let secret_reference = format!("ai_secret_{}", uuid::Uuid::new_v4().simple());
     let connection = CredentialConnection {
-        id: connection_id.clone(),
+        id: connection_id,
         provider_id: provider_id.clone(),
         service_entry_id: entry.id.clone(),
         credential_profile_id: profile.id.clone(),
@@ -835,61 +1125,314 @@ pub(super) async fn service_save_public_ai_custom_provider(
         prompt_cache_by_protocol: BTreeMap::new(),
         usage_scope_override: None,
     };
-    let secret = CredentialSecretEnvelope::new_api_key(request.secret)?;
-    let _transaction = begin_public_ai_configuration_transaction().await;
-    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
-    match current_configuration
-        .custom_providers
-        .get(provider_id.as_str())
-    {
+    Ok(PreparedCustomProviderCandidate {
+        provider_id,
+        descriptor,
+        connection,
+        secret_reference,
+        secret: CredentialSecretEnvelope::new_api_key(request.secret.clone())?,
+        updating_existing,
+    })
+}
+
+/// Creates one isolated configuration containing the candidate provider and temporary connection.
+/// 创建一份包含候选供应商与临时连接的隔离配置。
+///
+/// # Parameters
+/// 参数
+/// `runtime` supplies the effective provider registry, `current` is immutable persisted state, and
+/// `candidate` contains the exact descriptor and validation connection.
+/// `runtime` 提供有效供应商注册表，`current` 是不可变持久化状态，`candidate` 包含精确描述与验证连接。
+///
+/// # Returns
+/// 返回值
+/// Returns the isolated validation configuration after ownership and protocol checks.
+/// 在归属与协议检查后返回隔离验证配置。
+fn custom_provider_validation_configuration(
+    runtime: &PublicAiRuntime,
+    current: &PersistedAiConfiguration,
+    candidate: &PreparedCustomProviderCandidate,
+) -> Result<PersistedAiConfiguration, String> {
+    match current.custom_providers.get(candidate.provider_id.as_str()) {
         Some(existing) if existing.kind != ProviderKind::Custom => {
             return Err(format!(
-                "Provider `{provider_id}` is not a user-defined provider."
+                "Provider `{}` is not a user-defined provider.",
+                candidate.provider_id
             ));
         }
-        None if updating_existing => {
+        None if candidate.updating_existing => {
             return Err(format!(
-                "Custom provider `{provider_id}` is not configured."
+                "Custom provider `{}` is not configured.",
+                candidate.provider_id
             ));
         }
         Some(_) | None => {}
     }
-    for existing_connection in current_configuration
+    let candidate_protocol = candidate.connection.selected_protocol.as_str();
+    for existing_connection in current
         .connection_graph
         .connections
         .values()
-        .filter(|existing_connection| existing_connection.provider_id == provider_id)
+        .filter(|connection| connection.provider_id == candidate.provider_id)
     {
-        if existing_connection.selected_protocol != route.protocol_profile_id {
+        if existing_connection.selected_protocol != candidate_protocol {
             return Err(format!(
-                "Custom provider `{provider_id}` cannot change protocol while credential `{}` uses `{}`.",
-                existing_connection.display_name, existing_connection.selected_protocol
+                "Custom provider `{}` cannot change protocol while credential `{}` uses `{}`.",
+                candidate.provider_id,
+                existing_connection.display_name,
+                existing_connection.selected_protocol
             ));
         }
     }
-    let mut validation_configuration = current_configuration.clone();
-    validation_configuration
+    let mut validation = current.clone();
+    validation
         .custom_providers
-        .insert(provider_id.clone(), descriptor.clone());
-    let validation_providers = runtime.effective_providers(&validation_configuration)?;
-    validation_configuration
+        .insert(candidate.provider_id.clone(), candidate.descriptor.clone());
+    let providers = runtime.effective_providers(&validation)?;
+    validation
         .connection_graph
-        .add_connection(&validation_providers, connection.clone())?;
+        .add_connection(&providers, candidate.connection.clone())?;
+    Ok(validation)
+}
+
+/// Executes one candidate discovery request while retaining its typed status for policy decisions.
+/// 执行一次候选目录发现请求，并保留其类型化状态供策略决策使用。
+///
+/// # Parameters
+/// 参数
+/// `runtime` owns process-local catalogs, `validation` is isolated, and `candidate` owns the temporary secret.
+/// `runtime` 持有进程内目录，`validation` 是隔离配置，`candidate` 持有临时秘密。
+///
+/// # Returns
+/// 返回值
+/// Returns a typed observation even when the remote discovery request itself fails.
+/// 即使远程发现请求失败，也返回类型化观测。
+async fn observe_custom_provider_candidate(
+    runtime: &PublicAiRuntime,
+    validation: &PersistedAiConfiguration,
+    candidate: &PreparedCustomProviderCandidate,
+) -> Result<CustomProviderCandidateObservation, String> {
     let secret_store = OsAiCredentialSecretStore;
-    CredentialSecretStore::create_secret(&secret_store, secret_reference.as_str(), &secret)?;
-    if let Err(error) = runtime
-        .refresh_connection_catalog(&validation_configuration, connection_id.as_str())
+    CredentialSecretStore::create_secret(
+        &secret_store,
+        candidate.secret_reference.as_str(),
+        &candidate.secret,
+    )?;
+    let refresh_error = runtime
+        .refresh_connection_catalog(validation, candidate.connection.id.as_str())
         .await
+        .err();
+    let status = runtime
+        .catalog_status_snapshot()?
+        .remove(candidate.connection.id.as_str())
+        .ok_or_else(|| {
+            refresh_error.clone().unwrap_or_else(|| {
+                String::from("Custom provider discovery did not publish a typed status.")
+            })
+        })?;
+    let catalog = runtime
+        .source_catalog_snapshot()?
+        .remove(candidate.connection.id.as_str());
+    Ok(CustomProviderCandidateObservation {
+        status,
+        catalog,
+        refresh_error,
+    })
+}
+
+/// Removes every process-local and secure-store artifact owned by one temporary candidate.
+/// 移除一个临时候选项拥有的全部进程内与安全存储工件。
+///
+/// # Parameters
+/// 参数
+/// `runtime` owns candidate catalogs and `candidate` identifies the exact secret and connection.
+/// `runtime` 持有候选目录，`candidate` 标识精确秘密与连接。
+///
+/// # Returns
+/// 返回值
+/// Returns success only when both cleanup operations succeed.
+/// 仅当两项清理操作都成功时返回成功。
+fn cleanup_custom_provider_candidate(
+    runtime: &PublicAiRuntime,
+    candidate: &PreparedCustomProviderCandidate,
+) -> Result<(), String> {
+    let secret_store = OsAiCredentialSecretStore;
+    combine_results(
+        CredentialSecretStore::delete_secret(&secret_store, candidate.secret_reference.as_str()),
+        runtime.remove_connection_catalog(candidate.connection.id.as_str()),
+    )
+}
+
+/// Reports whether one closed discovery state supports an explicit manual-model fallback.
+/// 报告一个封闭发现状态是否支持显式手工模型回退。
+fn manual_fallback_available(state: CatalogDiscoveryState) -> bool {
+    matches!(
+        state,
+        CatalogDiscoveryState::Empty
+            | CatalogDiscoveryState::Unsupported
+            | CatalogDiscoveryState::InvalidResponse
+    )
+}
+
+/// Reports whether one closed discovery state may be saved for a later retry.
+/// 报告一个封闭发现状态是否可以保存并稍后重试。
+fn pending_validation_available(state: CatalogDiscoveryState) -> bool {
+    matches!(
+        state,
+        CatalogDiscoveryState::RateLimited
+            | CatalogDiscoveryState::TemporarilyUnavailable
+            | CatalogDiscoveryState::Failed
+    )
+}
+
+/// Reports whether an explicitly accepted non-ready observation must remain routing-isolated.
+/// 报告一项被显式接受但未就绪的观测是否必须保持路由隔离。
+///
+/// # Parameters
+/// 参数
+/// `state` is the typed observation and both flags represent the user's exact save action.
+/// `state` 是类型化观测，两个标志表示用户精确选择的保存动作。
+///
+/// # Returns
+/// 返回值
+/// `true` when a later explicit model test is required before normal routing.
+/// 当正常路由前仍需执行一次显式模型测试时返回 `true`。
+fn custom_provider_save_requires_pending_validation(
+    state: CatalogDiscoveryState,
+    allow_manual_fallback: bool,
+    allow_pending_validation: bool,
+) -> bool {
+    (allow_pending_validation && pending_validation_available(state))
+        || (allow_manual_fallback && manual_fallback_available(state))
+}
+
+/// Reports whether the observed catalog state matches one explicit user save action.
+/// 报告观测到的目录状态是否与一项显式用户保存动作匹配。
+///
+/// # Parameters
+/// 参数
+/// `state` is the typed observation and both flags are explicit manual or deferred acceptance.
+/// `state` 是类型化观测，两个标志分别表示显式手工接受或延期接受。
+///
+/// # Returns
+/// 返回值
+/// `true` only for ready discovery or a matching explicit acceptance path.
+/// 仅在目录就绪或命中对应显式接受路径时返回 `true`。
+fn custom_provider_observation_is_accepted(
+    state: CatalogDiscoveryState,
+    allow_manual_fallback: bool,
+    allow_pending_validation: bool,
+) -> bool {
+    state == CatalogDiscoveryState::Ready
+        || (allow_manual_fallback && manual_fallback_available(state))
+        || (allow_pending_validation && pending_validation_available(state))
+}
+
+/// Probes one custom provider without persisting provider, credential, or catalog state.
+/// 探测一个自定义供应商且不持久化供应商、凭据或目录状态。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the runtime snapshot and `request` carries the candidate provider and credential.
+/// `state` 持有运行时快照，`request` 携带候选供应商与凭据。
+///
+/// # Returns
+/// 返回值
+/// Returns typed discovery status and raw model facts after guaranteed temporary cleanup.
+/// 在保证清理临时状态后返回类型化发现状态与原始模型事实。
+pub(super) async fn service_probe_public_ai_custom_provider(
+    state: SharedServiceBridgeState,
+    request: PublicAiCustomProviderSaveRequest,
+) -> Result<PublicAiCustomProviderProbeResult, String> {
+    let candidate = prepare_custom_provider_candidate(&request)?;
+    let (runtime, current) = public_ai_runtime_and_configuration(&state)?;
+    let validation =
+        custom_provider_validation_configuration(runtime.as_ref(), &current, &candidate)?;
+    let observation =
+        observe_custom_provider_candidate(runtime.as_ref(), &validation, &candidate).await;
+    let cleanup = cleanup_custom_provider_candidate(runtime.as_ref(), &candidate);
+    let observation =
+        observation.map_err(|error| compensated_operation_error(error, cleanup.clone(), Ok(())))?;
+    cleanup?;
+    Ok(PublicAiCustomProviderProbeResult {
+        manual_fallback_available: manual_fallback_available(observation.status.state),
+        pending_save_available: pending_validation_available(observation.status.state),
+        status: observation.status,
+        catalog: observation.catalog,
+    })
+}
+
+/// Creates or updates one custom provider after typed credential-scoped discovery validation.
+/// 在完成类型化凭据作用域发现验证后创建或更新一个自定义供应商。
+pub(super) async fn service_save_public_ai_custom_provider(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiCustomProviderSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    let candidate = prepare_custom_provider_candidate(&request)?;
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    let validation_configuration = custom_provider_validation_configuration(
+        runtime.as_ref(),
+        &current_configuration,
+        &candidate,
+    )?;
+    let observation = match observe_custom_provider_candidate(
+        runtime.as_ref(),
+        &validation_configuration,
+        &candidate,
+    )
+    .await
     {
-        let catalog_cleanup = runtime.remove_connection_catalog(connection_id.as_str());
-        let secret_cleanup =
-            CredentialSecretStore::delete_secret(&secret_store, secret_reference.as_str());
+        Ok(observation) => observation,
+        Err(error) => {
+            let cleanup = cleanup_custom_provider_candidate(runtime.as_ref(), &candidate);
+            return Err(compensated_operation_error(error, cleanup, Ok(())));
+        }
+    };
+    let save_as_pending = custom_provider_save_requires_pending_validation(
+        observation.status.state,
+        request.allow_manual_fallback,
+        request.allow_pending_validation,
+    );
+    let accepted = custom_provider_observation_is_accepted(
+        observation.status.state,
+        request.allow_manual_fallback,
+        request.allow_pending_validation,
+    );
+    if !accepted {
+        let diagnostic = observation
+            .refresh_error
+            .as_deref()
+            .or(observation.status.message.as_deref())
+            .unwrap_or_else(|| {
+                if observation.status.state == CatalogDiscoveryState::Empty {
+                    "The provider returned an empty model catalog."
+                } else {
+                    "The provider model catalog was not validated."
+                }
+            });
+        let cleanup = cleanup_custom_provider_candidate(runtime.as_ref(), &candidate);
         return Err(compensated_operation_error(
-            format!("Custom provider model discovery failed before save: {error}"),
-            secret_cleanup,
-            catalog_cleanup,
+            format!(
+                "Custom provider validation requires an explicit supported action: {diagnostic}"
+            ),
+            cleanup,
+            Ok(()),
         ));
     }
+
+    if candidate.updating_existing {
+        // Existing-provider validation artifacts are temporary and must be removed before the
+        // durable edit, so a cleanup failure cannot report a false transactional rollback.
+        // 既有供应商的验证工件属于临时数据，必须在持久化编辑前移除，避免清理失败造成虚假的事务回滚提示。
+        cleanup_custom_provider_candidate(runtime.as_ref(), &candidate)?;
+    }
+
+    let provider_id = candidate.provider_id.clone();
+    let updating_existing = candidate.updating_existing;
+    let descriptor = candidate.descriptor.clone();
+    let connection = candidate.connection.clone();
     let persist_result = mutate_public_ai_configuration_in_transaction(
         &state,
         "保存自定义供应商失败",
@@ -897,11 +1440,29 @@ pub(super) async fn service_save_public_ai_custom_provider(
             configuration
                 .custom_providers
                 .insert(provider_id.clone(), descriptor.clone());
+            configuration
+                .custom_provider_model_defaults
+                .entry(provider_id.clone())
+                .or_default();
             if !updating_existing {
                 let effective_providers = runtime.effective_providers(configuration)?;
                 configuration
                     .connection_graph
                     .add_connection(&effective_providers, connection.clone())?;
+                configuration
+                    .set_connection_pending_validation(connection.id.as_str(), save_as_pending)?;
+            } else if save_as_pending {
+                let connection_ids = configuration
+                    .connection_graph
+                    .connections
+                    .values()
+                    .filter(|existing_connection| existing_connection.provider_id == provider_id)
+                    .map(|existing_connection| existing_connection.id.clone())
+                    .collect::<Vec<_>>();
+                for connection_id in connection_ids {
+                    configuration
+                        .set_connection_pending_validation(connection_id.as_str(), true)?;
+                }
             }
             Ok(())
         },
@@ -909,43 +1470,210 @@ pub(super) async fn service_save_public_ai_custom_provider(
     let configuration = match persist_result {
         Ok(configuration) => configuration,
         Err(error) => {
-            let catalog_cleanup = runtime.remove_connection_catalog(connection_id.as_str());
-            let secret_cleanup =
-                CredentialSecretStore::delete_secret(&secret_store, secret_reference.as_str());
-            return Err(compensated_operation_error(
-                error,
-                secret_cleanup,
-                catalog_cleanup,
-            ));
+            // Existing-provider artifacts were already removed before persistence; new-provider
+            // artifacts must still be compensated when their first durable write fails.
+            // 既有供应商工件已在持久化前移除；新供应商首次持久化失败时仍需补偿其临时工件。
+            let cleanup = if updating_existing {
+                Ok(())
+            } else {
+                cleanup_custom_provider_candidate(runtime.as_ref(), &candidate)
+            };
+            return Err(compensated_operation_error(error, cleanup, Ok(())));
         }
     };
+
     if updating_existing {
-        let catalog_cleanup = runtime.remove_connection_catalog(connection_id.as_str());
-        let secret_cleanup =
-            CredentialSecretStore::delete_secret(&secret_store, secret_reference.as_str());
-        let cleanup_error =
-            compensated_operation_error(String::new(), secret_cleanup, catalog_cleanup);
-        if !cleanup_error.is_empty() {
-            return Err(format!(
-                "Custom provider was saved, but temporary validation cleanup failed: {cleanup_error}"
-            ));
+        let existing_connection_ids = configuration
+            .connection_graph
+            .connections
+            .values()
+            .filter(|existing_connection| existing_connection.provider_id == provider_id)
+            .map(|existing_connection| existing_connection.id.clone())
+            .collect::<Vec<_>>();
+        for existing_connection_id in existing_connection_ids {
+            runtime.remove_connection_catalog(existing_connection_id.as_str())?;
+            // The provider edit is already durable; each refresh publishes its own typed status and
+            // a failed remote directory must not roll the descriptor back.
+            // 供应商编辑已经持久化；每次刷新都会发布自己的类型化状态，远程目录失败不得回滚描述。
+            let _refresh_result = runtime
+                .refresh_connection_catalog(&configuration, existing_connection_id.as_str())
+                .await;
         }
     }
-    let connection_ids = configuration
-        .connection_graph
-        .connections
-        .values()
-        .filter(|existing_connection| {
-            existing_connection.provider_id == provider_id
-                && existing_connection.id != connection_id
-        })
-        .map(|existing_connection| existing_connection.id.clone())
-        .collect::<Vec<_>>();
-    for existing_connection_id in connection_ids {
-        runtime.remove_connection_catalog(existing_connection_id.as_str())?;
-    }
+
+    drop(transaction);
     publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
     build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Executes one explicit minimal model request and releases a pending credential only on success.
+/// 执行一次显式最小模型请求，并且仅在成功后解除待验证凭据隔离。
+///
+/// # Parameters
+/// 参数
+/// `app` publishes the eligible workbench after success, `state` owns runtime/configuration, and
+/// `request` freezes the exact provider, credential, and model selected by the user.
+/// `app` 在成功后发布可用工作台，`state` 持有运行时与配置，`request` 冻结用户选择的精确供应商、凭据与模型。
+///
+/// # Returns
+/// 返回值
+/// Returns compact response facts only after a terminal stream with visible text.
+/// 仅在流以可见文本成功终结后返回紧凑响应事实。
+pub(super) async fn service_validate_public_ai_custom_model(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiCustomModelValidationRequest,
+) -> Result<PublicAiCustomModelValidationResult, String> {
+    validate_non_empty("providerId", request.provider_id.as_str())?;
+    validate_non_empty("connectionId", request.connection_id.as_str())?;
+    validate_non_empty("modelId", request.model_id.as_str())?;
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    validate_custom_provider_identity(&current_configuration, request.provider_id.as_str())?;
+    let connection = current_configuration
+        .connection_graph
+        .connections
+        .get(request.connection_id.as_str())
+        .ok_or_else(|| format!("Connection `{}` is not configured.", request.connection_id))?;
+    if connection.provider_id != request.provider_id {
+        return Err(format!(
+            "Connection `{}` does not belong to custom provider `{}`.",
+            request.connection_id, request.provider_id
+        ));
+    }
+
+    // validation_configuration bypasses only the pending/workbench gates for this explicit action.
+    // validation_configuration 仅为此次显式操作绕过待验证与工作台开关门禁。
+    let mut validation_configuration = current_configuration.clone();
+    validation_configuration
+        .pending_validation_connection_ids
+        .remove(request.connection_id.as_str());
+    validation_configuration.model_enabled_overrides.insert(
+        PersistedAiConfiguration::provider_model_key(
+            request.provider_id.as_str(),
+            request.model_id.as_str(),
+        ),
+        true,
+    );
+    let selection = runtime.resolve_connection_model_selection(
+        &validation_configuration,
+        request.connection_id.as_str(),
+        request.provider_id.as_str(),
+        request.model_id.as_str(),
+    )?;
+    let output_limit = selection
+        .overrides
+        .output_limit
+        .or(selection.model.capabilities.output_limit)
+        .unwrap_or(256)
+        .clamp(1, 256);
+    let reasoning_effort = selection
+        .model
+        .capabilities
+        .reasoning_efforts
+        .contains(&ReasoningEffort::None)
+        .then_some(ReasoningEffort::None);
+    let execution_id = format!("custom-model-validation-{}", uuid::Uuid::new_v4().simple());
+    let execution_request = AiExecutionRequest {
+        operation: AiOperation::ConversationRespond,
+        model_id: selection.model.id.clone(),
+        cache_scope_id: None,
+        continuation: None,
+        messages: vec![AiMessage {
+            role: MessageRole::User,
+            content: vec![ContentItem::Text {
+                text: String::from("Reply with exactly OK."),
+            }],
+        }],
+        tools: Vec::new(),
+        native_tools: Vec::new(),
+        tool_choice: ToolChoicePolicy::Disabled,
+        parallel_tool_calls: ParallelToolCallPolicy::Disabled,
+        structured_output: StructuredOutputPolicy::None,
+        stop_sequences: Vec::new(),
+        prompt_cache: selection.overrides.prompt_cache.clone().unwrap_or_default(),
+        reasoning_effort,
+        reasoning_output: ReasoningOutputPolicy::Hidden,
+        model_parameters: selection.overrides.model_parameters.clone(),
+        resources: Vec::new(),
+        output_token_limit: Some(output_limit),
+    };
+    let mut stream = runtime
+        .execute_internal_llm(&selection, execution_request, execution_id)
+        .await
+        .map_err(|failure| failure.to_string())?;
+    let mut response_text = String::new();
+    let mut terminal_observed = false;
+    while let Some(event) = stream.next().await {
+        match event.map_err(|failure| failure.to_string())? {
+            AiStreamEvent::ResponseItemStarted {
+                item: ContentItem::Text { text },
+                ..
+            }
+            | AiStreamEvent::ResponseTextDelta { delta: text, .. } => {
+                response_text.push_str(text.as_str());
+            }
+            AiStreamEvent::ResponseCompleted => {
+                terminal_observed = true;
+                break;
+            }
+            AiStreamEvent::ResponseFailed { error } => return Err(error.message),
+            AiStreamEvent::ResponseCancelled => {
+                return Err(String::from("Custom model validation was cancelled."));
+            }
+            _ => {}
+        }
+    }
+    if !terminal_observed {
+        return Err(String::from(
+            "Custom model validation stream ended before a terminal completion event.",
+        ));
+    }
+    let response_text = response_text.trim().to_string();
+    if response_text.is_empty() {
+        return Err(String::from(
+            "Custom model validation completed without visible text output.",
+        ));
+    }
+
+    let provider_id = request.provider_id.clone();
+    let connection_id = request.connection_id.clone();
+    let configuration = mutate_public_ai_configuration_in_transaction(
+        &state,
+        "保存自定义模型验证结果失败",
+        |configuration| {
+            let current_connection = configuration
+                .connection_graph
+                .connections
+                .get(connection_id.as_str())
+                .ok_or_else(|| format!("Connection `{connection_id}` is no longer configured."))?;
+            if current_connection.provider_id != provider_id
+                || current_connection.selected_protocol
+                    != selection.route.connection.selected_protocol
+            {
+                return Err(format!(
+                    "Connection `{connection_id}` changed while model validation was running."
+                ));
+            }
+            configuration.set_connection_pending_validation(connection_id.as_str(), false)?;
+            configuration
+                .connection_graph
+                .account_preferences
+                .provider_defaults
+                .entry(provider_id.clone())
+                .or_insert_with(|| connection_id.clone());
+            Ok(())
+        },
+    )?;
+    drop(transaction);
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    Ok(PublicAiCustomModelValidationResult {
+        provider_id: request.provider_id,
+        connection_id: request.connection_id,
+        model_id: request.model_id,
+        response_characters: response_text.chars().count(),
+        response_text,
+    })
 }
 
 /// Removes one unreferenced custom provider.
@@ -1046,6 +1774,35 @@ pub(super) async fn service_save_public_ai_custom_models(
             ));
         }
     }
+    // seen_template_decisions rejects ambiguous duplicate decisions before persistence begins.
+    // seen_template_decisions 在开始持久化前拒绝含义不明确的重复决策。
+    let mut seen_template_decisions = BTreeSet::new();
+    // template_decisions contains validated composite keys ready for the single configuration transaction.
+    // template_decisions 包含已校验的组合键，可直接进入单次配置事务。
+    let mut template_decisions = Vec::with_capacity(request.template_decisions.len());
+    for item in request.template_decisions {
+        validate_non_empty("templateDecisions[].modelId", item.model_id.as_str())?;
+        if !seen_template_decisions.insert(item.model_id.clone()) {
+            return Err(format!(
+                "templateDecisions contains duplicate model `{}`.",
+                item.model_id
+            ));
+        }
+        if !replacement.contains_key(item.model_id.as_str()) {
+            return Err(format!(
+                "templateDecisions references model `{}` outside the replacement model set.",
+                item.model_id
+            ));
+        }
+        validate_custom_template_decision(item.model_id.as_str(), &item.decision)?;
+        template_decisions.push((
+            PersistedAiConfiguration::provider_model_key(
+                request.provider_id.as_str(),
+                item.model_id.as_str(),
+            ),
+            item.decision,
+        ));
+    }
     let removed_model_ids = current_configuration
         .custom_models
         .get(request.provider_id.as_str())
@@ -1054,34 +1811,67 @@ pub(super) async fn service_save_public_ai_custom_models(
         .filter(|model_id| !replacement.contains_key(model_id.as_str()))
         .cloned()
         .collect::<BTreeSet<_>>();
-    let referenced_removed_models = referenced_custom_model_ids(
-        &current_configuration,
-        request.provider_id.as_str(),
+    let provider_id = request.provider_id;
+    // candidate_configuration is authoritative for deciding whether a removed manual overlay
+    // also removes the executable model from an exact credential catalog.
+    // candidate_configuration 是判断移除手工覆盖后模型是否也从精确凭据目录消失的权威状态。
+    let mut candidate_configuration = current_configuration.clone();
+    apply_custom_model_replacement(
+        &mut candidate_configuration,
+        provider_id.as_str(),
+        &replacement,
         &removed_model_ids,
+        &template_decisions,
     );
-    let mut referenced_removed_models = referenced_removed_models;
+    runtime.validate_model_catalog_overlays(&candidate_configuration)?;
+    let mut referenced_removed_models = referenced_custom_model_ids(
+        runtime.as_ref(),
+        &candidate_configuration,
+        provider_id.as_str(),
+        &removed_model_ids,
+    )?;
     // Loaded session selections are runtime-owned and must be checked separately from persisted defaults.
     // 已加载会话选择由运行时持有，必须与持久化默认值分开检查。
-    {
+    // loaded_session_references is copied while holding service state so catalog resolution never
+    // nests runtime locks under the workspace mutex.
+    // loaded_session_references 在持有服务状态锁时完成复制，避免在工作区互斥锁内嵌套目录锁。
+    let loaded_session_references = {
         let guard = state
             .lock()
             .map_err(|error| format!("Failed to lock service state: {error}"))?;
-        if let Some(workspace) = guard.workspace_snapshot.as_ref() {
-            for runtime_state in workspace
-                .session_runtime_state
-                .values()
-                .chain(workspace.archived_session_runtime_state.values())
-            {
-                if runtime_state.active_provider_id.as_deref() == Some(request.provider_id.as_str())
+        guard
+            .workspace_snapshot
+            .as_ref()
+            .into_iter()
+            .flat_map(|workspace| {
+                workspace
+                    .session_runtime_state
+                    .values()
+                    .chain(workspace.archived_session_runtime_state.values())
+            })
+            .filter(|runtime_state| {
+                runtime_state.active_provider_id.as_deref() == Some(provider_id.as_str())
                     && runtime_state
                         .active_model_id
-                        .as_ref()
-                        .is_some_and(|model_id| removed_model_ids.contains(model_id.as_str()))
-                    && let Some(model_id) = runtime_state.active_model_id.as_ref()
-                {
-                    referenced_removed_models.insert(model_id.clone());
-                }
-            }
+                        .as_deref()
+                        .is_some_and(|model_id| removed_model_ids.contains(model_id))
+            })
+            .filter_map(|runtime_state| {
+                runtime_state
+                    .active_model_id
+                    .as_ref()
+                    .map(|model_id| (runtime_state.active_connection_id.clone(), model_id.clone()))
+            })
+            .collect::<BTreeSet<_>>()
+    };
+    for (connection_id, model_id) in loaded_session_references {
+        if !model_remains_on_connection(
+            runtime.as_ref(),
+            &candidate_configuration,
+            connection_id.as_deref(),
+            model_id.as_str(),
+        )? {
+            referenced_removed_models.insert(model_id);
         }
     }
     if !referenced_removed_models.is_empty() {
@@ -1094,20 +1884,349 @@ pub(super) async fn service_save_public_ai_custom_models(
         ));
     }
 
-    let provider_id = request.provider_id;
     let configuration = mutate_public_ai_configuration_in_transaction(
         &state,
         "保存自定义模型失败",
         |configuration| {
-            if replacement.is_empty() {
-                configuration.custom_models.remove(provider_id.as_str());
+            apply_custom_model_replacement(
+                configuration,
+                provider_id.as_str(),
+                &replacement,
+                &removed_model_ids,
+                &template_decisions,
+            );
+            Ok(())
+        },
+    )?;
+    runtime.reapply_model_catalog_overlays(&configuration)?;
+    drop(transaction);
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Applies one complete custom-model replacement to a candidate or durable configuration.
+/// 将一份完整自定义模型替换应用到候选配置或持久配置。
+///
+/// # Parameters
+/// 参数
+/// `configuration` is the mutation target, `provider_id` owns all records, `replacement` is the
+/// complete model set, `removed_model_ids` scopes cleanup, and `template_decisions` contains
+/// already validated composite keys.
+/// `configuration` 是修改目标，`provider_id` 持有全部记录，`replacement` 是完整模型集合，
+/// `removed_model_ids` 限定清理范围，`template_decisions` 包含已经校验的组合键。
+fn apply_custom_model_replacement(
+    configuration: &mut PersistedAiConfiguration,
+    provider_id: &str,
+    replacement: &BTreeMap<String, CustomModelDefinition>,
+    removed_model_ids: &BTreeSet<String>,
+    template_decisions: &[(String, CustomModelTemplateDecision)],
+) {
+    if replacement.is_empty() {
+        configuration.custom_models.remove(provider_id);
+    } else {
+        configuration
+            .custom_models
+            .insert(provider_id.to_string(), replacement.clone());
+    }
+    for model_id in removed_model_ids {
+        configuration.remove_model_owned_settings(provider_id, model_id.as_str());
+    }
+    for (key, decision) in template_decisions {
+        configuration
+            .custom_model_template_decisions
+            .insert(key.clone(), decision.clone());
+    }
+}
+
+/// Saves provider-wide model defaults and rebuilds every affected in-memory catalog.
+/// 保存供应商级模型默认值并重建所有受影响的内存目录。
+pub(super) async fn service_save_public_ai_custom_provider_model_defaults(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiCustomProviderModelDefaultsSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    validate_non_empty("providerId", request.provider_id.as_str())?;
+    request.defaults.validate()?;
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    validate_custom_provider_identity(&current_configuration, request.provider_id.as_str())?;
+    let provider_id = request.provider_id;
+    let defaults = request.defaults;
+    let mut candidate_configuration = current_configuration.clone();
+    candidate_configuration
+        .custom_provider_model_defaults
+        .insert(provider_id.clone(), defaults.clone());
+    runtime.validate_model_catalog_overlays(&candidate_configuration)?;
+    let configuration = mutate_public_ai_configuration_in_transaction(
+        &state,
+        "保存自定义供应商模型默认值失败",
+        |configuration| {
+            configuration
+                .custom_provider_model_defaults
+                .insert(provider_id.clone(), defaults.clone());
+            Ok(())
+        },
+    )?;
+    runtime.reapply_model_catalog_overlays(&configuration)?;
+    drop(transaction);
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Returns offline template suggestions without network access or persistent mutation.
+/// 在不访问网络且不修改持久化状态的情况下返回离线模板建议。
+pub(super) fn service_public_ai_custom_model_template_suggestions(
+    request: PublicAiCustomModelTemplateSuggestionsRequest,
+) -> Result<Vec<CommonModelTemplateSuggestion>, String> {
+    validate_non_empty("modelId", request.model_id.as_str())?;
+    Ok(vulcan_provider_adapters::suggest_common_model_templates(
+        request.model_id.as_str(),
+    ))
+}
+
+/// Returns offline template suggestions for distinct model identifiers in one bounded request.
+/// 在一次有界请求中返回互不重复模型标识的离线模板建议。
+///
+/// # Parameters
+/// 参数
+/// `request` contains exact model identifiers from one browser-visible provider union.
+/// `request` 包含一个浏览器可见供应商并集中的精确模型标识。
+///
+/// # Returns
+/// 返回值
+/// Ordered suggestion records without network access or persistent mutation.
+/// 返回有序建议记录，且不访问网络、不修改持久化状态。
+pub(super) fn service_public_ai_custom_model_template_suggestions_batch(
+    request: PublicAiCustomModelTemplateSuggestionsBatchRequest,
+) -> Result<Vec<PublicAiCustomModelTemplateSuggestionsRecord>, String> {
+    if request.model_ids.is_empty() {
+        return Err(String::from(
+            "modelIds must contain at least one model identifier.",
+        ));
+    }
+    if request.model_ids.len() > MAX_CUSTOM_MODEL_TEMPLATE_BATCH_SIZE {
+        return Err(format!(
+            "modelIds exceeds the maximum batch size of {MAX_CUSTOM_MODEL_TEMPLATE_BATCH_SIZE}."
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    let mut records = Vec::with_capacity(request.model_ids.len());
+    for model_id in request.model_ids {
+        validate_non_empty("modelIds[]", model_id.as_str())?;
+        if !seen.insert(model_id.clone()) {
+            return Err(format!("modelIds contains duplicate model `{model_id}`."));
+        }
+        records.push(PublicAiCustomModelTemplateSuggestionsRecord {
+            suggestions: vulcan_provider_adapters::suggest_common_model_templates(
+                model_id.as_str(),
+            ),
+            model_id,
+        });
+    }
+    Ok(records)
+}
+
+/// Saves one explicit template decision and rebuilds affected model snapshots.
+/// 保存一项显式模板决策并重建受影响的模型快照。
+pub(super) async fn service_save_public_ai_custom_model_template_decision(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiCustomModelTemplateDecisionSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    validate_non_empty("providerId", request.provider_id.as_str())?;
+    validate_non_empty("modelId", request.model_id.as_str())?;
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    validate_custom_provider_identity(&current_configuration, request.provider_id.as_str())?;
+    validate_custom_provider_model_exists(
+        runtime.as_ref(),
+        &current_configuration,
+        request.provider_id.as_str(),
+        request.model_id.as_str(),
+    )?;
+    if let Some(decision) = request.decision.as_ref() {
+        validate_custom_template_decision(request.model_id.as_str(), decision)?;
+    }
+    let key = PersistedAiConfiguration::provider_model_key(
+        request.provider_id.as_str(),
+        request.model_id.as_str(),
+    );
+    let decision = request.decision;
+    let mut candidate_configuration = current_configuration.clone();
+    if let Some(decision) = decision.clone() {
+        candidate_configuration
+            .custom_model_template_decisions
+            .insert(key.clone(), decision);
+    } else {
+        candidate_configuration
+            .custom_model_template_decisions
+            .remove(key.as_str());
+    }
+    runtime.validate_model_catalog_overlays(&candidate_configuration)?;
+    let configuration = mutate_public_ai_configuration_in_transaction(
+        &state,
+        "保存自定义模型模板决策失败",
+        |configuration| {
+            if let Some(decision) = decision.clone() {
+                configuration
+                    .custom_model_template_decisions
+                    .insert(key.clone(), decision);
             } else {
                 configuration
-                    .custom_models
-                    .insert(provider_id.clone(), replacement.clone());
+                    .custom_model_template_decisions
+                    .remove(key.as_str());
             }
-            for model_id in &removed_model_ids {
-                configuration.remove_model_owned_settings(provider_id.as_str(), model_id.as_str());
+            Ok(())
+        },
+    )?;
+    runtime.reapply_model_catalog_overlays(&configuration)?;
+    drop(transaction);
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Atomically saves a bounded set of explicit template decisions and rebuilds catalogs once.
+/// 原子保存一组有界显式模板决策，并且只重建一次目录。
+///
+/// # Parameters
+/// 参数
+/// `app` publishes the rebuilt workbench, `state` owns runtime and persistence, and `request`
+/// identifies one custom provider plus distinct reviewed decisions.
+/// `app` 发布重建后的工作台，`state` 持有运行时与持久化状态，`request`
+/// 标识一个自定义供应商及互不重复的已审查决策。
+///
+/// # Returns
+/// 返回值
+/// The rebuilt browser snapshot after all decisions pass validation and persist atomically.
+/// 所有决策通过校验并原子持久化后返回重建的浏览器快照。
+pub(super) async fn service_save_public_ai_custom_model_template_decisions_batch(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiCustomModelTemplateDecisionsBatchSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    validate_non_empty("providerId", request.provider_id.as_str())?;
+    if request.decisions.is_empty() {
+        return Err(String::from(
+            "decisions must contain at least one reviewed template decision.",
+        ));
+    }
+    if request.decisions.len() > MAX_CUSTOM_MODEL_TEMPLATE_BATCH_SIZE {
+        return Err(format!(
+            "decisions exceeds the maximum batch size of {MAX_CUSTOM_MODEL_TEMPLATE_BATCH_SIZE}."
+        ));
+    }
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    validate_custom_provider_identity(&current_configuration, request.provider_id.as_str())?;
+    let mut seen = BTreeSet::new();
+    let mut decisions = Vec::with_capacity(request.decisions.len());
+    for item in request.decisions {
+        validate_non_empty("decisions[].modelId", item.model_id.as_str())?;
+        if !seen.insert(item.model_id.clone()) {
+            return Err(format!(
+                "decisions contains duplicate model `{}`.",
+                item.model_id
+            ));
+        }
+        validate_custom_provider_model_exists(
+            runtime.as_ref(),
+            &current_configuration,
+            request.provider_id.as_str(),
+            item.model_id.as_str(),
+        )?;
+        validate_custom_template_decision(item.model_id.as_str(), &item.decision)?;
+        decisions.push((
+            PersistedAiConfiguration::provider_model_key(
+                request.provider_id.as_str(),
+                item.model_id.as_str(),
+            ),
+            item.decision,
+        ));
+    }
+    let mut candidate_configuration = current_configuration.clone();
+    for (key, decision) in &decisions {
+        candidate_configuration
+            .custom_model_template_decisions
+            .insert(key.clone(), decision.clone());
+    }
+    runtime.validate_model_catalog_overlays(&candidate_configuration)?;
+    let configuration = mutate_public_ai_configuration_in_transaction(
+        &state,
+        "批量保存自定义模型模板决策失败",
+        |configuration| {
+            for (key, decision) in decisions.clone() {
+                configuration
+                    .custom_model_template_decisions
+                    .insert(key, decision);
+            }
+            Ok(())
+        },
+    )?;
+    runtime.reapply_model_catalog_overlays(&configuration)?;
+    drop(transaction);
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Saves one per-account manual-model availability difference and rebuilds effective catalogs.
+/// 保存一项逐账号手工模型可用性差异并重建有效目录。
+pub(super) async fn service_save_public_ai_custom_model_connection_availability(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiCustomModelConnectionAvailabilitySaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    validate_non_empty("connectionId", request.connection_id.as_str())?;
+    validate_non_empty("modelId", request.model_id.as_str())?;
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    let connection = current_configuration
+        .connection_graph
+        .connections
+        .get(request.connection_id.as_str())
+        .ok_or_else(|| {
+            format!(
+                "Credential connection `{}` is not configured.",
+                request.connection_id
+            )
+        })?;
+    validate_custom_provider_identity(&current_configuration, connection.provider_id.as_str())?;
+    if current_configuration
+        .custom_model(connection.provider_id.as_str(), request.model_id.as_str())
+        .is_none()
+    {
+        return Err(format!(
+            "Custom provider `{}` has no manual model `{}`.",
+            connection.provider_id, request.model_id
+        ));
+    }
+    let key = PersistedAiConfiguration::connection_model_key(
+        request.connection_id.as_str(),
+        request.model_id.as_str(),
+    );
+    let enabled = request.enabled;
+    let mut candidate_configuration = current_configuration.clone();
+    if let Some(enabled) = enabled {
+        candidate_configuration
+            .custom_model_connection_enabled_overrides
+            .insert(key.clone(), enabled);
+    } else {
+        candidate_configuration
+            .custom_model_connection_enabled_overrides
+            .remove(key.as_str());
+    }
+    runtime.validate_model_catalog_overlays(&candidate_configuration)?;
+    let configuration = mutate_public_ai_configuration_in_transaction(
+        &state,
+        "保存自定义模型账号可用性失败",
+        |configuration| {
+            if let Some(enabled) = enabled {
+                configuration
+                    .custom_model_connection_enabled_overrides
+                    .insert(key.clone(), enabled);
+            } else {
+                configuration
+                    .custom_model_connection_enabled_overrides
+                    .remove(key.as_str());
             }
             Ok(())
         },
@@ -1140,14 +2259,6 @@ pub(super) async fn service_save_public_ai_model_capability_overrides(
 ) -> Result<PublicAiSettingsSnapshot, String> {
     validate_non_empty("providerId", request.provider_id.as_str())?;
     validate_non_empty("modelId", request.model_id.as_str())?;
-    if request
-        .overrides
-        .as_ref()
-        .and_then(|overrides| overrides.context_limit)
-        == Some(0)
-    {
-        return Err(String::from("The context limit must be greater than zero."));
-    }
     let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
     let catalogs = runtime.catalog_snapshot()?;
@@ -1170,6 +2281,12 @@ pub(super) async fn service_save_public_ai_model_capability_overrides(
             request.provider_id, request.model_id
         ));
     }
+    runtime.validate_model_capability_override_candidate(
+        &current_configuration,
+        request.provider_id.as_str(),
+        request.model_id.as_str(),
+        request.overrides.as_ref(),
+    )?;
     let key = PersistedAiConfiguration::provider_model_key(
         request.provider_id.as_str(),
         request.model_id.as_str(),
@@ -1199,14 +2316,21 @@ pub(super) async fn service_save_public_ai_model_capability_overrides(
 /// Finds removed custom models still owned by active or internal inference routes.
 /// 查找仍被当前选择或内部推理路由持有的已移除自定义模型。
 fn referenced_custom_model_ids(
+    runtime: &PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
     provider_id: &str,
     removed_model_ids: &BTreeSet<String>,
-) -> BTreeSet<String> {
+) -> Result<BTreeSet<String>, String> {
     let mut referenced = BTreeSet::new();
     if let Some(active) = configuration.active.as_ref()
         && active.provider_id == provider_id
         && removed_model_ids.contains(active.model_id.as_str())
+        && !model_remains_on_connection(
+            runtime,
+            configuration,
+            Some(active.connection_id.as_str()),
+            active.model_id.as_str(),
+        )?
     {
         referenced.insert(active.model_id.clone());
     }
@@ -1219,12 +2343,51 @@ fn referenced_custom_model_ids(
         for route in routes {
             if route.provider_id == provider_id
                 && removed_model_ids.contains(route.model_id.as_str())
+                && !model_remains_on_connection(
+                    runtime,
+                    configuration,
+                    Some(route.connection_id.as_str()),
+                    route.model_id.as_str(),
+                )?
             {
                 referenced.insert(route.model_id.clone());
             }
         }
     }
-    referenced
+    Ok(referenced)
+}
+
+/// Checks whether a candidate configuration keeps a model on one exact referenced connection.
+/// 检查候选配置是否在一个精确被引用连接上保留模型。
+///
+/// # Parameters
+/// 参数
+/// `runtime` owns immutable source catalogs, `configuration` is the candidate state,
+/// `connection_id` is the referenced credential when available, and `model_id` is exact.
+/// `runtime` 持有不可变源目录，`configuration` 是候选状态，`connection_id` 是可用时的
+/// 被引用凭据，`model_id` 为精确模型标识。
+///
+/// # Returns
+/// 返回值
+/// `true` only when the connection still exists and its fully resolved catalog contains the model.
+/// 仅当连接仍存在且其完整解析目录包含该模型时返回 `true`。
+fn model_remains_on_connection(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+    connection_id: Option<&str>,
+    model_id: &str,
+) -> Result<bool, String> {
+    let Some(connection_id) = connection_id else {
+        return Ok(false);
+    };
+    if !configuration
+        .connection_graph
+        .connections
+        .contains_key(connection_id)
+    {
+        return Ok(false);
+    }
+    runtime.connection_catalog_contains_model(configuration, connection_id, model_id)
 }
 
 /// Starts one exact provider OAuth flow without persisting transaction state.
@@ -1631,6 +2794,10 @@ async fn add_public_ai_connection_with_secret(
             "Credential secret mode does not match the requested connection mode.",
         ));
     }
+    // The transaction covers discovery and persistence so a concurrent catalog synchronization
+    // cannot publish overlays built from an older configuration snapshot.
+    // 事务覆盖目录发现与持久化，避免并发目录同步发布基于旧配置快照构建的覆盖结果。
+    let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
     let connection_id = format!("connection_{}", uuid::Uuid::new_v4().simple());
     let credential_id = format!("credential_{}", uuid::Uuid::new_v4().simple());
@@ -1828,6 +2995,7 @@ async fn add_public_ai_connection_with_secret(
             ));
         }
     };
+    drop(transaction);
     publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
     build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
 }
@@ -2454,6 +3622,12 @@ pub(super) async fn service_save_public_ai_default_connection(
                     request.connection_id, request.provider_id
                 ));
             }
+            if configuration.connection_is_pending_validation(request.connection_id.as_str()) {
+                return Err(format!(
+                    "Connection `{}` is pending explicit model validation and cannot become a provider default.",
+                    request.connection_id
+                ));
+            }
             configuration
                 .connection_graph
                 .account_preferences
@@ -2538,6 +3712,10 @@ pub(super) async fn service_sync_public_ai_connection(
     state: SharedServiceBridgeState,
     connection_id: String,
 ) -> Result<PublicAiSettingsSnapshot, String> {
+    // Manual synchronization shares the configuration transaction with overlay mutations so its
+    // remote response cannot replace a newer in-memory projection with stale user settings.
+    // 手动同步与覆盖配置变更共用配置事务，避免远程响应以过期用户设置替换较新的内存投影。
+    let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
     let connection = configuration
         .connection_graph
@@ -2557,6 +3735,7 @@ pub(super) async fn service_sync_public_ai_connection(
         entry_kind,
     )
     .await;
+    drop(transaction);
     publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
     refresh_result?;
     build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
@@ -2646,6 +3825,12 @@ pub(super) async fn service_select_public_ai_model(
         return Err(format!(
             "Connection `{}` does not belong to provider `{}`.",
             request.connection_id, request.provider_id
+        ));
+    }
+    if current_configuration.connection_is_pending_validation(request.connection_id.as_str()) {
+        return Err(format!(
+            "Connection `{}` is pending explicit model validation and cannot be selected for a conversation.",
+            request.connection_id
         ));
     }
     if !current_configuration
@@ -4340,6 +5525,7 @@ fn build_public_ai_settings_snapshot(
     let mut model_override_records_by_key = BTreeMap::new();
     let mut model_access_records_by_key = BTreeMap::new();
     let mut model_capability_override_records_by_key = BTreeMap::new();
+    let mut custom_model_template_decision_records_by_key = BTreeMap::new();
     for (connection_id, catalog) in &catalogs {
         let Some(connection) = configuration
             .connection_graph
@@ -4385,6 +5571,18 @@ fn build_public_ai_settings_snapshot(
                         overrides,
                     });
             }
+            if let Some(decision) = configuration
+                .custom_model_template_decision(connection.provider_id.as_str(), model.id.as_str())
+                .cloned()
+            {
+                custom_model_template_decision_records_by_key
+                    .entry(access_key.clone())
+                    .or_insert_with(|| PublicAiCustomModelTemplateDecisionRecord {
+                        provider_id: connection.provider_id.clone(),
+                        model_id: model.id.clone(),
+                        decision,
+                    });
+            }
             let key = PersistedAiConfiguration::provider_model_protocol_key(
                 connection.provider_id.as_str(),
                 model.id.as_str(),
@@ -4406,6 +5604,51 @@ fn build_public_ai_settings_snapshot(
     let model_access_records = model_access_records_by_key.into_values().collect();
     let model_capability_override_records = model_capability_override_records_by_key
         .into_values()
+        .collect();
+    for (provider_id, models) in &configuration.custom_models {
+        for model_id in models.keys() {
+            let key = PersistedAiConfiguration::provider_model_key(provider_id, model_id);
+            if let Some(decision) = configuration
+                .custom_model_template_decision(provider_id, model_id)
+                .cloned()
+            {
+                custom_model_template_decision_records_by_key
+                    .entry(key)
+                    .or_insert_with(|| PublicAiCustomModelTemplateDecisionRecord {
+                        provider_id: provider_id.clone(),
+                        model_id: model_id.clone(),
+                        decision,
+                    });
+            }
+        }
+    }
+    let custom_model_template_decision_records = custom_model_template_decision_records_by_key
+        .into_values()
+        .collect();
+    let custom_model_connection_availability_records = configuration
+        .connection_graph
+        .connections
+        .values()
+        .flat_map(|connection| {
+            configuration
+                .custom_models
+                .get(connection.provider_id.as_str())
+                .into_iter()
+                .flat_map(move |models| {
+                    models.keys().filter_map(move |model_id| {
+                        configuration
+                            .custom_model_connection_enabled_override(
+                                connection.id.as_str(),
+                                model_id.as_str(),
+                            )
+                            .map(|enabled| PublicAiCustomModelConnectionAvailabilityRecord {
+                                connection_id: connection.id.clone(),
+                                model_id: model_id.clone(),
+                                enabled,
+                            })
+                    })
+                })
+        })
         .collect();
     let available_provider_tool_targets = runtime.available_provider_tool_targets(configuration)?;
     let provider_tool_selections = filter_current_provider_tool_selections(
@@ -4434,11 +5677,16 @@ fn build_public_ai_settings_snapshot(
             .clone(),
         active: configuration.active.clone(),
         catalogs,
+        source_catalogs: runtime.source_catalog_snapshot()?,
+        catalog_statuses: runtime.catalog_status_snapshot()?,
         catalog_errors: runtime.catalog_error_snapshot()?,
         model_overrides: configuration.model_overrides.clone(),
         model_override_records,
         model_access_records,
         custom_models: configuration.custom_models.clone(),
+        custom_provider_model_defaults: configuration.custom_provider_model_defaults.clone(),
+        custom_model_template_decision_records,
+        custom_model_connection_availability_records,
         model_capability_overrides: configuration.model_capability_overrides.clone(),
         model_capability_override_records,
         provider_tool_targets: available_provider_tool_targets
@@ -4585,6 +5833,9 @@ fn build_internal_inference_candidates(
 ) -> Result<Vec<PublicAiInternalInferenceCandidate>, String> {
     let mut candidates = Vec::new();
     for connection in configuration.connection_graph.connections.values() {
+        if configuration.connection_is_pending_validation(connection.id.as_str()) {
+            continue;
+        }
         let Some(catalog) = catalogs.get(connection.id.as_str()) else {
             continue;
         };
@@ -5119,6 +6370,9 @@ fn remove_connection_from_configuration(
         .filter(|connection| {
             connection.provider_id == removed.provider_id && connection.id != connection_id
         })
+        .filter(|connection| {
+            !configuration.connection_is_pending_validation(connection.id.as_str())
+        })
         .collect::<Vec<_>>();
     let replacement = if deleting_provider_default && !remaining_same_provider.is_empty() {
         let replacement_id = replacement_default_connection_id.ok_or_else(|| {
@@ -5147,6 +6401,9 @@ fn remove_connection_from_configuration(
     configuration
         .connection_graph
         .connections
+        .remove(connection_id);
+    configuration
+        .pending_validation_connection_ids
         .remove(connection_id);
     configuration
         .connection_graph
@@ -5182,9 +6439,94 @@ fn remove_connection_from_configuration(
         !key.starts_with(format!("{}:{connection_id}:", connection_id.len()).as_str())
     });
     configuration
+        .custom_model_connection_enabled_overrides
+        .retain(|key, _| {
+            !key.starts_with(format!("{}:{connection_id}:", connection_id.len()).as_str())
+        });
+    configuration
         .provider_tool_selections
         .retain(|_, selection| selection.connection_id != connection_id);
     Ok(())
+}
+
+/// Validates that one exact identifier owns a configured user-defined provider.
+/// 校验一个精确标识持有已配置的用户自定义供应商。
+fn validate_custom_provider_identity(
+    configuration: &PersistedAiConfiguration,
+    provider_id: &str,
+) -> Result<(), String> {
+    let provider = configuration
+        .custom_providers
+        .get(provider_id)
+        .ok_or_else(|| format!("Custom provider `{provider_id}` is not configured."))?;
+    if provider.kind != ProviderKind::Custom {
+        return Err(format!(
+            "Provider `{provider_id}` is not a user-defined provider."
+        ));
+    }
+    Ok(())
+}
+
+/// Validates that one custom-provider model exists in a current catalog or manual declaration.
+/// 校验一个自定义供应商模型存在于当前目录或手工声明中。
+fn validate_custom_provider_model_exists(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+    provider_id: &str,
+    model_id: &str,
+) -> Result<(), String> {
+    if configuration.custom_model(provider_id, model_id).is_some() {
+        return Ok(());
+    }
+    let catalogs = runtime.catalog_snapshot()?;
+    let exists = configuration
+        .connection_graph
+        .connections
+        .values()
+        .filter(|connection| connection.provider_id == provider_id)
+        .any(|connection| {
+            catalogs
+                .get(connection.id.as_str())
+                .is_some_and(|catalog| catalog.models.iter().any(|model| model.id == model_id))
+        });
+    if exists {
+        Ok(())
+    } else {
+        Err(format!(
+            "Custom provider `{provider_id}` does not expose model `{model_id}`."
+        ))
+    }
+}
+
+/// Validates a persisted template decision against the immutable local suggestion catalog.
+/// 根据不可变本地建议目录校验持久化模板决策。
+fn validate_custom_template_decision(
+    model_id: &str,
+    decision: &CustomModelTemplateDecision,
+) -> Result<(), String> {
+    decision.validate()?;
+    let suggestions = vulcan_provider_adapters::suggest_common_model_templates(model_id);
+    let matches = match decision {
+        CustomModelTemplateDecision::Applied { selection } => suggestions.iter().any(|candidate| {
+            candidate.template_key == selection.template_key
+                && candidate.template_revision == selection.template_revision
+                && candidate.selection() == *selection
+        }),
+        CustomModelTemplateDecision::Rejected {
+            template_key,
+            template_revision,
+        } => suggestions.iter().any(|candidate| {
+            candidate.template_key == *template_key
+                && candidate.template_revision == *template_revision
+        }),
+    };
+    if matches {
+        Ok(())
+    } else {
+        Err(format!(
+            "The reviewed common template decision no longer matches model `{model_id}`."
+        ))
+    }
 }
 
 /// Rejects empty browser string fields before mutation.
@@ -5366,5 +6708,109 @@ mod inference_settings_route_tests {
             conflicts[0].capability,
             ProviderToolCapabilityKind::WebSearch
         );
+    }
+
+    /// Verifies every discovery state accepts only its exact explicit save path.
+    /// 验证每个发现状态只接受其精确对应的显式保存路径。
+    #[test]
+    fn custom_provider_observation_acceptance_is_closed_and_explicit() {
+        assert!(custom_provider_observation_is_accepted(
+            CatalogDiscoveryState::Ready,
+            false,
+            false,
+        ));
+        for state in [
+            CatalogDiscoveryState::Empty,
+            CatalogDiscoveryState::Unsupported,
+            CatalogDiscoveryState::InvalidResponse,
+        ] {
+            assert!(!custom_provider_observation_is_accepted(
+                state, false, false,
+            ));
+            assert!(custom_provider_observation_is_accepted(state, true, false));
+            assert!(!custom_provider_observation_is_accepted(state, false, true,));
+        }
+        for state in [
+            CatalogDiscoveryState::RateLimited,
+            CatalogDiscoveryState::TemporarilyUnavailable,
+            CatalogDiscoveryState::Failed,
+        ] {
+            assert!(!custom_provider_observation_is_accepted(
+                state, false, false,
+            ));
+            assert!(!custom_provider_observation_is_accepted(state, true, false,));
+            assert!(custom_provider_observation_is_accepted(state, false, true));
+        }
+        for state in [
+            CatalogDiscoveryState::NotChecked,
+            CatalogDiscoveryState::AuthenticationFailed,
+            CatalogDiscoveryState::Stale,
+        ] {
+            assert!(!custom_provider_observation_is_accepted(
+                state, false, false,
+            ));
+            assert!(!custom_provider_observation_is_accepted(state, true, true,));
+        }
+    }
+
+    /// Verifies only accepted non-ready states are marked pending validation.
+    /// 验证只有被接受的未就绪状态才会标记为待验证。
+    #[test]
+    fn custom_provider_pending_validation_matches_non_ready_acceptance() {
+        assert!(!custom_provider_save_requires_pending_validation(
+            CatalogDiscoveryState::Ready,
+            false,
+            false,
+        ));
+        for state in [
+            CatalogDiscoveryState::Empty,
+            CatalogDiscoveryState::Unsupported,
+            CatalogDiscoveryState::InvalidResponse,
+        ] {
+            assert!(!custom_provider_save_requires_pending_validation(
+                state, false, false,
+            ));
+            assert!(custom_provider_save_requires_pending_validation(
+                state, true, false,
+            ));
+        }
+        for state in [
+            CatalogDiscoveryState::RateLimited,
+            CatalogDiscoveryState::TemporarilyUnavailable,
+            CatalogDiscoveryState::Failed,
+        ] {
+            assert!(!custom_provider_save_requires_pending_validation(
+                state, false, false,
+            ));
+            assert!(custom_provider_save_requires_pending_validation(
+                state, false, true,
+            ));
+        }
+        for state in [
+            CatalogDiscoveryState::NotChecked,
+            CatalogDiscoveryState::AuthenticationFailed,
+            CatalogDiscoveryState::Stale,
+        ] {
+            assert!(!custom_provider_save_requires_pending_validation(
+                state, true, true,
+            ));
+        }
+    }
+
+    /// Verifies older model-save clients may omit the newly added template decision batch.
+    /// 验证旧版模型保存客户端可以省略新增的模板决策批次。
+    #[test]
+    fn custom_model_save_request_defaults_missing_template_decisions() {
+        // request preserves the previous browser payload shape while the service owns the default.
+        // request 保留旧版浏览器载荷形态，并由服务端负责提供默认值。
+        let request: PublicAiCustomModelsSaveRequest = serde_json::from_value(serde_json::json!({
+            "providerId": "custom:test",
+            "models": []
+        }))
+        .expect("the previous custom-model save payload should remain valid");
+
+        assert_eq!(request.provider_id, "custom:test");
+        assert!(request.models.is_empty());
+        assert!(request.template_decisions.is_empty());
     }
 }

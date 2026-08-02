@@ -89,13 +89,19 @@ pub(crate) fn public_ai_provider_rows_for_selection(
     runtime: &vulcan_provider_adapters::PublicAiRuntime,
     active_selection: Option<&vulcan_provider_adapters::ResolvedPublicAiSelection>,
 ) -> Result<Vec<ProviderSummary>, String> {
-    let catalogs = vulcan_provider_adapters::RuntimeConnectionCatalogs::from_snapshot(
-        runtime.catalog_snapshot()?,
-    );
+    let mut catalog_snapshot = runtime.catalog_snapshot()?;
+    catalog_snapshot.retain(|connection_id, _| {
+        !configuration.connection_is_pending_validation(connection_id.as_str())
+    });
+    let catalogs =
+        vulcan_provider_adapters::RuntimeConnectionCatalogs::from_snapshot(catalog_snapshot);
     let errors = runtime.catalog_error_snapshot()?;
     let providers = runtime.effective_providers(configuration)?;
     let mut rows = Vec::new();
     for connection in configuration.connection_graph.connections.values() {
+        if configuration.connection_is_pending_validation(connection.id.as_str()) {
+            continue;
+        }
         let provider = providers
             .provider(connection.provider_id.as_str())
             .ok_or_else(|| format!("Provider `{}` is not registered.", connection.provider_id))?;

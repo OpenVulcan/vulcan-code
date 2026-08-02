@@ -21,9 +21,17 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_add_public_ai_connection",
     "service_update_public_ai_connection",
     "service_remove_public_ai_connection",
+    "service_probe_public_ai_custom_provider",
     "service_save_public_ai_custom_provider",
+    "service_validate_public_ai_custom_model",
     "service_remove_public_ai_custom_provider",
     "service_save_public_ai_custom_models",
+    "service_save_public_ai_custom_provider_model_defaults",
+    "service_public_ai_custom_model_template_suggestions",
+    "service_public_ai_custom_model_template_suggestions_batch",
+    "service_save_public_ai_custom_model_template_decision",
+    "service_save_public_ai_custom_model_template_decisions_batch",
+    "service_save_public_ai_custom_model_connection_availability",
     "service_save_public_ai_model_capability_overrides",
     "service_sync_public_ai_connection",
     "service_query_public_ai_connection_usage",
@@ -148,8 +156,20 @@ pub(super) async fn dispatch(
             service_remove_public_ai_connection(app, state, rpc_required_param(params, "request")?)
                 .await,
         ),
+        "service_probe_public_ai_custom_provider" => rpc_json_result(
+            service_probe_public_ai_custom_provider(state, rpc_required_param(params, "request")?)
+                .await,
+        ),
         "service_save_public_ai_custom_provider" => rpc_json_result(
             service_save_public_ai_custom_provider(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_validate_public_ai_custom_model" => rpc_json_result(
+            service_validate_public_ai_custom_model(
                 app,
                 state,
                 rpc_required_param(params, "request")?,
@@ -166,6 +186,48 @@ pub(super) async fn dispatch(
         ),
         "service_save_public_ai_custom_models" => rpc_json_result(
             service_save_public_ai_custom_models(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_save_public_ai_custom_provider_model_defaults" => rpc_json_result(
+            service_save_public_ai_custom_provider_model_defaults(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_public_ai_custom_model_template_suggestions" => {
+            rpc_json_result(service_public_ai_custom_model_template_suggestions(
+                rpc_required_param(params, "request")?,
+            ))
+        }
+        "service_public_ai_custom_model_template_suggestions_batch" => {
+            rpc_json_result(service_public_ai_custom_model_template_suggestions_batch(
+                rpc_required_param(params, "request")?,
+            ))
+        }
+        "service_save_public_ai_custom_model_template_decision" => rpc_json_result(
+            service_save_public_ai_custom_model_template_decision(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_save_public_ai_custom_model_template_decisions_batch" => rpc_json_result(
+            service_save_public_ai_custom_model_template_decisions_batch(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_save_public_ai_custom_model_connection_availability" => rpc_json_result(
+            service_save_public_ai_custom_model_connection_availability(
                 app,
                 state,
                 rpc_required_param(params, "request")?,

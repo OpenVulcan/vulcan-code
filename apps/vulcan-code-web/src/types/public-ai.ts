@@ -40,9 +40,29 @@ export interface PublicAiCredentialProfile {
 // PublicAiProtocolRoute 描述一条已验证 Wire 路由。
 export interface PublicAiProtocolRoute {
   protocol_profile_id: string;
-  endpoint_path: string;
+  endpoint_path?: string;
+  model_discovery?: PublicAiModelDiscoveryKind;
+  model_discovery_path?: string;
   verified: boolean;
 }
+
+// PublicAiModelDiscoveryKind identifies one registered catalog acquisition contract.
+// PublicAiModelDiscoveryKind 标识一种已注册的目录获取契约。
+export type PublicAiModelDiscoveryKind =
+  | "manual"
+  | "provider_tools_only"
+  | "mini_max_anthropic"
+  | "mini_max_open_ai"
+  | "open_router"
+  | "alibaba_coding_plan_static"
+  | "alibaba_token_plan_static"
+  | "alibaba_model_studio_static"
+  | "open_ai"
+  | "open_ai_codex"
+  | "anthropic"
+  | "anthropic_compatible"
+  | "gemini"
+  | "google_code_assist";
 
 // PublicAiServiceEntry describes one selectable provider entry.
 // PublicAiServiceEntry 描述一个可选供应商入口。
@@ -53,6 +73,7 @@ export interface PublicAiServiceEntry {
   base_url: string;
   credential_profiles: PublicAiCredentialProfile[];
   authentication: string;
+  model_discovery: PublicAiModelDiscoveryKind;
   protocol_routes: PublicAiProtocolRoute[];
 }
 
@@ -104,6 +125,10 @@ export type PublicAiCustomProviderProtocol =
   | "open_ai_chat"
   | "open_ai_responses";
 
+// PublicAiCustomProviderModelDiscoveryMode selects automatic, custom-path, or manual discovery.
+// PublicAiCustomProviderModelDiscoveryMode 选择自动、自定义路径或手工发现。
+export type PublicAiCustomProviderModelDiscoveryMode = "standard" | "custom_path" | "manual";
+
 // PublicAiCustomProviderSaveRequest creates or replaces one user-defined provider.
 // PublicAiCustomProviderSaveRequest 创建或替换一个用户自定义供应商。
 export interface PublicAiCustomProviderSaveRequest {
@@ -114,6 +139,19 @@ export interface PublicAiCustomProviderSaveRequest {
   authentication: "bearer_authorization" | "x_api_key";
   credentialDisplayName: string;
   secret: string;
+  modelDiscoveryMode: PublicAiCustomProviderModelDiscoveryMode;
+  modelDiscoveryPath?: string;
+  allowManualFallback?: boolean;
+  allowPendingValidation?: boolean;
+}
+
+// PublicAiCustomProviderProbeResult is one typed non-persistent credential observation.
+// PublicAiCustomProviderProbeResult 是一项类型化且不持久化的凭据观测。
+export interface PublicAiCustomProviderProbeResult {
+  status: PublicAiCatalogDiscoveryStatus;
+  catalog?: PublicAiConnectionCatalog;
+  manualFallbackAvailable: boolean;
+  pendingSaveAvailable: boolean;
 }
 
 // PublicAiCustomRequestMutation describes one provider-owned request-body mutation.
@@ -147,8 +185,107 @@ export interface PublicAiCustomModelDefinition {
 // PublicAiModelCapabilityOverrides 仅保存用户相对于不可变能力数据的差异。
 export interface PublicAiModelCapabilityOverrides {
   context_limit?: number;
+  output_limit?: number;
   input_resources?: PublicAiResourceKind[];
   output_resources?: PublicAiResourceKind[];
+}
+
+// PublicAiCustomProviderModelDefaults is the safe provider-wide fallback capability contract.
+// PublicAiCustomProviderModelDefaults 是安全的供应商级回退能力契约。
+export interface PublicAiCustomProviderModelDefaults {
+  context_limit: number;
+  output_limit: number;
+  input_resources?: PublicAiResourceKind[];
+  output_resources?: PublicAiResourceKind[];
+}
+
+// PublicAiCustomModelTemplateSelection is one immutable user-reviewed template snapshot.
+// PublicAiCustomModelTemplateSelection 是一份不可变的用户审查模板快照。
+export interface PublicAiCustomModelTemplateSelection {
+  template_key: string;
+  template_revision: string;
+  context_limit: number;
+  supports_text_input: boolean;
+  supports_text_output: boolean;
+  input_resources?: PublicAiResourceKind[];
+  output_resources?: PublicAiResourceKind[];
+}
+
+// PublicAiCustomModelTemplateDecision records an applied or rejected local template revision.
+// PublicAiCustomModelTemplateDecision 记录已应用或已拒绝的本地模板修订。
+export type PublicAiCustomModelTemplateDecision =
+  | { decision: "applied"; selection: PublicAiCustomModelTemplateSelection }
+  | { decision: "rejected"; template_key: string; template_revision: string };
+
+// PublicAiCommonModelTemplateSuggestion describes one offline capability-template recommendation.
+// PublicAiCommonModelTemplateSuggestion 描述一项离线能力模板建议。
+export interface PublicAiCommonModelTemplateSuggestion {
+  template_key: string;
+  template_revision: string;
+  match_kind: "exact" | "alias" | "provider_agnostic" | "similar";
+  confidence: number;
+  context_limit: number;
+  supports_text_input: boolean;
+  supports_text_output: boolean;
+  input_resources: PublicAiResourceKind[];
+  output_resources: PublicAiResourceKind[];
+}
+
+// PublicAiCustomModelTemplateSuggestionsRecord carries local suggestions for one exact model.
+// PublicAiCustomModelTemplateSuggestionsRecord 承载一个精确模型的本地模板建议。
+export interface PublicAiCustomModelTemplateSuggestionsRecord {
+  modelId: string;
+  suggestions: PublicAiCommonModelTemplateSuggestion[];
+}
+
+// PublicAiCustomModelTemplateDecisionBatchItem carries one reviewed batch decision.
+// PublicAiCustomModelTemplateDecisionBatchItem 承载一项已审查批量决策。
+export interface PublicAiCustomModelTemplateDecisionBatchItem {
+  modelId: string;
+  decision: PublicAiCustomModelTemplateDecision;
+}
+
+// PublicAiCatalogDiscoveryStatus carries one closed process-local discovery observation.
+// PublicAiCatalogDiscoveryStatus 承载一项封闭的进程内发现观测。
+export interface PublicAiCatalogDiscoveryStatus {
+  state:
+    | "not_checked"
+    | "ready"
+    | "empty"
+    | "unsupported"
+    | "authentication_failed"
+    | "rate_limited"
+    | "temporarily_unavailable"
+    | "invalid_response"
+    | "stale"
+    | "failed";
+  failure_kind?:
+    | "unsupported"
+    | "authentication_failed"
+    | "rate_limited"
+    | "temporarily_unavailable"
+    | "invalid_response"
+    | "failed";
+  message?: string;
+  model_count: number;
+  generation: number;
+  observed_at_ms: number;
+}
+
+// PublicAiCustomModelTemplateDecisionRecord identifies one decision without composite-key parsing.
+// PublicAiCustomModelTemplateDecisionRecord 无需解析组合键即可标识一项决策。
+export interface PublicAiCustomModelTemplateDecisionRecord {
+  providerId: string;
+  modelId: string;
+  decision: PublicAiCustomModelTemplateDecision;
+}
+
+// PublicAiCustomModelConnectionAvailabilityRecord identifies one explicit account-model choice.
+// PublicAiCustomModelConnectionAvailabilityRecord 标识一项显式账号模型选择。
+export interface PublicAiCustomModelConnectionAvailabilityRecord {
+  connectionId: string;
+  modelId: string;
+  enabled: boolean;
 }
 
 // PublicAiConnection carries redacted credential connection metadata.
@@ -174,6 +311,19 @@ export interface PublicAiConnection {
   verified_protocols: string[];
   selected_protocol: string;
   prompt_cache_by_protocol: Record<string, unknown>;
+  // Whether normal routing is blocked until one explicit model validation succeeds.
+  // 在一次显式模型验证成功前是否阻止常规路由。
+  pending_validation: boolean;
+}
+
+// PublicAiCustomModelValidationResult carries compact facts from an explicit paid model test.
+// PublicAiCustomModelValidationResult 承载一次显式付费模型测试的紧凑事实。
+export interface PublicAiCustomModelValidationResult {
+  providerId: string;
+  connectionId: string;
+  modelId: string;
+  responseText: string;
+  responseCharacters: number;
 }
 
 // PublicAiModel describes one runtime-discovered model.
@@ -182,6 +332,18 @@ export interface PublicAiModel {
   id: string;
   display_name: string;
   capabilities: PublicAiModelCapabilities;
+  capability_evidence?: PublicAiModelCapabilityEvidence;
+}
+
+// PublicAiModelCapabilityEvidence preserves exact field-presence facts from one credential directory.
+// PublicAiModelCapabilityEvidence 保留一个凭据目录返回的精确字段存在性事实。
+export interface PublicAiModelCapabilityEvidence {
+  context_limit_declared: boolean;
+  output_limit_declared: boolean;
+  input_modalities_declared: boolean;
+  output_modalities_declared: boolean;
+  supports_text_input?: boolean;
+  supports_text_output?: boolean;
 }
 
 // PublicAiModelCapabilities carries exact route controls used by workbench and internal inference.
@@ -283,6 +445,12 @@ export interface PublicAiConnectionCatalog {
   connection_id: string;
   models: PublicAiModel[];
   generation: number;
+  // Number of upstream pages consumed for this catalog snapshot.
+  // 此目录快照已读取的上游分页数量。
+  page_count: number;
+  // Revision of the parser contract that produced this catalog snapshot.
+  // 生成此目录快照的解析器契约修订号。
+  discovery_schema_revision: string;
 }
 
 // PublicAiActiveSelection identifies one exact model and account.
@@ -580,11 +748,16 @@ export interface PublicAiSettingsSnapshot {
   providerDefaults: Record<string, string>;
   active?: PublicAiActiveSelection;
   catalogs: Record<string, PublicAiConnectionCatalog>;
+  sourceCatalogs: Record<string, PublicAiConnectionCatalog>;
+  catalogStatuses: Record<string, PublicAiCatalogDiscoveryStatus>;
   catalogErrors: Record<string, string>;
   modelOverrides: Record<string, PublicAiModelOverrides>;
   modelOverrideRecords: PublicAiModelOverrideRecord[];
   modelAccessRecords: PublicAiModelAccessRecord[];
   customModels?: Record<string, Record<string, PublicAiCustomModelDefinition>>;
+  customProviderModelDefaults?: Record<string, PublicAiCustomProviderModelDefaults>;
+  customModelTemplateDecisionRecords?: PublicAiCustomModelTemplateDecisionRecord[];
+  customModelConnectionAvailabilityRecords?: PublicAiCustomModelConnectionAvailabilityRecord[];
   modelCapabilityOverrides?: Record<string, PublicAiModelCapabilityOverrides>;
   modelCapabilityOverrideRecords?: PublicAiModelCapabilityOverrideRecord[];
   providerToolTargets: PublicAiProviderToolTargetSnapshot[];

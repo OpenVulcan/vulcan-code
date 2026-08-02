@@ -4,7 +4,257 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use vulcan_ai_contract::{ModelCapabilities, ModelParameterDefault, ReasoningEffort};
+use vulcan_ai_contract::{ModelCapabilities, ModelParameterDefault, ReasoningEffort, ResourceKind};
+
+use crate::{
+    ModelCapabilityEvidence, PROVIDER_MODEL_DISPLAY_NAME_MAX_BYTES,
+    PROVIDER_MODEL_IDENTIFIER_MAX_BYTES,
+};
+
+/// Default context window used by user-defined compatible providers.
+/// 用户自定义兼容供应商使用的默认上下文窗口。
+pub const CUSTOM_PROVIDER_DEFAULT_CONTEXT_LIMIT: u64 = 200_000;
+
+/// Default output ceiling used with the two-hundred-thousand-token context window.
+/// 与二十万 Token 上下文窗口配套使用的默认输出上限。
+pub const CUSTOM_PROVIDER_DEFAULT_OUTPUT_LIMIT: u64 = 32_768;
+
+/// Identifies the immutable common-capability snapshot understood by this binary.
+/// 标识当前二进制理解的不可变公共能力快照。
+pub const CUSTOM_MODEL_TEMPLATE_REVISION: &str = "common-model-capabilities.v1";
+
+/// Stores provider-wide capability defaults used only when a stronger source is absent.
+/// 保存仅在更强能力来源缺失时使用的供应商级默认能力。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CustomProviderModelDefaults {
+    /// Default context window in tokens.
+    /// 默认上下文 Token 窗口。
+    #[serde(default = "default_custom_provider_context_limit")]
+    pub context_limit: u64,
+    /// Default output-token ceiling.
+    /// 默认输出 Token 上限。
+    #[serde(default = "default_custom_provider_output_limit")]
+    pub output_limit: u64,
+    /// Default accepted non-text input resources.
+    /// 默认接受的非文本输入资源。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_resources: Vec<ResourceKind>,
+    /// Default emitted non-text output resources.
+    /// 默认输出的非文本资源。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_resources: Vec<ResourceKind>,
+}
+
+impl Default for CustomProviderModelDefaults {
+    /// Builds the safe text-first 200K/32K provider defaults.
+    /// 构建安全的纯文本优先 200K/32K 供应商默认值。
+    fn default() -> Self {
+        Self {
+            context_limit: CUSTOM_PROVIDER_DEFAULT_CONTEXT_LIMIT,
+            output_limit: CUSTOM_PROVIDER_DEFAULT_OUTPUT_LIMIT,
+            input_resources: Vec::new(),
+            output_resources: Vec::new(),
+        }
+    }
+}
+
+impl CustomProviderModelDefaults {
+    /// Validates that provider defaults form a usable token budget.
+    /// 校验供应商默认值能够形成可用的 Token 预算。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success or one actionable validation message.
+    /// 返回成功或一条可操作的校验消息。
+    pub fn validate(&self) -> Result<(), String> {
+        if self.context_limit == 0 {
+            return Err(String::from(
+                "Custom provider default context limit must be greater than zero.",
+            ));
+        }
+        if self.output_limit == 0 {
+            return Err(String::from(
+                "Custom provider default output limit must be greater than zero.",
+            ));
+        }
+        if self.output_limit > self.context_limit {
+            return Err(String::from(
+                "Custom provider default output limit must not exceed its context limit.",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Fills only model fields that were not declared by a stronger source.
+    /// 仅填充尚未由更强来源声明的模型字段。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `capabilities` is the credential-scoped capability snapshot being resolved.
+    /// `capabilities` 是正在解析的凭据作用域能力快照。
+    pub fn apply_missing(
+        &self,
+        capabilities: &mut ModelCapabilities,
+        evidence: &ModelCapabilityEvidence,
+    ) {
+        if capabilities.context_limit.is_none() {
+            capabilities.context_limit = Some(self.context_limit);
+        }
+        if capabilities.output_limit.is_none() {
+            // effective_context_limit prevents a smaller accepted template window from inheriting an unsafe provider output ceiling.
+            // effective_context_limit 防止较小的已接受模板窗口继承不安全的供应商输出上限。
+            let effective_context_limit = capabilities.context_limit.unwrap_or(self.context_limit);
+            capabilities.output_limit = Some(self.output_limit.min(effective_context_limit));
+        }
+        if !evidence.input_modalities_declared && capabilities.input_resources.is_empty() {
+            capabilities.input_resources = self.input_resources.clone();
+        }
+        if !evidence.output_modalities_declared && capabilities.output_resources.is_empty() {
+            capabilities.output_resources = self.output_resources.clone();
+        }
+    }
+}
+
+/// Stores the confirmed common template snapshot applied to one custom-provider model.
+/// 保存应用到某个自定义供应商模型的已确认公共模板快照。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CustomModelTemplateSelection {
+    /// Canonical immutable template key.
+    /// 不可变模板规范键。
+    pub template_key: String,
+    /// Template resource revision accepted by the user.
+    /// 用户接受的模板资源修订号。
+    pub template_revision: String,
+    /// Confirmed context window.
+    /// 已确认上下文窗口。
+    pub context_limit: u64,
+    /// Whether the reviewed template supports text input.
+    /// 已审查模板是否支持文本输入。
+    #[serde(default = "default_enabled")]
+    pub supports_text_input: bool,
+    /// Whether the reviewed template supports text output.
+    /// 已审查模板是否支持文本输出。
+    #[serde(default = "default_enabled")]
+    pub supports_text_output: bool,
+    /// Confirmed non-text input resources.
+    /// 已确认非文本输入资源。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_resources: Vec<ResourceKind>,
+    /// Confirmed non-text output resources.
+    /// 已确认非文本输出资源。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_resources: Vec<ResourceKind>,
+}
+
+impl CustomModelTemplateSelection {
+    /// Validates one stable user-confirmed template snapshot.
+    /// 校验一份稳定的用户确认模板快照。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success or one actionable validation message.
+    /// 返回成功或一条可操作的校验消息。
+    pub fn validate(&self) -> Result<(), String> {
+        if self.template_key.trim().is_empty() || self.template_revision.trim().is_empty() {
+            return Err(String::from(
+                "Custom model template key and revision are required.",
+            ));
+        }
+        if self.context_limit == 0 {
+            return Err(String::from(
+                "Custom model template context limit must be greater than zero.",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Fills fields absent from credential evidence before provider defaults are applied.
+    /// 在应用供应商默认值前填充凭据证据未声明的字段。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `capabilities` is the credential-scoped capability snapshot being resolved.
+    /// `capabilities` 是正在解析的凭据作用域能力快照。
+    pub fn apply_missing(
+        &self,
+        capabilities: &mut ModelCapabilities,
+        evidence: &ModelCapabilityEvidence,
+    ) {
+        if capabilities.context_limit.is_none() {
+            capabilities.context_limit = Some(self.context_limit);
+        }
+        if !evidence.input_modalities_declared && capabilities.input_resources.is_empty() {
+            capabilities.input_resources = self.input_resources.clone();
+        }
+        if !evidence.output_modalities_declared && capabilities.output_resources.is_empty() {
+            capabilities.output_resources = self.output_resources.clone();
+        }
+    }
+}
+
+/// Records whether the user accepted or dismissed one capability-template recommendation.
+/// 记录用户是否接受或拒绝某项能力模板建议。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "decision", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CustomModelTemplateDecision {
+    /// Applies one immutable reviewed snapshot.
+    /// 应用一份不可变且已审查的快照。
+    Applied {
+        /// Accepted template snapshot.
+        /// 已接受模板快照。
+        selection: CustomModelTemplateSelection,
+    },
+    /// Suppresses the same reviewed template revision without hiding later catalog changes.
+    /// 抑制同一已审查模板修订，同时不隐藏后续目录变化。
+    Rejected {
+        /// Rejected canonical template key.
+        /// 已拒绝的规范模板键。
+        template_key: String,
+        /// Rejected template resource revision.
+        /// 已拒绝的模板资源修订号。
+        template_revision: String,
+    },
+}
+
+impl CustomModelTemplateDecision {
+    /// Validates one persisted template decision without consulting mutable runtime state.
+    /// 校验一项持久化模板决策，且不依赖可变运行时状态。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success or one actionable validation message.
+    /// 返回成功或一条可操作的校验消息。
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Applied { selection } => selection.validate(),
+            Self::Rejected {
+                template_key,
+                template_revision,
+            } => {
+                if template_key.trim().is_empty() || template_revision.trim().is_empty() {
+                    return Err(String::from(
+                        "Rejected custom model template key and revision are required.",
+                    ));
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Returns the serialized default context limit.
+/// 返回用于序列化的默认上下文限制。
+fn default_custom_provider_context_limit() -> u64 {
+    CUSTOM_PROVIDER_DEFAULT_CONTEXT_LIMIT
+}
+
+/// Returns the serialized default output limit.
+/// 返回用于序列化的默认输出上限。
+fn default_custom_provider_output_limit() -> u64 {
+    CUSTOM_PROVIDER_DEFAULT_OUTPUT_LIMIT
+}
 
 /// Lists request-root fields reserved for protocol and host ownership.
 /// 列出由协议与宿主持有的请求根字段。
@@ -95,11 +345,21 @@ impl CustomModelDefinition {
     /// Success or one actionable pre-save validation message.
     /// 返回成功或一条可操作的保存前校验消息。
     pub fn validate(&self) -> Result<(), String> {
-        if self.id.trim().is_empty() {
-            return Err(String::from("Custom model identifier is required."));
+        if self.id.trim().is_empty()
+            || self.id.len() > PROVIDER_MODEL_IDENTIFIER_MAX_BYTES
+            || self.id.chars().any(char::is_control)
+        {
+            return Err(format!(
+                "Custom model identifier must be non-empty, contain no control characters, and fit within {PROVIDER_MODEL_IDENTIFIER_MAX_BYTES} UTF-8 bytes."
+            ));
         }
-        if self.display_name.trim().is_empty() {
-            return Err(String::from("Custom model display name is required."));
+        if self.display_name.trim().is_empty()
+            || self.display_name.len() > PROVIDER_MODEL_DISPLAY_NAME_MAX_BYTES
+            || self.display_name.chars().any(char::is_control)
+        {
+            return Err(format!(
+                "Custom model display name must be non-empty, contain no control characters, and fit within {PROVIDER_MODEL_DISPLAY_NAME_MAX_BYTES} UTF-8 bytes."
+            ));
         }
         if self.capabilities.context_limit == Some(0) {
             return Err(String::from(
@@ -109,6 +369,15 @@ impl CustomModelDefinition {
         if self.capabilities.output_limit == Some(0) {
             return Err(String::from(
                 "Custom model output limit must be greater than zero.",
+            ));
+        }
+        if let (Some(context_limit), Some(output_limit)) = (
+            self.capabilities.context_limit,
+            self.capabilities.output_limit,
+        ) && output_limit > context_limit
+        {
+            return Err(String::from(
+                "Custom model output limit must not exceed its context limit.",
             ));
         }
         self.validate_model_parameter_definitions()?;
@@ -379,6 +648,68 @@ fn validate_request_path(path: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies provider defaults clamp output to a stronger effective context window.
+    /// 验证供应商默认输出会收窄到更强来源给出的有效上下文窗口。
+    #[test]
+    fn provider_defaults_clamp_output_to_effective_context() {
+        let defaults = CustomProviderModelDefaults::default();
+        let mut capabilities = ModelCapabilities {
+            context_limit: Some(8_192),
+            ..ModelCapabilities::default()
+        };
+
+        defaults.apply_missing(&mut capabilities, &ModelCapabilityEvidence::default());
+
+        assert_eq!(capabilities.context_limit, Some(8_192));
+        assert_eq!(capabilities.output_limit, Some(8_192));
+    }
+
+    /// Verifies a manual model cannot declare an output budget larger than its context.
+    /// 验证手工模型不能声明大于其上下文窗口的输出预算。
+    #[test]
+    fn custom_model_rejects_output_larger_than_context() {
+        let model = CustomModelDefinition {
+            id: String::from("custom-model"),
+            display_name: String::from("Custom Model"),
+            enabled: true,
+            capabilities: ModelCapabilities {
+                context_limit: Some(8_192),
+                output_limit: Some(9_000),
+                ..ModelCapabilities::default()
+            },
+            request_projection: CustomModelRequestProjection::default(),
+        };
+
+        let error = model
+            .validate()
+            .expect_err("output larger than context must be rejected");
+
+        assert!(error.contains("must not exceed"));
+    }
+
+    /// Verifies manual model identity fields share the bounded runtime catalog contract.
+    /// 验证手工模型身份字段与运行时目录共享同一有界契约。
+    #[test]
+    fn custom_model_rejects_unbounded_or_controlled_identity_text() {
+        let oversized = CustomModelDefinition {
+            id: "x".repeat(PROVIDER_MODEL_IDENTIFIER_MAX_BYTES + 1),
+            display_name: String::from("Custom Model"),
+            enabled: true,
+            capabilities: ModelCapabilities::default(),
+            request_projection: CustomModelRequestProjection::default(),
+        };
+        assert!(oversized.validate().is_err());
+
+        let controlled = CustomModelDefinition {
+            id: String::from("custom-model"),
+            display_name: String::from("Custom\nModel"),
+            enabled: true,
+            capabilities: ModelCapabilities::default(),
+            request_projection: CustomModelRequestProjection::default(),
+        };
+        assert!(controlled.validate().is_err());
+    }
 
     /// Verifies host-owned request roots cannot be changed by custom providers.
     /// 验证自定义供应商不能修改宿主持有的请求根字段。

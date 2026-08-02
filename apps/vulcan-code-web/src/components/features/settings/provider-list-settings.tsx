@@ -585,6 +585,11 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
                   {tag}
                 </Badge>
               ))}
+              {props.connection.pending_validation ? (
+                <Badge className="h-4 px-1.5 text-[10px]" variant="destructive">
+                  {t("settings.customModels.pendingValidation")}
+                </Badge>
+              ) : null}
             </CardDescription>
           </div>
           {usageSupported ? (
@@ -615,7 +620,7 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
       <CardFooter className="mt-auto shrink-0 flex-wrap justify-end gap-2 px-3 py-1.5">
         {props.entry?.kind !== "provider_tools" ? (
           <CredentialIconAction
-            disabled={props.busy}
+            disabled={props.busy || props.connection.pending_validation}
             label="同步支持模型"
             onClick={props.onSync}
           >
@@ -624,8 +629,10 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
         ) : null}
         {!props.isDefault ? (
           <CredentialIconAction
-            disabled={props.busy}
-            label="设为默认账号"
+            disabled={props.busy || props.connection.pending_validation}
+            label={props.connection.pending_validation
+              ? t("settings.customModels.pendingCannotDefault")
+              : "设为默认账号"}
             onClick={props.onSetDefault}
           >
             <Star className="size-4" />
@@ -671,16 +678,18 @@ function CredentialIconAction(props: CredentialIconActionProps) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button
-          aria-label={props.label}
-          disabled={props.disabled}
-          onClick={props.onClick}
-          size="icon-sm"
-          type="button"
-          variant="outline"
-        >
-          {props.children}
-        </Button>
+        <span className="inline-flex">
+          <Button
+            aria-label={props.label}
+            disabled={props.disabled}
+            onClick={props.onClick}
+            size="icon-sm"
+            type="button"
+            variant="outline"
+          >
+            {props.children}
+          </Button>
+        </span>
       </TooltipTrigger>
       <TooltipContent side="top">{props.label}</TooltipContent>
     </Tooltip>

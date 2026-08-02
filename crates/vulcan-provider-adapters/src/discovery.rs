@@ -2,7 +2,7 @@
 //! 严格的凭据作用域模型发现。
 
 use crate::{
-    ConnectionModel, ConnectionModelCatalog,
+    ConnectionModel, ConnectionModelCatalog, ModelCapabilityEvidence,
     reasoning_catalog::{FixedReasoningProvider, fixed_reasoning_capabilities},
 };
 use serde::Deserialize;
@@ -53,6 +53,7 @@ pub fn parse_minimax_model_catalog(
         connection_id,
         generation,
         page.models,
+        1,
     ))
 }
 
@@ -81,6 +82,7 @@ pub(crate) fn parse_minimax_model_page(body: &str) -> Result<MiniMaxModelPage, S
                 id: model.id,
                 display_name: model.display_name,
                 capabilities,
+                capability_evidence: ModelCapabilityEvidence::default(),
             }
         })
         .collect();
@@ -119,13 +121,50 @@ pub fn parse_minimax_openai_model_catalog(
             display_name: model.id.clone(),
             capabilities: minimax_text_capabilities(model.id.as_str(), OPENAI_CHAT_PROFILE_ID),
             id: model.id,
+            capability_evidence: ModelCapabilityEvidence::default(),
         })
-        .collect();
+        .collect::<Vec<_>>();
+    validate_model_catalog_identities(models.as_slice(), "MiniMax OpenAI model list")?;
     Ok(ConnectionModelCatalog {
         connection_id: connection_id.to_string(),
         models,
         generation,
+        page_count: 1,
+        discovery_schema_revision: String::from("minimax.openai.models.v1"),
     })
+}
+
+/// Validates non-empty, unique model identifiers for one atomic catalog response.
+/// 校验一份原子目录响应中的模型标识均非空且唯一。
+///
+/// # Parameters
+/// 参数
+/// `models` is the parsed page or catalog and `operation` scopes the controlled diagnostic.
+/// `models` 是已解析分页或目录，`operation` 限定受控诊断。
+///
+/// # Returns
+/// 返回值
+/// Success for a stable identity set, otherwise one exact catalog-contract error.
+/// 标识集合稳定时返回成功，否则返回一项精确目录契约错误。
+fn validate_model_catalog_identities(
+    models: &[ConnectionModel],
+    operation: &str,
+) -> Result<(), String> {
+    // seen tracks exact upstream identities without normalizing provider-owned values.
+    // seen 跟踪精确上游标识，不对供应商拥有的值做归一化。
+    let mut seen = BTreeSet::new();
+    for model in models {
+        if model.id.trim().is_empty() {
+            return Err(format!("{operation} returned an empty model identifier."));
+        }
+        if !seen.insert(model.id.as_str()) {
+            return Err(format!(
+                "{operation} returned duplicate model `{}`.",
+                model.id
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Builds one complete connection-scoped MiniMax catalog from all fetched pages.
@@ -134,8 +173,10 @@ pub fn parse_minimax_openai_model_catalog(
 /// # Parameters
 /// 参数
 /// `connection_id` is the exact credential connection, `generation` is the refresh
-/// generation, and `models` contains every page in provider order.
-/// `connection_id` 是精确凭据连接，`generation` 是刷新代次，`models` 包含按供应商顺序排列的全部分页。
+/// generation, `models` contains every page in provider order, and `page_count` records
+/// how many upstream pages were consumed.
+/// `connection_id` 是精确凭据连接，`generation` 是刷新代次，`models` 包含按供应商顺序排列的全部分页，
+/// `page_count` 记录实际读取的上游分页数。
 ///
 /// # Returns
 /// 返回值
@@ -145,11 +186,14 @@ pub(crate) fn build_minimax_model_catalog(
     connection_id: &str,
     generation: u64,
     models: Vec<ConnectionModel>,
+    page_count: u32,
 ) -> ConnectionModelCatalog {
     ConnectionModelCatalog {
         connection_id: connection_id.to_string(),
         models,
         generation,
+        page_count,
+        discovery_schema_revision: String::from("minimax.anthropic.models.v1"),
     }
 }
 
@@ -186,13 +230,17 @@ pub fn parse_openrouter_model_catalog(
                 display_name,
                 id: model.id,
                 capabilities,
+                capability_evidence: ModelCapabilityEvidence::default(),
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
+    validate_model_catalog_identities(models.as_slice(), "OpenRouter model list")?;
     Ok(ConnectionModelCatalog {
         connection_id: connection_id.to_string(),
         models,
         generation,
+        page_count: 1,
+        discovery_schema_revision: String::from("openrouter.models.v1"),
     })
 }
 
@@ -271,6 +319,8 @@ pub fn parse_openrouter_complete_model_catalog(
         connection_id: connection_id.to_string(),
         models: models.into_values().collect(),
         generation,
+        page_count: 1,
+        discovery_schema_revision: String::from("openrouter.complete-models.v1"),
     })
 }
 
@@ -298,6 +348,7 @@ fn merge_openrouter_specialized_model(
             id: source.id.clone(),
             display_name: openrouter_model_display_name(source.name.as_deref(), source.id.as_str()),
             capabilities: ModelCapabilities::default(),
+            capability_evidence: ModelCapabilityEvidence::default(),
         });
     for operation in specialized.operations {
         if !model.capabilities.operations.contains(&operation) {
@@ -460,6 +511,7 @@ pub fn build_alibaba_coding_plan_catalog(
                     evidence_revision: evidence_revision.to_string(),
                     ..ModelCapabilities::default()
                 },
+                capability_evidence: ModelCapabilityEvidence::default(),
             };
             enrich_alibaba_model(service_entry_id, &mut model);
             model
@@ -469,6 +521,8 @@ pub fn build_alibaba_coding_plan_catalog(
         connection_id: connection_id.to_string(),
         models,
         generation,
+        page_count: 1,
+        discovery_schema_revision: String::from("alibaba.static-models.v1"),
     })
 }
 
@@ -908,6 +962,7 @@ pub fn build_alibaba_model_studio_catalog(
             id: id.to_string(),
             display_name: display_name.to_string(),
             capabilities: ModelCapabilities::default(),
+            capability_evidence: ModelCapabilityEvidence::default(),
         };
         enrich_alibaba_model(service_entry_id, &mut model);
         catalog.models.push(model);
@@ -917,6 +972,7 @@ pub fn build_alibaba_model_studio_catalog(
             id: String::from("qwen3.7-text-embedding"),
             display_name: String::from("Qwen3.7 Text Embedding"),
             capabilities: ModelCapabilities::default(),
+            capability_evidence: ModelCapabilityEvidence::default(),
         };
         enrich_alibaba_model(service_entry_id, &mut model);
         catalog.models.push(model);
@@ -1046,6 +1102,7 @@ fn build_alibaba_static_conversation_catalog(
                     },
                     ..ModelCapabilities::default()
                 },
+                capability_evidence: ModelCapabilityEvidence::default(),
             };
             if responses_harness {
                 model.capabilities.tool_calling = CapabilitySupport::Unsupported;
@@ -1062,6 +1119,8 @@ fn build_alibaba_static_conversation_catalog(
         connection_id: connection_id.to_string(),
         models,
         generation,
+        page_count: 1,
+        discovery_schema_revision: String::from("alibaba.models.v1"),
     })
 }
 
@@ -1120,23 +1179,68 @@ pub fn parse_openai_model_catalog(
         .data
         .into_iter()
         .map(|model| {
-            let mut capabilities = ModelCapabilities {
+            let input_resources = model
+                .input_modalities
+                .as_deref()
+                .map(compatible_resource_kinds)
+                .unwrap_or_default();
+            let output_resources = model
+                .output_modalities
+                .as_deref()
+                .map(compatible_resource_kinds)
+                .unwrap_or_default();
+            let supports_text_input = model
+                .input_modalities
+                .as_ref()
+                .is_none_or(|modalities| compatible_supports_text(modalities));
+            let supports_text_output = model
+                .output_modalities
+                .as_ref()
+                .is_none_or(|modalities| compatible_supports_text(modalities));
+            let capability_evidence = ModelCapabilityEvidence {
+                context_limit_declared: model.context_window.is_some(),
+                output_limit_declared: model.max_output_tokens.is_some(),
+                input_modalities_declared: model.input_modalities.is_some(),
+                output_modalities_declared: model.output_modalities.is_some(),
+                supports_text_input: model
+                    .input_modalities
+                    .as_ref()
+                    .map(|modalities| compatible_supports_text(modalities)),
+                supports_text_output: model
+                    .output_modalities
+                    .as_ref()
+                    .map(|modalities| compatible_supports_text(modalities)),
+            };
+            let capabilities = ModelCapabilities {
                 operations: vec![AiOperation::ConversationRespond],
+                context_limit: model.context_window,
+                output_limit: model.max_output_tokens,
+                input_resources,
+                output_resources,
                 evidence_revision: String::from("openai-compatible.models.v1"),
                 ..ModelCapabilities::default()
             };
-            crate::apply_common_model_capability_defaults(model.id.as_str(), &mut capabilities);
+            let mut capabilities = capabilities;
+            if !supports_text_input || !supports_text_output {
+                capabilities
+                    .operations
+                    .retain(|operation| *operation != AiOperation::ConversationRespond);
+            }
             ConnectionModel {
-                display_name: model.id.clone(),
+                display_name: model.display_name.unwrap_or_else(|| model.id.clone()),
                 id: model.id,
                 capabilities,
+                capability_evidence,
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
+    validate_model_catalog_identities(models.as_slice(), "OpenAI model list")?;
     Ok(ConnectionModelCatalog {
         connection_id: connection_id.to_string(),
         models,
         generation,
+        page_count: 1,
+        discovery_schema_revision: String::from("openai-compatible.models.v1"),
     })
 }
 
@@ -1156,7 +1260,12 @@ pub fn enrich_compatible_model_catalog(
     catalog: &mut ConnectionModelCatalog,
 ) {
     for model in &mut catalog.models {
-        crate::apply_common_model_capability_defaults(model.id.as_str(), &mut model.capabilities);
+        if !provider_id.starts_with("custom:") {
+            crate::apply_common_model_capability_defaults(
+                model.id.as_str(),
+                &mut model.capabilities,
+            );
+        }
         match provider_id {
             "openai" => enrich_openai_model(model),
             "kimi" => enrich_kimi_model(service_entry_id, protocol_id, model),
@@ -1591,12 +1700,15 @@ pub fn parse_openai_codex_model_catalog(
                 evidence_revision: String::from("openai.codex.models.v1"),
                 ..ModelCapabilities::default()
             },
+            capability_evidence: ModelCapabilityEvidence::default(),
         })
         .collect();
     Ok(ConnectionModelCatalog {
         connection_id: connection_id.to_string(),
         models,
         generation,
+        page_count: 1,
+        discovery_schema_revision: String::from("openai.codex.models.v1"),
     })
 }
 
@@ -1612,30 +1724,53 @@ pub fn parse_openai_codex_model_catalog(
 /// 返回值
 /// Parsed models plus authoritative pagination fields.
 /// 返回解析后的模型及权威分页字段。
-pub(crate) fn parse_anthropic_model_page(body: &str) -> Result<AnthropicModelPage, String> {
+pub(crate) fn parse_anthropic_model_page(
+    body: &str,
+    official_anthropic: bool,
+) -> Result<AnthropicModelPage, String> {
     let response: AnthropicModelList = serde_json::from_str(body)
         .map_err(|error| format!("Anthropic model list is invalid: {error}"))?;
     let models = response
         .data
         .into_iter()
         .map(|model| {
-            let reasoning =
-                fixed_reasoning_capabilities(FixedReasoningProvider::Anthropic, model.id.as_str());
+            let (reasoning_support, reasoning_efforts, evidence_revision) = if official_anthropic {
+                let reasoning = fixed_reasoning_capabilities(
+                    FixedReasoningProvider::Anthropic,
+                    model.id.as_str(),
+                );
+                (
+                    reasoning.support,
+                    reasoning.efforts,
+                    if reasoning.support == CapabilitySupport::Unknown {
+                        String::from("anthropic.models.v1")
+                    } else {
+                        reasoning.evidence_revision.to_string()
+                    },
+                )
+            } else {
+                (
+                    CapabilitySupport::Unknown,
+                    Vec::new(),
+                    String::from("anthropic-compatible.models.v1"),
+                )
+            };
             ConnectionModel {
                 id: model.id,
                 display_name: model.display_name,
                 capabilities: ModelCapabilities {
                     operations: vec![AiOperation::ConversationRespond],
-                    reasoning: reasoning.support,
-                    reasoning_efforts: reasoning.efforts,
-                    prompt_cache: anthropic_prompt_cache(),
-                    evidence_revision: if reasoning.support == CapabilitySupport::Unknown {
-                        String::from("anthropic.models.v1")
+                    reasoning: reasoning_support,
+                    reasoning_efforts,
+                    prompt_cache: if official_anthropic {
+                        anthropic_prompt_cache()
                     } else {
-                        reasoning.evidence_revision.to_string()
+                        Default::default()
                     },
+                    evidence_revision,
                     ..ModelCapabilities::default()
                 },
+                capability_evidence: ModelCapabilityEvidence::default(),
             }
         })
         .collect();
@@ -1651,8 +1786,10 @@ pub(crate) fn parse_anthropic_model_page(body: &str) -> Result<AnthropicModelPag
 ///
 /// # Parameters
 /// 参数
-/// `connection_id`, `generation`, and `models` identify the complete in-memory snapshot.
-/// `connection_id`、`generation` 与 `models` 标识完整内存快照。
+/// `connection_id`, `generation`, and `models` identify the complete in-memory snapshot;
+/// `page_count` and `discovery_schema_revision` preserve discovery evidence.
+/// `connection_id`、`generation` 与 `models` 标识完整内存快照；
+/// `page_count` 与 `discovery_schema_revision` 保留发现证据。
 ///
 /// # Returns
 /// 返回值
@@ -1662,11 +1799,15 @@ pub(crate) fn build_anthropic_model_catalog(
     connection_id: &str,
     generation: u64,
     models: Vec<ConnectionModel>,
+    page_count: u32,
+    discovery_schema_revision: &str,
 ) -> ConnectionModelCatalog {
     ConnectionModelCatalog {
         connection_id: connection_id.to_string(),
         models,
         generation,
+        page_count,
+        discovery_schema_revision: discovery_schema_revision.to_string(),
     }
 }
 
@@ -1721,6 +1862,7 @@ pub(crate) fn parse_gemini_model_page(body: &str) -> Result<GeminiModelPage, Str
                     },
                     ..ModelCapabilities::default()
                 },
+                capability_evidence: ModelCapabilityEvidence::default(),
             }
         })
         .collect();
@@ -1735,8 +1877,10 @@ pub(crate) fn parse_gemini_model_page(body: &str) -> Result<GeminiModelPage, Str
 ///
 /// # Parameters
 /// 参数
-/// `connection_id`, `generation`, and `models` identify the complete in-memory snapshot.
-/// `connection_id`、`generation` 与 `models` 标识完整内存快照。
+/// `connection_id`, `generation`, and `models` identify the complete in-memory snapshot;
+/// `page_count` records how many upstream pages were consumed.
+/// `connection_id`、`generation` 与 `models` 标识完整内存快照；
+/// `page_count` 记录实际读取的上游分页数。
 ///
 /// # Returns
 /// 返回值
@@ -1746,11 +1890,14 @@ pub(crate) fn build_gemini_model_catalog(
     connection_id: &str,
     generation: u64,
     models: Vec<ConnectionModel>,
+    page_count: u32,
 ) -> ConnectionModelCatalog {
     ConnectionModelCatalog {
         connection_id: connection_id.to_string(),
         models,
         generation,
+        page_count,
+        discovery_schema_revision: String::from("google.gemini.models.v1beta"),
     }
 }
 
@@ -1797,6 +1944,7 @@ pub fn parse_google_code_assist_model_catalog(
                     },
                     ..ModelCapabilities::default()
                 },
+                capability_evidence: ModelCapabilityEvidence::default(),
             }
         })
         .collect();
@@ -1804,6 +1952,10 @@ pub fn parse_google_code_assist_model_catalog(
         connection_id: connection_id.to_string(),
         models,
         generation,
+        page_count: 1,
+        discovery_schema_revision: String::from(
+            "google-code-assist.fetch-available-models.v1internal",
+        ),
     })
 }
 
@@ -2332,7 +2484,6 @@ struct OpenRouterModelList {
 /// Documented OpenAI model-list response.
 /// 文档化 OpenAI 模型列表响应。
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct OpenAiModelList {
     /// Returned model records.
     /// 返回的模型记录。
@@ -2340,7 +2491,12 @@ struct OpenAiModelList {
     /// Documented object discriminator.
     /// 文档化对象判别值。
     #[serde(rename = "object")]
-    _object: String,
+    #[serde(default)]
+    _object: Option<String>,
+    /// Remaining compatible-provider pagination metadata is intentionally ignored.
+    /// 其余兼容供应商分页元数据会被有意忽略。
+    #[serde(flatten)]
+    _remaining: BTreeMap<String, serde_json::Value>,
 }
 
 /// Documented OpenAI model record fields used by Vulcan.
@@ -2350,6 +2506,55 @@ struct OpenAiModelEntry {
     /// Exact model identifier.
     /// 精确模型标识。
     id: String,
+    /// Optional provider display name.
+    /// 可选供应商显示名称。
+    #[serde(default, alias = "name")]
+    display_name: Option<String>,
+    /// Optional provider-declared context window.
+    /// 可选供应商声明的上下文窗口。
+    #[serde(default)]
+    context_window: Option<u64>,
+    /// Optional provider-declared output-token ceiling.
+    /// 可选供应商声明的输出 Token 上限。
+    #[serde(default)]
+    max_output_tokens: Option<u64>,
+    /// Optional provider-declared input modalities.
+    /// 可选供应商声明的输入模态。
+    #[serde(default)]
+    input_modalities: Option<Vec<String>>,
+    /// Optional provider-declared output modalities.
+    /// 可选供应商声明的输出模态。
+    #[serde(default)]
+    output_modalities: Option<Vec<String>>,
+    /// Remaining compatible-provider fields are not interpreted as capabilities.
+    /// 其余兼容供应商字段不解释为能力。
+    #[serde(flatten)]
+    _remaining: BTreeMap<String, serde_json::Value>,
+}
+
+/// Projects compatible-provider modality strings into the closed resource vocabulary.
+/// 将兼容供应商模态字符串投影到封闭资源词表。
+fn compatible_resource_kinds(modalities: &[String]) -> Vec<ResourceKind> {
+    modalities
+        .iter()
+        .filter_map(
+            |modality| match modality.trim().to_ascii_lowercase().as_str() {
+                "image" => Some(ResourceKind::Image),
+                "audio" => Some(ResourceKind::Audio),
+                "video" => Some(ResourceKind::Video),
+                "file" => Some(ResourceKind::File),
+                _ => None,
+            },
+        )
+        .collect()
+}
+
+/// Reports whether one compatible-provider modality list explicitly includes text.
+/// 报告兼容供应商模态列表是否明确包含文本。
+fn compatible_supports_text(modalities: &[String]) -> bool {
+    modalities
+        .iter()
+        .any(|modality| modality.trim().eq_ignore_ascii_case("text"))
 }
 
 /// Exact Codex subscription model-list container.
@@ -3010,9 +3215,14 @@ mod tests {
         let catalog = parse_openai_model_catalog(
             "connection",
             1,
-            r#"{"object":"list","data":[{"id":"gpt-test","object":"model","created":1,"owned_by":"openai"}]}"#,
+            r#"{"object":"list","first_id":"gpt-test","has_more":false,"data":[{"id":"gpt-test","object":"model","created":1,"owned_by":"openai"}]}"#,
         )
         .expect("documented response should parse");
+        assert_eq!(catalog.page_count, 1);
+        assert_eq!(
+            catalog.discovery_schema_revision,
+            "openai-compatible.models.v1"
+        );
         assert_eq!(catalog.models[0].id, "gpt-test");
         assert_eq!(
             catalog.models[0].capabilities.operations,
@@ -3026,24 +3236,67 @@ mod tests {
             catalog.models[0].capabilities.evidence_revision,
             "openai-compatible.models.v1"
         );
+        assert_eq!(
+            catalog.models[0].capability_evidence,
+            ModelCapabilityEvidence::default()
+        );
     }
 
-    /// Verifies an exact public embedding identity never enters compatible conversation catalogs.
-    /// 验证精确的公共向量模型身份不会进入兼容协议会话目录。
+    /// Verifies a compatible catalog rejects empty and duplicate upstream model identities.
+    /// 验证兼容目录会拒绝空白及重复的上游模型标识。
     #[test]
-    fn openai_compatible_embedding_identity_is_not_a_conversation_model() {
+    fn openai_compatible_discovery_requires_stable_model_identities() {
+        // empty_error proves whitespace-only provider identifiers never enter runtime catalogs.
+        // empty_error 证明仅含空白的供应商标识绝不会进入运行时目录。
+        let empty_error = parse_openai_model_catalog("connection", 1, r#"{"data":[{"id":"   "}]}"#)
+            .expect_err("an empty model identity must fail");
+        assert!(empty_error.contains("empty model identifier"));
+
+        // duplicate_error proves one atomic response cannot rely on later UI de-duplication.
+        // duplicate_error 证明一份原子响应不能依赖后续 UI 去重。
+        let duplicate_error = parse_openai_model_catalog(
+            "connection",
+            1,
+            r#"{"data":[{"id":"model-a"},{"id":"model-a"}]}"#,
+        )
+        .expect_err("duplicate model identities must fail");
+        assert!(duplicate_error.contains("duplicate model `model-a`"));
+    }
+
+    /// Verifies explicit non-text output prevents a compatible model from entering conversation catalogs.
+    /// 验证显式非文本输出会阻止兼容模型进入会话目录。
+    #[test]
+    fn openai_compatible_explicit_non_text_output_is_not_a_conversation_model() {
         let catalog = parse_openai_model_catalog(
             "connection",
             1,
-            r#"{"object":"list","data":[{"id":"text-embedding-3-small","object":"model","created":1,"owned_by":"relay"}]}"#,
+            r#"{"object":"list","data":[{"id":"text-embedding-3-small","object":"model","created":1,"owned_by":"relay","input_modalities":["text"],"output_modalities":["embedding"]}]}"#,
         )
-        .expect("documented embedding identity should parse");
+        .expect("explicit modality evidence should parse");
 
         assert!(
             !catalog.models[0]
                 .capabilities
                 .operations
                 .contains(&AiOperation::ConversationRespond)
+        );
+        assert!(
+            catalog.models[0]
+                .capability_evidence
+                .input_modalities_declared
+        );
+        assert!(
+            catalog.models[0]
+                .capability_evidence
+                .output_modalities_declared
+        );
+        assert_eq!(
+            catalog.models[0].capability_evidence.supports_text_input,
+            Some(true)
+        );
+        assert_eq!(
+            catalog.models[0].capability_evidence.supports_text_output,
+            Some(false)
         );
     }
 
@@ -3145,6 +3398,7 @@ mod tests {
     fn anthropic_discovery_parses_page_contract() {
         let page = parse_anthropic_model_page(
             r#"{"data":[{"type":"model","id":"claude-test","display_name":"Claude Test","created_at":"2026-01-01T00:00:00Z"}],"has_more":false,"first_id":"claude-test","last_id":"claude-test"}"#,
+            true,
         )
         .expect("documented response should parse");
         assert!(!page.has_more);
@@ -3168,6 +3422,18 @@ mod tests {
                 .map(|option| option.id.as_str())
                 .collect::<Vec<_>>(),
             vec!["5m", "1h"]
+        );
+        let catalog = build_anthropic_model_catalog(
+            "connection",
+            9,
+            page.models,
+            3,
+            "anthropic.models.2023-06-01",
+        );
+        assert_eq!(catalog.page_count, 3);
+        assert_eq!(
+            catalog.discovery_schema_revision,
+            "anthropic.models.2023-06-01"
         );
     }
 

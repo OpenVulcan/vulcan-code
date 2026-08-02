@@ -227,6 +227,9 @@ impl ServiceEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelDiscoveryKind {
+    /// User-managed models without a remote catalog request.
+    /// 不请求远程目录、完全由用户管理的模型。
+    Manual,
     /// No conversation-model discovery exists for provider-tools-only entries.
     /// 仅供应商工具入口不存在对话模型发现。
     ProviderToolsOnly,
@@ -502,6 +505,18 @@ pub struct CredentialConnection {
     pub usage_scope_override: Option<BTreeSet<InferenceUsageScope>>,
 }
 
+/// Maximum models accepted in one credential-scoped runtime catalog.
+/// 单个凭据作用域运行时目录允许接受的最大模型数量。
+pub const PROVIDER_MODEL_CATALOG_MAX_MODELS: usize = 20_000;
+
+/// Maximum UTF-8 bytes accepted for one provider model identifier.
+/// 单个供应商模型标识允许接受的最大 UTF-8 字节数。
+pub const PROVIDER_MODEL_IDENTIFIER_MAX_BYTES: usize = 2_048;
+
+/// Maximum UTF-8 bytes accepted for one provider model display name.
+/// 单个供应商模型显示名称允许接受的最大 UTF-8 字节数。
+pub const PROVIDER_MODEL_DISPLAY_NAME_MAX_BYTES: usize = 4_096;
+
 /// Describes one connection-scoped model.
 /// 描述一个连接作用域模型。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -515,6 +530,41 @@ pub struct ConnectionModel {
     /// Resolved model capabilities.
     /// 解析后的模型能力。
     pub capabilities: ModelCapabilities,
+    /// Field-presence evidence captured directly from this credential's model directory.
+    /// 直接从当前凭据模型目录捕获的字段存在性证据。
+    #[serde(default)]
+    pub capability_evidence: ModelCapabilityEvidence,
+}
+
+/// Records which basic capability fields were explicitly declared by one model directory.
+/// 记录一个模型目录明确声明了哪些基础能力字段。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ModelCapabilityEvidence {
+    /// Whether the directory explicitly declared a context limit.
+    /// 目录是否明确声明了上下文上限。
+    #[serde(default)]
+    pub context_limit_declared: bool,
+    /// Whether the directory explicitly declared an output-token limit.
+    /// 目录是否明确声明了输出 Token 上限。
+    #[serde(default)]
+    pub output_limit_declared: bool,
+    /// Whether the directory explicitly declared input modalities.
+    /// 目录是否明确声明了输入模态。
+    #[serde(default)]
+    pub input_modalities_declared: bool,
+    /// Whether the directory explicitly declared output modalities.
+    /// 目录是否明确声明了输出模态。
+    #[serde(default)]
+    pub output_modalities_declared: bool,
+    /// Explicit text-input support, or `None` when the directory omitted input modalities.
+    /// 明确的文本输入支持；目录未声明输入模态时为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_text_input: Option<bool>,
+    /// Explicit text-output support, or `None` when the directory omitted output modalities.
+    /// 明确的文本输出支持；目录未声明输出模态时为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_text_output: Option<bool>,
 }
 
 /// Stores a connection-scoped in-memory model catalog.
@@ -530,6 +580,12 @@ pub struct ConnectionModelCatalog {
     /// Monotonic in-process refresh generation.
     /// 进程内单调刷新代次。
     pub generation: u64,
+    /// Number of provider pages atomically represented by this catalog.
+    /// 此目录原子表示的供应商分页数量。
+    pub page_count: u32,
+    /// Exact parser contract revision used for the source response.
+    /// 源响应所使用的精确解析器契约修订号。
+    pub discovery_schema_revision: String,
 }
 
 /// Identifies one semantic provider tool capability.

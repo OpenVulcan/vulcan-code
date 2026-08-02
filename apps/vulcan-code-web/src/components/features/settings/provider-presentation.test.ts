@@ -21,6 +21,7 @@ function entryFixture(id: string, displayName: string): PublicAiServiceEntry {
     base_url: "https://example.com",
     credential_profiles: [],
     authentication: "bearer_authorization",
+    model_discovery: "open_ai",
     protocol_routes: [],
   }
 }

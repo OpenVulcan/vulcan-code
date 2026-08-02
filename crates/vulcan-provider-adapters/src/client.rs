@@ -3,23 +3,190 @@
 
 use crate::{
     AccountUsageQueryKind, AuthenticationProjection, ConnectionModel, ConnectionModelCatalog,
-    CredentialConnection, CredentialExecutionSecret, ModelDiscoveryKind, ProviderDescriptor,
-    SecondaryRouteOption, ServiceEntry, build_alibaba_coding_plan_catalog,
-    build_alibaba_model_studio_catalog, build_alibaba_token_plan_catalog,
-    build_anthropic_model_catalog, build_gemini_model_catalog, build_minimax_model_catalog,
-    enrich_compatible_model_catalog, parse_anthropic_model_page, parse_gemini_model_page,
-    parse_google_code_assist_model_catalog, parse_minimax_model_page,
+    CredentialConnection, CredentialExecutionSecret, ModelDiscoveryKind,
+    PROVIDER_MODEL_CATALOG_MAX_MODELS, PROVIDER_MODEL_DISPLAY_NAME_MAX_BYTES,
+    PROVIDER_MODEL_IDENTIFIER_MAX_BYTES, ProviderDescriptor, SecondaryRouteOption, ServiceEntry,
+    build_alibaba_coding_plan_catalog, build_alibaba_model_studio_catalog,
+    build_alibaba_token_plan_catalog, build_anthropic_model_catalog, build_gemini_model_catalog,
+    build_minimax_model_catalog, enrich_compatible_model_catalog, parse_anthropic_model_page,
+    parse_gemini_model_page, parse_google_code_assist_model_catalog, parse_minimax_model_page,
     parse_minimax_openai_model_catalog, parse_openai_codex_model_catalog,
     parse_openai_model_catalog, parse_openrouter_complete_model_catalog,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::BTreeSet;
 use vulcan_ai_contract::{AccountUsageAvailability, AccountUsageSnapshot, AccountUsageWindow};
 
 /// Maximum wall time for one provider metadata or account-usage HTTP request.
 /// 单次供应商元数据或账号用量 HTTP 请求的最大墙钟时间。
 const PROVIDER_METADATA_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Maximum pages accepted from one credential-scoped remote model catalog.
+/// 单次凭据作用域远程模型目录允许接受的最大分页数。
+const MODEL_DISCOVERY_MAX_PAGES: u32 = 1_024;
+
+/// Maximum decoded bytes accepted from one remote model-catalog response page.
+/// 单个远程模型目录响应分页允许接受的最大解码字节数。
+const MODEL_DISCOVERY_MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Maximum decoded bytes accepted from one non-catalog provider metadata response.
+/// 单个非目录供应商元数据响应允许接受的最大解码字节数。
+const PROVIDER_METADATA_MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+
+/// Closed failure variants produced while reading a bounded HTTP response body.
+/// 读取有界 HTTP 响应正文时产出的封闭失败变体。
+#[derive(Debug)]
+enum BoundedResponseReadError {
+    /// The transport failed before the complete response body arrived.
+    /// 完整响应正文到达前传输失败。
+    Transport(String),
+    /// The response violated its byte or UTF-8 boundary.
+    /// 响应违反字节或 UTF-8 边界。
+    Invalid(String),
+}
+
+impl BoundedResponseReadError {
+    /// Converts the shared body-reader failure into the model-discovery error contract.
+    /// 将共享正文读取失败转换为模型发现错误契约。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A transport or invalid-response model-discovery failure preserving the controlled message.
+    /// 返回保留受控消息的传输失败或无效响应模型发现错误。
+    fn into_model_discovery_error(self) -> ModelDiscoveryError {
+        match self {
+            Self::Transport(message) => {
+                ModelDiscoveryError::new(ModelDiscoveryFailureKind::TemporarilyUnavailable, message)
+            }
+            Self::Invalid(message) => ModelDiscoveryError::invalid_response(message),
+        }
+    }
+}
+
+/// Closed failure categories produced at the model-discovery boundary.
+/// 在模型发现边界产出的封闭失败分类。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ModelDiscoveryFailureKind {
+    /// The selected endpoint explicitly does not expose a model catalog.
+    /// 所选入口明确不提供模型目录。
+    Unsupported,
+    /// The selected credential was rejected by the provider.
+    /// 所选凭据被供应商拒绝。
+    AuthenticationFailed,
+    /// The provider rate-limited the catalog request.
+    /// 供应商限制了目录请求速率。
+    RateLimited,
+    /// The provider or network is temporarily unavailable.
+    /// 供应商或网络暂时不可用。
+    TemporarilyUnavailable,
+    /// The provider returned a response that violates the registered catalog schema.
+    /// 供应商返回了违反已登记目录 Schema 的响应。
+    InvalidResponse,
+    /// Local route configuration or an unclassified provider failure prevented discovery.
+    /// 本地路由配置或未分类供应商失败阻止了发现。
+    Failed,
+}
+
+/// Typed model-discovery failure with a controlled diagnostic message.
+/// 带受控诊断消息的强类型模型发现失败。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelDiscoveryError {
+    /// Closed machine-readable failure category.
+    /// 封闭的机器可读失败分类。
+    pub kind: ModelDiscoveryFailureKind,
+    /// Controlled human-readable diagnostic without secret material.
+    /// 不含秘密材料的受控人类可读诊断。
+    pub message: String,
+}
+
+impl ModelDiscoveryError {
+    /// Builds one typed discovery failure from an explicit category and controlled message.
+    /// 使用明确分类和受控消息构建一个强类型发现失败。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `kind` is the closed failure category and `message` is safe diagnostic text.
+    /// `kind` 是封闭失败分类，`message` 是安全诊断文本。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A typed model-discovery error.
+    /// 返回强类型模型发现错误。
+    pub fn new(kind: ModelDiscoveryFailureKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+        }
+    }
+
+    /// Builds one invalid-response failure from a parser or pagination diagnostic.
+    /// 使用解析器或分页诊断构建无效响应失败。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `message` is the controlled contract violation.
+    /// `message` 是受控契约违规消息。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A typed invalid-response error.
+    /// 返回强类型无效响应错误。
+    pub fn invalid_response(message: impl Into<String>) -> Self {
+        Self::new(ModelDiscoveryFailureKind::InvalidResponse, message)
+    }
+
+    /// Builds one local or unclassified discovery failure.
+    /// 构建一个本地或未分类发现失败。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `message` is the controlled diagnostic.
+    /// `message` 是受控诊断。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A typed generic discovery error.
+    /// 返回强类型通用发现错误。
+    pub fn failed(message: impl Into<String>) -> Self {
+        Self::new(ModelDiscoveryFailureKind::Failed, message)
+    }
+
+    /// Classifies one exact HTTP response without parsing error prose.
+    /// 在不解析错误文案的情况下分类一个精确 HTTP 响应。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `status` is the exact HTTP status and `message` is a controlled response diagnostic.
+    /// `status` 是精确 HTTP 状态，`message` 是受控响应诊断。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A typed discovery error with the matching closed category.
+    /// 返回带匹配封闭分类的强类型发现错误。
+    pub fn from_http_status(status: u16, message: impl Into<String>) -> Self {
+        let kind = match status {
+            404 | 405 => ModelDiscoveryFailureKind::Unsupported,
+            401 | 403 => ModelDiscoveryFailureKind::AuthenticationFailed,
+            429 => ModelDiscoveryFailureKind::RateLimited,
+            408 => ModelDiscoveryFailureKind::TemporarilyUnavailable,
+            500..=599 => ModelDiscoveryFailureKind::TemporarilyUnavailable,
+            _ => ModelDiscoveryFailureKind::Failed,
+        };
+        Self::new(kind, message)
+    }
+}
+
+impl std::fmt::Display for ModelDiscoveryError {
+    /// Formats only the controlled diagnostic message.
+    /// 仅格式化受控诊断消息。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.message.as_str())
+    }
+}
+
+impl std::error::Error for ModelDiscoveryError {}
 
 /// Performs credential-scoped provider metadata operations.
 /// 执行凭据作用域的供应商元数据操作。
@@ -46,7 +213,7 @@ pub trait ProviderMetadataClient: Send + Sync {
         connection: &CredentialConnection,
         secret: &CredentialExecutionSecret,
         generation: u64,
-    ) -> Result<ConnectionModelCatalog, String>;
+    ) -> Result<ConnectionModelCatalog, ModelDiscoveryError>;
 
     /// Queries account usage for one exact credential.
     /// 查询一个精确凭据的账号用量。
@@ -228,19 +395,24 @@ async fn probe_minimax_region(
     let response = http
         .get(format!("{base_url}/v1/models"))
         .bearer_auth(key)
+        .timeout(PROVIDER_METADATA_REQUEST_TIMEOUT)
         .send()
         .await
         .map_err(|error| format!("catalog request failed: {error}"))?;
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| format!("catalog response failed: {error}"))?;
+    let url = format!("{base_url}/v1/models");
+    let body_result =
+        read_bounded_model_discovery_body(response, "MiniMax region probe", url.as_str()).await;
     if !status.is_success() {
         return Err(format!("HTTP {}", status.as_u16()));
     }
-    let catalog = parse_openai_model_catalog("minimax-region-probe", 1, body.as_str())
-        .map_err(|error| format!("invalid catalog: {error}"))?;
+    let body = body_result.map_err(|error| error.message)?;
+    let catalog = validate_discovered_catalog_bounds(
+        parse_openai_model_catalog("minimax-region-probe", 1, body.as_str())
+            .map_err(|error| format!("invalid catalog: {error}"))?,
+        "minimax-region-probe",
+    )
+    .map_err(|error| error.message)?;
     if catalog.models.is_empty() {
         return Err(String::from("catalog contained no models"));
     }
@@ -256,31 +428,41 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
         connection: &CredentialConnection,
         secret: &CredentialExecutionSecret,
         generation: u64,
-    ) -> Result<ConnectionModelCatalog, String> {
+    ) -> Result<ConnectionModelCatalog, ModelDiscoveryError> {
         let protocol_route = entry
             .protocol_routes
             .iter()
             .find(|route| route.protocol_profile_id == connection.selected_protocol)
             .ok_or_else(|| {
-                format!(
+                ModelDiscoveryError::failed(format!(
                     "Protocol `{}` is not registered for service entry `{}`.",
                     connection.selected_protocol, entry.id
-                )
+                ))
             })?;
         let credential_profile = entry
             .credential_profile(connection.credential_profile_id.as_str())
             .ok_or_else(|| {
-                format!(
+                ModelDiscoveryError::failed(format!(
                     "Credential profile `{}` is not registered for service entry `{}`.",
                     connection.credential_profile_id, entry.id
-                )
+                ))
             })?;
         let authentication = protocol_route
             .resolved_authentication(entry.authentication, credential_profile.authentication);
-        match protocol_route.resolved_model_discovery(entry.model_discovery) {
-            ModelDiscoveryKind::ProviderToolsOnly => Err(format!(
-                "Provider-tools service entry `{}` does not expose a conversation model catalog.",
-                entry.id
+        let catalog = match protocol_route.resolved_model_discovery(entry.model_discovery) {
+            ModelDiscoveryKind::Manual => Ok(ConnectionModelCatalog {
+                connection_id: connection.id.clone(),
+                models: Vec::new(),
+                generation,
+                page_count: 0,
+                discovery_schema_revision: String::from("manual.models.v1"),
+            }),
+            ModelDiscoveryKind::ProviderToolsOnly => Err(ModelDiscoveryError::new(
+                ModelDiscoveryFailureKind::Unsupported,
+                format!(
+                    "Provider-tools service entry `{}` does not expose a conversation model catalog.",
+                    entry.id
+                ),
             )),
             ModelDiscoveryKind::MiniMaxAnthropic => {
                 discover_minimax_models(
@@ -309,6 +491,7 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
                     generation,
                     body.as_str(),
                 )
+                .map_err(ModelDiscoveryError::invalid_response)
             }
             ModelDiscoveryKind::OpenRouter => {
                 let conversation_url = protocol_route.model_discovery_url(entry, "/models/user");
@@ -349,24 +532,28 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
                     embedding_body.as_str(),
                     complete_body.as_str(),
                 )
+                .map_err(ModelDiscoveryError::invalid_response)
             }
             ModelDiscoveryKind::AlibabaCodingPlanStatic => build_alibaba_coding_plan_catalog(
                 connection.id.as_str(),
                 entry.id.as_str(),
                 generation,
-            ),
+            )
+            .map_err(ModelDiscoveryError::failed),
             ModelDiscoveryKind::AlibabaTokenPlanStatic => build_alibaba_token_plan_catalog(
                 connection.id.as_str(),
                 entry.id.as_str(),
                 connection.selected_protocol.as_str(),
                 generation,
-            ),
+            )
+            .map_err(ModelDiscoveryError::failed),
             ModelDiscoveryKind::AlibabaModelStudioStatic => build_alibaba_model_studio_catalog(
                 connection.id.as_str(),
                 entry.id.as_str(),
                 connection.selected_protocol.as_str(),
                 generation,
-            ),
+            )
+            .map_err(ModelDiscoveryError::failed),
             ModelDiscoveryKind::OpenAi => {
                 let url = protocol_route.model_discovery_url(entry, "/models");
                 let body = send_metadata_get_with_authentication(
@@ -379,7 +566,8 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
                 )
                 .await?;
                 let mut catalog =
-                    parse_openai_model_catalog(connection.id.as_str(), generation, body.as_str())?;
+                    parse_openai_model_catalog(connection.id.as_str(), generation, body.as_str())
+                        .map_err(ModelDiscoveryError::invalid_response)?;
                 enrich_compatible_model_catalog(
                     provider.id.as_str(),
                     entry.id.as_str(),
@@ -401,13 +589,22 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
                 )
                 .await?;
                 parse_openai_codex_model_catalog(connection.id.as_str(), generation, body.as_str())
+                    .map_err(ModelDiscoveryError::invalid_response)
             }
             ModelDiscoveryKind::Anthropic => {
                 discover_anthropic_models(&self.http, entry, connection, secret, generation).await
             }
             ModelDiscoveryKind::AnthropicCompatible => {
+                // url preserves the reviewed protocol-route catalog path instead of rebuilding `/models`.
+                // url 保留已审核的协议路由目录路径，而不是重新拼接 `/models`。
+                let url = protocol_route.model_discovery_url(entry, "/models");
                 discover_anthropic_compatible_models(
-                    &self.http, entry, connection, secret, generation,
+                    &self.http,
+                    entry,
+                    connection,
+                    secret,
+                    generation,
+                    url.as_str(),
                 )
                 .await
             }
@@ -420,7 +617,8 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
                 )
                 .await
             }
-        }
+        }?;
+        validate_discovered_catalog_bounds(catalog, connection.id.as_str())
     }
 
     async fn query_account_usage(
@@ -531,9 +729,11 @@ async fn discover_google_code_assist_models(
     connection: &CredentialConnection,
     secret: &CredentialExecutionSecret,
     generation: u64,
-) -> Result<ConnectionModelCatalog, String> {
+) -> Result<ConnectionModelCatalog, ModelDiscoveryError> {
     let project_id = secret.project_id().ok_or_else(|| {
-        String::from("Google Code Assist model discovery requires a validated project id.")
+        ModelDiscoveryError::failed(
+            "Google Code Assist model discovery requires a validated project id.",
+        )
     })?;
     let url = format!(
         "{}/v1internal:fetchAvailableModels",
@@ -549,23 +749,36 @@ async fn discover_google_code_assist_models(
     if let Some(quota_project_id) = secret.quota_project_id() {
         request = request.header("x-goog-user-project", quota_project_id);
     }
-    let response = request
-        .send()
-        .await
-        .map_err(|error| format!("Google Code Assist model discovery failed: {error}"))?;
+    let response = request.send().await.map_err(|error| {
+        ModelDiscoveryError::new(
+            ModelDiscoveryFailureKind::TemporarilyUnavailable,
+            format!("Google Code Assist model discovery failed: {error}"),
+        )
+    })?;
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| format!("Google Code Assist model discovery response failed: {error}"))?;
+    let body_result = read_bounded_model_discovery_body(
+        response,
+        "Google Code Assist model discovery",
+        url.as_str(),
+    )
+    .await;
     if !status.is_success() {
-        return Err(format!(
-            "Google Code Assist model discovery returned HTTP {}: {}",
+        let diagnostic = body_result
+            .as_ref()
+            .map(|body| controlled_error_summary(body.as_str(), secret.expose_value()))
+            .unwrap_or_else(|error| error.message.clone());
+        return Err(ModelDiscoveryError::from_http_status(
             status.as_u16(),
-            controlled_error_body(body.as_str())
+            format!(
+                "Google Code Assist model discovery returned HTTP {}: {}",
+                status.as_u16(),
+                diagnostic
+            ),
         ));
     }
+    let body = body_result?;
     parse_google_code_assist_model_catalog(connection.id.as_str(), generation, body.as_str())
+        .map_err(ModelDiscoveryError::invalid_response)
 }
 
 /// Sends one authenticated metadata GET and returns a controlled response body.
@@ -576,7 +789,7 @@ async fn send_metadata_get(
     url: &str,
     secret: &CredentialExecutionSecret,
     operation: &str,
-) -> Result<String, String> {
+) -> Result<String, ModelDiscoveryError> {
     send_metadata_get_with_authentication(http, entry, entry.authentication, url, secret, operation)
         .await
 }
@@ -603,7 +816,7 @@ async fn send_metadata_get_with_authentication(
     url: &str,
     secret: &CredentialExecutionSecret,
     operation: &str,
-) -> Result<String, String> {
+) -> Result<String, ModelDiscoveryError> {
     let mut request = http.get(url).timeout(PROVIDER_METADATA_REQUEST_TIMEOUT);
     for (name, value) in &entry.request_headers {
         let normalized_name = name.to_ascii_lowercase();
@@ -615,9 +828,9 @@ async fn send_metadata_get_with_authentication(
                 | "chatgpt-account-id"
                 | "x-goog-user-project"
         ) {
-            return Err(format!(
+            return Err(ModelDiscoveryError::failed(format!(
                 "Service entry must not override reserved metadata header `{name}`."
-            ));
+            )));
         }
         request = request.header(name, value);
     }
@@ -636,7 +849,9 @@ async fn send_metadata_get_with_authentication(
     match authentication {
         AuthenticationProjection::OpenAiCodexBearer => {
             let account_id = secret.account_id().ok_or_else(|| {
-                String::from("OpenAI Codex metadata request requires a verified account identity.")
+                ModelDiscoveryError::failed(
+                    "OpenAI Codex metadata request requires a verified account identity.",
+                )
             })?;
             request = request.header("chatgpt-account-id", account_id);
         }
@@ -647,7 +862,7 @@ async fn send_metadata_get_with_authentication(
         }
         AuthenticationProjection::GoogleGeminiBearer => {
             let quota_project_id = secret.quota_project_id().ok_or_else(|| {
-                String::from(
+                ModelDiscoveryError::failed(
                     "Public Gemini OAuth metadata request requires a Google Cloud project id.",
                 )
             })?;
@@ -657,23 +872,359 @@ async fn send_metadata_get_with_authentication(
         | AuthenticationProjection::BearerAuthorization
         | AuthenticationProjection::GoogleApiKey => {}
     }
-    let response = request
-        .send()
-        .await
-        .map_err(|error| format!("{operation} request to `{url}` failed: {error}"))?;
+    let response = request.send().await.map_err(|error| {
+        ModelDiscoveryError::new(
+            ModelDiscoveryFailureKind::TemporarilyUnavailable,
+            format!("{operation} request to `{url}` failed: {error}"),
+        )
+    })?;
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| format!("{operation} response from `{url}` failed: {error}"))?;
+    let body_result = read_bounded_model_discovery_body(response, operation, url).await;
     if !status.is_success() {
-        return Err(format!(
-            "{operation} request to `{url}` returned HTTP {}: {}",
+        let diagnostic = body_result
+            .as_ref()
+            .map(|body| controlled_error_summary(body.as_str(), secret.expose_value()))
+            .unwrap_or_else(|error| error.message.clone());
+        return Err(ModelDiscoveryError::from_http_status(
             status.as_u16(),
-            controlled_error_body(body.as_str())
+            format!(
+                "{operation} request to `{url}` returned HTTP {}: {}",
+                status.as_u16(),
+                diagnostic
+            ),
         ));
     }
-    Ok(body)
+    body_result
+}
+
+/// Reads one model-discovery response through a strict decoded-byte boundary.
+/// 通过严格的解码字节边界读取一个模型发现响应。
+///
+/// # Parameters
+/// 参数
+/// `response` is the exact upstream response, while `operation` and `url` scope controlled errors.
+/// `response` 是精确上游响应，`operation` 与 `url` 用于限定受控错误范围。
+///
+/// # Returns
+/// 返回值
+/// A strict UTF-8 body that fits the catalog response boundary.
+/// 返回符合目录响应边界的严格 UTF-8 正文。
+async fn read_bounded_model_discovery_body(
+    response: reqwest::Response,
+    operation: &str,
+    url: &str,
+) -> Result<String, ModelDiscoveryError> {
+    read_bounded_utf8_response_body(
+        response,
+        operation,
+        url,
+        MODEL_DISCOVERY_MAX_RESPONSE_BYTES,
+        "catalog",
+    )
+    .await
+    .map_err(BoundedResponseReadError::into_model_discovery_error)
+}
+
+/// Reads one non-catalog provider metadata response through a strict decoded-byte boundary.
+/// 通过严格的解码字节边界读取一个非目录供应商元数据响应。
+///
+/// # Parameters
+/// 参数
+/// `response` is the exact upstream response, while `operation` and `url` scope controlled errors.
+/// `response` 是精确上游响应，`operation` 与 `url` 用于限定受控错误范围。
+///
+/// # Returns
+/// 返回值
+/// A strict UTF-8 body within the metadata boundary, or a controlled diagnostic.
+/// 返回元数据边界内的严格 UTF-8 正文，或受控诊断。
+async fn read_bounded_provider_metadata_body(
+    response: reqwest::Response,
+    operation: &str,
+    url: &str,
+) -> Result<String, String> {
+    read_bounded_utf8_response_body(
+        response,
+        operation,
+        url,
+        PROVIDER_METADATA_MAX_RESPONSE_BYTES,
+        "metadata",
+    )
+    .await
+    .map_err(|error| match error {
+        BoundedResponseReadError::Transport(message)
+        | BoundedResponseReadError::Invalid(message) => message,
+    })
+}
+
+/// Reads one decoded HTTP response without allowing content length or compression to bypass limits.
+/// 读取一个解码后的 HTTP 响应，不允许内容长度或压缩绕过限制。
+///
+/// # Parameters
+/// 参数
+/// `response` is consumed exactly once; `operation`, `url`, and `boundary_label` scope diagnostics;
+/// `limit` is the maximum decoded byte count.
+/// `response` 仅消费一次；`operation`、`url` 与 `boundary_label` 限定诊断；`limit`
+/// 是最大解码字节数。
+///
+/// # Returns
+/// 返回值
+/// A strict UTF-8 body or a typed transport/invalid-response failure.
+/// 返回严格 UTF-8 正文，或强类型传输/无效响应失败。
+async fn read_bounded_utf8_response_body(
+    mut response: reqwest::Response,
+    operation: &str,
+    url: &str,
+    limit: usize,
+    boundary_label: &str,
+) -> Result<String, BoundedResponseReadError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err(BoundedResponseReadError::Invalid(format!(
+            "{operation} response from `{url}` exceeds the {limit}-byte {boundary_label} boundary."
+        )));
+    }
+    // body accumulates decoded chunks, so compressed responses cannot bypass the in-memory limit.
+    // body 累积解码后的数据块，因此压缩响应无法绕过内存限制。
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
+        BoundedResponseReadError::Transport(format!(
+            "{operation} response from `{url}` failed: {error}"
+        ))
+    })? {
+        append_bounded_response_chunk(&mut body, chunk.as_ref(), limit, operation, boundary_label)?;
+    }
+    String::from_utf8(body).map_err(|_| {
+        BoundedResponseReadError::Invalid(format!(
+            "{operation} response from `{url}` is not valid UTF-8 JSON."
+        ))
+    })
+}
+
+/// Appends one decoded response chunk without crossing the explicit memory boundary.
+/// 在不越过显式内存边界的前提下追加一个解码响应块。
+///
+/// # Parameters
+/// 参数
+/// `target` owns accepted bytes, `chunk` is the next decoded fragment, `limit` is explicit, and
+/// `operation` scopes the controlled diagnostic.
+/// `target` 持有已接受字节，`chunk` 是下一段解码数据，`limit` 是显式边界，`operation`
+/// 限定受控诊断范围。
+///
+/// # Returns
+/// 返回值
+/// Success after the atomic append, or an invalid-response failure before allocation growth.
+/// 原子追加后返回成功；扩容前发现越界时返回无效响应失败。
+#[cfg(test)]
+fn append_bounded_model_discovery_chunk(
+    target: &mut Vec<u8>,
+    chunk: &[u8],
+    limit: usize,
+    operation: &str,
+) -> Result<(), ModelDiscoveryError> {
+    append_bounded_response_chunk(target, chunk, limit, operation, "catalog")
+        .map_err(BoundedResponseReadError::into_model_discovery_error)
+}
+
+/// Appends one decoded response chunk without crossing the caller-owned byte boundary.
+/// 在不越过调用方持有的字节边界前提下追加一个解码响应块。
+///
+/// # Parameters
+/// 参数
+/// `target` owns accepted bytes, `chunk` is the next fragment, `limit` is explicit, and the
+/// operation and boundary label scope diagnostics.
+/// `target` 持有已接受字节，`chunk` 是下一段数据，`limit` 是显式边界，操作与边界标签限定诊断。
+///
+/// # Returns
+/// 返回值
+/// Success after the atomic append, or an invalid-response failure before allocation growth.
+/// 原子追加后返回成功；扩容前发现越界时返回无效响应失败。
+fn append_bounded_response_chunk(
+    target: &mut Vec<u8>,
+    chunk: &[u8],
+    limit: usize,
+    operation: &str,
+    boundary_label: &str,
+) -> Result<(), BoundedResponseReadError> {
+    if target
+        .len()
+        .checked_add(chunk.len())
+        .is_none_or(|length| length > limit)
+    {
+        return Err(BoundedResponseReadError::Invalid(format!(
+            "{operation} response exceeds the {limit}-byte {boundary_label} boundary."
+        )));
+    }
+    target.extend_from_slice(chunk);
+    Ok(())
+}
+
+/// Validates aggregate catalog identity and size limits after protocol parsing completes.
+/// 在协议解析完成后校验目录聚合身份与大小边界。
+///
+/// # Parameters
+/// 参数
+/// `catalog` is the complete parsed result and `connection_id` is the expected credential owner.
+/// `catalog` 是完整解析结果，`connection_id` 是预期凭据所有者。
+///
+/// # Returns
+/// 返回值
+/// The unchanged catalog when every bound holds, or a typed invalid-response failure.
+/// 全部边界成立时返回原目录，否则返回强类型无效响应失败。
+fn validate_discovered_catalog_bounds(
+    catalog: ConnectionModelCatalog,
+    connection_id: &str,
+) -> Result<ConnectionModelCatalog, ModelDiscoveryError> {
+    if catalog.connection_id != connection_id {
+        return Err(ModelDiscoveryError::invalid_response(
+            "Model discovery returned a catalog for a different credential connection.",
+        ));
+    }
+    if catalog.page_count > MODEL_DISCOVERY_MAX_PAGES {
+        return Err(ModelDiscoveryError::invalid_response(format!(
+            "Model discovery exceeded the {MODEL_DISCOVERY_MAX_PAGES}-page safety boundary."
+        )));
+    }
+    if catalog.models.len() > PROVIDER_MODEL_CATALOG_MAX_MODELS {
+        return Err(ModelDiscoveryError::invalid_response(format!(
+            "Model discovery exceeded the {PROVIDER_MODEL_CATALOG_MAX_MODELS}-model safety boundary."
+        )));
+    }
+    // model_ids rejects duplicates in non-paginated parsers as well as malformed identities.
+    // model_ids 同时拒绝非分页解析器中的重复项与格式异常标识。
+    let mut model_ids = BTreeSet::new();
+    for (index, model) in catalog.models.iter().enumerate() {
+        if model.id.trim().is_empty()
+            || model.id.len() > PROVIDER_MODEL_IDENTIFIER_MAX_BYTES
+            || model.id.chars().any(char::is_control)
+        {
+            return Err(ModelDiscoveryError::invalid_response(format!(
+                "Model discovery returned an invalid model identifier at index {index}."
+            )));
+        }
+        if !model_ids.insert(model.id.as_str()) {
+            return Err(ModelDiscoveryError::invalid_response(format!(
+                "Model discovery returned a duplicate model identifier at index {index}."
+            )));
+        }
+        if model.display_name.len() > PROVIDER_MODEL_DISPLAY_NAME_MAX_BYTES
+            || model.display_name.chars().any(char::is_control)
+        {
+            return Err(ModelDiscoveryError::invalid_response(format!(
+                "Model discovery returned an invalid display name at index {index}."
+            )));
+        }
+    }
+    Ok(catalog)
+}
+
+/// Appends one discovery page while rejecting duplicate model identities across pages.
+/// 追加一页发现结果，同时拒绝跨页重复的模型标识。
+///
+/// # Parameters
+/// 参数
+/// `target` owns accepted models, `seen_ids` tracks exact identities, `page` is the new page, and
+/// `operation` scopes the controlled diagnostic.
+/// `target` 持有已接受模型，`seen_ids` 跟踪精确标识，`page` 是新分页，`operation` 限定受控诊断。
+///
+/// # Returns
+/// 返回值
+/// Success after an atomic page append, or a duplicate-model contract error without partial append.
+/// 原子追加分页后返回成功；发现重复模型时不进行部分追加并返回契约错误。
+fn append_unique_discovered_models(
+    target: &mut Vec<ConnectionModel>,
+    seen_ids: &mut BTreeSet<String>,
+    page: Vec<ConnectionModel>,
+    operation: &str,
+) -> Result<(), ModelDiscoveryError> {
+    if target
+        .len()
+        .checked_add(page.len())
+        .is_none_or(|length| length > PROVIDER_MODEL_CATALOG_MAX_MODELS)
+    {
+        return Err(ModelDiscoveryError::invalid_response(format!(
+            "{operation} exceeded the {PROVIDER_MODEL_CATALOG_MAX_MODELS}-model safety boundary."
+        )));
+    }
+    let mut page_ids = BTreeSet::new();
+    for (index, model) in page.iter().enumerate() {
+        if model.id.trim().is_empty()
+            || model.id.len() > PROVIDER_MODEL_IDENTIFIER_MAX_BYTES
+            || model.id.chars().any(char::is_control)
+        {
+            return Err(ModelDiscoveryError::invalid_response(format!(
+                "{operation} returned an invalid model identifier at page index {index}."
+            )));
+        }
+        if model.display_name.len() > PROVIDER_MODEL_DISPLAY_NAME_MAX_BYTES
+            || model.display_name.chars().any(char::is_control)
+        {
+            return Err(ModelDiscoveryError::invalid_response(format!(
+                "{operation} returned an invalid display name at page index {index}."
+            )));
+        }
+        if seen_ids.contains(model.id.as_str()) || !page_ids.insert(model.id.clone()) {
+            return Err(ModelDiscoveryError::invalid_response(format!(
+                "{operation} returned duplicate model `{}` across pages.",
+                model.id
+            )));
+        }
+    }
+    seen_ids.extend(page_ids);
+    target.extend(page);
+    Ok(())
+}
+
+/// Registers one next-page cursor and rejects every repeated value in the current traversal.
+/// 登记一个下一页游标，并拒绝当前遍历中出现过的任意重复值。
+///
+/// # Parameters
+/// 参数
+/// `seen` owns prior cursors, `next` is the provider-returned cursor, and `operation` scopes errors.
+/// `seen` 持有历史游标，`next` 是供应商返回的游标，`operation` 限定错误范围。
+///
+/// # Returns
+/// 返回值
+/// The unchanged cursor after first registration, or a deterministic loop diagnostic.
+/// 首次登记时返回原游标；重复时返回确定性的循环诊断。
+fn register_pagination_cursor(
+    seen: &mut BTreeSet<String>,
+    next: String,
+    operation: &str,
+) -> Result<String, ModelDiscoveryError> {
+    if !seen.insert(next.clone()) {
+        return Err(ModelDiscoveryError::invalid_response(format!(
+            "{operation} repeated pagination cursor `{next}`."
+        )));
+    }
+    Ok(next)
+}
+
+/// Rejects an upstream catalog that continues beyond the explicit traversal boundary.
+/// 拒绝超过明确遍历边界后仍继续的上游目录。
+///
+/// # Parameters
+/// 参数
+/// `page_count` is the number already consumed, `has_more` is authoritative, and `operation`
+/// scopes the controlled diagnostic.
+/// `page_count` 是已经消费的分页数，`has_more` 是权威继续标记，`operation` 限定受控诊断。
+///
+/// # Returns
+/// 返回值
+/// Success when traversal may stop or continue safely, otherwise an invalid-response failure.
+/// 遍历可以安全停止或继续时返回成功，否则返回无效响应失败。
+fn validate_pagination_boundary(
+    page_count: u32,
+    has_more: bool,
+    operation: &str,
+) -> Result<(), ModelDiscoveryError> {
+    if has_more && page_count >= MODEL_DISCOVERY_MAX_PAGES {
+        return Err(ModelDiscoveryError::invalid_response(format!(
+            "{operation} exceeded the {MODEL_DISCOVERY_MAX_PAGES}-page safety boundary."
+        )));
+    }
+    Ok(())
 }
 
 /// Fetches every documented Anthropic model page.
@@ -684,14 +1235,17 @@ async fn discover_anthropic_models(
     connection: &CredentialConnection,
     secret: &CredentialExecutionSecret,
     generation: u64,
-) -> Result<ConnectionModelCatalog, String> {
+) -> Result<ConnectionModelCatalog, ModelDiscoveryError> {
     let mut models = Vec::<ConnectionModel>::new();
+    let mut model_ids = BTreeSet::new();
+    let mut seen_cursors = BTreeSet::new();
     let mut after_id = None::<String>;
+    let mut page_count = 0_u32;
     loop {
         let mut url = reqwest::Url::parse(
             format!("{}/v1/models", entry.base_url.trim_end_matches('/')).as_str(),
         )
-        .map_err(|_| String::from("Anthropic model discovery URL is invalid."))?;
+        .map_err(|_| ModelDiscoveryError::failed("Anthropic model discovery URL is invalid."))?;
         url.query_pairs_mut().append_pair("limit", "1000");
         if let Some(cursor) = after_id.as_deref() {
             url.query_pairs_mut().append_pair("after_id", cursor);
@@ -704,44 +1258,70 @@ async fn discover_anthropic_models(
             "Anthropic model discovery",
         )
         .await?;
-        let page = parse_anthropic_model_page(body.as_str())?;
-        models.extend(page.models);
+        let page = parse_anthropic_model_page(body.as_str(), true)
+            .map_err(ModelDiscoveryError::invalid_response)?;
+        page_count = page_count.saturating_add(1);
+        append_unique_discovered_models(
+            &mut models,
+            &mut model_ids,
+            page.models,
+            "Anthropic model discovery",
+        )?;
+        validate_pagination_boundary(page_count, page.has_more, "Anthropic model discovery")?;
         if !page.has_more {
             break;
         }
         let next = page.last_id.ok_or_else(|| {
-            String::from("Anthropic model discovery reported more pages without `last_id`.")
+            ModelDiscoveryError::invalid_response(
+                "Anthropic model discovery reported more pages without `last_id`.",
+            )
         })?;
-        if after_id.as_deref() == Some(next.as_str()) {
-            return Err(String::from(
-                "Anthropic model discovery repeated the same pagination cursor.",
-            ));
-        }
-        after_id = Some(next);
+        after_id = Some(register_pagination_cursor(
+            &mut seen_cursors,
+            next,
+            "Anthropic model discovery",
+        )?);
     }
     Ok(build_anthropic_model_catalog(
         connection.id.as_str(),
         generation,
         models,
+        page_count,
+        "anthropic.models.v1",
     ))
 }
 
 /// Fetches every Anthropic-compatible model page relative to a versioned base URL.
 /// 相对于带版本基础 URL 获取每一页 Anthropic 兼容模型。
+///
+/// # Parameters
+/// 参数
+/// `http`, `entry`, `connection`, and `secret` define the exact credential request;
+/// `generation` identifies the in-memory revision and `discovery_url` is the reviewed first-page URL.
+/// `http`、`entry`、`connection` 与 `secret` 定义精确凭据请求；
+/// `generation` 标识内存修订，`discovery_url` 是已审核的第一页地址。
+///
+/// # Returns
+/// 返回值
+/// A complete credential-scoped catalog or one typed discovery failure.
+/// 返回完整的凭据作用域目录或一个强类型发现失败。
 async fn discover_anthropic_compatible_models(
     http: &reqwest::Client,
     entry: &ServiceEntry,
     connection: &CredentialConnection,
     secret: &CredentialExecutionSecret,
     generation: u64,
-) -> Result<ConnectionModelCatalog, String> {
+    discovery_url: &str,
+) -> Result<ConnectionModelCatalog, ModelDiscoveryError> {
     let mut models = Vec::<ConnectionModel>::new();
+    let mut model_ids = BTreeSet::new();
+    let mut seen_cursors = BTreeSet::new();
     let mut after_id = None::<String>;
+    let mut page_count = 0_u32;
     loop {
-        let mut url = reqwest::Url::parse(
-            format!("{}/models", entry.base_url.trim_end_matches('/')).as_str(),
-        )
-        .map_err(|_| String::from("Anthropic-compatible model discovery URL is invalid."))?;
+        let mut url = reqwest::Url::parse(discovery_url).map_err(|_| {
+            ModelDiscoveryError::failed("Anthropic-compatible model discovery URL is invalid.")
+        })?;
         url.query_pairs_mut().append_pair("limit", "1000");
         if let Some(cursor) = after_id.as_deref() {
             url.query_pairs_mut().append_pair("after_id", cursor);
@@ -754,27 +1334,40 @@ async fn discover_anthropic_compatible_models(
             "Anthropic-compatible model discovery",
         )
         .await?;
-        let page = parse_anthropic_model_page(body.as_str())?;
-        models.extend(page.models);
+        let page = parse_anthropic_model_page(body.as_str(), false)
+            .map_err(ModelDiscoveryError::invalid_response)?;
+        page_count = page_count.saturating_add(1);
+        append_unique_discovered_models(
+            &mut models,
+            &mut model_ids,
+            page.models,
+            "Anthropic-compatible model discovery",
+        )?;
+        validate_pagination_boundary(
+            page_count,
+            page.has_more,
+            "Anthropic-compatible model discovery",
+        )?;
         if !page.has_more {
             break;
         }
         let next = page.last_id.ok_or_else(|| {
-            String::from(
+            ModelDiscoveryError::invalid_response(
                 "Anthropic-compatible model discovery reported more pages without `last_id`.",
             )
         })?;
-        if after_id.as_deref() == Some(next.as_str()) {
-            return Err(String::from(
-                "Anthropic-compatible model discovery repeated the same pagination cursor.",
-            ));
-        }
-        after_id = Some(next);
+        after_id = Some(register_pagination_cursor(
+            &mut seen_cursors,
+            next,
+            "Anthropic-compatible model discovery",
+        )?);
     }
     Ok(build_anthropic_model_catalog(
         connection.id.as_str(),
         generation,
         models,
+        page_count,
+        "anthropic-compatible.models.v1",
     ))
 }
 
@@ -786,36 +1379,53 @@ async fn discover_gemini_models(
     connection: &CredentialConnection,
     secret: &CredentialExecutionSecret,
     generation: u64,
-) -> Result<ConnectionModelCatalog, String> {
+) -> Result<ConnectionModelCatalog, ModelDiscoveryError> {
     let mut models = Vec::<ConnectionModel>::new();
+    let mut model_ids = BTreeSet::new();
+    let mut seen_cursors = BTreeSet::new();
     let mut page_token = None::<String>;
+    let mut page_count = 0_u32;
     loop {
         let mut url = reqwest::Url::parse(
             format!("{}/models", entry.base_url.trim_end_matches('/')).as_str(),
         )
-        .map_err(|_| String::from("Gemini model discovery URL is invalid."))?;
+        .map_err(|_| ModelDiscoveryError::failed("Gemini model discovery URL is invalid."))?;
         url.query_pairs_mut().append_pair("pageSize", "1000");
         if let Some(token) = page_token.as_deref() {
             url.query_pairs_mut().append_pair("pageToken", token);
         }
         let body =
             send_metadata_get(http, entry, url.as_str(), secret, "Gemini model discovery").await?;
-        let page = parse_gemini_model_page(body.as_str())?;
-        models.extend(page.models);
+        let page = parse_gemini_model_page(body.as_str())
+            .map_err(ModelDiscoveryError::invalid_response)?;
+        page_count = page_count.saturating_add(1);
+        append_unique_discovered_models(
+            &mut models,
+            &mut model_ids,
+            page.models,
+            "Gemini model discovery",
+        )?;
+        validate_pagination_boundary(
+            page_count,
+            page.next_page_token
+                .as_ref()
+                .is_some_and(|value| !value.is_empty()),
+            "Gemini model discovery",
+        )?;
         let Some(next) = page.next_page_token.filter(|value| !value.is_empty()) else {
             break;
         };
-        if page_token.as_deref() == Some(next.as_str()) {
-            return Err(String::from(
-                "Gemini model discovery repeated the same pagination token.",
-            ));
-        }
-        page_token = Some(next);
+        page_token = Some(register_pagination_cursor(
+            &mut seen_cursors,
+            next,
+            "Gemini model discovery",
+        )?);
     }
     Ok(build_gemini_model_catalog(
         connection.id.as_str(),
         generation,
         models,
+        page_count,
     ))
 }
 
@@ -859,14 +1469,17 @@ async fn query_openrouter_model_endpoints(
             format!("OpenRouter secondary route request to `{url}` failed: {error}")
         })?;
     let status = response.status();
-    let body = response.text().await.map_err(|error| {
-        format!("OpenRouter secondary route response from `{url}` failed: {error}")
-    })?;
+    let body = read_bounded_provider_metadata_body(
+        response,
+        "OpenRouter secondary route request",
+        url.as_str(),
+    )
+    .await?;
     if !status.is_success() {
         return Err(format!(
             "OpenRouter secondary route request to `{url}` returned HTTP {}: {}",
             status.as_u16(),
-            controlled_error_body(body.as_str())
+            controlled_error_summary(body.as_str(), secret)
         ));
     }
     let payload = serde_json::from_str::<OpenRouterModelEndpointsResponse>(&body)
@@ -972,15 +1585,14 @@ async fn query_minimax_token_plan(
         .await
         .map_err(|error| format!("MiniMax Token Plan usage request failed: {error}"))?;
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| format!("MiniMax Token Plan usage response failed: {error}"))?;
+    let body =
+        read_bounded_provider_metadata_body(response, "MiniMax Token Plan usage", url.as_str())
+            .await?;
     if !status.is_success() {
         return Err(format!(
             "MiniMax Token Plan usage returned HTTP {}: {}",
             status.as_u16(),
-            controlled_error_body(body.as_str())
+            controlled_error_summary(body.as_str(), secret)
         ));
     }
     let response: MiniMaxQuotaResponse = serde_json::from_str(body.as_str())
@@ -1012,8 +1624,11 @@ async fn query_kimi_coding_plan(
     secret: &str,
     device_id: Option<&str>,
 ) -> Result<AccountUsageSnapshot, String> {
+    // url is the verified fixed Kimi Coding Plan usage endpoint.
+    // url 是已验证的固定 Kimi Coding Plan 用量入口。
+    let url = "https://api.kimi.com/coding/v1/usages";
     let response = http
-        .get("https://api.kimi.com/coding/v1/usages")
+        .get(url)
         .bearer_auth(secret)
         .header("user-agent", "KimiCLI/1.10.6")
         .header("x-msh-platform", "kimi_cli")
@@ -1032,15 +1647,12 @@ async fn query_kimi_coding_plan(
         .await
         .map_err(|error| format!("Kimi Coding Plan usage request failed: {error}"))?;
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| format!("Kimi Coding Plan usage response failed: {error}"))?;
+    let body = read_bounded_provider_metadata_body(response, "Kimi Coding Plan usage", url).await?;
     if !status.is_success() {
         return Err(format!(
             "Kimi Coding Plan usage returned HTTP {}: {}",
             status.as_u16(),
-            controlled_error_body(body.as_str())
+            controlled_error_summary(body.as_str(), secret)
         ));
     }
     decode_kimi_coding_plan_usage(body.as_str())
@@ -1214,15 +1826,13 @@ async fn query_tavily_credits(
         .await
         .map_err(|error| format!("Tavily account usage request failed: {error}"))?;
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| format!("Tavily account usage response failed: {error}"))?;
+    let body =
+        read_bounded_provider_metadata_body(response, "Tavily account usage", url.as_str()).await?;
     if !status.is_success() {
         return Err(format!(
             "Tavily account usage returned HTTP {}: {}",
             status.as_u16(),
-            controlled_error_body(body.as_str())
+            controlled_error_summary(body.as_str(), secret)
         ));
     }
     let response: TavilyUsageResponse = serde_json::from_str(body.as_str())
@@ -1367,15 +1977,14 @@ async fn query_openrouter_credits(
         .await
         .map_err(|error| format!("OpenRouter account usage request failed: {error}"))?;
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| format!("OpenRouter account usage response failed: {error}"))?;
+    let body =
+        read_bounded_provider_metadata_body(response, "OpenRouter account usage", url.as_str())
+            .await?;
     if !status.is_success() {
         return Err(format!(
             "OpenRouter account usage returned HTTP {}: {}",
             status.as_u16(),
-            controlled_error_body(body.as_str())
+            controlled_error_summary(body.as_str(), secret)
         ));
     }
     let response: OpenRouterCreditsResponse = serde_json::from_str(body.as_str())
@@ -1424,15 +2033,14 @@ async fn query_deepseek_balance(
         .await
         .map_err(|error| format!("DeepSeek account balance request failed: {error}"))?;
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| format!("DeepSeek account balance response failed: {error}"))?;
+    let body =
+        read_bounded_provider_metadata_body(response, "DeepSeek account balance", url.as_str())
+            .await?;
     if !status.is_success() {
         return Err(format!(
             "DeepSeek account balance returned HTTP {}: {}",
             status.as_u16(),
-            controlled_error_body(body.as_str())
+            controlled_error_summary(body.as_str(), secret)
         ));
     }
     decode_deepseek_balance(body.as_str())
@@ -1543,17 +2151,20 @@ async fn discover_minimax_models(
     authentication: AuthenticationProjection,
     secret: &CredentialExecutionSecret,
     generation: u64,
-) -> Result<ConnectionModelCatalog, String> {
+) -> Result<ConnectionModelCatalog, ModelDiscoveryError> {
     let url = format!(
         "{}/anthropic/v1/models",
         entry.base_url.trim_end_matches('/')
     );
     let mut after_id: Option<String> = None;
     let mut models = Vec::new();
-    let mut model_ids = std::collections::BTreeSet::new();
+    let mut model_ids = BTreeSet::new();
+    let mut seen_cursors = BTreeSet::new();
+    let mut page_count = 0_u32;
     loop {
-        let mut page_url = reqwest::Url::parse(url.as_str())
-            .map_err(|error| format!("MiniMax model discovery URL is invalid: {error}"))?;
+        let mut page_url = reqwest::Url::parse(url.as_str()).map_err(|error| {
+            ModelDiscoveryError::failed(format!("MiniMax model discovery URL is invalid: {error}"))
+        })?;
         if let Some(cursor) = after_id.as_deref() {
             page_url.query_pairs_mut().append_pair("after_id", cursor);
         }
@@ -1566,16 +2177,16 @@ async fn discover_minimax_models(
             "MiniMax model discovery",
         )
         .await?;
-        let page = parse_minimax_model_page(body.as_str())?;
-        for model in page.models {
-            if !model_ids.insert(model.id.clone()) {
-                return Err(format!(
-                    "MiniMax model discovery returned duplicate model `{}` across pages.",
-                    model.id
-                ));
-            }
-            models.push(model);
-        }
+        let page = parse_minimax_model_page(body.as_str())
+            .map_err(ModelDiscoveryError::invalid_response)?;
+        page_count = page_count.saturating_add(1);
+        append_unique_discovered_models(
+            &mut models,
+            &mut model_ids,
+            page.models,
+            "MiniMax model discovery",
+        )?;
+        validate_pagination_boundary(page_count, page.has_more, "MiniMax model discovery")?;
         if !page.has_more {
             break;
         }
@@ -1583,21 +2194,21 @@ async fn discover_minimax_models(
             .last_id
             .filter(|cursor| !cursor.trim().is_empty())
             .ok_or_else(|| {
-                String::from(
+                ModelDiscoveryError::invalid_response(
                     "MiniMax model discovery reported `has_more=true` without a `last_id` cursor.",
                 )
             })?;
-        if after_id.as_deref() == Some(next_cursor.as_str()) {
-            return Err(format!(
-                "MiniMax model discovery repeated pagination cursor `{next_cursor}`."
-            ));
-        }
-        after_id = Some(next_cursor);
+        after_id = Some(register_pagination_cursor(
+            &mut seen_cursors,
+            next_cursor,
+            "MiniMax model discovery",
+        )?);
     }
     Ok(build_minimax_model_catalog(
         connection.id.as_str(),
         generation,
         models,
+        page_count,
     ))
 }
 
@@ -1756,10 +2367,88 @@ fn current_unix_milliseconds() -> Option<String> {
         .ok()
 }
 
-/// Limits an upstream error body before presenting it to callers.
-/// 在向调用方展示前限制上游错误正文长度。
-fn controlled_error_body(body: &str) -> String {
-    body.chars().take(2_000).collect()
+/// Extracts registered diagnostic fields without exposing one raw upstream response body.
+/// 提取已登记诊断字段且不公开原始上游响应正文。
+///
+/// # Parameters
+/// 参数
+/// `body` is the exact provider response and `sensitive_value` is the credential used by the request.
+/// `body` 是精确供应商响应，`sensitive_value` 是请求所使用的凭据。
+///
+/// # Returns
+/// 返回值
+/// A bounded structured summary with the exact credential redacted, or a fixed omission notice.
+/// 返回已精确遮盖凭据的有界结构化摘要；无法识别时返回固定省略提示。
+fn controlled_error_summary(body: &str, sensitive_value: &str) -> String {
+    // payload accepts only structured JSON before any provider text may enter a public diagnostic.
+    // payload 只接受结构化 JSON，之后供应商文本才可能进入公开诊断。
+    let Ok(payload) = serde_json::from_str::<Value>(body) else {
+        return String::from("Provider returned an unstructured error response; body omitted.");
+    };
+    // diagnostics preserves only the explicitly registered common error fields in stable order.
+    // diagnostics 只按稳定顺序保留显式登记的公共错误字段。
+    let mut diagnostics = Vec::new();
+    if let Some(error) = payload.get("error") {
+        match error {
+            Value::String(message) => diagnostics.push(format!("error={message}")),
+            Value::Object(fields) => {
+                append_controlled_error_field(&mut diagnostics, "error.code", fields.get("code"));
+                append_controlled_error_field(&mut diagnostics, "error.type", fields.get("type"));
+                append_controlled_error_field(
+                    &mut diagnostics,
+                    "error.message",
+                    fields.get("message"),
+                );
+            }
+            _ => {}
+        }
+    }
+    append_controlled_error_field(&mut diagnostics, "code", payload.get("code"));
+    append_controlled_error_field(&mut diagnostics, "type", payload.get("type"));
+    append_controlled_error_field(&mut diagnostics, "message", payload.get("message"));
+    // summary never falls back to serialized JSON, so unregistered response fields remain private.
+    // summary 绝不回退到序列化 JSON，因此未登记响应字段保持私密。
+    let summary = if diagnostics.is_empty() {
+        String::from(
+            "Provider returned a structured error response without registered diagnostics; body omitted.",
+        )
+    } else {
+        diagnostics.join(" | ")
+    };
+    // redacted removes the exact request credential before applying the public length boundary.
+    // redacted 在应用公开长度边界前移除精确请求凭据。
+    let redacted = if sensitive_value.is_empty() {
+        summary
+    } else {
+        summary.replace(sensitive_value, "[REDACTED]")
+    };
+    redacted.chars().take(2_000).collect()
+}
+
+/// Appends one registered scalar error field to a controlled diagnostic summary.
+/// 向受控诊断摘要追加一个已登记的标量错误字段。
+///
+/// # Parameters
+/// 参数
+/// `target` owns ordered diagnostic fragments, `label` is code-owned, and `value` is one JSON field.
+/// `target` 持有有序诊断片段，`label` 由代码持有，`value` 是一个 JSON 字段。
+///
+/// # Returns
+/// 返回值
+/// This helper mutates `target` only when `value` is a non-empty scalar.
+/// 仅当 `value` 是非空标量时，此辅助函数才修改 `target`。
+fn append_controlled_error_field(target: &mut Vec<String>, label: &str, value: Option<&Value>) {
+    // text accepts only scalar JSON values; objects and arrays are intentionally omitted.
+    // text 只接受 JSON 标量值；对象与数组会被有意省略。
+    let text = match value {
+        Some(Value::String(text)) => Some(text.clone()),
+        Some(Value::Number(number)) => Some(number.to_string()),
+        Some(Value::Bool(boolean)) => Some(boolean.to_string()),
+        _ => None,
+    };
+    if let Some(text) = text.filter(|text| !text.trim().is_empty()) {
+        target.push(format!("{label}={text}"));
+    }
 }
 
 /// DeepSeek official account balance response.
@@ -2260,10 +2949,814 @@ struct KimiUsageMembership {
 #[cfg(test)]
 mod tests {
     use super::{
-        MiniMaxQuotaModelRemain, decode_deepseek_balance, decode_kimi_coding_plan_usage,
-        minimax_key_profile_id, minimax_quota_windows, resolve_minimax_region,
-        subtract_non_negative_decimal, tavily_usage_window,
+        HttpProviderMetadataClient, MiniMaxQuotaModelRemain, ModelDiscoveryFailureKind,
+        ProviderMetadataClient, append_bounded_model_discovery_chunk,
+        append_unique_discovered_models, controlled_error_summary, decode_deepseek_balance,
+        decode_kimi_coding_plan_usage, minimax_key_profile_id, minimax_quota_windows,
+        register_pagination_cursor, resolve_minimax_region, subtract_non_negative_decimal,
+        tavily_usage_window, validate_discovered_catalog_bounds, validate_pagination_boundary,
     };
+    use crate::{
+        ConnectionModel, ConnectionModelCatalog, CredentialConnection, CredentialMode,
+        CredentialSecretEnvelope, CustomProviderAuthentication, CustomProviderDefinition,
+        CustomProviderModelDiscoveryMode, CustomProviderProtocol, ModelCapabilityEvidence,
+        PROVIDER_MODEL_IDENTIFIER_MAX_BYTES,
+    };
+    use std::collections::{BTreeMap, BTreeSet};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+        sync::oneshot,
+        task::JoinHandle,
+    };
+    use vulcan_ai_contract::ModelCapabilities;
+    use vulcan_ai_protocols::{ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID};
+
+    /// Starts one local HTTP fixture that captures the request and returns one JSON response.
+    /// 启动一个本地 HTTP 夹具，捕获请求并返回一项 JSON 响应。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `status` is the complete HTTP status text and `body` is the exact response body.
+    /// `status` 是完整 HTTP 状态文本，`body` 是精确响应正文。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The server origin, captured-request receiver, and bounded server task.
+    /// 返回服务源地址、请求捕获接收器与有界服务任务。
+    async fn start_metadata_fixture(
+        status: &str,
+        body: &str,
+    ) -> (String, oneshot::Receiver<String>, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("local metadata fixture should bind");
+        let address = listener
+            .local_addr()
+            .expect("local metadata fixture address");
+        let status = status.to_string();
+        let body = body.to_string();
+        let (request_sender, request_receiver) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .expect("metadata fixture should receive one request");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = stream
+                    .read(&mut buffer)
+                    .await
+                    .expect("metadata fixture should read request headers");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+            }
+            let _ = request_sender.send(String::from_utf8_lossy(&request).into_owned());
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len(),
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("metadata fixture should write response");
+        });
+        (format!("http://{address}"), request_receiver, task)
+    }
+
+    /// Starts one local HTTP fixture that returns a bounded sequence of paginated responses.
+    /// 启动一个返回有界分页响应序列的本地 HTTP 夹具。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `responses` contains exact HTTP status text and response bodies in request order.
+    /// `responses` 按请求顺序包含精确 HTTP 状态文本和响应正文。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The server origin, captured request list, and bounded server task.
+    /// 返回服务源地址、已捕获请求列表与有界服务任务。
+    async fn start_metadata_sequence_fixture(
+        responses: Vec<(&str, &str)>,
+    ) -> (String, oneshot::Receiver<Vec<String>>, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("local metadata sequence fixture should bind");
+        let address = listener
+            .local_addr()
+            .expect("local metadata sequence fixture address");
+        let responses = responses
+            .into_iter()
+            .map(|(status, body)| (status.to_string(), body.to_string()))
+            .collect::<Vec<_>>();
+        let (request_sender, request_receiver) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let mut requests = Vec::with_capacity(responses.len());
+            for (status, body) in responses {
+                let Ok(accepted) =
+                    tokio::time::timeout(std::time::Duration::from_secs(2), listener.accept())
+                        .await
+                else {
+                    break;
+                };
+                let (mut stream, _) =
+                    accepted.expect("metadata sequence fixture should receive one request");
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let read = stream
+                        .read(&mut buffer)
+                        .await
+                        .expect("metadata sequence fixture should read request headers");
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                requests.push(String::from_utf8_lossy(&request).into_owned());
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len(),
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("metadata sequence fixture should write response");
+            }
+            let _ = request_sender.send(requests);
+        });
+        (format!("http://{address}"), request_receiver, task)
+    }
+
+    /// Builds one exact custom OpenAI-compatible connection for HTTP discovery tests.
+    /// 为 HTTP 发现测试构建一个精确的自定义 OpenAI 兼容连接。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` and `base_url` define the custom provider identity and endpoint;
+    /// `model_discovery_path` optionally selects a reviewed same-origin catalog path.
+    /// `provider_id` 与 `base_url` 定义自定义供应商身份和端点；
+    /// `model_discovery_path` 可选指定一个已审核的同源目录路径。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A validated descriptor and matching credential connection.
+    /// 返回已验证描述及匹配的凭据连接。
+    fn custom_openai_fixture(
+        provider_id: &str,
+        base_url: &str,
+    ) -> (crate::ProviderDescriptor, CredentialConnection) {
+        let provider = CustomProviderDefinition {
+            id: provider_id.to_string(),
+            display_name: String::from("Local Fixture"),
+            base_url: base_url.to_string(),
+            protocol: CustomProviderProtocol::OpenAiChat,
+            authentication: CustomProviderAuthentication::BearerAuthorization,
+            model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
+            model_discovery_path: None,
+        }
+        .into_descriptor()
+        .expect("custom provider fixture should project");
+        let connection = CredentialConnection {
+            id: String::from("connection"),
+            provider_id: provider_id.to_string(),
+            service_entry_id: String::from("default"),
+            credential_profile_id: String::from("api-key"),
+            credential_mode: CredentialMode::Token,
+            credential_id: String::from("credential"),
+            display_name: String::from("Fixture account"),
+            secret_reference: String::from("secret"),
+            management_secret_reference: None,
+            service_origin_override: None,
+            verified_protocols: BTreeSet::from([OPENAI_CHAT_PROFILE_ID.to_string()]),
+            selected_protocol: OPENAI_CHAT_PROFILE_ID.to_string(),
+            prompt_cache_by_protocol: BTreeMap::new(),
+            usage_scope_override: None,
+        };
+        (provider, connection)
+    }
+
+    /// Builds one exact custom Anthropic-compatible connection for pagination tests.
+    /// 为分页测试构建一个精确的自定义 Anthropic 兼容连接。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` and `base_url` define the custom provider identity and endpoint.
+    /// `provider_id` 与 `base_url` 定义自定义供应商身份和端点。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A validated descriptor and matching credential connection.
+    /// 返回已验证描述及匹配的凭据连接。
+    fn custom_anthropic_fixture(
+        provider_id: &str,
+        base_url: &str,
+        model_discovery_path: Option<&str>,
+    ) -> (crate::ProviderDescriptor, CredentialConnection) {
+        let provider = CustomProviderDefinition {
+            id: provider_id.to_string(),
+            display_name: String::from("Local Anthropic Fixture"),
+            base_url: base_url.to_string(),
+            protocol: CustomProviderProtocol::AnthropicMessages,
+            authentication: CustomProviderAuthentication::XApiKey,
+            model_discovery_mode: if model_discovery_path.is_some() {
+                CustomProviderModelDiscoveryMode::CustomPath
+            } else {
+                CustomProviderModelDiscoveryMode::Standard
+            },
+            model_discovery_path: model_discovery_path.map(str::to_string),
+        }
+        .into_descriptor()
+        .expect("custom Anthropic provider fixture should project");
+        let connection = CredentialConnection {
+            id: String::from("connection"),
+            provider_id: provider_id.to_string(),
+            service_entry_id: String::from("default"),
+            credential_profile_id: String::from("api-key"),
+            credential_mode: CredentialMode::Token,
+            credential_id: String::from("credential"),
+            display_name: String::from("Fixture account"),
+            secret_reference: String::from("secret"),
+            management_secret_reference: None,
+            service_origin_override: None,
+            verified_protocols: BTreeSet::from([ANTHROPIC_MESSAGES_PROFILE_ID.to_string()]),
+            selected_protocol: ANTHROPIC_MESSAGES_PROFILE_ID.to_string(),
+            prompt_cache_by_protocol: BTreeMap::new(),
+            usage_scope_override: None,
+        };
+        (provider, connection)
+    }
+
+    /// Runs one complete custom Anthropic discovery against a bounded local page sequence.
+    /// 针对有界本地分页序列运行一次完整自定义 Anthropic 发现。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `responses` contains exact ordered HTTP pages.
+    /// `responses` 包含精确有序 HTTP 分页。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The typed discovery result and every captured request.
+    /// 返回强类型发现结果与全部已捕获请求。
+    async fn discover_custom_anthropic_pages(
+        responses: Vec<(&str, &str)>,
+    ) -> (
+        Result<crate::ConnectionModelCatalog, super::ModelDiscoveryError>,
+        Vec<String>,
+    ) {
+        let (origin, request_receiver, server_task) =
+            start_metadata_sequence_fixture(responses).await;
+        let (provider, connection) = custom_anthropic_fixture(
+            "custom:anthropic-fixture",
+            format!("{origin}/v1").as_str(),
+            None,
+        );
+        let entry = provider
+            .service_entries
+            .first()
+            .expect("custom Anthropic provider entry");
+        let secret = CredentialSecretEnvelope::new_api_key(String::from("test-key"))
+            .expect("test credential envelope")
+            .execution_secret()
+            .expect("test execution secret");
+        let result = HttpProviderMetadataClient::new(reqwest::Client::new())
+            .discover_models(&provider, entry, &connection, &secret, 1)
+            .await;
+        let requests = request_receiver
+            .await
+            .expect("metadata sequence fixture should publish requests");
+        server_task
+            .await
+            .expect("metadata sequence fixture should finish");
+        (result, requests)
+    }
+
+    /// Builds one minimal model-catalog record for pagination helper tests.
+    /// 为分页辅助函数测试构建一个最小模型目录记录。
+    fn pagination_model(model_id: &str) -> ConnectionModel {
+        ConnectionModel {
+            id: model_id.to_string(),
+            display_name: model_id.to_string(),
+            capabilities: ModelCapabilities::default(),
+            capability_evidence: ModelCapabilityEvidence::default(),
+        }
+    }
+
+    /// Verifies duplicate identities reject the complete incoming page without partial mutation.
+    /// 验证重复标识会拒绝完整的新分页且不会发生部分变更。
+    #[test]
+    fn paginated_model_append_is_atomic_and_unique() {
+        let mut target = vec![pagination_model("existing")];
+        let mut seen = BTreeSet::from([String::from("existing")]);
+        let error = append_unique_discovered_models(
+            &mut target,
+            &mut seen,
+            vec![pagination_model("new"), pagination_model("existing")],
+            "Test discovery",
+        )
+        .expect_err("duplicate model must reject the complete page");
+
+        assert!(error.message.contains("duplicate model `existing`"));
+        assert_eq!(target.len(), 1);
+        assert!(!seen.contains("new"));
+    }
+
+    /// Verifies non-adjacent cursor cycles are rejected deterministically.
+    /// 验证非相邻游标循环会被确定性拒绝。
+    #[test]
+    fn pagination_cursor_registry_rejects_non_adjacent_cycles() {
+        let mut seen = BTreeSet::new();
+        assert_eq!(
+            register_pagination_cursor(&mut seen, String::from("A"), "Test discovery")
+                .expect("first cursor must register"),
+            "A"
+        );
+        register_pagination_cursor(&mut seen, String::from("B"), "Test discovery")
+            .expect("second cursor must register");
+        let error = register_pagination_cursor(&mut seen, String::from("A"), "Test discovery")
+            .expect_err("a non-adjacent cursor cycle must fail");
+        assert!(error.message.contains("repeated pagination cursor `A`"));
+    }
+
+    /// Verifies a provider cannot continue beyond the explicit model-catalog page boundary.
+    /// 验证供应商不能在明确模型目录分页边界之后继续。
+    #[test]
+    fn pagination_boundary_rejects_unbounded_unique_cursors() {
+        assert!(validate_pagination_boundary(1_023, true, "Test discovery").is_ok());
+        assert!(validate_pagination_boundary(1_024, false, "Test discovery").is_ok());
+        // error proves a unique-cursor stream still terminates at the fixed safety boundary.
+        // error 证明即使游标始终唯一，数据流也会在固定安全边界终止。
+        let error = validate_pagination_boundary(1_024, true, "Test discovery")
+            .expect_err("continued traversal at the boundary must fail");
+        assert!(error.message.contains("1024-page safety boundary"));
+    }
+
+    /// Verifies decoded response chunks are rejected before crossing their memory boundary.
+    /// 验证解码响应块会在越过内存边界前被拒绝。
+    #[test]
+    fn bounded_model_discovery_chunk_rejects_overflow_before_append() {
+        let mut body = vec![b'a'; 4];
+
+        let error = append_bounded_model_discovery_chunk(&mut body, b"b", 4, "model discovery")
+            .expect_err("overflowing chunk must fail");
+
+        assert_eq!(body, b"aaaa");
+        assert_eq!(error.kind, ModelDiscoveryFailureKind::InvalidResponse);
+        assert!(error.message.contains("4-byte catalog boundary"));
+    }
+
+    /// Verifies non-paginated catalogs cannot bypass aggregate model and identity validation.
+    /// 验证非分页目录无法绕过聚合模型与身份校验。
+    #[test]
+    fn discovered_catalog_bounds_reject_duplicate_and_oversized_identities() {
+        let duplicate = ConnectionModelCatalog {
+            connection_id: String::from("account"),
+            models: vec![
+                ConnectionModel {
+                    id: String::from("same"),
+                    display_name: String::from("One"),
+                    capabilities: ModelCapabilities::default(),
+                    capability_evidence: ModelCapabilityEvidence::default(),
+                },
+                ConnectionModel {
+                    id: String::from("same"),
+                    display_name: String::from("Two"),
+                    capabilities: ModelCapabilities::default(),
+                    capability_evidence: ModelCapabilityEvidence::default(),
+                },
+            ],
+            generation: 1,
+            page_count: 1,
+            discovery_schema_revision: String::from("test"),
+        };
+        let duplicate_error = validate_discovered_catalog_bounds(duplicate, "account")
+            .expect_err("duplicate identities must fail");
+        assert!(
+            duplicate_error
+                .message
+                .contains("duplicate model identifier")
+        );
+
+        let oversized = ConnectionModelCatalog {
+            connection_id: String::from("account"),
+            models: vec![ConnectionModel {
+                id: "x".repeat(PROVIDER_MODEL_IDENTIFIER_MAX_BYTES + 1),
+                display_name: String::from("Model"),
+                capabilities: ModelCapabilities::default(),
+                capability_evidence: ModelCapabilityEvidence::default(),
+            }],
+            generation: 1,
+            page_count: 1,
+            discovery_schema_revision: String::from("test"),
+        };
+        let oversized_error = validate_discovered_catalog_bounds(oversized, "account")
+            .expect_err("oversized identities must fail");
+        assert!(oversized_error.message.contains("invalid model identifier"));
+    }
+
+    /// Verifies public provider diagnostics expose only registered fields and redact the exact key.
+    /// 验证公开供应商诊断只暴露已登记字段并遮盖精确 Key。
+    #[test]
+    fn controlled_error_summary_is_structured_and_secret_safe() {
+        // secret is deliberately echoed by the fixture to prove exact redaction.
+        // secret 会被夹具有意回显，用于证明精确遮盖有效。
+        let secret = "sk-private-fixture";
+        // summary must retain actionable fields but omit every unregistered payload field.
+        // summary 必须保留可操作字段，同时省略每个未登记载荷字段。
+        let summary = controlled_error_summary(
+            r#"{"error":{"code":"invalid_key","message":"rejected sk-private-fixture"},"debug":{"raw":"private-upstream-body"}}"#,
+            secret,
+        );
+
+        assert!(summary.contains("error.code=invalid_key"));
+        assert!(summary.contains("error.message=rejected [REDACTED]"));
+        assert!(!summary.contains(secret));
+        assert!(!summary.contains("private-upstream-body"));
+    }
+
+    /// Verifies non-JSON provider bodies never enter the public diagnostic channel.
+    /// 验证非 JSON 供应商正文绝不会进入公开诊断通道。
+    #[test]
+    fn controlled_error_summary_omits_unstructured_body() {
+        // summary is fixed text and must not reproduce the raw upstream HTML.
+        // summary 是固定文本，不能复现原始上游 HTML。
+        let summary = controlled_error_summary("<html>private diagnostic</html>", "secret");
+
+        assert_eq!(
+            summary,
+            "Provider returned an unstructured error response; body omitted."
+        );
+        assert!(!summary.contains("private diagnostic"));
+    }
+
+    /// Verifies Anthropic-compatible discovery follows every page and forwards the exact cursor.
+    /// 验证 Anthropic 兼容发现会读取全部分页并转发精确游标。
+    #[tokio::test]
+    async fn custom_anthropic_discovery_collects_multiple_pages() {
+        let (result, requests) = discover_custom_anthropic_pages(vec![
+            (
+                "200 OK",
+                r#"{"data":[{"id":"claude-a","display_name":"Claude A"}],"has_more":true,"last_id":"claude-a"}"#,
+            ),
+            (
+                "200 OK",
+                r#"{"data":[{"id":"claude-b","display_name":"Claude B"}],"has_more":false,"last_id":"claude-b"}"#,
+            ),
+        ])
+        .await;
+        let catalog = result.expect("two valid pages should discover successfully");
+
+        assert_eq!(catalog.page_count, 2);
+        assert_eq!(
+            catalog
+                .models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["claude-a", "claude-b"]
+        );
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].starts_with("GET /v1/models?limit=1000 HTTP/1.1\r\n"));
+        assert!(requests[1].contains("after_id=claude-a"));
+    }
+
+    /// Verifies Anthropic-compatible discovery honors one reviewed same-origin catalog path.
+    /// 验证 Anthropic 兼容发现会遵守已审核的同源模型目录路径。
+    #[tokio::test]
+    async fn custom_anthropic_discovery_uses_custom_catalog_path() {
+        // fixture records the exact HTTP path requested by the discovery client.
+        // fixture 记录发现客户端请求的精确 HTTP 路径。
+        let (origin, request_receiver, server_task) = start_metadata_sequence_fixture(vec![(
+            "200 OK",
+            r#"{"data":[{"id":"claude-a","display_name":"Claude A"}],"has_more":false,"last_id":"claude-a"}"#,
+        )])
+        .await;
+        // provider selects a catalog path outside the versioned inference base URL.
+        // provider 选择位于版本化推理基础地址之外的目录路径。
+        let (provider, connection) = custom_anthropic_fixture(
+            "custom:anthropic-custom-path",
+            format!("{origin}/v1").as_str(),
+            Some("/catalog/models"),
+        );
+        // entry is the exact projected service entry used by the metadata client.
+        // entry 是元数据客户端使用的精确投影服务入口。
+        let entry = provider
+            .service_entries
+            .first()
+            .expect("custom Anthropic provider entry");
+        // secret supplies the exact X-API-Key projection expected by the custom provider.
+        // secret 提供自定义供应商所需的精确 X-API-Key 投影。
+        let secret = CredentialSecretEnvelope::new_api_key(String::from("test-key"))
+            .expect("test credential envelope")
+            .execution_secret()
+            .expect("test execution secret");
+
+        // catalog is the completed one-page discovery result.
+        // catalog 是已完成的单页发现结果。
+        let catalog = HttpProviderMetadataClient::new(reqwest::Client::new())
+            .discover_models(&provider, entry, &connection, &secret, 1)
+            .await
+            .expect("custom Anthropic discovery should honor the configured path");
+        // requests contains every HTTP request observed by the bounded fixture.
+        // requests 包含有界夹具观测到的每个 HTTP 请求。
+        let requests = request_receiver
+            .await
+            .expect("metadata sequence fixture should publish requests");
+        server_task
+            .await
+            .expect("metadata sequence fixture should finish");
+
+        assert_eq!(catalog.models.len(), 1);
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with("GET /v1/catalog/models?limit=1000 HTTP/1.1\r\n"));
+    }
+
+    /// Verifies a duplicate Anthropic model identity across pages rejects the complete traversal.
+    /// 验证 Anthropic 跨页重复模型标识会拒绝完整遍历。
+    #[tokio::test]
+    async fn custom_anthropic_discovery_rejects_duplicate_models() {
+        let (result, requests) = discover_custom_anthropic_pages(vec![
+            (
+                "200 OK",
+                r#"{"data":[{"id":"claude-a","display_name":"Claude A"}],"has_more":true,"last_id":"cursor-a"}"#,
+            ),
+            (
+                "200 OK",
+                r#"{"data":[{"id":"claude-a","display_name":"Claude A"}],"has_more":false,"last_id":"cursor-b"}"#,
+            ),
+        ])
+        .await;
+        let error = result.expect_err("duplicate model identity must reject discovery");
+
+        assert_eq!(error.kind, ModelDiscoveryFailureKind::InvalidResponse);
+        assert!(
+            error.message.contains("duplicate model `claude-a`"),
+            "{}",
+            error.message
+        );
+        assert_eq!(requests.len(), 2);
+    }
+
+    /// Verifies `has_more=true` without a cursor is an invalid response rather than an empty page.
+    /// 验证缺少游标的 `has_more=true` 属于无效响应而非空分页。
+    #[tokio::test]
+    async fn custom_anthropic_discovery_requires_cursor_for_more_pages() {
+        let (result, requests) = discover_custom_anthropic_pages(vec![(
+            "200 OK",
+            r#"{"data":[{"id":"claude-a","display_name":"Claude A"}],"has_more":true}"#,
+        )])
+        .await;
+        let error = result.expect_err("missing cursor must reject discovery");
+
+        assert_eq!(error.kind, ModelDiscoveryFailureKind::InvalidResponse);
+        assert!(error.message.contains("without `last_id`"));
+        assert_eq!(requests.len(), 1);
+    }
+
+    /// Verifies a repeated Anthropic cursor terminates before a third request can loop forever.
+    /// 验证 Anthropic 重复游标会在第三次请求前终止，避免无限循环。
+    #[tokio::test]
+    async fn custom_anthropic_discovery_rejects_cursor_cycles() {
+        let (result, requests) = discover_custom_anthropic_pages(vec![
+            (
+                "200 OK",
+                r#"{"data":[{"id":"claude-a","display_name":"Claude A"}],"has_more":true,"last_id":"cursor-a"}"#,
+            ),
+            (
+                "200 OK",
+                r#"{"data":[{"id":"claude-b","display_name":"Claude B"}],"has_more":true,"last_id":"cursor-a"}"#,
+            ),
+        ])
+        .await;
+        let error = result.expect_err("repeated cursor must reject discovery");
+
+        assert_eq!(error.kind, ModelDiscoveryFailureKind::InvalidResponse);
+        assert!(
+            error
+                .message
+                .contains("repeated pagination cursor `cursor-a`")
+        );
+        assert_eq!(requests.len(), 2);
+    }
+
+    /// Verifies custom discovery calls the standard endpoint, sends Bearer auth, and tolerates extensions.
+    /// 验证自定义发现会调用标准端点、发送 Bearer 鉴权并容忍扩展字段。
+    #[tokio::test]
+    async fn custom_openai_discovery_uses_standard_models_endpoint() {
+        let (origin, request_receiver, server_task) = start_metadata_fixture(
+            "200 OK",
+            r#"{"object":"list","first_id":"model-a","data":[{"id":"model-a","object":"model","owned_by":"fixture"}]}"#,
+        )
+        .await;
+        let (provider, connection) =
+            custom_openai_fixture("custom:local-fixture", format!("{origin}/v1").as_str());
+        let entry = provider
+            .service_entries
+            .first()
+            .expect("custom provider entry");
+        let secret = CredentialSecretEnvelope::new_api_key(String::from("test-key"))
+            .expect("test credential envelope")
+            .execution_secret()
+            .expect("test execution secret");
+        let client = HttpProviderMetadataClient::new(reqwest::Client::new());
+
+        let catalog = client
+            .discover_models(&provider, entry, &connection, &secret, 7)
+            .await
+            .expect("custom model discovery should succeed");
+        let request = request_receiver
+            .await
+            .expect("metadata fixture should capture the request");
+        server_task.await.expect("metadata fixture should finish");
+
+        assert!(request.starts_with("GET /v1/models HTTP/1.1\r\n"));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer test-key")
+        );
+        assert_eq!(catalog.connection_id, "connection");
+        assert_eq!(catalog.generation, 7);
+        assert_eq!(catalog.page_count, 1);
+        assert_eq!(catalog.models.len(), 1);
+        assert_eq!(catalog.models[0].id, "model-a");
+    }
+
+    /// Verifies a provider HTTP authentication failure remains observable for typed classification.
+    /// 验证供应商 HTTP 鉴权失败会保持可观测，以供类型化分类。
+    #[tokio::test]
+    async fn custom_openai_discovery_preserves_authentication_status() {
+        let (origin, _request_receiver, server_task) = start_metadata_fixture(
+            "401 Unauthorized",
+            r#"{"error":{"message":"invalid credential"}}"#,
+        )
+        .await;
+        let (provider, connection) =
+            custom_openai_fixture("custom:auth-fixture", format!("{origin}/v1").as_str());
+        let entry = provider
+            .service_entries
+            .first()
+            .expect("custom provider entry");
+        let secret = CredentialSecretEnvelope::new_api_key(String::from("invalid-key"))
+            .expect("test credential envelope")
+            .execution_secret()
+            .expect("test execution secret");
+        let client = HttpProviderMetadataClient::new(reqwest::Client::new());
+
+        let error = client
+            .discover_models(&provider, entry, &connection, &secret, 1)
+            .await
+            .expect_err("authentication failure must reject discovery");
+        server_task.await.expect("metadata fixture should finish");
+
+        assert_eq!(error.kind, ModelDiscoveryFailureKind::AuthenticationFailed);
+        assert!(error.message.contains("HTTP 401"));
+        assert!(error.message.contains("invalid credential"));
+    }
+
+    /// Verifies every documented HTTP discovery class is assigned at the response boundary.
+    /// 验证每一种文档化 HTTP 发现分类都会在响应边界直接赋值。
+    #[tokio::test]
+    async fn custom_discovery_http_statuses_have_exact_typed_failures() {
+        for (status, expected) in [
+            (
+                "403 Forbidden",
+                ModelDiscoveryFailureKind::AuthenticationFailed,
+            ),
+            ("404 Not Found", ModelDiscoveryFailureKind::Unsupported),
+            (
+                "405 Method Not Allowed",
+                ModelDiscoveryFailureKind::Unsupported,
+            ),
+            (
+                "429 Too Many Requests",
+                ModelDiscoveryFailureKind::RateLimited,
+            ),
+            (
+                "408 Request Timeout",
+                ModelDiscoveryFailureKind::TemporarilyUnavailable,
+            ),
+            (
+                "500 Internal Server Error",
+                ModelDiscoveryFailureKind::TemporarilyUnavailable,
+            ),
+            (
+                "503 Service Unavailable",
+                ModelDiscoveryFailureKind::TemporarilyUnavailable,
+            ),
+        ] {
+            let (origin, _request_receiver, server_task) =
+                start_metadata_fixture(status, r#"{"error":"controlled"}"#).await;
+            let (provider, connection) =
+                custom_openai_fixture("custom:status-fixture", format!("{origin}/v1").as_str());
+            let entry = provider
+                .service_entries
+                .first()
+                .expect("custom provider entry");
+            let secret = CredentialSecretEnvelope::new_api_key(String::from("test-key"))
+                .expect("test credential envelope")
+                .execution_secret()
+                .expect("test execution secret");
+            let error = HttpProviderMetadataClient::new(reqwest::Client::new())
+                .discover_models(&provider, entry, &connection, &secret, 1)
+                .await
+                .expect_err("non-success status must reject discovery");
+            server_task.await.expect("metadata fixture should finish");
+
+            assert_eq!(error.kind, expected, "unexpected class for {status}");
+        }
+    }
+
+    /// Verifies malformed success payloads fail while an explicit empty catalog remains successful.
+    /// 验证格式错误的成功载荷会失败，而显式空目录仍保持成功。
+    #[tokio::test]
+    async fn custom_discovery_distinguishes_invalid_json_from_empty_catalog() {
+        let (invalid_origin, _request_receiver, invalid_server) =
+            start_metadata_fixture("200 OK", "{not-json").await;
+        let (invalid_provider, invalid_connection) = custom_openai_fixture(
+            "custom:invalid-fixture",
+            format!("{invalid_origin}/v1").as_str(),
+        );
+        let invalid_entry = invalid_provider
+            .service_entries
+            .first()
+            .expect("custom provider entry");
+        let secret = CredentialSecretEnvelope::new_api_key(String::from("test-key"))
+            .expect("test credential envelope")
+            .execution_secret()
+            .expect("test execution secret");
+        let client = HttpProviderMetadataClient::new(reqwest::Client::new());
+        let error = client
+            .discover_models(
+                &invalid_provider,
+                invalid_entry,
+                &invalid_connection,
+                &secret,
+                1,
+            )
+            .await
+            .expect_err("malformed JSON must reject discovery");
+        invalid_server
+            .await
+            .expect("invalid metadata fixture should finish");
+        assert_eq!(error.kind, ModelDiscoveryFailureKind::InvalidResponse);
+
+        let (empty_origin, _request_receiver, empty_server) =
+            start_metadata_fixture("200 OK", r#"{"object":"list","data":[]}"#).await;
+        let (empty_provider, empty_connection) = custom_openai_fixture(
+            "custom:empty-fixture",
+            format!("{empty_origin}/v1").as_str(),
+        );
+        let empty_entry = empty_provider
+            .service_entries
+            .first()
+            .expect("custom provider entry");
+        let catalog = client
+            .discover_models(&empty_provider, empty_entry, &empty_connection, &secret, 2)
+            .await
+            .expect("empty catalog is a successful observed state");
+        empty_server
+            .await
+            .expect("empty metadata fixture should finish");
+        assert!(catalog.models.is_empty());
+        assert_eq!(catalog.page_count, 1);
+    }
+
+    /// Verifies a transport failure is retryable and never masquerades as unsupported discovery.
+    /// 验证传输失败可重试，且绝不会伪装成目录不受支持。
+    #[tokio::test]
+    async fn custom_discovery_transport_failure_is_temporarily_unavailable() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("temporary endpoint should bind");
+        let address = listener.local_addr().expect("temporary endpoint address");
+        drop(listener);
+        let (provider, connection) = custom_openai_fixture(
+            "custom:transport-fixture",
+            format!("http://{address}/v1").as_str(),
+        );
+        let entry = provider
+            .service_entries
+            .first()
+            .expect("custom provider entry");
+        let secret = CredentialSecretEnvelope::new_api_key(String::from("test-key"))
+            .expect("test credential envelope")
+            .execution_secret()
+            .expect("test execution secret");
+        let error = HttpProviderMetadataClient::new(reqwest::Client::new())
+            .discover_models(&provider, entry, &connection, &secret, 1)
+            .await
+            .expect_err("closed endpoint must reject discovery");
+
+        assert_eq!(
+            error.kind,
+            ModelDiscoveryFailureKind::TemporarilyUnavailable
+        );
+    }
 
     /// Verifies MiniMax billing profiles are selected only from reviewed literal prefixes.
     /// 验证 MiniMax 计费配置档仅从已审核的字面前缀中选择。

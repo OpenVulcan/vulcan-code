@@ -1826,6 +1826,61 @@ export type TranslationKey =
   | "settings.customProviders.modelCount"
   | "settings.customProviders.manageModels"
   | "settings.customProviders.manageModelsFor"
+  | "settings.customProviders.addTitle"
+  | "settings.customProviders.editTitle"
+  | "settings.customProviders.dialogDescription"
+  | "settings.customProviders.progressLabel"
+  | "settings.customProviders.step.connection"
+  | "settings.customProviders.step.credential"
+  | "settings.customProviders.step.result"
+  | "settings.customProviders.displayName"
+  | "settings.customProviders.baseUrl"
+  | "settings.customProviders.protocol"
+  | "settings.customProviders.authentication"
+  | "settings.customProviders.discoveryMode"
+  | "settings.customProviders.discoveryStandard"
+  | "settings.customProviders.discoveryCustomPath"
+  | "settings.customProviders.discoveryManual"
+  | "settings.customProviders.discoveryPath"
+  | "settings.customProviders.protocolEndpoint"
+  | "settings.customProviders.modelsEndpoint"
+  | "settings.customProviders.manualOnly"
+  | "settings.customProviders.validationTitle"
+  | "settings.customProviders.validationEditDescription"
+  | "settings.customProviders.validationCreateDescription"
+  | "settings.customProviders.validationCredentialName"
+  | "settings.customProviders.firstCredentialName"
+  | "settings.customProviders.apiKey"
+  | "settings.customProviders.apiKeyEditPlaceholder"
+  | "settings.customProviders.apiKeyCreatePlaceholder"
+  | "settings.customProviders.credentialRequired"
+  | "settings.customProviders.back"
+  | "settings.customProviders.next"
+  | "settings.customProviders.probing"
+  | "settings.customProviders.probe"
+  | "settings.customProviders.validationResultDescription"
+  | "settings.customProviders.validationModelCount"
+  | "settings.customProviders.validationPageCount"
+  | "settings.customProviders.validationCredential"
+  | "settings.customProviders.validationObservedAt"
+  | "settings.customProviders.validationModelsTitle"
+  | "settings.customProviders.validationEvidence"
+  | "settings.customProviders.validationModelsHint"
+  | "settings.customProviders.manualFallbackHint"
+  | "settings.customProviders.pendingSaveHint"
+  | "settings.customProviders.saving"
+  | "settings.customProviders.saveVerified"
+  | "settings.customProviders.saveManual"
+  | "settings.customProviders.savePending"
+  | "settings.customProviders.pendingConfirmTitle"
+  | "settings.customProviders.pendingConfirmDescription"
+  | "settings.customProviders.confirmPending"
+  | "settings.customProviders.displayNameRequired"
+  | "settings.customProviders.baseUrlInvalid"
+  | "settings.customProviders.discoveryPathInvalid"
+  | "settings.customProviders.discovery.standard"
+  | "settings.customProviders.discovery.custom_path"
+  | "settings.customProviders.discovery.manual"
   | "settings.customModels.identityRequired"
   | "settings.customModels.duplicateId"
   | "settings.customModels.parametersInvalid"
@@ -1874,6 +1929,124 @@ export type TranslationKey =
   | "settings.customModels.remove"
   | "settings.customModels.selectHint"
   | "settings.customModels.save"
+  | "settings.customModels.defaultsTitle"
+  | "settings.customModels.defaultsDescription"
+  | "settings.customModels.defaultsEdit"
+  | "settings.customModels.contextSummary"
+  | "settings.customModels.outputSummary"
+  | "settings.customModels.textInputOutput"
+  | "settings.customModels.outputRecommendation"
+  | "settings.customModels.defaultsContextInvalid"
+  | "settings.customModels.defaultsOutputInvalid"
+  | "settings.customModels.defaultsSave"
+  | "settings.customModels.templateSearching"
+  | "settings.customModels.templateUpdateAvailable"
+  | "settings.customModels.templateUpdateDescription"
+  | "settings.customModels.templateCurrent"
+  | "settings.customModels.templateLatest"
+  | "settings.customModels.templateApplyUpdate"
+  | "settings.customModels.templateApplied"
+  | "settings.customModels.templateRestore"
+  | "settings.customModels.templateNone"
+  | "settings.customModels.templateDefaultFallback"
+  | "settings.customModels.templateRejected"
+  | "settings.customModels.templateReviewAgain"
+  | "settings.customModels.templateSuggested"
+  | "settings.customModels.templateApply"
+  | "settings.customModels.templateKeepDefaults"
+  | "settings.customModels.templateMatch.exact"
+  | "settings.customModels.templateMatch.alias"
+  | "settings.customModels.templateMatch.provider_agnostic"
+  | "settings.customModels.templateMatch.similar"
+  | "settings.customModels.discoveryTitle"
+  | "settings.customModels.discoverySummary"
+  | "settings.customModels.reviewTemplates"
+  | "settings.customModels.reviewTemplatesTitle"
+  | "settings.customModels.reviewTemplatesDescription"
+  | "settings.customModels.reviewExact"
+  | "settings.customModels.reviewSimilar"
+  | "settings.customModels.reviewMissing"
+  | "settings.customModels.reviewExactDescription"
+  | "settings.customModels.reviewSimilarDescription"
+  | "settings.customModels.reviewMissingDescription"
+  | "settings.customModels.reviewComplete"
+  | "settings.customModels.applyAllExact"
+  | "settings.customModels.refreshAll"
+  | "settings.customModels.refreshAccount"
+  | "settings.customModels.lastSynchronized"
+  | "settings.customModels.notSynchronized"
+  | "settings.customModels.discoveryDetails"
+  | "settings.customModels.discoveryModelCount"
+  | "settings.customModels.discoveryPageCount"
+  | "settings.customModels.discoverySchema"
+  | "settings.customModels.discovery.notChecked"
+  | "settings.customModels.discovery.ready"
+  | "settings.customModels.discovery.empty"
+  | "settings.customModels.discovery.unsupported"
+  | "settings.customModels.discovery.authenticationFailed"
+  | "settings.customModels.discovery.rateLimited"
+  | "settings.customModels.discovery.temporarilyUnavailable"
+  | "settings.customModels.discovery.invalidResponse"
+  | "settings.customModels.discovery.stale"
+  | "settings.customModels.discovery.failed"
+  | "settings.customModels.sourceApi"
+  | "settings.customModels.sourceManual"
+  | "settings.customModels.sourceUserOverride"
+  | "settings.customModels.sourceAccount"
+  | "settings.customModels.sourceTemplate"
+  | "settings.customModels.sourceProviderDefault"
+  | "settings.customModels.backToList"
+  | "settings.customModels.tabOverview"
+  | "settings.customModels.tabAccounts"
+  | "settings.customModels.tabCapabilities"
+  | "settings.customModels.tabAdvanced"
+  | "settings.customModels.accountReturned"
+  | "settings.customModels.accountNotReturned"
+  | "settings.customModels.accountAvailable"
+  | "settings.customModels.accountUnavailable"
+  | "settings.customModels.accountInherit"
+  | "settings.customModels.accountForceEnable"
+  | "settings.customModels.accountForceDisable"
+  | "settings.customModels.capabilityAccount"
+  | "settings.customModels.viewAccountCapabilities"
+  | "settings.customModels.pendingValidation"
+  | "settings.customModels.pendingCannotDefault"
+  | "settings.customModels.validateModel"
+  | "settings.customModels.validateModelTitle"
+  | "settings.customModels.validateModelDescription"
+  | "settings.customModels.confirmValidation"
+  | "settings.customModels.validationComplete"
+  | "settings.customModels.validationSucceeded"
+  | "settings.customModels.noAccounts"
+  | "settings.customModels.noAccountsDescription"
+  | "settings.customModels.saveCapabilityOverrides"
+  | "settings.customModels.changeSummaryTitle"
+  | "settings.customModels.changeSummaryDescription"
+  | "settings.customModels.confirmChanges"
+  | "settings.customModels.summaryModel"
+  | "settings.customModels.summaryAccount"
+  | "settings.customModels.summaryAvailability"
+  | "settings.customModels.summaryRoutingState"
+  | "settings.customModels.summaryCapabilityOverrides"
+  | "settings.customModels.summaryRemoveOverrides"
+  | "settings.customModels.summaryTemplate"
+  | "settings.customModels.summaryDefaults"
+  | "settings.customModels.summaryNotEntered"
+  | "settings.customModels.advancedChangeSummaryDescription"
+  | "settings.customModels.summaryAdvancedDefinitions"
+  | "settings.customModels.summaryCurrentModel"
+  | "settings.customModels.textOnly"
+  | "settings.customModels.advancedUnavailable"
+  | "settings.customModels.advancedCreateHint"
+  | "settings.customModels.advancedCreate"
+  | "settings.customModels.saveAdvanced"
+  | "settings.customModels.unsavedAdvanced"
+  | "settings.customModels.modelIdRequired"
+  | "settings.customModels.manualDescription"
+  | "settings.customModels.templateChoice"
+  | "settings.customModels.discardTitle"
+  | "settings.customModels.discardDescription"
+  | "settings.customModels.discard"
   | "settings.modelCapabilities.title"
   | "settings.modelCapabilities.shortLabel"
   | "settings.modelCapabilities.overlayHint"
@@ -4088,6 +4261,61 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customProviders.modelCount": "{count} 个模型",
     "settings.customProviders.manageModels": "管理模型",
     "settings.customProviders.manageModelsFor": "管理 {provider} 的模型",
+    "settings.customProviders.addTitle": "添加自定义供应商",
+    "settings.customProviders.editTitle": "编辑自定义供应商",
+    "settings.customProviders.dialogDescription": "一个基础 URL 只绑定一种调用协议。先确认入口，再用真实凭据验证模型目录；新增时该凭据会成为首个账号。",
+    "settings.customProviders.progressLabel": "自定义供应商配置进度",
+    "settings.customProviders.step.connection": "入口",
+    "settings.customProviders.step.credential": "凭据",
+    "settings.customProviders.step.result": "确认",
+    "settings.customProviders.displayName": "显示名称",
+    "settings.customProviders.baseUrl": "基础 URL",
+    "settings.customProviders.protocol": "调用协议",
+    "settings.customProviders.authentication": "鉴权请求头",
+    "settings.customProviders.discoveryMode": "模型目录",
+    "settings.customProviders.discoveryStandard": "标准 /models",
+    "settings.customProviders.discoveryCustomPath": "自定义同源路径",
+    "settings.customProviders.discoveryManual": "不支持目录，手动维护",
+    "settings.customProviders.discoveryPath": "模型目录路径",
+    "settings.customProviders.protocolEndpoint": "调用端点：",
+    "settings.customProviders.modelsEndpoint": "目录端点：",
+    "settings.customProviders.manualOnly": "不访问远程目录",
+    "settings.customProviders.validationTitle": "使用真实凭据验证",
+    "settings.customProviders.validationEditDescription": "凭据只用于验证这次入口修改，不会创建新账号或替换现有账号。",
+    "settings.customProviders.validationCreateDescription": "验证成功后，该凭据会作为此供应商的首个账号保存。",
+    "settings.customProviders.validationCredentialName": "验证凭据名称",
+    "settings.customProviders.firstCredentialName": "首个凭据名称",
+    "settings.customProviders.apiKey": "API Key",
+    "settings.customProviders.apiKeyEditPlaceholder": "仅用于验证本次配置",
+    "settings.customProviders.apiKeyCreatePlaceholder": "验证通过后安全保存",
+    "settings.customProviders.credentialRequired": "请填写凭据名称和有效 API Key。",
+    "settings.customProviders.back": "上一步",
+    "settings.customProviders.next": "下一步",
+    "settings.customProviders.probing": "正在验证…",
+    "settings.customProviders.probe": "验证并同步模型",
+    "settings.customProviders.validationResultDescription": "验证完成；请选择与当前状态匹配的保存方式。",
+    "settings.customProviders.validationModelCount": "发现模型数",
+    "settings.customProviders.validationPageCount": "读取分页数",
+    "settings.customProviders.validationCredential": "验证凭据",
+    "settings.customProviders.validationObservedAt": "验证时间",
+    "settings.customProviders.validationModelsTitle": "已发现模型确认",
+    "settings.customProviders.validationEvidence": "能力证据 {known}/{total}",
+    "settings.customProviders.validationModelsHint": "只保存供应商、凭据与用户配置；此远程模型目录仅保留在当前进程内。",
+    "settings.customProviders.manualFallbackHint": "该结果允许暂存入口并转入手动模型管理；凭据会保持待验证隔离，直至一次明确的模型测试成功。",
+    "settings.customProviders.pendingSaveHint": "这是限流或临时故障，可明确暂存配置并在稍后重新同步。",
+    "settings.customProviders.saving": "正在保存…",
+    "settings.customProviders.saveVerified": "保存并继续",
+    "settings.customProviders.saveManual": "保存并手动配置模型",
+    "settings.customProviders.savePending": "暂存并稍后重试",
+    "settings.customProviders.pendingConfirmTitle": "暂存尚未验证的连接？",
+    "settings.customProviders.pendingConfirmDescription": "该凭据尚未完成模型目录验证。保存后它会保持隔离，不能成为默认账号或进入会话路由；必须稍后同步目录并成功执行一次明确的模型测试。",
+    "settings.customProviders.confirmPending": "确认暂存",
+    "settings.customProviders.displayNameRequired": "请输入供应商显示名称。",
+    "settings.customProviders.baseUrlInvalid": "请输入有效的 HTTP 或 HTTPS 基础 URL。",
+    "settings.customProviders.discoveryPathInvalid": "自定义目录路径必须以 / 开头，且不能包含域名或上级目录。",
+    "settings.customProviders.discovery.standard": "标准目录",
+    "settings.customProviders.discovery.custom_path": "自定义路径",
+    "settings.customProviders.discovery.manual": "手动维护",
     "settings.customModels.identityRequired": "每个模型都必须填写模型 ID 和显示名称。",
     "settings.customModels.duplicateId": "模型 ID 必须唯一，请修改重复的 ID：{model}。",
     "settings.customModels.parametersInvalid": "模型参数必须是 JSON 数组。",
@@ -4136,6 +4364,124 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.remove": "移除当前模型",
     "settings.customModels.selectHint": "从左侧选择模型，或从目录导入、手动添加一个模型。",
     "settings.customModels.save": "保存模型",
+    "settings.customModels.defaultsTitle": "供应商默认能力",
+    "settings.customModels.defaultsDescription": "仅用于目录未声明且未接受公共模板的模型；每个模型仍可单独覆盖。",
+    "settings.customModels.defaultsEdit": "编辑默认值",
+    "settings.customModels.contextSummary": "上下文 {count}",
+    "settings.customModels.outputSummary": "输出 {count}",
+    "settings.customModels.textInputOutput": "文本输入 / 文本输出",
+    "settings.customModels.outputRecommendation": "按当前上下文建议输出上限为 {count} Token（最多 32,768）。",
+    "settings.customModels.defaultsContextInvalid": "上下文限制必须是大于 0 的整数。",
+    "settings.customModels.defaultsOutputInvalid": "输出限制必须是大于 0 且不超过上下文限制的整数。",
+    "settings.customModels.defaultsSave": "保存供应商默认值",
+    "settings.customModels.templateSearching": "正在本地能力库中查找相似模型…",
+    "settings.customModels.templateUpdateAvailable": "公共能力模板已有新版本",
+    "settings.customModels.templateUpdateDescription": "当前模型继续使用已确认的旧快照；只有点击应用更新后才会切换到新版本。",
+    "settings.customModels.templateCurrent": "当前快照",
+    "settings.customModels.templateLatest": "最新模板",
+    "settings.customModels.templateApplyUpdate": "应用模板更新",
+    "settings.customModels.templateApplied": "已应用公共模型模板",
+    "settings.customModels.templateRestore": "重新选择",
+    "settings.customModels.templateNone": "没有可靠的公共模板",
+    "settings.customModels.templateDefaultFallback": "将使用当前供应商的默认上下文、输出上限和文本能力。",
+    "settings.customModels.templateRejected": "已明确不使用公共模板",
+    "settings.customModels.templateReviewAgain": "重新检查",
+    "settings.customModels.templateSuggested": "发现可复用的公共能力模板",
+    "settings.customModels.templateApply": "应用此模板",
+    "settings.customModels.templateKeepDefaults": "保持供应商默认值",
+    "settings.customModels.templateMatch.exact": "模型 ID 完全匹配",
+    "settings.customModels.templateMatch.alias": "已知别名匹配",
+    "settings.customModels.templateMatch.provider_agnostic": "忽略供应商前缀后匹配",
+    "settings.customModels.templateMatch.similar": "名称相似，需人工确认",
+    "settings.customModels.discoveryTitle": "账号目录同步",
+    "settings.customModels.discoverySummary": "{accounts} 个账号共发现 {models} 个模型，{failed} 个账号需要处理；目录只缓存在内存中。",
+    "settings.customModels.reviewTemplates": "审查能力建议",
+    "settings.customModels.reviewTemplatesTitle": "审查模型能力建议",
+    "settings.customModels.reviewTemplatesDescription": "精确键、明确别名与去供应商前缀后的精确命中可批量应用；名称相似项必须逐项确认。",
+    "settings.customModels.reviewExact": "可批量应用",
+    "settings.customModels.reviewSimilar": "需要逐项确认",
+    "settings.customModels.reviewMissing": "使用供应商默认值",
+    "settings.customModels.reviewExactDescription": "精确或确定性命中",
+    "settings.customModels.reviewSimilarDescription": "相似命中：请逐项确认差异",
+    "settings.customModels.reviewMissingDescription": "无命中：继续使用 200K/32K 纯文本供应商默认值",
+    "settings.customModels.reviewComplete": "当前模型均已审查，或没有待处理的模板建议。",
+    "settings.customModels.applyAllExact": "应用全部确定性建议（{count}）",
+    "settings.customModels.refreshAll": "同步全部账号",
+    "settings.customModels.refreshAccount": "同步此账号",
+    "settings.customModels.lastSynchronized": "最近同步：{time}",
+    "settings.customModels.notSynchronized": "尚未同步",
+    "settings.customModels.discoveryDetails": "账号同步详情与诊断",
+    "settings.customModels.discoveryModelCount": "{count} 个模型",
+    "settings.customModels.discoveryPageCount": "{count} 页",
+    "settings.customModels.discoverySchema": "解析契约：{revision}",
+    "settings.customModels.discovery.notChecked": "尚未检查",
+    "settings.customModels.discovery.ready": "目录就绪",
+    "settings.customModels.discovery.empty": "目录为空",
+    "settings.customModels.discovery.unsupported": "不支持目录接口",
+    "settings.customModels.discovery.authenticationFailed": "凭据验证失败",
+    "settings.customModels.discovery.rateLimited": "请求受限",
+    "settings.customModels.discovery.temporarilyUnavailable": "暂时不可用",
+    "settings.customModels.discovery.invalidResponse": "响应格式无效",
+    "settings.customModels.discovery.stale": "使用上次内存结果",
+    "settings.customModels.discovery.failed": "同步失败",
+    "settings.customModels.sourceApi": "API 目录",
+    "settings.customModels.sourceManual": "手动声明",
+    "settings.customModels.sourceUserOverride": "模型覆盖",
+    "settings.customModels.sourceAccount": "账号目录证据",
+    "settings.customModels.sourceTemplate": "公共模板",
+    "settings.customModels.sourceProviderDefault": "供应商默认值",
+    "settings.customModels.backToList": "返回模型列表",
+    "settings.customModels.tabOverview": "概览",
+    "settings.customModels.tabAccounts": "账号",
+    "settings.customModels.tabCapabilities": "能力",
+    "settings.customModels.tabAdvanced": "高级",
+    "settings.customModels.accountReturned": "目录已返回此模型",
+    "settings.customModels.accountNotReturned": "目录未返回此模型",
+    "settings.customModels.accountAvailable": "当前可用",
+    "settings.customModels.accountUnavailable": "当前不可用",
+    "settings.customModels.accountInherit": "跟随目录",
+    "settings.customModels.accountForceEnable": "强制允许",
+    "settings.customModels.accountForceDisable": "强制禁用",
+    "settings.customModels.capabilityAccount": "查看账号能力",
+    "settings.customModels.viewAccountCapabilities": "查看能力",
+    "settings.customModels.pendingValidation": "待模型验证",
+    "settings.customModels.pendingCannotDefault": "待验证账号不能设为默认，请先完成模型测试",
+    "settings.customModels.validateModel": "测试模型",
+    "settings.customModels.validateModelTitle": "发送一次真实模型测试？",
+    "settings.customModels.validateModelDescription": "将通过账号“{account}”向模型“{model}”发送一条最小文本请求。此操作可能产生少量费用；只有成功收到可见文本后，待验证账号才会进入会话路由。",
+    "settings.customModels.confirmValidation": "确认并测试",
+    "settings.customModels.validationComplete": "模型测试成功",
+    "settings.customModels.validationSucceeded": "账号“{account}”已通过测试，模型返回：{response}",
+    "settings.customModels.noAccounts": "尚无可用账号",
+    "settings.customModels.noAccountsDescription": "添加并验证凭据后，才能查看逐账号能力与可用性。",
+    "settings.customModels.saveCapabilityOverrides": "保存能力覆盖",
+    "settings.customModels.changeSummaryTitle": "确认变更摘要",
+    "settings.customModels.changeSummaryDescription": "请确认模型“{model}”即将保存的设置。",
+    "settings.customModels.confirmChanges": "确认保存",
+    "settings.customModels.summaryModel": "模型",
+    "settings.customModels.summaryAccount": "账号",
+    "settings.customModels.summaryAvailability": "账号可用性",
+    "settings.customModels.summaryRoutingState": "路由状态",
+    "settings.customModels.summaryCapabilityOverrides": "能力覆盖",
+    "settings.customModels.summaryRemoveOverrides": "移除全部用户能力覆盖，恢复来源优先级解析",
+    "settings.customModels.summaryTemplate": "能力来源",
+    "settings.customModels.summaryDefaults": "默认上下文 / 输出",
+    "settings.customModels.summaryNotEntered": "尚未输入",
+    "settings.customModels.advancedChangeSummaryDescription": "请确认将一次保存的全部高级模型定义。未列出的目录事实不会被复制或覆盖。",
+    "settings.customModels.summaryAdvancedDefinitions": "高级定义",
+    "settings.customModels.summaryCurrentModel": "当前模型",
+    "settings.customModels.textOnly": "仅文本",
+    "settings.customModels.advancedUnavailable": "目录模型尚未创建高级定义。",
+    "settings.customModels.advancedCreateHint": "只有在需要协议参数或请求投影时才创建用户定义；模型目录本身不会被复制。",
+    "settings.customModels.advancedCreate": "创建高级定义",
+    "settings.customModels.saveAdvanced": "保存高级定义",
+    "settings.customModels.unsavedAdvanced": "高级定义有尚未保存的修改。",
+    "settings.customModels.modelIdRequired": "请输入真实模型 ID。",
+    "settings.customModels.manualDescription": "仅在 /models 不可用或没有返回目标模型时手动添加。系统会先在本地公共库中寻找模板。",
+    "settings.customModels.templateChoice": "能力模板",
+    "settings.customModels.discardTitle": "放弃未保存的修改？",
+    "settings.customModels.discardDescription": "高级模型定义仍有未保存修改。关闭后这些修改将丢失。",
+    "settings.customModels.discard": "放弃修改",
     "settings.modelCapabilities.title": "默认能力覆盖",
     "settings.modelCapabilities.shortLabel": "能力",
     "settings.modelCapabilities.overlayHint": "只保存差异，不修改供应商目录和公共能力库。",
@@ -6347,6 +6693,61 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customProviders.modelCount": "{count} models",
     "settings.customProviders.manageModels": "Manage models",
     "settings.customProviders.manageModelsFor": "Manage models for {provider}",
+    "settings.customProviders.addTitle": "Add custom provider",
+    "settings.customProviders.editTitle": "Edit custom provider",
+    "settings.customProviders.dialogDescription": "One base URL binds one calling protocol. Confirm the endpoint first, then validate the model catalog with a real credential; new providers retain it as their first account.",
+    "settings.customProviders.progressLabel": "Custom provider setup progress",
+    "settings.customProviders.step.connection": "Endpoint",
+    "settings.customProviders.step.credential": "Credential",
+    "settings.customProviders.step.result": "Confirm",
+    "settings.customProviders.displayName": "Display name",
+    "settings.customProviders.baseUrl": "Base URL",
+    "settings.customProviders.protocol": "Calling protocol",
+    "settings.customProviders.authentication": "Authentication header",
+    "settings.customProviders.discoveryMode": "Model catalog",
+    "settings.customProviders.discoveryStandard": "Standard /models",
+    "settings.customProviders.discoveryCustomPath": "Custom same-origin path",
+    "settings.customProviders.discoveryManual": "No catalog; manage manually",
+    "settings.customProviders.discoveryPath": "Model catalog path",
+    "settings.customProviders.protocolEndpoint": "Calling endpoint:",
+    "settings.customProviders.modelsEndpoint": "Catalog endpoint:",
+    "settings.customProviders.manualOnly": "No remote catalog request",
+    "settings.customProviders.validationTitle": "Validate with a real credential",
+    "settings.customProviders.validationEditDescription": "The credential validates this endpoint change only; it does not create a new account or replace existing accounts.",
+    "settings.customProviders.validationCreateDescription": "After validation, this credential is securely saved as the provider's first account.",
+    "settings.customProviders.validationCredentialName": "Validation credential name",
+    "settings.customProviders.firstCredentialName": "First credential name",
+    "settings.customProviders.apiKey": "API Key",
+    "settings.customProviders.apiKeyEditPlaceholder": "Used only for this validation",
+    "settings.customProviders.apiKeyCreatePlaceholder": "Stored securely after validation",
+    "settings.customProviders.credentialRequired": "Enter a credential name and a valid API Key.",
+    "settings.customProviders.back": "Back",
+    "settings.customProviders.next": "Next",
+    "settings.customProviders.probing": "Validating…",
+    "settings.customProviders.probe": "Validate and sync models",
+    "settings.customProviders.validationResultDescription": "Validation finished. Choose the save action that matches the observed state.",
+    "settings.customProviders.validationModelCount": "Models discovered",
+    "settings.customProviders.validationPageCount": "Pages read",
+    "settings.customProviders.validationCredential": "Credential checked",
+    "settings.customProviders.validationObservedAt": "Validated at",
+    "settings.customProviders.validationModelsTitle": "Discovered model confirmation",
+    "settings.customProviders.validationEvidence": "Capability evidence {known}/{total}",
+    "settings.customProviders.validationModelsHint": "Only the provider, credential, and user settings are saved; this remote model catalog remains process-memory only.",
+    "settings.customProviders.manualFallbackHint": "This result can be retained for manual model management. The credential remains isolated as pending until one explicit model test succeeds.",
+    "settings.customProviders.pendingSaveHint": "This is a rate limit or transient failure. You may explicitly retain the setup and retry synchronization later.",
+    "settings.customProviders.saving": "Saving…",
+    "settings.customProviders.saveVerified": "Save and continue",
+    "settings.customProviders.saveManual": "Save and configure models manually",
+    "settings.customProviders.savePending": "Save pending and retry later",
+    "settings.customProviders.pendingConfirmTitle": "Save an unvalidated connection?",
+    "settings.customProviders.pendingConfirmDescription": "The credential has not completed model-catalog validation. It will remain isolated after saving and cannot become the default account or enter conversation routing until the catalog is synchronized and one explicit model test succeeds.",
+    "settings.customProviders.confirmPending": "Confirm pending save",
+    "settings.customProviders.displayNameRequired": "Enter a provider display name.",
+    "settings.customProviders.baseUrlInvalid": "Enter a valid HTTP or HTTPS base URL.",
+    "settings.customProviders.discoveryPathInvalid": "A custom catalog path must start with / and contain neither an origin nor parent traversal.",
+    "settings.customProviders.discovery.standard": "Standard catalog",
+    "settings.customProviders.discovery.custom_path": "Custom path",
+    "settings.customProviders.discovery.manual": "Manual management",
     "settings.customModels.identityRequired": "Every model requires a model ID and display name.",
     "settings.customModels.duplicateId": "Model IDs must be unique. Rename the duplicate ID: {model}.",
     "settings.customModels.parametersInvalid": "Model parameters must be a JSON array.",
@@ -6395,6 +6796,124 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.remove": "Remove current model",
     "settings.customModels.selectHint": "Select a model on the left, import from the catalog, or add one manually.",
     "settings.customModels.save": "Save models",
+    "settings.customModels.defaultsTitle": "Provider capability defaults",
+    "settings.customModels.defaultsDescription": "Used only when the catalog is silent and no common template is accepted; each model can still override them.",
+    "settings.customModels.defaultsEdit": "Edit defaults",
+    "settings.customModels.contextSummary": "Context {count}",
+    "settings.customModels.outputSummary": "Output {count}",
+    "settings.customModels.textInputOutput": "Text input / text output",
+    "settings.customModels.outputRecommendation": "Recommended output limit for this context: {count} tokens (capped at 32,768).",
+    "settings.customModels.defaultsContextInvalid": "Context limit must be a positive integer.",
+    "settings.customModels.defaultsOutputInvalid": "Output limit must be a positive integer no greater than the context limit.",
+    "settings.customModels.defaultsSave": "Save provider defaults",
+    "settings.customModels.templateSearching": "Searching the local capability library for similar models…",
+    "settings.customModels.templateUpdateAvailable": "A newer common capability template is available",
+    "settings.customModels.templateUpdateDescription": "This model keeps its reviewed snapshot until you explicitly apply the newer revision.",
+    "settings.customModels.templateCurrent": "Current snapshot",
+    "settings.customModels.templateLatest": "Latest template",
+    "settings.customModels.templateApplyUpdate": "Apply template update",
+    "settings.customModels.templateApplied": "Common model template applied",
+    "settings.customModels.templateRestore": "Choose again",
+    "settings.customModels.templateNone": "No reliable common template",
+    "settings.customModels.templateDefaultFallback": "The current provider defaults for context, output, and text capability will be used.",
+    "settings.customModels.templateRejected": "Common templates were explicitly declined",
+    "settings.customModels.templateReviewAgain": "Review again",
+    "settings.customModels.templateSuggested": "Reusable common capability template found",
+    "settings.customModels.templateApply": "Apply this template",
+    "settings.customModels.templateKeepDefaults": "Keep provider defaults",
+    "settings.customModels.templateMatch.exact": "Exact model ID match",
+    "settings.customModels.templateMatch.alias": "Known alias match",
+    "settings.customModels.templateMatch.provider_agnostic": "Matched without provider prefix",
+    "settings.customModels.templateMatch.similar": "Similar name; confirmation required",
+    "settings.customModels.discoveryTitle": "Account catalog sync",
+    "settings.customModels.discoverySummary": "{accounts} accounts expose {models} models; {failed} accounts need attention. Catalogs remain memory-only.",
+    "settings.customModels.reviewTemplates": "Review capability hints",
+    "settings.customModels.reviewTemplatesTitle": "Review model capability hints",
+    "settings.customModels.reviewTemplatesDescription": "Exact keys, explicit aliases, and exact provider-prefix matches may be applied in bulk. Similar names always require individual review.",
+    "settings.customModels.reviewExact": "Safe for bulk apply",
+    "settings.customModels.reviewSimilar": "Needs individual review",
+    "settings.customModels.reviewMissing": "Uses provider defaults",
+    "settings.customModels.reviewExactDescription": "Exact or deterministic matches",
+    "settings.customModels.reviewSimilarDescription": "Similar matches: review each difference",
+    "settings.customModels.reviewMissingDescription": "No match: keep the 200K/32K text-only provider defaults",
+    "settings.customModels.reviewComplete": "Every current model has been reviewed, or no template hint needs action.",
+    "settings.customModels.applyAllExact": "Apply all deterministic hints ({count})",
+    "settings.customModels.refreshAll": "Sync all accounts",
+    "settings.customModels.refreshAccount": "Sync this account",
+    "settings.customModels.lastSynchronized": "Last synchronized: {time}",
+    "settings.customModels.notSynchronized": "Not synchronized",
+    "settings.customModels.discoveryDetails": "Account sync details and diagnostics",
+    "settings.customModels.discoveryModelCount": "{count} models",
+    "settings.customModels.discoveryPageCount": "{count} pages",
+    "settings.customModels.discoverySchema": "Parser contract: {revision}",
+    "settings.customModels.discovery.notChecked": "Not checked",
+    "settings.customModels.discovery.ready": "Catalog ready",
+    "settings.customModels.discovery.empty": "Catalog empty",
+    "settings.customModels.discovery.unsupported": "Catalog endpoint unsupported",
+    "settings.customModels.discovery.authenticationFailed": "Credential validation failed",
+    "settings.customModels.discovery.rateLimited": "Rate limited",
+    "settings.customModels.discovery.temporarilyUnavailable": "Temporarily unavailable",
+    "settings.customModels.discovery.invalidResponse": "Invalid response",
+    "settings.customModels.discovery.stale": "Using prior in-memory result",
+    "settings.customModels.discovery.failed": "Sync failed",
+    "settings.customModels.sourceApi": "API catalog",
+    "settings.customModels.sourceManual": "Manual declaration",
+    "settings.customModels.sourceUserOverride": "Model override",
+    "settings.customModels.sourceAccount": "Account catalog evidence",
+    "settings.customModels.sourceTemplate": "Common template",
+    "settings.customModels.sourceProviderDefault": "Provider defaults",
+    "settings.customModels.backToList": "Back to model list",
+    "settings.customModels.tabOverview": "Overview",
+    "settings.customModels.tabAccounts": "Accounts",
+    "settings.customModels.tabCapabilities": "Capabilities",
+    "settings.customModels.tabAdvanced": "Advanced",
+    "settings.customModels.accountReturned": "Catalog returned this model",
+    "settings.customModels.accountNotReturned": "Catalog did not return this model",
+    "settings.customModels.accountAvailable": "Currently available",
+    "settings.customModels.accountUnavailable": "Currently unavailable",
+    "settings.customModels.accountInherit": "Follow catalog",
+    "settings.customModels.accountForceEnable": "Force allow",
+    "settings.customModels.accountForceDisable": "Force disable",
+    "settings.customModels.capabilityAccount": "Capability account",
+    "settings.customModels.viewAccountCapabilities": "View capabilities",
+    "settings.customModels.pendingValidation": "Pending model validation",
+    "settings.customModels.pendingCannotDefault": "A pending account cannot be the default; complete a model test first",
+    "settings.customModels.validateModel": "Test model",
+    "settings.customModels.validateModelTitle": "Send one real model test?",
+    "settings.customModels.validateModelDescription": "A minimal text request will be sent to “{model}” through account “{account}”. This may incur a small charge. A pending account becomes eligible for conversations only after visible text is received.",
+    "settings.customModels.confirmValidation": "Confirm and test",
+    "settings.customModels.validationComplete": "Model test succeeded",
+    "settings.customModels.validationSucceeded": "Account “{account}” passed validation. Model response: {response}",
+    "settings.customModels.noAccounts": "No account is available",
+    "settings.customModels.noAccountsDescription": "Add and validate a credential before reviewing account-specific capabilities and availability.",
+    "settings.customModels.saveCapabilityOverrides": "Save capability overrides",
+    "settings.customModels.changeSummaryTitle": "Confirm change summary",
+    "settings.customModels.changeSummaryDescription": "Review the settings that will be saved for model “{model}”.",
+    "settings.customModels.confirmChanges": "Confirm and save",
+    "settings.customModels.summaryModel": "Model",
+    "settings.customModels.summaryAccount": "Account",
+    "settings.customModels.summaryAvailability": "Account availability",
+    "settings.customModels.summaryRoutingState": "Routing state",
+    "settings.customModels.summaryCapabilityOverrides": "Capability overrides",
+    "settings.customModels.summaryRemoveOverrides": "Remove every user capability override and restore source-priority resolution",
+    "settings.customModels.summaryTemplate": "Capability source",
+    "settings.customModels.summaryDefaults": "Default context / output",
+    "settings.customModels.summaryNotEntered": "Not entered",
+    "settings.customModels.advancedChangeSummaryDescription": "Review every advanced model definition that will be saved together. Unlisted catalog facts are not copied or replaced.",
+    "settings.customModels.summaryAdvancedDefinitions": "Advanced definitions",
+    "settings.customModels.summaryCurrentModel": "Current model",
+    "settings.customModels.textOnly": "Text only",
+    "settings.customModels.advancedUnavailable": "This catalog model has no advanced definition yet.",
+    "settings.customModels.advancedCreateHint": "Create a user definition only when protocol parameters or request projection are needed; the catalog itself is not copied.",
+    "settings.customModels.advancedCreate": "Create advanced definition",
+    "settings.customModels.saveAdvanced": "Save advanced definition",
+    "settings.customModels.unsavedAdvanced": "The advanced definition has unsaved changes.",
+    "settings.customModels.modelIdRequired": "Enter the real model ID.",
+    "settings.customModels.manualDescription": "Add a model manually only when /models is unavailable or omits it. The local common library is checked first.",
+    "settings.customModels.templateChoice": "Capability template",
+    "settings.customModels.discardTitle": "Discard unsaved changes?",
+    "settings.customModels.discardDescription": "The advanced model definition still has unsaved changes. Closing now will discard them.",
+    "settings.customModels.discard": "Discard changes",
     "settings.modelCapabilities.title": "Default capability override",
     "settings.modelCapabilities.shortLabel": "Capabilities",
     "settings.modelCapabilities.overlayHint": "Stores differences only; provider catalogs and the common capability library remain unchanged.",

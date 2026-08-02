@@ -8,15 +8,16 @@ use crate::provider_task::{
 use crate::{
     ActiveAiModelSelection, ConnectionModel, ConnectionModelCatalog, CredentialConnection,
     CredentialExecutionSecret, CredentialSecretEnvelope, HttpProviderMetadataClient,
-    InferenceRouteBinding, InferenceRouteConfiguration, OAuthAuthorizationRuntime,
-    PersistedAiConfiguration, ProviderExecutionClient, ProviderExecutionFailure,
-    ProviderExecutionRoute, ProviderExecutionStream, ProviderMetadataClient, ProviderRegistry,
-    ProviderToolCapabilityKind, ProviderToolExecutionResult, ProviderToolTarget,
-    ProviderToolTargetSelection, RuntimeConnectionCatalogs, SecondaryRouteOption,
-    SecondaryRouteSelection, built_in_provider_tool_targets,
-    native_inference::validate_native_action_binding,
+    InferenceRouteBinding, InferenceRouteConfiguration, ModelDiscoveryFailureKind,
+    OAuthAuthorizationRuntime, PersistedAiConfiguration, ProviderExecutionClient,
+    ProviderExecutionFailure, ProviderExecutionRoute, ProviderExecutionStream,
+    ProviderMetadataClient, ProviderRegistry, ProviderToolCapabilityKind,
+    ProviderToolExecutionResult, ProviderToolTarget, ProviderToolTargetSelection,
+    RuntimeConnectionCatalogs, SecondaryRouteOption, SecondaryRouteSelection,
+    built_in_provider_tool_targets, native_inference::validate_native_action_binding,
 };
-use std::collections::BTreeMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::path::Path;
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
@@ -48,6 +49,95 @@ const PROVIDER_ASYNC_TASK_POLL_INTERVAL: Duration = Duration::from_secs(15);
 /// Maximum wall time for one provider task poll or cancellation observation.
 /// 单次供应商任务轮询或取消观测的最大墙钟时间。
 const PROVIDER_ASYNC_TASK_OBSERVATION_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Identifies the closed outcome of one credential-scoped model discovery attempt.
+/// 标识一次凭据作用域模型发现尝试的封闭结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogDiscoveryState {
+    /// No discovery has run since process start.
+    /// 进程启动后尚未执行发现。
+    NotChecked,
+    /// A non-empty authoritative catalog was installed.
+    /// 已安装非空权威目录。
+    Ready,
+    /// Discovery succeeded but returned no models.
+    /// 发现成功但没有返回模型。
+    Empty,
+    /// The endpoint explicitly does not support model discovery.
+    /// 端点明确不支持模型发现。
+    Unsupported,
+    /// The supplied credential cannot access model discovery.
+    /// 所提供凭据无法访问模型发现。
+    AuthenticationFailed,
+    /// The provider rate-limited model discovery.
+    /// 供应商对模型发现进行了限流。
+    RateLimited,
+    /// A network or upstream availability failure may recover later.
+    /// 网络或上游可用性故障可能稍后恢复。
+    TemporarilyUnavailable,
+    /// The provider returned a response that violates the selected protocol.
+    /// 供应商返回了违反所选协议的响应。
+    InvalidResponse,
+    /// A previous successful catalog remains active after the latest failure.
+    /// 最近一次失败后仍继续使用先前成功目录。
+    Stale,
+    /// A controlled failure did not match another closed category.
+    /// 受控失败未匹配其他封闭类别。
+    Failed,
+}
+
+/// Identifies the failure behind a stale catalog without changing its usability.
+/// 标识过期目录背后的失败，同时不改变其可用性。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogDiscoveryFailureKind {
+    /// The endpoint does not implement model discovery.
+    /// 端点未实现模型发现。
+    Unsupported,
+    /// Authentication or authorization failed.
+    /// 身份认证或授权失败。
+    AuthenticationFailed,
+    /// The provider rejected the request due to rate limiting.
+    /// 供应商因限流拒绝请求。
+    RateLimited,
+    /// A transient network or upstream failure occurred.
+    /// 发生暂时性网络或上游故障。
+    TemporarilyUnavailable,
+    /// The response violated the selected discovery protocol.
+    /// 响应违反所选发现协议。
+    InvalidResponse,
+    /// The error did not match another closed category.
+    /// 错误未匹配其他封闭类别。
+    Failed,
+}
+
+/// Stores one process-local model-discovery observation without credential material.
+/// 保存一项不含凭据材料的进程内模型发现观测。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogDiscoveryStatus {
+    /// Current user-facing state.
+    /// 当前面向用户的状态。
+    pub state: CatalogDiscoveryState,
+    /// Latest failure kind when the current state is stale.
+    /// 当前状态为过期时的最近失败类型。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_kind: Option<CatalogDiscoveryFailureKind>,
+    /// Controlled diagnostic message.
+    /// 受控诊断消息。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// Number of models retained for this connection.
+    /// 此连接保留的模型数量。
+    pub model_count: usize,
+    /// Process-local catalog generation.
+    /// 进程内目录代次。
+    pub generation: u64,
+    /// Wall-clock observation time in Unix milliseconds.
+    /// Unix 毫秒墙钟观测时间。
+    pub observed_at_ms: u64,
+}
 
 /// Reports whether one model contract supports bidirectional text conversation.
 /// 报告一个模型契约是否支持双向文本会话。
@@ -258,6 +348,9 @@ pub struct PublicAiRuntime {
     /// Latest controlled synchronization error per connection.
     /// 每个连接最近一次受控同步错误。
     catalog_errors: Arc<RwLock<BTreeMap<String, String>>>,
+    /// Closed process-local discovery state per credential connection.
+    /// 每个凭据连接的封闭进程内发现状态。
+    catalog_statuses: Arc<RwLock<BTreeMap<String, CatalogDiscoveryStatus>>>,
     /// Process-local account-usage observations keyed by connection.
     /// 按连接索引的进程内账号用量观测。
     usage_cache: Arc<RwLock<BTreeMap<String, AccountUsageSnapshot>>>,
@@ -305,6 +398,7 @@ impl PublicAiRuntime {
             source_catalogs: Arc::new(RwLock::new(RuntimeConnectionCatalogs::default())),
             catalog_mutation_lock: Arc::new(StdMutex::new(())),
             catalog_errors: Arc::new(RwLock::new(BTreeMap::new())),
+            catalog_statuses: Arc::new(RwLock::new(BTreeMap::new())),
             usage_cache: Arc::new(RwLock::new(BTreeMap::new())),
             secondary_route_cache: Arc::new(RwLock::new(BTreeMap::new())),
             refresh_locks: Arc::new(StdMutex::new(BTreeMap::new())),
@@ -470,6 +564,9 @@ impl PublicAiRuntime {
             .connections
             .values()
             .filter(|connection| connection.provider_id == provider_id)
+            .filter(|connection| {
+                !configuration.connection_is_pending_validation(connection.id.as_str())
+            })
             .any(|connection| {
                 catalogs
                     .get(connection.id.as_str())
@@ -503,6 +600,9 @@ impl PublicAiRuntime {
             .connection_graph
             .connections
             .values()
+            .filter(|connection| {
+                !configuration.connection_is_pending_validation(connection.id.as_str())
+            })
             .filter_map(|connection| {
                 catalogs
                     .get(connection.id.as_str())
@@ -537,6 +637,40 @@ impl PublicAiRuntime {
             .clone())
     }
 
+    /// Returns immutable provider-discovery catalogs before user overlays.
+    /// 返回应用用户覆盖前的不可变供应商发现目录。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A cloned connection-to-source-catalog map.
+    /// 返回克隆后的连接到源目录映射。
+    pub fn source_catalog_snapshot(
+        &self,
+    ) -> Result<BTreeMap<String, ConnectionModelCatalog>, String> {
+        Ok(self
+            .source_catalogs
+            .read()
+            .map_err(|_| String::from("The source AI model catalog lock is poisoned."))?
+            .snapshot())
+    }
+
+    /// Returns the latest closed process-local discovery states.
+    /// 返回最近的封闭进程内发现状态。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A cloned connection-to-status map.
+    /// 返回克隆后的连接到状态映射。
+    pub fn catalog_status_snapshot(
+        &self,
+    ) -> Result<BTreeMap<String, CatalogDiscoveryStatus>, String> {
+        Ok(self
+            .catalog_statuses
+            .read()
+            .map_err(|_| String::from("The AI catalog status lock is poisoned."))?
+            .clone())
+    }
+
     /// Removes runtime-only metadata for one deleted connection.
     /// 移除一个已删除连接的仅运行时元数据。
     ///
@@ -561,10 +695,71 @@ impl PublicAiRuntime {
             .write()
             .map_err(|_| String::from("The AI catalog error lock is poisoned."))?
             .remove(connection_id);
+        self.catalog_statuses
+            .write()
+            .map_err(|_| String::from("The AI catalog status lock is poisoned."))?
+            .remove(connection_id);
         self.refresh_locks
             .lock()
             .map_err(|_| String::from("The AI credential refresh lock is poisoned."))?
             .remove(connection_id);
+        Ok(())
+    }
+
+    /// Records one catalog refresh failure while preserving the last immutable source snapshot.
+    /// 记录一次目录刷新失败，同时保留最近的不可变源快照。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `connection_id` scopes the observation, `generation` and `observed_at_ms` identify the
+    /// attempt, `failure_kind` is closed, and `message` is already controlled for display.
+    /// `connection_id` 限定观测作用域，`generation` 与 `observed_at_ms` 标识本次尝试，
+    /// `failure_kind` 为封闭分类，`message` 已经完成可展示控制。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success after both error and typed status maps are updated.
+    /// 在错误与强类型状态映射均更新后返回成功。
+    fn record_catalog_refresh_failure(
+        &self,
+        connection_id: &str,
+        generation: u64,
+        observed_at_ms: u64,
+        failure_kind: CatalogDiscoveryFailureKind,
+        message: &str,
+    ) -> Result<(), String> {
+        let stale_catalog = self
+            .source_catalogs
+            .read()
+            .map_err(|_| String::from("The source AI model catalog lock is poisoned."))?
+            .get(connection_id)
+            .cloned();
+        self.catalog_errors
+            .write()
+            .map_err(|_| String::from("The AI catalog error lock is poisoned."))?
+            .insert(connection_id.to_string(), message.to_string());
+        self.catalog_statuses
+            .write()
+            .map_err(|_| String::from("The AI catalog status lock is poisoned."))?
+            .insert(
+                connection_id.to_string(),
+                CatalogDiscoveryStatus {
+                    state: if stale_catalog.is_some() {
+                        CatalogDiscoveryState::Stale
+                    } else {
+                        discovery_state_for_failure(failure_kind)
+                    },
+                    failure_kind: Some(failure_kind),
+                    message: Some(message.to_string()),
+                    model_count: stale_catalog
+                        .as_ref()
+                        .map_or(0, |catalog| catalog.models.len()),
+                    generation: stale_catalog
+                        .as_ref()
+                        .map_or(generation, |catalog| catalog.generation),
+                    observed_at_ms,
+                },
+            );
         Ok(())
     }
 
@@ -585,6 +780,7 @@ impl PublicAiRuntime {
         configuration: &PersistedAiConfiguration,
         connection_id: &str,
     ) -> Result<ConnectionModelCatalog, String> {
+        let observed_at_ms = current_unix_millis()?;
         let (provider, entry, connection) =
             self.resolve_connection_metadata(configuration, connection_id)?;
         let secret = self
@@ -606,18 +802,38 @@ impl PublicAiRuntime {
         let source_catalog = match discovery {
             Ok(catalog) => catalog,
             Err(error) => {
-                self.catalog_errors
-                    .write()
-                    .map_err(|_| String::from("The AI catalog error lock is poisoned."))?
-                    .insert(connection_id.to_string(), error.clone());
+                let failure_kind = catalog_discovery_failure_kind(error.kind);
+                let error_message = error.message;
+                self.record_catalog_refresh_failure(
+                    connection_id,
+                    generation,
+                    observed_at_ms,
+                    failure_kind,
+                    error_message.as_str(),
+                )?;
                 self.install_manual_custom_catalog_without_discovery(
                     configuration,
                     &connection,
                     generation,
                 )?;
-                return Err(error);
+                return Err(error_message);
             }
         };
+        let source_model_count = source_catalog.models.len();
+        let mut catalog = source_catalog.clone();
+        if let Err(error) =
+            apply_model_catalog_overlays(configuration, provider.id.as_str(), &mut catalog)
+                .and_then(|_| validate_resolved_catalog_limits(&catalog))
+        {
+            self.record_catalog_refresh_failure(
+                connection_id,
+                generation,
+                observed_at_ms,
+                CatalogDiscoveryFailureKind::Failed,
+                error.as_str(),
+            )?;
+            return Err(error);
+        }
         let _mutation_guard = self
             .catalog_mutation_lock
             .lock()
@@ -625,14 +841,30 @@ impl PublicAiRuntime {
         self.source_catalogs
             .write()
             .map_err(|_| String::from("The source AI model catalog lock is poisoned."))?
-            .replace(source_catalog.clone());
-        let mut catalog = source_catalog;
-        apply_model_catalog_overlays(configuration, provider.id.as_str(), &mut catalog)?;
+            .replace(source_catalog);
         self.replace_catalog(catalog.clone())?;
         self.catalog_errors
             .write()
             .map_err(|_| String::from("The AI catalog error lock is poisoned."))?
             .remove(connection_id);
+        self.catalog_statuses
+            .write()
+            .map_err(|_| String::from("The AI catalog status lock is poisoned."))?
+            .insert(
+                connection_id.to_string(),
+                CatalogDiscoveryStatus {
+                    state: if source_model_count == 0 {
+                        CatalogDiscoveryState::Empty
+                    } else {
+                        CatalogDiscoveryState::Ready
+                    },
+                    failure_kind: None,
+                    message: None,
+                    model_count: source_model_count,
+                    generation: catalog.generation,
+                    observed_at_ms,
+                },
+            );
         Ok(catalog)
     }
 
@@ -670,12 +902,171 @@ impl PublicAiRuntime {
                 connection.provider_id.as_str(),
                 &mut catalog,
             )?;
+            validate_resolved_catalog_limits(&catalog)?;
             effective.replace(catalog);
         }
         *self
             .catalogs
             .write()
             .map_err(|_| String::from("The AI model catalog lock is poisoned."))? = effective;
+        Ok(())
+    }
+
+    /// Validates every currently reconstructable account catalog for one candidate configuration.
+    /// 校验一个候选配置下当前所有可重建的账号目录。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration` contains the complete proposed provider defaults, template decisions,
+    /// manual declarations, availability choices, and user capability differences.
+    /// `configuration` 包含完整候选供应商默认值、模板决策、手工声明、可用性选择与用户能力差异。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success when every source-backed or manual account projection has valid final limits.
+    /// 当每个源目录或手工账号投影都具有有效最终限制时返回成功。
+    pub fn validate_model_catalog_overlays(
+        &self,
+        configuration: &PersistedAiConfiguration,
+    ) -> Result<(), String> {
+        let source_catalogs = self
+            .source_catalogs
+            .read()
+            .map_err(|_| String::from("The source AI model catalog lock is poisoned."))?
+            .snapshot();
+        for connection in configuration.connection_graph.connections.values() {
+            let Some(mut catalog) = source_catalogs
+                .get(connection.id.as_str())
+                .cloned()
+                .or_else(|| manual_custom_catalog(configuration, connection, 1))
+            else {
+                continue;
+            };
+            apply_model_catalog_overlays(
+                configuration,
+                connection.provider_id.as_str(),
+                &mut catalog,
+            )?;
+            validate_resolved_catalog_limits(&catalog)?;
+        }
+        Ok(())
+    }
+
+    /// Determines whether one exact connection still exposes a model after applying candidate overlays.
+    /// 判断一个精确连接在应用候选覆盖后是否仍暴露指定模型。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration` is the complete candidate configuration, `connection_id` selects the exact
+    /// credential catalog, and `model_id` is the upstream model identifier.
+    /// `configuration` 是完整候选配置，`connection_id` 选择精确凭据目录，`model_id`
+    /// 是上游模型标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when the immutable discovery snapshot or manual fallback still contains the model
+    /// after all defaults and user differences resolve; otherwise `false`.
+    /// 当不可变发现快照或手工回退目录在解析全部默认值与用户差异后仍包含该模型时返回
+    /// `true`，否则返回 `false`。
+    pub fn connection_catalog_contains_model(
+        &self,
+        configuration: &PersistedAiConfiguration,
+        connection_id: &str,
+        model_id: &str,
+    ) -> Result<bool, String> {
+        let connection = configuration
+            .connection_graph
+            .connections
+            .get(connection_id)
+            .ok_or_else(|| format!("Credential connection `{connection_id}` is not configured."))?;
+        // source_catalog keeps provider evidence immutable while the candidate is evaluated.
+        // source_catalog 在评估候选配置时保持供应商证据不可变。
+        let source_catalog = self
+            .source_catalogs
+            .read()
+            .map_err(|_| String::from("The source AI model catalog lock is poisoned."))?
+            .get(connection_id)
+            .cloned();
+        let Some(mut catalog) =
+            source_catalog.or_else(|| manual_custom_catalog(configuration, connection, 1))
+        else {
+            return Ok(false);
+        };
+        apply_model_catalog_overlays(configuration, connection.provider_id.as_str(), &mut catalog)?;
+        validate_resolved_catalog_limits(&catalog)?;
+        Ok(catalog.models.iter().any(|model| model.id == model_id))
+    }
+
+    /// Validates one proposed provider-model capability difference against every visible account.
+    /// 针对每个可见账号校验一项候选供应商模型能力差异。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration` is the persisted baseline, `provider_id` and `model_id` identify the exact
+    /// model, and `overrides` is the replacement difference or `None` when clearing it.
+    /// `configuration` 是持久化基线，`provider_id` 与 `model_id` 标识精确模型，`overrides`
+    /// 是替换差异，清除差异时为 `None`。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success only when the fully resolved limits remain valid for every account that exposes
+    /// the model from an immutable discovery snapshot or an explicit manual declaration.
+    /// 仅当不可变发现快照或显式手工声明中暴露该模型的每个账号，其最终解析限制均有效时返回成功。
+    pub fn validate_model_capability_override_candidate(
+        &self,
+        configuration: &PersistedAiConfiguration,
+        provider_id: &str,
+        model_id: &str,
+        overrides: Option<&crate::ModelCapabilityOverrides>,
+    ) -> Result<(), String> {
+        let mut candidate_configuration = configuration.clone();
+        let provider_model_key =
+            PersistedAiConfiguration::provider_model_key(provider_id, model_id);
+        if let Some(overrides) = overrides {
+            candidate_configuration
+                .model_capability_overrides
+                .insert(provider_model_key, overrides.clone());
+        } else {
+            candidate_configuration
+                .model_capability_overrides
+                .remove(provider_model_key.as_str());
+        }
+
+        let source_catalogs = self
+            .source_catalogs
+            .read()
+            .map_err(|_| String::from("The source AI model catalog lock is poisoned."))?
+            .snapshot();
+        let mut matched_connection = false;
+        for connection in candidate_configuration
+            .connection_graph
+            .connections
+            .values()
+            .filter(|connection| connection.provider_id == provider_id)
+        {
+            let Some(mut catalog) = source_catalogs
+                .get(connection.id.as_str())
+                .cloned()
+                .or_else(|| manual_custom_catalog(&candidate_configuration, connection, 1))
+            else {
+                continue;
+            };
+            apply_model_catalog_overlays(&candidate_configuration, provider_id, &mut catalog)?;
+            let Some(model) = catalog.models.iter().find(|model| model.id == model_id) else {
+                continue;
+            };
+            matched_connection = true;
+            validate_resolved_model_capability_limits(
+                connection.id.as_str(),
+                model.id.as_str(),
+                &model.capabilities,
+            )?;
+        }
+        if !matched_connection {
+            return Err(format!(
+                "Provider `{provider_id}` has no immutable or manual catalog source for model `{model_id}`. Synchronize the model catalog before saving capability overrides."
+            ));
+        }
         Ok(())
     }
 
@@ -956,6 +1347,9 @@ impl PublicAiRuntime {
         let registry = self.effective_providers(configuration)?;
         let mut available = Vec::new();
         for connection in configuration.connection_graph.connections.values() {
+            if configuration.connection_is_pending_validation(connection.id.as_str()) {
+                continue;
+            }
             let provider = registry
                 .provider(connection.provider_id.as_str())
                 .ok_or_else(|| {
@@ -1662,6 +2056,12 @@ impl PublicAiRuntime {
                     selection.connection_id
                 )
             })?;
+        if configuration.connection_is_pending_validation(connection.id.as_str()) {
+            return Err(format!(
+                "Provider tool connection `{}` is pending explicit model validation.",
+                connection.id
+            ));
+        }
         let provider = registry
             .provider(connection.provider_id.as_str())
             .cloned()
@@ -1944,9 +2344,14 @@ impl PublicAiRuntime {
             .catalogs
             .read()
             .map_err(|_| String::from("The AI model catalog lock is poisoned."))?;
+        let mut eligible_catalogs = catalogs.snapshot();
+        eligible_catalogs.retain(|connection_id, _| {
+            !configuration.connection_is_pending_validation(connection_id.as_str())
+        });
+        let eligible_catalogs = RuntimeConnectionCatalogs::from_snapshot(eligible_catalogs);
         let connection = configuration
             .connection_graph
-            .resolve_connection(provider_id, model_id, &catalogs)?
+            .resolve_connection(provider_id, model_id, &eligible_catalogs)?
             .clone();
         drop(catalogs);
         self.resolve_selection_for_connection(
@@ -2223,6 +2628,12 @@ impl PublicAiRuntime {
         model_id: &str,
         required_internal_operation: Option<AiOperation>,
     ) -> Result<ResolvedPublicAiSelection, String> {
+        if configuration.connection_is_pending_validation(connection.id.as_str()) {
+            return Err(format!(
+                "Connection `{}` is pending explicit model validation and cannot execute normal requests.",
+                connection.id
+            ));
+        }
         if let Some(operation) = required_internal_operation {
             if !configuration.internal_model_is_enabled(provider_id, model_id, operation) {
                 return Err(format!(
@@ -2365,6 +2776,8 @@ fn manual_custom_catalog(
             connection_id: connection.id.clone(),
             models: Vec::new(),
             generation,
+            page_count: 0,
+            discovery_schema_revision: String::from("manual.models.v1"),
         })
 }
 
@@ -2380,11 +2793,42 @@ fn apply_model_catalog_overlays(
     provider_id: &str,
     catalog: &mut ConnectionModelCatalog,
 ) -> Result<(), String> {
+    let custom_provider = provider_id.starts_with("custom:");
+    let custom_defaults =
+        custom_provider.then(|| configuration.custom_provider_model_defaults(provider_id));
+    if let Some(defaults) = custom_defaults.as_ref() {
+        defaults.validate()?;
+    }
+    let source_model_ids = catalog
+        .models
+        .iter()
+        .map(|model| model.id.clone())
+        .collect::<BTreeSet<_>>();
+    // An observed empty provider page is authoritative; only the explicit manual baseline lacks discovery evidence.
+    // 供应商明确返回的空分页仍具权威性；只有显式手工基线不包含发现证据。
+    let discovery_is_authoritative =
+        custom_provider && catalog.discovery_schema_revision != "manual.models.v1";
     let mut models = catalog
         .models
         .drain(..)
         .map(|mut model| {
-            crate::apply_common_model_context_default(model.id.as_str(), &mut model.capabilities);
+            if custom_provider {
+                apply_custom_model_defaults(
+                    configuration,
+                    provider_id,
+                    model.id.as_str(),
+                    custom_defaults
+                        .as_ref()
+                        .expect("custom defaults must exist"),
+                    &model.capability_evidence,
+                    &mut model.capabilities,
+                );
+            } else {
+                crate::apply_common_model_context_default(
+                    model.id.as_str(),
+                    &mut model.capabilities,
+                );
+            }
             configuration.apply_model_capability_overrides(
                 provider_id,
                 model.id.as_str(),
@@ -2396,8 +2840,49 @@ fn apply_model_catalog_overlays(
     if let Some(custom_models) = configuration.custom_models.get(provider_id) {
         for definition in custom_models.values() {
             definition.validate()?;
+            let availability = configuration.custom_model_connection_enabled_override(
+                catalog.connection_id.as_str(),
+                definition.id.as_str(),
+            );
+            if availability == Some(false)
+                || (discovery_is_authoritative
+                    && !source_model_ids.contains(definition.id.as_str())
+                    && availability != Some(true))
+            {
+                continue;
+            }
+            // A successful provider catalog remains authoritative for identity, limits, modalities,
+            // and operations. The manual declaration may still add explicit advanced behavior that
+            // `/models` cannot describe, such as reasoning projections and model parameters.
+            // 成功的供应商目录仍是身份、限制、多模态和操作的权威来源。手工声明仍可补充
+            // `/models` 无法表达的显式高级行为，例如思考投影和模型参数。
+            if let Some(discovered_model) = models.get_mut(definition.id.as_str()) {
+                discovered_model.display_name = definition.display_name.clone();
+                apply_custom_model_advanced_declaration(
+                    &definition.capabilities,
+                    &mut discovered_model.capabilities,
+                );
+                continue;
+            }
             let mut capabilities = definition.capabilities.clone();
-            crate::apply_common_model_context_default(definition.id.as_str(), &mut capabilities);
+            let capability_evidence = manual_model_capability_evidence(&capabilities);
+            if custom_provider {
+                apply_custom_model_defaults(
+                    configuration,
+                    provider_id,
+                    definition.id.as_str(),
+                    custom_defaults
+                        .as_ref()
+                        .expect("custom defaults must exist"),
+                    &capability_evidence,
+                    &mut capabilities,
+                );
+            } else {
+                crate::apply_common_model_context_default(
+                    definition.id.as_str(),
+                    &mut capabilities,
+                );
+            }
             configuration.apply_model_capability_overrides(
                 provider_id,
                 definition.id.as_str(),
@@ -2409,12 +2894,232 @@ fn apply_model_catalog_overlays(
                     id: definition.id.clone(),
                     display_name: definition.display_name.clone(),
                     capabilities,
+                    capability_evidence,
                 },
             );
         }
     }
     catalog.models = models.into_values().collect();
     Ok(())
+}
+
+/// Validates the final context and output limits resolved for one account model.
+/// 校验一个账号模型最终解析得到的上下文与输出限制。
+///
+/// # Parameters
+/// 参数
+/// `connection_id` and `model_id` identify the exact projection, while `capabilities` contains
+/// the fully resolved provider evidence, template/default values, and user differences.
+/// `connection_id` 与 `model_id` 标识精确投影，`capabilities` 包含完整解析后的供应商证据、
+/// 模板或默认值以及用户差异。
+///
+/// # Returns
+/// 返回值
+/// Success when every present limit is positive and output does not exceed context.
+/// 当所有已存在限制均为正数且输出不超过上下文时返回成功。
+fn validate_resolved_model_capability_limits(
+    connection_id: &str,
+    model_id: &str,
+    capabilities: &ModelCapabilities,
+) -> Result<(), String> {
+    if capabilities.context_limit == Some(0) {
+        return Err(format!(
+            "Model `{model_id}` on connection `{connection_id}` has an effective context limit of zero."
+        ));
+    }
+    if capabilities.output_limit == Some(0) {
+        return Err(format!(
+            "Model `{model_id}` on connection `{connection_id}` has an effective output limit of zero."
+        ));
+    }
+    if let (Some(context_limit), Some(output_limit)) =
+        (capabilities.context_limit, capabilities.output_limit)
+        && output_limit > context_limit
+    {
+        return Err(format!(
+            "Model `{model_id}` on connection `{connection_id}` has an effective output limit that exceeds its context limit."
+        ));
+    }
+    Ok(())
+}
+
+/// Validates every final model limit in one credential-scoped catalog.
+/// 校验一个凭据作用域目录中的每个最终模型限制。
+///
+/// # Parameters
+/// 参数
+/// `catalog` is a fully overlaid account projection.
+/// `catalog` 是已经完整应用覆盖的账号投影。
+///
+/// # Returns
+/// 返回值
+/// Success only when every model has a coherent positive token budget.
+/// 仅当每个模型都具有一致且为正数的 Token 预算时返回成功。
+fn validate_resolved_catalog_limits(catalog: &ConnectionModelCatalog) -> Result<(), String> {
+    if catalog.models.len() > crate::PROVIDER_MODEL_CATALOG_MAX_MODELS {
+        return Err(format!(
+            "Connection `{}` exceeds the {}-model runtime catalog boundary.",
+            catalog.connection_id,
+            crate::PROVIDER_MODEL_CATALOG_MAX_MODELS
+        ));
+    }
+    for model in &catalog.models {
+        validate_resolved_model_capability_limits(
+            catalog.connection_id.as_str(),
+            model.id.as_str(),
+            &model.capabilities,
+        )?;
+    }
+    Ok(())
+}
+
+/// Applies only explicit advanced fields from a manual declaration to a discovered model.
+/// 仅将手工声明中的显式高级字段应用到已发现模型。
+///
+/// # Parameters
+/// 参数
+/// `declared` is the user-owned advanced declaration and `resolved` retains provider-owned basics.
+/// `declared` 是用户持有的高级声明，`resolved` 保留供应商持有的基础事实。
+fn apply_custom_model_advanced_declaration(
+    declared: &ModelCapabilities,
+    resolved: &mut ModelCapabilities,
+) {
+    if declared.tool_calling != vulcan_ai_contract::CapabilitySupport::Unknown {
+        resolved.tool_calling = declared.tool_calling;
+    }
+    if declared.parallel_tool_calling != vulcan_ai_contract::CapabilitySupport::Unknown {
+        resolved.parallel_tool_calling = declared.parallel_tool_calling;
+    }
+    if declared.reasoning != vulcan_ai_contract::CapabilitySupport::Unknown {
+        resolved.reasoning = declared.reasoning;
+    }
+    if declared.reasoning_control != vulcan_ai_contract::ReasoningControlMode::Unknown {
+        resolved.reasoning_control = declared.reasoning_control;
+        resolved.reasoning_efforts = declared.reasoning_efforts.clone();
+    } else if !declared.reasoning_efforts.is_empty() {
+        resolved.reasoning_efforts = declared.reasoning_efforts.clone();
+    }
+    if declared.prompt_cache != vulcan_ai_contract::PromptCacheCapability::default() {
+        resolved.prompt_cache = declared.prompt_cache.clone();
+    }
+    for parameter in &declared.model_parameters {
+        if let Some(existing) = resolved
+            .model_parameters
+            .iter_mut()
+            .find(|existing| existing.id == parameter.id)
+        {
+            *existing = parameter.clone();
+        } else {
+            resolved.model_parameters.push(parameter.clone());
+        }
+    }
+    if declared.tool_calling != vulcan_ai_contract::CapabilitySupport::Unknown
+        || declared.parallel_tool_calling != vulcan_ai_contract::CapabilitySupport::Unknown
+        || declared.reasoning != vulcan_ai_contract::CapabilitySupport::Unknown
+        || declared.reasoning_control != vulcan_ai_contract::ReasoningControlMode::Unknown
+        || !declared.reasoning_efforts.is_empty()
+        || declared.prompt_cache != vulcan_ai_contract::PromptCacheCapability::default()
+        || !declared.model_parameters.is_empty()
+    {
+        resolved.evidence_revision = format!(
+            "{}+{}",
+            resolved.evidence_revision, declared.evidence_revision
+        );
+    }
+}
+
+/// Resolves custom-provider template and provider defaults without overriding credential evidence.
+/// 在不覆盖凭据证据的前提下解析自定义供应商模板与供应商默认值。
+///
+/// # Parameters
+/// 参数
+/// `configuration`, `provider_id`, and `model_id` identify persisted choices; `defaults` and
+/// `capabilities` are the fallback contract and credential-scoped model snapshot.
+/// `configuration`、`provider_id` 与 `model_id` 标识持久化选择；`defaults` 与
+/// `capabilities` 分别是回退契约和凭据作用域模型快照。
+fn apply_custom_model_defaults(
+    configuration: &PersistedAiConfiguration,
+    provider_id: &str,
+    model_id: &str,
+    defaults: &crate::CustomProviderModelDefaults,
+    evidence: &crate::ModelCapabilityEvidence,
+    capabilities: &mut ModelCapabilities,
+) {
+    let selection = if let Some(crate::CustomModelTemplateDecision::Applied { selection }) =
+        configuration.custom_model_template_decision(provider_id, model_id)
+    {
+        selection.apply_missing(capabilities, evidence);
+        Some(selection)
+    } else {
+        None
+    };
+    defaults.apply_missing(capabilities, evidence);
+
+    let existing_conversation = capabilities
+        .operations
+        .contains(&AiOperation::ConversationRespond);
+    let has_explicit_non_conversation_operation = capabilities
+        .operations
+        .iter()
+        .any(|operation| *operation != AiOperation::ConversationRespond);
+    let implicit_text_default = existing_conversation || !has_explicit_non_conversation_operation;
+    let supports_text_input = evidence
+        .supports_text_input
+        .or_else(|| selection.map(|value| value.supports_text_input))
+        .unwrap_or(implicit_text_default);
+    let supports_text_output = evidence
+        .supports_text_output
+        .or_else(|| selection.map(|value| value.supports_text_output))
+        .unwrap_or(implicit_text_default);
+    set_conversation_operation(capabilities, supports_text_input && supports_text_output);
+}
+
+/// Captures the explicit basic-capability facts carried by one manual model definition.
+/// 捕获一个手工模型定义携带的显式基础能力事实。
+///
+/// # Parameters
+/// 参数
+/// `capabilities` is the user-owned provider-neutral declaration.
+/// `capabilities` 是用户持有的供应商无关能力声明。
+///
+/// # Returns
+/// 返回值
+/// Evidence that prevents provider defaults from replacing intentional manual values.
+/// 返回用于阻止供应商默认值替换手工明确值的证据。
+fn manual_model_capability_evidence(
+    capabilities: &ModelCapabilities,
+) -> crate::ModelCapabilityEvidence {
+    let supports_text = capabilities
+        .operations
+        .contains(&AiOperation::ConversationRespond);
+    crate::ModelCapabilityEvidence {
+        context_limit_declared: capabilities.context_limit.is_some(),
+        output_limit_declared: capabilities.output_limit.is_some(),
+        input_modalities_declared: true,
+        output_modalities_declared: true,
+        supports_text_input: Some(supports_text),
+        supports_text_output: Some(supports_text),
+    }
+}
+
+/// Adds or removes conversation capability according to the resolved text contract.
+/// 根据解析后的文本契约添加或移除会话能力。
+///
+/// # Parameters
+/// 参数
+/// `capabilities` is mutated in place and `supported` is the final bidirectional-text result.
+/// `capabilities` 会被原地修改，`supported` 是最终双向文本支持结果。
+fn set_conversation_operation(capabilities: &mut ModelCapabilities, supported: bool) {
+    capabilities
+        .operations
+        .retain(|operation| *operation != AiOperation::ConversationRespond);
+    if supported {
+        capabilities
+            .operations
+            .push(AiOperation::ConversationRespond);
+        capabilities.operations.sort();
+        capabilities.operations.dedup();
+    }
 }
 
 /// Applies closed adapter-declared defaults before freezing an execution selection.
@@ -2546,6 +3251,52 @@ fn current_unix_millis() -> Result<u64, String> {
         .as_millis();
     u64::try_from(millis)
         .map_err(|_| String::from("System time exceeds the supported OAuth range."))
+}
+
+/// Maps the metadata client's typed failure into the public runtime status contract.
+/// 将元数据客户端的强类型失败映射为公共运行时状态契约。
+///
+/// # Parameters
+/// 参数
+/// `failure` is produced at the exact HTTP or parser boundary.
+/// `failure` 由精确 HTTP 或解析器边界产出。
+///
+/// # Returns
+/// 返回值
+/// The equivalent serializable catalog failure category.
+/// 返回等价的可序列化目录失败分类。
+fn catalog_discovery_failure_kind(
+    failure: ModelDiscoveryFailureKind,
+) -> CatalogDiscoveryFailureKind {
+    match failure {
+        ModelDiscoveryFailureKind::Unsupported => CatalogDiscoveryFailureKind::Unsupported,
+        ModelDiscoveryFailureKind::AuthenticationFailed => {
+            CatalogDiscoveryFailureKind::AuthenticationFailed
+        }
+        ModelDiscoveryFailureKind::RateLimited => CatalogDiscoveryFailureKind::RateLimited,
+        ModelDiscoveryFailureKind::TemporarilyUnavailable => {
+            CatalogDiscoveryFailureKind::TemporarilyUnavailable
+        }
+        ModelDiscoveryFailureKind::InvalidResponse => CatalogDiscoveryFailureKind::InvalidResponse,
+        ModelDiscoveryFailureKind::Failed => CatalogDiscoveryFailureKind::Failed,
+    }
+}
+
+/// Maps one failure kind to its non-stale user-facing state.
+/// 将一种失败类型映射为非过期的面向用户状态。
+fn discovery_state_for_failure(failure: CatalogDiscoveryFailureKind) -> CatalogDiscoveryState {
+    match failure {
+        CatalogDiscoveryFailureKind::Unsupported => CatalogDiscoveryState::Unsupported,
+        CatalogDiscoveryFailureKind::AuthenticationFailed => {
+            CatalogDiscoveryState::AuthenticationFailed
+        }
+        CatalogDiscoveryFailureKind::RateLimited => CatalogDiscoveryState::RateLimited,
+        CatalogDiscoveryFailureKind::TemporarilyUnavailable => {
+            CatalogDiscoveryState::TemporarilyUnavailable
+        }
+        CatalogDiscoveryFailureKind::InvalidResponse => CatalogDiscoveryState::InvalidResponse,
+        CatalogDiscoveryFailureKind::Failed => CatalogDiscoveryState::Failed,
+    }
 }
 
 /// Returns the exact active connection and rejects cross-provider selections.
@@ -2738,6 +3489,55 @@ mod tests {
         .expect("documented model fixture should parse")
     }
 
+    /// Installs one immutable source catalog for candidate-overlay validation tests.
+    /// 为候选覆盖校验测试安装一个不可变源目录。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `runtime` owns the process-local catalog maps and `catalog` is the exact provider snapshot.
+    /// `runtime` 持有进程内目录映射，`catalog` 是精确供应商快照。
+    fn install_source_catalog(runtime: &PublicAiRuntime, catalog: ConnectionModelCatalog) {
+        runtime
+            .source_catalogs
+            .write()
+            .expect("source catalog lock should remain healthy")
+            .replace(catalog);
+    }
+
+    /// Verifies every client-side failure category maps without message parsing.
+    /// 验证每一种客户端失败分类都无需解析消息即可完成映射。
+    #[test]
+    fn catalog_failure_mapping_preserves_every_typed_category() {
+        for (source, expected) in [
+            (
+                ModelDiscoveryFailureKind::Unsupported,
+                CatalogDiscoveryFailureKind::Unsupported,
+            ),
+            (
+                ModelDiscoveryFailureKind::AuthenticationFailed,
+                CatalogDiscoveryFailureKind::AuthenticationFailed,
+            ),
+            (
+                ModelDiscoveryFailureKind::RateLimited,
+                CatalogDiscoveryFailureKind::RateLimited,
+            ),
+            (
+                ModelDiscoveryFailureKind::TemporarilyUnavailable,
+                CatalogDiscoveryFailureKind::TemporarilyUnavailable,
+            ),
+            (
+                ModelDiscoveryFailureKind::InvalidResponse,
+                CatalogDiscoveryFailureKind::InvalidResponse,
+            ),
+            (
+                ModelDiscoveryFailureKind::Failed,
+                CatalogDiscoveryFailureKind::Failed,
+            ),
+        ] {
+            assert_eq!(catalog_discovery_failure_kind(source), expected);
+        }
+    }
+
     /// Builds a runtime and two configured accounts that expose the same model.
     /// 构建一个运行时以及两个暴露相同模型的已配置账号。
     fn two_account_runtime() -> (PublicAiRuntime, PersistedAiConfiguration) {
@@ -2784,6 +3584,7 @@ mod tests {
             PersistedAiConfiguration::provider_model_key("openrouter", "vendor/model"),
             crate::ModelCapabilityOverrides {
                 context_limit: Some(4_096),
+                output_limit: None,
                 input_resources: Some(vec![vulcan_ai_contract::ResourceKind::Image]),
                 output_resources: None,
             },
@@ -2813,6 +3614,128 @@ mod tests {
             effective_model.capabilities.input_resources,
             vec![vulcan_ai_contract::ResourceKind::Image]
         );
+    }
+
+    /// Verifies candidate capability differences are checked after inherited limits resolve.
+    /// 验证候选能力差异会在继承限制解析完成后接受校验。
+    #[test]
+    fn capability_override_candidate_validates_final_resolved_limits() {
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .connection_graph
+            .add_connection(runtime.providers(), connection("one"))
+            .expect("connection should register");
+        install_source_catalog(&runtime, catalog("one"));
+
+        for (overrides, expected_error) in [
+            (
+                crate::ModelCapabilityOverrides {
+                    output_limit: Some(0),
+                    ..crate::ModelCapabilityOverrides::default()
+                },
+                "effective output limit of zero",
+            ),
+            (
+                crate::ModelCapabilityOverrides {
+                    context_limit: Some(2_048),
+                    ..crate::ModelCapabilityOverrides::default()
+                },
+                "effective output limit that exceeds its context limit",
+            ),
+            (
+                crate::ModelCapabilityOverrides {
+                    output_limit: Some(9_000),
+                    ..crate::ModelCapabilityOverrides::default()
+                },
+                "effective output limit that exceeds its context limit",
+            ),
+        ] {
+            let error = runtime
+                .validate_model_capability_override_candidate(
+                    &configuration,
+                    "openrouter",
+                    "vendor/model",
+                    Some(&overrides),
+                )
+                .expect_err("invalid final limits must be rejected");
+            assert!(
+                error.contains(expected_error),
+                "unexpected validation error: {error}"
+            );
+        }
+
+        runtime
+            .validate_model_capability_override_candidate(
+                &configuration,
+                "openrouter",
+                "vendor/model",
+                Some(&crate::ModelCapabilityOverrides {
+                    context_limit: Some(8_192),
+                    output_limit: Some(4_096),
+                    ..crate::ModelCapabilityOverrides::default()
+                }),
+            )
+            .expect("valid final limits should be accepted");
+    }
+
+    /// Verifies a provider-wide difference must remain valid for every credential source.
+    /// 验证供应商级差异必须对每个凭据源都保持有效。
+    #[test]
+    fn capability_override_candidate_validates_every_account() {
+        let (runtime, configuration) = two_account_runtime();
+        install_source_catalog(&runtime, catalog("one"));
+        install_source_catalog(
+            &runtime,
+            parse_openrouter_model_catalog(
+                "two",
+                1,
+                r#"{"data":[{"id":"vendor/model","name":"Model","context_length":2048,"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":1024}}]}"#,
+            )
+            .expect("second account source should parse"),
+        );
+
+        let error = runtime
+            .validate_model_capability_override_candidate(
+                &configuration,
+                "openrouter",
+                "vendor/model",
+                Some(&crate::ModelCapabilityOverrides {
+                    output_limit: Some(3_000),
+                    ..crate::ModelCapabilityOverrides::default()
+                }),
+            )
+            .expect_err("an override invalid for the second account must be rejected");
+        assert!(
+            error.contains("connection `two`"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// Verifies ordinary catalog rebuilds also refuse an already persisted invalid difference.
+    /// 验证常规目录重建也会拒绝已经持久化的无效差异。
+    #[test]
+    fn model_overlay_rebuild_rejects_invalid_final_limits() {
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .connection_graph
+            .add_connection(runtime.providers(), connection("one"))
+            .expect("connection should register");
+        install_source_catalog(&runtime, catalog("one"));
+        configuration.model_capability_overrides.insert(
+            PersistedAiConfiguration::provider_model_key("openrouter", "vendor/model"),
+            crate::ModelCapabilityOverrides {
+                output_limit: Some(9_000),
+                ..crate::ModelCapabilityOverrides::default()
+            },
+        );
+
+        let error = runtime
+            .reapply_model_catalog_overlays(&configuration)
+            .expect_err("invalid final limits must stop the rebuild");
+
+        assert!(error.contains("exceeds its context limit"));
     }
 
     /// Verifies manual models remain usable when a provider has no discovered source catalog.
@@ -2868,6 +3791,386 @@ mod tests {
         assert_eq!(model.capabilities.context_limit, Some(200_000));
     }
 
+    /// Verifies removing a manual-only definition removes the model from its exact connection.
+    /// 验证移除仅手工定义后模型会从其精确连接消失。
+    #[test]
+    fn connection_catalog_membership_tracks_manual_definition_removal() {
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        let mut configuration = PersistedAiConfiguration::default();
+        let mut custom_connection = connection("custom-account");
+        custom_connection.provider_id = String::from("custom:test");
+        configuration
+            .connection_graph
+            .connections
+            .insert(custom_connection.id.clone(), custom_connection);
+        configuration
+            .custom_models
+            .entry(String::from("custom:test"))
+            .or_default()
+            .insert(
+                String::from("manual/chat"),
+                crate::CustomModelDefinition {
+                    id: String::from("manual/chat"),
+                    display_name: String::from("Manual Chat"),
+                    enabled: true,
+                    capabilities: ModelCapabilities {
+                        operations: vec![AiOperation::ConversationRespond],
+                        context_limit: Some(200_000),
+                        ..ModelCapabilities::default()
+                    },
+                    request_projection: crate::CustomModelRequestProjection::default(),
+                },
+            );
+
+        assert!(
+            runtime
+                .connection_catalog_contains_model(&configuration, "custom-account", "manual/chat",)
+                .expect("manual catalog membership should resolve")
+        );
+        configuration.custom_models.remove("custom:test");
+        assert!(
+            !runtime
+                .connection_catalog_contains_model(&configuration, "custom-account", "manual/chat",)
+                .expect("removed manual model should resolve as absent")
+        );
+    }
+
+    /// Verifies removing a user overlay does not hide a model retained by immutable discovery.
+    /// 验证移除用户覆盖不会隐藏不可变发现目录仍保留的模型。
+    #[test]
+    fn connection_catalog_membership_retains_discovered_model_after_overlay_removal() {
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        let mut configuration = PersistedAiConfiguration::default();
+        let mut custom_connection = connection("custom-account");
+        custom_connection.provider_id = String::from("custom:test");
+        configuration
+            .connection_graph
+            .connections
+            .insert(custom_connection.id.clone(), custom_connection);
+        let source = crate::parse_openai_model_catalog(
+            "custom-account",
+            1,
+            r#"{"data":[{"id":"vendor/model"}]}"#,
+        )
+        .expect("compatible source catalog should parse");
+        install_source_catalog(&runtime, source);
+        configuration
+            .custom_models
+            .entry(String::from("custom:test"))
+            .or_default()
+            .insert(
+                String::from("vendor/model"),
+                crate::CustomModelDefinition {
+                    id: String::from("vendor/model"),
+                    display_name: String::from("Reviewed Model"),
+                    enabled: true,
+                    capabilities: ModelCapabilities::default(),
+                    request_projection: crate::CustomModelRequestProjection::default(),
+                },
+            );
+
+        configuration.custom_models.remove("custom:test");
+        assert!(
+            runtime
+                .connection_catalog_contains_model(
+                    &configuration,
+                    "custom-account",
+                    "vendor/model",
+                )
+                .expect("source-backed membership should resolve")
+        );
+    }
+
+    /// Verifies an ID-only custom catalog receives the documented provider defaults.
+    /// 验证仅含 ID 的自定义目录会获得文档规定的供应商默认值。
+    #[test]
+    fn custom_catalog_uses_two_hundred_thousand_and_thirty_two_thousand_defaults() {
+        let configuration = PersistedAiConfiguration::default();
+        let mut catalog = crate::parse_openai_model_catalog(
+            "custom-account",
+            1,
+            r#"{"data":[{"id":"private/chat"}]}"#,
+        )
+        .expect("ID-only compatible catalog should parse");
+
+        apply_model_catalog_overlays(&configuration, "custom:test", &mut catalog)
+            .expect("custom defaults should resolve");
+
+        let model = catalog.models.first().expect("model should remain visible");
+        assert_eq!(model.capabilities.context_limit, Some(200_000));
+        assert_eq!(model.capabilities.output_limit, Some(32_768));
+        assert!(
+            model
+                .capabilities
+                .operations
+                .contains(&AiOperation::ConversationRespond)
+        );
+    }
+
+    /// Verifies explicit credential fields outrank templates and provider defaults field by field.
+    /// 验证凭据明确字段会逐字段优先于模板与供应商默认值。
+    #[test]
+    fn explicit_custom_catalog_evidence_outranks_template_and_defaults() {
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.custom_provider_model_defaults.insert(
+            String::from("custom:test"),
+            crate::CustomProviderModelDefaults {
+                context_limit: 200_000,
+                output_limit: 32_768,
+                input_resources: vec![vulcan_ai_contract::ResourceKind::Image],
+                output_resources: vec![vulcan_ai_contract::ResourceKind::Image],
+            },
+        );
+        configuration.custom_model_template_decisions.insert(
+            PersistedAiConfiguration::provider_model_key("custom:test", "private/embedding"),
+            crate::CustomModelTemplateDecision::Applied {
+                selection: crate::CustomModelTemplateSelection {
+                    template_key: String::from("openai/text-embedding-3-small"),
+                    template_revision: String::from(crate::CUSTOM_MODEL_TEMPLATE_REVISION),
+                    context_limit: 100_000,
+                    supports_text_input: true,
+                    supports_text_output: false,
+                    input_resources: vec![vulcan_ai_contract::ResourceKind::File],
+                    output_resources: Vec::new(),
+                },
+            },
+        );
+        let mut catalog = crate::parse_openai_model_catalog(
+            "custom-account",
+            1,
+            r#"{"data":[{"id":"private/embedding","context_window":64000,"max_output_tokens":4096,"input_modalities":["text"],"output_modalities":["embedding"]}]}"#,
+        )
+        .expect("explicit compatible catalog should parse");
+
+        apply_model_catalog_overlays(&configuration, "custom:test", &mut catalog)
+            .expect("custom evidence should resolve");
+
+        let model = catalog.models.first().expect("model should remain visible");
+        assert_eq!(model.capabilities.context_limit, Some(64_000));
+        assert_eq!(model.capabilities.output_limit, Some(4_096));
+        assert!(model.capabilities.input_resources.is_empty());
+        assert!(model.capabilities.output_resources.is_empty());
+        assert!(
+            !model
+                .capabilities
+                .operations
+                .contains(&AiOperation::ConversationRespond)
+        );
+    }
+
+    /// Verifies an explicit user difference outranks credential evidence.
+    /// 验证显式用户差异会优先于凭据证据。
+    #[test]
+    fn custom_model_user_override_outranks_credential_evidence() {
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.model_capability_overrides.insert(
+            PersistedAiConfiguration::provider_model_key("custom:test", "private/chat"),
+            crate::ModelCapabilityOverrides {
+                context_limit: Some(32_000),
+                output_limit: Some(2_000),
+                input_resources: Some(vec![vulcan_ai_contract::ResourceKind::File]),
+                output_resources: Some(vec![vulcan_ai_contract::ResourceKind::Image]),
+            },
+        );
+        let mut catalog = crate::parse_openai_model_catalog(
+            "custom-account",
+            1,
+            r#"{"data":[{"id":"private/chat","context_window":64000,"max_output_tokens":4096,"input_modalities":["text"],"output_modalities":["text"]}]}"#,
+        )
+        .expect("explicit compatible catalog should parse");
+
+        apply_model_catalog_overlays(&configuration, "custom:test", &mut catalog)
+            .expect("custom override should resolve");
+
+        let model = catalog.models.first().expect("model should remain visible");
+        assert_eq!(model.capabilities.context_limit, Some(32_000));
+        assert_eq!(model.capabilities.output_limit, Some(2_000));
+        assert_eq!(
+            model.capabilities.input_resources,
+            vec![vulcan_ai_contract::ResourceKind::File]
+        );
+        assert_eq!(
+            model.capabilities.output_resources,
+            vec![vulcan_ai_contract::ResourceKind::Image]
+        );
+    }
+
+    /// Verifies discovered basics survive while explicit manual advanced declarations become effective.
+    /// 验证已发现基础事实会保留，同时显式手工高级声明会真正生效。
+    #[test]
+    fn discovered_custom_model_applies_only_manual_advanced_declarations() {
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .custom_models
+            .entry(String::from("custom:test"))
+            .or_default()
+            .insert(
+                String::from("private/chat"),
+                crate::CustomModelDefinition {
+                    id: String::from("private/chat"),
+                    display_name: String::from("Private Chat Renamed"),
+                    enabled: true,
+                    capabilities: ModelCapabilities {
+                        operations: vec![AiOperation::ConversationRespond],
+                        context_limit: Some(1_024),
+                        output_limit: Some(512),
+                        input_resources: vec![vulcan_ai_contract::ResourceKind::File],
+                        output_resources: vec![vulcan_ai_contract::ResourceKind::Audio],
+                        tool_calling: vulcan_ai_contract::CapabilitySupport::Native,
+                        reasoning: vulcan_ai_contract::CapabilitySupport::Native,
+                        reasoning_control:
+                            vulcan_ai_contract::ReasoningControlMode::EffortSelection,
+                        reasoning_efforts: vec![vulcan_ai_contract::ReasoningEffort::High],
+                        model_parameters: vec![vulcan_ai_contract::ModelParameterDefinition {
+                            id: String::from("vendor.flag"),
+                            display_name: String::from("Vendor flag"),
+                            description: String::from("Controls one verified vendor flag."),
+                            schema: vulcan_ai_contract::ModelParameterSchema::Boolean,
+                            default: vulcan_ai_contract::ModelParameterDefault::ProviderDefault,
+                            protocol_ids: Vec::new(),
+                            model_ids: Vec::new(),
+                            dependent_required: Vec::new(),
+                            conflicts: Vec::new(),
+                            evidence_revision: String::from("user.custom-model.v1"),
+                        }],
+                        evidence_revision: String::from("user.custom-model.v2"),
+                        ..ModelCapabilities::default()
+                    },
+                    request_projection: crate::CustomModelRequestProjection {
+                        model_parameter_paths: BTreeMap::from([(
+                            String::from("vendor.flag"),
+                            String::from("vendor_flag"),
+                        )]),
+                        ..crate::CustomModelRequestProjection::default()
+                    },
+                },
+            );
+        let mut catalog = crate::parse_openai_model_catalog(
+            "custom-account",
+            1,
+            r#"{"data":[{"id":"private/chat","name":"Provider Chat","context_window":64000,"max_output_tokens":4096,"input_modalities":["text","image"],"output_modalities":["text"]}]}"#,
+        )
+        .expect("explicit compatible catalog should parse");
+
+        apply_model_catalog_overlays(&configuration, "custom:test", &mut catalog)
+            .expect("advanced declaration should merge");
+
+        let model = catalog.models.first().expect("model should remain visible");
+        assert_eq!(model.display_name, "Private Chat Renamed");
+        assert_eq!(model.capabilities.context_limit, Some(64_000));
+        assert_eq!(model.capabilities.output_limit, Some(4_096));
+        assert_eq!(
+            model.capabilities.input_resources,
+            vec![vulcan_ai_contract::ResourceKind::Image]
+        );
+        assert!(model.capabilities.output_resources.is_empty());
+        assert_eq!(
+            model.capabilities.tool_calling,
+            vulcan_ai_contract::CapabilitySupport::Native
+        );
+        assert_eq!(
+            model.capabilities.reasoning_control,
+            vulcan_ai_contract::ReasoningControlMode::EffortSelection
+        );
+        assert_eq!(
+            model.capabilities.reasoning_efforts,
+            vec![vulcan_ai_contract::ReasoningEffort::High]
+        );
+        assert_eq!(model.capabilities.model_parameters.len(), 1);
+        assert!(
+            model
+                .capabilities
+                .evidence_revision
+                .contains("user.custom-model.v2")
+        );
+    }
+
+    /// Verifies an authoritative non-empty account catalog hides absent manual models until forced.
+    /// 验证权威非空账号目录会隐藏缺失的手工模型，直至用户显式强制启用。
+    #[test]
+    fn authoritative_custom_catalog_requires_force_enable_for_absent_manual_model() {
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .custom_models
+            .entry(String::from("custom:test"))
+            .or_default()
+            .insert(
+                String::from("manual/chat"),
+                crate::CustomModelDefinition {
+                    id: String::from("manual/chat"),
+                    display_name: String::from("Manual Chat"),
+                    enabled: true,
+                    capabilities: ModelCapabilities {
+                        operations: vec![AiOperation::ConversationRespond],
+                        ..ModelCapabilities::default()
+                    },
+                    request_projection: crate::CustomModelRequestProjection::default(),
+                },
+            );
+        let source = crate::parse_openai_model_catalog(
+            "custom-account",
+            1,
+            r#"{"data":[{"id":"discovered/chat"}]}"#,
+        )
+        .expect("authoritative catalog should parse");
+        let mut hidden = source.clone();
+        apply_model_catalog_overlays(&configuration, "custom:test", &mut hidden)
+            .expect("catalog should resolve");
+        assert!(hidden.models.iter().all(|model| model.id != "manual/chat"));
+
+        configuration
+            .custom_model_connection_enabled_overrides
+            .insert(
+                PersistedAiConfiguration::connection_model_key("custom-account", "manual/chat"),
+                true,
+            );
+        let mut forced = source;
+        apply_model_catalog_overlays(&configuration, "custom:test", &mut forced)
+            .expect("forced catalog should resolve");
+        assert!(forced.models.iter().any(|model| model.id == "manual/chat"));
+    }
+
+    /// Verifies an authoritative empty provider catalog does not degrade into manual-only mode.
+    /// 验证权威空供应商目录不会降级为仅手工模式。
+    #[test]
+    fn authoritative_empty_custom_catalog_hides_manual_models_until_forced() {
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .custom_models
+            .entry(String::from("custom:test"))
+            .or_default()
+            .insert(
+                String::from("manual/chat"),
+                crate::CustomModelDefinition {
+                    id: String::from("manual/chat"),
+                    display_name: String::from("Manual Chat"),
+                    enabled: true,
+                    capabilities: ModelCapabilities {
+                        operations: vec![AiOperation::ConversationRespond],
+                        ..ModelCapabilities::default()
+                    },
+                    request_projection: crate::CustomModelRequestProjection::default(),
+                },
+            );
+        let source = crate::parse_openai_model_catalog("custom-account", 1, r#"{"data":[]}"#)
+            .expect("authoritative empty catalog should parse");
+        let mut hidden = source.clone();
+        apply_model_catalog_overlays(&configuration, "custom:test", &mut hidden)
+            .expect("empty catalog should remain authoritative");
+        assert!(hidden.models.is_empty());
+
+        configuration
+            .custom_model_connection_enabled_overrides
+            .insert(
+                PersistedAiConfiguration::connection_model_key("custom-account", "manual/chat"),
+                true,
+            );
+        let mut forced = source;
+        apply_model_catalog_overlays(&configuration, "custom:test", &mut forced)
+            .expect("forced empty catalog should resolve");
+        assert!(forced.models.iter().any(|model| model.id == "manual/chat"));
+    }
+
     /// Verifies a provider-task network future cannot block its caller beyond the exact host limit.
     /// 验证供应商任务网络 Future 无法阻塞调用方超过精确宿主限制。
     #[tokio::test]
@@ -2920,6 +4223,55 @@ mod tests {
         assert_eq!(selection.route.connection.id, "one");
     }
 
+    /// Verifies pending credentials are removed from preferences and all normal resolution paths.
+    /// 验证待验证凭据会从偏好中移除，并被全部常规解析路径隔离。
+    #[test]
+    fn pending_validation_connection_is_isolated_from_normal_routing() {
+        let (runtime, mut configuration) = two_account_runtime();
+        configuration
+            .connection_graph
+            .remember_model_connection("openrouter", "vendor/model", "one")
+            .expect("model preference should be recorded");
+        configuration.active = Some(ActiveAiModelSelection {
+            provider_id: String::from("openrouter"),
+            model_id: String::from("vendor/model"),
+            connection_id: String::from("one"),
+        });
+
+        configuration
+            .set_connection_pending_validation("one", true)
+            .expect("configured connection should enter pending state");
+
+        assert!(configuration.active.is_none());
+        assert!(
+            !configuration
+                .connection_graph
+                .account_preferences
+                .provider_defaults
+                .contains_key("openrouter")
+        );
+        assert!(
+            configuration
+                .connection_graph
+                .account_preferences
+                .model_last_connections
+                .is_empty()
+        );
+        let fallback = runtime
+            .resolve_model_selection(&configuration, "openrouter", "vendor/model")
+            .expect("eligible account should replace the pending preference");
+        assert_eq!(fallback.route.connection.id, "two");
+        let Err(exact_error) = runtime.resolve_connection_model_selection(
+            &configuration,
+            "one",
+            "openrouter",
+            "vendor/model",
+        ) else {
+            panic!("pending exact account must not execute");
+        };
+        assert!(exact_error.contains("pending explicit model validation"));
+    }
+
     /// Verifies workbench selectors and resolution reject operation-only internal models.
     /// 验证工作台选择器与解析会拒绝仅供内部操作使用的模型。
     #[test]
@@ -2943,6 +4295,7 @@ mod tests {
                             operations: vec![AiOperation::ConversationRespond],
                             ..ModelCapabilities::default()
                         },
+                        capability_evidence: crate::ModelCapabilityEvidence::default(),
                     },
                     ConnectionModel {
                         id: String::from("vendor/embedding"),
@@ -2951,9 +4304,12 @@ mod tests {
                             operations: vec![AiOperation::EmbeddingCreate],
                             ..ModelCapabilities::default()
                         },
+                        capability_evidence: crate::ModelCapabilityEvidence::default(),
                     },
                 ],
                 generation: 1,
+                page_count: 1,
+                discovery_schema_revision: String::from("test.mixed.models.v1"),
             })
             .expect("mixed catalog should install");
 

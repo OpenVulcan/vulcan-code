@@ -42,6 +42,23 @@ pub enum CustomProviderAuthentication {
     XApiKey,
 }
 
+/// Selects how one custom provider exposes its model catalog.
+/// 选择一个自定义供应商如何公开模型目录。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CustomProviderModelDiscoveryMode {
+    /// Uses the protocol-standard models endpoint.
+    /// 使用协议标准模型目录端点。
+    #[default]
+    Standard,
+    /// Uses one user-declared same-origin relative path.
+    /// 使用用户声明的同源相对路径。
+    CustomPath,
+    /// Skips remote discovery and relies on manual model declarations.
+    /// 跳过远程发现并依赖手工模型声明。
+    Manual,
+}
+
 impl CustomProviderAuthentication {
     /// Projects the public custom setting into the runtime authentication contract.
     /// 将公开自定义设置投影为运行时鉴权契约。
@@ -94,6 +111,14 @@ pub struct CustomProviderDefinition {
     /// Exact API-key header projection.
     /// 精确 API Key 请求头投影。
     pub authentication: CustomProviderAuthentication,
+    /// Selected remote-model discovery behavior.
+    /// 选定的远程模型发现行为。
+    #[serde(default)]
+    pub model_discovery_mode: CustomProviderModelDiscoveryMode,
+    /// Same-origin relative model-discovery path used only by custom-path mode.
+    /// 仅由自定义路径模式使用的同源相对模型目录路径。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_discovery_path: Option<String>,
 }
 
 impl CustomProviderDefinition {
@@ -115,17 +140,30 @@ impl CustomProviderDefinition {
         if display_name.is_empty() {
             return Err(String::from("Custom provider display name is required."));
         }
-        let base_url = self.base_url.trim().trim_end_matches('/').to_string();
-        if !(base_url.starts_with("https://") || base_url.starts_with("http://")) {
-            return Err(String::from(
-                "Custom provider base URL must use HTTP or HTTPS.",
-            ));
-        }
-        let model_discovery = match self.protocol {
+        let base_url = validate_custom_provider_base_url(self.base_url.as_str())?;
+        let protocol_discovery = match self.protocol {
             CustomProviderProtocol::AnthropicMessages => ModelDiscoveryKind::AnthropicCompatible,
             CustomProviderProtocol::OpenAiChat | CustomProviderProtocol::OpenAiResponses => {
                 ModelDiscoveryKind::OpenAi
             }
+        };
+        let model_discovery = match self.model_discovery_mode {
+            CustomProviderModelDiscoveryMode::Standard
+            | CustomProviderModelDiscoveryMode::CustomPath => protocol_discovery,
+            CustomProviderModelDiscoveryMode::Manual => ModelDiscoveryKind::Manual,
+        };
+        let model_discovery_path = match self.model_discovery_mode {
+            CustomProviderModelDiscoveryMode::CustomPath => {
+                let path = self
+                    .model_discovery_path
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|path| !path.is_empty())
+                    .ok_or_else(|| String::from("Custom model discovery path is required."))?;
+                Some(validate_custom_model_discovery_path(path)?)
+            }
+            CustomProviderModelDiscoveryMode::Standard
+            | CustomProviderModelDiscoveryMode::Manual => None,
         };
         let protocol_routes = vec![ProtocolRoute {
             protocol_profile_id: self.protocol.profile_id().to_string(),
@@ -134,7 +172,7 @@ impl CustomProviderDefinition {
             request_headers: BTreeMap::new(),
             authentication: None,
             model_discovery: Some(model_discovery),
-            model_discovery_path: None,
+            model_discovery_path,
             model_discovery_base_url_override: None,
             verified: true,
         }];
@@ -180,6 +218,264 @@ impl CustomProviderDefinition {
     }
 }
 
+/// Validates and normalizes one user-declared compatible API base URL.
+/// 校验并规范化一个用户声明的兼容 API 基础 URL。
+///
+/// # Parameters
+/// 参数
+/// `candidate` is the exact base URL entered by the user.
+/// `candidate` 是用户输入的精确基础 URL。
+///
+/// # Returns
+/// 返回值
+/// A normalized HTTP(S) URL without credentials, query, fragment, or trailing slash.
+/// 返回不含凭据、查询串、片段或末尾斜杠的规范化 HTTP(S) URL。
+fn validate_custom_provider_base_url(candidate: &str) -> Result<String, String> {
+    let candidate = candidate.trim();
+    // parsed makes the authority boundary explicit before this value enters persistence or probing.
+    // parsed 在该值进入持久化或探测前明确解析其权限边界。
+    let parsed = reqwest::Url::parse(candidate)
+        .map_err(|_| String::from("Custom provider base URL must be a valid HTTP or HTTPS URL."))?;
+    let has_explicit_authority = candidate
+        .split_once("://")
+        .is_some_and(|(_, authority)| !authority.is_empty() && !authority.starts_with('/'));
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !has_explicit_authority
+    {
+        return Err(String::from(
+            "Custom provider base URL must be a valid HTTP or HTTPS URL with a host.",
+        ));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(String::from(
+            "Custom provider base URL must not contain embedded credentials.",
+        ));
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(String::from(
+            "Custom provider base URL must not contain a query or fragment.",
+        ));
+    }
+    Ok(parsed.as_str().trim_end_matches('/').to_string())
+}
+
+/// Revalidates one persisted custom-provider descriptor before runtime registration.
+/// 在运行时注册前重新校验一个已持久化的自定义供应商描述。
+///
+/// # Parameters
+/// 参数
+/// `provider` is the complete descriptor loaded from persisted configuration.
+/// `provider` 是从持久化配置加载的完整描述。
+///
+/// # Returns
+/// 返回值
+/// Success only when the descriptor remains inside the user-configurable custom-provider contract.
+/// 仅当描述仍处于用户可配置的自定义供应商契约内时返回成功。
+pub(crate) fn validate_persisted_custom_provider_descriptor(
+    provider: &ProviderDescriptor,
+) -> Result<(), String> {
+    if provider.display_name.trim().is_empty() {
+        return Err(String::from(
+            "Persisted custom provider display name is required.",
+        ));
+    }
+    let [entry] = provider.service_entries.as_slice() else {
+        return Err(String::from(
+            "Persisted custom provider must contain exactly one conversation service entry.",
+        ));
+    };
+    if entry.kind != crate::ServiceEntryKind::Conversation
+        || entry.request_projector != crate::RequestProjectorKind::Direct
+    {
+        return Err(String::from(
+            "Persisted custom provider must use the direct conversation projector.",
+        ));
+    }
+    validate_custom_provider_base_url(entry.base_url.as_str())?;
+    if !entry.request_headers.is_empty() {
+        return Err(String::from(
+            "Persisted custom provider must not inject service-entry request headers.",
+        ));
+    }
+    if !matches!(
+        entry.authentication,
+        AuthenticationProjection::BearerAuthorization | AuthenticationProjection::XApiKey
+    ) {
+        return Err(String::from(
+            "Persisted custom provider uses an unsupported authentication projection.",
+        ));
+    }
+    let [profile] = entry.credential_profiles.as_slice() else {
+        return Err(String::from(
+            "Persisted custom provider must contain exactly one API-key credential profile.",
+        ));
+    };
+    if profile.credential_mode != CredentialMode::Token
+        || profile.oauth_provider.is_some()
+        || profile.billing_kind != CredentialBillingKind::ProviderManaged
+        || profile.account_usage_query != AccountUsageQueryKind::Unsupported
+        || profile.authentication.is_some()
+        || profile.key_prefix.is_some()
+    {
+        return Err(String::from(
+            "Persisted custom provider credential profile is outside the API-key contract.",
+        ));
+    }
+    let [route] = entry.protocol_routes.as_slice() else {
+        return Err(String::from(
+            "Persisted custom provider must contain exactly one protocol route.",
+        ));
+    };
+    let protocol = match route.protocol_profile_id.as_str() {
+        ANTHROPIC_MESSAGES_PROFILE_ID => CustomProviderProtocol::AnthropicMessages,
+        OPENAI_CHAT_PROFILE_ID => CustomProviderProtocol::OpenAiChat,
+        OPENAI_RESPONSES_PROFILE_ID => CustomProviderProtocol::OpenAiResponses,
+        _ => {
+            return Err(String::from(
+                "Persisted custom provider uses an unsupported protocol route.",
+            ));
+        }
+    };
+    if route.endpoint_path.as_deref() != Some(protocol.endpoint_path())
+        || route.base_url_override.is_some()
+        || !route.request_headers.is_empty()
+        || route.authentication.is_some()
+        || route.model_discovery_base_url_override.is_some()
+        || !route.verified
+    {
+        return Err(String::from(
+            "Persisted custom provider protocol route is outside the verified single-route contract.",
+        ));
+    }
+    let expected_discovery = match protocol {
+        CustomProviderProtocol::AnthropicMessages => ModelDiscoveryKind::AnthropicCompatible,
+        CustomProviderProtocol::OpenAiChat | CustomProviderProtocol::OpenAiResponses => {
+            ModelDiscoveryKind::OpenAi
+        }
+    };
+    let route_discovery = route.model_discovery.ok_or_else(|| {
+        String::from("Persisted custom provider protocol route must declare model discovery.")
+    })?;
+    if route_discovery != entry.model_discovery
+        || !matches!(route_discovery, ModelDiscoveryKind::Manual)
+            && route_discovery != expected_discovery
+    {
+        return Err(String::from(
+            "Persisted custom provider model discovery does not match its protocol.",
+        ));
+    }
+    match route.model_discovery_path.as_deref() {
+        Some(_) if route_discovery == ModelDiscoveryKind::Manual => {
+            return Err(String::from(
+                "Persisted manual custom provider must not declare a model-discovery path.",
+            ));
+        }
+        Some(path) => {
+            validate_custom_model_discovery_path(path)?;
+        }
+        None => {}
+    }
+    Ok(())
+}
+
+/// Validates one same-origin absolute model-discovery path.
+/// 校验一个同源绝对模型发现路径。
+///
+/// # Parameters
+/// 参数
+/// `candidate` is the path entered for custom model discovery.
+/// `candidate` 是为自定义模型发现输入的路径。
+///
+/// # Returns
+/// 返回值
+/// The trimmed path when it cannot change origin, traverse parents, or inject URL suffixes.
+/// 当路径不会改变来源、遍历父级或注入 URL 后缀时返回去除空白后的路径。
+fn validate_custom_model_discovery_path(candidate: &str) -> Result<String, String> {
+    let path = candidate.trim();
+    // decoded_segments checks both direct and encoded separators before the path reaches the URL client.
+    // decoded_segments 在路径进入 URL 客户端前同时检查直接分隔符与编码分隔符。
+    let Some(decoded_segments) = path
+        .split('/')
+        .map(percent_decode_path_segment)
+        .collect::<Option<Vec<_>>>()
+    else {
+        return Err(String::from(
+            "Custom model discovery path must contain only valid URL percent escapes.",
+        ));
+    };
+    let has_parent_traversal = decoded_segments.iter().any(|segment| {
+        segment
+            .split(['/', '\\'])
+            .any(|component| component == "..")
+    });
+    if !path.starts_with('/')
+        || path.starts_with("//")
+        || path.contains("://")
+        || path.contains(['?', '#', '\\'].as_slice())
+        || path.chars().any(char::is_control)
+        || has_parent_traversal
+    {
+        return Err(String::from(
+            "Custom model discovery path must be a same-origin absolute path without parent traversal, query, or fragment.",
+        ));
+    }
+    reqwest::Url::parse(format!("https://validation.invalid{path}").as_str())
+        .map_err(|_| String::from("Custom model discovery path must be a valid URL path."))?;
+    Ok(path.to_string())
+}
+
+/// Percent-decodes one path segment only when every escape is valid UTF-8 data.
+/// 仅当每个转义均为有效 UTF-8 数据时，对一个路径片段执行百分号解码。
+///
+/// # Parameters
+/// 参数
+/// `segment` is one slash-delimited URL path segment.
+/// `segment` 是一个由斜杠分隔的 URL 路径片段。
+///
+/// # Returns
+/// 返回值
+/// The decoded segment, or `None` when an escape sequence or UTF-8 payload is invalid.
+/// 返回解码后的片段；转义序列或 UTF-8 载荷无效时返回 `None`。
+fn percent_decode_path_segment(segment: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(segment.len());
+    let source = segment.as_bytes();
+    let mut index = 0;
+    while index < source.len() {
+        if source[index] == b'%' {
+            let high = source.get(index + 1).and_then(|value| hex_value(*value))?;
+            let low = source.get(index + 2).and_then(|value| hex_value(*value))?;
+            bytes.push((high << 4) | low);
+            index += 3;
+        } else {
+            bytes.push(source[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(bytes).ok()
+}
+
+/// Converts one ASCII hexadecimal digit into its numeric value.
+/// 将一个 ASCII 十六进制数字转换为数值。
+///
+/// # Parameters
+/// 参数
+/// `value` is one raw ASCII byte.
+/// `value` 是一个原始 ASCII 字节。
+///
+/// # Returns
+/// 返回值
+/// The hexadecimal value, or `None` for non-hexadecimal input.
+/// 返回十六进制值；输入不是十六进制数字时返回 `None`。
+fn hex_value(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,6 +490,8 @@ mod tests {
             base_url: String::from("https://example.com/v1/"),
             protocol: CustomProviderProtocol::OpenAiResponses,
             authentication: CustomProviderAuthentication::BearerAuthorization,
+            model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
+            model_discovery_path: None,
         }
         .into_descriptor()
         .expect("custom provider should be valid");
@@ -213,9 +511,140 @@ mod tests {
             base_url: String::from("example.com/v1"),
             protocol: CustomProviderProtocol::OpenAiChat,
             authentication: CustomProviderAuthentication::BearerAuthorization,
+            model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
+            model_discovery_path: None,
         }
         .into_descriptor()
         .expect_err("invalid custom provider should fail");
         assert!(error.contains("HTTP"));
+    }
+
+    /// Verifies transport URLs cannot smuggle credentials or URL suffixes into persistence.
+    /// 验证传输 URL 不能把凭据或 URL 后缀夹带进持久化。
+    #[test]
+    fn custom_provider_rejects_unsafe_base_url_components() {
+        for (base_url, expected) in [
+            ("https://user:secret@example.com/v1", "credentials"),
+            ("https://example.com/v1?token=secret", "query"),
+            ("https://example.com/v1#private", "query"),
+            ("http:///v1", "valid HTTP"),
+        ] {
+            let error = CustomProviderDefinition {
+                id: String::from("custom:unsafe-example"),
+                display_name: String::from("Unsafe example"),
+                base_url: String::from(base_url),
+                protocol: CustomProviderProtocol::OpenAiChat,
+                authentication: CustomProviderAuthentication::BearerAuthorization,
+                model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
+                model_discovery_path: None,
+            }
+            .into_descriptor()
+            .expect_err("unsafe custom provider URL must fail");
+            assert!(error.contains(expected), "unexpected error: {error}");
+            assert!(!error.contains("secret"));
+        }
+    }
+
+    /// Verifies a custom model directory remains a same-origin absolute path.
+    /// 验证自定义模型目录会保持为同源绝对路径。
+    #[test]
+    fn custom_provider_accepts_only_safe_model_discovery_paths() {
+        let descriptor = CustomProviderDefinition {
+            id: String::from("custom:path-example"),
+            display_name: String::from("Path example"),
+            base_url: String::from("https://example.com/v1"),
+            protocol: CustomProviderProtocol::OpenAiChat,
+            authentication: CustomProviderAuthentication::BearerAuthorization,
+            model_discovery_mode: CustomProviderModelDiscoveryMode::CustomPath,
+            model_discovery_path: Some(String::from("/catalog/models")),
+        }
+        .into_descriptor()
+        .expect("same-origin model path should be valid");
+        assert_eq!(
+            descriptor.service_entries[0].protocol_routes[0]
+                .model_discovery_path
+                .as_deref(),
+            Some("/catalog/models")
+        );
+
+        let error = CustomProviderDefinition {
+            id: String::from("custom:path-example"),
+            display_name: String::from("Path example"),
+            base_url: String::from("https://example.com/v1"),
+            protocol: CustomProviderProtocol::OpenAiChat,
+            authentication: CustomProviderAuthentication::BearerAuthorization,
+            model_discovery_mode: CustomProviderModelDiscoveryMode::CustomPath,
+            model_discovery_path: Some(String::from("/../models")),
+        }
+        .into_descriptor()
+        .expect_err("parent traversal must be rejected");
+        assert!(error.contains("same-origin absolute path"));
+
+        for unsafe_path in [
+            "//other.example/models",
+            "/%2e%2e/models",
+            "/catalog/models?token=secret",
+            "/catalog/models#private",
+            "/catalog\\models",
+            "/catalog/\nmodels",
+        ] {
+            let error = CustomProviderDefinition {
+                id: String::from("custom:path-example"),
+                display_name: String::from("Path example"),
+                base_url: String::from("https://example.com/v1"),
+                protocol: CustomProviderProtocol::OpenAiChat,
+                authentication: CustomProviderAuthentication::BearerAuthorization,
+                model_discovery_mode: CustomProviderModelDiscoveryMode::CustomPath,
+                model_discovery_path: Some(String::from(unsafe_path)),
+            }
+            .into_descriptor()
+            .expect_err("unsafe model-discovery path must fail");
+            assert!(error.contains("same-origin absolute path"));
+            assert!(!error.contains("secret"));
+            assert!(!error.contains("private"));
+        }
+    }
+
+    /// Verifies persisted descriptors cannot bypass creation-time route and URL validation.
+    /// 验证持久化描述不能绕过创建时的路由与 URL 校验。
+    #[test]
+    fn persisted_custom_provider_revalidates_security_boundaries() {
+        let descriptor = CustomProviderDefinition {
+            id: String::from("custom:persisted-example"),
+            display_name: String::from("Persisted example"),
+            base_url: String::from("https://example.com/v1"),
+            protocol: CustomProviderProtocol::OpenAiChat,
+            authentication: CustomProviderAuthentication::BearerAuthorization,
+            model_discovery_mode: CustomProviderModelDiscoveryMode::CustomPath,
+            model_discovery_path: Some(String::from("/catalog/models")),
+        }
+        .into_descriptor()
+        .expect("fixture custom provider should be valid");
+        validate_persisted_custom_provider_descriptor(&descriptor)
+            .expect("unchanged persisted descriptor should remain valid");
+
+        let mut unsafe_url = descriptor.clone();
+        unsafe_url.service_entries[0].base_url = String::from("https://user:secret@example.com/v1");
+        let error = validate_persisted_custom_provider_descriptor(&unsafe_url)
+            .expect_err("embedded credentials must fail after reload");
+        assert!(error.contains("credentials"));
+        assert!(!error.contains("secret"));
+
+        let mut unsafe_header = descriptor.clone();
+        unsafe_header.service_entries[0]
+            .request_headers
+            .insert(String::from("authorization"), String::from("private"));
+        let error = validate_persisted_custom_provider_descriptor(&unsafe_header)
+            .expect_err("persisted request-header injection must fail");
+        assert!(error.contains("request headers"));
+        assert!(!error.contains("private"));
+
+        let mut cross_origin_route = descriptor;
+        cross_origin_route.service_entries[0].protocol_routes[0]
+            .model_discovery_base_url_override = Some(String::from("https://other.example"));
+        let error = validate_persisted_custom_provider_descriptor(&cross_origin_route)
+            .expect_err("persisted cross-origin discovery must fail");
+        assert!(error.contains("single-route contract"));
+        assert!(!error.contains("other.example"));
     }
 }

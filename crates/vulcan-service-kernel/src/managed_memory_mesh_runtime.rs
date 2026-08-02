@@ -2452,8 +2452,12 @@ mod tests {
                     id: String::from("qwen3.7-text-embedding"),
                     display_name: String::from("Qwen3.7 Text Embedding"),
                     capabilities,
+                    capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence::default(
+                    ),
                 }],
                 generation: 1,
+                page_count: 1,
+                discovery_schema_revision: String::from("test.embedding.models.v1"),
             },
         )]);
 

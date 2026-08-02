@@ -2,8 +2,9 @@
 //! 不包含供应商目录或秘钥的持久化公共 AI 配置。
 
 use crate::{
-    CustomModelDefinition, PersistedConnectionGraph, ProviderDescriptor,
-    ProviderToolCapabilityKind, ProviderToolTargetSelection, SecondaryRouteSelection,
+    CustomModelDefinition, CustomModelTemplateDecision, CustomProviderModelDefaults,
+    PersistedConnectionGraph, ProviderDescriptor, ProviderToolCapabilityKind,
+    ProviderToolTargetSelection, SecondaryRouteSelection,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,7 +16,7 @@ use vulcan_ai_contract::{
 
 /// Identifies the current persisted AI configuration schema.
 /// 标识当前持久化 AI 配置 Schema。
-pub const PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION: u32 = 3;
+pub const PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION: u32 = 6;
 
 /// Stores only user-declared differences from immutable model capability sources.
 /// 仅保存用户相对于不可变模型能力来源声明的差异。
@@ -26,6 +27,10 @@ pub struct ModelCapabilityOverrides {
     /// 可选用户上下文窗口替换值。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_limit: Option<u64>,
+    /// Optional user output-token replacement.
+    /// 可选用户输出 Token 上限替换值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_limit: Option<u64>,
     /// Optional complete non-text input resource replacement.
     /// 可选的完整非文本输入资源替换集合。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -34,6 +39,22 @@ pub struct ModelCapabilityOverrides {
     /// 可选的完整非文本输出资源替换集合。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_resources: Option<Vec<ResourceKind>>,
+}
+
+impl ModelCapabilityOverrides {
+    /// Reports whether this record contains no user-owned capability difference.
+    /// 报告此记录是否不包含任何用户持有的能力差异。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when every optional difference is absent.
+    /// 当全部可选差异均不存在时返回 `true`。
+    fn is_empty(&self) -> bool {
+        self.context_limit.is_none()
+            && self.output_limit.is_none()
+            && self.input_resources.is_none()
+            && self.output_resources.is_none()
+    }
 }
 
 /// Lists the reviewed OpenRouter models enabled by default.
@@ -231,6 +252,22 @@ pub struct PersistedAiConfiguration {
     /// 按自定义供应商标识分组的用户自有模型定义。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub custom_models: BTreeMap<String, BTreeMap<String, CustomModelDefinition>>,
+    /// Capability defaults grouped by custom provider identifier.
+    /// 按自定义供应商标识分组的能力默认值。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub custom_provider_model_defaults: BTreeMap<String, CustomProviderModelDefaults>,
+    /// User-reviewed common-template decisions keyed by provider and model.
+    /// 按供应商与模型索引的用户审查公共模板决策。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub custom_model_template_decisions: BTreeMap<String, CustomModelTemplateDecision>,
+    /// Explicit custom-model availability differences keyed by connection and model.
+    /// 按连接与模型索引的自定义模型显式可用性差异。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub custom_model_connection_enabled_overrides: BTreeMap<String, bool>,
+    /// Credential connections isolated until one explicit paid model validation succeeds.
+    /// 在一次显式付费模型验证成功前保持隔离的凭据连接。
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub pending_validation_connection_ids: BTreeSet<String>,
     /// Exact active model and account selection.
     /// 精确的当前模型与账号选择。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -297,6 +334,10 @@ impl Default for PersistedAiConfiguration {
             usage_refresh_interval_seconds: default_usage_refresh_interval_seconds(),
             custom_providers: BTreeMap::new(),
             custom_models: BTreeMap::new(),
+            custom_provider_model_defaults: BTreeMap::new(),
+            custom_model_template_decisions: BTreeMap::new(),
+            custom_model_connection_enabled_overrides: BTreeMap::new(),
+            pending_validation_connection_ids: BTreeSet::new(),
             active: None,
             connection_graph: PersistedConnectionGraph::default(),
             model_overrides: BTreeMap::new(),
@@ -335,7 +376,13 @@ impl PersistedAiConfiguration {
                     Ok(true)
                 }
             }
+            3..=5 => {
+                self.migrate_legacy_custom_model_capabilities();
+                self.schema_version = PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION;
+                Ok(true)
+            }
             2 => {
+                self.migrate_legacy_custom_model_capabilities();
                 self.inference_profiles
                     .entry(String::from("vmm"))
                     .or_default();
@@ -365,6 +412,7 @@ impl PersistedAiConfiguration {
                     .map(|(capability, _)| *capability)
                     .collect();
                 self.provider_tool_disabled_targets.clear();
+                self.migrate_legacy_custom_model_capabilities();
                 self.inference_profiles
                     .entry(String::from("vmm"))
                     .or_default();
@@ -374,6 +422,63 @@ impl PersistedAiConfiguration {
             unsupported => Err(format!(
                 "Unsupported persisted AI configuration schema version {unsupported}; supported version is {PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION}."
             )),
+        }
+    }
+
+    /// Migrates legacy complete custom-model capabilities into explicit field differences.
+    /// 将旧版完整自定义模型能力迁移为显式字段差异。
+    fn migrate_legacy_custom_model_capabilities(&mut self) {
+        let provider_ids = self.custom_models.keys().cloned().collect::<Vec<_>>();
+        for provider_id in provider_ids {
+            let defaults = self
+                .custom_provider_model_defaults
+                .entry(provider_id.clone())
+                .or_default()
+                .clone();
+            let migrated_differences = self
+                .custom_models
+                .get_mut(provider_id.as_str())
+                .into_iter()
+                .flat_map(|models| models.values_mut())
+                .filter_map(|model| {
+                    let differences = ModelCapabilityOverrides {
+                        context_limit: model
+                            .capabilities
+                            .context_limit
+                            .filter(|value| *value != defaults.context_limit),
+                        output_limit: model
+                            .capabilities
+                            .output_limit
+                            .filter(|value| *value != defaults.output_limit),
+                        input_resources: (model.capabilities.input_resources
+                            != defaults.input_resources)
+                            .then(|| model.capabilities.input_resources.clone()),
+                        output_resources: (model.capabilities.output_resources
+                            != defaults.output_resources)
+                            .then(|| model.capabilities.output_resources.clone()),
+                    };
+                    // Supported historical schemas stored resolved basic capabilities inside each
+                    // model. Clear those fields after extracting differences so later
+                    // provider-default edits are not shadowed by a duplicate historical snapshot.
+                    // 受支持的历史 Schema 将解析后的基础能力存入每个模型。提取差异后清除这些字段，
+                    // 避免后续供应商默认值变更被重复的历史快照遮蔽。
+                    model.capabilities.context_limit = None;
+                    model.capabilities.output_limit = None;
+                    model.capabilities.input_resources.clear();
+                    model.capabilities.output_resources.clear();
+                    (!differences.is_empty()).then(|| {
+                        (
+                            Self::provider_model_key(provider_id.as_str(), model.id.as_str()),
+                            differences,
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            for (key, differences) in migrated_differences {
+                self.model_capability_overrides
+                    .entry(key)
+                    .or_insert(differences);
+            }
         }
     }
 
@@ -475,6 +580,133 @@ impl PersistedAiConfiguration {
             .get(Self::provider_model_key(provider_id, model_id).as_str())
     }
 
+    /// Returns provider defaults for one custom provider, falling back to safe built-in values.
+    /// 返回一个自定义供应商的默认值，缺失时回退到安全内置值。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` identifies one exact custom provider.
+    /// `provider_id` 标识一个精确自定义供应商。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Persisted defaults or the text-first 200K/32K defaults.
+    /// 返回已持久化默认值或纯文本优先的 200K/32K 默认值。
+    pub fn custom_provider_model_defaults(&self, provider_id: &str) -> CustomProviderModelDefaults {
+        self.custom_provider_model_defaults
+            .get(provider_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Returns the reviewed template decision for one custom-provider model.
+    /// 返回一个自定义供应商模型的已审查模板决策。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` and `model_id` identify one exact model.
+    /// `provider_id` 与 `model_id` 标识一个精确模型。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The persisted decision when present.
+    /// 存在时返回持久化决策。
+    pub fn custom_model_template_decision(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+    ) -> Option<&CustomModelTemplateDecision> {
+        self.custom_model_template_decisions
+            .get(Self::provider_model_key(provider_id, model_id).as_str())
+    }
+
+    /// Returns an explicit connection-scoped custom-model availability choice.
+    /// 返回显式连接作用域自定义模型可用性选择。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `connection_id` and `model_id` identify one exact account-model pair.
+    /// `connection_id` 与 `model_id` 标识一个精确账号模型组合。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The explicit choice when the user created one.
+    /// 用户已创建时返回显式选择。
+    pub fn custom_model_connection_enabled_override(
+        &self,
+        connection_id: &str,
+        model_id: &str,
+    ) -> Option<bool> {
+        self.custom_model_connection_enabled_overrides
+            .get(Self::connection_model_key(connection_id, model_id).as_str())
+            .copied()
+    }
+
+    /// Reports whether one connection is isolated pending explicit model validation.
+    /// 报告一个连接是否因等待显式模型验证而处于隔离状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `connection_id` identifies one exact persisted credential connection.
+    /// `connection_id` 标识一个精确持久化凭据连接。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` only while the connection must remain unavailable to normal routing.
+    /// 仅当该连接必须对常规路由保持不可用时返回 `true`。
+    pub fn connection_is_pending_validation(&self, connection_id: &str) -> bool {
+        self.pending_validation_connection_ids
+            .contains(connection_id)
+    }
+
+    /// Changes the isolated validation state for one configured connection.
+    /// 修改一个已配置连接的隔离验证状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `connection_id` identifies one exact configured connection and `pending` is the target state.
+    /// `connection_id` 标识一个精确已配置连接，`pending` 是目标状态。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns an error when the connection does not exist.
+    /// 当连接不存在时返回错误。
+    pub fn set_connection_pending_validation(
+        &mut self,
+        connection_id: &str,
+        pending: bool,
+    ) -> Result<(), String> {
+        if !self
+            .connection_graph
+            .connections
+            .contains_key(connection_id)
+        {
+            return Err(format!("Connection `{connection_id}` is not configured."));
+        }
+        if pending {
+            self.pending_validation_connection_ids
+                .insert(connection_id.to_string());
+            self.connection_graph
+                .account_preferences
+                .provider_defaults
+                .retain(|_, value| value != connection_id);
+            self.connection_graph
+                .account_preferences
+                .model_last_connections
+                .retain(|_, value| value != connection_id);
+            if self
+                .active
+                .as_ref()
+                .is_some_and(|active| active.connection_id == connection_id)
+            {
+                self.active = None;
+            }
+        } else {
+            self.pending_validation_connection_ids.remove(connection_id);
+        }
+        Ok(())
+    }
+
     /// Applies user differences after all immutable capability sources have resolved.
     /// 在全部不可变能力来源解析后应用用户差异。
     ///
@@ -493,6 +725,9 @@ impl PersistedAiConfiguration {
         };
         if let Some(context_limit) = overrides.context_limit {
             capabilities.context_limit = Some(context_limit);
+        }
+        if let Some(output_limit) = overrides.output_limit {
+            capabilities.output_limit = Some(output_limit);
         }
         if let Some(input_resources) = overrides.input_resources.as_ref() {
             capabilities.input_resources = input_resources.clone();
@@ -516,6 +751,8 @@ impl PersistedAiConfiguration {
             .remove(provider_model_key.as_str());
         self.model_capability_overrides
             .remove(provider_model_key.as_str());
+        self.custom_model_template_decisions
+            .remove(provider_model_key.as_str());
         self.connection_graph
             .account_preferences
             .model_last_connections
@@ -535,6 +772,8 @@ impl PersistedAiConfiguration {
         for connection_id in connection_ids {
             self.secondary_routes
                 .remove(Self::connection_model_key(connection_id.as_str(), model_id).as_str());
+            self.custom_model_connection_enabled_overrides
+                .remove(Self::connection_model_key(connection_id.as_str(), model_id).as_str());
         }
     }
 
@@ -547,6 +786,9 @@ impl PersistedAiConfiguration {
     /// `provider_id` 标识将被永久移除的精确供应商。
     pub fn remove_provider_owned_model_settings(&mut self, provider_id: &str) {
         let provider_model_prefix = format!("{}:{provider_id}:", provider_id.len());
+        self.custom_provider_model_defaults.remove(provider_id);
+        self.custom_model_template_decisions
+            .retain(|key, _| !key.starts_with(provider_model_prefix.as_str()));
         self.model_enabled_overrides
             .retain(|key, _| !key.starts_with(provider_model_prefix.as_str()));
         self.model_capability_overrides
@@ -704,6 +946,7 @@ pub fn default_model_enabled(provider_id: &str, model_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{CUSTOM_MODEL_TEMPLATE_REVISION, CustomModelTemplateSelection};
 
     /// Verifies runtime model catalogs cannot appear in persisted AI JSON.
     /// 验证运行时模型目录不会出现在持久化 AI JSON 中。
@@ -795,6 +1038,7 @@ mod tests {
             key,
             ModelCapabilityOverrides {
                 context_limit: Some(32_000),
+                output_limit: None,
                 input_resources: Some(vec![ResourceKind::Image]),
                 output_resources: None,
             },
@@ -884,11 +1128,30 @@ mod tests {
         configuration
             .secondary_routes
             .insert(connection_model_key, SecondaryRouteSelection::Automatic);
+        configuration.custom_model_template_decisions.insert(
+            provider_model_key.clone(),
+            CustomModelTemplateDecision::Rejected {
+                template_key: String::from("private-model"),
+                template_revision: String::from(CUSTOM_MODEL_TEMPLATE_REVISION),
+            },
+        );
+        configuration
+            .custom_model_connection_enabled_overrides
+            .insert(
+                PersistedAiConfiguration::connection_model_key("connection", model_id),
+                false,
+            );
 
         configuration.remove_model_owned_settings(provider_id, model_id);
 
         assert!(configuration.model_enabled_overrides.is_empty());
         assert!(configuration.model_capability_overrides.is_empty());
+        assert!(configuration.custom_model_template_decisions.is_empty());
+        assert!(
+            configuration
+                .custom_model_connection_enabled_overrides
+                .is_empty()
+        );
         assert!(configuration.model_overrides.is_empty());
         assert!(configuration.internal_model_enabled_overrides.is_empty());
         assert!(configuration.secondary_routes.is_empty());
@@ -921,6 +1184,17 @@ mod tests {
         configuration
             .model_capability_overrides
             .insert(removed_key.clone(), ModelCapabilityOverrides::default());
+        configuration.custom_provider_model_defaults.insert(
+            String::from(removed_provider),
+            CustomProviderModelDefaults::default(),
+        );
+        configuration.custom_model_template_decisions.insert(
+            removed_key.clone(),
+            CustomModelTemplateDecision::Rejected {
+                template_key: String::from("private-model"),
+                template_revision: String::from(CUSTOM_MODEL_TEMPLATE_REVISION),
+            },
+        );
         configuration.model_overrides.insert(
             PersistedAiConfiguration::provider_model_protocol_key(
                 removed_provider,
@@ -955,6 +1229,8 @@ mod tests {
             BTreeMap::from([(retained_key, true)])
         );
         assert!(configuration.model_capability_overrides.is_empty());
+        assert!(configuration.custom_provider_model_defaults.is_empty());
+        assert!(configuration.custom_model_template_decisions.is_empty());
         assert!(configuration.model_overrides.is_empty());
         assert!(configuration.internal_model_enabled_overrides.is_empty());
         assert!(
@@ -1006,6 +1282,7 @@ mod tests {
             PersistedAiConfiguration::provider_model_key("custom-provider", "private-model"),
             ModelCapabilityOverrides {
                 context_limit: Some(64_000),
+                output_limit: None,
                 input_resources: Some(Vec::new()),
                 output_resources: None,
             },
@@ -1018,6 +1295,275 @@ mod tests {
         assert_eq!(
             decoded.model_capability_overrides,
             historical.model_capability_overrides
+        );
+    }
+
+    /// Verifies schema two migrates legacy resolved custom capabilities into explicit differences.
+    /// 验证 Schema 2 会把旧版自定义模型已解析能力迁移为显式差异。
+    #[test]
+    fn schema_two_migrates_legacy_custom_model_capabilities() {
+        let provider_id = "custom-provider";
+        let model_id = "private-model";
+        let mut historical = PersistedAiConfiguration {
+            schema_version: 2,
+            custom_models: BTreeMap::from([(
+                String::from(provider_id),
+                BTreeMap::from([(
+                    String::from(model_id),
+                    CustomModelDefinition {
+                        id: String::from(model_id),
+                        display_name: String::from("Private Model"),
+                        enabled: true,
+                        capabilities: ModelCapabilities {
+                            context_limit: Some(64_000),
+                            output_limit: Some(4_096),
+                            input_resources: vec![ResourceKind::Image],
+                            ..ModelCapabilities::default()
+                        },
+                        request_projection: Default::default(),
+                    },
+                )]),
+            )]),
+            ..PersistedAiConfiguration::default()
+        };
+
+        assert!(
+            historical
+                .migrate_to_current_schema()
+                .expect("schema two must migrate")
+        );
+
+        let migrated_model = historical
+            .custom_model(provider_id, model_id)
+            .expect("custom model identity and advanced contract should remain");
+        assert_eq!(migrated_model.capabilities.context_limit, None);
+        assert_eq!(migrated_model.capabilities.output_limit, None);
+        assert!(migrated_model.capabilities.input_resources.is_empty());
+        let differences = historical
+            .model_capability_overrides(provider_id, model_id)
+            .expect("legacy basic fields should become explicit differences");
+        assert_eq!(differences.context_limit, Some(64_000));
+        assert_eq!(differences.output_limit, Some(4_096));
+        assert_eq!(differences.input_resources, Some(vec![ResourceKind::Image]));
+    }
+
+    /// Verifies schema four upgrades without inventing pending credential state.
+    /// 验证 Schema 4 升级时不会凭空创建待验证凭据状态。
+    #[test]
+    fn schema_four_migration_initializes_pending_validation_state() {
+        let mut historical = PersistedAiConfiguration {
+            schema_version: 4,
+            ..PersistedAiConfiguration::default()
+        };
+
+        assert!(
+            historical
+                .migrate_to_current_schema()
+                .expect("schema four must migrate")
+        );
+        assert_eq!(
+            historical.schema_version,
+            PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
+        );
+        assert!(historical.pending_validation_connection_ids.is_empty());
+    }
+
+    /// Verifies schema-five files produced by the earlier migration are normalized without replacing newer explicit differences.
+    /// 验证早期迁移生成的 Schema 5 文件会被规范化，且不会覆盖更新的显式差异。
+    #[test]
+    fn schema_five_migration_repairs_duplicated_basic_capabilities() {
+        let provider_id = "custom-provider";
+        let model_id = "private-model";
+        let provider_model_key =
+            PersistedAiConfiguration::provider_model_key(provider_id, model_id);
+        let mut historical = PersistedAiConfiguration {
+            schema_version: 5,
+            custom_models: BTreeMap::from([(
+                String::from(provider_id),
+                BTreeMap::from([(
+                    String::from(model_id),
+                    CustomModelDefinition {
+                        id: String::from(model_id),
+                        display_name: String::from("Private Model"),
+                        enabled: true,
+                        capabilities: ModelCapabilities {
+                            context_limit: Some(64_000),
+                            output_limit: Some(4_096),
+                            input_resources: vec![ResourceKind::Image],
+                            ..ModelCapabilities::default()
+                        },
+                        request_projection: Default::default(),
+                    },
+                )]),
+            )]),
+            model_capability_overrides: BTreeMap::from([(
+                provider_model_key.clone(),
+                ModelCapabilityOverrides {
+                    context_limit: Some(128_000),
+                    output_limit: Some(8_192),
+                    input_resources: Some(Vec::new()),
+                    output_resources: None,
+                },
+            )]),
+            ..PersistedAiConfiguration::default()
+        };
+
+        assert!(
+            historical
+                .migrate_to_current_schema()
+                .expect("schema five must migrate")
+        );
+
+        let migrated_model = historical
+            .custom_model(provider_id, model_id)
+            .expect("migrated custom model should remain configured");
+        assert_eq!(migrated_model.capabilities.context_limit, None);
+        assert_eq!(migrated_model.capabilities.output_limit, None);
+        assert!(migrated_model.capabilities.input_resources.is_empty());
+        assert_eq!(
+            historical
+                .model_capability_overrides
+                .get(provider_model_key.as_str()),
+            Some(&ModelCapabilityOverrides {
+                context_limit: Some(128_000),
+                output_limit: Some(8_192),
+                input_resources: Some(Vec::new()),
+                output_resources: None,
+            })
+        );
+    }
+
+    /// Verifies schema-three complete custom-model capabilities become explicit user differences.
+    /// 验证 Schema 3 的完整自定义模型能力会迁移为显式用户差异。
+    #[test]
+    fn schema_three_migration_preserves_custom_model_capability_differences() {
+        let provider_id = "custom-provider";
+        let model_id = "private-model";
+        let model = CustomModelDefinition {
+            id: String::from(model_id),
+            display_name: String::from("Private Model"),
+            enabled: true,
+            capabilities: ModelCapabilities {
+                context_limit: Some(64_000),
+                output_limit: Some(4_096),
+                input_resources: vec![ResourceKind::Image],
+                evidence_revision: String::from("legacy.advanced.v1"),
+                ..ModelCapabilities::default()
+            },
+            request_projection: Default::default(),
+        };
+        let mut historical = PersistedAiConfiguration {
+            schema_version: 3,
+            custom_models: BTreeMap::from([(
+                String::from(provider_id),
+                BTreeMap::from([(String::from(model_id), model)]),
+            )]),
+            ..PersistedAiConfiguration::default()
+        };
+
+        assert!(
+            historical
+                .migrate_to_current_schema()
+                .expect("schema three must migrate")
+        );
+
+        assert_eq!(
+            historical
+                .model_capability_overrides
+                .get(PersistedAiConfiguration::provider_model_key(provider_id, model_id).as_str()),
+            Some(&ModelCapabilityOverrides {
+                context_limit: Some(64_000),
+                output_limit: Some(4_096),
+                input_resources: Some(vec![ResourceKind::Image]),
+                output_resources: None,
+            })
+        );
+        let migrated_model = historical
+            .custom_model(provider_id, model_id)
+            .expect("migrated custom model should remain configured");
+        assert_eq!(migrated_model.capabilities.context_limit, None);
+        assert_eq!(migrated_model.capabilities.output_limit, None);
+        assert!(migrated_model.capabilities.input_resources.is_empty());
+        assert!(migrated_model.capabilities.output_resources.is_empty());
+        assert_eq!(
+            migrated_model.capabilities.evidence_revision,
+            "legacy.advanced.v1"
+        );
+    }
+
+    /// Verifies schema-three values equal to the new defaults do not create redundant overlays.
+    /// 验证 Schema 3 中等于新默认值的能力不会生成冗余覆盖。
+    #[test]
+    fn schema_three_migration_skips_values_equal_to_provider_defaults() {
+        let provider_id = "custom-provider";
+        let model_id = "default-model";
+        let defaults = CustomProviderModelDefaults::default();
+        let model = CustomModelDefinition {
+            id: String::from(model_id),
+            display_name: String::from("Default Model"),
+            enabled: true,
+            capabilities: ModelCapabilities {
+                context_limit: Some(defaults.context_limit),
+                output_limit: Some(defaults.output_limit),
+                input_resources: defaults.input_resources.clone(),
+                output_resources: defaults.output_resources.clone(),
+                ..ModelCapabilities::default()
+            },
+            request_projection: Default::default(),
+        };
+        let mut historical = PersistedAiConfiguration {
+            schema_version: 3,
+            custom_models: BTreeMap::from([(
+                String::from(provider_id),
+                BTreeMap::from([(String::from(model_id), model)]),
+            )]),
+            ..PersistedAiConfiguration::default()
+        };
+
+        historical
+            .migrate_to_current_schema()
+            .expect("schema three must migrate");
+
+        assert!(historical.model_capability_overrides.is_empty());
+        let migrated_model = historical
+            .custom_model(provider_id, model_id)
+            .expect("migrated custom model should remain configured");
+        assert_eq!(migrated_model.capabilities.context_limit, None);
+        assert_eq!(migrated_model.capabilities.output_limit, None);
+        assert!(migrated_model.capabilities.input_resources.is_empty());
+        assert!(migrated_model.capabilities.output_resources.is_empty());
+    }
+
+    /// Verifies template selections preserve their exact text modality decisions through JSON.
+    /// 验证模板选择通过 JSON 往返时会精确保留文本模态决策。
+    #[test]
+    fn custom_model_template_text_capabilities_round_trip_exactly() {
+        let key = PersistedAiConfiguration::provider_model_key("custom-provider", "image-model");
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.custom_model_template_decisions.insert(
+            key.clone(),
+            CustomModelTemplateDecision::Applied {
+                selection: CustomModelTemplateSelection {
+                    template_key: String::from("image-model"),
+                    template_revision: String::from(CUSTOM_MODEL_TEMPLATE_REVISION),
+                    context_limit: 200_000,
+                    supports_text_input: true,
+                    supports_text_output: false,
+                    input_resources: vec![ResourceKind::Image],
+                    output_resources: vec![ResourceKind::Image],
+                },
+            },
+        );
+
+        let encoded = serde_json::to_string(&configuration).expect("configuration must serialize");
+        let decoded: PersistedAiConfiguration =
+            serde_json::from_str(encoded.as_str()).expect("configuration must deserialize");
+
+        assert_eq!(
+            decoded.custom_model_template_decisions.get(key.as_str()),
+            configuration
+                .custom_model_template_decisions
+                .get(key.as_str())
         );
     }
 

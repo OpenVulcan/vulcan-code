@@ -3,7 +3,14 @@ import type {
   PublicAiConnectionAddRequest,
   PublicAiConnectionUpdateRequest,
   PublicAiCustomProviderSaveRequest,
+  PublicAiCustomProviderProbeResult,
+  PublicAiCustomProviderModelDefaults,
+  PublicAiCustomModelTemplateDecision,
+  PublicAiCustomModelTemplateDecisionBatchItem,
+  PublicAiCustomModelTemplateSuggestionsRecord,
+  PublicAiCommonModelTemplateSuggestion,
   PublicAiCustomModelDefinition,
+  PublicAiCustomModelValidationResult,
   PublicAiModelCapabilityOverrides,
   PublicAiModelOverrides,
   PublicAiInferenceRoute,
@@ -106,6 +113,30 @@ export async function savePublicAiCustomProvider(
   );
 }
 
+// probePublicAiCustomProvider validates one candidate without persisting secrets or provider state.
+// probePublicAiCustomProvider 验证一个候选项且不持久化秘密或供应商状态。
+export async function probePublicAiCustomProvider(
+  request: PublicAiCustomProviderSaveRequest,
+): Promise<PublicAiCustomProviderProbeResult> {
+  return serviceClient.request<PublicAiCustomProviderProbeResult>(
+    "service_probe_public_ai_custom_provider",
+    { request },
+  );
+}
+
+// validatePublicAiCustomModel executes one explicit potentially billable model request.
+// validatePublicAiCustomModel 执行一次显式且可能计费的模型请求。
+export async function validatePublicAiCustomModel(request: {
+  providerId: string;
+  connectionId: string;
+  modelId: string;
+}): Promise<PublicAiCustomModelValidationResult> {
+  return serviceClient.request<PublicAiCustomModelValidationResult>(
+    "service_validate_public_ai_custom_model",
+    { request },
+  );
+}
+
 // removePublicAiCustomProvider removes one unreferenced user-defined provider.
 // removePublicAiCustomProvider 移除一个未被引用的用户自定义供应商。
 export async function removePublicAiCustomProvider(
@@ -122,10 +153,83 @@ export async function removePublicAiCustomProvider(
 export async function savePublicAiCustomModels(
   providerId: string,
   models: PublicAiCustomModelDefinition[],
+  templateDecisions: PublicAiCustomModelTemplateDecisionBatchItem[] = [],
 ): Promise<PublicAiSettingsSnapshot> {
   return serviceClient.request<PublicAiSettingsSnapshot>(
     "service_save_public_ai_custom_models",
-    { request: { providerId, models } },
+    { request: { providerId, models, templateDecisions } },
+  );
+}
+
+// savePublicAiCustomProviderModelDefaults persists the safe provider-wide fallback contract.
+// savePublicAiCustomProviderModelDefaults 持久化安全的供应商级回退契约。
+export async function savePublicAiCustomProviderModelDefaults(request: {
+  providerId: string;
+  defaults: PublicAiCustomProviderModelDefaults;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_custom_provider_model_defaults",
+    { request },
+  );
+}
+
+// getPublicAiCustomModelTemplateSuggestions returns local hints without network access.
+// getPublicAiCustomModelTemplateSuggestions 在不访问网络的情况下返回本地提示。
+export async function getPublicAiCustomModelTemplateSuggestions(
+  modelId: string,
+): Promise<PublicAiCommonModelTemplateSuggestion[]> {
+  return serviceClient.request<PublicAiCommonModelTemplateSuggestion[]>(
+    "service_public_ai_custom_model_template_suggestions",
+    { request: { modelId } },
+  );
+}
+
+// getPublicAiCustomModelTemplateSuggestionsBatch returns bounded local hints in one RPC.
+// getPublicAiCustomModelTemplateSuggestionsBatch 通过一次 RPC 返回有界本地提示。
+export async function getPublicAiCustomModelTemplateSuggestionsBatch(
+  modelIds: string[],
+): Promise<PublicAiCustomModelTemplateSuggestionsRecord[]> {
+  return serviceClient.request<PublicAiCustomModelTemplateSuggestionsRecord[]>(
+    "service_public_ai_custom_model_template_suggestions_batch",
+    { request: { modelIds } },
+  );
+}
+
+// savePublicAiCustomModelTemplateDecision persists or clears one reviewed template choice.
+// savePublicAiCustomModelTemplateDecision 持久化或清除一项已审查模板选择。
+export async function savePublicAiCustomModelTemplateDecision(request: {
+  providerId: string;
+  modelId: string;
+  decision?: PublicAiCustomModelTemplateDecision;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_custom_model_template_decision",
+    { request },
+  );
+}
+
+// savePublicAiCustomModelTemplateDecisionsBatch atomically persists reviewed suggestions.
+// savePublicAiCustomModelTemplateDecisionsBatch 原子持久化已审查模板建议。
+export async function savePublicAiCustomModelTemplateDecisionsBatch(request: {
+  providerId: string;
+  decisions: PublicAiCustomModelTemplateDecisionBatchItem[];
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_custom_model_template_decisions_batch",
+    { request },
+  );
+}
+
+// savePublicAiCustomModelConnectionAvailability controls one manual model on one account.
+// savePublicAiCustomModelConnectionAvailability 控制一个手工模型在一个账号上的可用性。
+export async function savePublicAiCustomModelConnectionAvailability(request: {
+  connectionId: string;
+  modelId: string;
+  enabled?: boolean;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_custom_model_connection_availability",
+    { request },
   );
 }
 
