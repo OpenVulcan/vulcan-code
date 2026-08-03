@@ -702,6 +702,7 @@ function workspaceDiffFilePathKey(oldPath: string, newPath: string): string {
 // diffReviewSelectionStableKey 为单个 Git 审核选择构建紧凑稳定键。
 export function diffReviewSelectionStableKey(selection: DiffReviewSelection): string {
   return [
+    selection.repositoryKey?.trim() || ".",
     selection.mode,
     selection.baseBranch?.trim() ?? "",
     selection.compareBranch?.trim() ?? "",

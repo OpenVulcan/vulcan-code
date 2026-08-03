@@ -631,17 +631,23 @@ fn run_service_bootstrap(
             format!("Vulcan Plugin hook 注册失败：{error}"),
         )
     })?;
+    // credentialStore binds every new credential mutation to the Controller-owned application SQLite database.
+    // credentialStore 将全部新凭据变更绑定到 Controller 持有的应用 SQLite 数据库。
+    let credential_store = Arc::new(
+        crate::ai_credential_secret_store::SqliteAiCredentialSecretStore::new(
+            controller_runtime.clone(),
+        ),
+    );
     let public_ai_runtime = Arc::new(
-        vulcan_provider_adapters::PublicAiRuntime::first_batch(Arc::new(
-            crate::ai_credential_secret_store::OsAiCredentialSecretStore,
-        ))
-        .map_err(|error| {
-            ServiceBootstrapError::new(
-                "workspace",
-                "Workspace",
-                format!("公共 AI 运行时初始化失败：{error}"),
-            )
-        })?,
+        vulcan_provider_adapters::PublicAiRuntime::first_batch(credential_store).map_err(
+            |error| {
+                ServiceBootstrapError::new(
+                    "workspace",
+                    "Workspace",
+                    format!("公共 AI 运行时初始化失败：{error}"),
+                )
+            },
+        )?,
     );
     public_ai_runtime
         .replace_configuration(public_ai_configuration.clone())
@@ -730,6 +736,7 @@ fn run_service_bootstrap(
         configured_inference_service,
         provider_id_override: None,
         model_id_override: None,
+        connection_id_override: None,
         agent_profile_catalog,
         luaskills_runtime: agent_luaskills_runtime,
         vulcan_plugin_runtime: vulcan_plugin_runtime.clone(),

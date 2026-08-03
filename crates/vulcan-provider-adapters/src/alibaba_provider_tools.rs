@@ -1,6 +1,7 @@
 //! Alibaba provider-native media tools and temporary resource materialization.
 //! 阿里云供应商原生媒体工具与临时资源物化。
 
+use crate::media::{MediaUploadCancellation, MediaUploadProgressCallback};
 use crate::provider_task::{
     ProviderAsyncTaskPhase, ProviderAsyncTaskPoll, ProviderAsyncTaskRecoveryContext,
     ProviderAsyncTaskStart,
@@ -9,6 +10,7 @@ use crate::{
     CredentialExecutionSecret, ProviderToolAdapterKind, ProviderToolExecutionResult,
     ProviderToolGeneratedResource, ProviderToolNormalizedOutput, ProviderToolTarget, ServiceEntry,
 };
+use async_stream::stream;
 use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::Value;
@@ -139,6 +141,73 @@ async fn upload_provider_object(
     secret: &CredentialExecutionSecret,
     descriptor: &AlibabaHostFileDescriptor,
 ) -> Result<String, String> {
+    let cancellation = MediaUploadCancellation::new();
+    upload_alibaba_object(
+        http,
+        entry,
+        target.upstream_target_id.as_str(),
+        secret,
+        descriptor,
+        None,
+        &cancellation,
+    )
+    .await
+}
+
+/// Uploads one user attachment through the verified Alibaba temporary OSS workflow.
+/// 通过已验证的阿里云临时 OSS 流程上传一个用户附件。
+///
+/// # Parameters
+/// 参数
+/// `http`, `entry`, and `secret` identify the exact configured Alibaba account.
+/// `http`、`entry` 与 `secret` 标识精确配置的阿里云账号。
+/// `model_id` selects the model-specific upload policy, while the remaining values describe the
+/// validated local attachment and its progress/cancellation controls.
+/// `model_id` 选择模型对应的上传策略，其余参数描述已校验的本地附件及进度/取消控制。
+///
+/// # Returns
+/// 返回值
+/// The temporary `oss://` reference consumed by Alibaba model requests.
+/// 阿里云模型请求消费的临时 `oss://` 引用。
+pub(crate) async fn upload_user_media(
+    http: &reqwest::Client,
+    entry: &ServiceEntry,
+    model_id: &str,
+    secret: &CredentialExecutionSecret,
+    local_path: &Path,
+    mime_type: &str,
+    size_bytes: u64,
+    progress: Option<MediaUploadProgressCallback>,
+    cancellation: &MediaUploadCancellation,
+) -> Result<String, String> {
+    let descriptor = AlibabaHostFileDescriptor {
+        absolute_path: local_path.to_string_lossy().into_owned(),
+        mime_type: mime_type.to_string(),
+        size_bytes,
+    };
+    upload_alibaba_object(
+        http,
+        entry,
+        model_id,
+        secret,
+        &descriptor,
+        progress,
+        cancellation,
+    )
+    .await
+}
+
+/// Uploads one verified local file through Alibaba's temporary OSS policy flow.
+/// 通过阿里云临时 OSS 策略流程上传一个已校验的本地文件。
+async fn upload_alibaba_object(
+    http: &reqwest::Client,
+    entry: &ServiceEntry,
+    model_id: &str,
+    secret: &CredentialExecutionSecret,
+    descriptor: &AlibabaHostFileDescriptor,
+    progress: Option<MediaUploadProgressCallback>,
+    cancellation: &MediaUploadCancellation,
+) -> Result<String, String> {
     if !matches!(
         entry.id.as_str(),
         "model-studio-cn" | "token-plan-personal-cn"
@@ -151,21 +220,28 @@ async fn upload_provider_object(
     let canonical = validate_host_file(descriptor).await?;
     let policy_url = format!(
         "https://dashscope.aliyuncs.com/api/v1/uploads?action=getPolicy&model={}",
-        percent_encode_component(target.upstream_target_id.as_str())
+        percent_encode_component(model_id)
     );
-    let policy_response = http
+    let policy_response = tokio::select! {
+        response = http
         .get(policy_url)
         .bearer_auth(secret.expose_value())
         .header("content-type", "application/json")
-        .send()
-        .await
-        .map_err(|error| format!("Alibaba OSS policy request failed: {error}"))?;
+        .send() => response
+            .map_err(|error| format!("Alibaba OSS policy request failed: {error}"))?,
+        _ = cancellation.wait() => return Err(String::from("media upload cancelled")),
+    };
     let policy_status = policy_response.status();
-    let policy_text = crate::provider_tool_execution::read_bounded_provider_response(
-        policy_response,
-        "Alibaba OSS policy",
-    )
-    .await?;
+    let policy_text = tokio::select! {
+        result = crate::provider_tool_execution::read_bounded_provider_response(
+            policy_response,
+            "Alibaba OSS policy",
+        ) => result?,
+        _ = cancellation.wait() => return Err(String::from("media upload cancelled")),
+    };
+    if cancellation.is_cancelled() {
+        return Err(String::from("media upload cancelled"));
+    }
     if !policy_status.is_success() {
         return Err(format!(
             "Alibaba OSS policy failed: HTTP {} | {}",
@@ -176,7 +252,7 @@ async fn upload_provider_object(
     let policy: AlibabaOssPolicyEnvelope = serde_json::from_str(policy_text.as_str())
         .map_err(|error| format!("Alibaba OSS policy JSON is invalid: {error}"))?;
     validate_oss_policy(&policy.data)?;
-    let digest = hash_host_file(canonical.as_path()).await?;
+    let digest = hash_host_file(canonical.as_path(), cancellation).await?;
     let file_name = format!(
         "resource-{}{}",
         &digest[..16],
@@ -195,9 +271,43 @@ async fn upload_provider_object(
     let file = tokio::fs::File::open(canonical)
         .await
         .map_err(|error| format!("Alibaba upload source cannot be opened: {error}"))?;
+    let descriptor_size_bytes = descriptor.size_bytes;
+    let upload_cancellation = cancellation.clone();
+    let upload_progress = progress.clone();
+    let stream = stream! {
+        let mut source = ReaderStream::new(file);
+        let mut sent = 0_u64;
+        while let Some(chunk) = source.next().await {
+            if upload_cancellation.is_cancelled() {
+                yield Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "media upload cancelled",
+                ));
+                return;
+            }
+            let chunk = match chunk {
+                Ok(chunk) => chunk,
+                Err(error) => {
+                    yield Err(error);
+                    return;
+                }
+            };
+            sent = sent.saturating_add(chunk.len() as u64);
+            if let Some(callback) = upload_progress.as_ref() {
+                callback(sent, Some(descriptor_size_bytes));
+            }
+            yield Ok(chunk);
+        }
+        if sent != descriptor_size_bytes {
+            yield Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "Alibaba upload source length changed during transfer",
+            ));
+        }
+    };
     let part = reqwest::multipart::Part::stream_with_length(
-        reqwest::Body::wrap_stream(ReaderStream::new(file)),
-        descriptor.size_bytes,
+        reqwest::Body::wrap_stream(stream),
+        descriptor_size_bytes,
     )
     .file_name(file_name)
     .mime_str(descriptor.mime_type.as_str())
@@ -211,18 +321,34 @@ async fn upload_provider_object(
         .text("key", object_key.clone())
         .text("success_action_status", "200")
         .part("file", part);
-    let upload_response = http
+    let upload_response = tokio::select! {
+        response = http
         .post(policy.data.upload_host)
         .multipart(form)
-        .send()
-        .await
-        .map_err(|error| format!("Alibaba OSS upload failed: {error}"))?;
+        .send() => response
+            .map_err(|error| {
+                if cancellation.is_cancelled() {
+                    String::from("media upload cancelled")
+                } else {
+                    format!("Alibaba OSS upload failed: {error}")
+                }
+            })?,
+        _ = cancellation.wait() => return Err(String::from("media upload cancelled")),
+    };
+    if cancellation.is_cancelled() {
+        return Err(String::from("media upload cancelled"));
+    }
     let upload_status = upload_response.status();
-    let upload_text = crate::provider_tool_execution::read_bounded_provider_response(
-        upload_response,
-        "Alibaba OSS upload",
-    )
-    .await?;
+    let upload_text = tokio::select! {
+        result = crate::provider_tool_execution::read_bounded_provider_response(
+            upload_response,
+            "Alibaba OSS upload",
+        ) => result?,
+        _ = cancellation.wait() => return Err(String::from("media upload cancelled")),
+    };
+    if cancellation.is_cancelled() {
+        return Err(String::from("media upload cancelled"));
+    }
     if !upload_status.is_success() {
         return Err(format!(
             "Alibaba OSS upload failed: HTTP {} | {}",
@@ -245,13 +371,19 @@ async fn upload_provider_object(
 /// 返回值
 /// Lowercase SHA-256 hexadecimal text.
 /// 返回小写 SHA-256 十六进制文本。
-async fn hash_host_file(path: &Path) -> Result<String, String> {
+async fn hash_host_file(
+    path: &Path,
+    cancellation: &MediaUploadCancellation,
+) -> Result<String, String> {
     let mut file = tokio::fs::File::open(path)
         .await
         .map_err(|error| format!("Alibaba upload source cannot be opened: {error}"))?;
     let mut hash = Sha256::new();
     let mut buffer = vec![0_u8; 1024 * 1024];
     loop {
+        if cancellation.is_cancelled() {
+            return Err(String::from("media upload cancelled"));
+        }
         let read = file
             .read(buffer.as_mut_slice())
             .await

@@ -16,6 +16,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_workbench_snapshot",
     "workspace.diff.snapshot",
     "service_workspace_diff_snapshot",
+    "workspace.git.catalog",
+    "workspace.git.setMonitoring",
     "workspace.diff.fileDetail",
     "service_workspace_diff_file_detail",
     "workspace.diff.search",
@@ -67,6 +69,27 @@ pub(super) async fn dispatch(
                 rpc_optional_param(params, "projectId")?,
                 rpc_optional_param(params, "conversationId")?,
                 rpc_optional_param(params, "request")?,
+            )
+            .await,
+        ),
+        "workspace.git.catalog" => rpc_json_result(
+            service_workspace_git_catalog_with_watcher(
+                app,
+                state,
+                rpc_optional_param(params, "workspacePath")?,
+                rpc_optional_param(params, "projectId")?,
+                rpc_optional_param(params, "conversationId")?,
+            )
+            .await,
+        ),
+        "workspace.git.setMonitoring" => rpc_json_result(
+            service_set_workspace_git_monitoring(
+                app,
+                state,
+                rpc_optional_param(params, "workspacePath")?,
+                rpc_optional_param(params, "projectId")?,
+                rpc_optional_param(params, "conversationId")?,
+                rpc_required_param(params, "request")?,
             )
             .await,
         ),

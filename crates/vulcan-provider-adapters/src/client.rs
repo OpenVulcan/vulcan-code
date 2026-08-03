@@ -1663,15 +1663,16 @@ async fn query_kimi_coding_plan(
 fn decode_kimi_coding_plan_usage(body: &str) -> Result<AccountUsageSnapshot, String> {
     let response: KimiUsageResponse = serde_json::from_str(body)
         .map_err(|error| format!("Kimi Coding Plan usage JSON is invalid: {error}"))?;
+    let plan_name = kimi_membership_plan_name(response.user.membership.level.as_deref())?;
     let mut windows =
         Vec::with_capacity(response.limits.len() + usize::from(response.usage.is_some()));
     if let Some(usage) = response.usage
-        && let Some(window) = kimi_usage_window("weekly_usage", "Weekly usage", usage, None)?
+        && let Some(window) = kimi_usage_window("weekly_usage", "weekly_usage", usage, None)?
     {
         windows.push(window);
     }
-    for (index, item) in response.limits.into_iter().enumerate() {
-        let name = [
+    for (index, mut item) in response.limits.into_iter().enumerate() {
+        let provider_name = [
             item.name.as_deref(),
             item.title.as_deref(),
             item.scope.as_deref(),
@@ -1685,23 +1686,42 @@ fn decode_kimi_coding_plan_usage(body: &str) -> Result<AccountUsageSnapshot, Str
         .into_iter()
         .flatten()
         .find(|value| !value.trim().is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("Limit {}", index + 1));
-        let id = format!("kimi_{}", normalize_usage_identifier(name.as_str(), index));
-        let detail = item.detail.unwrap_or(item.inline);
-        if let Some(window) = kimi_usage_window(id.as_str(), name.as_str(), detail, item.window)? {
+        .map(|value| value.trim().to_string());
+        let inline_duration = item.inline.duration.take();
+        let inline_time_unit = item
+            .inline
+            .time_unit
+            .take()
+            .filter(|value| !value.trim().is_empty());
+        let mut detail = item.detail.unwrap_or(item.inline);
+        let window = item.window.or_else(|| {
+            inline_duration
+                .or_else(|| detail.duration.take())
+                .map(|duration| KimiUsageWindow {
+                    duration: Some(duration),
+                    time_unit: inline_time_unit.or_else(|| {
+                        detail
+                            .time_unit
+                            .take()
+                            .filter(|value| !value.trim().is_empty())
+                    }),
+                })
+        });
+        let metric = provider_name
+            .as_deref()
+            .map(kimi_metric_identifier)
+            .unwrap_or_else(|| kimi_unnamed_limit_metric(window.as_ref(), index));
+        let display_name = provider_name.unwrap_or_else(|| metric.clone());
+        if let Some(window) =
+            kimi_usage_window(metric.as_str(), display_name.as_str(), detail, window)?
+        {
             windows.push(window);
         }
     }
     Ok(AccountUsageSnapshot {
         credential_id: String::new(),
         availability: AccountUsageAvailability::Supported,
-        plan_name: response
-            .user
-            .membership
-            .level
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| Some(String::from("Kimi Coding Plan"))),
+        plan_name: Some(plan_name),
         used_amount: None,
         remaining_amount: None,
         currency: None,
@@ -1710,6 +1730,24 @@ fn decode_kimi_coding_plan_usage(body: &str) -> Result<AccountUsageSnapshot, Str
         observed_at: current_unix_milliseconds(),
         refresh_message: None,
     })
+}
+
+/// Resolves Kimi's exact provider membership enum to the public plan name used by ModelCore.
+/// 将 Kimi 的精确供应商会员枚举解析为 ModelCore 使用的公开套餐名称。
+fn kimi_membership_plan_name(provider_level: Option<&str>) -> Result<String, String> {
+    match provider_level
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        None => Ok(String::from("Kimi Coding Plan")),
+        Some("LEVEL_TRIAL") => Ok(String::from("Andante")),
+        Some("LEVEL_BASIC") => Ok(String::from("Moderato")),
+        Some("LEVEL_INTERMEDIATE") => Ok(String::from("Allegretto")),
+        Some("LEVEL_ADVANCED") => Ok(String::from("Allegro")),
+        Some(value) => Err(format!(
+            "Kimi Coding Plan usage returned unknown membership level `{value}`."
+        )),
+    }
 }
 
 /// Converts one Kimi counter into a neutral window without inventing absent limits.
@@ -1768,25 +1806,51 @@ fn kimi_usage_window(
     }))
 }
 
-/// Returns a stable UI-safe identifier from one provider metric label.
-/// 从一个供应商指标标签返回稳定且适合 UI 的标识。
-fn normalize_usage_identifier(value: &str, fallback_index: usize) -> String {
-    let normalized = value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character.to_ascii_lowercase()
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>()
-        .trim_matches('_')
-        .to_string();
-    if normalized.is_empty() {
-        format!("limit_{}", fallback_index + 1)
+/// Normalizes one provider-owned Kimi metric with ModelCore's exact ASCII token rules.
+/// 使用 ModelCore 的精确 ASCII 分词规则规范化一个供应商拥有的 Kimi 指标。
+fn kimi_metric_identifier(value: &str) -> String {
+    let parts = value
+        .trim()
+        .to_ascii_lowercase()
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|part| !part.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        String::from("provider_limit")
     } else {
-        normalized
+        parts.join("_")
+    }
+}
+
+/// Identifies an unnamed Kimi limit from its provider window using ModelCore's metric rules.
+/// 使用 ModelCore 的指标规则根据供应商窗口标识一个未命名的 Kimi 限制。
+fn kimi_unnamed_limit_metric(window: Option<&KimiUsageWindow>, index: usize) -> String {
+    let fallback = || format!("limit_{}", index + 1);
+    let Some(window) = window else {
+        return fallback();
+    };
+    let Some(duration) = window.duration.as_ref().and_then(KimiDecimal::as_f64) else {
+        return fallback();
+    };
+    let multiplier = match window
+        .time_unit
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_uppercase()
+        .as_str()
+    {
+        "" | "SECONDS" => 1.0,
+        "MINUTES" | "TIME_UNIT_MINUTE" => 60.0,
+        "HOURS" => 60.0 * 60.0,
+        "DAYS" => 24.0 * 60.0 * 60.0,
+        _ => return fallback(),
+    };
+    if duration * multiplier == 5.0 * 60.0 * 60.0 {
+        String::from("five_hour_usage")
+    } else {
+        fallback()
     }
 }
 
@@ -2803,6 +2867,16 @@ enum KimiDecimal {
 }
 
 impl KimiDecimal {
+    /// Converts one provider decimal to a finite floating-point value for duration matching.
+    /// 将一个供应商十进制数转换为用于时长匹配的有限浮点值。
+    fn as_f64(&self) -> Option<f64> {
+        let value = match self {
+            Self::Number(value) => value.as_f64(),
+            Self::String(value) => value.parse::<f64>().ok(),
+        }?;
+        value.is_finite().then_some(value)
+    }
+
     /// Returns one validated non-negative exact decimal string.
     /// 返回一个经过校验的非负精确十进制字符串。
     fn exact(self) -> Result<String, String> {
@@ -2862,6 +2936,14 @@ struct KimiUsageDetail {
     /// 备用下划线形式重置时间。
     #[serde(default, rename = "reset_time")]
     reset_time_snake: Option<String>,
+    /// Alternate inline rolling-window duration.
+    /// 备用内联滚动窗口时长。
+    #[serde(default)]
+    duration: Option<KimiDecimal>,
+    /// Alternate inline rolling-window unit.
+    /// 备用内联滚动窗口单位。
+    #[serde(default, rename = "timeUnit", alias = "time_unit")]
+    time_unit: Option<String>,
 }
 
 /// Mirrors one Kimi rolling-window descriptor.
@@ -3797,12 +3879,15 @@ mod tests {
     #[test]
     fn kimi_usage_preserves_membership_and_nested_windows() {
         let snapshot = decode_kimi_coding_plan_usage(
-            r#"{"usage":{"used":"1.25","limit":"10"},"limits":[{"name":"5 hour usage","detail":{"used":2,"limit":8,"remaining":6,"resetAt":"2026-07-29T10:00:00Z"},"window":{"duration":5,"timeUnit":"HOURS"}}],"user":{"membership":{"level":"moderato"}}}"#,
+            r#"{"usage":{"used":"1.25","limit":"10"},"limits":[{"name":"5 hour usage","detail":{"used":2,"limit":8,"remaining":6,"resetAt":"2026-07-29T10:00:00Z"},"window":{"duration":5,"timeUnit":"HOURS"}}],"user":{"membership":{"level":"LEVEL_BASIC"}}}"#,
         )
         .expect("valid Kimi usage");
-        assert_eq!(snapshot.plan_name.as_deref(), Some("moderato"));
+        assert_eq!(snapshot.plan_name.as_deref(), Some("Moderato"));
         assert_eq!(snapshot.quota_windows.len(), 2);
+        assert_eq!(snapshot.quota_windows[0].id, "weekly_usage");
+        assert_eq!(snapshot.quota_windows[0].display_name, "weekly_usage");
         assert_eq!(snapshot.quota_windows[0].remaining.as_deref(), Some("8.75"));
+        assert_eq!(snapshot.quota_windows[1].id, "5_hour_usage");
         assert_eq!(snapshot.quota_windows[1].used.as_deref(), Some("2"));
         assert_eq!(snapshot.quota_windows[1].remaining.as_deref(), Some("6"));
         assert_eq!(
@@ -3812,6 +3897,47 @@ mod tests {
         assert_eq!(
             snapshot.quota_windows[1].bucket_name.as_deref(),
             Some("5 HOURS")
+        );
+    }
+
+    /// Verifies Kimi membership names follow ModelCore's confirmed provider-level matrix.
+    /// 验证 Kimi 套餐名称遵循 ModelCore 已确认的供应商等级矩阵。
+    #[test]
+    fn kimi_usage_maps_confirmed_membership_names() {
+        for (provider_level, plan_name) in [
+            ("LEVEL_TRIAL", "Andante"),
+            ("LEVEL_BASIC", "Moderato"),
+            ("LEVEL_INTERMEDIATE", "Allegretto"),
+            ("LEVEL_ADVANCED", "Allegro"),
+        ] {
+            let body = format!(r#"{{"user":{{"membership":{{"level":"{provider_level}"}}}}}}"#);
+            let snapshot =
+                decode_kimi_coding_plan_usage(body.as_str()).expect("known Kimi membership");
+            assert_eq!(snapshot.plan_name.as_deref(), Some(plan_name));
+        }
+
+        let error =
+            decode_kimi_coding_plan_usage(r#"{"user":{"membership":{"level":"LEVEL_FUTURE"}}}"#)
+                .expect_err("unknown Kimi membership must be rejected");
+        assert!(error.contains("unknown membership level `LEVEL_FUTURE`"));
+    }
+
+    /// Verifies an unnamed five-hour Kimi window receives ModelCore's stable metric identifier.
+    /// 验证未命名的五小时 Kimi 窗口获得 ModelCore 的稳定指标标识。
+    #[test]
+    fn kimi_usage_identifies_unnamed_five_hour_window() {
+        let snapshot = decode_kimi_coding_plan_usage(
+            r#"{"limits":[{"duration":300,"timeUnit":"TIME_UNIT_MINUTE","detail":{"used":2,"limit":8,"remaining":6}}],"user":{"membership":{"level":"LEVEL_INTERMEDIATE"}}}"#,
+        )
+        .expect("valid unnamed Kimi window");
+
+        assert_eq!(snapshot.plan_name.as_deref(), Some("Allegretto"));
+        assert_eq!(snapshot.quota_windows.len(), 1);
+        assert_eq!(snapshot.quota_windows[0].id, "five_hour_usage");
+        assert_eq!(snapshot.quota_windows[0].display_name, "five_hour_usage");
+        assert_eq!(
+            snapshot.quota_windows[0].bucket_name.as_deref(),
+            Some("300 TIME_UNIT_MINUTE")
         );
     }
 

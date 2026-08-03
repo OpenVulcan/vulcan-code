@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { PublicAiSettingsSnapshot } from "@/types";
-import { providerToolSettingsConflicts } from "./composer-capability-controls";
+import {
+  orderProviderToolCapabilities,
+  providerToolSettingsConflicts,
+} from "./composer-capability-controls";
 
 // settingsFixture builds the smallest catalog required to validate stale session routes.
 // settingsFixture 构建验证过期会话路由所需的最小目录。
@@ -86,5 +89,24 @@ describe("providerToolSettingsConflicts", () => {
     });
 
     expect(conflicts).toEqual([]);
+  });
+});
+
+describe("orderProviderToolCapabilities", () => {
+  it("keeps web search and web extract as the first two capabilities", () => {
+    expect(orderProviderToolCapabilities([
+      "media_analyze",
+      "web_extract",
+      "image_generate",
+      "web_search",
+      "image_edit",
+      "web_search",
+    ])).toEqual([
+      "web_search",
+      "web_extract",
+      "image_edit",
+      "image_generate",
+      "media_analyze",
+    ]);
   });
 });

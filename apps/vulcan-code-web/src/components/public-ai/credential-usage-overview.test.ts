@@ -1,9 +1,36 @@
 import { describe, expect, it } from "vitest"
 
+import type { TranslationKey } from "@/i18n"
+import type { PublicAiAccountUsageWindow } from "@/types"
+
 import {
   formatCurrencyAmount,
+  kimiUsageWindowLabel,
   usageCapabilitySupportsQuotaWindows,
 } from "./credential-usage-overview"
+
+// kimiUsageWindow creates one minimal normalized Kimi quota window for label tests.
+// kimiUsageWindow 为名称测试创建一个最小规范化 Kimi 额度窗口。
+function kimiUsageWindow(id: string, displayName = id): PublicAiAccountUsageWindow {
+  return {
+    id,
+    display_name: displayName,
+    unit: "provider_defined",
+    unlimited: false,
+    available: true,
+  }
+}
+
+// testTranslation resolves only the Kimi usage strings exercised by this module.
+// testTranslation 仅解析本模块验证的 Kimi 用量文案。
+function testTranslation(key: TranslationKey): string {
+  const messages: Partial<Record<TranslationKey, string>> = {
+    "composer.accountCard.kimiWeeklyUsage": "周用量",
+    "composer.accountCard.kimiFiveHourUsage": "5 小时用量",
+    "composer.accountCard.kimiLimit": "额度",
+  }
+  return messages[key] ?? key
+}
 
 describe("formatCurrencyAmount", () => {
   // Verifies provider decimal strings are rounded without floating-point conversion.
@@ -32,5 +59,27 @@ describe("usageCapabilitySupportsQuotaWindows", () => {
     expect(usageCapabilitySupportsQuotaWindows("open_router_credits")).toBe(false)
     expect(usageCapabilitySupportsQuotaWindows("deep_seek_balance")).toBe(false)
     expect(usageCapabilitySupportsQuotaWindows("unsupported")).toBe(false)
+  })
+})
+
+describe("kimiUsageWindowLabel", () => {
+  // Verifies ModelCore's stable Kimi metrics are localized instead of displayed as raw identifiers.
+  // 验证 ModelCore 的稳定 Kimi 指标会被本地化，而不是显示为原始标识。
+  it("localizes known and fallback Kimi usage metrics", () => {
+    expect(kimiUsageWindowLabel(kimiUsageWindow("weekly_usage"), testTranslation)).toBe("周用量")
+    expect(kimiUsageWindowLabel(kimiUsageWindow("five_hour_usage"), testTranslation)).toBe("5 小时用量")
+    expect(kimiUsageWindowLabel(kimiUsageWindow("5_hour_usage"), testTranslation)).toBe("5 小时用量")
+    expect(kimiUsageWindowLabel(kimiUsageWindow("limit_1"), testTranslation)).toBe("额度 1")
+  })
+
+  // Verifies provider-owned named metrics remain intact when no product translation exists.
+  // 验证不存在产品翻译时，供应商拥有的具名指标保持不变。
+  it("preserves provider-owned metric names", () => {
+    expect(
+      kimiUsageWindowLabel(
+        kimiUsageWindow("custom_provider_pool", "Custom provider pool"),
+        testTranslation,
+      ),
+    ).toBe("Custom provider pool")
   })
 })

@@ -979,6 +979,9 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
                     },
                 });
             }
+            "response.web_search_call.in_progress"
+            | "response.web_search_call.searching"
+            | "response.web_search_call.completed" => {}
             "response.content_part.added"
             | "response.content_part.done"
             | "response.output_text.done"
@@ -1618,5 +1621,52 @@ mod tests {
             )
             .expect_err("progress after image completion must fail");
         assert!(error.to_string().contains("progress after completion"));
+    }
+
+    /// Verifies Responses web-search lifecycle events remain provider-managed.
+    /// 验证 Responses 网页搜索生命周期事件保持由供应商管理。
+    #[test]
+    fn responses_web_search_events_are_consumed_without_host_tool_events() {
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        let started = decoder
+            .push_sse(
+                Some("response.output_item.added"),
+                r#"{"type":"response.output_item.added","output_index":0,"item":{"id":"search-item","type":"web_search_call","status":"in_progress"}}"#,
+            )
+            .expect("web search item should decode");
+        assert!(
+            started
+                .iter()
+                .all(|event| !matches!(event, AiStreamEvent::ToolCallStarted { .. }))
+        );
+        for event_name in [
+            "response.web_search_call.in_progress",
+            "response.web_search_call.searching",
+            "response.web_search_call.completed",
+        ] {
+            decoder
+                .push_sse(
+                    Some(event_name),
+                    &format!(r#"{{"type":"{event_name}","output_index":0}}"#),
+                )
+                .expect("web search status should decode");
+        }
+        decoder
+            .push_sse(
+                Some("response.output_item.done"),
+                r#"{"type":"response.output_item.done","output_index":0,"item":{"id":"search-item","type":"web_search_call","status":"completed"}}"#,
+            )
+            .expect("web search item should complete");
+        let completed = decoder
+            .push_sse(
+                Some("response.completed"),
+                r#"{"type":"response.completed","response":{"usage":{}}}"#,
+            )
+            .expect("response should complete");
+        assert!(
+            completed
+                .iter()
+                .any(|event| matches!(event, AiStreamEvent::ResponseCompleted))
+        );
     }
 }

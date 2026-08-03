@@ -1,12 +1,16 @@
 //! Per-turn provider tool registration and host-side resource materialization.
 //! 每回合供应商工具注册与宿主侧资源物化。
 
-use crate::attachment_assets::{attachment_descriptor_from_mime_type, stage_attachment_bytes};
+use crate::attachment_assets::{
+    attachment_descriptor_from_mime_type, stage_attachment_bytes, stage_attachment_file_streaming,
+};
 use base64::Engine;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::io::AsyncWriteExt;
 use vulcan_provider_adapters::{
     AvailableProviderToolTarget, PersistedAiConfiguration, ProviderToolAdapterKind,
     ProviderToolExecutionResult, ProviderToolNormalizedOutput, PublicAiRuntime,
@@ -28,6 +32,9 @@ const PROVIDER_TOOL_AUDIO_OUTPUT_BYTE_LIMIT: usize = 100 * 1024 * 1024;
 /// Maximum generated video size accepted by the host.
 /// 宿主接受的生成视频最大字节数。
 const PROVIDER_TOOL_VIDEO_OUTPUT_BYTE_LIMIT: usize = 512 * 1024 * 1024;
+/// Maximum wall-clock time allowed for one provider resource download.
+/// 单个供应商资源下载允许的最大墙钟时间。
+const PROVIDER_TOOL_RESOURCE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// Marks owned asynchronous provider work for cancellation when one tool future is dropped.
 /// 当工具 Future 被丢弃时，为其拥有的异步供应商任务记录取消意图。
@@ -114,11 +121,17 @@ pub(crate) fn build_provider_tool_candidates(
             vulcan_workbench_model::SessionProviderToolTargetSelection,
         >,
     >,
+    suppress_web_search: bool,
 ) -> Result<Vec<VulcanToolCandidate>, String> {
     apply_session_provider_tool_selections(&mut configuration, session_selections)?;
     let available = runtime.available_provider_tool_targets(&configuration)?;
     let mut candidates = Vec::new();
     for (capability, selection) in &configuration.provider_tool_selections {
+        if provider_tool_capability_is_suppressed(*capability, suppress_web_search) {
+            // Native route search is registered independently; retain persisted external selection but hide it for this turn.
+            // 原生路由搜索独立注册；保留持久化外部选择，但本回合不暴露该工具。
+            continue;
+        }
         if !configuration
             .provider_tool_enabled_capabilities
             .contains(capability)
@@ -147,6 +160,16 @@ pub(crate) fn build_provider_tool_candidates(
         ));
     }
     Ok(candidates)
+}
+
+/// Reports whether one configured provider-tool capability is hidden for the current route.
+/// 判断当前路由是否需要隐藏某项已配置的供应商工具能力。
+fn provider_tool_capability_is_suppressed(
+    capability: vulcan_provider_adapters::ProviderToolCapabilityKind,
+    suppress_web_search: bool,
+) -> bool {
+    suppress_web_search
+        && capability == vulcan_provider_adapters::ProviderToolCapabilityKind::WebSearch
 }
 
 /// Applies an explicit session override to the per-turn provider configuration.
@@ -1140,18 +1163,6 @@ async fn stage_provider_resources(
     let workspace_text = vulcan_runtime_assets::native_host_path_text_from_path(workspace_root);
     let mut outputs = Vec::with_capacity(resources.len());
     for resource in resources {
-        let bytes = match (resource.bytes, resource.download_url.as_deref()) {
-            (Some(bytes), None) => bytes,
-            (None, Some(download_url)) => {
-                download_provider_resource(download_url, resource.kind.as_str()).await?
-            }
-            _ => {
-                return Err(format!(
-                    "Provider tool resource `{}` has an invalid carrier.",
-                    resource.output_id
-                ));
-            }
-        };
         let descriptor = attachment_descriptor_from_mime_type(resource.mime_type.as_str())
             .ok_or_else(|| {
                 format!(
@@ -1160,13 +1171,32 @@ async fn stage_provider_resources(
                 )
             })?;
         let suggested_name = format!("{}.{}", resource.output_id, descriptor.extension);
-        let attachment = stage_attachment_bytes(
-            workspace_text.as_str(),
-            &descriptor,
-            suggested_name.as_str(),
-            None,
-            bytes.as_slice(),
-        )?;
+        let attachment = match (resource.bytes, resource.download_url.as_deref()) {
+            (Some(bytes), None) => stage_attachment_bytes(
+                workspace_text.as_str(),
+                &descriptor,
+                suggested_name.as_str(),
+                None,
+                bytes.as_slice(),
+            )?,
+            (None, Some(download_url)) => {
+                let temporary_path =
+                    download_provider_resource_to_temp(download_url, resource.kind.as_str())
+                        .await?;
+                stage_attachment_file_streaming(
+                    workspace_text.as_str(),
+                    &descriptor,
+                    suggested_name.as_str(),
+                    temporary_path.as_ref(),
+                )?
+            }
+            _ => {
+                return Err(format!(
+                    "Provider tool resource `{}` has an invalid carrier.",
+                    resource.output_id
+                ));
+            }
+        };
         outputs.push(json!({
             "kind": resource.kind,
             "file_name": attachment.file_name,
@@ -1198,8 +1228,8 @@ fn provider_resource_local_files(resources: &[Value]) -> Vec<String> {
         .collect()
 }
 
-/// Downloads one bounded HTTPS provider resource.
-/// 下载一个有界 HTTPS 供应商资源。
+/// Downloads one bounded HTTPS provider resource into an automatically cleaned temporary file.
+/// 将一个有界 HTTPS 供应商资源下载到会自动清理的临时文件。
 ///
 /// # Parameters
 /// 参数
@@ -1208,12 +1238,12 @@ fn provider_resource_local_files(resources: &[Value]) -> Vec<String> {
 ///
 /// # Returns
 /// 返回值
-/// Non-empty bytes below the configured limit.
-/// 返回低于配置上限的非空字节。
-async fn download_provider_resource(
+/// A temporary path containing non-empty content below the configured limit.
+/// 返回包含低于配置上限的非空内容的临时路径。
+async fn download_provider_resource_to_temp(
     download_url: &str,
     resource_kind: &str,
-) -> Result<Vec<u8>, String> {
+) -> Result<tempfile::TempPath, String> {
     let parsed_url = reqwest::Url::parse(download_url)
         .map_err(|_| String::from("Provider resource URL is invalid."))?;
     if parsed_url.scheme() != "https"
@@ -1230,7 +1260,16 @@ async fn download_provider_resource(
         "video" => PROVIDER_TOOL_VIDEO_OUTPUT_BYTE_LIMIT,
         _ => PROVIDER_TOOL_DEFAULT_OUTPUT_BYTE_LIMIT,
     };
-    let response = reqwest::Client::new()
+    // Redirects are disabled because the provider URL was validated before this request and a redirect could otherwise bypass that boundary.
+    // 禁止重定向，因为供应商 URL 已在请求前校验；否则重定向可能绕过该边界。
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(PROVIDER_TOOL_RESOURCE_DOWNLOAD_TIMEOUT)
+        .build()
+        .map_err(|error| {
+            format!("Provider resource download client could not be created: {error}")
+        })?;
+    let response = client
         .get(parsed_url)
         .send()
         .await
@@ -1249,28 +1288,47 @@ async fn download_provider_resource(
             "Provider resource exceeds the host limit for its declared kind.",
         ));
     }
+    let temporary_file = tempfile::NamedTempFile::new().map_err(|error| {
+        format!("Provider resource temporary file could not be created: {error}")
+    })?;
+    let temporary_path = temporary_file.into_temp_path();
+    let temporary_path_ref: &Path = temporary_path.as_ref();
+    let mut file = tokio::fs::File::create(temporary_path_ref)
+        .await
+        .map_err(|error| {
+            format!("Provider resource temporary file could not be opened: {error}")
+        })?;
     let mut stream = response.bytes_stream();
-    let mut bytes = Vec::new();
+    let mut downloaded_bytes = 0_usize;
     while let Some(chunk) = stream.next().await {
         let chunk =
             chunk.map_err(|error| format!("Provider resource body could not be read: {error}"))?;
-        if bytes.len().saturating_add(chunk.len()) > byte_limit {
+        downloaded_bytes = downloaded_bytes.saturating_add(chunk.len());
+        if downloaded_bytes > byte_limit {
             return Err(String::from(
                 "Provider resource exceeds the host limit for its declared kind.",
             ));
         }
-        bytes.extend_from_slice(chunk.as_ref());
+        file.write_all(chunk.as_ref()).await.map_err(|error| {
+            format!("Provider resource temporary file could not be written: {error}")
+        })?;
     }
-    if bytes.is_empty() {
+    if downloaded_bytes == 0 {
         return Err(String::from("Provider resource cannot be empty."));
     }
-    Ok(bytes)
+    file.flush().await.map_err(|error| {
+        format!("Provider resource temporary file could not be flushed: {error}")
+    })?;
+    file.sync_all().await.map_err(|error| {
+        format!("Provider resource temporary file could not be synchronized: {error}")
+    })?;
+    Ok(temporary_path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_session_provider_tool_selections, download_provider_resource,
+        apply_session_provider_tool_selections, download_provider_resource_to_temp,
         materialize_provider_tool_inputs, render_provider_tool_result,
     };
     use serde_json::json;
@@ -1319,7 +1377,7 @@ mod tests {
     /// 验证共享资源边界会在发起网络请求前拒绝不安全的供应商 URL。
     #[tokio::test]
     async fn provider_resource_download_rejects_insecure_url() {
-        let error = download_provider_resource("http://example.com/output.png", "image")
+        let error = download_provider_resource_to_temp("http://example.com/output.png", "image")
             .await
             .expect_err("insecure URL must be rejected");
         assert!(error.contains("absolute HTTPS"));
@@ -1387,5 +1445,30 @@ mod tests {
             result.model_output["composite"]["reranks"][0]["results"][0]["score"],
             0.75
         );
+    }
+
+    /// Verifies native web search suppresses only the external search capability.
+    /// 验证原生网页搜索只抑制外部搜索能力。
+    #[test]
+    fn native_web_search_suppression_preserves_web_extract_and_other_tools() {
+        use super::provider_tool_capability_is_suppressed;
+        use vulcan_provider_adapters::ProviderToolCapabilityKind;
+
+        assert!(provider_tool_capability_is_suppressed(
+            ProviderToolCapabilityKind::WebSearch,
+            true
+        ));
+        assert!(!provider_tool_capability_is_suppressed(
+            ProviderToolCapabilityKind::WebExtract,
+            true
+        ));
+        assert!(!provider_tool_capability_is_suppressed(
+            ProviderToolCapabilityKind::MediaAnalyze,
+            true
+        ));
+        assert!(!provider_tool_capability_is_suppressed(
+            ProviderToolCapabilityKind::WebSearch,
+            false
+        ));
     }
 }

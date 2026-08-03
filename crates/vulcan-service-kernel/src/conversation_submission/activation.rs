@@ -42,6 +42,117 @@ pub(crate) fn prepare_materialized_submission_session(
     Ok(())
 }
 
+/// Merges one newly accepted session slice into the retained full workspace without cloning historical sessions.
+/// 将一个新接纳的会话切片合并到保留的完整工作区中，且不克隆历史会话。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the authoritative retained workspace displayed by the workbench.
+/// `state` 持有工作台展示的权威保留工作区。
+/// `workspace_slice` contains only the selected project and newly created session state.
+/// `workspace_slice` 只包含所选项目与新建会话状态。
+/// `materialized_session` identifies the exact created session and owning project.
+/// `materialized_session` 标识精确的新建会话及其所属项目。
+///
+/// # Returns
+/// 返回值
+/// Success after the session-scoped fields are committed, or an explicit retained-state mismatch.
+/// 会话范围字段提交后返回成功，否则返回明确的保留状态不一致错误。
+pub(crate) fn commit_created_submission_workspace_slice(
+    state: &SharedServiceBridgeState,
+    workspace_slice: &WorkspaceSnapshot,
+    materialized_session: &MaterializedPromptSession,
+) -> Result<(), String> {
+    if materialized_session.kind != PromptSessionMaterializationKind::Created {
+        return Err(String::from(
+            "Only a created conversation can be committed from a bounded workspace slice.",
+        ));
+    }
+    // session_id is the sole identity copied from the bounded slice.
+    // session_id 是从有界切片复制的唯一身份。
+    let session_id = materialized_session.session_id;
+    let project_id = materialized_session
+        .project_id
+        .as_deref()
+        .ok_or_else(|| format!("Created conversation `{session_id}` has no owning project."))?;
+    let session = workspace_session_summary_for_session(workspace_slice, session_id)
+        .cloned()
+        .ok_or_else(|| format!("Created conversation slice is missing `{session_id}`."))?;
+    let messages = workspace_slice
+        .session_messages
+        .get(&session_id)
+        .cloned()
+        .unwrap_or_default();
+    let compactions = workspace_slice
+        .session_compactions
+        .get(&session_id)
+        .cloned()
+        .unwrap_or_default();
+    let runtime_state = workspace_slice
+        .session_runtime_state
+        .get(&session_id)
+        .cloned()
+        .ok_or_else(|| format!("Created conversation `{session_id}` has no runtime state."))?;
+    let run_phase = workspace_slice
+        .session_run_phases
+        .get(&session_id)
+        .copied()
+        .unwrap_or(SessionRunPhase::Preparing);
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    // Split disjoint retained fields once so cache retention can observe the committed workspace without cloning it.
+    // 一次拆分互不相交的保留字段，使缓存保留逻辑无需克隆即可观察已提交工作区。
+    let crate::ServiceBridgeState {
+        workspace_snapshot,
+        hydrated_conversation_windows,
+        ..
+    } = &mut *guard;
+    let workspace = workspace_snapshot
+        .as_mut()
+        .ok_or_else(|| String::from("workspace is no longer initialized"))?;
+    let project = workspace
+        .task_projects
+        .iter_mut()
+        .find(|candidate| candidate.id == project_id)
+        .ok_or_else(|| {
+            format!("Project `{project_id}` left the retained workspace before submission commit.")
+        })?;
+    if workspace
+        .sessions
+        .iter()
+        .any(|candidate| candidate.id == session_id)
+    {
+        return Err(format!(
+            "Created conversation `{session_id}` already exists in the retained workspace."
+        ));
+    }
+    project
+        .session_ids
+        .retain(|candidate| *candidate != session_id);
+    project.session_ids.insert(0, session_id);
+    workspace.sessions.insert(0, session);
+    workspace.session_messages.insert(session_id, messages);
+    if compactions.is_empty() {
+        workspace.session_compactions.remove(&session_id);
+    } else {
+        workspace
+            .session_compactions
+            .insert(session_id, compactions);
+    }
+    workspace
+        .session_runtime_state
+        .insert(session_id, runtime_state);
+    workspace.session_run_phases.insert(session_id, run_phase);
+    workspace.hydrated_session_ids.insert(session_id);
+    workspace.selected_session = session_id;
+    crate::retain_hydrated_conversation_windows_for_workspace(
+        hydrated_conversation_windows,
+        workspace,
+    );
+    Ok(())
+}
+
 /// Atomically commits one materialized session's sidebar activation after its kernel and workspace commit.
 /// 在 kernel 与工作区提交后原子提交一个已物化会话的侧栏激活状态。
 ///

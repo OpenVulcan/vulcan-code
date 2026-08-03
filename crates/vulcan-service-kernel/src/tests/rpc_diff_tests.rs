@@ -247,6 +247,7 @@ fn webui_diff_service_paths_cover_real_git_modes() {
     let unstaged = load_webui_workspace_diff_snapshot(
         &repository_text,
         Some(WebuiWorkspaceDiffRequest {
+            repository_key: None,
             mode: WebuiWorkspaceDiffMode::Unstaged,
             base_branch: None,
             compare_branch: None,
@@ -257,6 +258,7 @@ fn webui_diff_service_paths_cover_real_git_modes() {
     let staged = load_webui_workspace_diff_snapshot(
         &repository_text,
         Some(WebuiWorkspaceDiffRequest {
+            repository_key: None,
             mode: WebuiWorkspaceDiffMode::Staged,
             base_branch: None,
             compare_branch: None,
@@ -267,6 +269,7 @@ fn webui_diff_service_paths_cover_real_git_modes() {
     let commit = load_webui_workspace_diff_snapshot(
         &repository_text,
         Some(WebuiWorkspaceDiffRequest {
+            repository_key: None,
             mode: WebuiWorkspaceDiffMode::Commit,
             base_branch: None,
             compare_branch: None,
@@ -277,6 +280,7 @@ fn webui_diff_service_paths_cover_real_git_modes() {
     let branch = load_webui_workspace_diff_snapshot(
         &repository_text,
         Some(WebuiWorkspaceDiffRequest {
+            repository_key: None,
             mode: WebuiWorkspaceDiffMode::Branch,
             base_branch: Some(String::from("feature/webui-diff")),
             compare_branch: Some(String::from("main")),
@@ -298,6 +302,7 @@ fn webui_diff_service_paths_cover_real_git_modes() {
     let detail = load_webui_workspace_diff_file_detail(
         &repository_text,
         Some(WebuiWorkspaceDiffRequest {
+            repository_key: None,
             mode: WebuiWorkspaceDiffMode::Staged,
             base_branch: None,
             compare_branch: None,
@@ -322,6 +327,7 @@ fn webui_diff_service_paths_cover_real_git_modes() {
     let expanded_hunk_detail = load_webui_workspace_diff_file_detail(
         &repository_text,
         Some(WebuiWorkspaceDiffRequest {
+            repository_key: None,
             mode: WebuiWorkspaceDiffMode::Unstaged,
             base_branch: None,
             compare_branch: None,
@@ -364,6 +370,7 @@ fn webui_diff_service_paths_cover_real_git_modes() {
     let search = load_webui_workspace_diff_search(
         &repository_text,
         Some(WebuiWorkspaceDiffRequest {
+            repository_key: None,
             mode: WebuiWorkspaceDiffMode::Branch,
             base_branch: Some(String::from("feature/webui-diff")),
             compare_branch: Some(String::from("main")),
@@ -429,6 +436,7 @@ fn webui_diff_commit_review_lists_only_unpushed_commits() {
     let pushed_snapshot = load_webui_workspace_diff_snapshot(
         &repository_text,
         Some(WebuiWorkspaceDiffRequest {
+            repository_key: None,
             mode: WebuiWorkspaceDiffMode::Commit,
             base_branch: None,
             compare_branch: None,
@@ -452,6 +460,7 @@ fn webui_diff_commit_review_lists_only_unpushed_commits() {
     let unpushed_snapshot = load_webui_workspace_diff_snapshot(
         &repository_text,
         Some(WebuiWorkspaceDiffRequest {
+            repository_key: None,
             mode: WebuiWorkspaceDiffMode::Commit,
             base_branch: None,
             compare_branch: None,
@@ -479,6 +488,7 @@ fn webui_diff_commit_review_lists_only_unpushed_commits() {
     let no_upstream_snapshot = load_webui_workspace_diff_snapshot(
         &repository_text,
         Some(WebuiWorkspaceDiffRequest {
+            repository_key: None,
             mode: WebuiWorkspaceDiffMode::Commit,
             base_branch: None,
             compare_branch: None,
@@ -520,6 +530,7 @@ fn webui_diff_service_preserves_utf8_paths_from_git_output() {
     let snapshot = load_webui_workspace_diff_snapshot(
         &repository.path().to_string_lossy(),
         Some(WebuiWorkspaceDiffRequest {
+            repository_key: None,
             mode: WebuiWorkspaceDiffMode::Unstaged,
             base_branch: None,
             compare_branch: None,

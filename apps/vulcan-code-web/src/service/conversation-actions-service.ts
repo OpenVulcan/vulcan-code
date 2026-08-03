@@ -22,6 +22,7 @@ import { updateBrowserFallbackWorkbench } from "@/service/browser-fallback-workb
 // submitConversationPrompt sends one composer prompt to the desktop conversation runtime.
 // submitConversationPrompt 将单条输入区提示词发送到桌面会话运行时。
 export async function submitConversationPrompt(
+  clientSubmissionId: string,
   projectId: string | null,
   conversationId: string | null,
   prompt: string,
@@ -36,6 +37,7 @@ export async function submitConversationPrompt(
     return null;
   }
   return serviceClient.request<SubmitConversationPromptAck>("service_submit_conversation_prompt", {
+    clientSubmissionId,
     projectId,
     conversationId,
     prompt,
@@ -45,6 +47,17 @@ export async function submitConversationPrompt(
     reasoningEffort,
     modelSelection,
     sessionSettings,
+  });
+}
+
+// cancelConversationSubmission cancels pre-dispatch media preparation by client submission id.
+// cancelConversationSubmission 按客户端提交标识取消分派前媒体准备。
+export async function cancelConversationSubmission(clientSubmissionId: string): Promise<boolean> {
+  if (!hasServiceRuntime()) {
+    return false;
+  }
+  return serviceClient.request<boolean>("service_cancel_conversation_submission", {
+    clientSubmissionId,
   });
 }
 
@@ -230,6 +243,7 @@ export interface GitCommitActionResponse {
 export async function generateGitCommitMessage(request: {
   conversationId: string;
   workspacePath: string;
+  repositoryKey?: string | null;
   includeUnstaged: boolean;
 }): Promise<GitCommitSummaryGenerateResponse | null> {
   if (!hasServiceRuntime()) {
@@ -243,6 +257,7 @@ export async function generateGitCommitMessage(request: {
 export async function runGitCommitAction(request: {
   conversationId: string;
   workspacePath: string;
+  repositoryKey?: string | null;
   target: GitCommitActionTarget;
   includeUnstaged: boolean;
   message: string;

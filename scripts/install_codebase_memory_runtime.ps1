@@ -18,11 +18,11 @@ $RuntimeRepository = "OpenVulcan/vulcan-codebase-memory-mcp"
 
 # RuntimeTag pins the exact published release used by Vulcan Code.
 # RuntimeTag 固定 Vulcan Code 使用的精确发布版本。
-$RuntimeTag = "v0.1.0"
+$RuntimeTag = "v0.1.1"
 
 # RuntimeVersion is the byte-exact version expected from the packaged executable.
 # RuntimeVersion 是打包可执行文件必须返回的字节精确版本。
-$RuntimeVersion = "0.1.0"
+$RuntimeVersion = "0.1.1"
 
 # ChecksumsAssetName identifies the signed-off release checksum list.
 # ChecksumsAssetName 标识已确认的发布校验和清单。
@@ -30,7 +30,7 @@ $ChecksumsAssetName = "checksums.txt"
 
 # ChecksumsAssetSha256 pins the checksum-list bytes recorded by the official GitHub Release.
 # ChecksumsAssetSha256 固定 GitHub 官方 Release 记录的校验和清单字节。
-$ChecksumsAssetSha256 = "9c95f11959ecafc55f26ee2410a9e8801fdbcfef5279cdd7a83eee5a1e31287a"
+$ChecksumsAssetSha256 = "fc4b109557ca0cc0f285cfac816a13f0fc0e6b9b4b6986ef1a36e7a5107ffd6b"
 
 # PackageRuntimeScript validates the extracted binary and creates the host manifest.
 # PackageRuntimeScript 校验解压后的二进制并生成宿主清单。
@@ -125,7 +125,7 @@ function Get-NativeRuntimeAsset {
     }
 
     if ($OsKey -eq "windows" -and $ArchKey -ne "x86_64") {
-        throw "The v0.1.0 Codebase Memory release does not provide a Windows $ArchKey asset."
+        throw "The $RuntimeTag Codebase Memory release does not provide a Windows $ArchKey asset."
     }
 
     # Platform is the exact key consumed by the Vulcan Code runtime manifest.
@@ -183,7 +183,7 @@ function Test-InstalledRuntimeCurrent {
         # Manifest is parsed from the exact cache file used by build synchronization.
         # Manifest 从构建同步使用的精确缓存文件解析。
         $Manifest = Get-Content -LiteralPath $ManifestPath -Raw -Encoding utf8 | ConvertFrom-Json
-        if ($Manifest.protocol -cne "vulcan.codebase-memory/1" -or
+        if ($Manifest.protocol -cne "vulcan.codebase-memory/2" -or
             $Manifest.version -cne $RuntimeVersion -or
             $Manifest.platform -cne $Asset.platform -or
             $Manifest.executable -cne $Asset.executable_name -or

@@ -25,6 +25,9 @@ pub(crate) enum ExistingSubmissionQueueDecision {
 /// Owned inputs consumed when one existing-session submission commits to the visible queue.
 /// 单次已有会话提交写入可见队列时消费的有所有权输入。
 pub(crate) struct ExistingSubmissionQueueInput {
+    /// Stable client-generated identifier returned by the queued acknowledgement.
+    /// 由排队确认原样返回的客户端稳定生成标识。
+    pub(crate) client_submission_id: String,
     /// Hydrated workspace snapshot that owns the target queue.
     /// 持有目标队列的已水合工作区快照。
     pub(crate) workspace_snapshot: WorkspaceSnapshot,
@@ -43,6 +46,9 @@ pub(crate) struct ExistingSubmissionQueueInput {
     /// Optional reasoning effort retained for later dispatch.
     /// 为后续分发保留的可选推理强度。
     pub(crate) reasoning_effort: Option<String>,
+    /// Optional exact provider, model, and credential selection retained for later dispatch.
+    /// 为后续分发保留的可选精确供应商、模型与凭据选择。
+    pub(crate) model_selection: Option<SubmissionModelSelection>,
     /// Service-entry timestamp used by queued-return latency diagnostics.
     /// 排队返回延迟诊断使用的服务入口时间戳。
     pub(crate) submit_total_started_at: i128,
@@ -316,12 +322,14 @@ pub(crate) fn queue_existing_submission(
     // input fields are destructured once so the queue commit cannot mix values from different submissions.
     // input 字段只解构一次，确保队列提交不会混用不同提交的值。
     let ExistingSubmissionQueueInput {
+        client_submission_id,
         workspace_snapshot,
         session_id,
         prompt,
         hidden_model_guidance,
         attachments,
         reasoning_effort,
+        model_selection,
         submit_total_started_at,
     } = input;
     webui_submit_trace(
@@ -349,6 +357,7 @@ pub(crate) fn queue_existing_submission(
                 hidden_model_guidance,
                 attachments,
                 reasoning_effort.as_deref(),
+                model_selection.as_ref(),
             )?;
             Ok(queued_hook_event)
         },
@@ -398,6 +407,7 @@ pub(crate) fn queue_existing_submission(
         ),
     );
     Ok(SubmitConversationPromptAck {
+        client_submission_id,
         conversation_id: session_id.to_string(),
         accepted_message_id: None,
         turn_id: None,

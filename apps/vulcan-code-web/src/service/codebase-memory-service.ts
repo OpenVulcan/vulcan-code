@@ -16,9 +16,14 @@ export async function loadProjectCodebaseMemorySettings(
       projectId,
       enabled: Boolean(project.codebaseMemoryEnabled),
       serviceStatus: "preview",
-      indexStatus: null,
+      availability: null,
+      watcherRegistered: null,
       lastSuccessfulIndexAt: null,
       indexRevision: null,
+      nodeCount: null,
+      edgeCount: null,
+      activeJob: null,
+      lastJob: null,
       lastError: null,
     };
   }
@@ -39,9 +44,14 @@ export async function setProjectCodebaseMemoryEnabled(
       projectId,
       enabled,
       serviceStatus: "preview",
-      indexStatus: null,
+      availability: null,
+      watcherRegistered: null,
       lastSuccessfulIndexAt: null,
       indexRevision: null,
+      nodeCount: null,
+      edgeCount: null,
+      activeJob: null,
+      lastJob: null,
       lastError: null,
     };
   }
@@ -51,16 +61,31 @@ export async function setProjectCodebaseMemoryEnabled(
   );
 }
 
-// reindexProjectCodebaseMemory requests a non-destructive rebuild for one enabled project.
-// reindexProjectCodebaseMemory 为一个已启用项目请求非破坏性重建。
-export async function reindexProjectCodebaseMemory(
+// refreshProjectCodebaseMemorySettings queries the live Sidecar status for one enabled project.
+// refreshProjectCodebaseMemorySettings 查询一个已启用项目的实时 Sidecar 状态。
+export async function refreshProjectCodebaseMemorySettings(
   projectId: string,
 ): Promise<CodebaseMemoryProjectSettingsSummary> {
   if (!hasServiceRuntime()) {
     return loadProjectCodebaseMemorySettings(projectId);
   }
   return serviceClient.request<CodebaseMemoryProjectSettingsSummary>(
-    "service_reindex_project_codebase_memory",
+    "service_refresh_project_codebase_memory_settings",
     { projectId },
+  );
+}
+
+// updateProjectCodebaseMemoryIndex schedules one exact incremental update or isolated rebuild.
+// updateProjectCodebaseMemoryIndex 调度一次精确的增量更新或隔离重建。
+export async function updateProjectCodebaseMemoryIndex(
+  projectId: string,
+  mode: "update" | "rebuild",
+): Promise<CodebaseMemoryProjectSettingsSummary> {
+  if (!hasServiceRuntime()) {
+    return loadProjectCodebaseMemorySettings(projectId);
+  }
+  return serviceClient.request<CodebaseMemoryProjectSettingsSummary>(
+    "service_update_project_codebase_memory_index",
+    { projectId, mode },
   );
 }

@@ -1,10 +1,13 @@
 import React from "react";
 import {
+  ArrowDown,
+  ArrowUp,
   Bot,
   Boxes,
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronUp,
   Circle,
   ClipboardList,
   CloudUpload,
@@ -15,6 +18,7 @@ import {
   LoaderCircle,
   Maximize2,
   Minimize2,
+  Settings2,
   TerminalSquare,
 } from "lucide-react";
 import {
@@ -88,6 +92,52 @@ export interface ConversationSessionReviewSummary {
   unstagedDeletions: number;
 }
 
+// ConversationSessionReviewRepository describes one independently actionable Git node.
+// ConversationSessionReviewRepository 描述一个可独立操作的 Git 节点。
+export interface ConversationSessionReviewRepository {
+  // Stable project-relative repository key.
+  // 稳定的项目相对仓库键。
+  repositoryKey: string;
+  // Whether this repository is the deterministic primary repository for the project.
+  // 该仓库是否是项目确定性的主要仓库。
+  isPrimary: boolean;
+  // Compact repository name.
+  // 紧凑展示的仓库名称。
+  repositoryName: string;
+  // Secondary relative repository path.
+  // 次级展示的仓库相对路径。
+  relativePath: string;
+  // Review summary for this repository only.
+  // 仅属于该仓库的审查摘要。
+  summary: ConversationSessionReviewSummary | null;
+  // Whether live review monitoring is enabled.
+  // 是否启用实时审查监听。
+  monitoringEnabled: boolean;
+  // Whether this repository is refreshing.
+  // 该仓库是否正在刷新。
+  loading: boolean;
+  // Latest repository refresh error.
+  // 最近一次仓库刷新错误。
+  error: string | null;
+}
+
+// EMPTY_CONVERSATION_SESSION_REVIEW_SUMMARY keeps disabled repositories visible for settings.
+// EMPTY_CONVERSATION_SESSION_REVIEW_SUMMARY 让已关闭监听的仓库仍可展示设置。
+const EMPTY_CONVERSATION_SESSION_REVIEW_SUMMARY: ConversationSessionReviewSummary = {
+  additions: 0,
+  branchName: null,
+  branchNames: [],
+  changedFiles: 0,
+  deletions: 0,
+  stagedAdditions: 0,
+  stagedChangedFiles: 0,
+  stagedDeletions: 0,
+  unpushedCommits: 0,
+  unstagedAdditions: 0,
+  unstagedChangedFiles: 0,
+  unstagedDeletions: 0,
+};
+
 // ConversationSessionCommitTarget identifies where the local commit draft would land.
 // ConversationSessionCommitTarget 标识本地提交草稿的目标分支位置。
 type ConversationSessionCommitTarget = "current" | "new";
@@ -108,6 +158,42 @@ export type ConversationSessionCommitBusyState = {
 // ConversationSessionSubagentTask 描述一条后端投影出的子代理任务行。
 type ConversationSessionSubagentTask = NonNullable<NonNullable<WorkbenchSnapshot["subagentNavigation"]>["tasks"]>[number];
 
+// normalizeReviewRepositoryOrderKeys removes stale and duplicate persisted keys while retaining the current repository order.
+// normalizeReviewRepositoryOrderKeys 清理持久化顺序中的过期与重复键，同时保留当前仓库顺序。
+//
+// Parameters
+// 参数
+// `storedKeys` contains the previously persisted display order.
+// `storedKeys` 包含之前持久化的显示顺序。
+// `repositoryKeys` contains the repositories currently discovered by the backend.
+// `repositoryKeys` 包含后端当前发现的仓库键。
+//
+// Returns
+// 返回值
+// Returns each current repository key at most once, with new keys appended deterministically.
+// 返回每个当前仓库键最多一次，并将新增键按当前发现顺序追加到末尾。
+function normalizeReviewRepositoryOrderKeys(
+  storedKeys: readonly string[],
+  repositoryKeys: readonly string[],
+): string[] {
+  const currentKeys = new Set(repositoryKeys);
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const key of storedKeys) {
+    if (currentKeys.has(key) && !seen.has(key)) {
+      seen.add(key);
+      normalized.push(key);
+    }
+  }
+  for (const key of repositoryKeys) {
+    if (!seen.has(key)) {
+      seen.add(key);
+      normalized.push(key);
+    }
+  }
+  return normalized;
+}
+
 // ConversationSessionTodolistPanel renders the session todolist inside the main conversation surface.
 // ConversationSessionTodolistPanel 在主会话界面内渲染当前会话的 todolist。
 export function ConversationSessionTodolistPanel(props: {
@@ -117,12 +203,24 @@ export function ConversationSessionTodolistPanel(props: {
   // Current Git review summary projected from the selected workspace.
   // 从当前选中工作区投影出的 Git 审查摘要。
   reviewSummary: ConversationSessionReviewSummary | null;
+  // Independent repository review nodes shown for multi-repository projects.
+  // 多仓库项目展示的独立仓库审查节点。
+  reviewRepositories?: ConversationSessionReviewRepository[];
+  // Stable project key used to retain the local repository display order.
+  // 用于保留仓库显示顺序的稳定项目键。
+  reviewRepositoryOrderStorageKey?: string | null;
   // Whether the shared Git commit dialog is currently open.
   // 共享 Git 提交弹窗当前是否打开。
   commitDialogOpen: boolean;
+  // Stable repository key whose commit dialog is currently active.
+  // 当前激活提交弹窗对应的稳定仓库键。
+  activeReviewRepositoryKey?: string | null;
   // Current shared Git action phase shown by every commit trigger.
   // 每个提交入口展示的当前共享 Git 动作阶段。
   commitBusyState: ConversationSessionCommitBusyState;
+  // Resolves the independent Git action phase for one repository node.
+  // 解析单个仓库节点独立的 Git 操作阶段。
+  commitBusyStateForRepository?: (repositoryKey: string) => ConversationSessionCommitBusyState;
   // Current terminal sessions owned by the selected conversation.
   // 当前选中会话拥有的终端会话集合。
   terminalSessions: CommandSessionSummary[];
@@ -140,7 +238,16 @@ export function ConversationSessionTodolistPanel(props: {
   onCommitDialogOpenChange: (open: boolean) => void;
   // Opens the workspace review panel focused on uncommitted changes.
   // 打开工作区审核面板并聚焦未提交变更。
-  onOpenReviewChanges: () => void;
+  onOpenReviewChanges: (repositoryKey?: string) => void;
+  // Selects the repository whose commit dialog is currently active.
+  // 选择当前提交弹窗对应的仓库。
+  onSelectReviewRepository?: (repositoryKey: string) => void;
+  // Persists one repository's monitoring switch.
+  // 持久化单个仓库的监听开关。
+  onToggleReviewMonitoring?: (repositoryKey: string, enabled: boolean) => void | Promise<void>;
+  // Persists the user-selected repository display order.
+  // 持久化用户选择的仓库显示顺序。
+  onReviewRepositoryOrderChange?: (repositoryKeys: string[]) => void | Promise<void>;
   // Force-stops one live terminal session.
   // 强制停止单条实时终端会话。
   onStopCommandSession: (commandSessionId: string, ownerSessionId?: string | null) => Promise<void>;
@@ -151,7 +258,133 @@ export function ConversationSessionTodolistPanel(props: {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
-  const hasReviewSummary = Boolean(props.reviewSummary?.branchName);
+  const hasReviewSummary = Boolean(props.reviewRepositories?.length || props.reviewSummary);
+  const reviewRepositoryLayoutKey = props.reviewRepositories
+    ?.map((repository) => `${repository.repositoryKey}:${repository.isPrimary ? "primary" : "secondary"}`)
+    .join("\u0000") ?? "";
+  const [reviewRepositoryOrderKeys, setReviewRepositoryOrderKeys] = React.useState<string[]>([]);
+  const [collapsedReviewRepositoryKeys, setCollapsedReviewRepositoryKeys] = React.useState<Set<string>>(new Set());
+  const [monitoringTogglePendingKeys, setMonitoringTogglePendingKeys] = React.useState<Set<string>>(new Set());
+  const reviewRepositoryOrderStorageKey = props.reviewRepositoryOrderStorageKey
+    ? `vulcan.git-review.repository-order.${props.reviewRepositoryOrderStorageKey}`
+    : null;
+  React.useEffect(() => {
+    if (!reviewRepositoryOrderStorageKey) {
+      setReviewRepositoryOrderKeys([]);
+      return;
+    }
+    try {
+      const stored = window.localStorage.getItem(reviewRepositoryOrderStorageKey);
+      const parsed = stored ? JSON.parse(stored) : null;
+      setReviewRepositoryOrderKeys(
+        Array.isArray(parsed) && parsed.every((key): key is string => typeof key === "string") ? parsed : [],
+      );
+    } catch {
+      setReviewRepositoryOrderKeys([]);
+    }
+  }, [reviewRepositoryOrderStorageKey]);
+  React.useEffect(() => {
+    const repositoryKeys = (props.reviewRepositories ?? []).map((repository) => repository.repositoryKey);
+    setReviewRepositoryOrderKeys((current) => {
+      const next = normalizeReviewRepositoryOrderKeys(current, repositoryKeys);
+      return next.length === current.length && next.every((key, index) => key === current[index]) ? current : next;
+    });
+  }, [reviewRepositoryLayoutKey]);
+  const orderedReviewRepositories = React.useMemo(() => {
+    const repositoriesByKey = new Map((props.reviewRepositories ?? []).map((repository) => [repository.repositoryKey, repository]));
+    const ordered = reviewRepositoryOrderKeys
+      .map((repositoryKey) => repositoriesByKey.get(repositoryKey))
+      .filter((repository): repository is ConversationSessionReviewRepository => Boolean(repository));
+    for (const repository of props.reviewRepositories ?? []) {
+      if (!ordered.some((item) => item.repositoryKey === repository.repositoryKey)) {
+        ordered.push(repository);
+      }
+    }
+    return ordered;
+  }, [props.reviewRepositories, reviewRepositoryOrderKeys]);
+  const visibleReviewRepositories = React.useMemo(
+    () => orderedReviewRepositories.filter((repository) => repository.monitoringEnabled),
+    [orderedReviewRepositories],
+  );
+  const orderedReviewRepositoryKey = visibleReviewRepositories
+    .map((repository) => repository.repositoryKey)
+    .join("\u0000");
+  // Default expansion follows repository membership or order changes, not summary refreshes.
+  // 默认展开只跟随仓库集合或顺序变化，不因统计刷新而覆盖用户折叠选择。
+  React.useEffect(() => {
+    setCollapsedReviewRepositoryKeys((current) => {
+      const next = new Set(current);
+      const repositoryKeys = new Set(visibleReviewRepositories.map((repository) => repository.repositoryKey));
+      let changed = false;
+      for (const key of next) {
+        if (!repositoryKeys.has(key)) {
+          next.delete(key);
+          changed = true;
+        }
+      }
+      for (const [index, repository] of visibleReviewRepositories.entries()) {
+        if (index > 0 && !next.has(repository.repositoryKey)) {
+          next.add(repository.repositoryKey);
+          changed = true;
+        }
+        if (index === 0 && next.delete(repository.repositoryKey)) {
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [orderedReviewRepositoryKey, reviewRepositoryLayoutKey]);
+  React.useEffect(() => {
+    setMonitoringTogglePendingKeys((current) => {
+      const repositoryKeys = new Set((props.reviewRepositories ?? []).map((repository) => repository.repositoryKey));
+      const next = new Set([...current].filter((key) => repositoryKeys.has(key)));
+      return next.size === current.size ? current : next;
+    });
+  }, [reviewRepositoryLayoutKey]);
+  // toggleReviewMonitoring serializes one repository preference click until its persistence request settles.
+  // toggleReviewMonitoring 在偏好持久化请求结束前串行化单个仓库的开关点击。
+  const toggleReviewMonitoring = React.useCallback(async (repositoryKey: string, enabled: boolean) => {
+    if (!props.onToggleReviewMonitoring || monitoringTogglePendingKeys.has(repositoryKey)) {
+      return;
+    }
+    setMonitoringTogglePendingKeys((current) => {
+      const next = new Set(current);
+      next.add(repositoryKey);
+      return next;
+    });
+    try {
+      await props.onToggleReviewMonitoring(repositoryKey, enabled);
+    } finally {
+      setMonitoringTogglePendingKeys((current) => {
+        const next = new Set(current);
+        next.delete(repositoryKey);
+        return next;
+      });
+    }
+  }, [monitoringTogglePendingKeys, props.onToggleReviewMonitoring]);
+  const moveReviewRepository = React.useCallback((repositoryKey: string, direction: -1 | 1) => {
+    const orderedKeys = normalizeReviewRepositoryOrderKeys(
+      reviewRepositoryOrderKeys,
+      orderedReviewRepositories.map((repository) => repository.repositoryKey),
+    );
+    const index = orderedKeys.indexOf(repositoryKey);
+    const targetIndex = index + direction;
+    if (index < 0 || targetIndex < 0 || targetIndex >= orderedKeys.length) {
+      return;
+    }
+    const next = [...orderedKeys];
+    [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+    setReviewRepositoryOrderKeys(next);
+    if (reviewRepositoryOrderStorageKey) {
+      try {
+        window.localStorage.setItem(reviewRepositoryOrderStorageKey, JSON.stringify(next));
+      } catch {
+        // Local storage is optional; the in-memory order remains authoritative for this panel.
+        // 本地存储是可选能力；当前面板仍以内存顺序为准。
+      }
+    }
+    void props.onReviewRepositoryOrderChange?.(next);
+  }, [orderedReviewRepositories, props.onReviewRepositoryOrderChange, reviewRepositoryOrderKeys, reviewRepositoryOrderStorageKey]);
   const hasTodolist = Boolean(props.todolist?.items.length);
   const terminalSessions = React.useMemo(
     () => props.terminalSessions
@@ -171,10 +404,14 @@ export function ConversationSessionTodolistPanel(props: {
     [props.subagentNavigation?.tasks],
   );
   const hasSubagentTasks = subagentTasks.length > 0;
+  // showReviewRepositoryManager keeps disabled repositories reachable without rendering them as panel nodes.
+  // showReviewRepositoryManager 让已关闭仓库仍可从设置进入，同时不把它们渲染为面板节点。
+  const showReviewRepositoryManager = orderedReviewRepositories.length > 1
+    || (orderedReviewRepositories.length > 0 && visibleReviewRepositories.length === 0);
   // collapsedRowCount controls compact panel height for multi-source summaries.
   // collapsedRowCount 控制多来源摘要下的紧凑面板高度。
   const collapsedRowCount = [
-    props.reviewSummary,
+    props.reviewRepositories?.length || props.reviewSummary,
     props.todolist,
     hasTerminalSessions,
     hasSubagentTasks,
@@ -252,6 +489,13 @@ export function ConversationSessionTodolistPanel(props: {
             {conversationSessionReviewDelta(props.reviewSummary)}
           </span>
         ) : null}
+        {!props.reviewSummary && props.reviewRepositories?.length ? (
+          <span className="conversation-session-tool-collapsed-row">
+            <GitBranch size={15} />
+            <span>{t("gitCommitDialog.monitoringManager")}</span>
+            <strong>{visibleReviewRepositories.length}</strong>
+          </span>
+        ) : null}
         {props.todolist ? (
           <span className="conversation-session-tool-collapsed-row">
             <ClipboardList size={15} />
@@ -286,41 +530,173 @@ export function ConversationSessionTodolistPanel(props: {
       )}
       aria-label={t("sessionTools.menu")}
     >
-      {props.reviewSummary ? (
+      <div className="conversation-session-tool-panel-header">
+        {showReviewRepositoryManager ? (
+          <ConversationSessionReviewMonitoringManager
+            repositories={orderedReviewRepositories}
+            pendingRepositoryKeys={monitoringTogglePendingKeys}
+            onMoveRepository={moveReviewRepository}
+            onToggleMonitoring={toggleReviewMonitoring}
+          />
+        ) : <span />}
+        <button
+          aria-label={t("sessionTools.collapse")}
+          className="workspace-tool-panel-menu-icon-button"
+          onClick={() => requestExpandedChange(false)}
+          title={t("sessionTools.collapse")}
+          type="button"
+        >
+          <Minimize2 size={13} />
+        </button>
+      </div>
+      {visibleReviewRepositories.length ? visibleReviewRepositories.map((repository, index) => (
+        <ConversationSessionReviewSection
+          key={repository.repositoryKey}
+          commitBusyState={props.commitBusyStateForRepository?.(repository.repositoryKey)
+            ?? (props.activeReviewRepositoryKey === repository.repositoryKey ? props.commitBusyState : null)}
+          commitDialogOpen={props.commitDialogOpen && props.activeReviewRepositoryKey === repository.repositoryKey}
+          error={repository.error}
+          loading={repository.loading}
+          relativePath={repository.relativePath}
+          repositoryKey={repository.repositoryKey}
+          repositoryName={repository.repositoryName}
+          reviewSummary={repository.summary ?? EMPTY_CONVERSATION_SESSION_REVIEW_SUMMARY}
+          monitoringEnabled={repository.monitoringEnabled}
+          monitoringToggleDisabled={monitoringTogglePendingKeys.has(repository.repositoryKey)
+            || Boolean(props.commitBusyStateForRepository?.(repository.repositoryKey))}
+          expanded={index === 0 || !collapsedReviewRepositoryKeys.has(repository.repositoryKey)}
+          onExpandedChange={index === 0 ? undefined : (expanded) => {
+            setCollapsedReviewRepositoryKeys((current) => {
+              const next = new Set(current);
+              if (expanded) {
+                next.delete(repository.repositoryKey);
+              } else {
+                next.add(repository.repositoryKey);
+              }
+              return next;
+            });
+          }}
+          onCommitDialogOpenChange={(open) => {
+            props.onSelectReviewRepository?.(repository.repositoryKey);
+            props.onCommitDialogOpenChange(open);
+          }}
+          onOpenReviewChanges={() => props.onOpenReviewChanges(repository.repositoryKey)}
+          onToggleReviewMonitoring={toggleReviewMonitoring}
+        />
+      )) : props.reviewSummary ? (
         <ConversationSessionReviewSection
           commitBusyState={props.commitBusyState}
           commitDialogOpen={props.commitDialogOpen}
           reviewSummary={props.reviewSummary}
-          onCollapse={() => requestExpandedChange(false)}
           onCommitDialogOpenChange={props.onCommitDialogOpenChange}
-          onOpenReviewChanges={props.onOpenReviewChanges}
+          onOpenReviewChanges={() => props.onOpenReviewChanges()}
         />
       ) : null}
       {hasTerminalSessions ? (
         <ConversationSessionTerminalSection
-          showCollapse={!props.reviewSummary}
           summariesById={terminalSummaryById}
           terminalSessions={terminalSessions}
-          onCollapse={() => requestExpandedChange(false)}
           onStopCommandSession={props.onStopCommandSession}
         />
       ) : null}
       {props.todolist ? (
         <ConversationSessionProgressSection
           todolist={props.todolist}
-          onCollapse={props.reviewSummary || hasTerminalSessions ? undefined : () => requestExpandedChange(false)}
         />
       ) : null}
       {props.subagentNavigation && hasSubagentTasks ? (
         <ConversationSessionSubagentSection
           parentConversationId={props.subagentNavigation.parentConversationId}
-          showCollapse={!props.reviewSummary && !hasTerminalSessions && !hasTodolist}
           tasks={subagentTasks}
-          onCollapse={() => requestExpandedChange(false)}
           onOpenSubagentPanel={props.onOpenSubagentPanel}
         />
       ) : null}
     </aside>
+  );
+}
+
+// ConversationSessionReviewMonitoringManager edits the enabled repository set and display order.
+// ConversationSessionReviewMonitoringManager 编辑监听仓库集合与显示顺序。
+function ConversationSessionReviewMonitoringManager(props: {
+  // Repositories in their current display order.
+  // 当前显示顺序下的仓库集合。
+  repositories: ConversationSessionReviewRepository[];
+  // Repository keys currently waiting for a persistence request.
+  // 正在等待偏好持久化请求的仓库键集合。
+  pendingRepositoryKeys: ReadonlySet<string>;
+  // Moves one repository one slot in the display order.
+  // 将一个仓库在显示顺序中移动一个位置。
+  onMoveRepository: (repositoryKey: string, direction: -1 | 1) => void;
+  // Persists one repository monitoring switch.
+  // 持久化单个仓库的监听开关。
+  onToggleMonitoring: (repositoryKey: string, enabled: boolean) => void | Promise<void>;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = React.useState(false);
+  return (
+    <>
+      <button
+        aria-label={t("gitCommitDialog.monitoringManager")}
+        className="conversation-session-review-manager-trigger"
+        onClick={() => setOpen(true)}
+        title={t("gitCommitDialog.monitoringManager")}
+        type="button"
+      >
+        <Settings2 size={13} />
+        <span>{t("gitCommitDialog.monitoringManager")}</span>
+      </button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="conversation-session-review-manager-dialog">
+          <DialogTitle>{t("gitCommitDialog.monitoringManager")}</DialogTitle>
+          <DialogDescription>{t("gitCommitDialog.monitoringManagerDescription")}</DialogDescription>
+          <div className="conversation-session-review-manager-list">
+            {props.repositories.map((repository, index) => {
+              const pending = props.pendingRepositoryKeys.has(repository.repositoryKey);
+              return (
+                <div className="conversation-session-review-manager-row" key={repository.repositoryKey}>
+                  <label className="conversation-session-review-manager-check">
+                    <input
+                      checked={repository.monitoringEnabled}
+                      disabled={pending}
+                      onChange={(event) => void props.onToggleMonitoring(repository.repositoryKey, event.target.checked)}
+                      type="checkbox"
+                    />
+                    <span>
+                      <strong>{repository.repositoryName}</strong>
+                      {repository.relativePath && repository.relativePath !== repository.repositoryName ? (
+                        <small>{repository.relativePath}</small>
+                      ) : null}
+                    </span>
+                  </label>
+                  <div className="conversation-session-review-manager-order">
+                    <button
+                      aria-label={t("gitCommitDialog.moveRepositoryUp")}
+                      className="workspace-tool-panel-menu-icon-button"
+                      disabled={index === 0}
+                      onClick={() => props.onMoveRepository(repository.repositoryKey, -1)}
+                      title={t("gitCommitDialog.moveRepositoryUp")}
+                      type="button"
+                    >
+                      <ArrowUp size={13} />
+                    </button>
+                    <button
+                      aria-label={t("gitCommitDialog.moveRepositoryDown")}
+                      className="workspace-tool-panel-menu-icon-button"
+                      disabled={index === props.repositories.length - 1}
+                      onClick={() => props.onMoveRepository(repository.repositoryKey, 1)}
+                      title={t("gitCommitDialog.moveRepositoryDown")}
+                      type="button"
+                    >
+                      <ArrowDown size={13} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -336,15 +712,42 @@ function ConversationSessionReviewSection(props: {
   // Review summary rendered by this section.
   // 当前区域渲染的审查摘要。
   reviewSummary: ConversationSessionReviewSummary;
+  // Optional stable repository key rendered in a multi-repository node.
+  // 多仓库节点中展示的可选稳定仓库键。
+  repositoryKey?: string;
+  // Optional repository display name.
+  // 可选仓库展示名称。
+  repositoryName?: string;
+  // Optional secondary relative path.
+  // 可选次级相对路径。
+  relativePath?: string;
+  // Current monitoring state for the repository node.
+  // 仓库节点当前监听状态。
+  monitoringEnabled?: boolean;
+  // Whether this repository node is refreshing.
+  // 该仓库节点是否正在刷新。
+  loading?: boolean;
+  // Whether this repository node body is expanded.
+  // 该仓库节点正文是否展开。
+  expanded?: boolean;
+  // Latest repository refresh error.
+  // 该仓库节点最近一次刷新错误。
+  error?: string | null;
   // Opens the workspace review panel focused on uncommitted changes.
   // 打开工作区审核面板并聚焦未提交变更。
   onOpenReviewChanges: () => void;
+  // Persists one repository's monitoring state.
+  // 持久化单个仓库的监听状态。
+  onToggleReviewMonitoring?: (repositoryKey: string, enabled: boolean) => void | Promise<void>;
+  // Prevents monitoring changes while a Git write is running for this repository.
+  // 当前仓库存在 Git 写操作时禁止切换监听。
+  monitoringToggleDisabled?: boolean;
+  // Toggles this repository node body without changing monitoring.
+  // 切换该仓库节点正文展开状态，但不改变监听设置。
+  onExpandedChange?: (expanded: boolean) => void;
   // Opens or closes the shared Git commit dialog.
   // 打开或关闭共享 Git 提交弹窗。
   onCommitDialogOpenChange: (open: boolean) => void;
-  // Collapses the expanded session tool panel.
-  // 折叠当前展开的会话工具面板。
-  onCollapse: () => void;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -354,51 +757,88 @@ function ConversationSessionReviewSection(props: {
   const hasGitCommitOrPushContent = props.reviewSummary.stagedChangedFiles > 0
     || props.reviewSummary.unstagedChangedFiles > 0
     || props.reviewSummary.unpushedCommits > 0;
+  // repositoryMonitoringDisabled prevents stale snapshots from enabling actions after monitoring is turned off.
+  // repositoryMonitoringDisabled 防止关闭监听后旧快照仍然启用操作。
+  const repositoryMonitoringDisabled = Boolean(props.repositoryKey && props.monitoringEnabled === false);
+  // reviewSectionExpanded controls only this repository node body, not its monitoring lifecycle.
+  // reviewSectionExpanded 只控制当前仓库节点正文，不改变其监听生命周期。
+  const reviewSectionExpanded = props.expanded !== false;
   // commitTriggerDisabled disables the entry while Git is busy or no commit/push action is possible.
   // commitTriggerDisabled 在 Git 忙碌或没有可提交/可推送内容时禁用入口。
-  const commitTriggerDisabled = Boolean(props.commitBusyState) || !hasGitCommitOrPushContent;
+  const commitTriggerDisabled = repositoryMonitoringDisabled
+    || Boolean(props.commitBusyState)
+    || !hasGitCommitOrPushContent;
 
   return (
     <section className="conversation-session-tool-section conversation-session-review-section">
       <div className="conversation-session-tool-section-title with-action">
-        <span>{t("gitCommitDialog.toolsTitle")}</span>
-        <button
-          aria-label={t("sessionTools.collapse")}
-          className="workspace-tool-panel-menu-icon-button"
-          onClick={props.onCollapse}
-          title={t("sessionTools.collapse")}
-          type="button"
-        >
-          <Minimize2 size={13} />
-        </button>
-      </div>
-      <div className="workspace-tool-panel-menu-list conversation-session-review-list">
-        <button className="workspace-tool-panel-menu-row conversation-session-review-row" onClick={props.onOpenReviewChanges} type="button">
-          <FileDiff size={15} />
-          <span>{t("gitCommitDialog.changes")}</span>
-          {conversationSessionReviewDelta(props.reviewSummary)}
-        </button>
-        {props.reviewSummary.branchName ? (
-          <div className="workspace-tool-panel-menu-row conversation-session-review-row">
-            <GitBranch size={15} />
-            <span>{conversationSessionBranchDisplayName(props.reviewSummary.branchName)}</span>
-          </div>
+        <span>
+          {props.repositoryName ?? t("gitCommitDialog.toolsTitle")}
+          {props.relativePath && props.relativePath !== props.repositoryName ? (
+            <small className="conversation-session-review-repository-path">{props.relativePath}</small>
+          ) : null}
+        </span>
+        {props.loading ? <LoaderCircle aria-label={t("gitCommitDialog.running")} className="spin" size={13} /> : null}
+        {props.error ? <span aria-label={props.error} className="conversation-session-review-error" title={props.error}>!</span> : null}
+        {props.repositoryKey && props.onToggleReviewMonitoring ? (
+          <button
+            aria-label={t("gitCommitDialog.reviewSettings")}
+            className={cn("conversation-session-review-monitor-toggle", props.monitoringEnabled && "active")}
+            disabled={props.monitoringToggleDisabled}
+            onClick={() => props.onToggleReviewMonitoring?.(props.repositoryKey as string, !props.monitoringEnabled)}
+            title={props.monitoringEnabled ? t("gitCommitDialog.monitoringEnabled") : t("gitCommitDialog.monitoringDisabled")}
+            type="button"
+          >
+            {props.monitoringEnabled ? t("gitCommitDialog.monitoringEnabled") : t("gitCommitDialog.monitoringDisabled")}
+          </button>
         ) : null}
-        <button
-          aria-expanded={props.commitDialogOpen}
-          className={cn(
-            "workspace-tool-panel-menu-row conversation-session-review-row conversation-session-commit-trigger",
-            props.commitDialogOpen && "active",
-          )}
-          disabled={commitTriggerDisabled}
-          onClick={() => props.onCommitDialogOpenChange(true)}
-          type="button"
-        >
-          <GitCommitHorizontal size={15} />
-          <span>{props.commitBusyState?.label ?? t("gitCommitDialog.open")}</span>
-          {props.commitBusyState ? <LoaderCircle className="spin" size={14} /> : null}
-        </button>
+        {props.repositoryKey && props.onExpandedChange ? (
+          <button
+            aria-expanded={reviewSectionExpanded}
+            aria-label={reviewSectionExpanded ? t("sessionTools.collapse") : t("sessionTools.expand")}
+            className="workspace-tool-panel-menu-icon-button conversation-session-review-expand-button"
+            onClick={() => props.onExpandedChange?.(!reviewSectionExpanded)}
+            title={reviewSectionExpanded ? t("sessionTools.collapse") : t("sessionTools.expand")}
+            type="button"
+          >
+            {reviewSectionExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+          </button>
+        ) : null}
       </div>
+      {reviewSectionExpanded ? (
+        <div className="workspace-tool-panel-menu-list conversation-session-review-list">
+          <button
+            className="workspace-tool-panel-menu-row conversation-session-review-row"
+            disabled={repositoryMonitoringDisabled}
+            onClick={props.onOpenReviewChanges}
+            type="button"
+          >
+            <FileDiff size={15} />
+            <span>{t("gitCommitDialog.changes")}</span>
+            {conversationSessionReviewDelta(props.reviewSummary)}
+          </button>
+          {props.reviewSummary.branchName ? (
+            <div className="workspace-tool-panel-menu-row conversation-session-review-row">
+              <GitBranch size={15} />
+              <span>{conversationSessionBranchDisplayName(props.reviewSummary.branchName)}</span>
+            </div>
+          ) : null}
+          <button
+            aria-expanded={props.commitDialogOpen}
+            className={cn(
+              "workspace-tool-panel-menu-row conversation-session-review-row conversation-session-commit-trigger",
+              props.commitDialogOpen && "active",
+            )}
+            disabled={commitTriggerDisabled}
+            onClick={() => props.onCommitDialogOpenChange(true)}
+            type="button"
+          >
+            <GitCommitHorizontal size={15} />
+            <span>{props.commitBusyState?.label ?? t("gitCommitDialog.open")}</span>
+            {props.commitBusyState ? <LoaderCircle className="spin" size={14} /> : null}
+          </button>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -427,9 +867,12 @@ export function ConversationSessionCommitDialog(props: {
   // Workspace path used to resolve the Git repository on the backend.
   // 后端用于解析 Git 仓库的工作区路径。
   workspacePath: string | null;
+  // Stable project-relative repository key targeted by this dialog.
+  // 本弹窗操作的稳定项目相对仓库键。
+  repositoryKey?: string | null;
   // Updates every shared Git trigger with the active action phase.
   // 使用当前动作阶段更新每个共享 Git 入口。
-  onBusyStateChange: (state: ConversationSessionCommitBusyState) => void;
+  onBusyStateChange: (repositoryKey: string | null, state: ConversationSessionCommitBusyState) => void;
   // Refreshes the compact Git review summary after backend Git actions.
   // 后端 Git 动作完成后刷新紧凑 Git 审查摘要。
   onRefreshReviewSummary: () => Promise<void>;
@@ -450,9 +893,10 @@ export function ConversationSessionCommitDialog(props: {
           conversationId={props.conversationId}
           busyState={props.busyState}
           reviewSummary={props.reviewSummary}
+          repositoryKey={props.repositoryKey}
           workspacePath={props.workspacePath}
           onClose={() => props.onOpenChange(false)}
-          onBusyStateChange={props.onBusyStateChange}
+          onBusyStateChange={(state) => props.onBusyStateChange(props.repositoryKey ?? null, state)}
           onRefreshReviewSummary={props.onRefreshReviewSummary}
         />
       </DialogContent>
@@ -478,6 +922,9 @@ function ConversationSessionCommitPanel(props: {
   // Workspace path used to resolve the Git repository on the backend.
   // 后端用于解析 Git 仓库的工作区路径。
   workspacePath: string | null;
+  // Stable project-relative repository key targeted by this panel.
+  // 本面板操作的稳定项目相对仓库键。
+  repositoryKey?: string | null;
   // Closes the commit dialog after a Git action starts.
   // Git 动作开始后关闭提交弹窗。
   onClose: () => void;
@@ -581,6 +1028,7 @@ function ConversationSessionCommitPanel(props: {
         const response = await generateGitCommitMessage({
           conversationId: props.conversationId,
           workspacePath: props.workspacePath,
+          repositoryKey: props.repositoryKey,
           includeUnstaged,
         });
         message = response?.message?.trim() ?? "";
@@ -592,6 +1040,7 @@ function ConversationSessionCommitPanel(props: {
       const commitResponse = await runGitCommitAction({
         conversationId: props.conversationId,
         workspacePath: props.workspacePath,
+        repositoryKey: props.repositoryKey,
         target: commitTargetRequest(),
         includeUnstaged,
         message,
@@ -602,6 +1051,7 @@ function ConversationSessionCommitPanel(props: {
         const pushResponse = await runGitCommitAction({
           conversationId: props.conversationId,
           workspacePath: props.workspacePath,
+          repositoryKey: props.repositoryKey,
           target: { mode: "current" },
           includeUnstaged: false,
           message: "",
@@ -631,6 +1081,7 @@ function ConversationSessionCommitPanel(props: {
       const response = await runGitCommitAction({
         conversationId: props.conversationId,
         workspacePath: props.workspacePath,
+        repositoryKey: props.repositoryKey,
         target: { mode: "current" },
         includeUnstaged: false,
         message: "",
@@ -893,12 +1344,6 @@ function ConversationSessionSubagentSection(props: {
   // Visible active task rows.
   // 可见的活跃任务行。
   tasks: ConversationSessionSubagentTask[];
-  // Whether this section owns the panel collapse action.
-  // 当前区域是否承载面板折叠动作。
-  showCollapse: boolean;
-  // Collapses the expanded session tool panel.
-  // 折叠当前展开的会话工具面板。
-  onCollapse: () => void;
   // Opens one subagent transcript inside the right context panel.
   // 在右侧上下文面板中打开单个子代理转录。
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
@@ -908,23 +1353,12 @@ function ConversationSessionSubagentSection(props: {
   const { t } = useI18n();
   return (
     <section className="conversation-session-tool-section conversation-session-subagent-section">
-      <div className={cn("conversation-session-tool-section-title", props.showCollapse && "with-action")}>
+      <div className="conversation-session-tool-section-title">
         <span className="conversation-session-tool-section-title-main">
           <Bot size={13} />
           <span>{t("conversation.subagent.schedule")}</span>
           <strong>{props.tasks.length}</strong>
         </span>
-        {props.showCollapse ? (
-          <button
-            aria-label={t("sessionTools.collapse")}
-            className="workspace-tool-panel-menu-icon-button"
-            onClick={props.onCollapse}
-            title={t("sessionTools.collapse")}
-            type="button"
-          >
-            <Minimize2 size={13} />
-          </button>
-        ) : null}
       </div>
       <div className="workspace-tool-panel-menu-list conversation-session-subagent-list">
         {props.tasks.map((task) => (
@@ -1048,29 +1482,17 @@ function ConversationSessionProgressSection(props: {
   todolist: SessionTodolistSummary;
   // Optional collapse action used when progress is the first section.
   // 当进程为第一个区域时使用的可选折叠动作。
-  onCollapse?: () => void;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
   return (
     <section className="conversation-session-tool-section conversation-session-progress-section">
-      <div className={cn("conversation-session-tool-section-title", props.onCollapse && "with-action")}>
+      <div className="conversation-session-tool-section-title">
         <span className="conversation-session-tool-section-title-main">
           <span>{t("sessionTools.progress")}</span>
           <strong>{props.todolist.completedCount}/{props.todolist.totalCount}</strong>
         </span>
-        {props.onCollapse ? (
-          <button
-            aria-label={t("sessionTools.collapse")}
-            className="workspace-tool-panel-menu-icon-button"
-            onClick={props.onCollapse}
-            title={t("sessionTools.collapse")}
-            type="button"
-          >
-            <Minimize2 size={13} />
-          </button>
-        ) : null}
       </div>
       <div className="workspace-tool-panel-menu-list conversation-session-todolist-list">
         {props.todolist.items.map((item, index) => (

@@ -392,6 +392,7 @@ pub(crate) async fn service_submit_user_prompt_edit(
     let submission_result = service_submit_conversation_prompt(
         app.clone(),
         state.clone(),
+        Uuid::new_v4().to_string(),
         None,
         Some(request.conversation_id),
         request.prompt,

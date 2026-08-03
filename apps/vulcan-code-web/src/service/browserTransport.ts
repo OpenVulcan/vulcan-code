@@ -3,6 +3,7 @@ import type {
   PluginUiInvalidatedEvent,
   SessionAddonChangedEvent,
   StartupSnapshot,
+  WorkspaceGitChangedEvent,
   WorkbenchDeltaEnvelope,
   WorkbenchSnapshot,
 } from "@/types";
@@ -59,7 +60,8 @@ type BrowserServiceEvent =
   | { kind: "workbenchDelta"; payload: WorkbenchDeltaEnvelope }
   | { kind: "conversationRunSettled"; payload: ConversationRunSettledEvent }
   | { kind: "sessionAddonChanged"; payload: SessionAddonChangedEvent }
-  | { kind: "pluginUiInvalidated"; payload: PluginUiInvalidatedEvent };
+  | { kind: "pluginUiInvalidated"; payload: PluginUiInvalidatedEvent }
+  | { kind: "workspaceGitChanged"; payload: WorkspaceGitChangedEvent };
 
 // EVENT_KIND_TO_TOPIC maps service event kinds to protocol topics.
 // EVENT_KIND_TO_TOPIC 将服务事件类型映射为协议主题。
@@ -70,6 +72,7 @@ const EVENT_KIND_TO_TOPIC: Record<BrowserServiceEvent["kind"], string> = {
   conversationRunSettled: "conversation.run.settled",
   sessionAddonChanged: "session.addon.changed",
   pluginUiInvalidated: "plugin.ui.invalidated",
+  workspaceGitChanged: "workspace.git.changed",
 };
 
 // closeWebSocketWhenReady closes one socket without aborting its opening handshake.

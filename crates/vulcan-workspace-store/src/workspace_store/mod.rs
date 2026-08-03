@@ -24,6 +24,8 @@ use vulcan_session_boundary::{
 };
 use vulcan_session_core::SessionNodeId;
 
+mod ai_credentials;
+mod git_preferences;
 mod goal_store;
 mod persistence;
 mod segmented_session_store;
@@ -44,6 +46,14 @@ use self::segmented_session_store::{
     state_document_from_runtime_state, write_core_vmm_controller_state, write_state,
 };
 use self::session_addon_store::read_session_addon_state;
+pub use ai_credentials::{
+    AiCredentialSecretRecord, create_ai_credential_secret_record,
+    delete_ai_credential_secret_record, load_ai_credential_secret_record,
+    replace_ai_credential_secret_record, restore_ai_credential_secret_record,
+};
+pub use git_preferences::{
+    load_git_repository_monitoring_preferences, persist_git_repository_monitoring_preference,
+};
 pub use goal_store::{
     GoalAccountingOutcome, GoalResume, GoalUpdate, MAX_THREAD_GOAL_OBJECTIVE_CHARS, ThreadGoal,
     ThreadGoalObjectiveError, ThreadGoalProviderUsage, ThreadGoalStatus,

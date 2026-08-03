@@ -552,6 +552,9 @@ enum AnthropicBlock {
         /// 累积的原始 JSON 文本。
         arguments: String,
     },
+    /// Provider-managed server tool blocks whose execution is completed upstream.
+    /// 已由供应商上游完成执行的服务端工具内容块。
+    Ignored,
 }
 
 impl AnthropicStreamDecoder {
@@ -700,6 +703,10 @@ impl AnthropicStreamDecoder {
                     index,
                 }
             }
+            "server_tool_use" | "web_search_tool_result" => {
+                self.blocks.insert(index, AnthropicBlock::Ignored);
+                return Ok(Vec::new());
+            }
             other => {
                 return Err(ProtocolConversionError::new(format!(
                     "Anthropic content block type `{other}` is not supported."
@@ -781,6 +788,7 @@ impl AnthropicStreamDecoder {
                     },
                 }])
             }
+            (AnthropicBlock::Ignored, _) => Ok(Vec::new()),
             (_, other) => Err(ProtocolConversionError::new(format!(
                 "Anthropic delta type `{other}` does not match content index `{index}`."
             ))),
@@ -836,6 +844,7 @@ impl AnthropicStreamDecoder {
                     ),
                 }]),
             },
+            AnthropicBlock::Ignored => Ok(Vec::new()),
         }
     }
 }
@@ -1734,5 +1743,47 @@ mod tests {
 
         let mut premature = AnthropicStreamDecoder::new(String::from("premature"), BTreeMap::new());
         assert!(premature.push_sse(Some("done"), "[DONE]").is_err());
+    }
+
+    /// Verifies DeepSeek server-side search blocks do not enter the host tool loop.
+    /// 验证 DeepSeek 服务端搜索内容块不会进入宿主工具循环。
+    #[test]
+    fn server_side_search_blocks_are_consumed_without_host_tool_events() {
+        let mut decoder = AnthropicStreamDecoder::new(String::from("execution"), BTreeMap::new());
+        let started = decoder
+            .push_sse(
+                Some("content_block_start"),
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"search_1","name":"web_search","input":{}}}"#,
+            )
+            .expect("server search block should decode");
+        assert!(
+            started
+                .iter()
+                .all(|event| !matches!(event, AiStreamEvent::ToolCallStarted { .. }))
+        );
+        decoder
+            .push_sse(
+                Some("content_block_delta"),
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\":\"DeepSeek\"}"}}"#,
+            )
+            .expect("server search arguments should be ignored");
+        decoder
+            .push_sse(
+                Some("content_block_stop"),
+                r#"{"type":"content_block_stop","index":0}"#,
+            )
+            .expect("server search block should stop");
+        decoder
+            .push_sse(
+                Some("content_block_start"),
+                r#"{"type":"content_block_start","index":1,"content_block":{"type":"web_search_tool_result","tool_use_id":"search_1","content":[]}}"#,
+            )
+            .expect("search result block should decode");
+        decoder
+            .push_sse(
+                Some("content_block_stop"),
+                r#"{"type":"content_block_stop","index":1}"#,
+            )
+            .expect("search result block should stop");
     }
 }

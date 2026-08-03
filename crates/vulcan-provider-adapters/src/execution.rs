@@ -1,6 +1,7 @@
 //! Deterministic provider execution routing and SSE transport.
 //! 确定性的供应商执行路由与 SSE 传输。
 
+use crate::media::{MediaUploadCancellation, MediaUploadProgressCallback};
 use crate::{
     AuthenticationProjection, CredentialConnection, CredentialExecutionSecret,
     CustomModelRequestProjection, MINIMAX_REASONING_SPLIT_PARAMETER_ID,
@@ -8,18 +9,20 @@ use crate::{
     ProviderToolTarget, RequestProjectorKind, SAMPLING_TEMPERATURE_PARAMETER_ID,
     SecondaryRouteSelection, ServiceEntry,
 };
-use async_stream::try_stream;
+use async_stream::{stream, try_stream};
 use futures_util::{Stream, StreamExt};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
+use std::path::Path;
 use std::pin::Pin;
-use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{Duration, Instant, SystemTime};
 use vulcan_ai_contract::{
     AiErrorCategory, AiExecutionError, AiExecutionRequest, AiStreamEvent, AiStreamStateMachine,
     DispatchOutcome, InputTokenCount, ModelParameterValue, PromptCachePolicy, ReasoningEffort,
-    RetryAfterHint, RetryAfterSource,
+    ResourceKind, RetryAfterHint, RetryAfterSource,
 };
 use vulcan_ai_protocols::{
     EncodedWireRequest, ProtocolConversionError, ProtocolRegistry, ProtocolStreamFraming,
@@ -408,6 +411,69 @@ pub struct ProviderExecutionClient {
     /// Strict protocol profile registry.
     /// 严格协议 Profile 注册表。
     protocols: Arc<ProtocolRegistry>,
+    /// Process-local prepared media references shared by preflight and dispatch clones.
+    /// 由分派前准备与实际分派副本共享的进程内媒体引用缓存。
+    prepared_media: Arc<StdMutex<BTreeMap<String, PreparedMediaCacheEntry>>>,
+}
+
+/// Stores one temporary provider media reference until the matching request is dispatched.
+/// 在匹配请求分派前保存一个临时供应商媒体引用。
+#[derive(Clone)]
+struct PreparedMediaCacheEntry {
+    /// Provider-native URL or URI used by the exact request projector.
+    /// 精确请求投影器使用的供应商原生 URL 或 URI。
+    url: String,
+    /// Expiry prevents an abandoned submission from retaining a reference forever.
+    /// 过期时间防止放弃的提交永久保留远端引用。
+    expires_at: Instant,
+    /// Source metadata prevents a rewritten file from reusing an older provider reference.
+    /// 源文件元数据防止被改写的文件复用旧供应商引用。
+    source_fingerprint: PreparedMediaSourceFingerprint,
+}
+
+/// Identifies the source-file revision used to create one prepared media reference.
+/// 标识创建媒体准备引用时所使用的源文件修订版本。
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PreparedMediaSourceFingerprint {
+    /// Source byte length at the time the reference was remembered.
+    /// 记住引用时的源文件字节长度。
+    byte_len: u64,
+    /// Last modification time when the host exposes it.
+    /// 宿主可以提供时记录源文件最后修改时间。
+    modified_at: Option<SystemTime>,
+}
+
+/// Reads the stable host metadata used to validate one cached media reference.
+/// 读取用于校验媒体缓存引用的稳定宿主元数据。
+fn prepared_media_source_fingerprint(local_path: &Path) -> Option<PreparedMediaSourceFingerprint> {
+    let metadata = std::fs::metadata(local_path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    Some(PreparedMediaSourceFingerprint {
+        byte_len: metadata.len(),
+        modified_at: metadata.modified().ok(),
+    })
+}
+
+/// Builds the process-local cache key for one exact provider media projection.
+/// 构建一个精确供应商媒体投影的进程内缓存键。
+fn prepared_media_key(
+    route: &ProviderExecutionRoute,
+    model_id: &str,
+    local_path: &Path,
+    kind: ResourceKind,
+    mime_type: &str,
+) -> String {
+    format!(
+        "{}|{}|{}|{:?}|{}|{}",
+        route.provider.id,
+        route.connection.id,
+        model_id,
+        kind,
+        mime_type,
+        local_path.to_string_lossy(),
+    )
 }
 
 impl ProviderExecutionClient {
@@ -424,7 +490,310 @@ impl ProviderExecutionClient {
     /// A reusable execution client.
     /// 返回可复用执行客户端。
     pub fn new(http: reqwest::Client, protocols: Arc<ProtocolRegistry>) -> Self {
-        Self { http, protocols }
+        Self {
+            http,
+            protocols,
+            prepared_media: Arc::new(StdMutex::new(BTreeMap::new())),
+        }
+    }
+
+    /// Uploads or pre-reads one local media resource before the conversation is materialized.
+    /// 在会话物化前上传或预读取一个本地媒体资源。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `route`, `model_id`, and `secret` freeze the exact provider account and model contract.
+    /// `route`、`model_id` 与 `secret` 固定精确的供应商账号及模型契约。
+    /// `local_path` and `mime_type` identify the validated host attachment.
+    /// `local_path` 与 `mime_type` 标识已校验的宿主附件。
+    /// `progress` receives source-byte progress and `cancellation` owns the submit cancel path.
+    /// `progress` 接收源字节进度，`cancellation` 持有提交取消路径。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A provider-native reference when the provider has an upload contract, otherwise `None`
+    /// after the local inline payload has been completely pre-read.
+    /// 供应商存在上传契约时返回原生引用；否则在完整预读取本地内联载荷后返回 `None`。
+    pub async fn prepare_local_media(
+        &self,
+        route: &ProviderExecutionRoute,
+        model_id: &str,
+        secret: &CredentialExecutionSecret,
+        local_path: &Path,
+        kind: ResourceKind,
+        mime_type: &str,
+        progress: Option<MediaUploadProgressCallback>,
+        cancellation: &MediaUploadCancellation,
+    ) -> Result<Option<String>, String> {
+        if cancellation.is_cancelled() {
+            return Err(String::from("media upload cancelled"));
+        }
+        let metadata = tokio::fs::metadata(local_path)
+            .await
+            .map_err(|error| format!("Media source metadata could not be read: {error}"))?;
+        if !metadata.is_file() || metadata.len() == 0 {
+            return Err(String::from("Media source must be a non-empty file."));
+        }
+        // The request must never bind a provider reference to a source that changed during preparation.
+        // 请求绝不能把供应商引用绑定到准备期间已经发生变化的源文件。
+        let source_fingerprint = PreparedMediaSourceFingerprint {
+            byte_len: metadata.len(),
+            modified_at: metadata.modified().ok(),
+        };
+        let total_bytes = Some(metadata.len());
+        let native_reference = match route.provider.id.as_str() {
+            "kimi" if kind == ResourceKind::Video => Some(
+                self.upload_multipart_media(
+                    route,
+                    secret,
+                    local_path,
+                    mime_type,
+                    "/files",
+                    "video",
+                    "ms://",
+                    progress.clone(),
+                    cancellation,
+                )
+                .await?,
+            ),
+            "minimax" if kind == ResourceKind::Video => Some(
+                self.upload_multipart_media(
+                    route,
+                    secret,
+                    local_path,
+                    mime_type,
+                    "/v1/files/upload",
+                    "retrieval",
+                    "mm_file://",
+                    progress.clone(),
+                    cancellation,
+                )
+                .await?,
+            ),
+            "alibaba" if matches!(kind, ResourceKind::Image | ResourceKind::Video) => Some(
+                crate::alibaba_provider_tools::upload_user_media(
+                    &self.http,
+                    &route.entry,
+                    model_id,
+                    secret,
+                    local_path,
+                    mime_type,
+                    metadata.len(),
+                    progress.clone(),
+                    cancellation,
+                )
+                .await?,
+            ),
+            _ => None,
+        };
+        if native_reference.is_none() {
+            self.pre_read_inline_media(local_path, total_bytes, progress, cancellation)
+                .await?;
+        }
+        if cancellation.is_cancelled() {
+            return Err(String::from("media upload cancelled"));
+        }
+        let current_source_fingerprint = prepared_media_source_fingerprint(local_path)
+            .ok_or_else(|| String::from("Media source disappeared during preparation."))?;
+        if current_source_fingerprint != source_fingerprint {
+            return Err(String::from(
+                "Media source changed during preparation; please retry the submission.",
+            ));
+        }
+        Ok(native_reference)
+    }
+
+    /// Remembers one provider-native reference for the exact route and local source.
+    /// 为精确路由与本地源记住一个供应商原生引用。
+    pub fn remember_prepared_media(
+        &self,
+        route: &ProviderExecutionRoute,
+        model_id: &str,
+        local_path: &Path,
+        kind: ResourceKind,
+        mime_type: &str,
+        url: String,
+    ) {
+        let Some(source_fingerprint) = prepared_media_source_fingerprint(local_path) else {
+            return;
+        };
+        let key = prepared_media_key(route, model_id, local_path, kind, mime_type);
+        if let Ok(mut cache) = self.prepared_media.lock() {
+            cache.insert(
+                key,
+                PreparedMediaCacheEntry {
+                    url,
+                    expires_at: Instant::now() + Duration::from_secs(30 * 60),
+                    source_fingerprint,
+                },
+            );
+        }
+    }
+
+    /// Returns a still-valid provider-native reference for the exact local source.
+    /// 返回精确本地源仍然有效的供应商原生引用。
+    pub fn prepared_media_url(
+        &self,
+        route: &ProviderExecutionRoute,
+        model_id: &str,
+        local_path: &Path,
+        kind: ResourceKind,
+        mime_type: &str,
+    ) -> Option<String> {
+        let source_fingerprint = prepared_media_source_fingerprint(local_path)?;
+        let key = prepared_media_key(route, model_id, local_path, kind, mime_type);
+        let mut cache = self.prepared_media.lock().ok()?;
+        let entry = cache.get(&key)?.clone();
+        if entry.expires_at <= Instant::now() || entry.source_fingerprint != source_fingerprint {
+            cache.remove(&key);
+            return None;
+        }
+        Some(entry.url)
+    }
+
+    /// Streams one provider multipart upload while reporting bytes and honoring cancellation.
+    /// 流式执行一次供应商 Multipart 上传，同时报告字节数并响应取消。
+    async fn upload_multipart_media(
+        &self,
+        route: &ProviderExecutionRoute,
+        secret: &CredentialExecutionSecret,
+        local_path: &Path,
+        mime_type: &str,
+        path: &str,
+        purpose: &str,
+        reference_prefix: &str,
+        progress: Option<MediaUploadProgressCallback>,
+        cancellation: &MediaUploadCancellation,
+    ) -> Result<String, String> {
+        let metadata = tokio::fs::metadata(local_path)
+            .await
+            .map_err(|error| format!("Media upload source metadata could not be read: {error}"))?;
+        let total_bytes = metadata.len();
+        let file = tokio::fs::File::open(local_path)
+            .await
+            .map_err(|error| format!("Media upload source cannot be opened: {error}"))?;
+        let file_name = local_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("resource.bin")
+            .to_string();
+        let upload_cancellation = cancellation.clone();
+        let upload_progress = progress.clone();
+        let stream = stream! {
+            let mut source = tokio_util::io::ReaderStream::new(file);
+            let mut sent = 0_u64;
+            while let Some(chunk) = source.next().await {
+                if upload_cancellation.is_cancelled() {
+                    yield Err(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "media upload cancelled",
+                    ));
+                    return;
+                }
+                let chunk = match chunk {
+                    Ok(chunk) => chunk,
+                    Err(error) => {
+                        yield Err(error);
+                        return;
+                    }
+                };
+                sent = sent.saturating_add(chunk.len() as u64);
+                if let Some(callback) = upload_progress.as_ref() {
+                    callback(sent, Some(total_bytes));
+                }
+                yield Ok(chunk);
+            }
+            if sent != total_bytes {
+                yield Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "media upload source length changed during transfer",
+                ));
+            }
+        };
+        let part = reqwest::multipart::Part::stream_with_length(
+            reqwest::Body::wrap_stream(stream),
+            total_bytes,
+        )
+        .file_name(file_name)
+        .mime_str(mime_type)
+        .map_err(|error| format!("Media upload MIME type is invalid: {error}"))?;
+        let form = reqwest::multipart::Form::new()
+            .text("purpose", purpose.to_string())
+            .part("file", part);
+        let url = route.request_url(path);
+        let mut headers = execution_headers(route, &BTreeMap::new(), secret)
+            .map_err(|error| error.to_string())?;
+        headers.remove(reqwest::header::CONTENT_TYPE);
+        let response = tokio::select! {
+            response = self.http.post(url.as_str()).headers(headers).multipart(form).send() => response
+                .map_err(|error| {
+                    if cancellation.is_cancelled() {
+                        String::from("media upload cancelled")
+                    } else {
+                        format!("Media upload to `{url}` failed: {error}")
+                    }
+                })?,
+            _ = cancellation.wait() => return Err(String::from("media upload cancelled")),
+        };
+        if cancellation.is_cancelled() {
+            return Err(String::from("media upload cancelled"));
+        }
+        let status = response.status();
+        let body = tokio::select! {
+            body = crate::provider_tool_execution::read_bounded_provider_response(
+                response,
+                "Media upload",
+            ) => body.map_err(|error| format!("Media upload response from `{url}` could not be read: {error}"))?,
+            _ = cancellation.wait() => return Err(String::from("media upload cancelled")),
+        };
+        if cancellation.is_cancelled() {
+            return Err(String::from("media upload cancelled"));
+        }
+        if !status.is_success() {
+            return Err(format!(
+                "Media upload failed with HTTP {}: {}",
+                status.as_u16(),
+                body
+            ));
+        }
+        let body: Value = serde_json::from_str(body.as_str())
+            .map_err(|error| format!("Media upload response JSON is invalid: {error}"))?;
+        let id = body
+            .pointer("/id")
+            .and_then(Value::as_str)
+            .or_else(|| body.pointer("/file/file_id").and_then(Value::as_str))
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| String::from("Media upload response did not contain a file id."))?;
+        Ok(format!("{reference_prefix}{id}"))
+    }
+
+    /// Reads an inline media source once before dispatch so every path exposes the same progress lifecycle.
+    /// 在分派前读取一次内联媒体源，使所有路径暴露一致的进度生命周期。
+    async fn pre_read_inline_media(
+        &self,
+        local_path: &Path,
+        total_bytes: Option<u64>,
+        progress: Option<MediaUploadProgressCallback>,
+        cancellation: &MediaUploadCancellation,
+    ) -> Result<(), String> {
+        let file = tokio::fs::File::open(local_path)
+            .await
+            .map_err(|error| format!("Inline media source cannot be opened: {error}"))?;
+        let mut source = tokio_util::io::ReaderStream::new(file);
+        let mut processed = 0_u64;
+        while let Some(chunk) = source.next().await {
+            if cancellation.is_cancelled() {
+                return Err(String::from("media upload cancelled"));
+            }
+            let chunk =
+                chunk.map_err(|error| format!("Inline media source could not be read: {error}"))?;
+            processed = processed.saturating_add(chunk.len() as u64);
+            if let Some(callback) = progress.as_ref() {
+                callback(processed, total_bytes);
+            }
+        }
+        Ok(())
     }
 
     /// Executes one frozen provider-native tool target and normalizes its output.
@@ -603,7 +972,18 @@ impl ProviderExecutionClient {
                 .map_err(protocol_failure)?;
             let transport = profile.transport_profile();
             let url = route.request_url(encoded.path.as_str());
-            let headers = execution_headers(&route, &encoded.headers, &secret)?;
+            let mut headers = execution_headers(&route, &encoded.headers, &secret)?;
+            // Alibaba requires an explicit resolver switch whenever the request carries an OSS reference.
+            // 阿里云请求携带 OSS 引用时必须显式开启对象解析开关。
+            if route.provider.id == "alibaba"
+                && serde_json::to_string(&encoded.body)
+                    .is_ok_and(|body| body.contains("oss://"))
+            {
+                headers.insert(
+                    HeaderName::from_static("x-dashscope-ossresource-resolve"),
+                    HeaderValue::from_static("enable"),
+                );
+            }
             let response = tokio::time::timeout(
                 Duration::from_millis(transport.response_headers_timeout_ms),
                 client
@@ -1227,7 +1607,7 @@ fn project_kimi_request(
     }
     let force_coding_model = matches!(
         request.model_id.as_str(),
-        "kimi-for-coding" | "kimi-for-coding-highspeed"
+        "k3" | "k3-256k" | "kimi-for-coding" | "kimi-for-coding-highspeed"
     );
     let reasoning_requested = request
         .reasoning_effort
@@ -1257,6 +1637,15 @@ fn project_deepseek_request(
     request: &AiExecutionRequest,
     encoded: &mut EncodedWireRequest,
 ) -> Result<(), ProviderExecutionFailure> {
+    if route.protocol_route.protocol_profile_id == vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID
+    {
+        let body = request_body_mut(encoded, "DeepSeek Responses")?;
+        // DeepSeek documents these Responses fields as unsupported even though it may ignore them.
+        // DeepSeek 文档明确列出这些 Responses 字段不支持，即使上游可能静默忽略它们。
+        body.remove("store");
+        body.remove("include");
+        return Ok(());
+    }
     let Some(effort) = request.reasoning_effort else {
         return Ok(());
     };
@@ -3349,6 +3738,28 @@ mod tests {
             .expect("DeepSeek Anthropic enabled request should encode");
         assert_eq!(enabled.body["thinking"]["type"], "enabled");
         assert_eq!(enabled.body["output_config"]["effort"], "max");
+    }
+
+    /// Verifies DeepSeek Responses projects native web search and removes unsupported fields.
+    /// 验证 DeepSeek Responses 投影原生网页搜索并移除不支持字段。
+    #[test]
+    fn deepseek_responses_projects_native_web_search() {
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let mut request = minimal_request();
+        request.model_id = String::from("deepseek-v4-flash");
+        request.reasoning_effort = Some(ReasoningEffort::Max);
+        request.native_tools = vec![vulcan_ai_contract::NativeToolKind::WebSearch];
+        let encoded = client
+            .encode_request(&deepseek_route(OPENAI_RESPONSES_PROFILE_ID), &request)
+            .expect("DeepSeek Responses request should encode");
+        assert_eq!(encoded.path, "/responses");
+        assert_eq!(encoded.body["tools"][0]["type"], "web_search");
+        assert!(encoded.body.get("store").is_none());
+        assert!(encoded.body.get("include").is_none());
+        assert_eq!(encoded.body["reasoning"]["effort"], "max");
     }
 
     /// Verifies every OpenRouter protocol route converges on the unified reasoning object.

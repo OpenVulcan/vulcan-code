@@ -1,187 +1,475 @@
-//! OS credential-store integration for public AI connections.
-//! 公共 AI 连接的操作系统凭据库存储集成。
+//! Controller-backed SQLite storage for public AI credentials.
+//! 公共 AI 凭据的 Controller 托管 SQLite 存储。
 
-use keyring::{Entry, Error as KeyringError};
-use sha2::{Digest, Sha256};
-use std::sync::{Mutex, OnceLock};
+use async_trait::async_trait;
+use std::collections::BTreeSet;
+use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_provider_adapters::{
-    CredentialSecretEnvelope, CredentialSecretResolver, CredentialSecretStore,
+    CredentialSecretEnvelope, CredentialSecretMaterial, CredentialSecretResolver,
+    CredentialSecretStore, MiniMaxRegion, OAuthTokenSet,
+};
+use vulcan_workspace_store::{
+    data_plane::ControllerRuntimeHandle,
+    workspace_store::{
+        AiCredentialSecretRecord, create_ai_credential_secret_record,
+        delete_ai_credential_secret_record, load_ai_credential_secret_record,
+        replace_ai_credential_secret_record, restore_ai_credential_secret_record,
+    },
 };
 
-/// Stable operating-system credential service name for AI connections.
-/// AI 连接使用的稳定操作系统凭据服务名。
-const VULCAN_AI_CREDENTIAL_SERVICE: &str = "vulcan-code.ai-provider";
+/// Stores all public AI credentials in Controller-backed SQLite.
+/// 将全部公共 AI 凭据保存到 Controller 托管 SQLite。
+#[derive(Clone)]
+pub(crate) struct SqliteAiCredentialSecretStore {
+    /// Shared application data-plane handle.
+    /// 共享应用数据平面句柄。
+    controller: ControllerRuntimeHandle,
+}
 
-/// Stateless secure-store adapter for AI credential references.
-/// AI 凭据引用的无状态安全存储适配器。
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct OsAiCredentialSecretStore;
-
-impl OsAiCredentialSecretStore {
-    /// Restores one exact deleted secret only for transaction rollback.
-    /// 仅为事务回滚恢复一个精确的已删除秘密。
+impl SqliteAiCredentialSecretStore {
+    /// Creates one SQLite credential store from the initialized application data plane.
+    /// 从已初始化应用数据平面创建 SQLite 凭据仓库。
     ///
     /// # Parameters
     /// 参数
-    /// `secret_reference` must be absent and `secret` is the previously validated envelope.
-    /// `secret_reference` 必须不存在，`secret` 是此前已验证的封装。
+    /// `controller` is the exact Controller runtime handle published during bootstrap.
+    /// `controller` 是启动期间发布的精确 Controller 运行时句柄。
     ///
     /// # Returns
     /// 返回值
-    /// Success after restoring the exact prior secure-store value.
-    /// 恢复精确的先前安全存储值后返回成功。
-    pub(crate) fn restore_deleted_secret(
+    /// One store bound to the current application SQLite binding.
+    /// 返回绑定当前应用 SQLite 的仓库。
+    pub(crate) fn new(controller: ControllerRuntimeHandle) -> Self {
+        Self { controller }
+    }
+}
+
+#[async_trait]
+impl CredentialSecretResolver for SqliteAiCredentialSecretStore {
+    /// Reads one optional credential exclusively from the current SQLite store.
+    /// 仅从当前 SQLite 仓库读取一个可选凭据。
+    async fn read_optional_secret(
+        &self,
+        secret_reference: &str,
+    ) -> Result<Option<CredentialSecretEnvelope>, String> {
+        load_ai_credential_secret_record(&self.controller, secret_reference)
+            .await?
+            .map(credential_envelope_from_record)
+            .transpose()
+    }
+}
+
+#[async_trait]
+impl CredentialSecretStore for SqliteAiCredentialSecretStore {
+    /// Creates one new revision-one credential only in SQLite.
+    /// 仅在 SQLite 中创建一个修订号为一的新凭据。
+    async fn create_secret(
         &self,
         secret_reference: &str,
         secret: &CredentialSecretEnvelope,
     ) -> Result<(), String> {
         secret.validate()?;
-        let _guard = credential_store_lock()
-            .lock()
-            .map_err(|_| String::from("The AI credential-store lock is poisoned."))?;
-        let entry = ai_secret_entry(secret_reference)?;
-        match entry.get_password() {
-            Err(KeyringError::NoEntry) => write_secret_unlocked(&entry, secret),
-            Ok(_) => Err(format!(
-                "AI credential `{secret_reference}` already exists during rollback."
-            )),
-            Err(_) => Err(format!(
-                "AI credential `{secret_reference}` could not be read securely."
-            )),
-        }
-    }
-}
-
-impl CredentialSecretResolver for OsAiCredentialSecretStore {
-    /// Reads one exact AI connection secret.
-    /// 读取一个精确 AI 连接秘密。
-    fn read_secret(&self, secret_reference: &str) -> Result<CredentialSecretEnvelope, String> {
-        let _guard = credential_store_lock()
-            .lock()
-            .map_err(|_| String::from("The AI credential-store lock is poisoned."))?;
-        read_secret_unlocked(secret_reference)
-    }
-}
-
-impl CredentialSecretStore for OsAiCredentialSecretStore {
-    /// Creates one exact versioned secret without overwriting an existing entry.
-    /// 创建一个精确版本化秘密且不覆盖已有条目。
-    fn create_secret(
-        &self,
-        secret_reference: &str,
-        secret: &CredentialSecretEnvelope,
-    ) -> Result<(), String> {
-        secret.validate()?;
-        if secret.revision != 1 {
-            return Err(String::from(
-                "A new AI credential secret must start at revision one.",
-            ));
-        }
-        let _guard = credential_store_lock()
-            .lock()
-            .map_err(|_| String::from("The AI credential-store lock is poisoned."))?;
-        let entry = ai_secret_entry(secret_reference)?;
-        match entry.get_password() {
-            Ok(_) => {
-                return Err(format!(
-                    "AI credential `{secret_reference}` is already configured."
-                ));
-            }
-            Err(KeyringError::NoEntry) => {}
-            Err(_) => {
-                return Err(format!(
-                    "AI credential `{secret_reference}` could not be read securely."
-                ));
-            }
-        }
-        write_secret_unlocked(&entry, secret)
+        let record = credential_record_from_envelope(secret_reference, secret)?;
+        create_ai_credential_secret_record(&self.controller, &record).await
     }
 
-    /// Replaces one exact secret through revision compare-and-replace.
-    /// 通过修订号比较替换一个精确秘密。
-    fn replace_secret(
+    /// Replaces one SQLite credential through revision compare-and-replace.
+    /// 通过修订号比较替换一个 SQLite 凭据。
+    async fn replace_secret(
         &self,
         secret_reference: &str,
         expected_revision: u64,
         secret: &CredentialSecretEnvelope,
     ) -> Result<(), String> {
         secret.validate()?;
-        let expected_next = expected_revision
-            .checked_add(1)
-            .ok_or_else(|| String::from("AI credential secret revision is exhausted."))?;
-        if secret.revision != expected_next {
+        let expected_revision = i64::try_from(expected_revision)
+            .map_err(|_| String::from("AI credential revision exceeds SQLite range."))?;
+        let record = credential_record_from_envelope(secret_reference, secret)?;
+        replace_ai_credential_secret_record(&self.controller, expected_revision, &record).await
+    }
+
+    /// Deletes one SQLite credential idempotently.
+    /// 幂等删除一个 SQLite 凭据。
+    async fn delete_secret(&self, secret_reference: &str) -> Result<(), String> {
+        delete_ai_credential_secret_record(&self.controller, secret_reference).await
+    }
+
+    /// Restores one exact deleted SQLite credential for transaction compensation.
+    /// 为事务补偿恢复一个精确删除的 SQLite 凭据。
+    async fn restore_secret(
+        &self,
+        secret_reference: &str,
+        secret: &CredentialSecretEnvelope,
+    ) -> Result<(), String> {
+        secret.validate()?;
+        let record = credential_record_from_envelope(secret_reference, secret)?;
+        restore_ai_credential_secret_record(&self.controller, &record).await
+    }
+}
+
+/// Converts one strongly typed credential envelope into relational SQLite fields.
+/// 将一个强类型凭据封装转换为关系化 SQLite 字段。
+fn credential_record_from_envelope(
+    secret_reference: &str,
+    secret: &CredentialSecretEnvelope,
+) -> Result<AiCredentialSecretRecord, String> {
+    secret.validate()?;
+    let format_version = i64::from(secret.version);
+    let revision = i64::try_from(secret.revision)
+        .map_err(|_| String::from("AI credential revision exceeds SQLite range."))?;
+    let timestamp = current_unix_millis()?;
+    let mut record = AiCredentialSecretRecord {
+        secret_reference: secret_reference.to_string(),
+        format_version,
+        revision,
+        material_kind: String::new(),
+        secret_value: None,
+        access_token: None,
+        refresh_token: None,
+        issued_at_unix_ms: None,
+        expires_at_unix_ms: None,
+        scope_text: String::new(),
+        account_subject: None,
+        email: None,
+        id_token: None,
+        account_id: None,
+        oauth_client_id: None,
+        oauth_client_secret: None,
+        project_id: None,
+        quota_project_id: None,
+        provider_region: None,
+        resource_url: None,
+        provider_device_id: None,
+        created_at_unix_ms: timestamp,
+        updated_at_unix_ms: timestamp,
+    };
+    match &secret.material {
+        CredentialSecretMaterial::ApiKey { value } => {
+            record.material_kind = String::from("api_key");
+            record.secret_value = Some(value.clone());
+        }
+        CredentialSecretMaterial::StaticBearer { access_token } => {
+            record.material_kind = String::from("static_bearer");
+            record.access_token = Some(access_token.clone());
+        }
+        CredentialSecretMaterial::OpenAiCodexOAuth {
+            tokens,
+            id_token,
+            account_id,
+        } => {
+            record.material_kind = String::from("open_ai_codex_oauth");
+            apply_oauth_tokens(&mut record, tokens)?;
+            record.id_token = id_token.clone();
+            record.account_id = account_id.clone();
+        }
+        CredentialSecretMaterial::ClaudeCodeOAuth { tokens } => {
+            record.material_kind = String::from("claude_code_oauth");
+            apply_oauth_tokens(&mut record, tokens)?;
+        }
+        CredentialSecretMaterial::GoogleOAuth {
+            tokens,
+            client_id,
+            client_secret,
+            project_id,
+            quota_project_id,
+        } => {
+            record.material_kind = String::from("google_oauth");
+            apply_oauth_tokens(&mut record, tokens)?;
+            record.oauth_client_id = Some(client_id.clone());
+            record.oauth_client_secret = client_secret.clone();
+            record.project_id = project_id.clone();
+            record.quota_project_id = quota_project_id.clone();
+        }
+        CredentialSecretMaterial::MiniMaxOAuth {
+            tokens,
+            region,
+            resource_url,
+        } => {
+            record.material_kind = String::from("mini_max_oauth");
+            apply_oauth_tokens(&mut record, tokens)?;
+            record.provider_region = Some(match region {
+                MiniMaxRegion::Global => String::from("global"),
+                MiniMaxRegion::China => String::from("china"),
+            });
+            record.resource_url = Some(resource_url.clone());
+        }
+        CredentialSecretMaterial::KimiCodingPlanOAuth { tokens, device_id } => {
+            record.material_kind = String::from("kimi_coding_plan_oauth");
+            apply_oauth_tokens(&mut record, tokens)?;
+            record.provider_device_id = Some(device_id.clone());
+        }
+    }
+    Ok(record)
+}
+
+/// Converts one relational SQLite record back into a validated credential envelope.
+/// 将一条关系化 SQLite 记录转换回已校验凭据封装。
+fn credential_envelope_from_record(
+    record: AiCredentialSecretRecord,
+) -> Result<CredentialSecretEnvelope, String> {
+    let version = u32::try_from(record.format_version)
+        .map_err(|_| String::from("Stored AI credential format version is invalid."))?;
+    let revision = u64::try_from(record.revision)
+        .map_err(|_| String::from("Stored AI credential revision is invalid."))?;
+    let material = match record.material_kind.as_str() {
+        "api_key" => CredentialSecretMaterial::ApiKey {
+            value: required_record_text(&record.secret_value, "API key")?,
+        },
+        "static_bearer" => CredentialSecretMaterial::StaticBearer {
+            access_token: required_record_text(&record.access_token, "static bearer token")?,
+        },
+        "open_ai_codex_oauth" => CredentialSecretMaterial::OpenAiCodexOAuth {
+            tokens: oauth_tokens_from_record(&record)?,
+            id_token: record.id_token.clone(),
+            account_id: record.account_id.clone(),
+        },
+        "claude_code_oauth" => CredentialSecretMaterial::ClaudeCodeOAuth {
+            tokens: oauth_tokens_from_record(&record)?,
+        },
+        "google_oauth" => CredentialSecretMaterial::GoogleOAuth {
+            tokens: oauth_tokens_from_record(&record)?,
+            client_id: required_record_text(&record.oauth_client_id, "Google OAuth client id")?,
+            client_secret: record.oauth_client_secret.clone(),
+            project_id: record.project_id.clone(),
+            quota_project_id: record.quota_project_id.clone(),
+        },
+        "mini_max_oauth" => CredentialSecretMaterial::MiniMaxOAuth {
+            tokens: oauth_tokens_from_record(&record)?,
+            region: match required_record_text(&record.provider_region, "MiniMax region")?.as_str()
+            {
+                "global" => MiniMaxRegion::Global,
+                "china" => MiniMaxRegion::China,
+                _ => return Err(String::from("Stored MiniMax region is invalid.")),
+            },
+            resource_url: required_record_text(&record.resource_url, "MiniMax resource URL")?,
+        },
+        "kimi_coding_plan_oauth" => CredentialSecretMaterial::KimiCodingPlanOAuth {
+            tokens: oauth_tokens_from_record(&record)?,
+            device_id: required_record_text(&record.provider_device_id, "Kimi device id")?,
+        },
+        _ => {
             return Err(String::from(
-                "Replacement AI credential secret must advance exactly one revision.",
+                "Stored AI credential material kind is unsupported.",
             ));
         }
-        let _guard = credential_store_lock()
-            .lock()
-            .map_err(|_| String::from("The AI credential-store lock is poisoned."))?;
-        let current = read_secret_unlocked(secret_reference)?;
-        if current.revision != expected_revision {
-            return Err(format!(
-                "AI credential `{secret_reference}` changed while it was being updated."
-            ));
-        }
-        let entry = ai_secret_entry(secret_reference)?;
-        write_secret_unlocked(&entry, secret)
-    }
-
-    /// Deletes one exact secret while holding the process-wide store lock.
-    /// 在持有进程级存储锁时删除一个精确秘密。
-    fn delete_secret(&self, secret_reference: &str) -> Result<(), String> {
-        let _guard = credential_store_lock()
-            .lock()
-            .map_err(|_| String::from("The AI credential-store lock is poisoned."))?;
-        match ai_secret_entry(secret_reference)?.delete_credential() {
-            Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
-            Err(_) => Err(String::from("Failed to delete the AI credential securely.")),
-        }
-    }
+    };
+    let envelope = CredentialSecretEnvelope {
+        version,
+        revision,
+        material,
+    };
+    envelope.validate()?;
+    Ok(envelope)
 }
 
-/// Returns the process-wide compare-and-replace lock for OS credential mutations.
-/// 返回操作系统凭据变更使用的进程级比较替换锁。
-fn credential_store_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
-
-/// Reads and validates one secret while the caller owns the store lock.
-/// 在调用方持有存储锁时读取并校验一个秘密。
-fn read_secret_unlocked(secret_reference: &str) -> Result<CredentialSecretEnvelope, String> {
-    match ai_secret_entry(secret_reference)?.get_password() {
-        Ok(document) => CredentialSecretEnvelope::from_json(document.as_str()),
-        Err(KeyringError::NoEntry) => Err(format!(
-            "AI credential `{secret_reference}` is not configured."
-        )),
-        Err(_) => Err(format!(
-            "AI credential `{secret_reference}` could not be read securely."
-        )),
-    }
-}
-
-/// Writes one serialized secret while the caller owns the store lock.
-/// 在调用方持有存储锁时写入一个序列化秘密。
-fn write_secret_unlocked(entry: &Entry, secret: &CredentialSecretEnvelope) -> Result<(), String> {
-    let document = secret.to_json()?;
-    entry
-        .set_password(document.as_str())
-        .map_err(|_| String::from("Failed to store the AI credential securely."))
-}
-
-/// Builds one collision-resistant OS credential entry from an opaque reference.
-/// 根据不透明引用构建一个抗碰撞的操作系统凭据条目。
-fn ai_secret_entry(secret_reference: &str) -> Result<Entry, String> {
-    if secret_reference.trim().is_empty() {
+/// Copies common OAuth token fields into one relational record.
+/// 将公共 OAuth Token 字段复制到一条关系化记录。
+fn apply_oauth_tokens(
+    record: &mut AiCredentialSecretRecord,
+    tokens: &OAuthTokenSet,
+) -> Result<(), String> {
+    tokens.validate()?;
+    if tokens.scopes.iter().any(|scope| {
+        scope
+            .as_bytes()
+            .iter()
+            .any(|byte| byte.is_ascii_whitespace())
+    }) {
         return Err(String::from(
-            "AI credential secret reference must not be empty.",
+            "OAuth scope values must not contain ASCII whitespace.",
         ));
     }
-    let mut digest = Sha256::new();
-    digest.update(secret_reference.len().to_be_bytes());
-    digest.update(secret_reference.as_bytes());
-    let account = format!("sha256:{:x}", digest.finalize());
-    Entry::new(VULCAN_AI_CREDENTIAL_SERVICE, &account)
-        .map_err(|_| String::from("Failed to open the operating-system credential store."))
+    record.access_token = Some(tokens.access_token.clone());
+    record.refresh_token = Some(tokens.refresh_token.clone());
+    record.issued_at_unix_ms = Some(
+        i64::try_from(tokens.issued_at_unix_ms)
+            .map_err(|_| String::from("OAuth issue time exceeds SQLite range."))?,
+    );
+    record.expires_at_unix_ms = Some(
+        i64::try_from(tokens.expires_at_unix_ms)
+            .map_err(|_| String::from("OAuth expiration time exceeds SQLite range."))?,
+    );
+    record.scope_text = tokens.scopes.iter().cloned().collect::<Vec<_>>().join(" ");
+    record.account_subject = tokens.account_subject.clone();
+    record.email = tokens.email.clone();
+    Ok(())
+}
+
+/// Reconstructs common OAuth token fields from one relational record.
+/// 从一条关系化记录重建公共 OAuth Token 字段。
+fn oauth_tokens_from_record(record: &AiCredentialSecretRecord) -> Result<OAuthTokenSet, String> {
+    let scopes = if record.scope_text.is_empty() {
+        BTreeSet::new()
+    } else {
+        let values = record.scope_text.split(' ').collect::<Vec<_>>();
+        if values.iter().any(|scope| scope.is_empty()) {
+            return Err(String::from("Stored OAuth scope field is invalid."));
+        }
+        values.into_iter().map(str::to_string).collect()
+    };
+    Ok(OAuthTokenSet {
+        access_token: required_record_text(&record.access_token, "OAuth access token")?,
+        refresh_token: required_record_text(&record.refresh_token, "OAuth refresh token")?,
+        issued_at_unix_ms: required_record_u64(record.issued_at_unix_ms, "OAuth issue time")?,
+        expires_at_unix_ms: required_record_u64(
+            record.expires_at_unix_ms,
+            "OAuth expiration time",
+        )?,
+        scopes,
+        account_subject: record.account_subject.clone(),
+        email: record.email.clone(),
+    })
+}
+
+/// Returns one required non-empty relational text field.
+/// 返回一个必需的非空关系文本字段。
+fn required_record_text(value: &Option<String>, label: &str) -> Result<String, String> {
+    value
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
+        .ok_or_else(|| format!("Stored AI credential {label} is missing."))
+}
+
+/// Returns one required non-negative relational integer as an unsigned value.
+/// 将一个必需的非负关系整数作为无符号值返回。
+fn required_record_u64(value: Option<i64>, label: &str) -> Result<u64, String> {
+    let value = value.ok_or_else(|| format!("Stored AI credential {label} is missing."))?;
+    u64::try_from(value).map_err(|_| format!("Stored AI credential {label} is invalid."))
+}
+
+/// Returns the current Unix timestamp in SQLite's signed millisecond range.
+/// 返回 SQLite 有符号毫秒范围内的当前 Unix 时间戳。
+fn current_unix_millis() -> Result<i64, String> {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| String::from("System clock is earlier than the Unix epoch."))?
+        .as_millis();
+    i64::try_from(millis).map_err(|_| String::from("System clock exceeds SQLite time range."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds one reusable valid OAuth token fixture.
+    /// 构建一份可复用的有效 OAuth Token 测试数据。
+    fn oauth_tokens() -> OAuthTokenSet {
+        OAuthTokenSet {
+            access_token: String::from("access"),
+            refresh_token: String::from("refresh"),
+            issued_at_unix_ms: 100,
+            expires_at_unix_ms: 200,
+            scopes: BTreeSet::from([String::from("account"), String::from("inference")]),
+            account_subject: Some(String::from("subject")),
+            email: Some(String::from("user@example.com")),
+        }
+    }
+
+    /// Verifies lossless Kimi relational conversion including its provider device identity.
+    /// 验证 Kimi 关系化转换无损保留供应商设备身份。
+    #[test]
+    fn kimi_oauth_round_trips_through_relational_record() {
+        let secret = CredentialSecretEnvelope::new(CredentialSecretMaterial::KimiCodingPlanOAuth {
+            tokens: OAuthTokenSet {
+                access_token: String::from("access"),
+                refresh_token: String::from("refresh"),
+                issued_at_unix_ms: 100,
+                expires_at_unix_ms: 200,
+                scopes: BTreeSet::from([String::from("account"), String::from("inference")]),
+                account_subject: Some(String::from("subject")),
+                email: Some(String::from("user@kimi.com")),
+            },
+            device_id: String::from("12345678-1234-1234-1234-123456789abc"),
+        })
+        .expect("Kimi fixture should be valid");
+
+        let record = credential_record_from_envelope("secret-kimi", &secret)
+            .expect("Kimi fixture should map to relational fields");
+        let restored = credential_envelope_from_record(record)
+            .expect("relational Kimi fields should reconstruct the envelope");
+
+        assert!(restored == secret);
+    }
+
+    /// Verifies that OAuth scopes remain a deterministic non-JSON field.
+    /// 验证 OAuth Scope 保持确定性的非 JSON 字段。
+    #[test]
+    fn oauth_scope_field_is_canonical_and_non_json() {
+        let secret = CredentialSecretEnvelope::new(CredentialSecretMaterial::ClaudeCodeOAuth {
+            tokens: OAuthTokenSet {
+                access_token: String::from("access"),
+                refresh_token: String::from("refresh"),
+                issued_at_unix_ms: 100,
+                expires_at_unix_ms: 200,
+                scopes: BTreeSet::from([String::from("zeta"), String::from("alpha")]),
+                account_subject: None,
+                email: None,
+            },
+        })
+        .expect("Claude fixture should be valid");
+
+        let record = credential_record_from_envelope("secret-claude", &secret)
+            .expect("Claude fixture should map to relational fields");
+
+        assert_eq!(record.scope_text, "alpha zeta");
+        assert!(
+            ['[', ']', '{', '}']
+                .iter()
+                .all(|marker| !record.scope_text.contains(*marker))
+        );
+    }
+
+    /// Verifies that every currently supported credential material remains lossless in relational storage.
+    /// 验证当前支持的全部凭据材料在关系化存储中保持无损。
+    #[test]
+    fn every_supported_credential_material_round_trips() {
+        let secrets = vec![
+            CredentialSecretEnvelope::new_api_key(String::from("api-key"))
+                .expect("API key fixture should be valid"),
+            CredentialSecretEnvelope::new(CredentialSecretMaterial::StaticBearer {
+                access_token: String::from("bearer"),
+            })
+            .expect("static bearer fixture should be valid"),
+            CredentialSecretEnvelope::new(CredentialSecretMaterial::OpenAiCodexOAuth {
+                tokens: oauth_tokens(),
+                id_token: Some(String::from("id-token")),
+                account_id: Some(String::from("account-id")),
+            })
+            .expect("OpenAI fixture should be valid"),
+            CredentialSecretEnvelope::new(CredentialSecretMaterial::ClaudeCodeOAuth {
+                tokens: oauth_tokens(),
+            })
+            .expect("Claude fixture should be valid"),
+            CredentialSecretEnvelope::new(CredentialSecretMaterial::GoogleOAuth {
+                tokens: oauth_tokens(),
+                client_id: String::from("client-id"),
+                client_secret: Some(String::from("client-secret")),
+                project_id: Some(String::from("project-id")),
+                quota_project_id: Some(String::from("quota-project-id")),
+            })
+            .expect("Google fixture should be valid"),
+            CredentialSecretEnvelope::new(CredentialSecretMaterial::MiniMaxOAuth {
+                tokens: oauth_tokens(),
+                region: MiniMaxRegion::Global,
+                resource_url: String::from("https://api.minimax.io"),
+            })
+            .expect("MiniMax fixture should be valid"),
+            CredentialSecretEnvelope::new(CredentialSecretMaterial::KimiCodingPlanOAuth {
+                tokens: oauth_tokens(),
+                device_id: String::from("12345678-1234-1234-1234-123456789abc"),
+            })
+            .expect("Kimi fixture should be valid"),
+        ];
+
+        for (index, secret) in secrets.into_iter().enumerate() {
+            let reference = format!("secret-{index}");
+            let record = credential_record_from_envelope(reference.as_str(), &secret)
+                .expect("credential fixture should map to relational fields");
+            let restored = credential_envelope_from_record(record)
+                .expect("relational fields should reconstruct the credential envelope");
+
+            assert!(restored == secret);
+        }
+    }
 }

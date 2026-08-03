@@ -16,7 +16,9 @@
           "status": { "enum": ["succeeded", "failed", "cancelled"] },
           "inputTokens": { "type": "number", "minimum": 0 },
           "outputTokens": { "type": "number", "minimum": 0 },
-          "totalTokens": { "type": "number", "minimum": 0 },
+          "totalTokens": { "type": ["number", "null"], "minimum": 0 },
+          "providerTotalTokens": { "type": ["number", "null"], "minimum": 0 },
+          "totalTokenSource": { "enum": ["reported", "derived", "inconsistent", "unknown"] },
           "cachedInputTokens": { "type": ["number", "null"], "minimum": 0 },
           "timeToFirstTokenMs": { "type": ["number", "null"], "minimum": 0 },
           "durationMs": { "type": "number", "minimum": 0 },
@@ -24,7 +26,7 @@
           "errorCategory": { "type": ["string", "null"] },
           "errorCode": { "type": ["string", "null"] }
         },
-        "required": ["requestId", "completedAtMs", "providerName", "modelName", "ownerKind", "ownerName", "status", "inputTokens", "outputTokens", "totalTokens", "durationMs", "retryCount"],
+        "required": ["requestId", "completedAtMs", "providerName", "modelName", "ownerKind", "ownerName", "status", "inputTokens", "outputTokens", "totalTokens", "providerTotalTokens", "totalTokenSource", "durationMs", "retryCount"],
         "additionalProperties": false
       }
     }

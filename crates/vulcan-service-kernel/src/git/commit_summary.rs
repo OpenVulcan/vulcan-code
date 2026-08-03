@@ -25,11 +25,11 @@ use vulcan_workbench_model::SessionId;
 use super::command::{format_webui_git_error, run_webui_git_command};
 use super::diff::{
     load_webui_staged_git_diff, load_webui_unstaged_git_diff, load_webui_untracked_git_diff,
-    resolve_webui_repository_root_from_workspace_text,
 };
 use super::model::{
     GitCommitSummaryGenerateRequest, GitCommitSummaryGenerateResponse, GitCommitSummaryInput,
 };
+use super::repository::resolve_webui_repository_root_from_workspace_text_with_key;
 use super::settings::resolve_git_commit_summary_model;
 use crate::{
     AgentRuntimeBridge, ProviderTelemetryHookGuard, SharedServiceBridgeState,
@@ -46,8 +46,16 @@ pub(crate) async fn service_generate_git_commit_message(
         .conversation_id
         .parse::<SessionId>()
         .map_err(|error| format!("会话标识无效，无法生成提交信息：{error}"))?;
-    let repository_root =
-        resolve_webui_repository_root_from_workspace_text(&request.workspace_path)?;
+    let resolved_workspace_path = crate::webui_diff_workspace_path_from_state(
+        &state,
+        None,
+        Some(&request.conversation_id),
+        Some(&request.workspace_path),
+    )?;
+    let repository_root = resolve_webui_repository_root_from_workspace_text_with_key(
+        &resolved_workspace_path,
+        request.repository_key.as_deref(),
+    )?;
     let (agent_runtime, provider_id, model_id, reasoning_effort, extra_prompt, plugin_runtime) = {
         let guard = state
             .lock()
@@ -110,11 +118,14 @@ pub(crate) async fn service_generate_git_commit_message(
         &prompt,
         agent_runtime.token_budget_runtime.estimator(),
     );
+    // repository_root_text keeps the owned repository path alive across the async model call.
+    // repository_root_text 在异步模型调用期间保持仓库路径所有权有效。
+    let repository_root_text = repository_root.to_string_lossy().into_owned();
     let report = run_git_commit_summary_model(
         state.clone(),
         agent_runtime,
         session_id,
-        &request.workspace_path,
+        &repository_root_text,
         reasoning_effort,
         prompt,
     )

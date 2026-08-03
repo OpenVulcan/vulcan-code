@@ -16,6 +16,7 @@ use crate::{
     RuntimeConnectionCatalogs, SecondaryRouteOption, SecondaryRouteSelection,
     built_in_provider_tool_targets, native_inference::validate_native_action_binding,
 };
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -201,7 +202,25 @@ struct SecondaryRouteCacheEntry {
 
 /// Reads secret material through a host-owned secure storage boundary.
 /// 通过宿主所有的安全存储边界读取秘密材料。
+#[async_trait]
 pub trait CredentialSecretResolver: Send + Sync {
+    /// Reads one secret when present without converting absence into a storage failure.
+    /// 在秘密存在时读取它，且不把缺失转换为存储失败。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `secret_reference` is the opaque reference saved with the credential connection.
+    /// `secret_reference` 是随凭据连接保存的不透明引用。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The validated secret when present, `None` when absent, or a controlled storage error.
+    /// 存在时返回已验证秘密，缺失时返回 `None`，否则返回受控存储错误。
+    async fn read_optional_secret(
+        &self,
+        secret_reference: &str,
+    ) -> Result<Option<CredentialSecretEnvelope>, String>;
+
     /// Reads the strict versioned secret identified by one exact persisted reference.
     /// 读取由一个精确持久化引用标识的严格版本化秘密。
     ///
@@ -214,11 +233,19 @@ pub trait CredentialSecretResolver: Send + Sync {
     /// 返回值
     /// The validated secret envelope or a controlled storage error that never includes the secret.
     /// 返回已验证秘密封装，或不包含秘密内容的受控存储错误。
-    fn read_secret(&self, secret_reference: &str) -> Result<CredentialSecretEnvelope, String>;
+    async fn read_secret(
+        &self,
+        secret_reference: &str,
+    ) -> Result<CredentialSecretEnvelope, String> {
+        self.read_optional_secret(secret_reference)
+            .await?
+            .ok_or_else(|| format!("AI credential `{secret_reference}` is not configured."))
+    }
 }
 
 /// Mutates versioned secrets through a host-owned compare-and-replace boundary.
 /// 通过宿主所有的比较替换边界修改版本化秘密。
+#[async_trait]
 pub trait CredentialSecretStore: CredentialSecretResolver {
     /// Creates one secret only when the opaque reference is absent.
     /// 仅在不透明引用不存在时创建一个秘密。
@@ -232,7 +259,7 @@ pub trait CredentialSecretStore: CredentialSecretResolver {
     /// 返回值
     /// Success after an exclusive secure-store create.
     /// 独占安全存储创建完成后返回成功。
-    fn create_secret(
+    async fn create_secret(
         &self,
         secret_reference: &str,
         secret: &CredentialSecretEnvelope,
@@ -250,7 +277,7 @@ pub trait CredentialSecretStore: CredentialSecretResolver {
     /// 返回值
     /// Success after a compare-and-replace mutation.
     /// 比较替换变更完成后返回成功。
-    fn replace_secret(
+    async fn replace_secret(
         &self,
         secret_reference: &str,
         expected_revision: u64,
@@ -264,7 +291,25 @@ pub trait CredentialSecretStore: CredentialSecretResolver {
     /// 返回值
     /// Success when the secret is absent or deleted.
     /// 秘密不存在或已删除时返回成功。
-    fn delete_secret(&self, secret_reference: &str) -> Result<(), String>;
+    async fn delete_secret(&self, secret_reference: &str) -> Result<(), String>;
+
+    /// Restores one exact deleted secret for transaction rollback.
+    /// 为事务回滚恢复一个精确的已删除秘密。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `secret_reference` must be absent and `secret` is the exact prior revision.
+    /// `secret_reference` 必须缺失，`secret` 是精确的先前修订版。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success only after restoring the complete prior secret.
+    /// 仅在恢复完整先前秘密后返回成功。
+    async fn restore_secret(
+        &self,
+        secret_reference: &str,
+        secret: &CredentialSecretEnvelope,
+    ) -> Result<(), String>;
 }
 
 /// Rejects credential reads when the host has not installed a secure resolver.
@@ -272,20 +317,25 @@ pub trait CredentialSecretStore: CredentialSecretResolver {
 #[derive(Debug, Default)]
 pub struct UnavailableCredentialSecretResolver;
 
+#[async_trait]
 impl CredentialSecretResolver for UnavailableCredentialSecretResolver {
-    /// Rejects the read because no secure host boundary exists.
-    /// 因不存在安全宿主边界而拒绝读取。
-    fn read_secret(&self, _secret_reference: &str) -> Result<CredentialSecretEnvelope, String> {
+    /// Rejects the optional read because no secure host boundary exists.
+    /// 因不存在安全宿主边界而拒绝可选读取。
+    async fn read_optional_secret(
+        &self,
+        _secret_reference: &str,
+    ) -> Result<Option<CredentialSecretEnvelope>, String> {
         Err(String::from(
             "The host has not installed an AI credential secret resolver.",
         ))
     }
 }
 
+#[async_trait]
 impl CredentialSecretStore for UnavailableCredentialSecretResolver {
     /// Rejects secret creation because no host store exists.
     /// 因不存在宿主存储而拒绝秘密创建。
-    fn create_secret(
+    async fn create_secret(
         &self,
         _secret_reference: &str,
         _secret: &CredentialSecretEnvelope,
@@ -297,7 +347,7 @@ impl CredentialSecretStore for UnavailableCredentialSecretResolver {
 
     /// Rejects secret replacement because no host store exists.
     /// 因不存在宿主存储而拒绝秘密替换。
-    fn replace_secret(
+    async fn replace_secret(
         &self,
         _secret_reference: &str,
         _expected_revision: u64,
@@ -310,7 +360,19 @@ impl CredentialSecretStore for UnavailableCredentialSecretResolver {
 
     /// Rejects secret deletion because no host store exists.
     /// 因不存在宿主存储而拒绝秘密删除。
-    fn delete_secret(&self, _secret_reference: &str) -> Result<(), String> {
+    async fn delete_secret(&self, _secret_reference: &str) -> Result<(), String> {
+        Err(String::from(
+            "The host has not installed an AI credential secret store.",
+        ))
+    }
+
+    /// Rejects rollback restoration because no host store exists.
+    /// 因不存在宿主存储而拒绝回滚恢复。
+    async fn restore_secret(
+        &self,
+        _secret_reference: &str,
+        _secret: &CredentialSecretEnvelope,
+    ) -> Result<(), String> {
         Err(String::from(
             "The host has not installed an AI credential secret store.",
         ))
@@ -499,6 +561,17 @@ impl PublicAiRuntime {
     /// 返回设置服务使用且不持久化事务的共享运行时。
     pub fn oauth(&self) -> &Arc<OAuthAuthorizationRuntime> {
         &self.oauth
+    }
+
+    /// Returns the shared host-owned credential store used by this runtime.
+    /// 返回该运行时使用的共享宿主持有凭据仓库。
+    ///
+    /// # Returns
+    /// 返回值
+    /// One cloned trait object that preserves the runtime storage identity.
+    /// 返回一个保持运行时存储身份的克隆 Trait Object。
+    pub fn credential_secret_store(&self) -> Arc<dyn CredentialSecretStore> {
+        Arc::clone(&self.secrets)
     }
 
     /// Replaces one credential-scoped catalog atomically.
@@ -821,9 +894,23 @@ impl PublicAiRuntime {
         };
         let source_model_count = source_catalog.models.len();
         let mut catalog = source_catalog.clone();
-        if let Err(error) =
-            apply_model_catalog_overlays(configuration, provider.id.as_str(), &mut catalog)
-                .and_then(|_| validate_resolved_catalog_limits(&catalog))
+        let kimi_coding_plan = provider.id == "kimi" && entry.id == "coding-plan";
+        if kimi_coding_plan {
+            let usage = self
+                .metadata_client
+                .query_account_usage(&entry, &connection, &secret)
+                .await;
+            self.cache_usage_snapshot(connection_id, usage, true)?;
+        }
+        let account_plan_name = self.cached_account_plan_name(connection_id)?;
+        if let Err(error) = apply_model_catalog_overlays_with_account_plan(
+            configuration,
+            provider.id.as_str(),
+            entry.id.as_str(),
+            account_plan_name.as_deref(),
+            &mut catalog,
+        )
+        .and_then(|_| validate_resolved_catalog_limits(&catalog))
         {
             self.record_catalog_refresh_failure(
                 connection_id,
@@ -866,6 +953,52 @@ impl PublicAiRuntime {
                 },
             );
         Ok(catalog)
+    }
+
+    /// Rebuilds one effective catalog after an account-usage observation changes model access.
+    /// 在账号用量观测改变模型访问权后重建一个有效目录。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration` supplies the authoritative overlays and `connection_id` identifies the
+    /// exact credential whose source catalog must be reprojected.
+    /// `configuration` 提供权威覆盖，`connection_id` 标识需要重新投影源目录的精确凭据。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success after the current source catalog has been atomically reprojected, or success with
+    /// no mutation when discovery has not produced a source catalog yet.
+    /// 当前源目录完成原子重新投影后返回成功；若发现尚未产生源目录，则成功但不修改状态。
+    fn rebuild_catalog_after_usage(
+        &self,
+        configuration: &PersistedAiConfiguration,
+        connection_id: &str,
+    ) -> Result<(), String> {
+        let (provider, entry, _) =
+            self.resolve_connection_metadata(configuration, connection_id)?;
+        let _mutation_guard = self
+            .catalog_mutation_lock
+            .lock()
+            .map_err(|_| String::from("The AI catalog mutation lock is poisoned."))?;
+        let source_catalog = self
+            .source_catalogs
+            .read()
+            .map_err(|_| String::from("The source AI model catalog lock is poisoned."))?
+            .get(connection_id)
+            .cloned();
+        let Some(mut catalog) = source_catalog else {
+            return Ok(());
+        };
+        let account_plan_name = self.cached_account_plan_name(connection_id)?;
+        apply_model_catalog_overlays_with_account_plan(
+            configuration,
+            provider.id.as_str(),
+            entry.id.as_str(),
+            account_plan_name.as_deref(),
+            &mut catalog,
+        )?;
+        validate_resolved_catalog_limits(&catalog)?;
+        self.replace_catalog(catalog)
     }
 
     /// Rebuilds every effective in-memory catalog from immutable discovery snapshots.
@@ -954,6 +1087,7 @@ impl PublicAiRuntime {
             .read()
             .map_err(|_| String::from("The source AI model catalog lock is poisoned."))?
             .snapshot();
+        let usage_cache = self.usage_cache_snapshot()?;
         let mut effective = RuntimeConnectionCatalogs::default();
         for connection in configuration.connection_graph.connections.values() {
             let Some(mut catalog) = source_catalogs
@@ -963,9 +1097,14 @@ impl PublicAiRuntime {
             else {
                 continue;
             };
-            apply_model_catalog_overlays(
+            let account_plan_name = usage_cache
+                .get(connection.id.as_str())
+                .and_then(|usage| usage.plan_name.as_deref());
+            apply_model_catalog_overlays_with_account_plan(
                 configuration,
                 connection.provider_id.as_str(),
+                connection.service_entry_id.as_str(),
+                account_plan_name,
                 &mut catalog,
             )?;
             validate_resolved_catalog_limits(&catalog)?;
@@ -1014,7 +1153,14 @@ impl PublicAiRuntime {
         else {
             return Ok(false);
         };
-        apply_model_catalog_overlays(configuration, connection.provider_id.as_str(), &mut catalog)?;
+        let account_plan_name = self.cached_account_plan_name(connection.id.as_str())?;
+        apply_model_catalog_overlays_with_account_plan(
+            configuration,
+            connection.provider_id.as_str(),
+            connection.service_entry_id.as_str(),
+            account_plan_name.as_deref(),
+            &mut catalog,
+        )?;
         validate_resolved_catalog_limits(&catalog)?;
         Ok(catalog.models.iter().any(|model| model.id == model_id))
     }
@@ -1073,7 +1219,14 @@ impl PublicAiRuntime {
             else {
                 continue;
             };
-            apply_model_catalog_overlays(&candidate_configuration, provider_id, &mut catalog)?;
+            let account_plan_name = self.cached_account_plan_name(connection.id.as_str())?;
+            apply_model_catalog_overlays_with_account_plan(
+                &candidate_configuration,
+                provider_id,
+                connection.service_entry_id.as_str(),
+                account_plan_name.as_deref(),
+                &mut catalog,
+            )?;
             let Some(model) = catalog.models.iter().find(|model| model.id == model_id) else {
                 continue;
             };
@@ -1127,7 +1280,14 @@ impl PublicAiRuntime {
         let Some(mut catalog) = manual_custom_catalog(configuration, connection, generation) else {
             return Ok(());
         };
-        apply_model_catalog_overlays(configuration, connection.provider_id.as_str(), &mut catalog)?;
+        let account_plan_name = self.cached_account_plan_name(connection.id.as_str())?;
+        apply_model_catalog_overlays_with_account_plan(
+            configuration,
+            connection.provider_id.as_str(),
+            connection.service_entry_id.as_str(),
+            account_plan_name.as_deref(),
+            &mut catalog,
+        )?;
         self.replace_catalog(catalog)
     }
 
@@ -1148,7 +1308,7 @@ impl PublicAiRuntime {
         configuration: &PersistedAiConfiguration,
         connection_id: &str,
     ) -> Result<AccountUsageSnapshot, String> {
-        let (_, entry, connection) =
+        let (provider, entry, connection) =
             self.resolve_connection_metadata(configuration, connection_id)?;
         let credential_profile = entry
             .credential_profile(connection.credential_profile_id.as_str())
@@ -1180,11 +1340,67 @@ impl PublicAiRuntime {
             .metadata_client
             .query_account_usage(&entry, &connection, &secret)
             .await;
-        self.usage_cache
-            .write()
-            .map_err(|_| String::from("The AI account-usage cache lock is poisoned."))?
-            .insert(connection_id.to_string(), snapshot.clone());
+        let kimi_coding_plan = provider.id == "kimi" && entry.id == "coding-plan";
+        let snapshot = self.cache_usage_snapshot(connection_id, snapshot, kimi_coding_plan)?;
+        if kimi_coding_plan {
+            self.rebuild_catalog_after_usage(configuration, connection_id)?;
+        }
         Ok(snapshot)
+    }
+
+    /// Caches one usage observation while retaining a confirmed Kimi plan through transient refresh failures.
+    /// 缓存一次用量观测，并在暂时刷新失败时保留已确认的 Kimi 套餐。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `connection_id` identifies the exact credential, `snapshot` is the provider observation,
+    /// and `preserve_plan_name` enables the Kimi-specific stale-plan rule.
+    /// `connection_id` 标识精确凭据，`snapshot` 是供应商观测，`preserve_plan_name` 启用 Kimi 专用旧套餐规则。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The snapshot stored in the process-local cache.
+    /// 已写入进程内缓存的观测。
+    fn cache_usage_snapshot(
+        &self,
+        connection_id: &str,
+        mut snapshot: AccountUsageSnapshot,
+        preserve_plan_name: bool,
+    ) -> Result<AccountUsageSnapshot, String> {
+        let mut cache = self
+            .usage_cache
+            .write()
+            .map_err(|_| String::from("The AI account-usage cache lock is poisoned."))?;
+        if preserve_plan_name && snapshot.plan_name.is_none() {
+            snapshot.plan_name = cache
+                .get(connection_id)
+                .and_then(|previous| previous.plan_name.clone());
+        }
+        cache.insert(connection_id.to_string(), snapshot.clone());
+        Ok(snapshot)
+    }
+
+    /// Reads the normalized plan name associated with one exact credential.
+    /// 读取一个精确凭据关联的规范化套餐名称。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `connection_id` identifies the process-local usage observation.
+    /// `connection_id` 标识进程内用量观测。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The confirmed plan name when the usage cache contains one.
+    /// 当用量缓存包含已确认套餐时返回其名称。
+    fn cached_account_plan_name(&self, connection_id: &str) -> Result<Option<String>, String> {
+        self.usage_cache
+            .read()
+            .map_err(|_| String::from("The AI account-usage cache lock is poisoned."))
+            .map(|cache| {
+                cache
+                    .get(connection_id)
+                    .and_then(|usage| usage.plan_name.clone())
+            })
     }
 
     /// Returns the complete process-local account-usage cache.
@@ -2222,6 +2438,35 @@ impl PublicAiRuntime {
         self.resolve_execution_from_selection(selection).await
     }
 
+    /// Resolves complete execution inputs for one exact persisted connection and model.
+    /// 为一个精确持久化连接与模型解析完整执行输入。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration` owns the authoritative connection graph; the remaining identifiers are
+    /// the exact selection frozen by the submitting session.
+    /// `configuration` 持有权威连接图；其余标识是提交会话冻结的精确选择。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The route, model, secret, and local overrides for that exact account.
+    /// 该精确账号的路由、模型、秘密与本地覆盖。
+    pub async fn resolve_connection_model_execution(
+        &self,
+        configuration: &PersistedAiConfiguration,
+        connection_id: &str,
+        provider_id: &str,
+        model_id: &str,
+    ) -> Result<ResolvedPublicAiExecution, String> {
+        let selection = self.resolve_connection_model_selection(
+            configuration,
+            connection_id,
+            provider_id,
+            model_id,
+        )?;
+        self.resolve_execution_from_selection(selection).await
+    }
+
     /// Attaches credential material to one already validated public selection.
     /// 为一个已经校验的公共选择附加凭据材料。
     ///
@@ -2274,7 +2519,7 @@ impl PublicAiRuntime {
         connection_id: &str,
         secret_reference: &str,
     ) -> Result<CredentialExecutionSecret, String> {
-        let current = self.secrets.read_secret(secret_reference)?;
+        let current = self.secrets.read_secret(secret_reference).await?;
         if !current.requires_refresh(current_unix_millis()?, OAUTH_REFRESH_SKEW_MS) {
             return current.execution_secret();
         }
@@ -2290,17 +2535,18 @@ impl PublicAiRuntime {
             )
         };
         let _guard = refresh_lock.lock().await;
-        let current = self.secrets.read_secret(secret_reference)?;
+        let current = self.secrets.read_secret(secret_reference).await?;
         if !current.requires_refresh(current_unix_millis()?, OAUTH_REFRESH_SKEW_MS) {
             return current.execution_secret();
         }
         let material = self.oauth.refresh(&current.material).await?;
         let refreshed = current.advance_with_material(material)?;
-        if let Err(replace_error) =
-            self.secrets
-                .replace_secret(secret_reference, current.revision, &refreshed)
+        if let Err(replace_error) = self
+            .secrets
+            .replace_secret(secret_reference, current.revision, &refreshed)
+            .await
         {
-            let concurrent = self.secrets.read_secret(secret_reference)?;
+            let concurrent = self.secrets.read_secret(secret_reference).await?;
             if concurrent.revision > current.revision
                 && !concurrent.requires_refresh(current_unix_millis()?, OAUTH_REFRESH_SKEW_MS)
             {
@@ -2810,9 +3056,22 @@ fn manual_custom_catalog(
 /// 参数
 /// `configuration` owns user data, `provider_id` is exact, and `catalog` is rebuilt in place.
 /// `configuration` 持有用户数据，`provider_id` 为精确标识，`catalog` 会被原地重建。
+#[cfg(test)]
 fn apply_model_catalog_overlays(
     configuration: &PersistedAiConfiguration,
     provider_id: &str,
+    catalog: &mut ConnectionModelCatalog,
+) -> Result<(), String> {
+    apply_model_catalog_overlays_with_account_plan(configuration, provider_id, "", None, catalog)
+}
+
+/// Applies catalog overlays together with the exact account-level Kimi entitlement observation.
+/// 应用目录覆盖，并叠加精确账号级 Kimi 权益观测。
+fn apply_model_catalog_overlays_with_account_plan(
+    configuration: &PersistedAiConfiguration,
+    provider_id: &str,
+    service_entry_id: &str,
+    account_plan_name: Option<&str>,
     catalog: &mut ConnectionModelCatalog,
 ) -> Result<(), String> {
     let custom_provider = provider_id.starts_with("custom:");
@@ -2928,6 +3187,13 @@ fn apply_model_catalog_overlays(
     models.retain(|model_id, _| {
         configuration.connection_model_is_enabled(catalog.connection_id.as_str(), model_id)
     });
+    if provider_id == "kimi" && service_entry_id == "coding-plan" {
+        // Kimi Coding Plan access is applied only after a confirmed usage observation so a transient lookup failure does not invent a tier.
+        // Kimi Coding Plan 仅在获得已确认用量观测后应用访问矩阵，避免暂时查询失败臆造套餐等级。
+        models.retain(|model_id, _| {
+            crate::kimi_coding_plan_model_is_available(account_plan_name, model_id)
+        });
+    }
     catalog.models = models.into_values().collect();
     Ok(())
 }

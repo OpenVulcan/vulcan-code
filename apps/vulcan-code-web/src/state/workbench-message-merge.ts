@@ -62,6 +62,8 @@ export function workbenchDeltaConversationId(envelope: WorkbenchDeltaEnvelope): 
       return null;
     case "luaSkillsManagedRuntimeProgressChanged":
       return null;
+    case "mediaUploadProgressChanged":
+      return envelope.delta.payload.conversationId ?? null;
   }
 }
 

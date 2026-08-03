@@ -316,6 +316,11 @@ export type TranslationKey =
   | "console.newConversation"
   | "console.emptyPrompt"
   | "conversation.loading.title"
+  | "conversation.submission.creating"
+  | "conversation.submission.preparing"
+  | "conversation.submission.uploading"
+  | "conversation.submission.uploadProgress"
+  | "conversation.submission.cancelling"
   | "conversation.loading.requesting"
   | "conversation.loading.locating"
   | "conversation.loading.index"
@@ -553,6 +558,9 @@ export type TranslationKey =
   | "composer.accountCard.noQuotaWindows"
   | "composer.accountCard.remaining"
   | "composer.accountCard.weeklyRemaining"
+  | "composer.accountCard.kimiWeeklyUsage"
+  | "composer.accountCard.kimiFiveHourUsage"
+  | "composer.accountCard.kimiLimit"
   | "composer.accountCard.reset"
   | "composer.accountCard.notIncluded"
   | "composer.accountCard.unlimited"
@@ -708,13 +716,49 @@ export type TranslationKey =
   | "projectSettings.codebaseMemory.disableHint"
   | "projectSettings.codebaseMemory.serviceStatus"
   | "projectSettings.codebaseMemory.indexStatus"
+  | "projectSettings.codebaseMemory.availability"
+  | "projectSettings.codebaseMemory.availability.ready"
+  | "projectSettings.codebaseMemory.availability.degraded"
+  | "projectSettings.codebaseMemory.availability.unavailable"
+  | "projectSettings.codebaseMemory.availability.offline"
+  | "projectSettings.codebaseMemory.availability.unknown"
   | "projectSettings.codebaseMemory.lastIndexed"
   | "projectSettings.codebaseMemory.revision"
+  | "projectSettings.codebaseMemory.watcher"
+  | "projectSettings.codebaseMemory.registered"
+  | "projectSettings.codebaseMemory.notRegistered"
+  | "projectSettings.codebaseMemory.graphSize"
+  | "projectSettings.codebaseMemory.graphSizeValue"
   | "projectSettings.codebaseMemory.unavailable"
   | "projectSettings.codebaseMemory.reindex"
+  | "projectSettings.codebaseMemory.refresh"
+  | "projectSettings.codebaseMemory.update"
+  | "projectSettings.codebaseMemory.rebuild"
+  | "projectSettings.codebaseMemory.rebuildTitle"
+  | "projectSettings.codebaseMemory.rebuildDescription"
+  | "projectSettings.codebaseMemory.confirmRebuild"
+  | "projectSettings.codebaseMemory.cancel"
+  | "projectSettings.codebaseMemory.lastJob"
+  | "projectSettings.codebaseMemory.job.availableDuringUpdate"
+  | "projectSettings.codebaseMemory.job.mode.update"
+  | "projectSettings.codebaseMemory.job.mode.rebuild"
+  | "projectSettings.codebaseMemory.job.phase.queued"
+  | "projectSettings.codebaseMemory.job.phase.discovering"
+  | "projectSettings.codebaseMemory.job.phase.extracting"
+  | "projectSettings.codebaseMemory.job.phase.resolving"
+  | "projectSettings.codebaseMemory.job.phase.persisting"
+  | "projectSettings.codebaseMemory.job.phase.publishing"
+  | "projectSettings.codebaseMemory.job.phase.finalizing"
+  | "projectSettings.codebaseMemory.job.state.queued"
+  | "projectSettings.codebaseMemory.job.state.running"
+  | "projectSettings.codebaseMemory.job.state.succeeded"
+  | "projectSettings.codebaseMemory.job.state.failed"
+  | "projectSettings.codebaseMemory.job.state.cancelled"
   | "projectSettings.codebaseMemory.enabledSaved"
   | "projectSettings.codebaseMemory.disabledSaved"
   | "projectSettings.codebaseMemory.reindexAccepted"
+  | "projectSettings.codebaseMemory.updateAccepted"
+  | "projectSettings.codebaseMemory.rebuildAccepted"
   | "projectSettings.vmmDescription"
   | "projectSettings.vmmLoading"
   | "projectSettings.enableProjectOverride"
@@ -2269,6 +2313,13 @@ export type TranslationKey =
   | "gitCommitDialog.pushing"
   | "gitCommitDialog.toolsTitle"
   | "gitCommitDialog.changes"
+  | "gitCommitDialog.reviewSettings"
+| "gitCommitDialog.monitoringEnabled"
+| "gitCommitDialog.monitoringDisabled"
+| "gitCommitDialog.monitoringManager"
+| "gitCommitDialog.monitoringManagerDescription"
+| "gitCommitDialog.moveRepositoryUp"
+| "gitCommitDialog.moveRepositoryDown"
   | "gitCommitDialog.open"
   | "gitCommitDialog.title"
   | "gitCommitDialog.description"
@@ -2773,6 +2824,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "console.newConversation": "新会话",
     "console.emptyPrompt": "我们应该在 {projectName} 中构建什么？",
     "conversation.loading.title": "正在载入会话",
+    "conversation.submission.creating": "正在创建会话",
+    "conversation.submission.preparing": "正在准备工作区",
+    "conversation.submission.uploading": "正在上传媒体",
+    "conversation.submission.uploadProgress": "媒体上传进度",
+    "conversation.submission.cancelling": "正在取消上传",
     "conversation.loading.requesting": "正在请求会话数据",
     "conversation.loading.locating": "正在定位会话",
     "conversation.loading.index": "正在读取消息索引",
@@ -3010,6 +3066,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.accountCard.noQuotaWindows": "该供应商不提供套餐额度窗口",
     "composer.accountCard.remaining": "剩余",
     "composer.accountCard.weeklyRemaining": "周剩余",
+    "composer.accountCard.kimiWeeklyUsage": "周用量",
+    "composer.accountCard.kimiFiveHourUsage": "5 小时用量",
+    "composer.accountCard.kimiLimit": "额度",
     "composer.accountCard.reset": "重置",
     "composer.accountCard.notIncluded": "不包含",
     "composer.accountCard.unlimited": "无限",
@@ -3165,13 +3224,49 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "projectSettings.codebaseMemory.disableHint": "不会注册 AI 工具，也不会删除已有索引。",
     "projectSettings.codebaseMemory.serviceStatus": "托管服务状态",
     "projectSettings.codebaseMemory.indexStatus": "项目索引状态",
+    "projectSettings.codebaseMemory.availability": "已发布索引",
+    "projectSettings.codebaseMemory.availability.ready": "可用",
+    "projectSettings.codebaseMemory.availability.degraded": "降级可用",
+    "projectSettings.codebaseMemory.availability.unavailable": "尚不可用",
+    "projectSettings.codebaseMemory.availability.offline": "离线缓存",
+    "projectSettings.codebaseMemory.availability.unknown": "尚未检查",
     "projectSettings.codebaseMemory.lastIndexed": "最近成功索引",
     "projectSettings.codebaseMemory.revision": "索引修订",
+    "projectSettings.codebaseMemory.watcher": "增量监视",
+    "projectSettings.codebaseMemory.registered": "已注册",
+    "projectSettings.codebaseMemory.notRegistered": "未注册",
+    "projectSettings.codebaseMemory.graphSize": "当前图谱",
+    "projectSettings.codebaseMemory.graphSizeValue": "{nodes} 个节点 · {edges} 条边",
     "projectSettings.codebaseMemory.unavailable": "暂不可用",
     "projectSettings.codebaseMemory.reindex": "重建项目索引",
+    "projectSettings.codebaseMemory.refresh": "刷新索引状态",
+    "projectSettings.codebaseMemory.update": "同步索引",
+    "projectSettings.codebaseMemory.rebuild": "完整重建",
+    "projectSettings.codebaseMemory.rebuildTitle": "完整重建项目索引？",
+    "projectSettings.codebaseMemory.rebuildDescription": "完整重建会在隔离数据库中重新扫描项目，成功后再原子替换现有索引。重建期间当前可用索引仍可继续查询。",
+    "projectSettings.codebaseMemory.confirmRebuild": "确认完整重建",
+    "projectSettings.codebaseMemory.cancel": "取消",
+    "projectSettings.codebaseMemory.lastJob": "最近任务",
+    "projectSettings.codebaseMemory.job.availableDuringUpdate": "后台任务不会让已经发布的索引进入不可用状态。",
+    "projectSettings.codebaseMemory.job.mode.update": "同步索引",
+    "projectSettings.codebaseMemory.job.mode.rebuild": "完整重建",
+    "projectSettings.codebaseMemory.job.phase.queued": "等待调度",
+    "projectSettings.codebaseMemory.job.phase.discovering": "扫描文件",
+    "projectSettings.codebaseMemory.job.phase.extracting": "提取结构",
+    "projectSettings.codebaseMemory.job.phase.resolving": "解析关系",
+    "projectSettings.codebaseMemory.job.phase.persisting": "写入索引",
+    "projectSettings.codebaseMemory.job.phase.publishing": "发布索引",
+    "projectSettings.codebaseMemory.job.phase.finalizing": "完成收尾",
+    "projectSettings.codebaseMemory.job.state.queued": "等待中",
+    "projectSettings.codebaseMemory.job.state.running": "运行中",
+    "projectSettings.codebaseMemory.job.state.succeeded": "已完成",
+    "projectSettings.codebaseMemory.job.state.failed": "失败",
+    "projectSettings.codebaseMemory.job.state.cancelled": "已取消",
     "projectSettings.codebaseMemory.enabledSaved": "已启用项目 Codebase Memory。",
     "projectSettings.codebaseMemory.disabledSaved": "已停用项目 Codebase Memory，已有索引仍保留。",
     "projectSettings.codebaseMemory.reindexAccepted": "项目索引重建请求已提交。",
+    "projectSettings.codebaseMemory.updateAccepted": "索引同步任务已提交。",
+    "projectSettings.codebaseMemory.rebuildAccepted": "完整重建任务已提交。",
     "projectSettings.vmmDescription": "覆盖当前项目的记忆开关、用户/项目映射与召回注入参数。",
     "projectSettings.vmmLoading": "正在加载项目 VMM 设置...",
     "projectSettings.enableProjectOverride": "启用项目覆盖",
@@ -4192,7 +4287,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.aiVendors": "能力供应商",
     "settings.aiWebSearch": "网页搜索",
     "settings.aiWebExtract": "网页抓取",
-    "settings.aiUnderstandImage": "图片理解",
+    "settings.aiUnderstandImage": "媒体理解工具",
     "settings.aiUnderstandVideo": "视频理解",
     "settings.aiUnderstandAudio": "音频理解",
     "settings.aiImageGeneration": "图片生成",
@@ -4213,7 +4308,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.aiVendors.description": "多个语义 AI 工具共用的能力供应商与路由目标。",
     "settings.aiWebSearch.description": "网页搜索能力的启用状态与可用目标。",
     "settings.aiWebExtract.description": "网页抓取能力的启用状态与可用目标。",
-    "settings.aiUnderstandImage.description": "图片理解能力的启用状态与可用目标。",
+    "settings.aiUnderstandImage.description": "独立供应商媒体理解工具的启用状态与可用目标；不等同于模型原生附件能力。",
     "settings.aiUnderstandVideo.description": "视频理解能力入口与接入状态。",
     "settings.aiUnderstandAudio.description": "音频理解能力入口与接入状态。",
     "settings.aiImageGeneration.description": "图片生成能力的启用状态与可用目标。",
@@ -4629,7 +4724,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerTools.disabled": "不启用",
     "settings.providerTools.unavailable": "已选目标不可用",
     "settings.providerTools.imageGenerate": "图片生成",
-    "settings.providerTools.mediaAnalyze": "图片理解",
+    "settings.providerTools.mediaAnalyze": "媒体理解工具",
     "settings.providerTools.musicGenerate": "音乐生成",
     "settings.providerTools.speechSynthesize": "语音合成",
     "settings.providerTools.videoGenerate": "视频生成",
@@ -4726,6 +4821,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "gitCommitDialog.pushing": "推送中",
     "gitCommitDialog.toolsTitle": "GIT 工具",
     "gitCommitDialog.changes": "更改",
+    "gitCommitDialog.reviewSettings": "审查设置",
+    "gitCommitDialog.monitoringEnabled": "监听中",
+    "gitCommitDialog.monitoringDisabled": "已关闭",
+    "gitCommitDialog.monitoringManager": "GIT设置",
+    "gitCommitDialog.monitoringManagerDescription": "选择需要监听的仓库，并调整显示顺序。第一个启用仓库固定展开。",
+    "gitCommitDialog.moveRepositoryUp": "上移仓库",
+    "gitCommitDialog.moveRepositoryDown": "下移仓库",
     "gitCommitDialog.open": "提交或推送",
     "gitCommitDialog.title": "提交或推送",
     "gitCommitDialog.description": "选择提交目标、填写提交信息，并根据 Git 变更状态启用提交操作。",
@@ -5227,6 +5329,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "console.newConversation": "New conversation",
     "console.emptyPrompt": "What should we build in {projectName}?",
     "conversation.loading.title": "Loading conversation",
+    "conversation.submission.creating": "Creating conversation",
+    "conversation.submission.preparing": "Preparing workspace",
+    "conversation.submission.uploading": "Uploading media",
+    "conversation.submission.uploadProgress": "Media upload progress",
+    "conversation.submission.cancelling": "Cancelling upload",
     "conversation.loading.requesting": "Requesting conversation data",
     "conversation.loading.locating": "Locating conversation",
     "conversation.loading.index": "Reading message index",
@@ -5464,6 +5571,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.accountCard.noQuotaWindows": "This provider does not expose plan quota windows",
     "composer.accountCard.remaining": "Remaining",
     "composer.accountCard.weeklyRemaining": "Weekly",
+    "composer.accountCard.kimiWeeklyUsage": "Weekly usage",
+    "composer.accountCard.kimiFiveHourUsage": "5-hour usage",
+    "composer.accountCard.kimiLimit": "Limit",
     "composer.accountCard.reset": "Reset",
     "composer.accountCard.notIncluded": "Not included",
     "composer.accountCard.unlimited": "Unlimited",
@@ -5619,13 +5729,49 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "projectSettings.codebaseMemory.disableHint": "AI tools are not registered and existing indexes are retained.",
     "projectSettings.codebaseMemory.serviceStatus": "Managed service status",
     "projectSettings.codebaseMemory.indexStatus": "Project index status",
+    "projectSettings.codebaseMemory.availability": "Published index",
+    "projectSettings.codebaseMemory.availability.ready": "Available",
+    "projectSettings.codebaseMemory.availability.degraded": "Available with warnings",
+    "projectSettings.codebaseMemory.availability.unavailable": "Not available yet",
+    "projectSettings.codebaseMemory.availability.offline": "Offline cache",
+    "projectSettings.codebaseMemory.availability.unknown": "Not checked",
     "projectSettings.codebaseMemory.lastIndexed": "Last successful index",
     "projectSettings.codebaseMemory.revision": "Index revision",
+    "projectSettings.codebaseMemory.watcher": "Incremental watcher",
+    "projectSettings.codebaseMemory.registered": "Registered",
+    "projectSettings.codebaseMemory.notRegistered": "Not registered",
+    "projectSettings.codebaseMemory.graphSize": "Current graph",
+    "projectSettings.codebaseMemory.graphSizeValue": "{nodes} nodes · {edges} edges",
     "projectSettings.codebaseMemory.unavailable": "Unavailable",
     "projectSettings.codebaseMemory.reindex": "Reindex project",
+    "projectSettings.codebaseMemory.refresh": "Refresh index status",
+    "projectSettings.codebaseMemory.update": "Sync index",
+    "projectSettings.codebaseMemory.rebuild": "Full rebuild",
+    "projectSettings.codebaseMemory.rebuildTitle": "Fully rebuild the project index?",
+    "projectSettings.codebaseMemory.rebuildDescription": "A full rebuild rescans the project in an isolated database and atomically replaces the current index only after success. The currently published index remains queryable during the rebuild.",
+    "projectSettings.codebaseMemory.confirmRebuild": "Confirm full rebuild",
+    "projectSettings.codebaseMemory.cancel": "Cancel",
+    "projectSettings.codebaseMemory.lastJob": "Latest job",
+    "projectSettings.codebaseMemory.job.availableDuringUpdate": "A background job does not make the already published index unavailable.",
+    "projectSettings.codebaseMemory.job.mode.update": "Index sync",
+    "projectSettings.codebaseMemory.job.mode.rebuild": "Full rebuild",
+    "projectSettings.codebaseMemory.job.phase.queued": "Waiting to start",
+    "projectSettings.codebaseMemory.job.phase.discovering": "Scanning files",
+    "projectSettings.codebaseMemory.job.phase.extracting": "Extracting structure",
+    "projectSettings.codebaseMemory.job.phase.resolving": "Resolving relationships",
+    "projectSettings.codebaseMemory.job.phase.persisting": "Writing index",
+    "projectSettings.codebaseMemory.job.phase.publishing": "Publishing index",
+    "projectSettings.codebaseMemory.job.phase.finalizing": "Finalizing",
+    "projectSettings.codebaseMemory.job.state.queued": "Queued",
+    "projectSettings.codebaseMemory.job.state.running": "Running",
+    "projectSettings.codebaseMemory.job.state.succeeded": "Completed",
+    "projectSettings.codebaseMemory.job.state.failed": "Failed",
+    "projectSettings.codebaseMemory.job.state.cancelled": "Cancelled",
     "projectSettings.codebaseMemory.enabledSaved": "Project Codebase Memory enabled.",
     "projectSettings.codebaseMemory.disabledSaved": "Project Codebase Memory disabled; existing indexes were retained.",
     "projectSettings.codebaseMemory.reindexAccepted": "Project reindex request submitted.",
+    "projectSettings.codebaseMemory.updateAccepted": "Index sync job submitted.",
+    "projectSettings.codebaseMemory.rebuildAccepted": "Full rebuild job submitted.",
     "projectSettings.vmmDescription": "Override memory enablement, user/project mapping, and recall injection parameters for this project.",
     "projectSettings.vmmLoading": "Loading project VMM settings...",
     "projectSettings.enableProjectOverride": "Enable project override",
@@ -6646,7 +6792,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.aiVendors": "Capability vendors",
     "settings.aiWebSearch": "Web search",
     "settings.aiWebExtract": "Web extract",
-    "settings.aiUnderstandImage": "Image understanding",
+    "settings.aiUnderstandImage": "Media understanding tool",
     "settings.aiUnderstandVideo": "Video understanding",
     "settings.aiUnderstandAudio": "Audio understanding",
     "settings.aiImageGeneration": "Image generation",
@@ -6667,7 +6813,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.aiVendors.description": "Capability vendors and route targets shared by semantic AI tools.",
     "settings.aiWebSearch.description": "Web-search capability state and available targets.",
     "settings.aiWebExtract.description": "Web-extraction capability state and available targets.",
-    "settings.aiUnderstandImage.description": "Image-understanding capability state and available targets.",
+    "settings.aiUnderstandImage.description": "State and available targets for the independent provider media-understanding tool; this is separate from native model attachments.",
     "settings.aiUnderstandVideo.description": "Video-understanding capability entry and connection status.",
     "settings.aiUnderstandAudio.description": "Audio-understanding capability entry and connection status.",
     "settings.aiImageGeneration.description": "Image-generation capability state and available targets.",
@@ -7083,7 +7229,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerTools.disabled": "Disabled",
     "settings.providerTools.unavailable": "Selected target unavailable",
     "settings.providerTools.imageGenerate": "Image generation",
-    "settings.providerTools.mediaAnalyze": "Image understanding",
+    "settings.providerTools.mediaAnalyze": "Media understanding tool",
     "settings.providerTools.musicGenerate": "Music generation",
     "settings.providerTools.speechSynthesize": "Speech synthesis",
     "settings.providerTools.videoGenerate": "Video generation",
@@ -7180,6 +7326,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "gitCommitDialog.pushing": "Pushing",
     "gitCommitDialog.toolsTitle": "Git tools",
     "gitCommitDialog.changes": "Changes",
+    "gitCommitDialog.reviewSettings": "Review settings",
+    "gitCommitDialog.monitoringEnabled": "Monitoring on",
+    "gitCommitDialog.monitoringDisabled": "Monitoring off",
+    "gitCommitDialog.monitoringManager": "Git settings",
+    "gitCommitDialog.monitoringManagerDescription": "Choose repositories to monitor and adjust their display order. The first enabled repository stays expanded.",
+    "gitCommitDialog.moveRepositoryUp": "Move repository up",
+    "gitCommitDialog.moveRepositoryDown": "Move repository down",
     "gitCommitDialog.open": "Commit or push",
     "gitCommitDialog.title": "Commit or push",
     "gitCommitDialog.description": "Choose a commit target, enter a commit message, and run commit actions based on the current Git changes.",

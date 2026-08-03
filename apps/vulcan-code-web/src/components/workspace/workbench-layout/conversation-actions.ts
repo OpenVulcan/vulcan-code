@@ -3,7 +3,9 @@ import type { ModelPickerChoice } from "@/components/composer/model-picker-contr
 import type { ComposerSubmission } from "@/components/composer/composer-model";
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
+import { materializeAcknowledgedDraftSubmission } from "@/components/workspace/draft-submission-state";
 import {
+  cancelConversationSubmission,
   compactSelectedConversationContext,
   closeSubagentTask,
   forkConversation,
@@ -156,8 +158,42 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
   const activeConversationId = selectedDraftConversation
     ? null
     : selectedConversation?.id ?? null;
+  // clientSubmissionId correlates the optimistic first message with the authoritative service acknowledgement.
+  // clientSubmissionId 将乐观首条消息与权威服务确认关联起来。
+  const clientSubmissionId = crypto.randomUUID();
+  // pendingStageTimer advances the bounded user-facing status when acknowledgement is not immediate.
+  // pendingStageTimer 在确认未即时返回时推进有界的用户可见状态。
+  const pendingStageTimer = selectedDraftConversation
+    ? window.setTimeout(() => {
+        setDraftConversation((current) => current?.id === selectedDraftConversation.id
+          && current.pendingSubmission?.clientSubmissionId === clientSubmissionId
+          ? {
+              ...current,
+              pendingSubmission: {
+                ...current.pendingSubmission,
+                stage: "preparing",
+              },
+            }
+          : current);
+      }, 500)
+    : null;
+  if (selectedDraftConversation) {
+    setDraftConversation((current) => current?.id === selectedDraftConversation.id
+      ? {
+          ...current,
+          pendingSubmission: {
+            clientSubmissionId,
+            prompt: submission.prompt,
+            attachments: submission.attachments,
+            startedAt: Date.now(),
+            stage: "creating",
+          },
+        }
+      : current);
+  }
   try {
     const ack = await submitConversationPrompt(
+      clientSubmissionId,
       activeProjectId,
       activeConversationId,
       submission.prompt,
@@ -169,8 +205,17 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
       submission.sessionSettings,
     );
     if (!ack) {
+      if (selectedDraftConversation) {
+        setDraftConversation((current) => current?.id === selectedDraftConversation.id
+          && current.pendingSubmission?.clientSubmissionId === clientSubmissionId
+          ? { ...current, pendingSubmission: null }
+          : current);
+      }
       toast.info(translate("conversationActions.previewCannotSend"));
       return false;
+    }
+    if (ack.clientSubmissionId !== clientSubmissionId) {
+      throw new Error("Service acknowledgement did not match the active submission.");
     }
     const nextConversationId = ack.conversationId || activeConversationId;
     if (nextConversationId) {
@@ -185,20 +230,35 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
         pendingMaterializedConversationIdRef.current = materializedConversationAlreadyVisible
           ? null
           : nextConversationId;
+        setDraftConversation((current) => materializeAcknowledgedDraftSubmission(
+          current,
+          submittedSelectionId,
+          clientSubmissionId,
+          nextConversationId,
+          materializedConversationAlreadyVisible,
+        ));
       }
       setSelectedConversationId((current) => (
         current === submittedSelectionId ? nextConversationId : current
       ));
     }
-    // Only retire the exact submitted draft so a newer draft created during the RPC is preserved.
-    // 仅清理本次提交的精确草稿，避免覆盖 RPC 期间新建的草稿。
-    setDraftConversation((current) => (
-      current?.id === submittedSelectionId ? null : current
-    ));
     return true;
   } catch (nextError) {
-    toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    if (selectedDraftConversation) {
+      setDraftConversation((current) => current?.id === selectedDraftConversation.id
+        && current.pendingSubmission?.clientSubmissionId === clientSubmissionId
+        ? { ...current, pendingSubmission: null }
+        : current);
+    }
+    const errorMessage = nextError instanceof Error ? nextError.message : String(nextError);
+    if (!errorMessage.startsWith("submission_cancelled:")) {
+      toast.error(errorMessage);
+    }
     return false;
+  } finally {
+    if (pendingStageTimer !== null) {
+      window.clearTimeout(pendingStageTimer);
+    }
   }
 }, [
   pendingMaterializedConversationIdRef,
@@ -260,6 +320,17 @@ const handleStopConversationRun = React.useCallback(async (): Promise<boolean> =
     return false;
   }
 }, [mergeWorkbenchWithLocalCaches, requestStopConversationRunChoice, selectedConversation?.id, setWorkbenchState]);
+
+// handleCancelConversationSubmission aborts a pending upload before the backend materializes the prompt.
+// handleCancelConversationSubmission 在后端物化提示词前中止待处理上传。
+const handleCancelConversationSubmission = React.useCallback(async (clientSubmissionId: string): Promise<boolean> => {
+  try {
+    return await cancelConversationSubmission(clientSubmissionId);
+  } catch (nextError) {
+    toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    return false;
+  }
+}, []);
 
 // handleCompactSelectedConversationContext starts manual compaction from slash commands.
 // handleCompactSelectedConversationContext 从斜杠指令启动手动上下文压缩。
@@ -622,6 +693,7 @@ const handleSelectWorkbenchThinkingDisplayMode = React.useCallback(async (mode: 
     handleSubmitConversationPrompt,
     handleInsertPendingPrompt,
     handleStopConversationRun,
+    handleCancelConversationSubmission,
     handleCompactSelectedConversationContext,
     handleOpenSubagentPanel,
     handleStopSubagentTask,

@@ -17,6 +17,7 @@ import type {
   WorkspaceDiffSearchRequest,
   WorkspaceDiffSearchResponse,
   WorkspaceDiffSnapshotResponse,
+  WorkspaceGitRepositoryCatalog,
 } from "@/diff/types";
 import {
   browserFallbackSnapshot,
@@ -93,6 +94,43 @@ export async function loadWorkspaceDiffSnapshot(
     projectId,
     conversationId,
     request,
+  });
+}
+
+// loadWorkspaceGitCatalog discovers the project repositories used by review nodes.
+// loadWorkspaceGitCatalog 发现审核节点使用的项目仓库。
+export async function loadWorkspaceGitCatalog(
+  workspacePath: string,
+  projectId: string | null,
+  conversationId: string | null,
+): Promise<WorkspaceGitRepositoryCatalog> {
+  if (!hasServiceRuntime()) {
+    return { projectRoot: workspacePath, repositories: [] };
+  }
+  return serviceClient.request<WorkspaceGitRepositoryCatalog>("workspace.git.catalog", {
+    workspacePath,
+    projectId,
+    conversationId,
+  });
+}
+
+// setWorkspaceGitMonitoring persists one repository's live-monitoring switch.
+// setWorkspaceGitMonitoring 持久化单个仓库的实时监听开关。
+export async function setWorkspaceGitMonitoring(
+  workspacePath: string,
+  projectId: string | null,
+  conversationId: string | null,
+  repositoryKey: string,
+  enabled: boolean,
+): Promise<WorkspaceGitRepositoryCatalog> {
+  if (!hasServiceRuntime()) {
+    return { projectRoot: workspacePath, repositories: [] };
+  }
+  return serviceClient.request<WorkspaceGitRepositoryCatalog>("workspace.git.setMonitoring", {
+    workspacePath,
+    projectId,
+    conversationId,
+    request: { repositoryKey, enabled },
   });
 }
 

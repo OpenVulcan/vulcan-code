@@ -492,8 +492,10 @@ fn precheck_cannot_own_vmm_profile_state_or_system_block() {
 /// 验证隐藏模型引导会进入 Provider 请求，但不会污染转录记录。
 #[test]
 fn hidden_model_guidance_stays_out_of_visible_transcript() {
-    let mut runtime_state = SessionRuntimeStateEntry::default();
-    runtime_state.active_temperature = Some(0.7);
+    let mut runtime_state = SessionRuntimeStateEntry {
+        active_temperature: Some(0.7),
+        ..SessionRuntimeStateEntry::default()
+    };
     let mut hook_runtime = ConversationHookRuntime::new();
     let start = begin_shared_prompt_turn_with_runtime_state(
         &mut runtime_state,

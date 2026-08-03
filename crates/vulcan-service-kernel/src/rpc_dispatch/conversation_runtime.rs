@@ -12,6 +12,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_session_history_page",
     "service_session_tool_detail",
     "service_submit_conversation_prompt",
+    "service_cancel_conversation_submission",
     "service_stop_conversation_run",
     "service_stop_command_session",
     "service_get_command_session_snapshot",
@@ -90,6 +91,7 @@ pub(super) async fn dispatch(
             service_submit_conversation_prompt(
                 app,
                 state,
+                rpc_required_param(params, "clientSubmissionId")?,
                 rpc_optional_param(params, "projectId")?,
                 rpc_optional_param(params, "conversationId")?,
                 rpc_required_param(params, "prompt")?,
@@ -103,6 +105,11 @@ pub(super) async fn dispatch(
                 ExistingSessionHydrationPolicy::HydrateIfEmpty,
             )
             .await,
+        ),
+        "service_cancel_conversation_submission" => rpc_json_result(
+            rpc_required_param::<String>(params, "clientSubmissionId").and_then(
+                |client_submission_id| cancel_media_upload(client_submission_id.as_str()),
+            ),
         ),
         "service_stop_conversation_run" => rpc_json_result(
             service_stop_conversation_run(

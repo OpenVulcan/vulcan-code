@@ -7,7 +7,7 @@ import { openProjectDirectoryPath } from "@/service/project-actions-service";
 import { DiffFileCard, DiffFileHeader, useDiffScrollState } from "../diff-file-card";
 import { DiffPanelToolbar } from "../diff-review-toolbar";
 import { DIFF_SEARCH_DETAIL_PREFETCH_TARGET_MATCHES, DIFF_SEARCH_SUMMARY_FILE_MATCH_LIMIT, DIFF_SEARCH_SUMMARY_REQUEST_DEBOUNCE_MS } from "../limits";
-import type { DiffFile, DiffPanelSnapshot, DiffRenderPreferences, DiffReviewSelection, DiffViewMode, WorkspaceDiffSearchResponse, WorkspaceGitFileActionKind } from "../types";
+import type { DiffFile, DiffPanelSnapshot, DiffRenderPreferences, DiffReviewSelection, DiffViewMode, WorkspaceDiffSearchResponse, WorkspaceGitFileActionKind, WorkspaceGitRepositorySummary } from "../types";
 import { clampDiffSearchIndex, diffSearchVisiblePage } from "../diff-search";
 import { useDiffSearchIndex } from "../diff-search-worker-client";
 import {
@@ -60,6 +60,9 @@ export function DiffReviewPanel(props: {
   // Current Git review source selection.
   // 当前 Git 审核来源选择。
   selection?: DiffReviewSelection;
+  // Discovered repositories available for right-panel selection.
+  // 右侧面板可选择的已发现仓库。
+  repositories?: WorkspaceGitRepositorySummary[];
   // Optional empty-state title.
   // 可选空状态标题。
   emptyTitle?: string;
@@ -528,6 +531,7 @@ export function DiffReviewPanel(props: {
       <DiffPanelToolbar
         loading={refreshBusy}
         selection={selection}
+        repositories={props.repositories}
         snapshot={snapshot}
         canSearchNext={searchIndex.matches.length > 1}
         canSearchPrevious={searchIndex.matches.length > 1}

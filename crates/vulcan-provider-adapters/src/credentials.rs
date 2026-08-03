@@ -22,8 +22,8 @@ pub enum MiniMaxRegion {
     China,
 }
 
-/// Stores one versioned credential secret inside the operating-system credential store.
-/// 在操作系统凭据仓库中保存一个版本化凭据秘密。
+/// Describes one versioned credential secret managed by the host credential store.
+/// 描述一个由宿主凭据仓库管理的版本化凭据秘密。
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CredentialSecretEnvelope {
@@ -286,8 +286,8 @@ impl CredentialSecretEnvelope {
     ///
     /// # Parameters
     /// 参数
-    /// `document` is the exact value read from the operating-system credential store.
-    /// `document` 是从操作系统凭据仓库读取的精确值。
+    /// `document` is one exact host-supplied serialized envelope.
+    /// `document` 是宿主提供的一份精确序列化封装。
     ///
     /// # Returns
     /// 返回值

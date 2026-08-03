@@ -183,6 +183,74 @@ pub struct WorkbenchDeltaEnvelope {
     pub delta: WorkbenchDelta,
 }
 
+/// Identifies one phase in the pre-dispatch media transfer lifecycle.
+/// 标识分派前媒体传输生命周期中的一个阶段。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum MediaUploadPhase {
+    /// The host is validating and opening the local source.
+    /// 宿主正在校验并打开本地源。
+    Preparing,
+    /// The source is being uploaded or read for an inline provider payload.
+    /// 源文件正在上传，或正在为内联供应商载荷读取。
+    Uploading,
+    /// The source is ready and the actual model request may start.
+    /// 源文件已就绪，可以开始实际模型请求。
+    Completed,
+    /// The user cancelled before the model request was sent.
+    /// 用户在模型请求发送前取消了本次操作。
+    Cancelled,
+    /// The source could not be prepared.
+    /// 源文件准备失败。
+    Failed,
+}
+
+/// Carries one ephemeral media-transfer progress update for the active submission.
+/// 携带活动提交的一条临时媒体传输进度更新。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaUploadProgressChangedDelta {
+    /// Client-generated submission identity used by the cancel RPC and draft recovery.
+    /// 客户端生成的提交标识，用于取消 RPC 与草稿恢复。
+    pub client_submission_id: String,
+    /// Existing conversation identity, or null while a new draft is being prepared.
+    /// 已有会话标识；新草稿准备期间为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    /// Exact provider selected for the pending request.
+    /// 待处理请求选定的精确供应商。
+    pub provider_id: String,
+    /// Exact model selected for the pending request.
+    /// 待处理请求选定的精确模型。
+    pub model_id: String,
+    /// User-visible source file name.
+    /// 面向用户展示的源文件名。
+    pub file_name: String,
+    /// Stable media kind such as image, audio, or video.
+    /// 稳定媒体类型，例如 image、audio 或 video。
+    pub media_kind: String,
+    /// Zero-based attachment index within the current submission.
+    /// 当前提交中的从零开始附件索引。
+    pub file_index: usize,
+    /// Total attachment count participating in preparation.
+    /// 参与准备的附件总数。
+    pub file_count: usize,
+    /// Current transfer lifecycle phase.
+    /// 当前传输生命周期阶段。
+    pub phase: MediaUploadPhase,
+    /// Bytes transferred or pre-read so far.
+    /// 当前已传输或预读取的字节数。
+    pub bytes_sent: u64,
+    /// Optional source byte length.
+    /// 可选的源文件字节长度。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_bytes: Option<u64>,
+    /// Controlled failure detail for the failed phase.
+    /// 失败阶段携带的受控错误详情。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// Describes one partial workbench update emitted on hot paths.
 /// 描述热路径上发出的单条局部工作台更新。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -254,6 +322,9 @@ pub enum WorkbenchDelta {
     /// Native LuaSkills managed-runtime progress replacement.
     /// LuaSkills 原生受管运行时进度替换增量。
     LuaSkillsManagedRuntimeProgressChanged(LuaSkillsManagedRuntimeProgressChangedDelta),
+    /// Ephemeral media upload progress for a submission that has not been materialized yet.
+    /// 尚未物化提交的临时媒体上传进度增量。
+    MediaUploadProgressChanged(MediaUploadProgressChangedDelta),
 }
 
 /// Replaces the Agent Skills domain without resending the full workbench snapshot.
@@ -726,6 +797,9 @@ pub struct SessionAddonsChangedResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmitConversationPromptAck {
+    /// Stable client-generated identifier that correlates optimistic UI state with this acknowledgement.
+    /// 将乐观界面状态与本次确认关联的客户端稳定生成标识。
+    pub client_submission_id: String,
     /// Stable conversation identifier that owns the accepted prompt.
     /// 拥有已接收提示词的稳定会话标识。
     pub conversation_id: String,

@@ -20,6 +20,9 @@
         "outputTokens": { "type": "number", "minimum": 0 },
         "reasoningTokens": { "type": "number", "minimum": 0 },
         "totalTokens": { "type": "number", "minimum": 0 },
+        "providerTotalTokens": { "type": "number", "minimum": 0 },
+        "unknownTokenRequests": { "type": "number", "minimum": 0 },
+        "inconsistentTokenRequests": { "type": "number", "minimum": 0 },
         "cachedInputTokens": { "type": "number", "minimum": 0 },
         "cacheCreationInputTokens": { "type": "number", "minimum": 0 },
         "durationMs": { "type": "number", "minimum": 0 },
@@ -37,7 +40,7 @@
         "successRate": { "type": "number", "minimum": 0, "maximum": 100 },
         "cacheHitRate": { "type": "number", "minimum": 0, "maximum": 100 }
       },
-      "required": ["requests", "successes", "failures", "cancelled", "retries", "inputTokens", "outputTokens", "reasoningTokens", "totalTokens", "cachedInputTokens", "cacheCreationInputTokens", "durationMs", "averageDurationMs", "mainAgentTokens", "subagentTokens", "internalTokens", "longestRequestMs", "peakRequestTokens", "averageFirstTokenMs", "activeDays", "currentStreakDays", "longestStreakDays", "peakDailyTokens", "successRate", "cacheHitRate"],
+      "required": ["requests", "successes", "failures", "cancelled", "retries", "inputTokens", "outputTokens", "reasoningTokens", "totalTokens", "providerTotalTokens", "unknownTokenRequests", "inconsistentTokenRequests", "cachedInputTokens", "cacheCreationInputTokens", "durationMs", "averageDurationMs", "mainAgentTokens", "subagentTokens", "internalTokens", "longestRequestMs", "peakRequestTokens", "averageFirstTokenMs", "activeDays", "currentStreakDays", "longestStreakDays", "peakDailyTokens", "successRate", "cacheHitRate"],
       "additionalProperties": false
     },
     "heatmap": {

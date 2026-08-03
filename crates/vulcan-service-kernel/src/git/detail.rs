@@ -15,6 +15,7 @@ use super::model::{
     WebuiWorkspaceDiffFileDetail, WebuiWorkspaceDiffFileDetailRequest, WebuiWorkspaceDiffMode,
     WebuiWorkspaceDiffRequest,
 };
+use super::repository::resolve_webui_repository_root_for_request;
 use super::selection::load_webui_workspace_diff_selection;
 use crate::{WEBUI_DIFF_DEFAULT_CONTEXT_LINES, normalized_workspace_path_text_from_path};
 
@@ -25,8 +26,20 @@ pub(crate) fn load_webui_workspace_diff_file_detail(
     request: Option<WebuiWorkspaceDiffRequest>,
     file: WebuiWorkspaceDiffFileDetailRequest,
 ) -> Result<WebuiWorkspaceDiffFileDetail, String> {
+    let request = request.unwrap_or(WebuiWorkspaceDiffRequest {
+        repository_key: None,
+        mode: WebuiWorkspaceDiffMode::Unstaged,
+        base_branch: None,
+        compare_branch: None,
+        commit_hash: None,
+    });
     let resolution = resolve_webui_workspace_git_resolution(workspace_path)?;
-    let Some(repository_root) = resolution.repository_root else {
+    let repository_root = resolve_webui_repository_root_for_request(
+        &resolution.workspace_path,
+        request.repository_key.as_deref(),
+        resolution.repository_root,
+    )?;
+    let Some(repository_root) = repository_root else {
         return Ok(WebuiWorkspaceDiffFileDetail {
             repository_root: normalized_workspace_path_text_from_path(&resolution.workspace_path),
             file: None,
@@ -46,7 +59,7 @@ pub(crate) fn load_webui_workspace_diff_file_detail(
     let hunk_index = file.hunk_index;
     let hunk_expansion_direction =
         normalized_webui_diff_hunk_expansion_direction(file.hunk_expansion_direction.as_deref());
-    let selection = load_webui_workspace_diff_selection(&repository_root, request)?;
+    let selection = load_webui_workspace_diff_selection(&repository_root, Some(request))?;
     let loaded_diff = load_webui_selected_workspace_unified_diff_for_path(
         &repository_root,
         selection.request.mode,

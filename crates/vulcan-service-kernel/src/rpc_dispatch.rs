@@ -104,24 +104,58 @@ pub(super) async fn dispatch_service_rpc(
     // traces_submit_rpc identifies the only RPC with detailed submission trace events.
     // traces_submit_rpc 标识唯一具有详细提交追踪事件的 RPC。
     let traces_submit_rpc = method == "service_submit_conversation_prompt";
+    // submit_trace_identity reads only fields declared by the exact submit RPC contract.
+    // submit_trace_identity 仅读取精确提交 RPC 契约声明的字段。
+    let submit_trace_identity = traces_submit_rpc.then(|| {
+        let client_submission_id = params
+            .get("clientSubmissionId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let target = params
+            .get("conversationId")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(|_| "existing")
+            .unwrap_or("new");
+        (client_submission_id, target)
+    });
     if traces_submit_rpc {
-        webui_submit_trace("rpc_received", format!("method={method}"));
+        let client_submission_id = submit_trace_identity
+            .as_ref()
+            .map(|(client_submission_id, _)| client_submission_id.as_str())
+            .unwrap_or_default();
+        webui_submit_trace(
+            "rpc_received",
+            format!("method={method} client_submission_id={client_submission_id}"),
+        );
     }
     // rpc_result preserves service and unknown-method failures for the returning trace.
     // rpc_result 为返回追踪保留服务失败与未知方法失败。
-    let rpc_result = match dispatch_known_service_rpc(app, state, &method, &params).await? {
+    let rpc_result = match dispatch_known_service_rpc(app, state.clone(), &method, &params).await? {
         ServiceRpcDispatch::Handled(result) => result,
         ServiceRpcDispatch::Unknown => Err(unknown_service_rpc_error(&method)),
     };
     if traces_submit_rpc {
+        let rpc_elapsed_ms = current_unix_millis_value().saturating_sub(rpc_started_at);
         webui_submit_trace(
             "rpc_returning",
             format!(
-                "method={method} ok={} elapsed_ms={}",
+                "method={method} ok={} elapsed_ms={rpc_elapsed_ms}",
                 rpc_result.is_ok(),
-                current_unix_millis_value().saturating_sub(rpc_started_at)
             ),
         );
+        if let Some((client_submission_id, target)) = submit_trace_identity
+            && let Err(error) = retain_slow_submission_diagnostic(
+                &state,
+                &client_submission_id,
+                target,
+                "rpc_total",
+                rpc_elapsed_ms,
+            )
+        {
+            eprintln!("[webui-service] failed to retain slow RPC diagnostic: {error}");
+        }
     }
     rpc_result
 }
@@ -190,6 +224,8 @@ mod tests {
         assert!(methods.contains("service_set_plugin_mcp_secret"));
         assert!(methods.contains("service_delete_plugin_mcp_secret"));
         assert!(methods.contains("workspace.diff.snapshot"));
+        assert!(methods.contains("workspace.git.catalog"));
+        assert!(methods.contains("workspace.git.setMonitoring"));
         assert!(methods.contains("service_remove_project"));
         assert!(methods.contains("service_create_knowledge_library"));
         assert!(methods.contains("service_list_knowledge_sources"));

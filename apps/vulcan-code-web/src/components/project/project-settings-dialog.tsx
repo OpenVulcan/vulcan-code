@@ -56,8 +56,9 @@ export {
 } from "./project-settings-utils";
 import {
   loadProjectCodebaseMemorySettings,
-  reindexProjectCodebaseMemory,
+  refreshProjectCodebaseMemorySettings,
   setProjectCodebaseMemoryEnabled,
+  updateProjectCodebaseMemoryIndex as requestProjectCodebaseMemoryIndex,
 } from "@/service/codebase-memory-service";
 
 // PROJECT_SETTINGS_RETRY_BASE_DELAY_MS is the first reconnect recovery delay.
@@ -707,9 +708,9 @@ export function ProjectSettingsDialog(props: {
     }
   };
 
-  // reindexCodebaseMemory requests a non-destructive rebuild and keeps returned diagnostics authoritative.
-  // reindexCodebaseMemory 请求非破坏性重建，并以返回诊断为权威。
-  const reindexCodebaseMemory = async () => {
+  // refreshCodebaseMemory queries one authoritative live Sidecar snapshot.
+  // refreshCodebaseMemory 查询一份权威的实时 Sidecar 快照。
+  const refreshCodebaseMemory = async () => {
     if (!projectId || codebaseMemoryBusy || codebaseMemoryMutationInFlightRef.current) {
       return;
     }
@@ -720,7 +721,42 @@ export function ProjectSettingsDialog(props: {
     codebaseMemoryMutationInFlightRef.current = true;
     setCodebaseMemoryMutationBusy(true);
     try {
-      const settings = await reindexProjectCodebaseMemory(targetProjectId);
+      const settings = await refreshProjectCodebaseMemorySettings(targetProjectId);
+      if (settings.projectId !== targetProjectId) {
+        throw new Error("Codebase Memory settings returned a mismatched project identity.");
+      }
+      if (
+        projectActionOwnerRef.current === requestOwner
+        && codebaseMemoryRequestSequenceRef.current === requestSequence
+      ) {
+        setCodebaseMemorySettings(settings);
+      }
+    } catch (error) {
+      if (projectActionOwnerRef.current === requestOwner) {
+        toast.error(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      if (projectActionOwnerRef.current === requestOwner) {
+        codebaseMemoryMutationInFlightRef.current = false;
+        setCodebaseMemoryMutationBusy(false);
+      }
+    }
+  };
+
+  // updateCodebaseMemoryIndex requests one exact incremental update or isolated full rebuild.
+  // updateCodebaseMemoryIndex 请求一次精确的增量更新或隔离完整重建。
+  const updateCodebaseMemoryIndex = async (mode: "update" | "rebuild") => {
+    if (!projectId || codebaseMemoryBusy || codebaseMemoryMutationInFlightRef.current) {
+      return;
+    }
+    const targetProjectId = projectId;
+    const requestOwner = projectActionOwnerRef.current;
+    const requestSequence = codebaseMemoryRequestSequenceRef.current + 1;
+    codebaseMemoryRequestSequenceRef.current = requestSequence;
+    codebaseMemoryMutationInFlightRef.current = true;
+    setCodebaseMemoryMutationBusy(true);
+    try {
+      const settings = await requestProjectCodebaseMemoryIndex(targetProjectId, mode);
       if (settings.projectId !== targetProjectId) {
         throw new Error("Codebase Memory settings returned a mismatched project identity.");
       }
@@ -731,7 +767,9 @@ export function ProjectSettingsDialog(props: {
         setCodebaseMemorySettings(settings);
       }
       if (projectActionOwnerRef.current === requestOwner) {
-        toast.success(t("projectSettings.codebaseMemory.reindexAccepted"));
+        toast.success(t(mode === "update"
+          ? "projectSettings.codebaseMemory.updateAccepted"
+          : "projectSettings.codebaseMemory.rebuildAccepted"));
       }
     } catch (error) {
       if (projectActionOwnerRef.current === requestOwner) {
@@ -802,8 +840,10 @@ export function ProjectSettingsDialog(props: {
             {activeSection === "codebase-memory" ? (
               <ProjectCodebaseMemorySection
                 busy={codebaseMemoryBusy}
-                onReindex={() => void reindexCodebaseMemory()}
+                onRebuild={() => void updateCodebaseMemoryIndex("rebuild")}
+                onRefresh={() => void refreshCodebaseMemory()}
                 onSetEnabled={(enabled) => void updateCodebaseMemoryEnabled(enabled)}
+                onUpdate={() => void updateCodebaseMemoryIndex("update")}
                 settings={codebaseMemorySettings}
               />
             ) : null}

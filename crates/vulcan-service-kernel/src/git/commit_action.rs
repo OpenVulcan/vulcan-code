@@ -12,10 +12,10 @@ use super::command::{
 use super::diff::{
     ensure_webui_git_ref_text, load_webui_current_branch_unpushed_commit_count,
     load_webui_current_git_branch, load_webui_head_commit_identity,
-    resolve_webui_repository_root_from_workspace_text, webui_current_branch_has_upstream,
-    webui_git_ref_exists,
+    webui_current_branch_has_upstream, webui_git_ref_exists,
 };
 use super::model::{GitCommitActionRequest, GitCommitActionResponse, GitCommitActionTargetRequest};
+use super::repository::resolve_webui_repository_root_from_workspace_text_with_key;
 use crate::{SharedServiceBridgeState, workspace_root};
 
 /// Runs the requested Git commit and optional push operation.
@@ -29,8 +29,29 @@ pub(crate) async fn service_run_git_commit_action(
         .parse::<SessionId>()
         .map_err(|error| format!("会话标识无效，无法执行提交：{error}"))?;
     validate_git_commit_action_session_exists(&state, session_id)?;
-    let repository_root =
-        resolve_webui_repository_root_from_workspace_text(&request.workspace_path)?;
+    let resolved_workspace_path = crate::webui_diff_workspace_path_from_state(
+        &state,
+        None,
+        Some(&request.conversation_id),
+        Some(&request.workspace_path),
+    )?;
+    let repository_root = resolve_webui_repository_root_from_workspace_text_with_key(
+        &resolved_workspace_path,
+        request.repository_key.as_deref(),
+    )?;
+    // operation_guard prevents concurrent sessions from mutating the same repository index or refs.
+    // operation_guard 防止多个会话并发修改同一个仓库的索引或引用。
+    let _operation_guard = crate::begin_webui_git_repository_operation(&repository_root).await?;
+    // Recheck monitoring after acquiring the write lane so preference updates serialize with this mutation.
+    // 获取写入通道后重新检查监听状态，确保偏好更新与本次变更严格串行。
+    crate::ensure_webui_git_repository_monitoring_enabled(
+        state,
+        Some(request.workspace_path.clone()),
+        None,
+        Some(request.conversation_id.clone()),
+        request.repository_key.as_deref(),
+    )
+    .await?;
     let commit_message = request.message.trim();
     if commit_message.is_empty() {
         if request.include_unstaged {

@@ -120,6 +120,7 @@ pub(crate) fn execute_vulcan_public_stream(
                 resolved.secret.clone(),
                 resolved.client.clone(),
                 adapter_inputs.provider_tool_definitions,
+                resolved.model.capabilities.provider_native_tools.clone(),
                 output_token_limit,
                 prompt_cache.clone(),
                 reasoning_effort,
@@ -174,6 +175,7 @@ pub(crate) fn capture_vulcan_public_stream(
             resolved.secret,
             resolved.client.clone(),
             provider_tool_definitions,
+            resolved.model.capabilities.provider_native_tools,
             output_token_limit,
             prompt_cache,
             reasoning_effort,
@@ -221,6 +223,9 @@ pub(crate) struct VulcanPublicContractAdapter {
     /// Model-visible host tool definitions.
     /// 模型可见的宿主工具定义。
     tools: Vec<ToolDefinition>,
+    /// Provider-native tools declared by the exact discovered model route.
+    /// 精确发现模型路由声明的供应商原生工具。
+    provider_native_tools: Vec<NativeToolKind>,
     /// Resolved output limit for every controller turn.
     /// 每个控制器回合使用的已解析输出限制。
     output_token_limit: u64,
@@ -283,6 +288,7 @@ impl VulcanPublicContractAdapter {
         secret: CredentialExecutionSecret,
         client: ProviderExecutionClient,
         tools: Vec<ProviderToolDefinition>,
+        provider_native_tools: Vec<NativeToolKind>,
         output_token_limit: u64,
         prompt_cache: PromptCachePolicy,
         reasoning_effort: Option<ReasoningEffort>,
@@ -323,6 +329,7 @@ impl VulcanPublicContractAdapter {
                     ),
                 })
                 .collect(),
+            provider_native_tools,
             output_token_limit,
             prompt_cache,
             reasoning_effort,
@@ -405,6 +412,7 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
                 &self.route,
                 self.model_id.as_str(),
                 self.input_resources.as_slice(),
+                &self.client,
             )
             .await?;
             messages.push(public_message);
@@ -419,6 +427,16 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
             self.model_id.as_str(),
             usize::from(!system_prompt.is_empty()),
         );
+        let mut native_tools = self.provider_native_tools.clone();
+        if self.route.protocol_route.protocol_profile_id
+            == vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID
+            && self.output_resources.contains(&ResourceKind::Image)
+            && !native_tools.contains(&NativeToolKind::ImageGeneration)
+        {
+            // Preserve the existing Codex image-generation capability while merging route metadata.
+            // 合并路由元数据时保留现有 Codex 图片生成能力。
+            native_tools.push(NativeToolKind::ImageGeneration);
+        }
         let public = AiExecutionRequest {
             operation: AiOperation::ConversationRespond,
             model_id: config.model_id.clone(),
@@ -426,14 +444,7 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
             continuation,
             messages,
             tools: self.tools.clone(),
-            native_tools: if self.route.protocol_route.protocol_profile_id
-                == vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID
-                && self.output_resources.contains(&ResourceKind::Image)
-            {
-                vec![NativeToolKind::ImageGeneration]
-            } else {
-                Vec::new()
-            },
+            native_tools,
             tool_choice: ToolChoicePolicy::Auto,
             parallel_tool_calls: ParallelToolCallPolicy::ProviderDefault,
             structured_output: StructuredOutputPolicy::None,
@@ -1355,8 +1366,8 @@ fn safe_generated_resource_stem(resource_id: &str) -> String {
     }
 }
 
-/// Resolves every local message resource into an immutable request-scoped data URL.
-/// 将每个本地消息资源解析为不可变的请求作用域 Data URL。
+/// Resolves every local message resource into an immutable request-scoped URL or data URL.
+/// 将每个本地消息资源解析为不可变的请求作用域原生 URL 或 Data URL。
 ///
 /// # Parameters
 /// 参数
@@ -1375,6 +1386,7 @@ async fn resolve_public_message_resources(
     route: &ProviderExecutionRoute,
     model_id: &str,
     model_resource_kinds: &[ResourceKind],
+    client: &ProviderExecutionClient,
 ) -> Result<(), VulcanCoreError> {
     for item in &mut message.content {
         let ContentItem::Resource { resource } = item else {
@@ -1394,6 +1406,22 @@ async fn resolve_public_message_resources(
                 .as_str(),
             )
         })?;
+        let media_type = resource.media_type.as_deref().ok_or_else(|| {
+            provider_failure(
+                route.provider.id.as_str(),
+                format!("Resource `{}` is missing its MIME type.", resource.id).as_str(),
+            )
+        })?;
+        if let Some(prepared_url) = client.prepared_media_url(
+            route,
+            model_id,
+            std::path::Path::new(local_path),
+            resource.kind,
+            media_type,
+        ) {
+            resource.url = Some(prepared_url);
+            continue;
+        }
         if let Some(byte_limit) = minimax_local_resource_byte_limit(route, model_id, resource) {
             let metadata = tokio::fs::metadata(local_path).await.map_err(|error| {
                 provider_failure(
@@ -1435,12 +1463,6 @@ async fn resolve_public_message_resources(
                 .as_str(),
             ));
         }
-        let media_type = resource.media_type.as_deref().ok_or_else(|| {
-            provider_failure(
-                route.provider.id.as_str(),
-                format!("Resource `{}` is missing its MIME type.", resource.id).as_str(),
-            )
-        })?;
         resource.url = Some(format!(
             "data:{media_type};base64,{}",
             base64::engine::general_purpose::STANDARD.encode(bytes)

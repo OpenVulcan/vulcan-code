@@ -22,6 +22,18 @@ messages:
   settings.save: Save settings
   settings.saving: Saving
   settings.saved: Saved
+  clear.title: Clear statistics
+  clear.previewOnly: Preview first
+  clear.description: Use the selected model and an optional inclusive local date range. Clearing cannot be undone.
+  clear.from: From date
+  clear.to: To date
+  clear.allModels: All models
+  clear.preview: Preview cleanup
+  clear.previewing: Preparing preview
+  clear.apply: Confirm cleanup
+  clear.applying: Clearing
+  clear.previewSummary: "Preview: {{requests}} requests · {{tokens}} tokens"
+  clear.success: "Cleared {{count}} requests"
   range.7: Last 7 days
   range.30: Last 30 days
   range.90: Last 90 days
@@ -48,9 +60,11 @@ messages:
   metric.time_to_first_token_ms: Average first token
   metric.label: Trend metric
   summary.tokens: Token usage
-  summary.inputTokens: Input tokens
+  summary.inputTokens: Uncached input tokens
   summary.outputTokens: Output tokens
   summary.cachedTokens: Cached input tokens
+  summary.unknownTokens: Unknown token requests
+  summary.inconsistentTokens: Inconsistent token requests
   summary.requests: Requests
   summary.retries: "{{count}} retries"
   summary.successRate: Success rate

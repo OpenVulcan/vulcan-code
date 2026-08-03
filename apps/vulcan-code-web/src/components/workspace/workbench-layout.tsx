@@ -33,6 +33,8 @@ import {
 import {
   type DraftConversationSelection,
 } from "@/components/workspace/workspace-resizable-body";
+import { retireMaterializedDraftSubmission } from "@/components/workspace/draft-submission-state";
+import { MediaUploadProgressPanel } from "@/components/workspace/media-upload-progress-panel";
 import { WorkbenchDialogs } from "@/components/workspace/workbench-dialogs";
 import { useWorkbenchShellChrome } from "@/components/workspace/workbench-layout/shell-chrome";
 import {
@@ -88,6 +90,7 @@ import type {
   VmmConfigDraftSummary,
   WorkbenchDeltaEnvelope,
   WorkbenchSnapshot,
+  MediaUploadProgressChangedDelta,
 } from "@/types";
 import {
   rejectPendingQuestion,
@@ -339,6 +342,9 @@ export function WorkbenchLayout(props: {
   const [workbenchState, setWorkbenchState] = React.useState<WorkbenchSnapshot>(
     () => workbenchWithSubagentSurfaceMessageCache(props.workbench, subagentSurfaceMessageCacheRef.current),
   );
+  // mediaUploadProgresses keeps every active pre-dispatch upload keyed by its exact submission identity.
+  // mediaUploadProgresses 按精确提交标识保存所有活跃的分派前上传，避免并发上传互相覆盖。
+  const [mediaUploadProgresses, setMediaUploadProgresses] = React.useState<Record<string, MediaUploadProgressChangedDelta>>({});
   React.useEffect(() => {
     if (
       isPluginDetailSubArea(activeWorkbenchSkillSubArea)
@@ -1006,6 +1012,7 @@ export function WorkbenchLayout(props: {
     handleSubmitConversationPrompt,
     handleInsertPendingPrompt,
     handleStopConversationRun,
+    handleCancelConversationSubmission,
     handleCompactSelectedConversationContext,
     handleOpenSubagentPanel,
     handleStopSubagentTask,
@@ -1438,6 +1445,26 @@ export function WorkbenchLayout(props: {
     const acceptedProjectSettingsRevisions = new Map<string, ProjectSettingsRevision>();
     let nextAcceptedRevision = acceptedWorkbenchRevisionRef.current;
     for (const envelope of props.workbenchDelta.envelopes) {
+      if (envelope.delta.kind === "mediaUploadProgressChanged") {
+        // Upload progress still participates in global ordering so a terminal event cannot be overtaken by an older snapshot.
+        // 上传进度仍参与全局排序，避免旧快照覆盖上传终态。
+        if (!shouldAcceptWorkbenchRevision(nextAcceptedRevision, envelope.generation)) {
+          continue;
+        }
+        const progress = envelope.delta.payload;
+        setMediaUploadProgresses((current) => {
+          const next = { ...current };
+          if (progress.phase === "preparing" || progress.phase === "uploading") {
+            next[progress.clientSubmissionId] = progress;
+          } else {
+            delete next[progress.clientSubmissionId];
+          }
+          return next;
+        });
+        acceptedEnvelopes.push(envelope);
+        nextAcceptedRevision = envelope.generation;
+        continue;
+      }
       if (envelope.delta.kind === "conversationArchived") {
         // acceptedArchives filters this single target through its own lifecycle revision.
         // acceptedArchives 通过目标自身生命周期版本过滤此单个目标。
@@ -1646,6 +1673,7 @@ export function WorkbenchLayout(props: {
     }
     if (workbenchState.conversations.some((conversation) => conversation.id === pendingConversationId)) {
       pendingMaterializedConversationIdRef.current = null;
+      setDraftConversation((current) => retireMaterializedDraftSubmission(current, pendingConversationId));
     }
   }, [workbenchState.conversations]);
 
@@ -1712,6 +1740,17 @@ export function WorkbenchLayout(props: {
 
   return (
     <div className={`app-shell ${showConsoleSidebar ? "with-console-sidebar" : "without-console-sidebar"} ${showWindowControls ? "tauri-shell" : "browser-shell"}`}>
+      {Object.values(mediaUploadProgresses).length > 0 ? (
+        <div className="media-upload-progress-stack">
+          {Object.values(mediaUploadProgresses).map((progress) => (
+            <MediaUploadProgressPanel
+              key={progress.clientSubmissionId}
+              progress={progress}
+              onCancel={handleCancelConversationSubmission}
+            />
+          ))}
+        </div>
+      ) : null}
       <main className="workspace">
         {showConsoleSidebar ? (
           <WorkspaceShell

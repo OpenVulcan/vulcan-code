@@ -4,12 +4,12 @@
 use std::{collections::BTreeSet, path::Path};
 
 use super::command::{format_webui_git_error, run_webui_git_command};
-use super::diff::resolve_webui_workspace_git_resolution;
 use super::diff_text::ensure_webui_git_pathspec_text;
 use super::model::{
     WebuiWorkspaceGitFileAction, WebuiWorkspaceGitFileActionFile,
     WebuiWorkspaceGitFileActionRequest, WebuiWorkspaceGitFileActionResult,
 };
+use super::repository::resolve_webui_repository_root_from_workspace_text_with_key;
 use super::search::clear_webui_diff_search_caches;
 use crate::normalized_workspace_path_text_from_path;
 
@@ -19,12 +19,10 @@ pub(crate) fn run_webui_workspace_git_file_action(
     workspace_path: &str,
     request: WebuiWorkspaceGitFileActionRequest,
 ) -> Result<WebuiWorkspaceGitFileActionResult, String> {
-    let resolution = resolve_webui_workspace_git_resolution(workspace_path)?;
-    let Some(repository_root) = resolution.repository_root else {
-        return Err(String::from(
-            "当前工作区不是 Git 仓库，无法执行 Git 文件操作。",
-        ));
-    };
+    let repository_root = resolve_webui_repository_root_from_workspace_text_with_key(
+        workspace_path,
+        request.repository_key.as_deref(),
+    )?;
     let affected_path_count = match request.action {
         WebuiWorkspaceGitFileAction::StageAll => {
             run_webui_git_action_command(&repository_root, &["add", "-A", "--", "."])?;

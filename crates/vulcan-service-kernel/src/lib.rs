@@ -119,7 +119,7 @@ use vulcan_service_api::{
     UserPromptEditDraftSummary, VmmMemorySnapshot, WEBUI_SERVICE_DISCOVERY_STATUS_FAILED,
     WEBUI_SERVICE_DISCOVERY_STATUS_READY, WEBUI_SERVICE_DISCOVERY_STATUS_STARTING,
     WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV, WorkbenchDelta, WorkbenchDeltaEnvelope,
-    WorkbenchSnapshot, webui_service_discovery_snapshot_with_status,
+    WorkbenchSnapshot, WorkspaceGitChangedEvent, webui_service_discovery_snapshot_with_status,
     webui_service_starting_discovery_snapshot, webui_static_root_from_candidates,
 };
 use vulcan_service_host::{
@@ -194,6 +194,7 @@ mod execution_report_memory;
 mod fallback_workbench_projection;
 mod git;
 mod git_diff_services;
+mod git_watcher;
 mod host_tools_settings;
 pub mod inference_access;
 mod inference_service;
@@ -201,6 +202,7 @@ mod knowledge_base_services;
 mod managed_memory_mesh_maintenance;
 mod managed_memory_mesh_runtime;
 mod mcp_settings;
+mod media_upload;
 mod pending_prompt_services;
 mod pending_prompts;
 mod plugin_mcp_secret_store;
@@ -290,18 +292,20 @@ use execution_report_memory::{
 };
 use fallback_workbench_projection::*;
 use git::{
-    WebuiWorkspaceDiffFileDetail, WebuiWorkspaceDiffFileDetailRequest, WebuiWorkspaceDiffRequest,
+    WebuiGitRepositoryCatalog, WebuiGitRepositoryMonitoringRequest, WebuiWorkspaceDiffFileDetail,
+    WebuiWorkspaceDiffFileDetailRequest, WebuiWorkspaceDiffRequest,
     WebuiWorkspaceDiffSearchRequest, WebuiWorkspaceDiffSearchResponse, WebuiWorkspaceDiffSnapshot,
     WebuiWorkspaceGitFileActionRequest, WebuiWorkspaceGitFileActionResult, git_commit_settings,
     load_webui_workspace_diff_file_detail, load_webui_workspace_diff_search,
-    load_webui_workspace_diff_snapshot, run_webui_workspace_git_file_action,
-    service_generate_git_commit_message, service_run_git_commit_action,
-    service_save_git_commit_settings,
+    load_webui_workspace_diff_snapshot, resolve_webui_repository_root_from_workspace_text_with_key,
+    run_webui_workspace_git_file_action, service_generate_git_commit_message,
+    service_run_git_commit_action, service_save_git_commit_settings,
 };
 use git_diff_services::*;
 use host_tools_settings::{host_tools_settings, host_tools_settings_with_native_tools};
 use knowledge_base_services::*;
 use mcp_settings::*;
+use media_upload::*;
 use pending_prompt_services::{
     service_edit_pending_prompt, service_remove_pending_prompt, service_reorder_pending_prompts,
 };
@@ -378,9 +382,9 @@ use vmm_hooks::{
 };
 use webui_prompt_context::*;
 use webui_prompt_lifecycle::{
-    maybe_prepare_next_webui_pending_prompt, maybe_start_webui_mailbox_turn_if_ready,
-    service_insert_pending_prompt, start_webui_precheck_or_continue,
-    webui_shared_prompt_precheck_plan,
+    mark_webui_prompt_preparation_failed, maybe_prepare_next_webui_pending_prompt,
+    maybe_start_webui_mailbox_turn_if_ready, service_insert_pending_prompt,
+    start_webui_precheck_or_continue, webui_shared_prompt_precheck_plan,
 };
 use webui_turn_chaining::{
     maybe_start_session_goal_continuation_if_idle, maybe_start_webui_turn_chain_after_finished,

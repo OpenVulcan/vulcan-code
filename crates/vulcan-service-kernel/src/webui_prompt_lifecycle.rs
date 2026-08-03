@@ -29,7 +29,8 @@ use super::pending_prompts::{
     agent_runtime_for_pending_prompt, clear_stale_webui_session_mailbox_pending_prompts,
     emit_pending_prompts_changed_delta, insert_webui_pending_prompt_into_internal_queue,
     pending_prompt_queue_status, remove_dispatched_pending_prompt_panel_entry,
-    take_next_webui_pending_prompt, webui_pending_prompt_dispatch_context,
+    restore_webui_pending_prompt, take_next_webui_pending_prompt,
+    webui_pending_prompt_dispatch_context,
 };
 use super::session_hydration::{
     capture_preserved_workspace_run_state, load_workspace_for_submission,

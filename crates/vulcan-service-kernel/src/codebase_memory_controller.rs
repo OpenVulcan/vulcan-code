@@ -15,14 +15,14 @@ use vulcan_agent_runtime::mcp::{
     McpRuntimeServerStatus, McpRuntimeToolAllowlist, McpServerConfig, McpServerSource,
     McpServerTransportConfig, replace_managed_codebase_memory_mcp_runtime_partition,
 };
-use vulcan_service_api::CodebaseMemoryProjectSettingsSummary;
+use vulcan_service_api::{CodebaseMemoryIndexJobSummary, CodebaseMemoryProjectSettingsSummary};
 
 /// Hidden control tools required from the Vulcan-specific sidecar contract.
 /// Vulcan 专用 Sidecar 契约要求的隐藏控制工具。
 const REQUIRED_CONTROL_TOOLS: [&str; 3] = [
     "vulcan_sync_projects",
     "vulcan_project_status",
-    "vulcan_reindex_project",
+    "vulcan_update_project_index",
 ];
 /// Relative directory reserved for the managed Codebase Memory distribution.
 /// 为托管 Codebase Memory 分发保留的相对目录。
@@ -32,7 +32,10 @@ const MANAGED_DISTRIBUTION_DIRECTORY: &str = "codebase-memory";
 const MANAGED_DISTRIBUTION_MANIFEST: &str = "manifest.json";
 /// Polling interval used only to detect managed transport reconnect transitions.
 /// 仅用于检测托管传输重连转换的轮询间隔。
-const MANAGED_RECOVERY_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const MANAGED_MONITOR_POLL_INTERVAL: Duration = Duration::from_secs(1);
+/// Number of monitor ticks between idle convergence queries.
+/// 空闲收敛查询之间的监视器节拍数量。
+const MANAGED_IDLE_STATUS_POLL_TICKS: u8 = 5;
 /// Host-owned deadline for private control acknowledgements that must not perform indexing inline.
 /// 私有控制确认的宿主持有截止时间；这些调用不得内联执行索引。
 const MANAGED_CONTROL_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -73,20 +76,103 @@ struct ManagedCodebaseMemoryManifest {
 
 /// Mutable per-project diagnostics retained independently from enablement intent.
 /// 与启用意图独立保留的可变项目级诊断。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
 struct ManagedProjectDiagnostic {
-    /// Current project indexing state reported by the sidecar.
-    /// Sidecar 报告的当前项目索引状态。
-    index_status: Option<String>,
+    /// Availability of the current published index snapshot.
+    /// 当前已发布索引快照的可用状态。
+    availability: Option<String>,
+    /// Whether the project watcher is registered.
+    /// 项目监视器是否已注册。
+    watcher_registered: Option<bool>,
     /// Last successful index timestamp reported by the sidecar.
     /// Sidecar 报告的最近成功索引时间。
     last_successful_index_at: Option<String>,
     /// Current index revision reported by the sidecar.
     /// Sidecar 报告的当前索引修订号。
     index_revision: Option<String>,
+    /// Current indexed node count from the latest live query.
+    /// 最近一次实时查询得到的当前索引节点数量。
+    node_count: Option<String>,
+    /// Current indexed edge count from the latest live query.
+    /// 最近一次实时查询得到的当前索引边数量。
+    edge_count: Option<String>,
+    /// Current physical index job independent from published availability.
+    /// 与已发布可用性独立的当前物理索引任务。
+    active_job: Option<CodebaseMemoryIndexJobSummary>,
+    /// Latest immutable terminal job snapshot.
+    /// 最近一次不可变终态任务快照。
+    last_job: Option<CodebaseMemoryIndexJobSummary>,
     /// Latest non-sensitive project error.
     /// 最近一次不含敏感信息的项目错误。
     last_error: Option<String>,
+}
+
+/// Strict bounded error object returned by the managed Sidecar.
+/// 托管 Sidecar 返回的严格有界错误对象。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManagedProjectErrorResponse {
+    /// Stable machine-readable error code.
+    /// 稳定的机器可读错误码。
+    code: String,
+    /// Non-sensitive user-facing detail.
+    /// 不含敏感信息的面向用户详情。
+    message: String,
+}
+
+/// Strict job snapshot returned by the managed Sidecar.
+/// 托管 Sidecar 返回的严格任务快照。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManagedProjectJobResponse {
+    /// Sidecar runtime identity.
+    /// Sidecar 运行时身份。
+    runtime_id: u64,
+    /// Runtime-local job identity.
+    /// 运行时内任务身份。
+    job_id: u64,
+    /// Monotonic project-local job generation.
+    /// 项目内单调任务代次。
+    job_generation: u64,
+    /// Exact execution mode.
+    /// 精确执行模式。
+    mode: String,
+    /// Stable scheduling trigger.
+    /// 稳定调度来源。
+    trigger: String,
+    /// Current or terminal state.
+    /// 当前或终态状态。
+    state: String,
+    /// Current monotonic phase.
+    /// 当前单调阶段。
+    phase: String,
+    /// Completed work units.
+    /// 已完成工作单位。
+    completed_units: u64,
+    /// Stable total work units when known.
+    /// 已知时的稳定总工作单位。
+    total_units: Option<u64>,
+    /// Whether the total is a real denominator.
+    /// 总量是否为真实分母。
+    has_total_units: bool,
+    /// Bounded work-unit label.
+    /// 有界工作单位标签。
+    unit: String,
+    /// Unix epoch milliseconds when the job started.
+    /// 任务开始时的 Unix 毫秒时间戳。
+    started_at_ms: u64,
+    /// Unix epoch milliseconds of the latest progress.
+    /// 最近进度对应的 Unix 毫秒时间戳。
+    updated_at_ms: u64,
+    /// Unix epoch milliseconds when the job completed, or zero while active.
+    /// 任务完成时的 Unix 毫秒时间戳；活动期间为零。
+    completed_at_ms: u64,
+    /// Whether this request coalesced into an existing physical job.
+    /// 本次请求是否合并进已有物理任务。
+    coalesced: bool,
+    /// Optional bounded job error.
+    /// 可选的有界任务错误。
+    error: Option<ManagedProjectErrorResponse>,
 }
 
 /// Strict response returned by the private full-project synchronization tool.
@@ -137,27 +223,27 @@ struct ManagedProjectSyncOutcome {
     /// Registry reconciliation result for this project.
     /// 该项目的注册表协调结果。
     change: String,
-    /// Current project lifecycle state.
-    /// 当前项目生命周期状态。
-    lifecycle: String,
-    /// Current project index state.
-    /// 当前项目索引状态。
-    index_status: String,
+    /// Availability of the current published index.
+    /// 当前已发布索引的可用状态。
+    availability: String,
     /// Whether the project watcher is currently registered.
     /// 当前是否已注册项目 Watcher。
     watcher_registered: bool,
     /// Monotonic successful index revision, or zero before the first success.
     /// 单调递增的成功索引修订号，首次成功前为零。
-    index_revision: u64,
+    revision: u64,
     /// Unix epoch milliseconds of the latest successful index, or zero when absent.
     /// 最近成功索引的 Unix 毫秒时间戳，不存在时为零。
     last_success_at_ms: u64,
-    /// Stable non-sensitive project error code when available.
-    /// 可用时稳定且不含敏感信息的项目错误码。
-    error_code: Option<String>,
-    /// Non-sensitive project-specific error.
-    /// 不含敏感信息的项目级错误。
-    error: Option<String>,
+    /// Currently active job snapshot.
+    /// 当前活动任务快照。
+    active_job: Option<ManagedProjectJobResponse>,
+    /// Latest terminal job snapshot.
+    /// 最近终态任务快照。
+    last_job: Option<ManagedProjectJobResponse>,
+    /// Latest bounded project error.
+    /// 最近一次有界项目错误。
+    last_error: Option<ManagedProjectErrorResponse>,
 }
 
 /// Strict response returned by the private project-status tool.
@@ -171,42 +257,42 @@ struct ManagedProjectStatusResponse {
     /// Stable project identity from the request.
     /// 请求中的稳定项目身份。
     project_id: String,
-    /// Current project lifecycle state.
-    /// 当前项目生命周期状态。
-    lifecycle: String,
-    /// Current project index state.
-    /// 当前项目索引状态。
-    index_status: String,
+    /// Availability of the current published index.
+    /// 当前已发布索引的可用状态。
+    availability: String,
     /// Whether the project watcher is currently registered.
     /// 当前是否已注册项目 Watcher。
     watcher_registered: bool,
     /// Monotonic successful index revision, or zero before the first success.
     /// 单调递增的成功索引修订号，首次成功前为零。
-    index_revision: u64,
+    revision: u64,
     /// Unix epoch milliseconds of the latest successful index, or zero when absent.
     /// 最近成功索引的 Unix 毫秒时间戳，不存在时为零。
     last_success_at_ms: u64,
     /// Current indexed node count.
     /// 当前已索引节点数量。
     #[serde(rename = "nodes")]
-    _nodes: u64,
+    nodes: u64,
     /// Current indexed edge count.
     /// 当前已索引边数量。
     #[serde(rename = "edges")]
-    _edges: u64,
-    /// Stable non-sensitive project error code when available.
-    /// 可用时稳定且不含敏感信息的项目错误码。
-    error_code: Option<String>,
-    /// Non-sensitive project-specific error.
-    /// 不含敏感信息的项目级错误。
-    error: Option<String>,
+    edges: u64,
+    /// Currently active job snapshot.
+    /// 当前活动任务快照。
+    active_job: Option<ManagedProjectJobResponse>,
+    /// Latest terminal job snapshot.
+    /// 最近终态任务快照。
+    last_job: Option<ManagedProjectJobResponse>,
+    /// Latest bounded project error.
+    /// 最近一次有界项目错误。
+    last_error: Option<ManagedProjectErrorResponse>,
 }
 
 /// Strict acknowledgement returned by the private project-reindex tool.
 /// 私有项目重建索引工具返回的严格确认。
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ManagedProjectReindexResponse {
+struct ManagedProjectIndexRequestResponse {
     /// Echoed private contract version.
     /// 回显的私有契约版本。
     contract: String,
@@ -216,12 +302,65 @@ struct ManagedProjectReindexResponse {
     /// Whether the sidecar accepted the non-destructive reindex request.
     /// Sidecar 是否接纳非破坏性的重建索引请求。
     accepted: bool,
+    /// Echoed exact execution mode.
+    /// 回显的精确执行模式。
+    mode: String,
     /// Scheduling state after accepting the request.
     /// 接纳请求后的调度状态。
     status: String,
     /// Whether the request joined an already running reindex operation.
     /// 请求是否合并进已经运行的重建索引操作。
     coalesced: bool,
+}
+
+/// Exact user-selectable managed index mode.
+/// 用户可选择的精确托管索引模式。
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum ManagedProjectIndexMode {
+    /// Incremental update with first-build fallback owned by the Sidecar.
+    /// 增量更新；首次构建回退由 Sidecar 负责。
+    Update,
+    /// Isolated full rebuild followed by atomic publication.
+    /// 隔离的完全重建，随后原子发布。
+    Rebuild,
+}
+
+impl ManagedProjectIndexMode {
+    /// Parses one exact protocol mode without aliases.
+    /// 在不接受别名的情况下解析一个精确协议模式。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `value` is the untrusted RPC mode text.
+    /// `value` 是不可信的 RPC 模式文本。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the exact supported mode or an actionable validation error.
+    /// 返回精确受支持模式或可操作的校验错误。
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "update" => Ok(Self::Update),
+            "rebuild" => Ok(Self::Rebuild),
+            _ => Err(String::from(
+                "Codebase Memory 索引模式必须是 `update` 或 `rebuild`。",
+            )),
+        }
+    }
+
+    /// Returns the exact private-contract text.
+    /// 返回精确的私有契约文本。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns `update` or `rebuild`.
+    /// 返回 `update` 或 `rebuild`。
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Update => "update",
+            Self::Rebuild => "rebuild",
+        }
+    }
 }
 
 /// Converts an optional managed Unix-millisecond timestamp into the API's RFC 3339 text.
@@ -277,48 +416,176 @@ fn managed_index_revision_text(value: u64) -> Option<String> {
 /// 返回值
 /// Returns the detailed error when present, otherwise the stable code.
 /// 详细错误存在时返回详细错误，否则返回稳定错误码。
-fn managed_project_error(error_code: Option<String>, error: Option<String>) -> Option<String> {
-    match error {
-        Some(error) => Some(error),
-        None => error_code,
-    }
+fn managed_project_error(error: Option<ManagedProjectErrorResponse>) -> Option<String> {
+    error.map(|error| {
+        if error.message.trim().is_empty() {
+            error.code
+        } else {
+            error.message
+        }
+    })
 }
 
-/// Validates the exact lifecycle-to-index-state mapping exposed by the managed sidecar.
-/// 校验托管 Sidecar 暴露的精确生命周期到索引状态映射。
+/// Converts an optional managed job timestamp into RFC 3339 text.
+/// 将可选的托管任务时间戳转换为 RFC 3339 文本。
 ///
 /// # Parameters
 /// 参数
-/// `lifecycle`, `index_status`, and `watcher_registered` are one atomic project snapshot.
-/// `lifecycle`、`index_status` 与 `watcher_registered` 构成一份原子项目快照。
+/// `value` is zero when the timestamp is absent and otherwise uses Unix epoch milliseconds.
+/// `value` 在时间戳缺失时为零，否则使用 Unix 纪元毫秒数。
+/// `field` identifies the exact invalid field in protocol diagnostics.
+/// `field` 在协议诊断中标识准确的无效字段。
+///
+/// # Returns
+/// 返回值
+/// Returns absent text for zero or one formatted timestamp.
+/// 零值返回空，否则返回一个格式化时间戳。
+fn managed_job_timestamp_text(value: u64, field: &str) -> Result<Option<String>, String> {
+    if value == 0 {
+        return Ok(None);
+    }
+    let timestamp = OffsetDateTime::from_unix_timestamp_nanos(i128::from(value) * 1_000_000)
+        .map_err(|error| {
+            format!("Codebase Memory returned an invalid `{field}` timestamp: {error}")
+        })?;
+    timestamp.format(&Rfc3339).map(Some).map_err(|error| {
+        format!("Codebase Memory `{field}` timestamp could not be formatted: {error}")
+    })
+}
+
+/// Validates and projects one exact Sidecar job snapshot.
+/// 校验并投影一个精确的 Sidecar 任务快照。
+///
+/// # Parameters
+/// 参数
+/// `job` is the strict transport payload and `active` selects active or terminal invariants.
+/// `job` 是严格传输载荷，`active` 选择活动或终态不变量。
+///
+/// # Returns
+/// 返回值
+/// Returns one WebUI-safe exact job summary or a protocol error.
+/// 返回一个 WebUI 安全的精确任务摘要或协议错误。
+fn managed_project_job_summary(
+    job: ManagedProjectJobResponse,
+    active: bool,
+) -> Result<CodebaseMemoryIndexJobSummary, String> {
+    if job.runtime_id == 0 || job.job_id == 0 || job.job_generation == 0 {
+        return Err(String::from(
+            "Codebase Memory returned a zero managed job identity.",
+        ));
+    }
+    if !matches!(job.mode.as_str(), "update" | "rebuild")
+        || !matches!(
+            job.trigger.as_str(),
+            "initial" | "watcher" | "manual" | "recovery"
+        )
+        || !matches!(
+            job.phase.as_str(),
+            "queued"
+                | "discovering"
+                | "extracting"
+                | "resolving"
+                | "persisting"
+                | "publishing"
+                | "finalizing"
+        )
+    {
+        return Err(String::from(
+            "Codebase Memory returned an unknown managed job mode, trigger, or phase.",
+        ));
+    }
+    let expected_state = if active {
+        matches!(job.state.as_str(), "queued" | "running")
+    } else {
+        matches!(job.state.as_str(), "succeeded" | "failed" | "cancelled")
+    };
+    if !expected_state {
+        return Err(format!(
+            "Codebase Memory returned invalid managed job state `{}` for an {} snapshot.",
+            job.state,
+            if active { "active" } else { "terminal" }
+        ));
+    }
+    if job.has_total_units != job.total_units.is_some()
+        || job
+            .total_units
+            .is_some_and(|total| job.completed_units > total)
+    {
+        return Err(String::from(
+            "Codebase Memory returned inconsistent managed job progress counters.",
+        ));
+    }
+    if job.started_at_ms == 0 || job.updated_at_ms < job.started_at_ms {
+        return Err(String::from(
+            "Codebase Memory returned inconsistent managed job timestamps.",
+        ));
+    }
+    if active && (job.completed_at_ms != 0 || job.error.is_some()) {
+        return Err(String::from(
+            "Codebase Memory returned terminal fields on an active managed job.",
+        ));
+    }
+    if !active && (job.completed_at_ms < job.updated_at_ms || job.completed_at_ms == 0) {
+        return Err(String::from(
+            "Codebase Memory returned an incomplete terminal managed job timestamp.",
+        ));
+    }
+    let error = managed_project_error(job.error);
+    Ok(CodebaseMemoryIndexJobSummary {
+        runtime_id: job.runtime_id.to_string(),
+        job_id: job.job_id.to_string(),
+        job_generation: job.job_generation.to_string(),
+        mode: job.mode,
+        trigger: job.trigger,
+        state: job.state,
+        phase: job.phase,
+        completed_units: job.completed_units.to_string(),
+        total_units: job.total_units.map(|value| value.to_string()),
+        unit: job.unit,
+        started_at: managed_job_timestamp_text(job.started_at_ms, "started_at_ms")?,
+        updated_at: managed_job_timestamp_text(job.updated_at_ms, "updated_at_ms")?,
+        completed_at: managed_job_timestamp_text(job.completed_at_ms, "completed_at_ms")?,
+        coalesced: job.coalesced,
+        error,
+    })
+}
+
+/// Validates one availability snapshot exposed by the managed Sidecar.
+/// 校验托管 Sidecar 暴露的一份可用性快照。
+///
+/// # Parameters
+/// 参数
+/// `availability`, `watcher_registered`, and `revision` form one atomic published snapshot.
+/// `availability`、`watcher_registered` 与 `revision` 构成一份原子已发布快照。
 ///
 /// # Returns
 /// 返回值
 /// Returns success for a contract-valid diagnostic tuple or an explicit protocol error.
 /// 契约有效的诊断元组返回成功，否则返回明确协议错误。
 fn validate_managed_project_diagnostics(
-    lifecycle: &str,
-    index_status: &str,
+    availability: &str,
     watcher_registered: bool,
+    revision: u64,
 ) -> Result<(), String> {
-    let expected_status = match lifecycle {
-        "pending" => "pending",
-        "indexing" => "running",
-        "ready" => "idle",
-        "offline" => "paused",
-        "failed" => "failed",
-        _ => {
-            return Err(format!(
-                "Codebase Memory returned unknown project lifecycle `{lifecycle}`."
-            ));
-        }
-    };
-    if index_status != expected_status {
+    if !matches!(
+        availability,
+        "unavailable" | "ready" | "degraded" | "offline"
+    ) {
         return Err(format!(
-            "Codebase Memory returned index status `{index_status}` for lifecycle `{lifecycle}`; expected `{expected_status}`."
+            "Codebase Memory returned unknown project availability `{availability}`."
         ));
     }
-    if lifecycle == "offline" && watcher_registered {
+    if matches!(availability, "ready" | "degraded") && revision == 0 {
+        return Err(format!(
+            "Codebase Memory returned availability `{availability}` without a published revision."
+        ));
+    }
+    if availability == "unavailable" && revision != 0 {
+        return Err(String::from(
+            "Codebase Memory returned an unavailable project with a published revision.",
+        ));
+    }
+    if availability == "offline" && watcher_registered {
         return Err(String::from(
             "Codebase Memory returned an offline project with a registered watcher.",
         ));
@@ -363,6 +630,12 @@ pub(crate) struct CodebaseMemoryController {
     /// Serializes full-project synchronizations across settings changes and reconnect recovery.
     /// 在设置变更与重连恢复之间串行化全量项目同步。
     synchronization_gate: Arc<tokio::sync::Mutex<()>>,
+    /// Serializes managed runtime publication, shutdown, and reconnect replay.
+    /// 串行化托管运行时发布、关闭与重连重放。
+    runtime_lifecycle_gate: Arc<tokio::sync::Mutex<()>>,
+    /// Serializes status queries so manual actions and the background monitor cannot reorder snapshots.
+    /// 串行化状态查询，避免手动操作与后台监视器重排快照。
+    status_refresh_gate: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl CodebaseMemoryController {
@@ -491,10 +764,15 @@ impl CodebaseMemoryController {
             } else {
                 state.service_status.clone()
             },
-            index_status: diagnostic.and_then(|value| value.index_status.clone()),
+            availability: diagnostic.and_then(|value| value.availability.clone()),
+            watcher_registered: diagnostic.and_then(|value| value.watcher_registered),
             last_successful_index_at: diagnostic
                 .and_then(|value| value.last_successful_index_at.clone()),
             index_revision: diagnostic.and_then(|value| value.index_revision.clone()),
+            node_count: diagnostic.and_then(|value| value.node_count.clone()),
+            edge_count: diagnostic.and_then(|value| value.edge_count.clone()),
+            active_job: diagnostic.and_then(|value| value.active_job.clone()),
+            last_job: diagnostic.and_then(|value| value.last_job.clone()),
             last_error: diagnostic.and_then(|value| value.last_error.clone()),
         }
     }
@@ -587,6 +865,22 @@ impl CodebaseMemoryController {
             .collect()
     }
 
+    /// Returns whether any enabled project currently owns an active index job.
+    /// 返回是否有任何已启用项目当前持有活动索引任务。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns true when active polling must remain responsive.
+    /// 活动轮询需要保持高响应时返回 true。
+    fn has_active_jobs(&self) -> bool {
+        self.state
+            .lock()
+            .expect("Codebase Memory controller state poisoned")
+            .project_diagnostics
+            .values()
+            .any(|diagnostic| diagnostic.active_job.is_some())
+    }
+
     /// Applies one complete set of sidecar synchronization outcomes after validating project identity.
     /// 在校验项目身份后应用一组完整的 Sidecar 同步结果。
     ///
@@ -641,23 +935,36 @@ impl CodebaseMemoryController {
                 ));
             }
             validate_managed_project_diagnostics(
-                &outcome.lifecycle,
-                &outcome.index_status,
+                &outcome.availability,
                 outcome.watcher_registered,
+                outcome.revision,
             )?;
-            if outcome.accepted != (outcome.lifecycle != "failed") {
+            if outcome.accepted
+                != (outcome.availability != "unavailable" || outcome.active_job.is_some())
+            {
                 return Err(format!(
-                    "Codebase Memory synchronization returned inconsistent acceptance and lifecycle for project `{}`.",
+                    "Codebase Memory synchronization returned inconsistent acceptance and availability for project `{}`.",
                     outcome.project_id
                 ));
             }
+            let active_job = outcome
+                .active_job
+                .map(|job| managed_project_job_summary(job, true))
+                .transpose()?;
+            let last_job = outcome
+                .last_job
+                .map(|job| managed_project_job_summary(job, false))
+                .transpose()?;
             normalized_outcomes.push((
                 outcome.project_id,
                 outcome.accepted,
-                outcome.index_status,
+                outcome.availability,
+                outcome.watcher_registered,
                 managed_success_timestamp_text(outcome.last_success_at_ms)?,
-                managed_index_revision_text(outcome.index_revision),
-                managed_project_error(outcome.error_code, outcome.error),
+                managed_index_revision_text(outcome.revision),
+                active_job,
+                last_job,
+                managed_project_error(outcome.last_error),
             ));
         }
 
@@ -666,16 +973,28 @@ impl CodebaseMemoryController {
             .lock()
             .expect("Codebase Memory controller state poisoned");
         let mut rejected = Vec::new();
-        for (project_id, accepted, index_status, last_successful_index_at, index_revision, error) in
-            normalized_outcomes
+        for (
+            project_id,
+            accepted,
+            availability,
+            watcher_registered,
+            last_successful_index_at,
+            index_revision,
+            active_job,
+            last_job,
+            error,
+        ) in normalized_outcomes
         {
             let diagnostic = state
                 .project_diagnostics
                 .entry(project_id.clone())
                 .or_default();
-            diagnostic.index_status = Some(index_status);
+            diagnostic.availability = Some(availability);
+            diagnostic.watcher_registered = Some(watcher_registered);
             diagnostic.last_successful_index_at = last_successful_index_at;
             diagnostic.index_revision = index_revision;
+            diagnostic.active_job = active_job;
+            diagnostic.last_job = last_job;
             diagnostic.last_error = error.clone();
             if !accepted {
                 rejected.push(match error {
@@ -696,28 +1015,48 @@ impl CodebaseMemoryController {
 
     /// Applies one strict project-status response to retained diagnostics.
     /// 将一份严格项目状态响应应用到保留诊断。
-    fn apply_project_status(&self, status: ManagedProjectStatusResponse) -> Result<(), String> {
+    fn apply_project_status(&self, status: ManagedProjectStatusResponse) -> Result<bool, String> {
         validate_managed_project_diagnostics(
-            &status.lifecycle,
-            &status.index_status,
+            &status.availability,
             status.watcher_registered,
+            status.revision,
         )?;
         let last_successful_index_at = managed_success_timestamp_text(status.last_success_at_ms)?;
-        let index_revision = managed_index_revision_text(status.index_revision);
-        let error = managed_project_error(status.error_code, status.error);
+        let index_revision = managed_index_revision_text(status.revision);
+        let active_job = status
+            .active_job
+            .map(|job| managed_project_job_summary(job, true))
+            .transpose()?;
+        let last_job = status
+            .last_job
+            .map(|job| managed_project_job_summary(job, false))
+            .transpose()?;
+        let error = managed_project_error(status.last_error);
         let mut state = self
             .state
             .lock()
             .expect("Codebase Memory controller state poisoned");
+        if !state.enabled_projects.contains_key(&status.project_id) {
+            return Ok(false);
+        }
         let diagnostic = state
             .project_diagnostics
             .entry(status.project_id)
             .or_default();
-        diagnostic.index_status = Some(status.index_status);
-        diagnostic.last_successful_index_at = last_successful_index_at;
-        diagnostic.index_revision = index_revision;
-        diagnostic.last_error = error;
-        Ok(())
+        let next = ManagedProjectDiagnostic {
+            availability: Some(status.availability),
+            watcher_registered: Some(status.watcher_registered),
+            last_successful_index_at,
+            index_revision,
+            node_count: Some(status.nodes.to_string()),
+            edge_count: Some(status.edges.to_string()),
+            active_job,
+            last_job,
+            last_error: error,
+        };
+        let changed = *diagnostic != next;
+        *diagnostic = next;
+        Ok(changed)
     }
 
     /// Records one non-sensitive error for an exact currently enabled project.
@@ -877,6 +1216,69 @@ pub(crate) fn service_get_project_codebase_memory_settings(
         .settings_summary(&project.id, project.codebase_memory_enabled))
 }
 
+/// Queries the live Sidecar diagnostics for one exact enabled project.
+/// 查询一个精确启用项目的实时 Sidecar 诊断。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the current managed runtime and project registry.
+/// `state` 持有当前托管运行时与项目注册表。
+/// `project_id` is the exact stable project identity.
+/// `project_id` 是精确稳定项目身份。
+///
+/// # Returns
+/// 返回值
+/// Returns current settings after one authoritative live status query.
+/// 在一次权威实时状态查询后返回当前设置。
+pub(crate) async fn service_refresh_project_codebase_memory_settings(
+    state: SharedServiceBridgeState,
+    project_id: String,
+) -> Result<CodebaseMemoryProjectSettingsSummary, String> {
+    let stable_project_id = project_id.trim().to_string();
+    if stable_project_id.is_empty() {
+        return Err(String::from("项目标识不能为空。"));
+    }
+    let (controller, runtime, route) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace = guard
+            .workspace_snapshot
+            .as_ref()
+            .ok_or_else(|| String::from("工作区尚未就绪。"))?;
+        let project = workspace
+            .task_projects
+            .iter()
+            .find(|project| project.id == stable_project_id)
+            .ok_or_else(|| format!("项目 `{stable_project_id}` 不存在。"))?;
+        if !project.codebase_memory_enabled {
+            return Ok(guard
+                .codebase_memory_controller
+                .settings_summary(&project.id, false));
+        }
+        let controller = guard.codebase_memory_controller.clone();
+        let route = controller
+            .enabled_projects()
+            .into_iter()
+            .find(|route| route.project_id == stable_project_id)
+            .ok_or_else(|| {
+                format!("项目 `{stable_project_id}` 尚未进入 Codebase Memory 托管注册表。")
+            })?;
+        let runtime = guard
+            .agent_runtime
+            .as_ref()
+            .ok_or_else(|| String::from("Agent 运行时尚未就绪。"))?
+            .extension_generation
+            .mcp_runtime();
+        (controller, runtime, route)
+    };
+    if managed_server_status(&runtime) != Some(McpRuntimeServerStatus::Connected) {
+        return Err(String::from("Codebase Memory 托管服务尚未连接。"));
+    }
+    refresh_managed_project_status(&controller, &runtime, &route).await?;
+    service_get_project_codebase_memory_settings(state, stable_project_id)
+}
+
 /// Persists one project enablement change and immediately reconciles the managed runtime.
 /// 持久化单个项目启用变更并立即协调托管运行时。
 ///
@@ -955,8 +1357,8 @@ pub(crate) async fn service_set_project_codebase_memory_enabled(
     service_get_project_codebase_memory_settings(state, stable_project_id)
 }
 
-/// Requests a non-destructive reindex for one exact enabled project.
-/// 为一个精确启用项目请求非破坏性重建索引。
+/// Requests an explicit index update or rebuild for one exact enabled project.
+/// 为一个精确启用项目请求显式索引更新或重建。
 ///
 /// # Parameters
 /// 参数
@@ -966,22 +1368,28 @@ pub(crate) async fn service_set_project_codebase_memory_enabled(
 /// `state` 持有当前托管运行时。
 /// `project_id` is the exact enabled project identity.
 /// `project_id` 是精确启用项目身份。
+/// `mode` is the exact update or rebuild operation selected by the user.
+/// `mode` 是用户选择的精确更新或重建操作。
 ///
 /// # Returns
 /// 返回值
 /// Returns current settings after the sidecar accepts the request.
 /// Sidecar 接受请求后返回当前设置。
-pub(crate) async fn service_reindex_project_codebase_memory(
+pub(crate) async fn service_update_project_codebase_memory_index(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     project_id: String,
+    mode: String,
 ) -> Result<CodebaseMemoryProjectSettingsSummary, String> {
     let stable_project_id = project_id.trim().to_string();
-    // persistGuard prevents project removal from overtaking an accepted reindex request.
-    // persistGuard 防止项目移除越过已经接纳的重建索引请求。
+    let exact_mode = ManagedProjectIndexMode::parse(mode.trim())?;
+    // persistGuard prevents project removal from overtaking an accepted index request.
+    // persistGuard 防止项目移除越过已经接纳的索引请求。
     let persist_lock = webui_workspace_persist_lock();
     let persist_guard = persist_lock.lock().await;
-    if let Err(error) = reindex_codebase_memory_project(&state, &stable_project_id).await {
+    if let Err(error) =
+        update_codebase_memory_project_index(&state, &stable_project_id, exact_mode).await
+    {
         if let Ok(guard) = state.lock() {
             guard
                 .codebase_memory_controller
@@ -994,7 +1402,7 @@ pub(crate) async fn service_reindex_project_codebase_memory(
             vulcan_service_api::ProjectSettingsDomain::CodebaseMemory,
         ) {
             eprintln!(
-                "[webui-service] managed Codebase Memory reindex error delta failed: {delta_error}"
+                "[webui-service] managed Codebase Memory index error delta failed: {delta_error}"
             );
         }
         drop(persist_guard);
@@ -1026,7 +1434,17 @@ pub(crate) async fn service_reindex_project_codebase_memory(
 pub(crate) async fn reconcile_codebase_memory_runtime(
     state: &SharedServiceBridgeState,
 ) -> Result<(), String> {
-    let (controller, projects, current_runtime) = {
+    // controller owns the lifecycle gate independently from the mutable service-state lock.
+    // controller 独立于可变服务状态锁持有生命周期闸门。
+    let controller = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .codebase_memory_controller
+        .clone();
+    // lifecycleGuard prevents concurrent settings reconciliation and reconnect recovery from publishing stale generations.
+    // lifecycleGuard 防止并发设置协调与重连恢复发布过时代次。
+    let _lifecycle_guard = controller.runtime_lifecycle_gate.lock().await;
+    let (projects, current_runtime) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -1043,11 +1461,7 @@ pub(crate) async fn reconcile_codebase_memory_runtime(
             .ok_or_else(|| String::from("Agent 运行时尚未就绪，无法协调 Codebase Memory。"))?
             .extension_generation
             .mcp_runtime();
-        (
-            guard.codebase_memory_controller.clone(),
-            projects,
-            current_runtime,
-        )
+        (projects, current_runtime)
     };
 
     if projects.is_empty() {
@@ -1081,8 +1495,8 @@ pub(crate) async fn reconcile_codebase_memory_runtime(
     Ok(())
 }
 
-/// Starts the lightweight reconnect observer for the managed Codebase Memory partition.
-/// 启动托管 Codebase Memory 分区的轻量重连观察器。
+/// Starts the reconnect and project-status monitor for the managed Codebase Memory partition.
+/// 启动托管 Codebase Memory 分区的重连与项目状态监视器。
 ///
 /// # Parameters
 /// 参数
@@ -1103,14 +1517,33 @@ pub(crate) fn start_codebase_memory_recovery_monitor(
     }
     let weak_state = Arc::downgrade(&state);
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(MANAGED_RECOVERY_POLL_INTERVAL);
+        let mut interval = tokio::time::interval(MANAGED_MONITOR_POLL_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // idleTicks limits idle convergence traffic while active jobs remain responsive.
+        // idleTicks 限制空闲收敛流量，同时保持活动任务响应及时。
+        let mut idle_ticks = MANAGED_IDLE_STATUS_POLL_TICKS;
         loop {
             interval.tick().await;
             let Some(state) = weak_state.upgrade() else {
                 break;
             };
-            match recover_codebase_memory_after_reconnect(&state).await {
+            let active_job = state
+                .lock()
+                .map(|guard| guard.codebase_memory_controller.has_active_jobs())
+                .unwrap_or(false);
+            let poll_project_status = if active_job {
+                idle_ticks = 0;
+                true
+            } else {
+                idle_ticks = idle_ticks.saturating_add(1);
+                if idle_ticks >= MANAGED_IDLE_STATUS_POLL_TICKS {
+                    idle_ticks = 0;
+                    true
+                } else {
+                    false
+                }
+            };
+            match monitor_codebase_memory_runtime(&state, poll_project_status).await {
                 Ok(true) => {
                     emit_codebase_memory_status_changed(&app, &state);
                 }
@@ -1120,7 +1553,7 @@ pub(crate) fn start_codebase_memory_recovery_monitor(
                         Ok(guard) => guard.codebase_memory_controller.clone(),
                         Err(lock_error) => {
                             eprintln!(
-                                "[webui-service] managed Codebase Memory recovery state lock failed: {lock_error}"
+                                "[webui-service] managed Codebase Memory monitor state lock failed: {lock_error}"
                             );
                             continue;
                         }
@@ -1128,9 +1561,7 @@ pub(crate) fn start_codebase_memory_recovery_monitor(
                     if controller.mark_runtime_unsynchronized(&error) {
                         emit_codebase_memory_status_changed(&app, &state);
                     }
-                    eprintln!(
-                        "[webui-service] managed Codebase Memory reconnect recovery degraded: {error}"
-                    );
+                    eprintln!("[webui-service] managed Codebase Memory monitor degraded: {error}");
                 }
             }
         }
@@ -1153,63 +1584,99 @@ fn emit_codebase_memory_status_changed(
     }
 }
 
-/// Replays the authoritative project set exactly once after each connected transition.
-/// 在每次连接转换后精确重放一次权威项目集合。
+/// Replays reconnect state and converges project diagnostics from the Sidecar authority.
+/// 重放重连状态并从 Sidecar 权威源收敛项目诊断。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the current runtime and controller projection.
+/// `state` 持有当前运行时与控制器投影。
+/// `poll_project_status` selects one bounded per-project convergence pass.
+/// `poll_project_status` 选择一次有界的逐项目收敛轮询。
 ///
 /// # Returns
 /// 返回值
 /// Returns whether the WebUI-facing status changed.
 /// 返回面向 WebUI 的状态是否发生变化。
-async fn recover_codebase_memory_after_reconnect(
+async fn monitor_codebase_memory_runtime(
     state: &SharedServiceBridgeState,
+    poll_project_status: bool,
 ) -> Result<bool, String> {
-    let (controller, runtime) = {
+    let controller = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.codebase_memory_controller.clone()
+    };
+    // lifecycleGuard keeps reconnect replay ordered with explicit enablement reconciliation.
+    // lifecycleGuard 使重连重放与显式启用状态协调保持有序。
+    let lifecycle_guard = controller.runtime_lifecycle_gate.lock().await;
+    let runtime = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         let Some(agent_runtime) = guard.agent_runtime.as_ref() else {
             return Ok(false);
         };
-        (
-            guard.codebase_memory_controller.clone(),
-            agent_runtime.extension_generation.mcp_runtime(),
-        )
+        agent_runtime.extension_generation.mcp_runtime()
     };
     let Some(runtime_status) = managed_server_status(&runtime) else {
         return Ok(false);
     };
     let connected = runtime_status == McpRuntimeServerStatus::Connected;
     let (replay_required, status_changed) = controller.observe_runtime_connection(connected);
-    if !replay_required {
+    if !connected {
         return Ok(status_changed);
     }
-
-    let distribution = managed_server_distribution()?;
-    validate_managed_initialize_identity(&runtime, &distribution.version)?;
-    validate_managed_tool_contract(&runtime)?;
-    let synchronization_warning = synchronize_enabled_projects(&controller, &runtime).await?;
-    controller.mark_runtime_synchronized();
-    if let Some(warning) = synchronization_warning.as_deref() {
-        controller.set_service_status("degraded", Some(warning));
+    let mut changed = status_changed;
+    if replay_required {
+        let distribution = managed_server_distribution()?;
+        validate_managed_initialize_identity(&runtime, &distribution.version)?;
+        validate_managed_tool_contract(&runtime)?;
+        let synchronization_warning = synchronize_enabled_projects(&controller, &runtime).await?;
+        controller.mark_runtime_synchronized();
+        changed = true;
+        if let Some(warning) = synchronization_warning.as_deref() {
+            changed |= controller.set_service_status("degraded", Some(warning));
+        }
     }
-    Ok(true)
+    drop(lifecycle_guard);
+    if poll_project_status {
+        for route in controller.enabled_projects() {
+            match refresh_managed_project_status(&controller, &runtime, &route).await {
+                Ok(project_changed) => changed |= project_changed,
+                Err(error) => {
+                    controller.set_project_error(&route.project_id, &error);
+                    changed = true;
+                    eprintln!(
+                        "[webui-service] managed Codebase Memory project status degraded for `{}`: {error}",
+                        route.project_id
+                    );
+                }
+            }
+        }
+    }
+    Ok(changed)
 }
 
-/// Invokes the hidden project reindex control tool for one enabled project.
-/// 为一个已启用项目调用隐藏的项目重建索引控制工具。
+/// Invokes the hidden explicit index control tool for one enabled project.
+/// 为一个已启用项目调用隐藏的显式索引控制工具。
 ///
 /// # Parameters
 /// 参数
 /// `state` owns the current managed runtime and `project_id` selects one exact enabled project.
 /// `state` 持有当前托管运行时，`project_id` 选择一个精确启用项目。
+/// `mode` is the exact update or rebuild operation.
+/// `mode` 是精确的更新或重建操作。
 ///
 /// # Returns
 /// 返回值
-/// Returns success after the sidecar accepts the reindex request.
-/// Sidecar 接受重建请求后返回成功。
-pub(crate) async fn reindex_codebase_memory_project(
+/// Returns success after the Sidecar accepts the index request.
+/// Sidecar 接受索引请求后返回成功。
+async fn update_codebase_memory_project_index(
     state: &SharedServiceBridgeState,
     project_id: &str,
+    mode: ManagedProjectIndexMode,
 ) -> Result<(), String> {
     let (route, runtime, controller) = {
         let guard = state
@@ -1244,29 +1711,32 @@ pub(crate) async fn reindex_codebase_memory_project(
     };
     let value = invoke_control_tool(
         &runtime,
-        "vulcan_reindex_project",
+        "vulcan_update_project_index",
         json!({
             "contract": MANAGED_CODEBASE_MEMORY_CONTRACT,
             "project_id": route.project_id,
             "pwd": route.pwd,
+            "mode": mode.as_str(),
         }),
     )
     .await?;
-    let response: ManagedProjectReindexResponse =
+    let response: ManagedProjectIndexRequestResponse =
         serde_json::from_value(value).map_err(|error| {
-            format!("Codebase Memory reindex returned an invalid response: {error}")
+            format!("Codebase Memory index request returned an invalid response: {error}")
         })?;
     if response.contract != MANAGED_CODEBASE_MEMORY_CONTRACT
         || response.project_id != route.project_id
+        || response.mode != mode.as_str()
     {
         return Err(String::from(
-            "Codebase Memory reindex returned a mismatched contract or project identity.",
+            "Codebase Memory index request returned a mismatched contract, project identity, or mode.",
         ));
     }
     if !response.accepted {
         let error = format!(
-            "Codebase Memory rejected reindex for project `{}`.",
-            route.project_id
+            "Codebase Memory rejected {} for project `{}`.",
+            mode.as_str(),
+            route.project_id,
         );
         controller.set_project_error(&route.project_id, &error);
         return Err(error);
@@ -1276,18 +1746,20 @@ pub(crate) async fn reindex_codebase_memory_project(
         "running" => true,
         _ => {
             return Err(format!(
-                "Codebase Memory reindex returned unknown scheduling status `{}`.",
+                "Codebase Memory index request returned unknown scheduling status `{}`.",
                 response.status
             ));
         }
     };
     if response.coalesced != expected_coalesced {
         return Err(format!(
-            "Codebase Memory reindex returned inconsistent scheduling status `{}` and coalesced flag.",
+            "Codebase Memory index request returned inconsistent scheduling status `{}` and coalesced flag.",
             response.status
         ));
     }
-    refresh_managed_project_status(&controller, &runtime, &route).await
+    refresh_managed_project_status(&controller, &runtime, &route)
+        .await
+        .map(|_| ())
 }
 
 /// Publishes one MCP access generation while preserving the current plugin catalog.
@@ -1556,7 +2028,10 @@ async fn refresh_managed_project_status(
     controller: &CodebaseMemoryController,
     runtime: &McpRuntimeAccess,
     route: &ManagedCodebaseMemoryProjectRoute,
-) -> Result<(), String> {
+) -> Result<bool, String> {
+    // statusGuard keeps manual and background observations in request order.
+    // statusGuard 保持手动与后台观察的请求顺序。
+    let _status_guard = controller.status_refresh_gate.lock().await;
     let value = invoke_control_tool(
         runtime,
         "vulcan_project_status",
@@ -1850,6 +2325,38 @@ mod tests {
         assert_eq!(controller.observe_runtime_connection(true), (true, false));
     }
 
+    /// Verifies a status response that arrives after project disablement cannot recreate stale diagnostics.
+    /// 验证项目停用后到达的状态响应不会重新创建过时诊断。
+    #[test]
+    fn disabled_project_ignores_late_status_response() {
+        let controller = CodebaseMemoryController::default();
+        let changed = controller
+            .apply_project_status(ManagedProjectStatusResponse {
+                contract: String::from(MANAGED_CODEBASE_MEMORY_CONTRACT),
+                project_id: String::from("project-disabled"),
+                availability: String::from("ready"),
+                watcher_registered: true,
+                revision: 3,
+                last_success_at_ms: 1_753_401_600_000,
+                nodes: 42,
+                edges: 17,
+                active_job: None,
+                last_job: None,
+                last_error: None,
+            })
+            .expect("late status should be safely ignored");
+
+        assert!(!changed);
+        assert!(
+            controller
+                .state
+                .lock()
+                .expect("controller state should lock")
+                .project_diagnostics
+                .is_empty()
+        );
+    }
+
     /// Verifies partial synchronization outcomes retain every project diagnostic before reporting degradation.
     /// 验证部分同步结果会先保留每个项目诊断，再报告降级。
     #[test]
@@ -1885,25 +2392,28 @@ mod tests {
                         project_id: String::from("project-a"),
                         accepted: true,
                         change: String::from("added"),
-                        lifecycle: String::from("ready"),
-                        index_status: String::from("idle"),
+                        availability: String::from("ready"),
                         watcher_registered: true,
-                        index_revision: 7,
+                        revision: 7,
                         last_success_at_ms: 1_753_401_600_000,
-                        error_code: None,
-                        error: None,
+                        active_job: None,
+                        last_job: None,
+                        last_error: None,
                     },
                     ManagedProjectSyncOutcome {
                         project_id: String::from("project-b"),
                         accepted: false,
                         change: String::from("retained"),
-                        lifecycle: String::from("failed"),
-                        index_status: String::from("failed"),
+                        availability: String::from("unavailable"),
                         watcher_registered: false,
-                        index_revision: 0,
+                        revision: 0,
                         last_success_at_ms: 0,
-                        error_code: Some(String::from("index_unavailable")),
-                        error: Some(String::from("index unavailable")),
+                        active_job: None,
+                        last_job: None,
+                        last_error: Some(ManagedProjectErrorResponse {
+                            code: String::from("index_unavailable"),
+                            message: String::from("index unavailable"),
+                        }),
                     },
                 ],
             )
@@ -1946,36 +2456,58 @@ mod tests {
                 "project_id": "project-a",
                 "accepted": true,
                 "change": "added",
-                "lifecycle": "ready",
-                "index_status": "idle",
+                "availability": "ready",
                 "watcher_registered": true,
-                "index_revision": 9,
-                "last_success_at_ms": 1_753_401_600_000_u64
+                "revision": 9,
+                "last_success_at_ms": 1_753_401_600_000_u64,
+                "active_job": null,
+                "last_job": null,
+                "last_error": null
             }]
         });
         let sync: ManagedProjectSyncResponse =
             serde_json::from_value(sync_payload).expect("exact sync payload should deserialize");
         assert_eq!(sync.status, "committed");
         assert_eq!(sync.removed, 2);
-        assert_eq!(sync.projects[0].index_revision, 9);
+        assert_eq!(sync.projects[0].revision, 9);
 
         // statusPayload mirrors the exact per-project diagnostic response.
         // statusPayload 对应精确的每项目诊断响应。
         let status_payload = json!({
             "contract": MANAGED_CODEBASE_MEMORY_CONTRACT,
             "project_id": "project-a",
-            "lifecycle": "indexing",
-            "index_status": "running",
+            "availability": "ready",
             "watcher_registered": true,
-            "index_revision": 9,
+            "revision": 9,
             "last_success_at_ms": 1_753_401_600_000_u64,
             "nodes": 42,
-            "edges": 17
+            "edges": 17,
+            "active_job": {
+                "runtime_id": 11,
+                "job_id": 12,
+                "job_generation": 3,
+                "mode": "update",
+                "trigger": "manual",
+                "state": "running",
+                "phase": "extracting",
+                "completed_units": 4,
+                "total_units": 10,
+                "has_total_units": true,
+                "unit": "files",
+                "started_at_ms": 1_753_401_600_000_u64,
+                "updated_at_ms": 1_753_401_601_000_u64,
+                "completed_at_ms": 0,
+                "coalesced": false,
+                "error": null
+            },
+            "last_job": null,
+            "last_error": null
         });
         let status: ManagedProjectStatusResponse = serde_json::from_value(status_payload)
             .expect("exact status payload should deserialize");
-        assert_eq!(status._nodes, 42);
-        assert_eq!(status._edges, 17);
+        assert_eq!(status.nodes, 42);
+        assert_eq!(status.edges, 17);
+        assert_eq!(status.active_job.as_ref().map(|job| job.job_id), Some(12));
 
         // reindexPayload mirrors both a newly started and a coalesced scheduling acknowledgement.
         // reindexPayload 对应新启动或合并调度的重建索引确认。
@@ -1983,13 +2515,15 @@ mod tests {
             "contract": MANAGED_CODEBASE_MEMORY_CONTRACT,
             "project_id": "project-a",
             "accepted": true,
+            "mode": "rebuild",
             "status": "running",
             "coalesced": true
         });
-        let reindex: ManagedProjectReindexResponse = serde_json::from_value(reindex_payload)
-            .expect("exact reindex payload should deserialize");
+        let reindex: ManagedProjectIndexRequestResponse = serde_json::from_value(reindex_payload)
+            .expect("exact index-request payload should deserialize");
         assert!(reindex.accepted);
         assert!(reindex.coalesced);
+        assert_eq!(reindex.mode, "rebuild");
     }
 
     /// Verifies strict host response models reject undeclared sidecar fields.
@@ -2000,12 +2534,13 @@ mod tests {
             "contract": MANAGED_CODEBASE_MEMORY_CONTRACT,
             "project_id": "project-a",
             "accepted": true,
+            "mode": "update",
             "status": "started",
             "coalesced": false,
             "unexpected": true
         });
 
-        assert!(serde_json::from_value::<ManagedProjectReindexResponse>(payload).is_err());
+        assert!(serde_json::from_value::<ManagedProjectIndexRequestResponse>(payload).is_err());
     }
 
     /// Verifies only normalized absolute project paths enter the private contract.

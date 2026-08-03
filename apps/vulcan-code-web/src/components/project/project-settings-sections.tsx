@@ -1,13 +1,28 @@
-import { Bot, BrainCircuit, Calendar, Database, FolderCog, Network, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Bot, BrainCircuit, Calendar, Database, FolderCog, LoaderCircle, Network, RefreshCw, Save, Trash2 } from "lucide-react";
 import { StatusPill } from "@/components/shared/status";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { VmmSelectField, vmmPolicyModeOptions } from "@/components/features/memory/vmm-project-settings-fields";
 import { useI18n } from "@/i18n";
+import type { TranslationKey } from "@/i18n-messages";
 import { cn } from "@/lib/utils";
 import type {
   ProjectSummary,
+  CodebaseMemoryIndexJobSummary,
   CodebaseMemoryProjectSettingsSummary,
   VmmConfigDraftSummary,
   WorkbenchSnapshot,
@@ -25,6 +40,79 @@ import {
   projectAttachmentKindLabel,
 } from "./project-settings-utils";
 
+// codebaseMemoryProgressPercent calculates a bounded determinate percentage without losing integer identity.
+// codebaseMemoryProgressPercent 在不丢失整数身份的情况下计算有界确定进度百分比。
+function codebaseMemoryProgressPercent(job: CodebaseMemoryIndexJobSummary): number | null {
+  if (!job.totalUnits) {
+    return null;
+  }
+  try {
+    const completed = BigInt(job.completedUnits);
+    const total = BigInt(job.totalUnits);
+    if (total <= 0n) {
+      return null;
+    }
+    const basisPoints = completed * 10_000n / total;
+    return Math.min(100, Number(basisPoints) / 100);
+  } catch {
+    return null;
+  }
+}
+
+// codebaseMemoryAvailabilityTone maps published availability to a shared status tone.
+// codebaseMemoryAvailabilityTone 将已发布可用状态映射到共享状态色调。
+function codebaseMemoryAvailabilityTone(availability: string | null | undefined): string {
+  if (availability === "ready") {
+    return "ready";
+  }
+  if (availability === "degraded") {
+    return "warning";
+  }
+  if (availability === "unavailable") {
+    return "error";
+  }
+  return "pending";
+}
+
+// CODEBASE_MEMORY_AVAILABILITY_KEYS binds exact protocol values to localized copy.
+// CODEBASE_MEMORY_AVAILABILITY_KEYS 将精确协议值绑定到本地化文案。
+const CODEBASE_MEMORY_AVAILABILITY_KEYS: Record<string, TranslationKey> = {
+  ready: "projectSettings.codebaseMemory.availability.ready",
+  degraded: "projectSettings.codebaseMemory.availability.degraded",
+  unavailable: "projectSettings.codebaseMemory.availability.unavailable",
+  offline: "projectSettings.codebaseMemory.availability.offline",
+  unknown: "projectSettings.codebaseMemory.availability.unknown",
+};
+
+// CODEBASE_MEMORY_JOB_MODE_KEYS binds exact managed modes to localized copy.
+// CODEBASE_MEMORY_JOB_MODE_KEYS 将精确托管模式绑定到本地化文案。
+const CODEBASE_MEMORY_JOB_MODE_KEYS: Record<string, TranslationKey> = {
+  update: "projectSettings.codebaseMemory.job.mode.update",
+  rebuild: "projectSettings.codebaseMemory.job.mode.rebuild",
+};
+
+// CODEBASE_MEMORY_JOB_PHASE_KEYS binds exact managed phases to localized copy.
+// CODEBASE_MEMORY_JOB_PHASE_KEYS 将精确托管阶段绑定到本地化文案。
+const CODEBASE_MEMORY_JOB_PHASE_KEYS: Record<string, TranslationKey> = {
+  queued: "projectSettings.codebaseMemory.job.phase.queued",
+  discovering: "projectSettings.codebaseMemory.job.phase.discovering",
+  extracting: "projectSettings.codebaseMemory.job.phase.extracting",
+  resolving: "projectSettings.codebaseMemory.job.phase.resolving",
+  persisting: "projectSettings.codebaseMemory.job.phase.persisting",
+  publishing: "projectSettings.codebaseMemory.job.phase.publishing",
+  finalizing: "projectSettings.codebaseMemory.job.phase.finalizing",
+};
+
+// CODEBASE_MEMORY_JOB_STATE_KEYS binds exact managed terminal states to localized copy.
+// CODEBASE_MEMORY_JOB_STATE_KEYS 将精确托管终态绑定到本地化文案。
+const CODEBASE_MEMORY_JOB_STATE_KEYS: Record<string, TranslationKey> = {
+  queued: "projectSettings.codebaseMemory.job.state.queued",
+  running: "projectSettings.codebaseMemory.job.state.running",
+  succeeded: "projectSettings.codebaseMemory.job.state.succeeded",
+  failed: "projectSettings.codebaseMemory.job.state.failed",
+  cancelled: "projectSettings.codebaseMemory.job.state.cancelled",
+};
+
 // ProjectCodebaseMemorySection renders project-owned managed MCP enablement and diagnostics.
 // ProjectCodebaseMemorySection 渲染项目自有的托管 MCP 启用状态与诊断。
 export function ProjectCodebaseMemorySection(props: {
@@ -37,14 +125,24 @@ export function ProjectCodebaseMemorySection(props: {
   // Persists the selected project enablement state.
   // 持久化所选项目启用状态。
   onSetEnabled: (enabled: boolean) => void;
-  // Requests a non-destructive project reindex.
-  // 请求非破坏性项目重建索引。
-  onReindex: () => void;
+  // Refreshes one authoritative live Sidecar snapshot.
+  // 刷新一份权威的实时 Sidecar 快照。
+  onRefresh: () => void;
+  // Requests the normal incremental index update.
+  // 请求常规增量索引更新。
+  onUpdate: () => void;
+  // Requests an isolated full index rebuild after confirmation.
+  // 在确认后请求隔离的完整索引重建。
+  onRebuild: () => void;
 }) {
   const { t } = useI18n();
   if (!props.settings) {
     return <p className="project-settings-muted">{t("projectSettings.codebaseMemory.loading")}</p>;
   }
+  const activeJob = props.settings.activeJob ?? null;
+  const lastJob = props.settings.lastJob ?? null;
+  const progressPercent = activeJob ? codebaseMemoryProgressPercent(activeJob) : null;
+  const availability = props.settings.availability ?? "unknown";
   return (
     <div className="project-settings-section">
       <header className="project-settings-heading">
@@ -53,13 +151,23 @@ export function ProjectCodebaseMemorySection(props: {
           <strong>{t("projectSettings.codebaseMemory.title")}</strong>
           <span>{t("projectSettings.codebaseMemory.description")}</span>
         </div>
+        <Button
+          aria-label={t("projectSettings.codebaseMemory.refresh")}
+          disabled={props.busy || !props.settings.enabled}
+          onClick={props.onRefresh}
+          size="icon-sm"
+          type="button"
+          variant="outline"
+        >
+          <RefreshCw className={cn(props.busy && "animate-spin")} size={15} />
+        </Button>
       </header>
-      <label className="project-settings-toggle-row">
-        <input
+      <div className="project-settings-toggle-row">
+        <Switch
+          aria-label={t("projectSettings.codebaseMemory.enable")}
           checked={props.settings.enabled}
           disabled={props.busy}
-          onChange={(event) => props.onSetEnabled(event.target.checked)}
-          type="checkbox"
+          onCheckedChange={props.onSetEnabled}
         />
         <span>
           <strong>{t("projectSettings.codebaseMemory.enable")}</strong>
@@ -67,15 +175,18 @@ export function ProjectCodebaseMemorySection(props: {
             ? t("projectSettings.codebaseMemory.enableHint")
             : t("projectSettings.codebaseMemory.disableHint")}</small>
         </span>
-      </label>
+      </div>
       <div className="project-settings-grid">
         <div className="project-settings-panel">
           <strong>{t("projectSettings.codebaseMemory.serviceStatus")}</strong>
           <p>{props.settings.serviceStatus}</p>
         </div>
         <div className="project-settings-panel">
-          <strong>{t("projectSettings.codebaseMemory.indexStatus")}</strong>
-          <p>{props.settings.indexStatus ?? t("projectSettings.codebaseMemory.unavailable")}</p>
+          <strong>{t("projectSettings.codebaseMemory.availability")}</strong>
+          <StatusPill
+            label={t(CODEBASE_MEMORY_AVAILABILITY_KEYS[availability] ?? CODEBASE_MEMORY_AVAILABILITY_KEYS.unknown)}
+            status={codebaseMemoryAvailabilityTone(props.settings.availability)}
+          />
         </div>
         <div className="project-settings-panel">
           <strong>{t("projectSettings.codebaseMemory.lastIndexed")}</strong>
@@ -85,20 +196,91 @@ export function ProjectCodebaseMemorySection(props: {
           <strong>{t("projectSettings.codebaseMemory.revision")}</strong>
           <p>{props.settings.indexRevision ?? t("projectSettings.codebaseMemory.unavailable")}</p>
         </div>
+        <div className="project-settings-panel">
+          <strong>{t("projectSettings.codebaseMemory.watcher")}</strong>
+          <p>{props.settings.watcherRegistered
+            ? t("projectSettings.codebaseMemory.registered")
+            : t("projectSettings.codebaseMemory.notRegistered")}</p>
+        </div>
+        <div className="project-settings-panel">
+          <strong>{t("projectSettings.codebaseMemory.graphSize")}</strong>
+          <p>{t("projectSettings.codebaseMemory.graphSizeValue")
+            .replace("{nodes}", props.settings.nodeCount ?? "—")
+            .replace("{edges}", props.settings.edgeCount ?? "—")}</p>
+        </div>
       </div>
+      {activeJob ? (
+        <section className="rounded-lg border bg-muted/20 p-3" aria-live="polite">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <LoaderCircle className="shrink-0 animate-spin" size={16} />
+              <strong>{t(CODEBASE_MEMORY_JOB_MODE_KEYS[activeJob.mode])}</strong>
+              <span className="truncate text-sm text-muted-foreground">
+                {t(CODEBASE_MEMORY_JOB_PHASE_KEYS[activeJob.phase])}
+              </span>
+            </div>
+            <span className="shrink-0 text-xs text-muted-foreground">
+              {activeJob.totalUnits
+                ? `${activeJob.completedUnits} / ${activeJob.totalUnits} ${activeJob.unit}`
+                : `${activeJob.completedUnits} ${activeJob.unit}`}
+            </span>
+          </div>
+          {progressPercent === null ? (
+            <div className="mt-3 h-1 overflow-hidden rounded-full bg-muted">
+              <div className="h-full w-1/3 animate-pulse rounded-full bg-primary" />
+            </div>
+          ) : (
+            <Progress className="mt-3" value={progressPercent} />
+          )}
+          <p className="mt-2 text-xs text-muted-foreground">
+            {t("projectSettings.codebaseMemory.job.availableDuringUpdate")}
+          </p>
+        </section>
+      ) : lastJob ? (
+        <p className="project-settings-muted">
+          {t("projectSettings.codebaseMemory.lastJob")}: {t(CODEBASE_MEMORY_JOB_MODE_KEYS[lastJob.mode])} · {t(CODEBASE_MEMORY_JOB_STATE_KEYS[lastJob.state])}
+          {lastJob.completedAt ? ` · ${lastJob.completedAt}` : ""}
+        </p>
+      ) : null}
       {props.settings.lastError ? (
-        <p className="project-settings-muted">{props.settings.lastError}</p>
+        <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+          {props.settings.lastError}
+        </p>
       ) : null}
       <div className="project-settings-actions">
         <Button
-          disabled={props.busy || !props.settings.enabled}
-          onClick={props.onReindex}
+          disabled={props.busy || !props.settings.enabled || Boolean(activeJob)}
+          onClick={props.onUpdate}
           type="button"
-          variant="outline"
         >
           <RefreshCw size={15} />
-          {t("projectSettings.codebaseMemory.reindex")}
+          {t("projectSettings.codebaseMemory.update")}
         </Button>
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button
+              disabled={props.busy || !props.settings.enabled || Boolean(activeJob)}
+              type="button"
+              variant="outline"
+            >
+              {t("projectSettings.codebaseMemory.rebuild")}
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t("projectSettings.codebaseMemory.rebuildTitle")}</AlertDialogTitle>
+              <AlertDialogDescription>
+                {t("projectSettings.codebaseMemory.rebuildDescription")}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{t("projectSettings.codebaseMemory.cancel")}</AlertDialogCancel>
+              <AlertDialogAction onClick={props.onRebuild}>
+                {t("projectSettings.codebaseMemory.confirmRebuild")}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </div>
   );

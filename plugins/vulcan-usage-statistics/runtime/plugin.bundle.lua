@@ -7,7 +7,7 @@ local M = {}
 
 -- SCHEMA_VERSION is the current isolated plugin database schema version.
 -- SCHEMA_VERSION 是当前插件隔离数据库的 Schema 版本。
-local SCHEMA_VERSION = 3
+local SCHEMA_VERSION = 4
 
 -- EMPTY_ARRAY preserves JSON array semantics when a query has no rows.
 -- EMPTY_ARRAY 在查询无结果时保留 JSON 数组语义。
@@ -81,6 +81,15 @@ local function sql_optional(value, value_kind)
     return sql_string(value)
 end
 
+-- Preserve legacy non-null token columns while recording unknown values in the new accounting columns.
+-- 在新的核算列记录未知值的同时，保留旧非空 Token 列的兼容写入。
+local function sql_legacy_integer(value)
+    if value == nil or is_json_null(value) then
+        return sql_integer(0)
+    end
+    return sql_integer(value)
+end
+
 -- Return the current complete schema-validated plugin configuration.
 -- 返回当前完整且通过 Schema 校验的插件配置。
 local function read_config()
@@ -119,15 +128,26 @@ end
 --
 -- applied_at_ms is an exact host telemetry timestamp when available.
 -- applied_at_ms 是可用时的精确宿主遥测时间戳。
+-- Read the exact existing columns so skipped historical migrations can be repaired safely.
+-- 读取现有精确列集合，使被跳过的历史迁移也能安全补齐。
+local function sqlite_table_columns(table_name)
+    local rows = sqlite_query(
+        [[SELECT name FROM pragma_table_info(?1)]],
+        { sql_string(table_name) },
+        "schema.columns." .. table_name
+    )
+    local columns = {}
+    for _, row in ipairs(rows) do
+        columns[row.name] = true
+    end
+    return columns
+end
+
 local function ensure_schema(applied_at_ms)
     if schema_ready then
         return
     end
-    vulcan.host.call("vulcan.plugin.storage.sqlite.migrate", {
-        version = SCHEMA_VERSION,
-        plugin_version = "0.1.0",
-        applied_at_ms = applied_at_ms or 0,
-        statements = {
+    local migration_statements = {
             [[CREATE TABLE IF NOT EXISTS models (
                 model_ref INTEGER PRIMARY KEY AUTOINCREMENT,
                 provider_key TEXT NOT NULL,
@@ -162,6 +182,9 @@ local function ensure_schema(applied_at_ms)
                 output_tokens INTEGER NOT NULL,
                 reasoning_tokens INTEGER NOT NULL,
                 total_tokens INTEGER NOT NULL,
+                provider_total_tokens INTEGER,
+                accounted_total_tokens INTEGER,
+                accounted_total_source TEXT NOT NULL DEFAULT 'unknown',
                 cached_input_tokens INTEGER,
                 cache_creation_input_tokens INTEGER,
                 finish_reason TEXT,
@@ -169,20 +192,20 @@ local function ensure_schema(applied_at_ms)
                 error_code TEXT,
                 calendar_date TEXT NOT NULL,
                 timezone_offset_minutes INTEGER NOT NULL,
-                created_at_ms INTEGER NOT NULL
+                created_at_ms INTEGER NOT NULL,
+                operation TEXT,
+                usage_scope TEXT,
+                service_entry_id TEXT,
+                connection_id TEXT,
+                protocol_profile_id TEXT,
+                secondary_route_id TEXT,
+                capability_revision TEXT,
+                catalog_revision TEXT,
+                input_item_count INTEGER,
+                output_item_count INTEGER,
+                vector_dimensions INTEGER,
+                provider_cost TEXT
             )]],
-            [[ALTER TABLE api_request_events ADD COLUMN operation TEXT]],
-            [[ALTER TABLE api_request_events ADD COLUMN usage_scope TEXT]],
-            [[ALTER TABLE api_request_events ADD COLUMN service_entry_id TEXT]],
-            [[ALTER TABLE api_request_events ADD COLUMN connection_id TEXT]],
-            [[ALTER TABLE api_request_events ADD COLUMN protocol_profile_id TEXT]],
-            [[ALTER TABLE api_request_events ADD COLUMN secondary_route_id TEXT]],
-            [[ALTER TABLE api_request_events ADD COLUMN capability_revision TEXT]],
-            [[ALTER TABLE api_request_events ADD COLUMN catalog_revision TEXT]],
-            [[ALTER TABLE api_request_events ADD COLUMN input_item_count INTEGER]],
-            [[ALTER TABLE api_request_events ADD COLUMN output_item_count INTEGER]],
-            [[ALTER TABLE api_request_events ADD COLUMN vector_dimensions INTEGER]],
-            [[ALTER TABLE api_request_events ADD COLUMN provider_cost TEXT]],
             [[CREATE INDEX IF NOT EXISTS idx_api_request_events_completed
                 ON api_request_events(completed_at_ms DESC)]],
             [[CREATE INDEX IF NOT EXISTS idx_api_request_events_calendar_date
@@ -217,6 +240,10 @@ local function ensure_schema(applied_at_ms)
                 maximum_request_tokens INTEGER NOT NULL,
                 first_token_ms_sum INTEGER NOT NULL,
                 first_token_count INTEGER NOT NULL,
+                provider_total_tokens INTEGER NOT NULL,
+                accounted_total_tokens INTEGER NOT NULL,
+                unknown_token_count INTEGER NOT NULL,
+                inconsistent_token_count INTEGER NOT NULL,
                 PRIMARY KEY(calendar_date, model_ref, owner_kind)
             )]],
             [[CREATE INDEX IF NOT EXISTS idx_usage_daily_model_date
@@ -274,7 +301,168 @@ local function ensure_schema(applied_at_ms)
                         SET meta_value = CAST(CAST(meta_value AS INTEGER) + 1 AS TEXT)
                         WHERE meta_key = 'data_revision';
                 END]],
-        },
+    }
+    -- existing_event_columns and existing_daily_columns are queried before DDL is assembled.
+    -- existing_event_columns 与 existing_daily_columns 在组装 DDL 前读取，避免重复 ADD COLUMN。
+    local existing_event_columns = sqlite_table_columns("api_request_events")
+    local existing_daily_columns = sqlite_table_columns("usage_daily_model")
+    local additive_columns = {}
+    -- Historical route columns are added only when an older table already exists.
+    -- 仅当旧表已经存在时才补充历史路由列，避免新表重复添加基表列。
+    if next(existing_event_columns) ~= nil then
+        for _, column_migration in ipairs({
+            { "operation", [[ALTER TABLE api_request_events ADD COLUMN operation TEXT]] },
+            { "usage_scope", [[ALTER TABLE api_request_events ADD COLUMN usage_scope TEXT]] },
+            { "service_entry_id", [[ALTER TABLE api_request_events ADD COLUMN service_entry_id TEXT]] },
+            { "connection_id", [[ALTER TABLE api_request_events ADD COLUMN connection_id TEXT]] },
+            { "protocol_profile_id", [[ALTER TABLE api_request_events ADD COLUMN protocol_profile_id TEXT]] },
+            { "secondary_route_id", [[ALTER TABLE api_request_events ADD COLUMN secondary_route_id TEXT]] },
+            { "capability_revision", [[ALTER TABLE api_request_events ADD COLUMN capability_revision TEXT]] },
+            { "catalog_revision", [[ALTER TABLE api_request_events ADD COLUMN catalog_revision TEXT]] },
+            { "input_item_count", [[ALTER TABLE api_request_events ADD COLUMN input_item_count INTEGER]] },
+            { "output_item_count", [[ALTER TABLE api_request_events ADD COLUMN output_item_count INTEGER]] },
+            { "vector_dimensions", [[ALTER TABLE api_request_events ADD COLUMN vector_dimensions INTEGER]] },
+            { "provider_cost", [[ALTER TABLE api_request_events ADD COLUMN provider_cost TEXT]] },
+        }) do
+            table.insert(additive_columns, { existing_event_columns, column_migration[1], column_migration[2] })
+        end
+    end
+    for _, column_migration in ipairs({
+        { existing_event_columns, "provider_total_tokens", [[ALTER TABLE api_request_events ADD COLUMN provider_total_tokens INTEGER]] },
+        { existing_event_columns, "accounted_total_tokens", [[ALTER TABLE api_request_events ADD COLUMN accounted_total_tokens INTEGER]] },
+        { existing_event_columns, "accounted_total_source", [[ALTER TABLE api_request_events ADD COLUMN accounted_total_source TEXT NOT NULL DEFAULT 'unknown']] },
+        { existing_daily_columns, "provider_total_tokens", [[ALTER TABLE usage_daily_model ADD COLUMN provider_total_tokens INTEGER NOT NULL DEFAULT 0]] },
+        { existing_daily_columns, "accounted_total_tokens", [[ALTER TABLE usage_daily_model ADD COLUMN accounted_total_tokens INTEGER NOT NULL DEFAULT 0]] },
+        { existing_daily_columns, "unknown_token_count", [[ALTER TABLE usage_daily_model ADD COLUMN unknown_token_count INTEGER NOT NULL DEFAULT 0]] },
+        { existing_daily_columns, "inconsistent_token_count", [[ALTER TABLE usage_daily_model ADD COLUMN inconsistent_token_count INTEGER NOT NULL DEFAULT 0]] },
+    }) do
+        table.insert(additive_columns, column_migration)
+    end
+    for _, column_migration in ipairs(additive_columns) do
+        if not column_migration[1][column_migration[2]] then
+            table.insert(migration_statements, column_migration[3])
+        end
+    end
+    local migration_tail = {
+            [[UPDATE api_request_events
+                SET provider_total_tokens = CASE
+                    WHEN total_tokens > 0 THEN total_tokens
+                    WHEN COALESCE(input_tokens, 0) + COALESCE(cached_input_tokens, 0)
+                        + COALESCE(output_tokens, 0) > 0
+                        THEN NULL
+                    ELSE 0
+                END,
+                accounted_total_tokens = CASE
+                    WHEN total_tokens > 0 THEN total_tokens
+                    WHEN COALESCE(input_tokens, 0) + COALESCE(cached_input_tokens, 0)
+                        + COALESCE(output_tokens, 0) > 0
+                        THEN COALESCE(input_tokens, 0) + COALESCE(cached_input_tokens, 0)
+                            + COALESCE(output_tokens, 0)
+                    ELSE NULL
+                END,
+                accounted_total_source = CASE
+                    WHEN total_tokens > 0 AND total_tokens = COALESCE(input_tokens, 0)
+                        + COALESCE(cached_input_tokens, 0) + COALESCE(output_tokens, 0) THEN 'reported'
+                    WHEN total_tokens > 0 AND COALESCE(input_tokens, 0) + COALESCE(cached_input_tokens, 0)
+                        + COALESCE(output_tokens, 0) > 0 THEN 'inconsistent'
+                    WHEN total_tokens > 0 THEN 'reported'
+                    WHEN COALESCE(input_tokens, 0) + COALESCE(cached_input_tokens, 0)
+                        + COALESCE(output_tokens, 0) > 0
+                        THEN 'inconsistent'
+                    ELSE 'unknown'
+                END]],
+            [[DROP TRIGGER IF EXISTS trg_api_request_events_aggregate]],
+            [[DELETE FROM usage_daily_model]],
+            [[INSERT INTO usage_daily_model(
+                calendar_date, model_ref, owner_kind, request_count,
+                success_count, failure_count, cancelled_count, retry_count, input_tokens,
+                output_tokens, reasoning_tokens, total_tokens,
+                cached_input_tokens, cache_creation_input_tokens, duration_ms,
+                maximum_duration_ms, maximum_request_tokens,
+                first_token_ms_sum, first_token_count,
+                provider_total_tokens, accounted_total_tokens, unknown_token_count,
+                inconsistent_token_count
+            )
+            SELECT calendar_date, model_ref, owner_kind, COUNT(*),
+                SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END),
+                COALESCE(SUM(retry_count), 0), COALESCE(SUM(input_tokens), 0),
+                COALESCE(SUM(output_tokens), 0), COALESCE(SUM(reasoning_tokens), 0),
+                COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cached_input_tokens), 0),
+                COALESCE(SUM(cache_creation_input_tokens), 0), COALESCE(SUM(duration_ms), 0),
+                COALESCE(MAX(duration_ms), 0), COALESCE(MAX(accounted_total_tokens), 0),
+                COALESCE(SUM(time_to_first_token_ms), 0),
+                SUM(CASE WHEN time_to_first_token_ms IS NULL THEN 0 ELSE 1 END),
+                COALESCE(SUM(provider_total_tokens), 0), COALESCE(SUM(accounted_total_tokens), 0),
+                SUM(CASE WHEN accounted_total_tokens IS NULL THEN 1 ELSE 0 END),
+                SUM(CASE WHEN accounted_total_source = 'inconsistent' THEN 1 ELSE 0 END)
+            FROM api_request_events
+            GROUP BY calendar_date, model_ref, owner_kind]],
+            [[CREATE TRIGGER IF NOT EXISTS trg_api_request_events_aggregate
+                AFTER INSERT ON api_request_events
+                BEGIN
+                    INSERT INTO usage_daily_model(
+                        calendar_date, model_ref, owner_kind, request_count,
+                        success_count, failure_count, cancelled_count, retry_count, input_tokens,
+                        output_tokens, reasoning_tokens, total_tokens,
+                        cached_input_tokens, cache_creation_input_tokens, duration_ms,
+                        maximum_duration_ms, maximum_request_tokens,
+                        first_token_ms_sum, first_token_count,
+                        provider_total_tokens, accounted_total_tokens, unknown_token_count,
+                        inconsistent_token_count
+                    ) VALUES (
+                        NEW.calendar_date, NEW.model_ref, NEW.owner_kind, 1,
+                        CASE WHEN NEW.status = 'succeeded' THEN 1 ELSE 0 END,
+                        CASE WHEN NEW.status = 'failed' THEN 1 ELSE 0 END,
+                        CASE WHEN NEW.status = 'cancelled' THEN 1 ELSE 0 END,
+                        NEW.retry_count, COALESCE(NEW.input_tokens, 0), COALESCE(NEW.output_tokens, 0),
+                        COALESCE(NEW.reasoning_tokens, 0), COALESCE(NEW.total_tokens, 0),
+                        COALESCE(NEW.cached_input_tokens, 0), COALESCE(NEW.cache_creation_input_tokens, 0),
+                        NEW.duration_ms, NEW.duration_ms, COALESCE(NEW.accounted_total_tokens, 0),
+                        COALESCE(NEW.time_to_first_token_ms, 0),
+                        CASE WHEN NEW.time_to_first_token_ms IS NULL THEN 0 ELSE 1 END,
+                        COALESCE(NEW.provider_total_tokens, 0), COALESCE(NEW.accounted_total_tokens, 0),
+                        CASE WHEN NEW.accounted_total_tokens IS NULL THEN 1 ELSE 0 END,
+                        CASE WHEN NEW.accounted_total_source = 'inconsistent' THEN 1 ELSE 0 END
+                    )
+                    ON CONFLICT(calendar_date, model_ref, owner_kind) DO UPDATE SET
+                        request_count = request_count + 1,
+                        success_count = success_count + excluded.success_count,
+                        failure_count = failure_count + excluded.failure_count,
+                        cancelled_count = cancelled_count + excluded.cancelled_count,
+                        retry_count = retry_count + excluded.retry_count,
+                        input_tokens = input_tokens + excluded.input_tokens,
+                        output_tokens = output_tokens + excluded.output_tokens,
+                        reasoning_tokens = reasoning_tokens + excluded.reasoning_tokens,
+                        total_tokens = total_tokens + excluded.total_tokens,
+                        cached_input_tokens = cached_input_tokens + excluded.cached_input_tokens,
+                        cache_creation_input_tokens = cache_creation_input_tokens + excluded.cache_creation_input_tokens,
+                        duration_ms = duration_ms + excluded.duration_ms,
+                        maximum_duration_ms = MAX(maximum_duration_ms, excluded.maximum_duration_ms),
+                        maximum_request_tokens = MAX(maximum_request_tokens, excluded.maximum_request_tokens),
+                        first_token_ms_sum = first_token_ms_sum + excluded.first_token_ms_sum,
+                        first_token_count = first_token_count + excluded.first_token_count,
+                        provider_total_tokens = provider_total_tokens + excluded.provider_total_tokens,
+                        accounted_total_tokens = accounted_total_tokens + excluded.accounted_total_tokens,
+                        unknown_token_count = unknown_token_count + excluded.unknown_token_count,
+                        inconsistent_token_count = inconsistent_token_count + excluded.inconsistent_token_count;
+                    UPDATE models
+                        SET last_seen_at_ms = NEW.completed_at_ms
+                        WHERE model_ref = NEW.model_ref;
+                    UPDATE statistics_meta
+                        SET meta_value = CAST(CAST(meta_value AS INTEGER) + 1 AS TEXT)
+                        WHERE meta_key = 'data_revision';
+                END]],
+    }
+    for _, statement in ipairs(migration_tail) do
+        table.insert(migration_statements, statement)
+    end
+    vulcan.host.call("vulcan.plugin.storage.sqlite.migrate", {
+        version = SCHEMA_VERSION,
+        plugin_version = "0.1.0",
+        applied_at_ms = applied_at_ms or 0,
+        statements = migration_statements,
     })
     schema_ready = true
 end
@@ -301,6 +489,40 @@ local function telemetry_payload(args)
         error("Unsupported Provider telemetry schema_version")
     end
     return payload
+end
+
+-- Normalize additive accounting fields while remaining compatible with the previous telemetry payload shape.
+-- 规范化新增核算字段，同时兼容旧版遥测载荷结构。
+local function accounted_payload_tokens(payload)
+    if payload.accounted_total_source ~= nil
+        and not is_json_null(payload.accounted_total_source)
+        and payload.accounted_total_tokens ~= nil
+        and not is_json_null(payload.accounted_total_tokens)
+    then
+        return payload.accounted_total_tokens, payload.accounted_total_source
+    end
+    local uncached = payload.uncached_input_tokens
+    local output = payload.output_tokens
+    local cached = payload.cached_input_tokens
+    if is_json_null(uncached) then uncached = nil end
+    if is_json_null(output) then output = nil end
+    if is_json_null(cached) then cached = nil end
+    local derived = nil
+    if uncached ~= nil and output ~= nil then
+        derived = uncached + (cached or 0) + output
+    end
+    local reported = payload.total_tokens
+    if is_json_null(reported) then reported = nil end
+    if reported ~= nil and reported > 0 then
+        if derived ~= nil and reported ~= derived then
+            return reported, "inconsistent"
+        end
+        return reported, "reported"
+    end
+    if derived ~= nil and derived > 0 then
+        return derived, reported == 0 and "inconsistent" or "derived"
+    end
+    return nil, "unknown"
 end
 
 -- Resolve the persistent model dimension key without duplicating model data per request.
@@ -358,7 +580,41 @@ local function resolve_model_ref(payload)
     return rows[1].model_ref
 end
 
--- Delete expired raw request facts while retaining permanent model and daily aggregate records.
+-- Return one deterministic SQL script that rebuilds every daily aggregate from raw request facts.
+-- 返回一段从原始请求事实重建全部每日聚合的确定性 SQL 脚本。
+local function aggregate_rebuild_sql()
+    return [[
+        DELETE FROM usage_daily_model;
+        INSERT INTO usage_daily_model(
+            calendar_date, model_ref, owner_kind, request_count,
+            success_count, failure_count, cancelled_count, retry_count, input_tokens,
+            output_tokens, reasoning_tokens, total_tokens,
+            cached_input_tokens, cache_creation_input_tokens, duration_ms,
+            maximum_duration_ms, maximum_request_tokens,
+            first_token_ms_sum, first_token_count,
+            provider_total_tokens, accounted_total_tokens, unknown_token_count,
+            inconsistent_token_count
+        )
+        SELECT calendar_date, model_ref, owner_kind, COUNT(*),
+            SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END),
+            COALESCE(SUM(retry_count), 0), COALESCE(SUM(input_tokens), 0),
+            COALESCE(SUM(output_tokens), 0), COALESCE(SUM(reasoning_tokens), 0),
+            COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cached_input_tokens), 0),
+            COALESCE(SUM(cache_creation_input_tokens), 0), COALESCE(SUM(duration_ms), 0),
+            COALESCE(MAX(duration_ms), 0), COALESCE(MAX(accounted_total_tokens), 0),
+            COALESCE(SUM(time_to_first_token_ms), 0),
+            SUM(CASE WHEN time_to_first_token_ms IS NULL THEN 0 ELSE 1 END),
+            COALESCE(SUM(provider_total_tokens), 0), COALESCE(SUM(accounted_total_tokens), 0),
+            SUM(CASE WHEN accounted_total_tokens IS NULL THEN 1 ELSE 0 END),
+            SUM(CASE WHEN accounted_total_source = 'inconsistent' THEN 1 ELSE 0 END)
+        FROM api_request_events
+        GROUP BY calendar_date, model_ref, owner_kind;
+    ]]
+end
+
+-- Delete expired raw request facts while retaining permanent model dimension records.
 -- 删除过期原始请求事实，同时永久保留模型与每日聚合记录。
 local function cleanup_expired_facts(config, calendar_date)
     -- A zero retention sentinel keeps raw statistics indefinitely and performs no destructive cleanup.
@@ -372,8 +628,26 @@ local function cleanup_expired_facts(config, calendar_date)
     -- retention_modifier is accepted as SQLite's documented relative date modifier.
     -- retention_modifier 使用 SQLite 文档化的相对日期修饰符。
     local retention_modifier = "-" .. tostring(config.retentionDays) .. " days"
+    local expired_rows = sqlite_query(
+        [[SELECT COUNT(*) AS count FROM api_request_events WHERE calendar_date < date(?1, ?2)]],
+        { sql_string(calendar_date), sql_string(retention_modifier) },
+        "retention.expired_count"
+    )
+    if #expired_rows == 0 or expired_rows[1].count == 0 then
+        last_cleanup_date = calendar_date
+        return
+    end
+    -- cleanup_script deletes facts, rebuilds aggregates, and advances the revision atomically.
+    -- cleanup_script 原子删除事实、重建聚合并推进修订号。
+    local cleanup_script = [[BEGIN IMMEDIATE;
+        DELETE FROM api_request_events WHERE calendar_date < date(?1, ?2);
+    ]] .. aggregate_rebuild_sql() .. [[
+        UPDATE statistics_meta
+        SET meta_value = CAST(CAST(meta_value AS INTEGER) + 1 AS TEXT)
+        WHERE meta_key = 'data_revision';
+        COMMIT;]]
     sqlite_execute(
-        [[DELETE FROM api_request_events WHERE calendar_date < date(?1, ?2)]],
+        cleanup_script,
         { sql_string(calendar_date), sql_string(retention_modifier) }
     )
     last_cleanup_date = calendar_date
@@ -392,6 +666,68 @@ local function current_revision()
         error("Statistics data revision is missing")
     end
     return rows[1].revision
+end
+
+-- Validate and normalize one inclusive local calendar date supplied by a cleanup action.
+-- 校验并规范化清理 Action 提交的一个本地自然日闭区间日期。
+local function validate_calendar_date(value, field_name)
+    if type(value) ~= "string" or not string.match(value, "^%d%d%d%d%-%d%d%-%d%d$") then
+        error(field_name .. " must use YYYY-MM-DD")
+    end
+    local rows = sqlite_query(
+        [[SELECT date(?1) AS normalized_date]],
+        { sql_string(value) },
+        "cleanup.validate_date"
+    )
+    if #rows ~= 1 or rows[1].normalized_date ~= value then
+        error(field_name .. " is not a valid calendar date")
+    end
+    return value
+end
+
+-- Build one explicit model/date deletion predicate and its ordered SQLite parameters.
+-- 构建一个明确的模型/日期删除谓词及其有序 SQLite 参数。
+local function clear_filter(input, event_alias)
+    local alias = event_alias or "e"
+    local model_ref = input.modelRef
+    local from_date = input.fromDate
+    local to_date = input.toDate
+    if model_ref == nil and from_date == nil and to_date == nil then
+        error("Statistics cleanup requires a model or a complete date range")
+    end
+    if (from_date == nil) ~= (to_date == nil) then
+        error("Statistics cleanup requires both fromDate and toDate")
+    end
+    if model_ref ~= nil then
+        local model_rows = sqlite_query(
+            [[SELECT model_ref AS modelRef FROM models WHERE model_ref = ?1]],
+            { sql_integer(model_ref) },
+            "cleanup.validate_model"
+        )
+        if #model_rows ~= 1 then
+            error("Statistics cleanup modelRef does not exist")
+        end
+    end
+    if from_date ~= nil then
+        from_date = validate_calendar_date(from_date, "fromDate")
+        to_date = validate_calendar_date(to_date, "toDate")
+        if from_date > to_date then
+            error("Statistics cleanup fromDate must not be after toDate")
+        end
+    end
+    local predicates = {}
+    local params = {}
+    if model_ref ~= nil then
+        table.insert(predicates, " AND " .. alias .. ".model_ref = ?" .. tostring(#params + 1))
+        table.insert(params, sql_integer(model_ref))
+    end
+    if from_date ~= nil then
+        table.insert(predicates, " AND " .. alias .. ".calendar_date >= ?" .. tostring(#params + 1))
+        table.insert(params, sql_string(from_date))
+        table.insert(predicates, " AND " .. alias .. ".calendar_date <= ?" .. tostring(#params + 1))
+        table.insert(params, sql_string(to_date))
+    end
+    return table.concat(predicates), params, model_ref, from_date, to_date
 end
 
 -- Return the current complete plugin configuration to the mounted UI.
@@ -473,6 +809,9 @@ function M.provider_request_completed(args)
     -- model_ref points to the permanent provider-and-model dimension record.
     -- model_ref 指向永久保存的供应商与模型维度记录。
     local model_ref = resolve_model_ref(payload)
+    -- accountedTokens applies the additive statistics contract for both new and old Hook payloads.
+    -- accountedTokens 为新旧 Hook 载荷应用增量统计契约。
+    local accounted_tokens, accounted_source = accounted_payload_tokens(payload)
     sqlite_execute(
         [[INSERT OR IGNORE INTO api_request_events(
             request_id, execution_id, session_id, project_id, workspace_id,
@@ -484,6 +823,7 @@ function M.provider_request_completed(args)
             first_event_at_ms, first_token_at_ms, completed_at_ms,
             time_to_first_event_ms, time_to_first_token_ms, duration_ms,
             input_tokens, output_tokens, reasoning_tokens, total_tokens,
+            provider_total_tokens, accounted_total_tokens, accounted_total_source,
             cached_input_tokens, cache_creation_input_tokens, finish_reason,
             error_category, error_code, calendar_date, timezone_offset_minutes,
             created_at_ms
@@ -492,7 +832,7 @@ function M.provider_request_completed(args)
             ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
             ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
             ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40,
-            ?41, ?42, ?43
+            ?41, ?42, ?43, ?44, ?45, ?46
         )]],
         {
             sql_string(payload.request_id), sql_string(payload.execution_id),
@@ -516,9 +856,12 @@ function M.provider_request_completed(args)
             sql_optional(payload.first_token_at_ms, "integer"), sql_integer(payload.completed_at_ms),
             sql_optional(payload.time_to_first_event_ms, "integer"),
             sql_optional(payload.time_to_first_token_ms, "integer"),
-            sql_integer(payload.duration_ms), sql_integer(payload.uncached_input_tokens),
-            sql_integer(payload.output_tokens), sql_integer(payload.reasoning_tokens),
-            sql_integer(payload.total_tokens), sql_optional(payload.cached_input_tokens, "integer"),
+            sql_integer(payload.duration_ms), sql_legacy_integer(payload.uncached_input_tokens),
+            sql_legacy_integer(payload.output_tokens), sql_legacy_integer(payload.reasoning_tokens),
+            sql_legacy_integer(payload.total_tokens), sql_optional(payload.total_tokens, "integer"),
+            sql_optional(accounted_tokens, "integer"),
+            sql_string(accounted_source),
+            sql_optional(payload.cached_input_tokens, "integer"),
             sql_optional(payload.cache_creation_input_tokens, "integer"),
             sql_optional(payload.finish_reason, "string"), sql_optional(payload.error_category, "string"),
             sql_optional(payload.error_code, "string"), sql_string(payload.calendar_date),
@@ -598,7 +941,7 @@ local function metric_expression(metric)
     -- expressions maps schema-enumerated metric keys to trusted SQL fragments.
     -- expressions 将 Schema 枚举指标键映射为可信 SQL 片段。
     local expressions = {
-        total_tokens = "SUM(total_tokens)",
+        total_tokens = "SUM(accounted_total_tokens)",
         input_tokens = "SUM(input_tokens)",
         output_tokens = "SUM(output_tokens)",
         requests = "SUM(request_count)",
@@ -655,18 +998,21 @@ function M.dashboard_get(args)
             COALESCE(SUM(input_tokens), 0) AS inputTokens,
             COALESCE(SUM(output_tokens), 0) AS outputTokens,
             COALESCE(SUM(reasoning_tokens), 0) AS reasoningTokens,
-            COALESCE(SUM(total_tokens), 0) AS totalTokens,
+            COALESCE(SUM(accounted_total_tokens), 0) AS totalTokens,
+            COALESCE(SUM(provider_total_tokens), 0) AS providerTotalTokens,
+            COALESCE(SUM(unknown_token_count), 0) AS unknownTokenRequests,
+            COALESCE(SUM(inconsistent_token_count), 0) AS inconsistentTokenRequests,
             COALESCE(SUM(cached_input_tokens), 0) AS cachedInputTokens,
             COALESCE(SUM(cache_creation_input_tokens), 0) AS cacheCreationInputTokens,
             COALESCE(SUM(duration_ms), 0) AS durationMs,
             CASE WHEN SUM(request_count) IS NULL OR SUM(request_count) = 0 THEN 0
                 ELSE SUM(duration_ms) / SUM(request_count) END AS averageDurationMs,
-            COALESCE(SUM(CASE WHEN owner_kind = 'main_agent' THEN total_tokens ELSE 0 END), 0) AS mainAgentTokens,
-            COALESCE(SUM(CASE WHEN owner_kind = 'subagent' THEN total_tokens ELSE 0 END), 0) AS subagentTokens,
+            COALESCE(SUM(CASE WHEN owner_kind = 'main_agent' THEN accounted_total_tokens ELSE 0 END), 0) AS mainAgentTokens,
+            COALESCE(SUM(CASE WHEN owner_kind = 'subagent' THEN accounted_total_tokens ELSE 0 END), 0) AS subagentTokens,
             COALESCE(SUM(CASE WHEN owner_kind IN (
                 'context_compaction', 'git_commit_summary', 'internal_llm',
                 'internal_embedding', 'internal_rerank', 'internal_multimodal'
-            ) THEN total_tokens ELSE 0 END), 0) AS internalTokens,
+            ) THEN accounted_total_tokens ELSE 0 END), 0) AS internalTokens,
             COALESCE(MAX(maximum_duration_ms), 0) AS longestRequestMs,
             COALESCE(MAX(maximum_request_tokens), 0) AS peakRequestTokens,
             CASE WHEN SUM(first_token_count) IS NULL OR SUM(first_token_count) = 0 THEN 0
@@ -717,18 +1063,18 @@ function M.dashboard_get(args)
     -- heatmap_rows 每个宿主本地自然日包含一个丰富活动单元与最常用模型名称。
     local heatmap_rows = sqlite_query(
         [[WITH filtered AS (
-            SELECT calendar_date, model_ref, total_tokens, request_count, success_count
+            SELECT calendar_date, model_ref, accounted_total_tokens, request_count, success_count
             FROM usage_daily_model
             WHERE calendar_date >= date('now', 'localtime', '-364 days')]] .. heatmap_owner_sql .. heatmap_model_sql .. [[
         ), daily AS (
-            SELECT calendar_date, SUM(total_tokens) AS value,
+            SELECT calendar_date, SUM(accounted_total_tokens) AS value,
                    SUM(request_count) AS requests, SUM(success_count) AS successes
             FROM filtered GROUP BY calendar_date
         ), ranked_models AS (
-            SELECT calendar_date, model_ref, SUM(total_tokens) AS model_tokens,
+            SELECT calendar_date, model_ref, SUM(accounted_total_tokens) AS model_tokens,
                    ROW_NUMBER() OVER (
                        PARTITION BY calendar_date
-                       ORDER BY SUM(total_tokens) DESC, model_ref
+                       ORDER BY SUM(accounted_total_tokens) DESC, model_ref
                    ) AS model_rank
             FROM filtered GROUP BY calendar_date, model_ref
         )
@@ -747,7 +1093,7 @@ function M.dashboard_get(args)
     -- peak_rows 计算完整宿主本地自然日中的最大 Token 总量。
     local peak_rows = sqlite_query(
         [[SELECT COALESCE(MAX(daily_tokens), 0) AS peakDailyTokens FROM (
-            SELECT calendar_date, SUM(total_tokens) AS daily_tokens
+            SELECT calendar_date, SUM(accounted_total_tokens) AS daily_tokens
             FROM usage_daily_model
             WHERE 1 = 1]] .. aggregate_filter_sql .. [[
             GROUP BY calendar_date
@@ -811,7 +1157,7 @@ function M.dashboard_get(args)
     local model_rows = sqlite_query(
         [[SELECT m.model_ref AS modelRef, m.provider_key AS providerKey,
                m.provider_name AS providerName, m.model_key AS modelKey,
-               m.model_name AS modelName, SUM(d.total_tokens) AS totalTokens,
+               m.model_name AS modelName, SUM(d.accounted_total_tokens) AS totalTokens,
                SUM(d.request_count) AS requests
         FROM usage_daily_model d
         JOIN models m ON m.model_ref = d.model_ref
@@ -836,9 +1182,9 @@ function M.dashboard_get(args)
     summary.longestStreakDays = streak_rows[1].longestStreakDays
     summary.peakDailyTokens = peak_rows[1].peakDailyTokens
     summary.successRate = summary.requests == 0 and 0 or summary.successes * 100 / summary.requests
-    -- cacheEligibleInputTokens combines every normalized input-token category that could produce a cache hit.
-    -- cacheEligibleInputTokens 合并所有可能产生缓存命中的归一化输入 Token 类别。
-    local cache_eligible_input_tokens = summary.inputTokens + summary.cachedInputTokens + summary.cacheCreationInputTokens
+    -- cacheEligibleInputTokens uses normalized non-cached and cache-hit input without double-counting cache writes.
+    -- cacheEligibleInputTokens 使用规范化非缓存输入与缓存命中输入，避免重复计算缓存写入。
+    local cache_eligible_input_tokens = summary.inputTokens + summary.cachedInputTokens
     summary.cacheHitRate = cache_eligible_input_tokens == 0 and 0 or summary.cachedInputTokens * 100 / cache_eligible_input_tokens
     -- model shares use the exact selected-range total and remain zero for an empty range.
     -- 模型占比使用精确的已选范围总量；空范围时保持为零。
@@ -893,7 +1239,10 @@ function M.recent_get(args)
                m.provider_name AS providerName, m.model_name AS modelName,
                e.owner_kind AS ownerKind, e.owner_name AS ownerName, e.status AS status,
                e.input_tokens AS inputTokens, e.output_tokens AS outputTokens,
-               e.total_tokens AS totalTokens, e.cached_input_tokens AS cachedInputTokens,
+               e.accounted_total_tokens AS totalTokens,
+               e.provider_total_tokens AS providerTotalTokens,
+               e.accounted_total_source AS totalTokenSource,
+               e.cached_input_tokens AS cachedInputTokens,
                e.time_to_first_token_ms AS timeToFirstTokenMs, e.duration_ms AS durationMs,
                e.retry_count AS retryCount, e.error_category AS errorCategory,
                e.error_code AS errorCode
@@ -945,6 +1294,99 @@ function M.errors_get(args)
         "errors.grouped"
     )
     return success({ errors = rows })
+end
+
+-- Read the exact deletion preview totals for one validated model/date predicate.
+-- 读取一个已校验模型/日期谓词对应的精确删除预览总量。
+local function clear_summary(filter_sql, params, query_name)
+    local rows = sqlite_query(
+        [[SELECT COUNT(*) AS requests,
+               COALESCE(SUM(CASE WHEN e.status = 'succeeded' THEN 1 ELSE 0 END), 0) AS successes,
+               COALESCE(SUM(CASE WHEN e.status = 'failed' THEN 1 ELSE 0 END), 0) AS failures,
+               COALESCE(SUM(CASE WHEN e.status = 'cancelled' THEN 1 ELSE 0 END), 0) AS cancelled,
+               COALESCE(SUM(e.input_tokens), 0) AS inputTokens,
+               COALESCE(SUM(e.output_tokens), 0) AS outputTokens,
+               COALESCE(SUM(e.reasoning_tokens), 0) AS reasoningTokens,
+               COALESCE(SUM(e.provider_total_tokens), 0) AS providerTotalTokens,
+               COALESCE(SUM(e.accounted_total_tokens), 0) AS totalTokens,
+               COALESCE(SUM(e.cached_input_tokens), 0) AS cachedInputTokens,
+               COALESCE(SUM(e.cache_creation_input_tokens), 0) AS cacheCreationInputTokens,
+               COALESCE(SUM(CASE WHEN e.accounted_total_tokens IS NULL THEN 1 ELSE 0 END), 0) AS unknownTokenRequests,
+               COALESCE(SUM(CASE WHEN e.accounted_total_source = 'inconsistent' THEN 1 ELSE 0 END), 0) AS inconsistentTokenRequests
+        FROM api_request_events e
+        WHERE 1 = 1]] .. filter_sql,
+        params,
+        query_name
+    )
+    return rows[1]
+end
+
+-- Preview one explicit model/date cleanup without mutating the statistics database.
+-- 预览一个明确的模型/日期清理范围，但不修改统计数据库。
+function M.statistics_clear_preview(args)
+    ensure_schema(0)
+    local input = args.arguments
+    local filter_sql, params, model_ref, from_date, to_date = clear_filter(input, "e")
+    return success({
+        revision = current_revision(),
+        modelRef = model_ref or vulcan.json.null,
+        fromDate = from_date or vulcan.json.null,
+        toDate = to_date or vulcan.json.null,
+        summary = clear_summary(filter_sql, params, "cleanup.preview"),
+    })
+end
+
+-- Apply one revision-fenced model/date cleanup and rebuild all remaining daily aggregates atomically.
+-- 原子执行一次带修订号围栏的模型/日期清理，并重建剩余全部每日聚合。
+function M.statistics_clear_apply(args)
+    ensure_schema(0)
+    local input = args.arguments
+    local filter_sql, filter_params, model_ref, from_date, to_date = clear_filter(input, "e")
+    local expected_revision = input.expectedRevision
+    local current = current_revision()
+    if expected_revision ~= current then
+        error("Statistics cleanup preview is stale; refresh the preview")
+    end
+    local before = clear_summary(filter_sql, filter_params, "cleanup.apply.before")
+    local revision_parameter_index = #filter_params + 1
+    table.insert(filter_params, sql_integer(expected_revision))
+    local cleanup_script = [[BEGIN IMMEDIATE;
+        CREATE TEMP TABLE IF NOT EXISTS statistics_clear_state(deleted_count INTEGER NOT NULL);
+        DELETE FROM statistics_clear_state;
+        DELETE FROM api_request_events AS e
+        WHERE 1 = 1]] .. filter_sql .. [[
+          AND (SELECT CAST(meta_value AS INTEGER) FROM statistics_meta WHERE meta_key = 'data_revision') = ?]] .. tostring(revision_parameter_index) .. [[;
+        INSERT INTO statistics_clear_state(deleted_count) VALUES (changes());
+    ]] .. aggregate_rebuild_sql() .. [[
+        UPDATE statistics_meta
+        SET meta_value = CAST(CAST(meta_value AS INTEGER) +
+            CASE WHEN (SELECT deleted_count FROM statistics_clear_state) > 0 THEN 1 ELSE 0 END AS TEXT)
+        WHERE meta_key = 'data_revision';
+        DROP TABLE statistics_clear_state;
+        COMMIT;]]
+    sqlite_execute(cleanup_script, filter_params)
+    table.remove(filter_params, #filter_params)
+    local after = clear_summary(filter_sql, filter_params, "cleanup.apply.after")
+    local revision = current_revision()
+    local deleted_requests = math.max(0, before.requests - after.requests)
+    if deleted_requests == 0 and revision ~= expected_revision then
+        error("Statistics cleanup preview is stale; refresh the preview")
+    end
+    if deleted_requests > 0 then
+        vulcan.host.call("vulcan.plugin.ui.invalidate", {
+            topic = "statistics.changed",
+            revision = revision,
+        })
+    end
+    return success({
+        revision = revision,
+        modelRef = model_ref or vulcan.json.null,
+        fromDate = from_date or vulcan.json.null,
+        toDate = to_date or vulcan.json.null,
+        deletedRequests = deleted_requests,
+        before = before,
+        remaining = after,
+    })
 end
 
 -- Create the durable schema immediately after plugin package installation.

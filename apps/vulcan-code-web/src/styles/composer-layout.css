@@ -60,6 +60,116 @@
   transition: width 180ms ease;
 }
 
+.conversation-submission-status {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--composer-dock-height, 132px) + 18px);
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 5px 12px;
+  transform: translateX(-50%);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--card) 96%, transparent);
+  box-shadow: 0 10px 32px color-mix(in oklch, var(--foreground) 9%, transparent);
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+  pointer-events: none;
+}
+
+.media-upload-progress-stack {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--composer-dock-height, 132px) + 18px);
+  z-index: 20;
+  width: min(520px, calc(100% - 40px));
+  display: grid;
+  gap: 8px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.media-upload-progress-panel {
+  position: relative;
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 12px;
+padding: 12px 14px;
+border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in oklch, var(--card) 94%, transparent);
+  box-shadow: 0 14px 40px rgb(0 0 0 / 18%);
+  backdrop-filter: blur(12px);
+  pointer-events: auto;
+}
+
+.media-upload-progress-heading,
+.media-upload-progress-file {
+grid-column: 1 / -1;
+min-width: 0;
+}
+
+.media-upload-progress-heading {
+display: flex;
+justify-content: space-between;
+font-size: 12px;
+font-weight: 600;
+}
+
+.media-upload-progress-file {
+overflow: hidden;
+color: var(--muted-foreground);
+font-size: 11px;
+text-overflow: ellipsis;
+white-space: nowrap;
+}
+
+.media-upload-progress-panel progress {
+width: 100%;
+height: 7px;
+align-self: center;
+}
+
+.media-upload-progress-cancel {
+align-self: center;
+padding: 4px 9px;
+border: 1px solid var(--border);
+border-radius: 6px;
+background: transparent;
+color: var(--muted-foreground);
+font-size: 11px;
+cursor: pointer;
+}
+
+.media-upload-progress-cancel:disabled {
+cursor: wait;
+opacity: 0.6;
+}
+
+.conversation-submission-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--primary);
+  animation: conversation-submission-status-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes conversation-submission-status-pulse {
+  0%, 100% {
+    opacity: 0.34;
+    transform: scale(0.82);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .streaming-thinking-overlay {
   position: absolute;
   left: calc(50% - var(--conversation-inline-offset, 0px));

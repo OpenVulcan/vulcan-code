@@ -10,12 +10,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::{
     AiOperation, CapabilitySupport, DistanceMetric, EmbeddingCapabilities, EmbeddingEncoding,
     EmbeddingNormalization, EmbeddingOutputKind, EmbeddingTask, ModelCapabilities,
-    ModelParameterDefault, ModelParameterDefinition, ModelParameterSchema, PromptCacheCapability,
-    ReasoningControlMode, ReasoningEffort, RerankCapabilities, RerankScoreSemantics,
-    RerankTruncation, ResourceKind,
+    ModelParameterDefault, ModelParameterDefinition, ModelParameterSchema, NativeToolKind,
+    PromptCacheCapability, ReasoningControlMode, ReasoningEffort, RerankCapabilities,
+    RerankScoreSemantics, RerankTruncation, ResourceKind,
 };
 use vulcan_ai_protocols::{
-    ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
+    ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
+    OPENAI_RESPONSES_PROFILE_ID,
 };
 
 /// Stable public parameter identifier for sampling temperature.
@@ -1302,124 +1303,198 @@ fn enrich_openai_model(model: &mut ConnectionModel) {
 /// `service_entry_id` and `protocol_id` identify the product route; `model` is mutated in place.
 /// `service_entry_id` 与 `protocol_id` 标识产品路由；`model` 会被原位更新。
 fn enrich_kimi_model(service_entry_id: &str, protocol_id: &str, model: &mut ConnectionModel) {
-    let (display_name, context_limit, reasoning, reasoning_efforts, input_resources) =
-        match (service_entry_id, model.id.as_str()) {
-            ("coding-plan", "kimi-for-coding") => (
-                "Kimi K2.7 Code",
-                Some(262_144),
-                CapabilitySupport::Native,
-                Vec::new(),
-                Vec::new(),
-            ),
-            ("coding-plan", "kimi-for-coding-highspeed") => (
-                "Kimi K2.7 Code HighSpeed",
-                Some(262_144),
-                CapabilitySupport::Native,
-                Vec::new(),
-                Vec::new(),
-            ),
-            ("coding-plan", "k3") => (
-                "Kimi K3",
-                Some(1_048_576),
-                CapabilitySupport::Native,
-                vec![
-                    ReasoningEffort::Low,
-                    ReasoningEffort::High,
-                    ReasoningEffort::Max,
-                ],
-                Vec::new(),
-            ),
-            (_, "kimi-k3") => (
-                "Kimi K3",
-                Some(1_048_576),
-                CapabilitySupport::Native,
-                vec![
-                    ReasoningEffort::Low,
-                    ReasoningEffort::High,
-                    ReasoningEffort::Max,
-                ],
-                vec![ResourceKind::Image, ResourceKind::Video],
-            ),
-            (_, "kimi-k2.7-code") => (
-                "Kimi K2.7 Code",
-                Some(262_144),
-                CapabilitySupport::Native,
-                Vec::new(),
-                vec![ResourceKind::Image, ResourceKind::Video],
-            ),
-            (_, "kimi-k2.7-code-highspeed") => (
-                "Kimi K2.7 Code HighSpeed",
-                Some(262_144),
-                CapabilitySupport::Native,
-                Vec::new(),
-                vec![ResourceKind::Image, ResourceKind::Video],
-            ),
-            (_, "kimi-k2.6") => (
-                "Kimi K2.6",
-                Some(262_144),
-                CapabilitySupport::Unknown,
-                Vec::new(),
-                vec![ResourceKind::Image],
-            ),
-            (_, "kimi-k2.5") => (
-                "Kimi K2.5",
-                Some(262_144),
-                CapabilitySupport::Unknown,
-                Vec::new(),
-                vec![ResourceKind::Image],
-            ),
-            (_, "moonshot-v1-8k") => (
-                "Moonshot V1 8K",
-                Some(8_192),
-                CapabilitySupport::Unsupported,
-                Vec::new(),
-                Vec::new(),
-            ),
-            (_, "moonshot-v1-32k") => (
-                "Moonshot V1 32K",
-                Some(32_768),
-                CapabilitySupport::Unsupported,
-                Vec::new(),
-                Vec::new(),
-            ),
-            (_, "moonshot-v1-128k") => (
-                "Moonshot V1 128K",
-                Some(131_072),
-                CapabilitySupport::Unsupported,
-                Vec::new(),
-                Vec::new(),
-            ),
-            (_, "moonshot-v1-8k-vision-preview") => (
-                "Moonshot V1 8K Vision",
-                Some(8_192),
-                CapabilitySupport::Unsupported,
-                Vec::new(),
-                vec![ResourceKind::Image],
-            ),
-            (_, "moonshot-v1-32k-vision-preview") => (
-                "Moonshot V1 32K Vision",
-                Some(32_768),
-                CapabilitySupport::Unsupported,
-                Vec::new(),
-                vec![ResourceKind::Image],
-            ),
-            (_, "moonshot-v1-128k-vision-preview") => (
-                "Moonshot V1 128K Vision",
-                Some(131_072),
-                CapabilitySupport::Unsupported,
-                Vec::new(),
-                vec![ResourceKind::Image],
-            ),
-            _ => return,
-        };
+    let (
+        display_name,
+        context_limit,
+        reasoning,
+        reasoning_control,
+        reasoning_efforts,
+        input_resources,
+    ) = match (service_entry_id, model.id.as_str()) {
+        ("coding-plan", "kimi-for-coding") => (
+            "Kimi K2.7 Code",
+            Some(262_144),
+            CapabilitySupport::Native,
+            ReasoningControlMode::FixedOn,
+            Vec::new(),
+            vec![ResourceKind::Image, ResourceKind::Video],
+        ),
+        ("coding-plan", "kimi-for-coding-highspeed") => (
+            "Kimi K2.7 Code HighSpeed",
+            Some(262_144),
+            CapabilitySupport::Native,
+            ReasoningControlMode::FixedOn,
+            Vec::new(),
+            vec![ResourceKind::Image, ResourceKind::Video],
+        ),
+        ("coding-plan", "k3-256k") => (
+            "Kimi K3 256K",
+            Some(262_144),
+            CapabilitySupport::Native,
+            ReasoningControlMode::EffortSelection,
+            vec![
+                ReasoningEffort::Low,
+                ReasoningEffort::High,
+                ReasoningEffort::Max,
+            ],
+            vec![ResourceKind::Image],
+        ),
+        ("coding-plan", "k3") => (
+            "Kimi K3",
+            Some(1_048_576),
+            CapabilitySupport::Native,
+            ReasoningControlMode::EffortSelection,
+            vec![
+                ReasoningEffort::Low,
+                ReasoningEffort::High,
+                ReasoningEffort::Max,
+            ],
+            vec![ResourceKind::Image, ResourceKind::Video],
+        ),
+        (_, "kimi-k3") => (
+            "Kimi K3",
+            Some(1_048_576),
+            CapabilitySupport::Native,
+            ReasoningControlMode::EffortSelection,
+            vec![
+                ReasoningEffort::Low,
+                ReasoningEffort::High,
+                ReasoningEffort::Max,
+            ],
+            vec![ResourceKind::Image, ResourceKind::Video],
+        ),
+        (_, "kimi-k2.7-code") => (
+            "Kimi K2.7 Code",
+            Some(262_144),
+            CapabilitySupport::Native,
+            ReasoningControlMode::FixedOn,
+            Vec::new(),
+            vec![ResourceKind::Image, ResourceKind::Video],
+        ),
+        (_, "kimi-k2.7-code-highspeed") => (
+            "Kimi K2.7 Code HighSpeed",
+            Some(262_144),
+            CapabilitySupport::Native,
+            ReasoningControlMode::FixedOn,
+            Vec::new(),
+            vec![ResourceKind::Image, ResourceKind::Video],
+        ),
+        (_, "kimi-k2.6") => (
+            "Kimi K2.6",
+            Some(262_144),
+            CapabilitySupport::Unknown,
+            ReasoningControlMode::Unknown,
+            Vec::new(),
+            vec![ResourceKind::Image],
+        ),
+        (_, "kimi-k2.5") => (
+            "Kimi K2.5",
+            Some(262_144),
+            CapabilitySupport::Unknown,
+            ReasoningControlMode::Unknown,
+            Vec::new(),
+            vec![ResourceKind::Image],
+        ),
+        (_, "moonshot-v1-8k") => (
+            "Moonshot V1 8K",
+            Some(8_192),
+            CapabilitySupport::Unsupported,
+            ReasoningControlMode::Unknown,
+            Vec::new(),
+            Vec::new(),
+        ),
+        (_, "moonshot-v1-32k") => (
+            "Moonshot V1 32K",
+            Some(32_768),
+            CapabilitySupport::Unsupported,
+            ReasoningControlMode::Unknown,
+            Vec::new(),
+            Vec::new(),
+        ),
+        (_, "moonshot-v1-128k") => (
+            "Moonshot V1 128K",
+            Some(131_072),
+            CapabilitySupport::Unsupported,
+            ReasoningControlMode::Unknown,
+            Vec::new(),
+            Vec::new(),
+        ),
+        (_, "moonshot-v1-8k-vision-preview") => (
+            "Moonshot V1 8K Vision",
+            Some(8_192),
+            CapabilitySupport::Unsupported,
+            ReasoningControlMode::Unknown,
+            Vec::new(),
+            vec![ResourceKind::Image],
+        ),
+        (_, "moonshot-v1-32k-vision-preview") => (
+            "Moonshot V1 32K Vision",
+            Some(32_768),
+            CapabilitySupport::Unsupported,
+            ReasoningControlMode::Unknown,
+            Vec::new(),
+            vec![ResourceKind::Image],
+        ),
+        (_, "moonshot-v1-128k-vision-preview") => (
+            "Moonshot V1 128K Vision",
+            Some(131_072),
+            CapabilitySupport::Unsupported,
+            ReasoningControlMode::Unknown,
+            Vec::new(),
+            vec![ResourceKind::Image],
+        ),
+        _ => return,
+    };
+    let input_resources = if protocol_id == ANTHROPIC_MESSAGES_PROFILE_ID {
+        // The standard Anthropic route has an image encoder; Kimi's dedicated video route owns video encoding.
+        // 标准 Anthropic 路由只有图片编码器；视频由 Kimi 专用视频路由负责编码。
+        input_resources
+            .into_iter()
+            .filter(|resource| *resource == ResourceKind::Image)
+            .collect()
+    } else if protocol_id == ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID {
+        // The dedicated Kimi video route keeps the model-declared image and video resources.
+        // Kimi 专用视频路由保留模型声明的图片与视频资源。
+        input_resources
+    } else {
+        input_resources
+    };
     model.display_name = display_name.to_string();
     model.capabilities.context_limit = context_limit;
     model.capabilities.input_resources = input_resources;
     model.capabilities.tool_calling = CapabilitySupport::Native;
     model.capabilities.parallel_tool_calling = CapabilitySupport::Native;
     model.capabilities.reasoning = reasoning;
+    model.capabilities.reasoning_control = reasoning_control;
     model.capabilities.reasoning_efforts = reasoning_efforts;
     model.capabilities.evidence_revision = format!("model-core.kimi.2026-07-29.{protocol_id}");
+}
+
+/// Resolves whether one known Kimi Coding Plan model remains exposed for an observed membership.
+/// 根据已观测会员等级解析一个已知 Kimi Coding Plan 模型是否继续暴露。
+///
+/// # Parameters
+/// 参数
+/// `plan_name` is the normalized membership name from the usage endpoint; `model_id` is the
+/// exact provider model identifier.
+/// `plan_name` 是用量端点返回的规范化会员名称；`model_id` 是供应商精确模型标识。
+///
+/// # Returns
+/// 返回值
+/// `true` when the model is allowed by the requested product matrix, or when no confirmed plan is
+/// available. Unknown model identifiers remain visible until the provider publishes a closed rule.
+/// 当模型符合产品矩阵，或尚未获得已确认套餐时返回 `true`。在供应商发布封闭规则前，未知模型标识继续保留。
+pub(crate) fn kimi_coding_plan_model_is_available(plan_name: Option<&str>, model_id: &str) -> bool {
+    let Some(plan_name) = plan_name.map(str::trim).filter(|value| !value.is_empty()) else {
+        return true;
+    };
+    match model_id {
+        "k3" => matches!(plan_name, "Allegretto" | "Allegro"),
+        "k3-256k" => matches!(plan_name, "Moderato" | "Allegretto" | "Allegro"),
+        "kimi-for-coding" => matches!(plan_name, "Andante" | "Moderato" | "Allegretto" | "Allegro"),
+        "kimi-for-coding-highspeed" => matches!(plan_name, "Allegretto" | "Allegro"),
+        _ => true,
+    }
 }
 
 /// Applies the exact current DeepSeek official text-model capability contract.
@@ -1430,6 +1505,12 @@ fn enrich_kimi_model(service_entry_id: &str, protocol_id: &str, model: &mut Conn
 /// `protocol_id` identifies the exact compatible interface and `model` is mutated only when known.
 /// `protocol_id` 标识精确兼容接口，`model` 仅在身份已知时原位更新。
 fn enrich_deepseek_model(protocol_id: &str, model: &mut ConnectionModel) {
+    model.capabilities.provider_native_tools = match protocol_id {
+        ANTHROPIC_MESSAGES_PROFILE_ID | OPENAI_RESPONSES_PROFILE_ID => {
+            vec![NativeToolKind::WebSearch]
+        }
+        _ => Vec::new(),
+    };
     let display_name = match model.id.as_str() {
         "deepseek-v4-flash" => "DeepSeek V4 Flash",
         "deepseek-v4-pro" => "DeepSeek V4 Pro",
@@ -2022,6 +2103,7 @@ fn minimax_text_capabilities(model_id: &str, protocol_id: &str) -> ModelCapabili
         },
         parallel_tool_calling: CapabilitySupport::Unknown,
         reasoning: reasoning_support,
+        provider_native_tools: Vec::new(),
         reasoning_control,
         reasoning_efforts: reasoning_contract.efforts,
         context_limit,
@@ -2337,6 +2419,7 @@ fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabi
             reasoning_efforts.as_slice(),
         ),
         reasoning_efforts,
+        provider_native_tools: Vec::new(),
         context_limit,
         output_limit: openrouter_effective_output_limit(model, context_limit),
         prompt_cache: PromptCacheCapability::default(),
@@ -2895,6 +2978,120 @@ mod tests {
         assert!(error.contains("display_name"));
     }
 
+    /// Verifies Kimi Coding Plan publishes the documented modality and reasoning contracts.
+    /// 验证 Kimi Coding Plan 发布文档化的多模态与推理契约。
+    #[test]
+    fn kimi_coding_plan_enrichment_publishes_model_capabilities() {
+        let mut catalog = parse_openai_model_catalog(
+            "connection",
+            1,
+            r#"{"data":[
+                {"id":"k3"},
+                {"id":"k3-256k"},
+                {"id":"kimi-for-coding"},
+                {"id":"kimi-for-coding-highspeed"}
+            ]}"#,
+        )
+        .expect("Kimi model list should parse");
+        enrich_compatible_model_catalog(
+            "kimi",
+            "coding-plan",
+            OPENAI_CHAT_PROFILE_ID,
+            &mut catalog,
+        );
+
+        let k3 = catalog
+            .models
+            .iter()
+            .find(|model| model.id == "k3")
+            .expect("K3");
+        assert_eq!(k3.capabilities.context_limit, Some(1_048_576));
+        assert_eq!(
+            k3.capabilities.input_resources,
+            vec![ResourceKind::Image, ResourceKind::Video]
+        );
+        assert_eq!(
+            k3.capabilities.reasoning_control,
+            ReasoningControlMode::EffortSelection
+        );
+
+        let k3_256k = catalog
+            .models
+            .iter()
+            .find(|model| model.id == "k3-256k")
+            .expect("K3 256K");
+        assert_eq!(k3_256k.capabilities.context_limit, Some(262_144));
+        assert_eq!(
+            k3_256k.capabilities.input_resources,
+            vec![ResourceKind::Image]
+        );
+
+        for model_id in ["kimi-for-coding", "kimi-for-coding-highspeed"] {
+            let model = catalog
+                .models
+                .iter()
+                .find(|model| model.id == model_id)
+                .expect("K2.7 Code model");
+            assert_eq!(
+                model.capabilities.input_resources,
+                vec![ResourceKind::Image, ResourceKind::Video]
+            );
+            assert_eq!(
+                model.capabilities.reasoning_control,
+                ReasoningControlMode::FixedOn
+            );
+        }
+    }
+
+    /// Verifies Kimi's standard and dedicated Anthropic routes expose their exact media encoders.
+    /// 验证 Kimi 标准 Anthropic 路由与专用视频路由公开各自精确的媒体编码器。
+    #[test]
+    fn kimi_anthropic_routes_publish_exact_media_capabilities() {
+        for (protocol_id, expected_resources) in [
+            (ANTHROPIC_MESSAGES_PROFILE_ID, vec![ResourceKind::Image]),
+            (
+                ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
+                vec![ResourceKind::Image, ResourceKind::Video],
+            ),
+        ] {
+            let mut catalog =
+                parse_openai_model_catalog("connection", 1, r#"{"data":[{"id":"k3"}]}"#)
+                    .expect("Kimi model list should parse");
+            enrich_compatible_model_catalog("kimi", "coding-plan", protocol_id, &mut catalog);
+
+            let k3 = catalog.models.first().expect("K3");
+            assert_eq!(k3.capabilities.input_resources, expected_resources);
+        }
+    }
+
+    /// Verifies the product-level plan filter deliberately reserves one-million-token K3 for Allegretto and above.
+    /// 验证产品级套餐过滤刻意将百万上下文 K3 保留给 Allegretto 及以上等级。
+    #[test]
+    fn kimi_coding_plan_model_access_matches_product_matrix() {
+        assert!(kimi_coding_plan_model_is_available(
+            Some("Andante"),
+            "kimi-for-coding"
+        ));
+        assert!(!kimi_coding_plan_model_is_available(
+            Some("Andante"),
+            "k3-256k"
+        ));
+        assert!(kimi_coding_plan_model_is_available(
+            Some("Moderato"),
+            "k3-256k"
+        ));
+        assert!(!kimi_coding_plan_model_is_available(Some("Moderato"), "k3"));
+        assert!(kimi_coding_plan_model_is_available(
+            Some("Allegretto"),
+            "k3"
+        ));
+        assert!(kimi_coding_plan_model_is_available(
+            Some("Allegretto"),
+            "kimi-for-coding-highspeed"
+        ));
+        assert!(kimi_coding_plan_model_is_available(None, "k3"));
+    }
+
     /// Verifies Alibaba Coding Plan static catalogs retain exact regional identity and limits.
     /// 验证阿里云 Coding Plan 静态目录保留精确区域身份与限制。
     #[test]
@@ -3442,6 +3639,7 @@ mod tests {
                 ReasoningEffort::Max,
             ]
         );
+        assert!(capabilities.provider_native_tools.is_empty());
         let temperature = capabilities
             .model_parameters
             .iter()
@@ -3452,10 +3650,22 @@ mod tests {
             temperature.protocol_ids,
             vec![String::from(OPENAI_CHAT_PROFILE_ID)]
         );
-        assert!(
-            deepseek_model_parameters("deepseek-v4-pro", OPENAI_RESPONSES_PROFILE_ID).is_empty(),
-            "DeepSeek official routes must not claim undocumented Responses support"
-        );
+
+        for protocol_id in [ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID] {
+            let mut protocol_catalog = catalog.clone();
+            enrich_compatible_model_catalog(
+                "deepseek",
+                "official-api",
+                protocol_id,
+                &mut protocol_catalog,
+            );
+            assert_eq!(
+                protocol_catalog.models[0]
+                    .capabilities
+                    .provider_native_tools,
+                vec![NativeToolKind::WebSearch]
+            );
+        }
     }
 
     /// Verifies Anthropic discovery uses documented identity and pagination fields.

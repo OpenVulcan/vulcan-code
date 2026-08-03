@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "modelRef": { "type": "integer", "minimum": 1 },
+    "fromDate": { "type": "string", "format": "date" },
+    "toDate": { "type": "string", "format": "date" }
+  },
+  "anyOf": [
+    { "required": ["modelRef"] },
+    { "required": ["fromDate", "toDate"] }
+  ],
+  "additionalProperties": false
+}

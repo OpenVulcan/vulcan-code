@@ -35,9 +35,7 @@ use vulcan_provider_adapters::{
 use vulcan_service_api::{ServiceEventEmitter, WorkbenchSnapshot};
 
 use crate::{
-    SharedServiceBridgeState,
-    ai_credential_secret_store::OsAiCredentialSecretStore,
-    begin_public_ai_configuration_transaction,
+    SharedServiceBridgeState, begin_public_ai_configuration_transaction,
     configured_inference::{VMM_CONSUMER_PROFILE_ID, model_supports_disabled_reasoning},
     emit_workbench_event, mutate_public_ai_configuration,
     mutate_public_ai_configuration_in_transaction, public_ai_provider_rows_for_selection,
@@ -1347,13 +1345,14 @@ async fn observe_custom_provider_candidate(
     validation: &PersistedAiConfiguration,
     candidate: &PreparedCustomProviderCandidate,
 ) -> Result<CustomProviderCandidateObservation, String> {
-    let secret_store = OsAiCredentialSecretStore;
+    let secret_store = runtime.credential_secret_store();
     if let Some(secret) = candidate.temporary_secret.as_ref() {
         CredentialSecretStore::create_secret(
-            &secret_store,
+            secret_store.as_ref(),
             candidate.connection.secret_reference.as_str(),
             secret,
-        )?;
+        )
+        .await?;
     }
     let refresh_error = runtime
         .refresh_connection_catalog(validation, candidate.connection.id.as_str())
@@ -1389,16 +1388,17 @@ async fn observe_custom_provider_candidate(
 /// 返回值
 /// Returns success only when both cleanup operations succeed.
 /// 仅当两项清理操作都成功时返回成功。
-fn cleanup_custom_provider_candidate(
+async fn cleanup_custom_provider_candidate(
     runtime: &PublicAiRuntime,
     candidate: &PreparedCustomProviderCandidate,
 ) -> Result<(), String> {
-    let secret_store = OsAiCredentialSecretStore;
+    let secret_store = runtime.credential_secret_store();
     let secret_cleanup = if candidate.temporary_secret.is_some() {
         CredentialSecretStore::delete_secret(
-            &secret_store,
+            secret_store.as_ref(),
             candidate.connection.secret_reference.as_str(),
         )
+        .await
     } else {
         Ok(())
     };
@@ -1495,7 +1495,7 @@ pub(super) async fn service_probe_public_ai_custom_provider(
         custom_provider_validation_configuration(runtime.as_ref(), &current, &candidate)?;
     let observation =
         observe_custom_provider_candidate(runtime.as_ref(), &validation, &candidate).await;
-    let cleanup = cleanup_custom_provider_candidate(runtime.as_ref(), &candidate);
+    let cleanup = cleanup_custom_provider_candidate(runtime.as_ref(), &candidate).await;
     let observation =
         observation.map_err(|error| compensated_operation_error(error, cleanup.clone(), Ok(())))?;
     cleanup?;
@@ -1531,7 +1531,7 @@ pub(super) async fn service_save_public_ai_custom_provider(
     {
         Ok(observation) => observation,
         Err(error) => {
-            let cleanup = cleanup_custom_provider_candidate(runtime.as_ref(), &candidate);
+            let cleanup = cleanup_custom_provider_candidate(runtime.as_ref(), &candidate).await;
             return Err(compensated_operation_error(error, cleanup, Ok(())));
         }
     };
@@ -1557,7 +1557,7 @@ pub(super) async fn service_save_public_ai_custom_provider(
                     "The provider model catalog was not validated."
                 }
             });
-        let cleanup = cleanup_custom_provider_candidate(runtime.as_ref(), &candidate);
+        let cleanup = cleanup_custom_provider_candidate(runtime.as_ref(), &candidate).await;
         return Err(compensated_operation_error(
             format!(
                 "Custom provider validation requires an explicit supported action: {diagnostic}"
@@ -1571,7 +1571,7 @@ pub(super) async fn service_save_public_ai_custom_provider(
         // Existing-provider validation artifacts are temporary and must be removed before the
         // durable edit, so a cleanup failure cannot report a false transactional rollback.
         // 既有供应商的验证工件属于临时数据，必须在持久化编辑前移除，避免清理失败造成虚假的事务回滚提示。
-        cleanup_custom_provider_candidate(runtime.as_ref(), &candidate)?;
+        cleanup_custom_provider_candidate(runtime.as_ref(), &candidate).await?;
     }
 
     let provider_id = candidate.provider_id.clone();
@@ -1621,7 +1621,7 @@ pub(super) async fn service_save_public_ai_custom_provider(
             let cleanup = if updating_existing {
                 Ok(())
             } else {
-                cleanup_custom_provider_candidate(runtime.as_ref(), &candidate)
+                cleanup_custom_provider_candidate(runtime.as_ref(), &candidate).await
             };
             return Err(compensated_operation_error(error, cleanup, Ok(())));
         }
@@ -2945,18 +2945,35 @@ pub(super) async fn service_commit_public_ai_oauth_connection(
                 "OAuth reauthorization provider does not match the existing connection.",
             ));
         }
-        let secret_store = OsAiCredentialSecretStore;
-        let previous = CredentialSecretResolver::read_secret(
-            &secret_store,
+        let secret_store = runtime.credential_secret_store();
+        let previous = CredentialSecretResolver::read_optional_secret(
+            secret_store.as_ref(),
             current.secret_reference.as_str(),
-        )?;
-        let replacement = previous.advance_with_material(material)?;
-        CredentialSecretStore::replace_secret(
-            &secret_store,
-            current.secret_reference.as_str(),
-            previous.revision,
-            &replacement,
-        )?;
+        )
+        .await?;
+        let replacement = match previous.as_ref() {
+            Some(previous) => previous.advance_with_material(material)?,
+            None => CredentialSecretEnvelope::new(material)?,
+        };
+        match previous.as_ref() {
+            Some(previous) => {
+                CredentialSecretStore::replace_secret(
+                    secret_store.as_ref(),
+                    current.secret_reference.as_str(),
+                    previous.revision,
+                    &replacement,
+                )
+                .await?;
+            }
+            None => {
+                CredentialSecretStore::create_secret(
+                    secret_store.as_ref(),
+                    current.secret_reference.as_str(),
+                    &replacement,
+                )
+                .await?;
+            }
+        }
         let connection_id = connection_id.to_string();
         let update_request = PublicAiConnectionUpdateRequest {
             connection_id: connection_id.clone(),
@@ -2977,22 +2994,26 @@ pub(super) async fn service_commit_public_ai_oauth_connection(
             &update_request,
             connection_id.as_str(),
         ) {
-            rollback_replaced_secret(
-                &secret_store,
+            rollback_oauth_reauthorization_secret(
+                secret_store.as_ref(),
                 current.secret_reference.as_str(),
-                Some(&(previous, replacement)),
-            )?;
+                previous.as_ref(),
+                &replacement,
+            )
+            .await?;
             return Err(error);
         }
         if let Err(error) = runtime
             .refresh_connection_catalog(&validation_configuration, connection_id.as_str())
             .await
         {
-            let rollback_result = rollback_replaced_secret(
-                &secret_store,
+            let rollback_result = rollback_oauth_reauthorization_secret(
+                secret_store.as_ref(),
                 current.secret_reference.as_str(),
-                Some(&(previous.clone(), replacement.clone())),
-            );
+                previous.as_ref(),
+                &replacement,
+            )
+            .await;
             let restore_result = runtime
                 .refresh_connection_catalog(&current_configuration, connection_id.as_str())
                 .await
@@ -3016,11 +3037,13 @@ pub(super) async fn service_commit_public_ai_oauth_connection(
         let configuration = match update_result {
             Ok(configuration) => configuration,
             Err(error) => {
-                let rollback_result = rollback_replaced_secret(
-                    &secret_store,
+                let rollback_result = rollback_oauth_reauthorization_secret(
+                    secret_store.as_ref(),
                     current.secret_reference.as_str(),
-                    Some(&(previous, replacement)),
-                );
+                    previous.as_ref(),
+                    &replacement,
+                )
+                .await;
                 let restore_result = runtime
                     .refresh_connection_catalog(&current_configuration, connection_id.as_str())
                     .await
@@ -3228,8 +3251,9 @@ async fn add_public_ai_connection_with_secret(
         prompt_cache_by_protocol: BTreeMap::new(),
         usage_scope_override: None,
     };
-    let secret_store = OsAiCredentialSecretStore;
-    CredentialSecretStore::create_secret(&secret_store, secret_reference.as_str(), &secret)?;
+    let secret_store = runtime.credential_secret_store();
+    CredentialSecretStore::create_secret(secret_store.as_ref(), secret_reference.as_str(), &secret)
+        .await?;
     if let (Some(reference), Some(value)) = (
         management_secret_reference.as_deref(),
         management_key
@@ -3237,11 +3261,18 @@ async fn add_public_ai_connection_with_secret(
             .filter(|value| !value.trim().is_empty()),
     ) {
         let management_secret = CredentialSecretEnvelope::new_api_key(value.clone())?;
-        if let Err(error) =
-            CredentialSecretStore::create_secret(&secret_store, reference, &management_secret)
+        if let Err(error) = CredentialSecretStore::create_secret(
+            secret_store.as_ref(),
+            reference,
+            &management_secret,
+        )
+        .await
         {
-            let cleanup =
-                CredentialSecretStore::delete_secret(&secret_store, secret_reference.as_str());
+            let cleanup = CredentialSecretStore::delete_secret(
+                secret_store.as_ref(),
+                secret_reference.as_str(),
+            )
+            .await;
             return Err(compensated_operation_error(error, cleanup, Ok(())));
         }
     }
@@ -3251,10 +3282,12 @@ async fn add_public_ai_connection_with_secret(
         .add_connection(&providers, connection.clone())
     {
         return match delete_connection_secrets(
-            &secret_store,
+            secret_store.as_ref(),
             secret_reference.as_str(),
             management_secret_reference.as_deref(),
-        ) {
+        )
+        .await
+        {
             Ok(()) => Err(error),
             Err(cleanup_error) => Err(format!(
                 "{error} Secret cleanup also failed: {cleanup_error}"
@@ -3271,10 +3304,11 @@ async fn add_public_ai_connection_with_secret(
     {
         let catalog_cleanup = runtime.remove_connection_catalog(connection_id.as_str());
         let secret_cleanup = delete_connection_secrets(
-            &secret_store,
+            secret_store.as_ref(),
             secret_reference.as_str(),
             management_secret_reference.as_deref(),
-        );
+        )
+        .await;
         return Err(compensated_operation_error(
             format!("Credential validation failed before the connection was saved: {error}"),
             secret_cleanup,
@@ -3293,10 +3327,11 @@ async fn add_public_ai_connection_with_secret(
                     runtime.remove_connection_usage(connection_id.as_str()),
                 );
                 let secret_cleanup = delete_connection_secrets(
-                    &secret_store,
+                    secret_store.as_ref(),
                     secret_reference.as_str(),
                     management_secret_reference.as_deref(),
-                );
+                )
+                .await;
                 return Err(compensated_operation_error(
                     error,
                     secret_cleanup,
@@ -3310,10 +3345,11 @@ async fn add_public_ai_connection_with_secret(
                 runtime.remove_connection_usage(connection_id.as_str()),
             );
             let secret_cleanup = delete_connection_secrets(
-                &secret_store,
+                secret_store.as_ref(),
                 secret_reference.as_str(),
                 management_secret_reference.as_deref(),
-            );
+            )
+            .await;
             return Err(compensated_operation_error(
                 usage.refresh_message.unwrap_or_else(|| {
                     String::from("OpenRouter management key validation failed.")
@@ -3323,14 +3359,16 @@ async fn add_public_ai_connection_with_secret(
             ));
         }
     }
-    let add_result =
-        mutate_public_ai_configuration(&state, "保存公共 AI 连接失败", |configuration| {
+    let add_result = mutate_public_ai_configuration_in_transaction(
+        &state,
+        "保存公共 AI 连接失败",
+        |configuration| {
             let effective_providers = runtime.effective_providers(configuration)?;
             configuration
                 .connection_graph
                 .add_connection(&effective_providers, connection.clone())
-        })
-        .await;
+        },
+    );
     let configuration = match add_result {
         Ok(configuration) => configuration,
         Err(error) => {
@@ -3339,10 +3377,11 @@ async fn add_public_ai_connection_with_secret(
                 runtime.remove_connection_usage(connection_id.as_str()),
             );
             let secret_cleanup = delete_connection_secrets(
-                &secret_store,
+                secret_store.as_ref(),
                 secret_reference.as_str(),
                 management_secret_reference.as_deref(),
-            );
+            )
+            .await;
             return Err(compensated_operation_error(
                 error,
                 secret_cleanup,
@@ -3514,7 +3553,7 @@ pub(super) async fn service_update_public_ai_connection(
         || current.selected_protocol != request.selected_protocol
         || current.service_origin_override != request.service_origin_override
         || request.secret.is_some();
-    let secret_store = OsAiCredentialSecretStore;
+    let secret_store = runtime.credential_secret_store();
     let replaced_secret = if let Some(secret) = request.secret.as_deref() {
         validate_non_empty("secret", secret)?;
         if request.credential_mode != CredentialMode::Token {
@@ -3523,33 +3562,38 @@ pub(super) async fn service_update_public_ai_connection(
             ));
         }
         let previous = CredentialSecretResolver::read_secret(
-            &secret_store,
+            secret_store.as_ref(),
             current.secret_reference.as_str(),
-        )?;
+        )
+        .await?;
         let replacement = previous.replace_api_key(secret.to_string())?;
         CredentialSecretStore::replace_secret(
-            &secret_store,
+            secret_store.as_ref(),
             current.secret_reference.as_str(),
             previous.revision,
             &replacement,
-        )?;
+        )
+        .await?;
         Some((previous, replacement))
     } else {
         None
     };
     let management_mutation = match prepare_management_secret_mutation(
-        &secret_store,
+        secret_store.as_ref(),
         &current,
         request.management_key.as_deref(),
         request.remove_management_key,
-    ) {
+    )
+    .await
+    {
         Ok(mutation) => mutation,
         Err(error) => {
             let rollback = rollback_replaced_secret(
-                &secret_store,
+                secret_store.as_ref(),
                 current.secret_reference.as_str(),
                 replaced_secret.as_ref(),
-            );
+            )
+            .await;
             return Err(compensated_operation_error(error, rollback, Ok(())));
         }
     };
@@ -3562,11 +3606,12 @@ pub(super) async fn service_update_public_ai_connection(
         connection_id.as_str(),
     ) {
         rollback_replaced_secret(
-            &secret_store,
+            secret_store.as_ref(),
             current.secret_reference.as_str(),
             replaced_secret.as_ref(),
-        )?;
-        rollback_management_secret_mutation(&secret_store, &management_mutation)?;
+        )
+        .await?;
+        rollback_management_secret_mutation(secret_store.as_ref(), &management_mutation).await?;
         return Err(error);
     }
     if let Some(connection) = validation_configuration
@@ -3586,12 +3631,13 @@ pub(super) async fn service_update_public_ai_connection(
         .await
     {
         let rollback_result = rollback_replaced_secret(
-            &secret_store,
+            secret_store.as_ref(),
             current.secret_reference.as_str(),
             replaced_secret.as_ref(),
-        );
+        )
+        .await;
         let management_rollback =
-            rollback_management_secret_mutation(&secret_store, &management_mutation);
+            rollback_management_secret_mutation(secret_store.as_ref(), &management_mutation).await;
         let restore_result = validate_connection_credential(
             runtime.as_ref(),
             &current_configuration,
@@ -3620,12 +3666,14 @@ pub(super) async fn service_update_public_ai_connection(
         };
         if let Some(error) = validation_error {
             let primary_rollback = rollback_replaced_secret(
-                &secret_store,
+                secret_store.as_ref(),
                 current.secret_reference.as_str(),
                 replaced_secret.as_ref(),
-            );
+            )
+            .await;
             let management_rollback =
-                rollback_management_secret_mutation(&secret_store, &management_mutation);
+                rollback_management_secret_mutation(secret_store.as_ref(), &management_mutation)
+                    .await;
             let cache_cleanup = runtime.remove_connection_usage(connection_id.as_str());
             return Err(compensated_operation_error(
                 error,
@@ -3646,12 +3694,14 @@ pub(super) async fn service_update_public_ai_connection(
         Ok(configuration) => configuration,
         Err(error) => {
             let rollback_result = rollback_replaced_secret(
-                &secret_store,
+                secret_store.as_ref(),
                 current.secret_reference.as_str(),
                 replaced_secret.as_ref(),
-            );
+            )
+            .await;
             let management_rollback =
-                rollback_management_secret_mutation(&secret_store, &management_mutation);
+                rollback_management_secret_mutation(secret_store.as_ref(), &management_mutation)
+                    .await;
             let cache_cleanup = runtime.remove_connection_usage(connection_id.as_str());
             let restore_result = validate_connection_credential(
                 runtime.as_ref(),
@@ -3742,6 +3792,38 @@ fn apply_connection_update(
         .add_connection(&providers, candidate)
 }
 
+/// Restores or removes an OAuth reauthorization secret after a later operation fails.
+/// 在后续操作失败后恢复或移除 OAuth 重新授权秘密。
+///
+/// # Parameters
+/// 参数
+/// `previous` is the optional secret present before reauthorization and `replacement` is the
+/// newly stored OAuth envelope.
+/// `previous` 是重新授权前可选存在的秘密，`replacement` 是新存储的 OAuth 封装。
+///
+/// # Returns
+/// 返回值
+/// Success after restoring a prior revision or deleting a newly reconstructed missing secret.
+/// 恢复先前修订版或删除新重建的缺失秘密后返回成功。
+async fn rollback_oauth_reauthorization_secret(
+    secret_store: &dyn CredentialSecretStore,
+    secret_reference: &str,
+    previous: Option<&CredentialSecretEnvelope>,
+    replacement: &CredentialSecretEnvelope,
+) -> Result<(), String> {
+    let Some(previous) = previous else {
+        return CredentialSecretStore::delete_secret(secret_store, secret_reference).await;
+    };
+    let rollback = replacement.advance_with_material(previous.material.clone())?;
+    CredentialSecretStore::replace_secret(
+        secret_store,
+        secret_reference,
+        replacement.revision,
+        &rollback,
+    )
+    .await
+}
+
 /// Restores a replaced secret with a monotonic revision when validation or persistence fails.
 /// 当验证或持久化失败时使用单调递增修订恢复已替换秘密。
 ///
@@ -3751,8 +3833,8 @@ fn apply_connection_update(
 /// `replaced_secret` contains the previous and replacement envelopes when a secret changed.
 /// `secret_store` 是安全仓库，`secret_reference` 是不透明引用，
 /// `replaced_secret` 在秘密变更时包含旧封装与替换封装。
-fn rollback_replaced_secret(
-    secret_store: &OsAiCredentialSecretStore,
+async fn rollback_replaced_secret(
+    secret_store: &dyn CredentialSecretStore,
     secret_reference: &str,
     replaced_secret: Option<&(CredentialSecretEnvelope, CredentialSecretEnvelope)>,
 ) -> Result<(), String> {
@@ -3766,6 +3848,7 @@ fn rollback_replaced_secret(
         replacement.revision,
         &rollback,
     )
+    .await
 }
 
 /// Records one reversible provider-management secret mutation.
@@ -3820,8 +3903,8 @@ impl ManagementSecretMutation {
 
 /// Applies the requested optional management-key edit before configuration persistence.
 /// 在配置持久化前应用请求的可选管理密钥编辑。
-fn prepare_management_secret_mutation(
-    secret_store: &OsAiCredentialSecretStore,
+async fn prepare_management_secret_mutation(
+    secret_store: &dyn CredentialSecretStore,
     current: &CredentialConnection,
     management_key: Option<&str>,
     remove_management_key: bool,
@@ -3830,8 +3913,8 @@ fn prepare_management_secret_mutation(
         let Some(reference) = current.management_secret_reference.as_deref() else {
             return Ok(ManagementSecretMutation::Unchanged);
         };
-        let previous = CredentialSecretResolver::read_secret(secret_store, reference)?;
-        CredentialSecretStore::delete_secret(secret_store, reference)?;
+        let previous = CredentialSecretResolver::read_secret(secret_store, reference).await?;
+        CredentialSecretStore::delete_secret(secret_store, reference).await?;
         return Ok(ManagementSecretMutation::Removed {
             reference: reference.to_string(),
             previous: Box::new(previous),
@@ -3841,14 +3924,15 @@ fn prepare_management_secret_mutation(
         return Ok(ManagementSecretMutation::Unchanged);
     };
     if let Some(reference) = current.management_secret_reference.as_deref() {
-        let previous = CredentialSecretResolver::read_secret(secret_store, reference)?;
+        let previous = CredentialSecretResolver::read_secret(secret_store, reference).await?;
         let replacement = previous.replace_api_key(value.to_string())?;
         CredentialSecretStore::replace_secret(
             secret_store,
             reference,
             previous.revision,
             &replacement,
-        )?;
+        )
+        .await?;
         return Ok(ManagementSecretMutation::Replaced {
             reference: reference.to_string(),
             previous: Box::new(previous),
@@ -3857,20 +3941,20 @@ fn prepare_management_secret_mutation(
     }
     let reference = format!("ai_management_secret_{}", uuid::Uuid::new_v4().simple());
     let secret = CredentialSecretEnvelope::new_api_key(value.to_string())?;
-    CredentialSecretStore::create_secret(secret_store, reference.as_str(), &secret)?;
+    CredentialSecretStore::create_secret(secret_store, reference.as_str(), &secret).await?;
     Ok(ManagementSecretMutation::Created { reference })
 }
 
 /// Reverts one provider-management secret mutation.
 /// 回滚一次供应商管理秘密变更。
-fn rollback_management_secret_mutation(
-    secret_store: &OsAiCredentialSecretStore,
+async fn rollback_management_secret_mutation(
+    secret_store: &dyn CredentialSecretStore,
     mutation: &ManagementSecretMutation,
 ) -> Result<(), String> {
     match mutation {
         ManagementSecretMutation::Unchanged => Ok(()),
         ManagementSecretMutation::Created { reference } => {
-            CredentialSecretStore::delete_secret(secret_store, reference)
+            CredentialSecretStore::delete_secret(secret_store, reference).await
         }
         ManagementSecretMutation::Replaced {
             reference,
@@ -3884,24 +3968,27 @@ fn rollback_management_secret_mutation(
                 replacement.revision,
                 &rollback,
             )
+            .await
         }
         ManagementSecretMutation::Removed {
             reference,
             previous,
-        } => secret_store.restore_deleted_secret(reference, previous.as_ref()),
+        } => {
+            CredentialSecretStore::restore_secret(secret_store, reference, previous.as_ref()).await
+        }
     }
 }
 
 /// Deletes the primary and optional management secrets as one cleanup operation.
 /// 将主秘密和可选管理秘密作为一次清理操作删除。
-fn delete_connection_secrets(
-    secret_store: &OsAiCredentialSecretStore,
+async fn delete_connection_secrets(
+    secret_store: &dyn CredentialSecretStore,
     primary_reference: &str,
     management_reference: Option<&str>,
 ) -> Result<(), String> {
-    CredentialSecretStore::delete_secret(secret_store, primary_reference)?;
+    CredentialSecretStore::delete_secret(secret_store, primary_reference).await?;
     if let Some(reference) = management_reference
-        && let Err(error) = CredentialSecretStore::delete_secret(secret_store, reference)
+        && let Err(error) = CredentialSecretStore::delete_secret(secret_store, reference).await
     {
         return Err(format!(
             "Primary secret was deleted but management secret cleanup failed: {error}"
@@ -4012,20 +4099,30 @@ pub(super) async fn service_remove_public_ai_connection(
         .get(connection_id.as_str())
         .cloned()
         .ok_or_else(|| format!("Connection `{connection_id}` is not configured."))?;
-    let secret_store = OsAiCredentialSecretStore;
-    let removed_secret =
-        CredentialSecretResolver::read_secret(&secret_store, removed.secret_reference.as_str())?;
-    let removed_management_secret = removed
-        .management_secret_reference
-        .as_deref()
-        .map(|reference| CredentialSecretResolver::read_secret(&secret_store, reference))
-        .transpose()?;
-    CredentialSecretStore::delete_secret(&secret_store, removed.secret_reference.as_str())?;
+    let secret_store = runtime.credential_secret_store();
+    let removed_secret = CredentialSecretResolver::read_secret(
+        secret_store.as_ref(),
+        removed.secret_reference.as_str(),
+    )
+    .await?;
+    let removed_management_secret =
+        if let Some(reference) = removed.management_secret_reference.as_deref() {
+            Some(CredentialSecretResolver::read_secret(secret_store.as_ref(), reference).await?)
+        } else {
+            None
+        };
+    CredentialSecretStore::delete_secret(secret_store.as_ref(), removed.secret_reference.as_str())
+        .await?;
     if let Some(reference) = removed.management_secret_reference.as_deref()
-        && let Err(error) = CredentialSecretStore::delete_secret(&secret_store, reference)
+        && let Err(error) =
+            CredentialSecretStore::delete_secret(secret_store.as_ref(), reference).await
     {
-        let restore =
-            secret_store.restore_deleted_secret(removed.secret_reference.as_str(), &removed_secret);
+        let restore = CredentialSecretStore::restore_secret(
+            secret_store.as_ref(),
+            removed.secret_reference.as_str(),
+            &removed_secret,
+        )
+        .await;
         return Err(compensated_operation_error(error, restore, Ok(())));
     }
     let remove_result = mutate_public_ai_configuration_in_transaction(
@@ -4042,13 +4139,19 @@ pub(super) async fn service_remove_public_ai_connection(
     let configuration = match remove_result {
         Ok(configuration) => configuration,
         Err(error) => {
-            let _ = secret_store
-                .restore_deleted_secret(removed.secret_reference.as_str(), &removed_secret);
+            let _ = CredentialSecretStore::restore_secret(
+                secret_store.as_ref(),
+                removed.secret_reference.as_str(),
+                &removed_secret,
+            )
+            .await;
             if let (Some(reference), Some(secret)) = (
                 removed.management_secret_reference.as_deref(),
                 removed_management_secret.as_ref(),
             ) {
-                let _ = secret_store.restore_deleted_secret(reference, secret);
+                let _ =
+                    CredentialSecretStore::restore_secret(secret_store.as_ref(), reference, secret)
+                        .await;
             }
             return Err(error);
         }

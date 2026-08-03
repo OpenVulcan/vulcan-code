@@ -50,7 +50,11 @@ import {
 import type {
   DiffReviewSelection,
   WorkspaceDiffSnapshotResponse,
+  WorkspaceReviewFocusRequest,
 } from "@/diff/types";
+import { loadWorkspaceGitCatalog, setWorkspaceGitMonitoring } from "@/service/workbench-snapshot-service";
+import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtime";
+import type { WorkspaceGitChangedEvent } from "@/types";
 import type { WorkspacePageDescriptor } from "@/components/workspace/workspace-page-descriptor";
 import { useI18n } from "@/i18n";
 import {
@@ -76,6 +80,7 @@ import {
 } from "@/components/workspace/workspace-shell/context-tabs";
 import {
   buildWorkspaceProjectGitSummary,
+  type WorkspaceProjectGitRepositoryState,
   type WorkspaceProjectGitStateMap,
 } from "@/components/workspace/workspace-shell/git-summary";
 import type { WorkspaceShellProps } from "@/components/workspace/workspace-shell/types";
@@ -158,7 +163,10 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   const contextTabState = contextTabStateEntry.state;
   // reviewFocusRequest increments whenever chat tools ask the review panel to show uncommitted changes.
   // reviewFocusRequest 在会话工具要求审核面板显示未提交变更时递增。
-  const [reviewFocusRequest, setReviewFocusRequest] = React.useState(0);
+  const [reviewFocusRequest, setReviewFocusRequest] = React.useState<WorkspaceReviewFocusRequest>({
+    sequence: 0,
+    repositoryKey: null,
+  });
   // leftAutoCollapsed records automatic left-sidebar collapse caused by width pressure.
   // leftAutoCollapsed 记录宽度压力导致的左侧栏自动折叠。
   const [leftAutoCollapsed, setLeftAutoCollapsed] = React.useState(false);
@@ -186,6 +194,16 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // workspaceGitStateByProject stores project-level Git state shared by all conversations.
   // workspaceGitStateByProject 保存所有会话共享的项目级 Git 状态。
   const [workspaceGitStateByProject, setWorkspaceGitStateByProject] = React.useState<WorkspaceProjectGitStateMap>({});
+  // workspaceGitStateByProjectRef exposes the latest committed project map to long-running refresh callbacks.
+  // workspaceGitStateByProjectRef 向长生命周期刷新回调暴露最近提交的项目状态映射。
+  const workspaceGitStateByProjectRef = React.useRef<WorkspaceProjectGitStateMap>({});
+  workspaceGitStateByProjectRef.current = workspaceGitStateByProject;
+  // selectedGitRepositoryKey stores the repository node used by commit and push actions.
+  // selectedGitRepositoryKey 保存提交与推送动作当前使用的仓库节点。
+  const [selectedGitRepositoryKey, setSelectedGitRepositoryKey] = React.useState<string | null>(null);
+  // activeGitCommitRepositoryKey freezes the repository bound to an open or running commit dialog.
+  // activeGitCommitRepositoryKey 固定已打开或正在运行的提交弹窗所绑定的仓库。
+  const [activeGitCommitRepositoryKey, setActiveGitCommitRepositoryKey] = React.useState<string | null>(null);
   // gitCommitDialogOpen stores the shared commit dialog state across chat and review surfaces.
   // gitCommitDialogOpen 保存聊天区与审核区共享的提交弹窗状态。
   const [gitCommitDialogOpen, setGitCommitDialogOpen] = React.useState(false);
@@ -195,6 +213,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // workspaceGitRefreshRequestSeqRef provides monotonic ids for project-level Git refreshes.
   // workspaceGitRefreshRequestSeqRef 为项目级 Git 刷新提供单调请求标识。
   const workspaceGitRefreshRequestSeqRef = React.useRef(0);
+  // monitoringRefreshQueueRef serializes file-event refreshes for one selected project.
+  // monitoringRefreshQueueRef 串行处理同一选中项目的文件事件刷新。
+  const monitoringRefreshQueueRef = React.useRef<Promise<void>>(Promise.resolve());
   // notifyConversationLayoutWillChange lets the active chat preserve scroll before shell geometry changes.
   // notifyConversationLayoutWillChange 让当前会话在外壳几何变化前保留滚动位置。
   const notifyConversationLayoutWillChange = React.useCallback(() => {
@@ -225,18 +246,57 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   const selectedWorkspaceGitState = selectedGitCommitWorkspaceKey
     ? workspaceGitStateByProject[selectedGitCommitWorkspaceKey] ?? null
     : null;
-  // sessionReviewSummary exposes the selected project's Git summary to chat and review triggers.
-  // sessionReviewSummary 向会话和审核入口暴露当前选中项目的 Git 摘要。
-  const sessionReviewSummary = selectedWorkspaceGitState?.summary ?? null;
+  // sessionReviewRepositories exposes every independent repository node to the compact panel.
+  // sessionReviewRepositories 向紧凑面板暴露全部独立仓库节点。
+  const sessionReviewRepositories = selectedWorkspaceGitState?.repositories ?? [];
+  // selectedGitRepositoryState stores the repository currently targeted by commit and push.
+  // selectedGitRepositoryState 保存提交与推送当前指向的仓库。
+  const enabledReviewRepositories = sessionReviewRepositories.filter((repository) => repository.monitoringEnabled);
+  // sessionReviewSummary exposes only an actively monitored primary summary to action surfaces.
+  // sessionReviewSummary 只向操作界面暴露正在监听的主要仓库摘要。
+  const sessionReviewSummary = enabledReviewRepositories.length > 0
+    ? enabledReviewRepositories.find((repository) => repository.repositoryKey === selectedGitRepositoryKey)?.summary
+      ?? enabledReviewRepositories.find((repository) => repository.repositoryKey === selectedWorkspaceGitState?.primaryRepositoryKey)?.summary
+      ?? enabledReviewRepositories.find((repository) => repository.summary)?.summary
+      ?? null
+    : null;
+  const selectedGitRepositoryState = selectedGitRepositoryKey
+    ? enabledReviewRepositories.find((repository) => repository.repositoryKey === selectedGitRepositoryKey)
+      ?? enabledReviewRepositories.find((repository) => repository.repositoryKey === selectedWorkspaceGitState?.primaryRepositoryKey)
+      ?? enabledReviewRepositories[0]
+      ?? null
+    : enabledReviewRepositories.find((repository) => repository.repositoryKey === selectedWorkspaceGitState?.primaryRepositoryKey)
+      ?? enabledReviewRepositories[0]
+      ?? null;
+  // selectedGitRepositoryForActions always has a deterministic repository key when a catalog exists.
+  // selectedGitRepositoryForActions 在存在仓库目录时始终具有确定性仓库键。
+  const selectedGitRepositoryForActions = selectedGitRepositoryState?.repositoryKey ?? null;
+  // activeGitCommitRepositoryState keeps the dialog target independent from right-panel selection changes.
+  // activeGitCommitRepositoryState 让提交弹窗目标独立于右侧面板选择变化。
+  const activeGitCommitRepositoryState = activeGitCommitRepositoryKey
+    ? enabledReviewRepositories.find((repository) => repository.repositoryKey === activeGitCommitRepositoryKey) ?? null
+    : selectedGitRepositoryState;
+  // activeGitCommitRepositoryForActions never falls back after a target has been captured.
+  // activeGitCommitRepositoryForActions 在捕获目标后绝不回退到其他仓库，避免弹窗或异步动作漂移。
+  const activeGitCommitRepositoryForActions = activeGitCommitRepositoryKey !== null
+    ? activeGitCommitRepositoryState?.repositoryKey ?? null
+    : selectedGitRepositoryForActions;
+  // activeSessionReviewSummary is the independent repository summary used by commit controls.
+  // activeSessionReviewSummary 是提交控件使用的独立仓库摘要。
+  const activeSessionReviewSummary = activeGitCommitRepositoryState
+    ? activeGitCommitRepositoryState.summary
+    : sessionReviewSummary;
   // gitCommitBusyState stores the selected workspace's shared Git action phase.
   // gitCommitBusyState 保存当前选中工作区的共享 Git 操作阶段。
-  const gitCommitBusyState = selectedGitCommitWorkspaceKey
-    ? gitCommitBusyStateByWorkspace[selectedGitCommitWorkspaceKey] ?? null
+  const gitCommitBusyState = selectedGitCommitWorkspaceKey && selectedGitRepositoryForActions
+    ? gitCommitBusyStateByWorkspace[`${selectedGitCommitWorkspaceKey}\u0000${selectedGitRepositoryForActions}`] ?? null
     : null;
   // updateGitCommitBusyState updates the running Git action state for the captured workspace.
   // updateGitCommitBusyState 更新当前闭包捕获工作区的 Git 动作状态。
-  const updateGitCommitBusyState = React.useCallback((state: ConversationSessionCommitBusyState) => {
-    const workspaceKey = selectedGitCommitWorkspaceKey;
+  const updateGitCommitBusyState = React.useCallback((repositoryKey: string | null, state: ConversationSessionCommitBusyState) => {
+    const workspaceKey = selectedGitCommitWorkspaceKey && repositoryKey
+      ? `${selectedGitCommitWorkspaceKey}\u0000${repositoryKey}`
+      : null;
     if (!workspaceKey) {
       return;
     }
@@ -252,6 +312,21 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       return next;
     });
   }, [selectedGitCommitWorkspaceKey]);
+  // gitCommitBusyStateForRepository exposes independent action phases without cross-repository bleed.
+  // gitCommitBusyStateForRepository 暴露独立操作阶段，避免仓库之间串状态。
+  const gitCommitBusyStateForRepository = React.useCallback((repositoryKey: string) => {
+    if (!selectedGitCommitWorkspaceKey) {
+      return null;
+    }
+    return gitCommitBusyStateByWorkspace[
+      `${selectedGitCommitWorkspaceKey}\u0000${repositoryKey}`
+    ] ?? null;
+  }, [gitCommitBusyStateByWorkspace, selectedGitCommitWorkspaceKey]);
+  // activeGitCommitBusyState shows the action phase for the repository frozen by the dialog.
+  // activeGitCommitBusyState 显示提交弹窗固定仓库对应的操作阶段。
+  const activeGitCommitBusyState = activeGitCommitRepositoryForActions
+    ? gitCommitBusyStateForRepository(activeGitCommitRepositoryForActions)
+    : gitCommitBusyState;
   // sessionTerminalSessions stores terminal sessions relevant to the selected conversation.
   // sessionTerminalSessions 保存与当前选中会话相关的终端会话。
   const sessionTerminalSessions = React.useMemo(
@@ -398,14 +473,51 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
 
   // handleOpenReviewChanges opens the right panel and focuses the live uncommitted review source.
   // handleOpenReviewChanges 打开右侧面板并聚焦实时未提交审核来源。
-  const handleOpenReviewChanges = React.useCallback(() => {
+  const handleOpenReviewChanges = React.useCallback((repositoryKey?: string) => {
     if (!hasSelectedChatConversation) {
       return;
     }
+    const nextRepositoryKey = repositoryKey ?? selectedGitRepositoryForActions;
+    if (nextRepositoryKey) {
+      setSelectedGitRepositoryKey(nextRepositoryKey);
+    }
     openContextTab("review");
-    setReviewFocusRequest((current) => current + 1);
+    setReviewFocusRequest((current) => ({
+      sequence: current.sequence + 1,
+      repositoryKey: nextRepositoryKey,
+    }));
     openRightContextPanel();
-  }, [hasSelectedChatConversation, openContextTab, openRightContextPanel]);
+  }, [hasSelectedChatConversation, openContextTab, openRightContextPanel, selectedGitRepositoryForActions]);
+
+  // handleSelectReviewRepository updates the visible selection and freezes the next commit dialog target.
+  // handleSelectReviewRepository 更新可见选择，并固定下一次提交弹窗目标。
+  const handleSelectReviewRepository = React.useCallback((repositoryKey: string) => {
+    setSelectedGitRepositoryKey(repositoryKey);
+    // Keep the open or running shared action bound to its original repository.
+    // 保持已打开或正在运行的共享动作绑定原始仓库。
+    if (!gitCommitDialogOpen && !activeGitCommitBusyState) {
+      setActiveGitCommitRepositoryKey(repositoryKey);
+    }
+  }, [activeGitCommitBusyState, gitCommitDialogOpen]);
+
+  // handleGitCommitDialogOpenChange preserves the selected repository identity across dialog close and reopen.
+  // handleGitCommitDialogOpenChange 在弹窗关闭与重开之间保留所选仓库身份。
+  const handleGitCommitDialogOpenChange = React.useCallback((open: boolean) => {
+    if (open && !gitCommitDialogOpen && selectedGitRepositoryForActions) {
+      setActiveGitCommitRepositoryKey(selectedGitRepositoryForActions);
+    }
+    setGitCommitDialogOpen(open);
+  }, [gitCommitDialogOpen, selectedGitRepositoryForActions]);
+
+  // handleOpenGitCommitDialog opens the shared dialog against the currently selected repository.
+  // handleOpenGitCommitDialog 针对当前选中仓库打开共享提交弹窗。
+  const handleOpenGitCommitDialog = React.useCallback(() => {
+    if (!selectedGitRepositoryForActions) {
+      return;
+    }
+    setActiveGitCommitRepositoryKey(selectedGitRepositoryForActions);
+    setGitCommitDialogOpen(true);
+  }, [selectedGitRepositoryForActions]);
 
   // handleOpenSubagentPanel opens a read-only subagent transcript tab in the right context panel.
   // handleOpenSubagentPanel 在右侧上下文面板中打开只读子代理转录页签。
@@ -496,12 +608,12 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     : null;
   // sessionGitRepositoryAvailable tracks whether the current chat project resolved as a Git repository.
   // sessionGitRepositoryAvailable 标记当前聊天项目是否已解析为 Git 仓库。
-  const sessionGitRepositoryAvailable = Boolean(sessionReviewSummary || selectedWorkspaceGitState?.loading);
+  const sessionGitRepositoryAvailable = Boolean(sessionReviewRepositories.length || sessionReviewSummary || selectedWorkspaceGitState?.loading);
   // sessionGitCommitActionAvailable tracks whether commit or push has a runnable target.
   // sessionGitCommitActionAvailable 标记提交或推送是否存在可执行目标。
-  const sessionGitCommitActionAvailable = Boolean(sessionReviewSummary && (
-    sessionReviewSummary.changedFiles > 0
-    || sessionReviewSummary.unpushedCommits > 0
+  const sessionGitCommitActionAvailable = Boolean(activeSessionReviewSummary && (
+    activeSessionReviewSummary.changedFiles > 0
+    || activeSessionReviewSummary.unpushedCommits > 0
   ));
   // sessionGitCommitActionVisible keeps shared commit triggers visible for Git repositories or running Git work.
   // sessionGitCommitActionVisible 在 Git 仓库或正在执行 Git 工作时保持共享提交入口可见。
@@ -530,6 +642,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     workspacePath: string,
     projectId: string | null,
     conversationId: string | null,
+    repositoryKey?: string | null,
   ) => {
     const requestId = workspaceGitRefreshRequestSeqRef.current + 1;
     workspaceGitRefreshRequestSeqRef.current = requestId;
@@ -547,52 +660,148 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           summary: previous?.summary ?? null,
           unstagedSnapshot: previous?.unstagedSnapshot ?? null,
           workspacePath,
+          repositories: previous?.repositories.map((repository) => ({
+            ...repository,
+            error: repositoryKey && repository.repositoryKey !== repositoryKey ? repository.error : null,
+            loading: repository.monitoringEnabled
+              && (!repositoryKey || repository.repositoryKey === repositoryKey),
+          })) ?? [],
+          primaryRepositoryKey: previous?.primaryRepositoryKey ?? null,
         },
       };
     });
-    const [unstagedResult, stagedResult] = await Promise.allSettled([
-      props.onLoadWorkspaceDiffSnapshot(
-        workspacePath,
+    let catalog;
+    try {
+      catalog = await loadWorkspaceGitCatalog(workspacePath, projectId, conversationId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setWorkspaceGitStateByProject((current) => ({
+        ...current,
+        [workspacePath]: {
+          ...(current[workspacePath] ?? {
+            projectId,
+            revision: 0,
+            stagedSnapshot: null,
+            summary: null,
+            unstagedSnapshot: null,
+            workspacePath,
+            repositories: [],
+            primaryRepositoryKey: null,
+          }),
+          error: message,
+          loading: false,
+          projectId,
+          refreshRequestId: requestId,
+        },
+      }));
+      return;
+    }
+    const previousEntry = workspaceGitStateByProjectRef.current[workspacePath];
+    const repositoryStates = await Promise.all(catalog.repositories.map(async (repository) => {
+      const previousRepository = previousEntry?.repositories.find((entry) => entry.repositoryKey === repository.repositoryKey);
+      if (repositoryKey && repository.repositoryKey !== repositoryKey) {
+        return previousRepository ?? {
+          error: null,
+          isPrimary: repository.isPrimary,
+          loading: false,
+          monitoringEnabled: repository.monitoringEnabled,
+          projectId,
+          relativePath: repository.relativePath,
+          repositoryKey: repository.repositoryKey,
+          repositoryName: repository.name,
+          revision: 0,
+          stagedSnapshot: null,
+          summary: null,
+          unstagedSnapshot: null,
+          workspacePath,
+        } satisfies WorkspaceProjectGitRepositoryState;
+      }
+      if (!repository.monitoringEnabled) {
+        return {
+          error: null,
+          isPrimary: repository.isPrimary,
+          loading: false,
+          monitoringEnabled: false,
+          projectId,
+          relativePath: repository.relativePath,
+          repositoryKey: repository.repositoryKey,
+          repositoryName: repository.name,
+          revision: (previousRepository?.revision ?? 0) + 1,
+          // Disabled repositories remain visible for settings but must not expose stale review counts.
+          // 已关闭监听的仓库仍保留设置入口，但不能继续展示过期审查统计。
+          stagedSnapshot: null,
+          summary: null,
+          unstagedSnapshot: null,
+          workspacePath,
+        } satisfies WorkspaceProjectGitRepositoryState;
+      }
+      const [unstagedResult, stagedResult] = await Promise.allSettled([
+        props.onLoadWorkspaceDiffSnapshot(workspacePath, projectId, conversationId, {
+          mode: "unstaged",
+          repositoryKey: repository.repositoryKey,
+        }),
+        props.onLoadWorkspaceDiffSnapshot(workspacePath, projectId, conversationId, {
+          mode: "staged",
+          repositoryKey: repository.repositoryKey,
+        }),
+      ]);
+      const rejectedError = [unstagedResult, stagedResult]
+        .find((result): result is PromiseRejectedResult => result.status === "rejected")
+        ?.reason;
+      const unstagedSnapshot = unstagedResult.status === "fulfilled"
+        ? unstagedResult.value
+        : previousRepository?.unstagedSnapshot ?? null;
+      const stagedSnapshot = stagedResult.status === "fulfilled"
+        ? stagedResult.value
+        : previousRepository?.stagedSnapshot ?? null;
+      return {
+        error: rejectedError instanceof Error ? rejectedError.message : rejectedError ? String(rejectedError) : null,
+        isPrimary: repository.isPrimary,
+        loading: false,
+        monitoringEnabled: true,
         projectId,
-        conversationId,
-        { mode: "unstaged" },
-      ),
-      props.onLoadWorkspaceDiffSnapshot(
+        relativePath: repository.relativePath,
+        repositoryKey: repository.repositoryKey,
+        repositoryName: repository.name,
+        revision: (previousRepository?.revision ?? 0) + 1,
+        stagedSnapshot,
+        summary: buildWorkspaceProjectGitSummary(unstagedSnapshot, stagedSnapshot),
+        unstagedSnapshot,
         workspacePath,
-        projectId,
-        conversationId,
-        { mode: "staged" },
-      ),
-    ]);
-    const rejectedError = [unstagedResult, stagedResult]
-      .find((result): result is PromiseRejectedResult => result.status === "rejected")
-      ?.reason;
+      } satisfies WorkspaceProjectGitRepositoryState;
+    }));
+    const primaryRepository = repositoryStates.find((repository) => (
+      catalog.repositories.find((candidate) => candidate.repositoryKey === repository.repositoryKey)?.isPrimary
+    )) ?? repositoryStates[0] ?? null;
     setWorkspaceGitStateByProject((current) => {
       const previous = current[workspacePath];
       if (previous && previous.refreshRequestId !== requestId) {
         return current;
       }
-      const unstagedSnapshot = unstagedResult.status === "fulfilled"
-        ? unstagedResult.value
-        : previous?.unstagedSnapshot ?? null;
-      const stagedSnapshot = stagedResult.status === "fulfilled"
-        ? stagedResult.value
-        : previous?.stagedSnapshot ?? null;
       return {
         ...current,
         [workspacePath]: {
-          error: rejectedError instanceof Error ? rejectedError.message : rejectedError ? String(rejectedError) : null,
-          loading: false,
+          error: repositoryStates.find((repository) => repository.error)?.error ?? null,
+          loading: repositoryStates.some((repository) => repository.loading),
           projectId,
           refreshRequestId: requestId,
           revision: (previous?.revision ?? 0) + 1,
-          stagedSnapshot,
-          summary: buildWorkspaceProjectGitSummary(unstagedSnapshot, stagedSnapshot),
-          unstagedSnapshot,
+          stagedSnapshot: primaryRepository?.stagedSnapshot ?? null,
+          summary: primaryRepository?.summary ?? null,
+          unstagedSnapshot: primaryRepository?.unstagedSnapshot ?? null,
           workspacePath,
+          repositories: repositoryStates,
+          primaryRepositoryKey: primaryRepository?.repositoryKey ?? null,
         },
       };
     });
+    setSelectedGitRepositoryKey((current) => (
+      current && repositoryStates.some((repository) => repository.repositoryKey === current && repository.monitoringEnabled)
+        ? current
+        : repositoryStates.find((repository) => repository.monitoringEnabled && repository.repositoryKey === primaryRepository?.repositoryKey)?.repositoryKey
+          ?? repositoryStates.find((repository) => repository.monitoringEnabled)?.repositoryKey
+          ?? null
+    ));
   }, [props.onLoadWorkspaceDiffSnapshot]);
 
   // refreshSessionReviewSummary reloads Git state for the currently selected project.
@@ -614,6 +823,108 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     selectedChatProject?.path,
   ]);
 
+  // refreshSelectedGitRepositorySummary refreshes only the repository captured by the commit dialog.
+  // refreshSelectedGitRepositorySummary 只刷新提交弹窗捕获的目标仓库。
+  const refreshSelectedGitRepositorySummary = React.useCallback(async () => {
+    if (!hasSelectedChatConversation || !selectedChatProject?.path || !activeGitCommitRepositoryForActions) {
+      return;
+    }
+    await refreshProjectGitSummary(
+      selectedChatProject.path,
+      selectedChatProject.id ?? null,
+      props.selectedConversationId,
+      activeGitCommitRepositoryForActions,
+    );
+  }, [
+    hasSelectedChatConversation,
+    props.selectedConversationId,
+    refreshProjectGitSummary,
+    activeGitCommitRepositoryForActions,
+    selectedChatProject?.id,
+    selectedChatProject?.path,
+  ]);
+
+  React.useEffect(() => {
+    if (!hasSelectedChatConversation || !selectedChatProject?.path || !hasServiceRuntime()) {
+      return undefined;
+    }
+    let cancelled = false;
+    let unsubscribe: (() => void) | null = null;
+    const workspacePath = selectedChatProject.path;
+    const projectId = selectedChatProject.id ?? null;
+    const conversationId = props.selectedConversationId;
+    const normalizeWorkspacePath = (value: string): string => value.replaceAll("\\", "/").replace(/\/+$/, "").toLocaleLowerCase();
+    const subscription = serviceClient.subscribe<WorkspaceGitChangedEvent>("workspace.git.changed", (event) => {
+      if (cancelled || normalizeWorkspacePath(event.workspacePath) !== normalizeWorkspacePath(workspacePath)) {
+        return;
+      }
+      if (event.projectId && projectId && event.projectId !== projectId) {
+        return;
+      }
+      const repositoryKeys = [...new Set(event.repositoryKeys)].filter((key) => key.trim().length > 0);
+      if (repositoryKeys.length === 0) {
+        return;
+      }
+      monitoringRefreshQueueRef.current = monitoringRefreshQueueRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          if (cancelled) {
+            return;
+          }
+          for (const repositoryKey of repositoryKeys) {
+            if (cancelled) {
+              return;
+            }
+            await refreshProjectGitSummary(workspacePath, projectId, conversationId, repositoryKey);
+          }
+        })
+        .catch(() => undefined);
+    });
+    void subscription.then((nextUnsubscribe) => {
+      if (cancelled) {
+        nextUnsubscribe();
+      } else {
+        unsubscribe = nextUnsubscribe;
+      }
+    }).catch(() => undefined);
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+      unsubscribe = null;
+      monitoringRefreshQueueRef.current = Promise.resolve();
+    };
+  }, [
+    hasSelectedChatConversation,
+    props.selectedConversationId,
+    refreshProjectGitSummary,
+    selectedChatProject?.id,
+    selectedChatProject?.path,
+  ]);
+
+  // handleToggleReviewMonitoring persists one repository listener switch and refreshes its own node.
+  // handleToggleReviewMonitoring 持久化单个仓库监听开关并刷新该仓库节点。
+  const handleToggleReviewMonitoring = React.useCallback(async (repositoryKey: string, enabled: boolean) => {
+    if (!selectedChatProject?.path || !selectedChatProject.id || !props.selectedConversationId) {
+      return;
+    }
+    await setWorkspaceGitMonitoring(
+      selectedChatProject.path,
+      selectedChatProject.id,
+      props.selectedConversationId,
+      repositoryKey,
+      enabled,
+    );
+    await refreshProjectGitSummary(
+      selectedChatProject.path,
+      selectedChatProject.id,
+      props.selectedConversationId,
+    );
+    setReviewFocusRequest((current) => ({
+      repositoryKey: current.repositoryKey,
+      sequence: current.sequence + 1,
+    }));
+  }, [props.selectedConversationId, refreshProjectGitSummary, selectedChatProject?.id, selectedChatProject?.path]);
+
   // recordWorkspaceDiffSnapshotForProject merges a panel-loaded snapshot into the shared project Git state.
   // recordWorkspaceDiffSnapshotForProject 将面板加载的快照合并进共享项目 Git 状态。
   const recordWorkspaceDiffSnapshotForProject = React.useCallback((
@@ -630,12 +941,35 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       if (previous?.loading) {
         return current;
       }
+      const repositoryKey = selection.repositoryKey ?? previous?.primaryRepositoryKey ?? ".";
+      const previousRepository = previous?.repositories.find((repository) => repository.repositoryKey === repositoryKey);
       const nextUnstagedSnapshot = selection.mode === "unstaged"
         ? response
-        : previous?.unstagedSnapshot ?? null;
+        : previousRepository?.unstagedSnapshot ?? null;
       const nextStagedSnapshot = selection.mode === "staged"
         ? response
-        : previous?.stagedSnapshot ?? null;
+        : previousRepository?.stagedSnapshot ?? null;
+      const nextRepository: WorkspaceProjectGitRepositoryState = {
+        error: null,
+        isPrimary: previousRepository?.isPrimary ?? repositoryKey === (previous?.primaryRepositoryKey ?? "."),
+        loading: false,
+        monitoringEnabled: previousRepository?.monitoringEnabled ?? true,
+        projectId,
+        relativePath: previousRepository?.relativePath ?? repositoryKey,
+        repositoryKey,
+        repositoryName: previousRepository?.repositoryName ?? repositoryKey,
+        revision: (previousRepository?.revision ?? 0) + 1,
+        stagedSnapshot: nextStagedSnapshot,
+        summary: buildWorkspaceProjectGitSummary(nextUnstagedSnapshot, nextStagedSnapshot),
+        unstagedSnapshot: nextUnstagedSnapshot,
+        workspacePath,
+      };
+      const repositories = previous?.repositories.filter((repository) => repository.repositoryKey !== repositoryKey) ?? [];
+      repositories.push(nextRepository);
+      repositories.sort((left, right) => left.repositoryKey.localeCompare(right.repositoryKey));
+      const primaryRepository = repositories.find((repository) => repository.repositoryKey === (previous?.primaryRepositoryKey ?? "."))
+        ?? repositories[0]
+        ?? null;
       return {
         ...current,
         [workspacePath]: {
@@ -644,20 +978,22 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           projectId,
           revision: (previous?.revision ?? 0) + 1,
           refreshRequestId: previous?.refreshRequestId ?? 0,
-          stagedSnapshot: nextStagedSnapshot,
-          summary: buildWorkspaceProjectGitSummary(nextUnstagedSnapshot, nextStagedSnapshot),
-          unstagedSnapshot: nextUnstagedSnapshot,
+          stagedSnapshot: primaryRepository?.stagedSnapshot ?? null,
+          summary: primaryRepository?.summary ?? null,
+          unstagedSnapshot: primaryRepository?.unstagedSnapshot ?? null,
           workspacePath,
+          repositories,
+          primaryRepositoryKey: primaryRepository?.repositoryKey ?? null,
         },
       };
     });
   }, []);
 
   React.useEffect(() => {
-    if (!hasSelectedChatConversation || !sessionReviewSummary) {
+    if (!hasSelectedChatConversation || (gitCommitDialogOpen && !activeSessionReviewSummary)) {
       setGitCommitDialogOpen(false);
     }
-  }, [hasSelectedChatConversation, sessionReviewSummary]);
+  }, [activeSessionReviewSummary, gitCommitDialogOpen, hasSelectedChatConversation]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -681,6 +1017,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
               summary: current[selectedChatProject.path]?.summary ?? null,
               unstagedSnapshot: current[selectedChatProject.path]?.unstagedSnapshot ?? null,
               workspacePath: selectedChatProject.path,
+              repositories: current[selectedChatProject.path]?.repositories ?? [],
+              primaryRepositoryKey: current[selectedChatProject.path]?.primaryRepositoryKey ?? null,
             },
           }));
         }
@@ -1006,16 +1344,45 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       onLayoutModeWillChange: notifyConversationLayoutWillChange,
       panel: sessionToolPanelVisible ? (
         <ConversationSessionTodolistPanel
+          activeReviewRepositoryKey={gitCommitDialogOpen ? activeGitCommitRepositoryKey : selectedGitRepositoryForActions}
           commitBusyState={gitCommitBusyState}
+          commitBusyStateForRepository={gitCommitBusyStateForRepository}
           commitDialogOpen={gitCommitDialogOpen}
           expanded={sessionToolExpanded}
           reviewSummary={sessionReviewSummary}
+          reviewRepositoryOrderStorageKey={selectedGitCommitWorkspaceKey}
+          reviewRepositories={sessionReviewRepositories.map((repository) => ({
+            error: repository.error,
+            isPrimary: repository.isPrimary,
+            loading: repository.loading,
+            monitoringEnabled: repository.monitoringEnabled,
+            relativePath: repository.relativePath,
+            repositoryKey: repository.repositoryKey,
+            repositoryName: repository.repositoryName,
+            summary: repository.monitoringEnabled ? repository.summary : null,
+          }))}
           subagentNavigation={sessionSubagentNavigation}
           terminalSessions={sessionTerminalSessions}
           todolist={null}
-          onCommitDialogOpenChange={setGitCommitDialogOpen}
+          onCommitDialogOpenChange={handleGitCommitDialogOpenChange}
           onExpandedChange={handleSessionToolExpandedChange}
           onOpenReviewChanges={handleOpenReviewChanges}
+          onSelectReviewRepository={handleSelectReviewRepository}
+          onToggleReviewMonitoring={(repositoryKey, enabled) => {
+            return handleToggleReviewMonitoring(repositoryKey, enabled).catch((error) => {
+              const message = error instanceof Error ? error.message : String(error);
+              setWorkspaceGitStateByProject((current) => {
+                const entry = selectedGitCommitWorkspaceKey ? current[selectedGitCommitWorkspaceKey] : null;
+                if (!entry) {
+                  return current;
+                }
+                return {
+                  ...current,
+                  [selectedGitCommitWorkspaceKey as string]: { ...entry, error: message },
+                };
+              });
+            });
+          }}
           onOpenSubagentPanel={handleOpenSubagentPanel}
           onStopCommandSession={props.onStopCommandSession}
         />
@@ -1099,13 +1466,14 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           runWorkspaceGitFileAction={props.onRunWorkspaceGitFileAction}
           onWorkspaceDiffSnapshotLoaded={recordWorkspaceDiffSnapshotForProject}
           onWorkspaceGitStateChanged={refreshProjectGitSummary}
+          onSelectGitRepository={setSelectedGitRepositoryKey}
           onRunVmmAction={props.memoryActions.onRunVmmAction}
           onLoadToolDetail={props.onLoadToolDetail}
           onTrace={props.onTrace}
           gitCommitActionBusy={Boolean(gitCommitBusyState)}
           gitCommitActionDisabled={!sessionGitCommitActionAvailable}
           gitCommitActionLabel={gitCommitBusyState?.label ?? t("gitCommitDialog.open")}
-          onOpenGitCommitAction={sessionGitCommitActionVisible ? () => setGitCommitDialogOpen(true) : undefined}
+          onOpenGitCommitAction={sessionGitCommitActionVisible ? handleOpenGitCommitDialog : undefined}
         >
           {pageDescriptor.content}
         </WorkspaceResizableBody>
@@ -1115,17 +1483,18 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           </div>
         ) : null}
       </SidebarInset>
-      {sessionGitCommitActionVisible && sessionReviewSummary ? (
+      {sessionGitCommitActionVisible && activeSessionReviewSummary ? (
         <ConversationSessionCommitDialog
-          busyState={gitCommitBusyState}
+          busyState={activeGitCommitBusyState}
           commitBranchPrefix={props.workbench.gitCommit?.newBranchPrefix ?? "vulcan/"}
           conversationId={props.selectedConversationId}
           open={gitCommitDialogOpen}
-          reviewSummary={sessionReviewSummary}
+          repositoryKey={activeGitCommitRepositoryForActions}
+          reviewSummary={activeSessionReviewSummary}
           workspacePath={selectedChatProject?.path ?? null}
           onBusyStateChange={updateGitCommitBusyState}
-          onOpenChange={setGitCommitDialogOpen}
-          onRefreshReviewSummary={refreshSessionReviewSummary}
+          onOpenChange={handleGitCommitDialogOpenChange}
+          onRefreshReviewSummary={refreshSelectedGitRepositorySummary}
         />
       ) : null}
       {props.conversationForkInProgress ? (

@@ -2,8 +2,8 @@
 //! 供应商无关的能力声明。
 
 use crate::{
-    AiOperation, EmbeddingCapabilities, ModelParameterDefinition, PromptCacheCapability,
-    RerankCapabilities, ResourceKind,
+    AiOperation, EmbeddingCapabilities, ModelParameterDefinition, NativeToolKind,
+    PromptCacheCapability, RerankCapabilities, ResourceKind,
 };
 use serde::{Deserialize, Serialize};
 
@@ -157,6 +157,10 @@ pub struct ModelCapabilities {
     /// Reasoning-content support level.
     /// 推理内容支持级别。
     pub reasoning: CapabilitySupport,
+    /// Provider-native tools available on this exact provider, service, protocol, and model route.
+    /// 本精确供应商、服务入口、协议与模型路由可用的供应商原生工具。
+    #[serde(default)]
+    pub provider_native_tools: Vec<NativeToolKind>,
     /// Exact reasoning control behavior.
     /// 精确推理控制行为。
     #[serde(default)]
@@ -203,6 +207,7 @@ impl Default for ModelCapabilities {
             tool_calling: CapabilitySupport::Unknown,
             parallel_tool_calling: CapabilitySupport::Unknown,
             reasoning: CapabilitySupport::Unknown,
+            provider_native_tools: Vec::new(),
             reasoning_control: ReasoningControlMode::Unknown,
             reasoning_efforts: Vec::new(),
             context_limit: None,
@@ -211,5 +216,42 @@ impl Default for ModelCapabilities {
             model_parameters: Vec::new(),
             evidence_revision: String::from("unverified"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ModelCapabilities, NativeToolKind};
+
+    /// Verifies old capability snapshots without the native-tool field remain readable.
+    /// 验证缺少原生工具字段的旧能力快照仍可正常读取。
+    #[test]
+    fn omitted_provider_native_tools_default_to_empty() {
+        let mut value = serde_json::to_value(ModelCapabilities::default())
+            .expect("default capabilities should serialize");
+        value
+            .as_object_mut()
+            .expect("capabilities should serialize as an object")
+            .remove("provider_native_tools");
+
+        let restored: ModelCapabilities =
+            serde_json::from_value(value).expect("old capability snapshot should remain readable");
+        assert!(restored.provider_native_tools.is_empty());
+    }
+
+    /// Verifies native-tool declarations survive the capability snapshot round trip.
+    /// 验证原生工具声明在能力快照往返序列化后保持不变。
+    #[test]
+    fn provider_native_tools_round_trip_without_loss() {
+        let mut capabilities = ModelCapabilities::default();
+        capabilities.provider_native_tools = vec![NativeToolKind::WebSearch];
+
+        let value = serde_json::to_value(&capabilities).expect("capabilities should serialize");
+        let restored: ModelCapabilities =
+            serde_json::from_value(value).expect("capabilities should deserialize");
+        assert_eq!(
+            restored.provider_native_tools,
+            capabilities.provider_native_tools
+        );
     }
 }

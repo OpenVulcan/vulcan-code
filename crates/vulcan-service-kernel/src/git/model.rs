@@ -19,6 +19,10 @@ pub(crate) struct GitCommitSummaryGenerateRequest {
     /// Workspace path used to resolve the Git repository.
     /// 用于解析 Git 仓库的工作区路径。
     pub(crate) workspace_path: String,
+    /// Stable project-relative repository key; `.` selects the project root repository.
+    /// 稳定的项目相对仓库键；`.` 表示选择项目根仓库。
+    #[serde(default)]
+    pub(crate) repository_key: Option<String>,
     /// Whether unstaged and untracked changes are included in the summary input.
     /// 是否将未暂存与未跟踪变更纳入总结输入。
     pub(crate) include_unstaged: bool,
@@ -63,6 +67,10 @@ pub(crate) struct GitCommitActionRequest {
     /// Workspace path used to resolve the Git repository.
     /// 用于解析 Git 仓库的工作区路径。
     pub(crate) workspace_path: String,
+    /// Stable project-relative repository key; `.` selects the project root repository.
+    /// 稳定的项目相对仓库键；`.` 表示选择项目根仓库。
+    #[serde(default)]
+    pub(crate) repository_key: Option<String>,
     /// Target branch selection for the commit.
     /// 本次提交的目标分支选择。
     pub(crate) target: GitCommitActionTargetRequest,
@@ -385,6 +393,10 @@ pub(crate) struct WebuiWorkspaceDiffSearchFileMatch {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WebuiWorkspaceGitFileActionRequest {
+    /// Stable project-relative repository key; `.` selects the project root repository.
+    /// 稳定的项目相对仓库键；`.` 表示选择项目根仓库。
+    #[serde(default)]
+    pub(crate) repository_key: Option<String>,
     /// File action to execute against the Git index or worktree.
     /// 要对 Git 索引或工作区执行的文件操作。
     pub(crate) action: WebuiWorkspaceGitFileAction,
@@ -459,6 +471,10 @@ pub(crate) struct WebuiWorkspaceGitFileActionResult {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WebuiWorkspaceDiffRequest {
+    /// Stable project-relative repository key; `.` selects the project root repository.
+    /// 稳定的项目相对仓库键；`.` 表示选择项目根仓库。
+    #[serde(default)]
+    pub(crate) repository_key: Option<String>,
     /// Selected review mode.
     /// 当前选择的审核模式。
     pub(crate) mode: WebuiWorkspaceDiffMode,
@@ -478,10 +494,62 @@ pub(crate) struct WebuiWorkspaceDiffRequest {
 pub(crate) fn default_webui_workspace_diff_request() -> WebuiWorkspaceDiffRequest {
     WebuiWorkspaceDiffRequest {
         mode: WebuiWorkspaceDiffMode::Unstaged,
+        repository_key: None,
         base_branch: None,
         compare_branch: None,
         commit_hash: None,
     }
+}
+
+/// One discovered Git repository exposed to the WebUI review surface.
+/// 暴露给 WebUI 审查界面的单个已发现 Git 仓库。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WebuiGitRepositorySummary {
+    /// Stable project-relative repository key.
+    /// 稳定的项目相对仓库键。
+    pub(crate) repository_key: String,
+    /// Canonical repository root used by backend Git commands.
+    /// 后端 Git 命令使用的规范化仓库根目录。
+    pub(crate) repository_root: String,
+    /// Repository directory name shown in compact selectors.
+    /// 紧凑选择器中显示的仓库目录名称。
+    pub(crate) name: String,
+    /// Stable project-relative path shown as secondary context.
+    /// 展示为次级上下文的稳定项目相对路径。
+    pub(crate) relative_path: String,
+    /// Whether this repository is the deterministic primary repository.
+    /// 该仓库是否为确定性的主要仓库。
+    pub(crate) is_primary: bool,
+    /// Whether this repository is enabled for live review monitoring.
+    /// 该仓库是否启用实时审查监听。
+    pub(crate) monitoring_enabled: bool,
+}
+
+/// Catalog of Git repositories discovered below one WebUI project.
+/// 单个 WebUI 项目下发现的 Git 仓库目录。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WebuiGitRepositoryCatalog {
+    /// Canonical project root used for discovery.
+    /// 发现流程使用的规范化项目根目录。
+    pub(crate) project_root: String,
+    /// Deterministically ordered discovered repositories.
+    /// 按确定性顺序排列的已发现仓库。
+    pub(crate) repositories: Vec<WebuiGitRepositorySummary>,
+}
+
+/// Request that toggles live monitoring for one discovered repository.
+/// 切换单个已发现仓库实时监听状态的请求。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WebuiGitRepositoryMonitoringRequest {
+    /// Stable project-relative repository key to update.
+    /// 需要更新的稳定项目相对仓库键。
+    pub(crate) repository_key: String,
+    /// Desired monitoring state.
+    /// 需要设置的监听状态。
+    pub(crate) enabled: bool,
 }
 
 /// WebUI Git diff source mode.

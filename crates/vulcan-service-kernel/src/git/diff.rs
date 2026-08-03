@@ -80,17 +80,6 @@ struct WebuiUntrackedDiffSection {
     binary_reason: Option<WebuiUntrackedBinaryReason>,
 }
 
-/// Resolves a WebUI workspace path into a concrete Git repository root.
-/// 将 WebUI 工作区路径解析为明确的 Git 仓库根目录。
-pub(crate) fn resolve_webui_repository_root_from_workspace_text(
-    workspace_path: &str,
-) -> Result<PathBuf, String> {
-    let resolution = resolve_webui_workspace_git_resolution(workspace_path)?;
-    resolution
-        .repository_root
-        .ok_or_else(|| String::from("当前工作区不是 Git 仓库，无法执行 Git 提交操作。"))
-}
-
 /// Resolves WebUI workspace text into a canonical path and optional Git repository root.
 /// 将 WebUI 工作区文本解析为规范化路径与可选 Git 仓库根目录。
 pub(crate) fn resolve_webui_workspace_git_resolution(

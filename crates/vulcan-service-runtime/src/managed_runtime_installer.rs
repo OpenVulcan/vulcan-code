@@ -38,6 +38,26 @@ const DOWNLOAD_BUFFER_BYTES: usize = 128 * 1024;
 /// 单次安装错误包含的子进程输出上限。
 const MAX_PROCESS_DIAGNOSTIC_BYTES: usize = 8 * 1024;
 
+/// Windows creation flag that prevents a console window for a child process.
+/// 防止子进程创建控制台窗口的 Windows 创建标志。
+#[cfg(all(windows, not(debug_assertions)))]
+const WINDOWS_CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Apply the Release-only no-console flag to a managed-runtime child process.
+/// 为受管运行时子进程应用仅 Release 生效的无控制台标志。
+fn apply_release_no_window_to_command(command: &mut Command) {
+    #[cfg(all(windows, not(debug_assertions)))]
+    {
+        use std::os::windows::process::CommandExt;
+
+        command.creation_flags(WINDOWS_CREATE_NO_WINDOW);
+    }
+    #[cfg(any(not(windows), debug_assertions))]
+    {
+        let _ = command;
+    }
+}
+
 /// Immutable native installation request for one managed runtime bootstrap.
 /// 单次受管运行时初始化使用的不可变原生安装请求。
 pub(crate) struct NativeManagedRuntimeInstallRequest<'a> {
@@ -432,7 +452,10 @@ where
     // process_staging 与 process_cache_root 以进程兼容形式保留文件系统身份。
     let process_staging = vulcan_runtime_assets::native_host_path(&staging);
     let process_cache_root = vulcan_runtime_assets::native_host_path(&cache_root);
-    let install_output = Command::new(&process_uv_executable)
+    // install_command owns the Release-aware uv invocation that installs Python.
+    // install_command 持有带 Release 无控制台处理的 uv Python 安装调用。
+    let mut install_command = Command::new(&process_uv_executable);
+    install_command
         .args([
             "python",
             "install",
@@ -443,23 +466,28 @@ where
         .env("UV_PYTHON_INSTALL_DIR", &process_staging)
         .env("UV_CACHE_DIR", &process_cache_root)
         .env("UV_MANAGED_PYTHON", "1")
-        .env("UV_NO_CONFIG", "1")
-        .output()
-        .map_err(|error| {
-            format!(
-                "failed to start managed uv {}: {error}",
-                uv_executable.display()
-            )
-        })?;
+        .env("UV_NO_CONFIG", "1");
+    apply_release_no_window_to_command(&mut install_command);
+    let install_output = install_command.output().map_err(|error| {
+        format!(
+            "failed to start managed uv {}: {error}",
+            uv_executable.display()
+        )
+    })?;
     ensure_process_success("uv python install", &install_output)?;
     // find_output resolves the installed interpreter inside the exact staging root.
     // find_output 解析精确暂存根内安装的解释器。
-    let find_output = Command::new(&process_uv_executable)
+    // find_command owns the Release-aware uv invocation that locates Python.
+    // find_command 持有带 Release 无控制台处理的 uv Python 定位调用。
+    let mut find_command = Command::new(&process_uv_executable);
+    find_command
         .args(["python", "find", request.python_version])
         .env("UV_PYTHON_INSTALL_DIR", &process_staging)
         .env("UV_CACHE_DIR", &process_cache_root)
         .env("UV_MANAGED_PYTHON", "1")
-        .env("UV_NO_CONFIG", "1")
+        .env("UV_NO_CONFIG", "1");
+    apply_release_no_window_to_command(&mut find_command);
+    let find_output = find_command
         .output()
         .map_err(|error| format!("failed to resolve managed Python interpreter: {error}"))?;
     ensure_process_success("uv python find", &find_output)?;
@@ -1422,8 +1450,12 @@ where
             vulcan_runtime_assets::native_host_path(Path::new(argument.as_ref())).into_os_string()
         })
         .collect::<Vec<_>>();
-    let output = Command::new(&process_executable)
-        .args(&process_arguments)
+    // command owns the Release-aware executable version-check invocation.
+    // command 持有带 Release 无控制台处理的可执行文件版本校验调用。
+    let mut command = Command::new(&process_executable);
+    command.args(&process_arguments);
+    apply_release_no_window_to_command(&mut command);
+    let output = command
         .output()
         .map_err(|error| format!("failed to start {}: {error}", executable.display()))?;
     ensure_process_success(

@@ -77,6 +77,20 @@ lua_runtime:
       timeout_ms: 8000
       callers:
         - plugin_ui
+    - id: statistics-clear-preview
+      function: statistics_clear_preview
+      input_schema_file: schemas/statistics-clear-input.json
+      output_schema_file: schemas/statistics-clear-preview-output.json
+      timeout_ms: 8000
+      callers:
+        - plugin_ui
+    - id: statistics-clear-apply
+      function: statistics_clear_apply
+      input_schema_file: schemas/statistics-clear-apply-input.json
+      output_schema_file: schemas/statistics-clear-apply-output.json
+      timeout_ms: 12000
+      callers:
+        - plugin_ui
   hooks:
     - id: provider-request-started
       point: provider.request.started

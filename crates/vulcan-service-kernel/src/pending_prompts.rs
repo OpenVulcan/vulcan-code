@@ -196,12 +196,13 @@ pub(super) fn enqueue_webui_pending_prompt_from_submission(
     hidden_model_guidance: Option<String>,
     attachments: Vec<ConversationAttachment>,
     reasoning_effort: Option<&str>,
+    model_selection: Option<&crate::conversation_submission::SubmissionModelSelection>,
 ) -> Result<QueuedPendingPromptHookEvent, String> {
     let entry = build_webui_pending_prompt_panel_entry(
         prompt,
         hidden_model_guidance,
         attachments,
-        current_pending_prompt_model_reference(agent_runtime),
+        current_pending_prompt_model_reference(agent_runtime, model_selection)?,
         pending_prompt_runtime_options_from_submission(
             &agent_runtime.provider_configuration,
             reasoning_effort,
@@ -284,30 +285,60 @@ fn enqueue_webui_pending_prompt_panel_entry(
     })
 }
 
-/// Captures the active provider/model identity for one queued WebUI prompt.
-/// 为单条 WebUI 排队提示词捕获当前激活的供应商与模型身份。
+/// Captures the exact selected or currently active public model identity for one queued prompt.
+/// 为排队提示词捕获精确选定的或当前激活的公共模型身份。
+///
+/// # Parameters
+/// 参数
+/// `agent_runtime` resolves the authoritative public model and credential catalog.
+/// `agent_runtime` 解析权威公共模型与凭据目录。
+/// `model_selection` is the optional composer selection that must take precedence over the active session selection.
+/// `model_selection` 是可选的输入区选择，必须优先于当前会话选择。
+///
+/// # Returns
+/// 返回值
+/// Returns a queue model reference when the active public selection is available, or an explicit selection error.
+/// 当前公共选择可用时返回队列模型引用，显式选择无效时返回明确错误。
 fn current_pending_prompt_model_reference(
     agent_runtime: &AgentRuntimeBridge,
-) -> Option<PendingPromptModelReference> {
-    let configuration = agent_runtime
-        .public_ai_runtime
-        .configuration_snapshot()
-        .ok()?;
-    let selection = agent_runtime
-        .public_ai_runtime
-        .resolve_active_selection(&configuration)
-        .ok()?;
+    model_selection: Option<&crate::conversation_submission::SubmissionModelSelection>,
+) -> Result<Option<PendingPromptModelReference>, String> {
+    let configuration = agent_runtime.public_ai_runtime.configuration_snapshot()?;
+    let selection = match model_selection {
+        Some(model_selection) => agent_runtime
+            .public_ai_runtime
+            .resolve_connection_model_selection(
+                &configuration,
+                model_selection.connection_id.as_str(),
+                model_selection.provider_id.as_str(),
+                model_selection.model_id.as_str(),
+            )?,
+        None => match agent_runtime
+            .public_ai_runtime
+            .resolve_active_selection(&configuration)
+        {
+            Ok(selection) => selection,
+            Err(_) => return Ok(None),
+        },
+    };
     let providers = agent_runtime
         .public_ai_runtime
-        .effective_providers(&configuration)
-        .ok()?;
-    let provider = providers.provider(selection.route.provider.id.as_str())?;
-    Some(PendingPromptModelReference {
+        .effective_providers(&configuration)?;
+    let provider = providers
+        .provider(selection.route.provider.id.as_str())
+        .ok_or_else(|| {
+            format!(
+                "Provider `{}` is unavailable while preserving a queued prompt.",
+                selection.route.provider.id
+            )
+        })?;
+    Ok(Some(PendingPromptModelReference {
+        connection_id: selection.route.connection.id,
         provider_id: selection.route.provider.id,
         model_id: selection.model.id,
         provider_label: provider.display_name.clone(),
         model_name: selection.model.display_name,
-    })
+    }))
 }
 
 /// Captures runtime controls for one queued WebUI prompt from the shared service router input.
@@ -342,6 +373,10 @@ pub(super) fn agent_runtime_for_pending_prompt(
         .model_reference
         .as_ref()
         .map(|reference| reference.model_id.clone());
+    next_runtime.connection_id_override =
+        prompt_entry.model_reference.as_ref().and_then(|reference| {
+            (!reference.connection_id.is_empty()).then(|| reference.connection_id.clone())
+        });
     next_runtime
 }
 
@@ -480,6 +515,59 @@ pub(super) fn take_next_webui_pending_prompt(
     )?;
     runtime_state.updated_at = current_unix_millis_text();
     Some(entry)
+}
+
+/// Restores a claimed pending prompt at the front of its dispatch queue after preparation fails or is cancelled.
+/// 在准备失败或取消后，将已领取的待发送提示词恢复到分发队列最前端。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` owns the detached queue snapshot being restored.
+/// `workspace_snapshot` 持有正在恢复的分离队列快照。
+/// `session_id` identifies the exact session queue that owns the prompt.
+/// `session_id` 标识拥有该提示词的精确会话队列。
+/// `entry` is the prompt removed for the current dispatch attempt.
+/// `entry` 是本次分发尝试中已取出的提示词。
+///
+/// # Returns
+/// 返回值
+/// Returns `Ok(())` after front insertion, or an explicit queue-state error.
+/// 成功插入队列前端后返回 `Ok(())`，否则返回明确的队列状态错误。
+pub(super) fn restore_webui_pending_prompt(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    entry: PendingSessionPromptEntry,
+) -> Result<(), String> {
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&session_id)
+        .ok_or_else(|| {
+            format!("Conversation `{session_id}` has no pending prompt runtime state.")
+        })?;
+    // A visible panel entry must return to Ready instead of being duplicated in the internal queue.
+    // 可见面板条目必须恢复为 Ready，不能同时复制回内部队列。
+    let restored_visible_panel = match entry.panel_entry_id.as_deref() {
+        Some(panel_entry_id) => {
+            if let Some(panel_entry) = runtime_state
+                .ui_state
+                .pending_prompt_panel_queue
+                .iter_mut()
+                .find(|panel_entry| panel_entry.id == panel_entry_id)
+            {
+                panel_entry.state = PendingPromptPanelEntryState::Ready;
+                true
+            } else {
+                false
+            }
+        }
+        None => false,
+    };
+    if !restored_visible_panel {
+        enqueue_pending_prompt_internal_queue_entry(&mut runtime_state.ui_state, entry, true)
+            .map_err(|error| format!("failed to restore pending prompt: {error:?}"))?;
+    }
+    runtime_state.updated_at = current_unix_millis_text();
+    Ok(())
 }
 
 /// Removes one visible panel row after a guided pending prompt has entered runtime dispatch.

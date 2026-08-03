@@ -134,6 +134,7 @@ mod tests {
     fn webui_workspace_diff_selection_uses_loaded_defaults() {
         let selection = webui_workspace_diff_selection(
             WebuiWorkspaceDiffRequest {
+                repository_key: None,
                 mode: WebuiWorkspaceDiffMode::Commit,
                 base_branch: Some(String::from(" ")),
                 compare_branch: None,
@@ -173,6 +174,7 @@ mod tests {
         // 解析一个携带未出现在未推送来源列表中的哈希请求。
         let selection = webui_workspace_diff_selection(
             WebuiWorkspaceDiffRequest {
+                repository_key: None,
                 mode: WebuiWorkspaceDiffMode::Commit,
                 base_branch: None,
                 compare_branch: None,

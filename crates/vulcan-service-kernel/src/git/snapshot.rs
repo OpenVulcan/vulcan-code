@@ -15,6 +15,7 @@ use super::diff_text::{
 use super::model::{
     WebuiWorkspaceDiffRequest, WebuiWorkspaceDiffSnapshot, default_webui_workspace_diff_request,
 };
+use super::repository::resolve_webui_repository_root_for_request;
 use super::selection::webui_workspace_diff_selection;
 use crate::normalized_workspace_path_text_from_path;
 
@@ -24,8 +25,14 @@ pub(crate) fn load_webui_workspace_diff_snapshot(
     workspace_path: &str,
     request: Option<WebuiWorkspaceDiffRequest>,
 ) -> Result<WebuiWorkspaceDiffSnapshot, String> {
+    let request = request.unwrap_or_else(default_webui_workspace_diff_request);
     let resolution = resolve_webui_workspace_git_resolution(workspace_path)?;
-    let Some(repository_root) = resolution.repository_root else {
+    let repository_root = resolve_webui_repository_root_for_request(
+        &resolution.workspace_path,
+        request.repository_key.as_deref(),
+        resolution.repository_root,
+    )?;
+    let Some(repository_root) = repository_root else {
         return Ok(empty_webui_diff_snapshot(
             normalized_workspace_path_text_from_path(&resolution.workspace_path),
             String::from("当前工作区不是 Git 仓库，无法生成代码审查 diff。"),
@@ -34,7 +41,6 @@ pub(crate) fn load_webui_workspace_diff_snapshot(
 
     // Normalize the optional request before combining it with Git selector sources.
     // 先标准化可选请求，再与 Git 选择器来源组合。
-    let request = request.unwrap_or_else(default_webui_workspace_diff_request);
     let current_branch = load_webui_current_git_branch(&repository_root)?;
     let current_branch_unpushed_commits =
         load_webui_current_branch_unpushed_commit_count(&repository_root)?;

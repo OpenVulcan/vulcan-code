@@ -1,5 +1,5 @@
 import React from "react";
-import { Maximize2, Minimize2, Square, TerminalSquare } from "lucide-react";
+import { Maximize2, Square, TerminalSquare } from "lucide-react";
 import {
   terminalStateClass,
   type TerminalVisualState,
@@ -36,12 +36,6 @@ export function ConversationSessionTerminalSection(props: {
   // Original summaries keyed by session id for owner metadata.
   // 按会话标识索引的原始摘要，用于归属元数据。
   summariesById: Map<string, CommandSessionSummary>;
-  // Whether this section owns the panel collapse action.
-  // 当前区域是否拥有面板折叠动作。
-  showCollapse: boolean;
-  // Collapses the expanded session tool panel.
-  // 折叠当前展开的会话工具面板。
-  onCollapse: () => void;
   // Force-stops one live terminal session.
   // 强制停止单条实时终端会话。
   onStopCommandSession: (commandSessionId: string, ownerSessionId?: string | null) => Promise<void>;
@@ -51,22 +45,11 @@ export function ConversationSessionTerminalSection(props: {
   const { t } = useI18n();
   return (
     <section className="conversation-session-tool-section conversation-session-terminal-section">
-      <div className={cn("conversation-session-tool-section-title", props.showCollapse && "with-action")}>
+      <div className="conversation-session-tool-section-title">
         <span className="conversation-session-tool-section-title-main">
           <span>{t("sessionTools.terminal")}</span>
           <strong>{props.terminalSessions.length}</strong>
         </span>
-        {props.showCollapse ? (
-          <button
-            aria-label={t("sessionTools.collapse")}
-            className="workspace-tool-panel-menu-icon-button"
-            onClick={props.onCollapse}
-            title={t("sessionTools.collapse")}
-            type="button"
-          >
-            <Minimize2 size={13} />
-          </button>
-        ) : null}
       </div>
       <div className="workspace-tool-panel-menu-list conversation-session-terminal-list">
         {props.terminalSessions.map((session) => (

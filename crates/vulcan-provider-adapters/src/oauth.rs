@@ -1441,12 +1441,19 @@ fn kimi_device_model() -> String {
     format!("{operating_system} {}", std::env::consts::ARCH)
 }
 
-/// Accepts only the exact HTTPS Kimi authorization authority.
-/// 仅接受精确的 HTTPS Kimi 授权域。
+/// Accepts HTTPS URLs on the Kimi main domain or any of its subdomains.
+/// 接受 kimi.com 主域及其任意子域名上的 HTTPS URL。
 fn validate_kimi_verification_uri(value: &str) -> Result<String, String> {
     let url = Url::parse(value)
         .map_err(|_| String::from("Kimi Device Flow returned an invalid verification URL."))?;
-    if url.scheme() != "https" || url.host_str() != Some("auth.kimi.com") {
+    let is_kimi_domain = match url.host_str() {
+        Some(host) => {
+            let normalized_host = host.to_ascii_lowercase();
+            normalized_host == "kimi.com" || normalized_host.ends_with(".kimi.com")
+        }
+        None => false,
+    };
+    if url.scheme() != "https" || !is_kimi_domain {
         return Err(String::from(
             "Kimi Device Flow returned an untrusted verification URL.",
         ));
@@ -2528,11 +2535,20 @@ mod tests {
             } if device_id == "123e4567-e89b-42d3-a456-426614174000"
         ));
         assert!(
-            validate_kimi_verification_uri("https://auth.kimi.com/device")
+            validate_kimi_verification_uri("https://kimi.com/device")
                 .expect("Kimi authority")
-                .starts_with("https://auth.kimi.com/")
+                .starts_with("https://kimi.com/")
         );
-        assert!(validate_kimi_verification_uri("https://example.com/device").is_err());
+        assert!(validate_kimi_verification_uri("https://auth.kimi.com/device").is_ok());
+        assert!(
+            validate_kimi_verification_uri(
+                "https://a.b.kimi.com/device?next=https%3A%2F%2Fevil.example#fragment"
+            )
+            .is_ok()
+        );
+        assert!(validate_kimi_verification_uri("https://notkimi.com/device").is_err());
+        assert!(validate_kimi_verification_uri("https://kimi.com.evil.example/device").is_err());
+        assert!(validate_kimi_verification_uri("http://auth.kimi.com/device").is_err());
     }
 
     /// Verifies Kimi receives the provider-observed operating-system label.

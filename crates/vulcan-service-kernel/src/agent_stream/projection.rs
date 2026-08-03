@@ -240,6 +240,93 @@ pub(crate) fn seal_stream_content_kind(
     Ok(())
 }
 
+/// Correlates the first provider semantic delta with one accepted browser submission.
+/// 将首个 Provider 语义增量与一次已接纳浏览器提交关联。
+struct FirstSemanticSubmissionDiagnostic {
+    /// Stable browser-generated submission identifier.
+    /// 浏览器生成的稳定提交标识。
+    client_submission_id: String,
+    /// Exact new-or-existing submission target captured at acceptance.
+    /// 接纳时捕获的精确新建或已有提交目标。
+    target: String,
+    /// Milliseconds from service acceptance to the first semantic delta.
+    /// 从服务接纳到首个语义增量的毫秒数。
+    elapsed_ms: i128,
+}
+
+/// Marks and returns the first semantic observation for the latest accepted user record.
+/// 标记并返回最近一条已接纳用户记录的首个语义观察。
+///
+/// # Parameters
+/// 参数
+/// `workspace` owns the visible user-record projection.
+/// `workspace` 持有可见用户记录投影。
+/// `runtime_state` owns the canonical record receiving the provider delta.
+/// `runtime_state` 持有接收 Provider 增量的规范记录。
+/// `session_id` identifies the exact conversation.
+/// `session_id` 标识精确会话。
+///
+/// # Returns
+/// 返回值
+/// Returns correlation timing exactly once for the latest user record, or `None` when it is not a browser submission.
+/// 对最近用户记录仅返回一次关联计时；若其不是浏览器提交则返回 `None`。
+fn mark_first_semantic_submission_observed(
+    workspace: &mut WorkspaceSnapshot,
+    runtime_state: &mut SessionRuntimeStateEntry,
+    session_id: SessionId,
+) -> Option<FirstSemanticSubmissionDiagnostic> {
+    let latest_user_record = runtime_state
+        .conversation_state
+        .records
+        .iter_mut()
+        .rev()
+        .find(|record| record.kind == SessionMessageKind::User)?;
+    let metadata = latest_user_record.metadata.as_mut()?.as_object_mut()?;
+    if metadata
+        .get("client_submission_first_semantic_observed")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let client_submission_id = metadata.get("client_submission_id")?.as_str()?.to_string();
+    let target = metadata
+        .get("client_submission_target")?
+        .as_str()?
+        .to_string();
+    let accepted_at_ms = metadata
+        .get("client_submission_accepted_at_ms")?
+        .as_str()?
+        .parse::<i128>()
+        .ok()?;
+    let user_record_id = latest_user_record.id.clone();
+    metadata.insert(
+        String::from("client_submission_first_semantic_observed"),
+        serde_json::Value::Bool(true),
+    );
+    if let Some(visible_metadata) = workspace
+        .session_messages
+        .get_mut(&session_id)
+        .and_then(|messages| {
+            messages
+                .iter_mut()
+                .find(|message| message.id == user_record_id)
+        })
+        .and_then(|message| message.metadata.as_mut())
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        visible_metadata.insert(
+            String::from("client_submission_first_semantic_observed"),
+            serde_json::Value::Bool(true),
+        );
+    }
+    Some(FirstSemanticSubmissionDiagnostic {
+        client_submission_id,
+        target,
+        elapsed_ms: current_unix_millis_value().saturating_sub(accepted_at_ms),
+    })
+}
+
 /// Appends or extends one streaming transcript record.
 /// 追加或扩展单条流式转录记录。
 fn append_stream_delta_record(
@@ -256,7 +343,7 @@ fn append_stream_delta_record(
         return Ok(());
     }
     let conversation_id = session_id.to_string();
-    let event = {
+    let (event, first_semantic_diagnostic) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -273,7 +360,7 @@ fn append_stream_delta_record(
             SessionMessageRecordKind::ThinkingOutput => SessionRunPhase::Thinking,
             _ => SessionRunPhase::Requesting,
         };
-        let (projected_entry, is_new_message) = {
+        let (projected_entry, is_new_message, first_semantic_diagnostic) = {
             let mut runtime_state = workspace
                 .session_runtime_state
                 .get(&session_id)
@@ -305,13 +392,23 @@ fn append_stream_delta_record(
                 .iter()
                 .find(|record| record.id == message_id)
                 .map(session_message_entry_from_conversation_record);
+            let is_new_message = previous_record_id.as_deref() != record_id_draft.as_deref();
+            let first_semantic_diagnostic = if is_new_message
+                && matches!(
+                    record_kind,
+                    SessionMessageRecordKind::ThinkingOutput
+                        | SessionMessageRecordKind::AssistantOutput
+                ) {
+                mark_first_semantic_submission_observed(workspace, &mut runtime_state, session_id)
+            } else {
+                None
+            };
             runtime_state.updated_at = now.clone();
             workspace
                 .session_runtime_state
                 .insert(session_id, runtime_state);
-            let is_new_message = previous_record_id.as_deref() != record_id_draft.as_deref();
             *record_id_slot = record_id_draft;
-            (projected_entry, is_new_message)
+            (projected_entry, is_new_message, first_semantic_diagnostic)
         };
         workspace.session_run_phases.insert(session_id, run_phase);
         sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
@@ -345,19 +442,33 @@ fn append_stream_delta_record(
                 break;
             }
         }
-        WorkbenchDeltaEnvelope {
-            generation,
-            delta: WorkbenchDelta::AppendMessageBody(AppendMessageBodyDelta {
-                conversation_id,
-                message_id: projected_entry.id,
-                body_delta: delta.to_string(),
-                current_body: None,
-                initial_message,
-                run_phase: Some(run_phase.to_string()),
-                stream_state: Some(ConversationMessageStreamState::Active),
-            }),
-        }
+        (
+            WorkbenchDeltaEnvelope {
+                generation,
+                delta: WorkbenchDelta::AppendMessageBody(AppendMessageBodyDelta {
+                    conversation_id,
+                    message_id: projected_entry.id,
+                    body_delta: delta.to_string(),
+                    current_body: None,
+                    initial_message,
+                    run_phase: Some(run_phase.to_string()),
+                    stream_state: Some(ConversationMessageStreamState::Active),
+                }),
+            },
+            first_semantic_diagnostic,
+        )
     };
+    if let Some(diagnostic) = first_semantic_diagnostic
+        && let Err(error) = retain_slow_submission_diagnostic(
+            state,
+            &diagnostic.client_submission_id,
+            &diagnostic.target,
+            "ack_to_first_semantic",
+            diagnostic.elapsed_ms,
+        )
+    {
+        eprintln!("[webui-service] failed to retain first-semantic diagnostic: {error}");
+    }
     emit_service_event_with_trace(
         app,
         "workbench_delta_emit",
@@ -2248,6 +2359,80 @@ mod tests {
             attachments: Vec::new(),
             editable_user_prompt: false,
         }
+    }
+
+    /// Verifies first-semantic correlation is emitted once and mirrored to the visible user record.
+    /// 验证首个语义输出关联只产生一次，并镜像到可见用户记录。
+    #[test]
+    fn first_semantic_submission_correlation_is_consumed_once() {
+        // session_id and user_record_id identify the exact canonical-visible record pair.
+        // session_id 与 user_record_id 标识精确的规范与可见记录对。
+        let session_id = SessionId::new_v4();
+        let user_record_id = "user-1";
+        let accepted_at_ms = current_unix_millis_value().saturating_sub(250);
+        let metadata = serde_json::json!({
+            "client_submission_id": "submission-1",
+            "client_submission_target": "new",
+            "client_submission_accepted_at_ms": accepted_at_ms.to_string(),
+        });
+        let mut visible_user_record =
+            SessionMessageEntry::new(SessionMessageKind::User, "", "hello")
+                .with_runtime_metadata(user_record_id, accepted_at_ms.to_string());
+        visible_user_record.metadata = Some(metadata.clone());
+        let mut workspace = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::from([(session_id, vec![visible_user_record])]),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        };
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        runtime_state
+            .conversation_state
+            .records
+            .push(vulcan_context::SessionConversationRecord {
+                id: user_record_id.to_string(),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::new(),
+                body: String::from("hello"),
+                metadata: Some(metadata),
+                created_at: accepted_at_ms.to_string(),
+            });
+
+        let diagnostic =
+            mark_first_semantic_submission_observed(&mut workspace, &mut runtime_state, session_id)
+                .expect("first semantic observation should expose timing correlation");
+        assert_eq!(diagnostic.client_submission_id, "submission-1");
+        assert_eq!(diagnostic.target, "new");
+        assert!(diagnostic.elapsed_ms >= 250);
+        assert!(
+            mark_first_semantic_submission_observed(
+                &mut workspace,
+                &mut runtime_state,
+                session_id,
+            )
+            .is_none()
+        );
+        assert_eq!(
+            workspace.session_messages[&session_id][0]
+                .metadata
+                .as_ref()
+                .and_then(serde_json::Value::as_object)
+                .and_then(|value| value.get("client_submission_first_semantic_observed"))
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
     }
 
     /// Verifies a new tool projection remains after already visible thinking and assistant stream rows.

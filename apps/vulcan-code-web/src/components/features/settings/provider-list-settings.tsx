@@ -1048,8 +1048,8 @@ function PublicAiConnectionDialog(props: {
     }
   }, [pendingAuthorization, props.onSaved])
 
-  // save validates the visible form and delegates secrets to the operating-system store.
-  // save 校验可见表单并把秘密委托给操作系统凭据库。
+  // save validates the visible form and delegates secrets to the host-owned credential store.
+  // save 校验可见表单并把秘密委托给宿主持有的凭据仓库。
   const save = React.useCallback(async () => {
     const requiresToken = credentialMode === "token"
       && (

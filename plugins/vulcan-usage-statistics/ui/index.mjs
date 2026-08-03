@@ -375,6 +375,16 @@ export function createPluginPanel(sdk) {
     // summaryExpanded controls whether KPI cards beyond the default two rows are visible.
     // summaryExpanded 控制默认两行以外的 KPI 卡片是否可见。
     const [summaryExpanded, setSummaryExpanded] = React.useState(false);
+    // clearFromDate and clearToDate define the optional inclusive local-date cleanup range.
+    // clearFromDate 与 clearToDate 定义可选的本地自然日闭区间清理范围。
+    const [clearFromDate, setClearFromDate] = React.useState("");
+    const [clearToDate, setClearToDate] = React.useState("");
+    // clearPreview stores the server-validated deletion preview and its revision fence.
+    // clearPreview 保存服务端校验的删除预览及其修订号围栏。
+    const [clearPreview, setClearPreview] = React.useState(null);
+    // clearBusy prevents overlapping preview and destructive cleanup actions.
+    // clearBusy 防止预览与破坏性清理 Action 重叠执行。
+    const [clearBusy, setClearBusy] = React.useState(false);
     // revisionRef lets event callbacks compare against the latest rendered revision.
     // revisionRef 使事件回调可以比较最近渲染的修订号。
     const revisionRef = React.useRef(0);
@@ -526,6 +536,58 @@ export function createPluginPanel(sdk) {
       }
     }
 
+    // cleanupArguments projects only the selected model and complete date range into the action contract.
+    // cleanupArguments 仅把已选模型和完整日期范围投影到清理 Action 契约。
+    function cleanupArguments() {
+      const argumentsValue = {};
+      if (modelRef !== null) argumentsValue.modelRef = modelRef;
+      if (clearFromDate !== "") argumentsValue.fromDate = clearFromDate;
+      if (clearToDate !== "") argumentsValue.toDate = clearToDate;
+      return argumentsValue;
+    }
+
+    // previewCleanup requests a read-only server preview before any deletion can be submitted.
+    // previewCleanup 在提交任何删除前请求只读服务端预览。
+    async function previewCleanup() {
+      setClearBusy(true);
+      setError("");
+      try {
+        const preview = await sdk.invoke("statistics-clear-preview", cleanupArguments());
+        setClearPreview(preview);
+      } catch (reason) {
+        const message = reason instanceof Error ? reason.message : String(reason);
+        setClearPreview(null);
+        setError(message);
+        sdk.notifications.error(message);
+      } finally {
+        setClearBusy(false);
+      }
+    }
+
+    // applyCleanup submits the exact preview revision and refreshes every visible projection after success.
+    // applyCleanup 提交精确预览修订号，并在成功后刷新全部可见统计投影。
+    async function applyCleanup() {
+      if (clearPreview === null) return;
+      setClearBusy(true);
+      setError("");
+      try {
+        const result = await sdk.invoke("statistics-clear-apply", {
+          ...cleanupArguments(),
+          expectedRevision: numeric(clearPreview.revision),
+        });
+        setClearPreview(null);
+        dashboardCache.clear();
+        sdk.notifications.success(interpolate(text("clear.success", "Cleared {{count}} requests"), { count: formatCompact(result.deletedRequests) }));
+        await loadDashboard(true);
+      } catch (reason) {
+        const message = reason instanceof Error ? reason.message : String(reason);
+        setError(message);
+        sdk.notifications.error(message);
+      } finally {
+        setClearBusy(false);
+      }
+    }
+
     // toggleSeries changes only local chart visibility and never reloads statistics.
     // toggleSeries 仅改变本地图表可见性，绝不重新加载统计。
     function toggleSeries(id) {
@@ -556,11 +618,20 @@ export function createPluginPanel(sdk) {
     // metricFormatter selects the exact compact formatter for the active metric.
     // metricFormatter 为活动指标选择精确紧凑格式化器。
     const metricFormatter = metric === "duration_ms" || metric === "time_to_first_token_ms" ? formatDuration : formatCompact;
-    // summaryCards contains all sixteen user-visible KPIs in semantic reading order.
-    // summaryCards 按语义阅读顺序包含全部十六张用户可见 KPI 卡片。
+    // selectedModel describes the exact model identity used by the cleanup scope label.
+    // selectedModel 描述清理范围标签使用的精确模型身份。
+    const selectedModel = (dashboard?.availableModels ?? []).find((model) => numeric(model.modelRef) === modelRef);
+    // clearScopeReady prevents sending a broad empty cleanup request from the UI.
+    // clearScopeReady 防止界面提交空范围的宽泛清理请求。
+    // clearDateRangeReady also prevents submitting only one endpoint of an inclusive date range.
+    // clearDateRangeReady 同时防止只提交闭区间日期的一端。
+    const clearDateRangeReady = (clearFromDate === "" && clearToDate === "") || (clearFromDate !== "" && clearToDate !== "");
+    const clearScopeReady = clearDateRangeReady && (modelRef !== null || (clearFromDate !== "" && clearToDate !== ""));
+    // summaryCards contains all eighteen user-visible KPIs in semantic reading order.
+    // summaryCards 按语义阅读顺序包含全部十八张用户可见 KPI 卡片。
     const summaryCards = [
       h(MetricCard, { key: "tokens", icon: "tokens", label: text("summary.tokens", "Token usage"), value: formatCompact(summary.totalTokens) }),
-      h(MetricCard, { key: "input-tokens", icon: "tokens", label: text("summary.inputTokens", "Input tokens"), value: formatCompact(summary.inputTokens) }),
+      h(MetricCard, { key: "input-tokens", icon: "tokens", label: text("summary.inputTokens", "Uncached input tokens"), value: formatCompact(summary.inputTokens) }),
       h(MetricCard, { key: "output-tokens", icon: "tokens", label: text("summary.outputTokens", "Output tokens"), value: formatCompact(summary.outputTokens) }),
       h(MetricCard, { key: "requests", icon: "requests", label: text("summary.requests", "Requests"), value: formatCompact(summary.requests), detail: interpolate(text("summary.retries", "{{count}} retries"), { count: formatCompact(summary.retries) }) }),
       h(MetricCard, { key: "success-rate", icon: "success", label: text("summary.successRate", "Success rate"), value: formatPercent(summary.successRate), detail: `${formatCompact(summary.failures)} ${text("status.failed", "failed")} · ${formatCompact(summary.cancelled)} ${text("status.cancelled", "cancelled")}` }),
@@ -570,6 +641,8 @@ export function createPluginPanel(sdk) {
       h(MetricCard, { key: "streak", icon: "calendar", label: text("summary.streak", "Current streak"), value: `${sdk.formatNumber(numeric(summary.currentStreakDays))} ${text("unit.days", "days")}`, detail: interpolate(text("summary.longestStreak", "Longest streak {{days}} days"), { days: sdk.formatNumber(numeric(summary.longestStreakDays)) }) }),
       h(MetricCard, { key: "top-model", icon: "model", label: text("summary.topModel", "Most used model"), value: dashboard?.models?.[0]?.modelName ?? "—", detail: dashboard?.models?.[0] ? `${formatPercent(dashboard.models[0].sharePercent)} · ${dashboard.models[0].providerName}` : "" }),
       h(MetricCard, { key: "cached-tokens", icon: "tokens", label: text("summary.cachedTokens", "Cached input tokens"), value: formatCompact(summary.cachedInputTokens), detail: `${formatPercent(summary.cacheHitRate)} ${text("summary.cacheRate", "cache hit rate")}` }),
+      h(MetricCard, { key: "unknown-tokens", icon: "requests", label: text("summary.unknownTokens", "Unknown token requests"), value: formatCompact(summary.unknownTokenRequests) }),
+      h(MetricCard, { key: "inconsistent-tokens", icon: "requests", label: text("summary.inconsistentTokens", "Inconsistent token requests"), value: formatCompact(summary.inconsistentTokenRequests) }),
       h(MetricCard, { key: "peak-tokens", icon: "activity", label: text("summary.peakTokens", "Peak daily tokens"), value: formatCompact(summary.peakDailyTokens), detail: interpolate(text("summary.peakRequest", "{{count}} per request"), { count: formatCompact(summary.peakRequestTokens) }) }),
       h(MetricCard, { key: "longest-request", icon: "duration", label: text("summary.longestRequest", "Longest request"), value: formatDuration(summary.longestRequestMs) }),
       h(MetricCard, { key: "main-agent", icon: "agent", label: text("summary.mainAgentTokens", "Main agent tokens"), value: formatCompact(summary.mainAgentTokens) }),
@@ -674,6 +747,7 @@ export function createPluginPanel(sdk) {
               // nextModelRef 保留用户选择的精确持久模型身份。
               const nextModelRef = value === "all" ? null : Number(value);
               setModelRef(nextModelRef);
+              setClearPreview(null);
               // A newly focused model must not inherit a hidden line from a previous chart view.
               // 新聚焦的模型不得继承上一图表视图中的隐藏折线状态。
               setHiddenSeries(new Set());
@@ -701,6 +775,57 @@ export function createPluginPanel(sdk) {
             }, text(`range.${days}`, days === 0 ? "All time" : `Last ${days} days`))),
           ),
         ),
+      ),
+      h("article", { className: "plugin-statistics-card plugin-statistics-cleanup-card" },
+        h("div", { className: "plugin-statistics-section-header" }, h("strong", null, text("clear.title", "Clear statistics")), h(Badge, { variant: "outline" }, text("clear.previewOnly", "Preview first"))),
+        h("p", { className: "plugin-statistics-privacy" }, text("clear.description", "Use the selected model and an optional inclusive local date range. Clearing cannot be undone.")),
+        h("div", { className: "plugin-statistics-toolbar" },
+          h("label", { className: "plugin-statistics-clear-date" },
+            h("span", null, text("clear.from", "From date")),
+            h("input", {
+              "aria-label": text("clear.from", "From date"),
+              type: "date",
+              value: clearFromDate,
+              onChange: (event) => {
+                setClearFromDate(event.currentTarget.value);
+                setClearPreview(null);
+              },
+            }),
+          ),
+          h("label", { className: "plugin-statistics-clear-date" },
+            h("span", null, text("clear.to", "To date")),
+            h("input", {
+              "aria-label": text("clear.to", "To date"),
+              type: "date",
+              value: clearToDate,
+              onChange: (event) => {
+                setClearToDate(event.currentTarget.value);
+                setClearPreview(null);
+              },
+            }),
+          ),
+          h("span", { className: "plugin-statistics-privacy" }, selectedModel ? `${selectedModel.providerName} / ${selectedModel.modelName}` : text("clear.allModels", "All models")),
+          h(Button, {
+            disabled: clearBusy || !clearScopeReady,
+            onClick: () => void previewCleanup(),
+            size: "sm",
+            type: "button",
+            variant: "outline",
+          }, clearBusy ? text("clear.previewing", "Preparing preview") : text("clear.preview", "Preview cleanup")),
+        ),
+        clearPreview ? h("div", { className: "plugin-statistics-privacy", "aria-live": "polite" },
+          interpolate(text("clear.previewSummary", "Preview: {{requests}} requests · {{tokens}} tokens"), {
+            requests: formatCompact(clearPreview.summary.requests),
+            tokens: formatCompact(clearPreview.summary.totalTokens),
+          }),
+          h(Button, {
+            disabled: clearBusy || clearPreview.revision !== revisionRef.current || numeric(clearPreview.summary.requests) === 0,
+            onClick: () => void applyCleanup(),
+            size: "sm",
+            type: "button",
+            variant: "destructive",
+          }, clearBusy ? text("clear.applying", "Clearing") : text("clear.apply", "Confirm cleanup")),
+        ) : null,
       ),
       error ? h(ErrorState, { title: text("status.error", "Statistics failed to load"), description: error }) : null,
       h("div", { className: "plugin-statistics-summary-section" },

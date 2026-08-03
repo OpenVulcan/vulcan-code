@@ -343,7 +343,7 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         .process_ready;
     request.provider_id_override = agent_runtime.provider_id_override.clone();
     request.model_id_override = agent_runtime.model_id_override.clone();
-    request.connection_id_override = None;
+    request.connection_id_override = agent_runtime.connection_id_override.clone();
     if request.provider_id_override.is_none() && request.model_id_override.is_none() {
         // session_model identifies the persisted provider, credential connection, and model.
         // session_model 标识持久化的 Provider、凭据连接与模型。

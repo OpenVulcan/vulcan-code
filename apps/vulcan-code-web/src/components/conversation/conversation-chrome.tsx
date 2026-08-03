@@ -3,6 +3,25 @@ import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ConversationHydrationProgress } from "@/types";
 
+// ConversationSubmissionStatus renders one bounded, non-blocking first-submit preparation stage.
+// ConversationSubmissionStatus 渲染首条提交的有界非阻塞准备阶段。
+export function ConversationSubmissionStatus(props: {
+  // Current optimistic submission stage.
+  // 当前乐观提交阶段。
+  stage: "creating" | "preparing";
+}) {
+  const { t } = useI18n();
+  const label = props.stage === "creating"
+    ? t("conversation.submission.creating")
+    : t("conversation.submission.preparing");
+  return (
+    <div className="conversation-submission-status" aria-live="polite" aria-busy="true">
+      <span className="conversation-submission-status-dot" aria-hidden="true" />
+      <span>{label}</span>
+    </div>
+  );
+}
+
 // ConversationLoadingCenter renders the cache-miss conversation hydration placeholder.
 // ConversationLoadingCenter 渲染无缓存会话水合时的居中占位提示。
 export function ConversationLoadingCenter(props: {

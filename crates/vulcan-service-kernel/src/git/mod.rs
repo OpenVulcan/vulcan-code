@@ -9,6 +9,7 @@ mod detail;
 mod diff;
 mod diff_text;
 mod model;
+mod repository;
 mod search;
 mod selection;
 mod settings;
@@ -27,10 +28,15 @@ pub(super) use diff_text::{
 };
 #[cfg(test)]
 pub(super) use model::WebuiWorkspaceDiffMode;
+pub(super) use model::{WebuiGitRepositoryCatalog, WebuiGitRepositoryMonitoringRequest};
 pub(super) use model::{
     WebuiWorkspaceDiffFileDetail, WebuiWorkspaceDiffFileDetailRequest, WebuiWorkspaceDiffRequest,
     WebuiWorkspaceDiffSearchRequest, WebuiWorkspaceDiffSearchResponse, WebuiWorkspaceDiffSnapshot,
     WebuiWorkspaceGitFileActionRequest, WebuiWorkspaceGitFileActionResult,
+};
+pub(super) use repository::{
+    discover_webui_git_repository_catalog,
+    resolve_webui_repository_root_from_workspace_text_with_key,
 };
 pub(super) use search::load_webui_workspace_diff_search;
 pub(super) use settings::{git_commit_settings, service_save_git_commit_settings};

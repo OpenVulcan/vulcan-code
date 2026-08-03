@@ -316,6 +316,29 @@ fn write_protected_file_atomically(path: &Path, contents: &[u8]) -> Result<(), S
 /// 返回值
 /// Success after inherited Windows access entries are removed and the protected allow-list is applied.
 /// 删除继承的 Windows 访问项并应用受保护允许列表后返回成功。
+/// Windows creation flag that prevents a console window for a child process.
+/// 防止子进程创建控制台窗口的 Windows 创建标志。
+#[cfg(all(windows, not(debug_assertions)))]
+const WINDOWS_CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Apply the Release-only no-console flag to a Windows service-host child process.
+/// 为 Windows 服务宿主子进程应用仅 Release 生效的无控制台标志。
+#[cfg(windows)]
+fn apply_release_no_window_to_command(command: &mut std::process::Command) {
+    #[cfg(not(debug_assertions))]
+    {
+        use std::os::windows::process::CommandExt;
+
+        command.creation_flags(WINDOWS_CREATE_NO_WINDOW);
+    }
+    #[cfg(debug_assertions)]
+    {
+        let _ = command;
+    }
+}
+
+/// Harden one Windows discovery staging file before publishing it.
+/// 在发布前保护一个 Windows 发现文件暂存副本。
 #[cfg(windows)]
 fn harden_protected_file_permissions(path: &Path) -> Result<(), String> {
     let system_root = std::env::var_os("SystemRoot")
@@ -326,22 +349,23 @@ fn harden_protected_file_permissions(path: &Path) -> Result<(), String> {
     let icacls = PathBuf::from(system_root)
         .join("System32")
         .join("icacls.exe");
-    let output = std::process::Command::new(icacls.as_path())
-        .arg(path)
-        .args([
-            "/inheritance:r",
-            "/grant:r",
-            "*S-1-3-4:(F)",
-            "*S-1-5-18:(F)",
-            "*S-1-5-32-544:(F)",
-        ])
-        .output()
-        .map_err(|error| {
-            format!(
-                "failed to launch Windows ACL protection for {}: {error}",
-                path.display()
-            )
-        })?;
+    // command owns the ACL subprocess whose console must stay hidden in Release.
+    // command 持有 Release 下必须保持隐藏控制台的 ACL 子进程。
+    let mut command = std::process::Command::new(icacls.as_path());
+    command.arg(path).args([
+        "/inheritance:r",
+        "/grant:r",
+        "*S-1-3-4:(F)",
+        "*S-1-5-18:(F)",
+        "*S-1-5-32-544:(F)",
+    ]);
+    apply_release_no_window_to_command(&mut command);
+    let output = command.output().map_err(|error| {
+        format!(
+            "failed to launch Windows ACL protection for {}: {error}",
+            path.display()
+        )
+    })?;
     if output.status.success() {
         return Ok(());
     }

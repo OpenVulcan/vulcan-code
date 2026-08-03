@@ -6,6 +6,7 @@ import {
 import { UserPromptEditDialog } from "@/components/conversation/chat-area/user-prompt-edit-dialog";
 import {
   ConversationLoadingCenter,
+  ConversationSubmissionStatus,
   EmptyConversationPrompt,
 } from "@/components/conversation/conversation-chrome";
 import { ConversationWorkspace } from "@/components/conversation/conversation-workspace";
@@ -45,6 +46,7 @@ import { toast } from "sonner";
 import type {
   ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
+  ConversationMessage,
 } from "@/types";
 import type { ChatAreaProps } from "@/components/conversation/chat-area/types";
 import { useChatAreaPlanActions } from "@/components/conversation/chat-area/plan-actions";
@@ -55,6 +57,7 @@ import {
 } from "@/components/conversation/chat-area/visual-state";
 import { useConversationSurfaceLayoutMemory } from "@/components/conversation/chat-area/surface-layout-memory";
 import { useConversationViewportFrameScheduler } from "@/components/conversation/chat-area/viewport-frame-scheduler";
+import { hasAuthoritativeSubmissionCorrelation } from "@/components/workspace/draft-submission-state";
 
 // CONVERSATION_UPWARD_SCROLL_TAIL_SUPPRESS_MS prevents near-bottom auto-follow from fighting slow upward scrolling.
 // CONVERSATION_UPWARD_SCROLL_TAIL_SUPPRESS_MS 防止近底部自动跟随抢夺慢速向上滚动。
@@ -185,9 +188,41 @@ export function ChatArea(props: ChatAreaProps) {
   // scrollRestoreGuardRef 防止恢复过程中的临时测量覆盖贴底记忆。
   const scrollRestoreGuardRef = React.useRef<{ surfaceId: string; wasAtBottom: boolean } | null>(null);
   const surfaceConversation = selectedConversation;
-  const messages = React.useMemo(
-    () => props.workbench.messages.filter((message) => message.conversationId === activeSurfaceConversationId),
-    [activeSurfaceConversationId, props.workbench.messages],
+  const messages = React.useMemo(() => {
+    const authoritativeMessages = props.workbench.messages
+      .filter((message) => message.conversationId === activeSurfaceConversationId);
+    const pendingSubmission = props.selectedDraftConversation?.pendingSubmission;
+    if (!pendingSubmission || props.selectedDraftConversation?.id !== activeSurfaceConversationId) {
+      return authoritativeMessages;
+    }
+    if (hasAuthoritativeSubmissionCorrelation(authoritativeMessages, pendingSubmission.clientSubmissionId)) {
+      return authoritativeMessages;
+    }
+    // optimisticMessage uses the draft id as its temporary conversation scope until the ACK supplies the durable id.
+    // optimisticMessage 在确认返回持久化标识前使用草稿标识作为临时会话作用域。
+    const optimisticMessage: ConversationMessage = {
+      id: `optimistic:${pendingSubmission.clientSubmissionId}`,
+      conversationId: props.selectedDraftConversation.id,
+      createdAt: String(pendingSubmission.startedAt),
+      role: "user",
+      body: pendingSubmission.prompt,
+      attachments: pendingSubmission.attachments,
+      editableUserPrompt: false,
+      metadata: {
+        client_submission_id: pendingSubmission.clientSubmissionId,
+        optimistic: true,
+      },
+    };
+    return [...authoritativeMessages, optimisticMessage];
+  }, [activeSurfaceConversationId, props.selectedDraftConversation, props.workbench.messages]);
+  // pendingSubmissionVisible remains true only until the exact authoritative user record replaces the optimistic row.
+  // pendingSubmissionVisible 仅在精确权威用户记录替代乐观行之前保持为真。
+  const pendingSubmissionVisible = Boolean(
+    props.selectedDraftConversation?.pendingSubmission
+    && !hasAuthoritativeSubmissionCorrelation(
+      props.workbench.messages.filter((message) => message.conversationId === activeSurfaceConversationId),
+      props.selectedDraftConversation.pendingSubmission.clientSubmissionId,
+    ),
   );
   // visibleCommandSessions limits transcript tool cards to this conversation surface's runtime resources.
   // visibleCommandSessions 将转录工具卡片限定到当前会话界面的运行时资源。
@@ -217,7 +252,7 @@ export function ChatArea(props: ChatAreaProps) {
   const selectedProject = selectedConversation ? projectForConversation(props.workbench, selectedConversation) : null;
   const emptyProjectName = props.selectedDraftConversation?.projectName ?? selectedProject?.name ?? t("conversation.unlinkedProject");
   const isEmptyConversation = Boolean(
-    props.selectedDraftConversation
+    (props.selectedDraftConversation && !props.selectedDraftConversation.pendingSubmission)
       || (selectedConversation && !showConversationLoadingOnly && !props.conversationLoadError && messages.length === 0),
   );
   // isMaterializingConversationSurface identifies the brief draft-to-summary frame that must remain visually blank.
@@ -884,6 +919,9 @@ export function ChatArea(props: ChatAreaProps) {
         resolveComposerAttachmentMedia={composerAttachmentMedia}
         onTrace={props.onTrace}
       />
+      {props.selectedDraftConversation?.pendingSubmission && pendingSubmissionVisible ? (
+        <ConversationSubmissionStatus stage={props.selectedDraftConversation.pendingSubmission.stage} />
+      ) : null}
       {visibleStreamingThinkingOverlayBlock && activeSurfaceConversationId ? (
         <StreamingThinkingOverlay
           block={visibleStreamingThinkingOverlayBlock}

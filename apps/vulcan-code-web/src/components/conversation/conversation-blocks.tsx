@@ -22,12 +22,16 @@ import {
 } from "@/components/conversation/conversation-measured-collapse";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { StreamingMarkdownDocument } from "@/components/conversation/streaming-markdown-document";
-import { nextStreamingThinkingTailFollow } from "@/components/conversation/streaming-thinking-scroll";
 import {
   loadStreamingThinkingLayoutMode,
   nextStreamingThinkingLayoutMode,
   persistStreamingThinkingLayoutMode,
 } from "@/components/conversation/streaming-thinking-layout";
+import {
+  shouldUseStreamingThinkingMarkdown,
+  streamingThinkingIdentity,
+} from "@/components/conversation/thinking-render-path";
+import { useStreamingThinkingViewport } from "@/components/conversation/use-streaming-thinking-viewport";
 import {
   metadataString,
   metadataValue,
@@ -296,6 +300,33 @@ export function ThinkingBlock(props: {
   const shouldAutoExpand = props.autoExpanded || (props.streaming && (props.autoExpandWhileStreaming ?? true));
   const collapseId = `thinking:${props.block.id}`;
   const [expanded, setExpanded] = useConversationMeasuredExpansion(collapseId, shouldAutoExpand);
+  // liveMarkdownIdentity binds one thinking block to its exact live Store stream and block mount.
+  // liveMarkdownIdentity 将单个思考块绑定到精确的实时 Store 流和块挂载实例。
+  const liveMarkdownIdentity = streamingThinkingIdentity(
+    props.conversationId,
+    props.block.sourceMessageId,
+    props.block.id,
+  );
+  // streamingMarkdownIdentity keeps the segmented renderer through the active-to-sealed handoff.
+  // streamingMarkdownIdentity 在 active 到 sealed 的交接期间保持分段渲染器。
+  const [streamingMarkdownIdentity, setStreamingMarkdownIdentity] = React.useState<string | null>(
+    () => props.streaming ? liveMarkdownIdentity : null,
+  );
+  React.useEffect(() => {
+    if (props.streaming && liveMarkdownIdentity) {
+      setStreamingMarkdownIdentity(liveMarkdownIdentity);
+    }
+  }, [liveMarkdownIdentity, props.streaming]);
+  // useStreamingMarkdown is limited to blocks that actually entered the live rendering path.
+  // useStreamingMarkdown 仅对确实进入实时渲染路径的块启用。
+  const useStreamingMarkdown = shouldUseStreamingThinkingMarkdown(
+    liveMarkdownIdentity,
+    props.streaming,
+    streamingMarkdownIdentity,
+  );
+  // thinkingViewport supplies the bounded scroll behavior for the inline thinking body.
+  // thinkingViewport 为内联思考正文提供受限滚动行为。
+  const thinkingViewport = useStreamingThinkingViewport({ enabled: useStreamingMarkdown });
   const wasStreamingRef = React.useRef(props.streaming);
 
   React.useEffect(() => {
@@ -337,18 +368,26 @@ export function ThinkingBlock(props: {
         )}
       </button>
       <ConversationMeasuredCollapse collapseId={collapseId} expanded={expanded}>
-        <div className="thinking-body">
-          {props.streaming && props.conversationId && props.block.sourceMessageId ? (
-            <StreamingMarkdownDocument
-              conversationId={props.conversationId}
-              fallbackContent={content}
-              fallbackStreaming={props.streaming}
-              messageId={props.block.sourceMessageId}
-              onOpenMedia={props.onOpenMedia}
-            />
-          ) : (
-            <MarkdownMessage content={content} eager streaming={props.streaming} onOpenMedia={props.onOpenMedia} />
-          )}
+        <div
+          className="thinking-body"
+          onPointerDown={thinkingViewport.handleBodyPointerDown}
+          onScroll={thinkingViewport.handleBodyScroll}
+          onWheel={thinkingViewport.handleBodyWheel}
+          ref={thinkingViewport.bodyRef}
+        >
+          <div className="thinking-content" ref={thinkingViewport.contentRef}>
+            {useStreamingMarkdown && props.conversationId && props.block.sourceMessageId ? (
+              <StreamingMarkdownDocument
+                conversationId={props.conversationId}
+                fallbackContent={content}
+                fallbackStreaming={props.streaming}
+                messageId={props.block.sourceMessageId}
+                onOpenMedia={props.onOpenMedia}
+              />
+            ) : (
+              <MarkdownMessage content={content} eager streaming={props.streaming} onOpenMedia={props.onOpenMedia} />
+            )}
+          </div>
         </div>
       </ConversationMeasuredCollapse>
     </section>
@@ -484,114 +523,12 @@ export function StreamingThinkingOverlay(props: {
   // t resolves localized labels for the floating thinking surface.
   // t 解析浮动思考面板使用的本地化文案。
   const { t } = useI18n();
-  // bodyRef stores the scrollable thinking body for tail following.
-  // bodyRef 保存可滚动思考正文，用于追随最新尾部。
-  const bodyRef = React.useRef<HTMLDivElement | null>(null);
-  // contentRef stores the changing inner document observed without watching cumulative body props.
-  // contentRef 保存变化中的内部文档，避免监听累计正文 props。
-  const contentRef = React.useRef<HTMLDivElement | null>(null);
-  // followTailRef records whether the user remains pinned near the popup bottom.
-  // followTailRef 记录用户是否仍停留在弹窗底部附近。
-  const followTailRef = React.useRef(true);
-  // tailFrameRef coalesces all resize-driven scroll work into one animation frame.
-  // tailFrameRef 将所有尺寸变化触发的滚动工作合并到一个动画帧。
-  const tailFrameRef = React.useRef<number | null>(null);
-  // manualScrollPointerRef records an active pointer gesture that may intentionally move the popup viewport.
-  // manualScrollPointerRef 记录可能主动移动弹窗视口的活跃指针手势。
-  const manualScrollPointerRef = React.useRef(false);
-  // manualScrollUntilRef keeps wheel intent active until its asynchronous scroll events settle.
-  // manualScrollUntilRef 保持滚轮意图，直到对应异步滚动事件稳定。
-  const manualScrollUntilRef = React.useRef(0);
+  // thinkingViewport supplies the shared popup scroll behavior without duplicating live Markdown logic.
+  // thinkingViewport 提供共享弹窗滚动行为，同时避免重复实时 Markdown 逻辑。
+  const thinkingViewport = useStreamingThinkingViewport({ enabled: true });
   // layoutMode stores the globally remembered popup placement selected by the user.
   // layoutMode 保存用户选择并全局记忆的弹窗位置。
   const [layoutMode, setLayoutMode] = React.useState(loadStreamingThinkingLayoutMode);
-
-  // scheduleTailFollow scrolls once per frame only while the user remains pinned to the tail.
-  // scheduleTailFollow 仅在用户仍钉住尾部时每帧最多滚动一次。
-  const scheduleTailFollow = React.useCallback(() => {
-    if (tailFrameRef.current !== null) {
-      return;
-    }
-    tailFrameRef.current = window.requestAnimationFrame(() => {
-      tailFrameRef.current = null;
-      // element is read at execution time because the popup may leave before the frame runs.
-      // element 在执行时读取，因为弹窗可能在动画帧运行前退场。
-      const element = bodyRef.current;
-      if (!element || !followTailRef.current) {
-        return;
-      }
-      element.scrollTop = element.scrollHeight;
-    });
-  }, []);
-
-  React.useEffect(() => {
-    // content is the exact inner document whose height changes as the live Store publishes updates.
-    // content 是实时 Store 发布更新时高度发生变化的精确内部文档。
-    const content = contentRef.current;
-    if (!content) {
-      return;
-    }
-    // observer schedules tail following from real geometry changes rather than cumulative Markdown props.
-    // observer 根据真实几何变化调度尾部跟随，而不是依赖累计 Markdown props。
-    const observer = new ResizeObserver(scheduleTailFollow);
-    observer.observe(content);
-    scheduleTailFollow();
-    return () => {
-      observer.disconnect();
-      if (tailFrameRef.current !== null) {
-        window.cancelAnimationFrame(tailFrameRef.current);
-        tailFrameRef.current = null;
-      }
-    };
-  }, [scheduleTailFollow]);
-
-  React.useEffect(() => {
-    // clearPointerInteraction ends scrollbar, mouse, pen, or touch scrolling even when release occurs outside the popup.
-    // clearPointerInteraction 即使在弹窗外释放，也会结束滚动条、鼠标、触控笔或触摸滚动交互。
-    const clearPointerInteraction = () => {
-      manualScrollPointerRef.current = false;
-    };
-    window.addEventListener("pointerup", clearPointerInteraction);
-    window.addEventListener("pointercancel", clearPointerInteraction);
-    return () => {
-      window.removeEventListener("pointerup", clearPointerInteraction);
-      window.removeEventListener("pointercancel", clearPointerInteraction);
-    };
-  }, []);
-
-  // handleBodyScroll updates tail-follow intent from the user's real viewport position.
-  // handleBodyScroll 根据用户真实视口位置更新尾部跟随意图。
-  const handleBodyScroll = React.useCallback(() => {
-    // element owns the popup-local scroll range.
-    // element 持有弹窗局部滚动范围。
-    const element = bodyRef.current;
-    if (!element) {
-      return;
-    }
-    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-    const manualInteraction = manualScrollPointerRef.current
-      || Date.now() <= manualScrollUntilRef.current;
-    followTailRef.current = nextStreamingThinkingTailFollow(
-      followTailRef.current,
-      distanceFromBottom,
-      manualInteraction,
-    );
-  }, []);
-
-  // handleBodyWheel records explicit wheel intent before the browser dispatches its scroll event.
-  // handleBodyWheel 在浏览器发出 scroll 事件前记录明确滚轮意图。
-  const handleBodyWheel = React.useCallback((event: React.WheelEvent<HTMLDivElement>) => {
-    manualScrollUntilRef.current = Date.now() + 250;
-    if (event.deltaY < 0) {
-      followTailRef.current = false;
-    }
-  }, []);
-
-  // handleBodyPointerDown marks pointer-driven scrollbar, touch, or drag scrolling as manual.
-  // handleBodyPointerDown 将指针驱动的滚动条、触摸或拖动滚动标记为手动操作。
-  const handleBodyPointerDown = React.useCallback(() => {
-    manualScrollPointerRef.current = true;
-  }, []);
 
   // handleLayoutToggle switches the popup layout and immediately persists the global preference.
   // handleLayoutToggle 切换弹窗布局并立即持久化全局偏好。
@@ -640,12 +577,12 @@ export function StreamingThinkingOverlay(props: {
       </header>
       <div
         className="streaming-thinking-body"
-        onPointerDown={handleBodyPointerDown}
-        onScroll={handleBodyScroll}
-        onWheel={handleBodyWheel}
-        ref={bodyRef}
+        onPointerDown={thinkingViewport.handleBodyPointerDown}
+        onScroll={thinkingViewport.handleBodyScroll}
+        onWheel={thinkingViewport.handleBodyWheel}
+        ref={thinkingViewport.bodyRef}
       >
-        <div className="streaming-thinking-content" ref={contentRef}>
+        <div className="streaming-thinking-content" ref={thinkingViewport.contentRef}>
           {props.block.sourceMessageId ? (
             <StreamingMarkdownDocument
               conversationId={props.conversationId}

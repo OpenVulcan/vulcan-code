@@ -126,7 +126,7 @@ $digest = (Get-FileHash -LiteralPath $destinationBinary -Algorithm SHA256).Hash.
 # manifest records the complete host validation contract consumed before process startup.
 # manifest 记录进程启动前由宿主消费的完整校验契约。
 $manifest = [ordered]@{
-    protocol = "vulcan.codebase-memory/1"
+    protocol = "vulcan.codebase-memory/2"
     version = $Version
     platform = $Platform
     executable = $destinationBinaryName

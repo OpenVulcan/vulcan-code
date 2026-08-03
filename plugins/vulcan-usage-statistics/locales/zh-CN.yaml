@@ -22,6 +22,18 @@ messages:
   settings.save: 保存设置
   settings.saving: 保存中
   settings.saved: 已保存
+  clear.title: 清理统计
+  clear.previewOnly: 先预览
+  clear.description: 使用当前选定模型和可选的本地自然日范围。清理后无法撤销。
+  clear.from: 起始日期
+  clear.to: 结束日期
+  clear.allModels: 全部模型
+  clear.preview: 预览清理范围
+  clear.previewing: 正在生成预览
+  clear.apply: 确认清理
+  clear.applying: 清理中
+  clear.previewSummary: "预览：{{requests}} 个请求 · {{tokens}} Token"
+  clear.success: "已清理 {{count}} 个请求"
   range.7: 最近 7 天
   range.30: 最近 30 天
   range.90: 最近 90 天
@@ -48,9 +60,11 @@ messages:
   metric.time_to_first_token_ms: 平均首 Token
   metric.label: 趋势指标
   summary.tokens: Token 用量
-  summary.inputTokens: 输入 Token
+  summary.inputTokens: 非缓存输入 Token
   summary.outputTokens: 输出 Token
   summary.cachedTokens: 缓存输入 Token
+  summary.unknownTokens: Token 未知请求
+  summary.inconsistentTokens: Token 不一致请求
   summary.requests: 请求次数
   summary.retries: "{{count}} 次重试"
   summary.successRate: 成功率

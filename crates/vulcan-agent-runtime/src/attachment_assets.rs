@@ -246,6 +246,110 @@ pub fn stage_attachment_file(
     )
 }
 
+/// Streams one already described source file into the managed attachment store without buffering its contents.
+/// 将一个已有描述的源文件流式复制到托管附件存储，避免把文件内容整体缓冲到内存。
+///
+/// # Parameters
+/// 参数
+/// `workspace_path` selects the managed attachment root.
+/// `workspace_path` 选择托管附件根目录。
+/// `descriptor` provides the host-controlled attachment kind and MIME metadata.
+/// `descriptor` 提供宿主控制的附件类型与 MIME 元数据。
+/// `suggested_file_name` is normalized before the managed path is created.
+/// `suggested_file_name` 会在创建托管路径前进行规范化。
+/// `source_path` is the complete source file that will be copied.
+/// `source_path` 是将被复制的完整源文件。
+///
+/// # Returns
+/// 返回值
+/// A persisted attachment descriptor whose managed file is fully written and indexed.
+/// 返回已完整写入并建立索引的托管附件描述。
+pub fn stage_attachment_file_streaming(
+    workspace_path: &str,
+    descriptor: &AttachmentDescriptor,
+    suggested_file_name: &str,
+    source_path: &Path,
+) -> Result<ConversationAttachment, String> {
+    let canonical_source_path = canonicalize_workspace_path(source_path);
+    let source_metadata = fs::metadata(&canonical_source_path).map_err(|error| {
+        format!(
+            "流式附件源文件 `{}` 读取失败：{error}",
+            canonical_source_path.display()
+        )
+    })?;
+    if !source_metadata.is_file() {
+        return Err(format!(
+            "流式附件源路径 `{}` 不是文件。",
+            canonical_source_path.display()
+        ));
+    }
+    let timestamp = current_attachment_timestamp_parts();
+    let asset_root = resolve_managed_attachment_root(workspace_path);
+    let category_directory = resolve_attachment_category_directory(&asset_root, &descriptor.kind);
+    fs::create_dir_all(&category_directory).map_err(|error| {
+        format!(
+            "创建托管附件分类目录 `{}` 失败：{error}",
+            category_directory.display()
+        )
+    })?;
+    let asset_id = Uuid::new_v4().to_string();
+    let sanitized_file_name =
+        sanitize_attachment_file_name(suggested_file_name, descriptor.extension);
+    let managed_file_path = category_directory.join(format!(
+        "{}-{asset_id}-{}",
+        timestamp.compact_prefix, sanitized_file_name
+    ));
+    let copied_bytes = match fs::copy(&canonical_source_path, &managed_file_path) {
+        Ok(copied_bytes) => copied_bytes,
+        Err(error) => {
+            return Err(rollback_failed_managed_attachment(
+                &managed_file_path,
+                format!(
+                    "流式复制附件 `{}` 到 `{}` 失败：{error}",
+                    canonical_source_path.display(),
+                    managed_file_path.display()
+                ),
+            ));
+        }
+    };
+    if copied_bytes != source_metadata.len() {
+        return Err(rollback_failed_managed_attachment(
+            &managed_file_path,
+            format!(
+                "流式复制附件 `{}` 到 `{}` 后字节数不一致：期望 {}，实际 {}。",
+                canonical_source_path.display(),
+                managed_file_path.display(),
+                source_metadata.len(),
+                copied_bytes
+            ),
+        ));
+    }
+    if let Err(error) = set_managed_attachment_file_times(&managed_file_path, timestamp.unix_millis)
+    {
+        return Err(rollback_failed_managed_attachment(
+            &managed_file_path,
+            error,
+        ));
+    }
+    let attachment = ConversationAttachment {
+        kind: descriptor.kind.clone(),
+        file_name: sanitized_file_name,
+        local_path: vulcan_runtime_assets::native_host_path_text_from_path(&managed_file_path),
+        source_path: None,
+        asset_id: Some(asset_id),
+        byte_len: Some(source_metadata.len()),
+        preview_local_path: None,
+        mime_type: descriptor.mime_type.to_string(),
+    };
+    if let Err(error) = record_staged_attachment(workspace_path, &attachment, &timestamp) {
+        return Err(rollback_failed_managed_attachment(
+            &managed_file_path,
+            error,
+        ));
+    }
+    Ok(attachment)
+}
+
 /// Materializes one in-memory attachment payload into the managed attachment store and returns the normalized replay descriptor.
 /// 将一份内存中的附件载荷物化到托管附件存储中，并返回规范化回放描述信息。
 pub fn stage_attachment_bytes(

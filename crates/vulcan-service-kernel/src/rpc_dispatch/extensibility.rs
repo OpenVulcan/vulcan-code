@@ -54,8 +54,9 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_execute_project_attachment_cleanup",
     "service_save_vmm_memory_config",
     "service_get_project_codebase_memory_settings",
+    "service_refresh_project_codebase_memory_settings",
     "service_set_project_codebase_memory_enabled",
-    "service_reindex_project_codebase_memory",
+    "service_update_project_codebase_memory_index",
 ];
 
 /// Dispatches one RPC method owned by this domain.
@@ -405,6 +406,13 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "projectId")?,
             ))
         }
+        "service_refresh_project_codebase_memory_settings" => rpc_json_result(
+            service_refresh_project_codebase_memory_settings(
+                state,
+                rpc_required_param(params, "projectId")?,
+            )
+            .await,
+        ),
         "service_set_project_codebase_memory_enabled" => rpc_json_result(
             service_set_project_codebase_memory_enabled(
                 app.clone(),
@@ -414,11 +422,12 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
-        "service_reindex_project_codebase_memory" => rpc_json_result(
-            service_reindex_project_codebase_memory(
+        "service_update_project_codebase_memory_index" => rpc_json_result(
+            service_update_project_codebase_memory_index(
                 app.clone(),
                 state,
                 rpc_required_param(params, "projectId")?,
+                rpc_required_param(params, "mode")?,
             )
             .await,
         ),

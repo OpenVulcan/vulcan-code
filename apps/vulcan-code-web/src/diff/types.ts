@@ -83,6 +83,9 @@ export interface DiffCommitSummary {
 // DiffReviewSelection stores the current Git diff source selection.
 // DiffReviewSelection 保存当前 Git diff 来源选择。
 export interface DiffReviewSelection {
+  // Stable project-relative repository key; `.` selects the project root repository.
+  // 稳定的项目相对仓库键；`.` 表示选择项目根仓库。
+  repositoryKey?: string | null;
   // Selected review mode.
   // 当前选择的审核模式。
   mode: DiffReviewMode;
@@ -392,12 +395,60 @@ export interface WorkspaceGitFileActionFile {
 // WorkspaceGitFileActionRequest describes one file-level Git mutation request.
 // WorkspaceGitFileActionRequest 描述一次文件级 Git 变更请求。
 export interface WorkspaceGitFileActionRequest {
+  // Stable project-relative repository key; `.` selects the project root repository.
+  // 稳定的项目相对仓库键；`.` 表示选择项目根仓库。
+  repositoryKey?: string | null;
   // Action to execute against the worktree or index.
   // 要对工作区或索引执行的操作。
   action: WorkspaceGitFileActionKind;
   // Optional files used by file-scoped actions.
   // 文件级操作使用的可选文件列表。
   files?: WorkspaceGitFileActionFile[];
+}
+
+// WorkspaceReviewFocusRequest identifies an external review-panel focus action.
+// WorkspaceReviewFocusRequest 标识一次外部审核面板聚焦动作。
+export interface WorkspaceReviewFocusRequest {
+  // Monotonic focus request sequence.
+  // 单调递增的聚焦请求序号。
+  sequence: number;
+  // Repository key that should be selected when the panel opens.
+  // 面板打开时需要选择的仓库键。
+  repositoryKey: string | null;
+}
+
+// WorkspaceGitRepositorySummary describes one discovered repository node.
+// WorkspaceGitRepositorySummary 描述一个已发现的仓库节点。
+export interface WorkspaceGitRepositorySummary {
+  // Stable project-relative repository key.
+  // 稳定的项目相对仓库键。
+  repositoryKey: string;
+  // Canonical backend repository root.
+  // 后端使用的规范化仓库根目录。
+  repositoryRoot: string;
+  // Compact repository name.
+  // 紧凑展示的仓库名称。
+  name: string;
+  // Stable project-relative path shown as secondary context.
+  // 展示为次级上下文的稳定项目相对路径。
+  relativePath: string;
+  // Whether this repository is the deterministic primary node.
+  // 该仓库是否为确定性的主要节点。
+  isPrimary: boolean;
+  // Whether live review monitoring is enabled for this repository.
+  // 该仓库是否启用实时审查监听。
+  monitoringEnabled: boolean;
+}
+
+// WorkspaceGitRepositoryCatalog describes all repositories discovered for one project.
+// WorkspaceGitRepositoryCatalog 描述单个项目发现的全部仓库。
+export interface WorkspaceGitRepositoryCatalog {
+  // Canonical project root used by discovery.
+  // 发现流程使用的规范化项目根目录。
+  projectRoot: string;
+  // Deterministically ordered repository nodes.
+  // 按确定性顺序排列的仓库节点。
+  repositories: WorkspaceGitRepositorySummary[];
 }
 
 // WorkspaceGitFileActionResult mirrors the backend Git mutation result.

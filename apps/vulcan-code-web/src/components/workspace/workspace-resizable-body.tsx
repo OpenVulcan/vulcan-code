@@ -13,11 +13,13 @@ import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ConversationMenuAction } from "@/components/project/project-sidebar-types";
 import type {
+  ComposerAttachmentSummary,
   ConversationSummary,
   StartupSnapshot,
   WorkbenchSnapshot,
 } from "@/types";
 import type { WorkspacePagePanelDescriptor } from "@/components/workspace/workspace-page-descriptor";
+import type { WorkspaceReviewFocusRequest } from "@/diff/types";
 
 // WORKSPACE_CONTEXT_PANEL_TRANSITION_MS matches the CSS slide animation duration.
 // WORKSPACE_CONTEXT_PANEL_TRANSITION_MS 对齐 CSS 右侧面板滑动动画时长。
@@ -44,6 +46,29 @@ export interface DraftConversationSelection {
   // Project display name shown in empty-state text.
   // 空状态文案中展示的项目名称。
   projectName: string;
+  // Optimistic first submission rendered while the backend materializes the durable conversation.
+  // 后端物化持久化会话期间渲染的乐观首条提交。
+  pendingSubmission?: DraftConversationPendingSubmission | null;
+}
+
+// DraftConversationPendingSubmission describes one accepted-by-the-UI first prompt before service acknowledgement.
+// DraftConversationPendingSubmission 描述服务确认前已被界面接纳的首条提示词。
+export interface DraftConversationPendingSubmission {
+  // Stable client-generated identifier shared with the service request and acknowledgement.
+  // 与服务请求及确认共享的客户端稳定生成标识。
+  clientSubmissionId: string;
+  // User-visible prompt body rendered immediately after send.
+  // 点击发送后立即渲染的用户可见提示词正文。
+  prompt: string;
+  // Structured composer attachments rendered with the optimistic message.
+  // 与乐观消息共同渲染的结构化输入区附件。
+  attachments: ComposerAttachmentSummary[];
+  // Unix-millisecond timestamp captured when the UI accepts the submission.
+  // 界面接纳提交时捕获的 Unix 毫秒时间戳。
+  startedAt: number;
+  // Current bounded preparation stage shown to the user.
+  // 向用户展示的当前有界准备阶段。
+  stage: "creating" | "preparing";
 }
 
 // WorkspaceResizableBody renders the main chat area and optional right context panel.
@@ -63,7 +88,7 @@ export function WorkspaceResizableBody(props: {
   contextPanelActiveTabId: string | null;
   // Monotonic request id used to focus the review panel on uncommitted changes.
   // 用于让审核面板聚焦未提交变更的单调请求标识。
-  reviewFocusRequest: number;
+  reviewFocusRequest: WorkspaceReviewFocusRequest;
   // Startup snapshot forwarded to layout-bound panels.
   // 转发给布局相关面板的启动快照。
   startup: StartupSnapshot;
@@ -187,6 +212,9 @@ export function WorkspaceResizableBody(props: {
   // Opens the shared Git commit or push dialog.
   // 打开共享 Git 提交或推送弹窗。
   onOpenGitCommitAction?: () => void;
+  // Synchronizes the active right-panel repository with shared commit controls.
+  // 将右侧面板当前仓库同步到共享提交控件。
+  onSelectGitRepository?: WorkspaceContextPanelProps["onSelectGitRepository"];
   // Loads one lazy workspace file directory for the right context panel.
   // 为右侧上下文面板加载单个懒加载工作区文件目录。
   loadWorkspaceFileDirectory: WorkspaceContextPanelProps["loadWorkspaceFileDirectory"];
@@ -454,6 +482,7 @@ export function WorkspaceResizableBody(props: {
               runWorkspaceGitFileAction={props.runWorkspaceGitFileAction}
               onWorkspaceDiffSnapshotLoaded={props.onWorkspaceDiffSnapshotLoaded}
               onWorkspaceGitStateChanged={props.onWorkspaceGitStateChanged}
+              onSelectGitRepository={props.onSelectGitRepository}
               gitCommitActionBusy={props.gitCommitActionBusy}
               gitCommitActionDisabled={props.gitCommitActionDisabled}
               gitCommitActionLabel={props.gitCommitActionLabel}

@@ -163,11 +163,21 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     };
     let workspace_root =
         (!workspace_path.is_empty()).then(|| PathBuf::from(workspace_path.clone()));
+    let suppress_external_web_search = model_blueprint
+        .public_capabilities
+        .provider_native_tools
+        .contains(&vulcan_ai_contract::NativeToolKind::WebSearch);
+    if suppress_external_web_search {
+        warnings.push(String::from(
+            "当前精确模型路由使用供应商原生网页搜索，本回合已隐藏外部网页搜索工具；已保存的外部搜索设置保持不变。",
+        ));
+    }
     let provider_tool_candidates = build_provider_tool_candidates(
         Arc::clone(&public_ai_runtime),
         public_ai_runtime.configuration_snapshot()?,
         workspace_root.clone(),
         &request.provider_tool_selections_override,
+        suppress_external_web_search,
     )?;
     let tools_manager = build_vulcan_tools_manager(
         foundation.task_runtime(),

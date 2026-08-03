@@ -66,6 +66,10 @@ impl Default for PendingPromptRuntimeOptions {
 /// 在排队提示词创建或插入时捕获的供应商与模型身份。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingPromptModelReference {
+    /// Stable credential connection identifier used to preserve the exact queued account.
+    /// 用于保留排队时精确账号的稳定凭据连接标识。
+    #[serde(default)]
+    pub connection_id: String,
     /// Stable provider identifier used to resolve credentials and transport configuration.
     /// 用于解析凭据与传输配置的稳定供应商标识。
     pub provider_id: String,

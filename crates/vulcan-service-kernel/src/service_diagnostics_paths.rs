@@ -32,6 +32,82 @@ pub(crate) fn push_webui_service_diagnostic(
     Ok(())
 }
 
+/// Retains one sanitized slow-submission diagnostic in both WebUI diagnostic buffers.
+/// 在两个 WebUI 诊断缓冲区中保留一条经过净化的慢提交诊断。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the retained startup and workbench diagnostic buffers.
+/// `state` 持有保留的启动与工作台诊断缓冲区。
+/// `client_submission_id` correlates browser acceptance with later preparation stages.
+/// `client_submission_id` 关联浏览器接纳与后续准备阶段。
+/// `target` identifies whether the submission creates or continues a conversation.
+/// `target` 标识提交是新建会话还是继续已有会话。
+/// `stage` names the bounded execution stage without including prompt content.
+/// `stage` 命名有界执行阶段，且不包含提示词内容。
+/// `elapsed_ms` is the measured stage duration in milliseconds.
+/// `elapsed_ms` 是测得的阶段耗时毫秒数。
+///
+/// # Returns
+/// 返回值
+/// Returns success after retention, or a precise service-state locking error.
+/// 保留完成后返回成功，否则返回精确的服务状态加锁错误。
+pub(crate) fn retain_slow_submission_diagnostic(
+    state: &SharedServiceBridgeState,
+    client_submission_id: &str,
+    target: &str,
+    stage: &str,
+    elapsed_ms: i128,
+) -> Result<(), String> {
+    if elapsed_ms <= 200 {
+        return Ok(());
+    }
+    // safe_token removes user-authored or delimiter-bearing text from the diagnostic identity.
+    // safe_token 从诊断标识中移除用户撰写内容或带分隔符的文本。
+    let safe_token = |value: &str| {
+        value
+            .chars()
+            .filter(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+            })
+            .take(96)
+            .collect::<String>()
+    };
+    let client_submission_id = safe_token(client_submission_id);
+    let target = safe_token(target);
+    let stage = safe_token(stage);
+    let message = format!(
+        "client_submission_id={client_submission_id} target={target} stage={stage} elapsed_ms={elapsed_ms}"
+    );
+    eprintln!("[webui-service][submit-slow] {message}");
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    guard
+        .startup
+        .recent_logs
+        .push(format!("[submit-slow] {message}"));
+    if guard.startup.recent_logs.len() > 200 {
+        let overflow = guard.startup.recent_logs.len().saturating_sub(200);
+        guard.startup.recent_logs.drain(0..overflow);
+    }
+    let entry_id = format!(
+        "submit-slow-{}-{}-{}",
+        client_submission_id,
+        stage,
+        current_unix_millis_text()
+    );
+    guard
+        .workbench
+        .logs
+        .push(log_entry(&entry_id, "warning", "submission", &message));
+    if guard.workbench.logs.len() > 200 {
+        let overflow = guard.workbench.logs.len().saturating_sub(200);
+        guard.workbench.logs.drain(0..overflow);
+    }
+    Ok(())
+}
+
 /// Creates one diagnostic log entry.
 /// 创建单条诊断日志。
 pub(crate) fn log_entry(id: &str, level: &str, source: &str, message: &str) -> LogEntrySummary {

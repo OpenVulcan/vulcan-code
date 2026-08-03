@@ -22,6 +22,56 @@ export interface ProjectSummary {
   codebaseMemoryEnabled?: boolean;
 }
 
+// CodebaseMemoryIndexJobSummary describes one exact managed index job snapshot.
+// CodebaseMemoryIndexJobSummary 描述一份精确的托管索引任务快照。
+export interface CodebaseMemoryIndexJobSummary {
+  // Sidecar runtime identity.
+  // Sidecar 运行时身份。
+  runtimeId: string;
+  // Runtime-local job identity.
+  // 运行时内任务身份。
+  jobId: string;
+  // Monotonic project-local job generation.
+  // 项目内单调递增的任务代次。
+  jobGeneration: string;
+  // Exact update or rebuild mode.
+  // 精确的更新或重建模式。
+  mode: string;
+  // Stable scheduling trigger.
+  // 稳定的调度来源。
+  trigger: string;
+  // Current or terminal job state.
+  // 当前或终态任务状态。
+  state: string;
+  // Current monotonic job phase.
+  // 当前单调任务阶段。
+  phase: string;
+  // Completed work units as lossless decimal text.
+  // 以无损十进制文本表示的已完成工作单元。
+  completedUnits: string;
+  // Stable total work units when known.
+  // 已知时的稳定总工作单元。
+  totalUnits?: string | null;
+  // Bounded work-unit label.
+  // 有界工作单元标签。
+  unit: string;
+  // RFC 3339 job start timestamp.
+  // RFC 3339 任务开始时间。
+  startedAt?: string | null;
+  // RFC 3339 latest progress timestamp.
+  // RFC 3339 最近进度时间。
+  updatedAt?: string | null;
+  // RFC 3339 terminal timestamp.
+  // RFC 3339 终态时间。
+  completedAt?: string | null;
+  // Whether the request joined an existing physical job.
+  // 请求是否合并进既有物理任务。
+  coalesced: boolean;
+  // Optional bounded job error.
+  // 可选的有界任务错误。
+  error?: string | null;
+}
+
 // CodebaseMemoryProjectSettingsSummary describes project-owned enablement and managed runtime diagnostics.
 // CodebaseMemoryProjectSettingsSummary 描述项目自有启用状态与托管运行时诊断。
 export interface CodebaseMemoryProjectSettingsSummary {
@@ -34,15 +84,30 @@ export interface CodebaseMemoryProjectSettingsSummary {
   // Current managed sidecar lifecycle status.
   // 当前托管 Sidecar 生命周期状态。
   serviceStatus: string;
-  // Current project indexing status when known.
-  // 已知时的当前项目索引状态。
-  indexStatus?: string | null;
+  // Availability of the last atomically published index.
+  // 最近一次原子发布索引的可用状态。
+  availability?: string | null;
+  // Whether the project watcher is registered.
+  // 项目监视器是否已经注册。
+  watcherRegistered?: boolean | null;
   // Last successful index timestamp reported by the sidecar.
   // Sidecar 报告的最近成功索引时间。
   lastSuccessfulIndexAt?: string | null;
   // Current project index revision reported by the sidecar.
   // Sidecar 报告的当前项目索引修订号。
   indexRevision?: string | null;
+  // Current indexed node count from the latest live query.
+  // 最近一次实时查询得到的索引节点数。
+  nodeCount?: string | null;
+  // Current indexed edge count from the latest live query.
+  // 最近一次实时查询得到的索引边数。
+  edgeCount?: string | null;
+  // Currently active physical index job.
+  // 当前活动的物理索引任务。
+  activeJob?: CodebaseMemoryIndexJobSummary | null;
+  // Latest immutable terminal index job.
+  // 最近一次不可变终态索引任务。
+  lastJob?: CodebaseMemoryIndexJobSummary | null;
   // Latest non-sensitive project or sidecar error.
   // 最近一次不含敏感信息的项目或 Sidecar 错误。
   lastError?: string | null;

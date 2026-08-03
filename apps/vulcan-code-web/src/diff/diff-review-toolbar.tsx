@@ -22,6 +22,7 @@ import type {
   DiffReviewMode,
   DiffReviewSelection,
   DiffViewMode,
+  WorkspaceGitRepositorySummary,
 } from "./types";
 
 // DIFF_REVIEW_MODE_LABELS maps review modes to compact UI labels.
@@ -56,6 +57,9 @@ export function DiffPanelToolbar(props: {
   // Current Git review source selection.
   // 当前 Git 审核来源选择。
   selection: DiffReviewSelection;
+  // Discovered repositories available for right-panel selection.
+  // 右侧面板可选择的已发现仓库。
+  repositories?: WorkspaceGitRepositorySummary[];
   // Whether the panel is currently loading.
   // 面板当前是否正在加载。
   loading?: boolean;
@@ -122,6 +126,9 @@ export function DiffPanelToolbar(props: {
 }) {
   const { t } = useI18n();
   const selectedCommit = selectedDiffCommit(props.snapshot.recentCommits ?? [], props.selection.commitHash ?? props.snapshot.selectedCommitHash);
+  const selectedRepositoryKey = props.selection.repositoryKey
+    ?? props.repositories?.find((repository) => repository.isPrimary)?.repositoryKey
+    ?? props.repositories?.[0]?.repositoryKey;
   const baseBranch = props.selection.baseBranch ?? props.snapshot.selectedBaseBranch ?? props.snapshot.currentBranch ?? "";
   const compareBranch = props.selection.compareBranch ?? props.snapshot.selectedCompareBranch ?? props.snapshot.defaultBranch ?? "";
   const titleText = props.selection.mode === "commit" && selectedCommit
@@ -131,6 +138,33 @@ export function DiffPanelToolbar(props: {
     <header className="diff-panel-header">
       <div className="diff-panel-main">
         <div className="diff-panel-title-row">
+          {props.repositories && props.repositories.length > 1 ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="diff-review-repository-trigger" type="button">
+                  {props.repositories.find((repository) => repository.repositoryKey === selectedRepositoryKey)?.name
+                    ?? props.repositories[0]?.name
+                    ?? "Git"}
+                  <ChevronDown size={12} />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                {props.repositories.map((repository) => (
+                  <DropdownMenuItem
+                    key={repository.repositoryKey}
+                    onSelect={() => props.onSelectionChange?.({
+                      ...props.selection,
+                      repositoryKey: repository.repositoryKey,
+                    })}
+                  >
+                    {repository.repositoryKey === selectedRepositoryKey ? <Check size={13} /> : <span className="diff-review-repository-check-spacer" />}
+                    <span>{repository.name}</span>
+                    {repository.relativePath !== repository.name ? <small>{repository.relativePath}</small> : null}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
           <DiffModeMenu
             changedFileCount={props.snapshot.stats.files}
             commits={props.snapshot.recentCommits ?? []}

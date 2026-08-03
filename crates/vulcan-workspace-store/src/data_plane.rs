@@ -29,7 +29,7 @@ static APP_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Shared schema version stored in the application metadata table.
 /// 存储在应用元数据表中的共享结构版本号。
-pub const APP_SCHEMA_VERSION: i64 = 14;
+pub const APP_SCHEMA_VERSION: i64 = 16;
 
 /// Long-lived controller handle kept by the host runtime after startup succeeds.
 /// 启动成功后由宿主运行时持有的长生命周期控制器句柄。
@@ -323,6 +323,103 @@ pub(crate) async fn ensure_application_schema_migrations(
         client,
         sqlite_binding_id,
         ADD_CODEBASE_MEMORY_ENABLED_COLUMN_SQL,
+    )
+    .await?;
+    ensure_optional_schema_statement(
+        client,
+        sqlite_binding_id,
+        r#"
+CREATE TABLE IF NOT EXISTS project_git_review_preferences (
+    project_id TEXT NOT NULL,
+    repository_key TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, repository_key),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_git_review_preferences_project
+ON project_git_review_preferences(project_id, repository_key ASC);
+"#,
+    )
+    .await?;
+    ensure_optional_schema_statement(
+        client,
+        sqlite_binding_id,
+        r#"
+CREATE TABLE IF NOT EXISTS ai_credential_secrets (
+    secret_reference TEXT PRIMARY KEY,
+    format_version INTEGER NOT NULL CHECK(format_version > 0),
+    revision INTEGER NOT NULL CHECK(revision > 0),
+    material_kind TEXT NOT NULL CHECK(material_kind IN (
+        'api_key',
+        'static_bearer',
+        'open_ai_codex_oauth',
+        'claude_code_oauth',
+        'google_oauth',
+        'mini_max_oauth',
+        'kimi_coding_plan_oauth'
+    )),
+    secret_value TEXT,
+    access_token TEXT,
+    refresh_token TEXT,
+    issued_at_unix_ms INTEGER,
+    expires_at_unix_ms INTEGER,
+    scope_text TEXT NOT NULL DEFAULT '',
+    account_subject TEXT,
+    email TEXT,
+    id_token TEXT,
+    account_id TEXT,
+    oauth_client_id TEXT,
+    oauth_client_secret TEXT,
+    project_id TEXT,
+    quota_project_id TEXT,
+    provider_region TEXT,
+    resource_url TEXT,
+    provider_device_id TEXT,
+    created_at_unix_ms INTEGER NOT NULL,
+    updated_at_unix_ms INTEGER NOT NULL,
+    CHECK(
+        (material_kind = 'api_key' AND secret_value IS NOT NULL AND length(trim(secret_value)) > 0)
+        OR (material_kind = 'static_bearer' AND access_token IS NOT NULL AND length(trim(access_token)) > 0)
+        OR (
+            material_kind IN (
+                'open_ai_codex_oauth',
+                'claude_code_oauth',
+                'google_oauth',
+                'mini_max_oauth',
+                'kimi_coding_plan_oauth'
+            )
+            AND access_token IS NOT NULL
+            AND length(trim(access_token)) > 0
+            AND refresh_token IS NOT NULL
+            AND length(trim(refresh_token)) > 0
+            AND issued_at_unix_ms IS NOT NULL
+            AND issued_at_unix_ms >= 0
+            AND expires_at_unix_ms IS NOT NULL
+            AND expires_at_unix_ms > issued_at_unix_ms
+        )
+    ),
+    CHECK(
+        material_kind != 'google_oauth'
+        OR (oauth_client_id IS NOT NULL AND length(trim(oauth_client_id)) > 0)
+    ),
+    CHECK(
+        material_kind != 'mini_max_oauth'
+        OR (
+            provider_region IS NOT NULL
+            AND length(trim(provider_region)) > 0
+            AND resource_url IS NOT NULL
+            AND length(trim(resource_url)) > 0
+        )
+    ),
+    CHECK(
+        material_kind != 'kimi_coding_plan_oauth'
+        OR (provider_device_id IS NOT NULL AND length(trim(provider_device_id)) > 0)
+    )
+);
+"#,
     )
     .await?;
     ensure_optional_schema_statement(
@@ -676,6 +773,78 @@ CREATE TABLE IF NOT EXISTS thread_goals (
 
 CREATE INDEX IF NOT EXISTS idx_thread_goals_status
 ON thread_goals(status, updated_at_ms DESC);
+
+CREATE TABLE IF NOT EXISTS ai_credential_secrets (
+    secret_reference TEXT PRIMARY KEY,
+    format_version INTEGER NOT NULL CHECK(format_version > 0),
+    revision INTEGER NOT NULL CHECK(revision > 0),
+    material_kind TEXT NOT NULL CHECK(material_kind IN (
+        'api_key',
+        'static_bearer',
+        'open_ai_codex_oauth',
+        'claude_code_oauth',
+        'google_oauth',
+        'mini_max_oauth',
+        'kimi_coding_plan_oauth'
+    )),
+    secret_value TEXT,
+    access_token TEXT,
+    refresh_token TEXT,
+    issued_at_unix_ms INTEGER,
+    expires_at_unix_ms INTEGER,
+    scope_text TEXT NOT NULL DEFAULT '',
+    account_subject TEXT,
+    email TEXT,
+    id_token TEXT,
+    account_id TEXT,
+    oauth_client_id TEXT,
+    oauth_client_secret TEXT,
+    project_id TEXT,
+    quota_project_id TEXT,
+    provider_region TEXT,
+    resource_url TEXT,
+    provider_device_id TEXT,
+    created_at_unix_ms INTEGER NOT NULL,
+    updated_at_unix_ms INTEGER NOT NULL,
+    CHECK(
+        (material_kind = 'api_key' AND secret_value IS NOT NULL AND length(trim(secret_value)) > 0)
+        OR (material_kind = 'static_bearer' AND access_token IS NOT NULL AND length(trim(access_token)) > 0)
+        OR (
+            material_kind IN (
+                'open_ai_codex_oauth',
+                'claude_code_oauth',
+                'google_oauth',
+                'mini_max_oauth',
+                'kimi_coding_plan_oauth'
+            )
+            AND access_token IS NOT NULL
+            AND length(trim(access_token)) > 0
+            AND refresh_token IS NOT NULL
+            AND length(trim(refresh_token)) > 0
+            AND issued_at_unix_ms IS NOT NULL
+            AND issued_at_unix_ms >= 0
+            AND expires_at_unix_ms IS NOT NULL
+            AND expires_at_unix_ms > issued_at_unix_ms
+        )
+    ),
+    CHECK(
+        material_kind != 'google_oauth'
+        OR (oauth_client_id IS NOT NULL AND length(trim(oauth_client_id)) > 0)
+    ),
+    CHECK(
+        material_kind != 'mini_max_oauth'
+        OR (
+            provider_region IS NOT NULL
+            AND length(trim(provider_region)) > 0
+            AND resource_url IS NOT NULL
+            AND length(trim(resource_url)) > 0
+        )
+    ),
+    CHECK(
+        material_kind != 'kimi_coding_plan_oauth'
+        OR (provider_device_id IS NOT NULL AND length(trim(provider_device_id)) > 0)
+    )
+);
 "#,
         schema_version = APP_SCHEMA_VERSION,
     )
@@ -753,6 +922,19 @@ mod tests {
         ] {
             assert!(schema.contains(column));
         }
+    }
+
+    /// Verifies that the base schema stores AI credentials as relational columns without JSON documents.
+    /// 验证基础结构使用关系字段存储 AI 凭据且不保存 JSON 文档。
+    #[test]
+    fn base_schema_includes_relational_ai_credential_storage() {
+        let schema = build_application_schema_script();
+
+        assert_eq!(APP_SCHEMA_VERSION, 16);
+        assert!(schema.contains("CREATE TABLE IF NOT EXISTS ai_credential_secrets"));
+        assert!(schema.contains("provider_device_id TEXT"));
+        assert!(schema.contains("scope_text TEXT NOT NULL DEFAULT ''"));
+        assert!(!schema.contains("credential_json"));
     }
 
     /// Verifies both new and upgraded databases default Codebase Memory to disabled.

@@ -103,6 +103,26 @@ const VULCAN_PLUGIN_STORAGE_LANCEDB_DROP_TABLE_TOOL: &str =
 /// 用于使当前插件界面数据失效的固定宿主工具名称。
 const VULCAN_PLUGIN_UI_INVALIDATE_TOOL: &str = "vulcan.plugin.ui.invalidate";
 
+/// Windows creation flag that prevents a console window for a child process.
+/// 防止子进程创建控制台窗口的 Windows 创建标志。
+#[cfg(all(windows, not(debug_assertions)))]
+const WINDOWS_CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Apply the Release-only no-console flag to a plugin dependency child process.
+/// 为插件依赖子进程应用仅 Release 生效的无控制台标志。
+fn apply_release_no_window_to_command(command: &mut Command) {
+    #[cfg(all(windows, not(debug_assertions)))]
+    {
+        use std::os::windows::process::CommandExt;
+
+        command.creation_flags(WINDOWS_CREATE_NO_WINDOW);
+    }
+    #[cfg(any(not(windows), debug_assertions))]
+    {
+        let _ = command;
+    }
+}
+
 /// Authenticated plugin identity paired with its validated bridge payload.
 /// 经过认证的插件身份及其已校验桥接载荷。
 type VulcanPluginBridgeIdentityPayload<'a> = (&'a str, &'a Map<String, Value>);
@@ -6771,6 +6791,7 @@ fn resolve_plugin_package_manager(
 /// Executes one bounded dependency installation command and preserves its full diagnostics.
 /// 执行一个有边界的依赖安装命令并保留完整诊断。
 fn run_plugin_dependency_command(command: &mut Command, label: &str) -> Result<(), String> {
+    apply_release_no_window_to_command(command);
     let output = command
         .output()
         .map_err(|error| format!("Failed to {label}: {error}"))?;
@@ -7526,9 +7547,40 @@ mod tests {
                     Ok(json!({"rows": [{"model_ref": 1}], "row_count": 1}))
                 }
                 VulcanPluginStorageOperation::SqliteQuery
+                    if sql.contains(
+                        "SELECT model_ref AS modelRef FROM models WHERE model_ref = ?1",
+                    ) =>
+                {
+                    Ok(json!({"rows": [{"modelRef": 1}], "row_count": 1}))
+                }
+                VulcanPluginStorageOperation::SqliteQuery
+                    if sql.contains("SELECT date(?1) AS normalized_date") =>
+                {
+                    Ok(json!({"rows": [{"normalized_date": "2026-07-14"}], "row_count": 1}))
+                }
+                VulcanPluginStorageOperation::SqliteQuery
                     if sql.contains("FROM statistics_meta") =>
                 {
                     Ok(json!({"rows": [{"revision": 1}], "row_count": 1}))
+                }
+                VulcanPluginStorageOperation::SqliteQuery
+                    if sql.contains("SELECT COUNT(*) AS requests") =>
+                {
+                    Ok(json!({"rows": [{
+                        "requests": 1,
+                        "successes": 1,
+                        "failures": 0,
+                        "cancelled": 0,
+                        "inputTokens": 10,
+                        "outputTokens": 20,
+                        "reasoningTokens": 5,
+                        "providerTotalTokens": 35,
+                        "totalTokens": 35,
+                        "cachedInputTokens": 14,
+                        "cacheCreationInputTokens": 2,
+                        "unknownTokenRequests": 0,
+                        "inconsistentTokenRequests": 0
+                    }], "row_count": 1}))
                 }
                 VulcanPluginStorageOperation::SqliteQuery
                     if sql.contains("COALESCE(SUM(request_count)") =>
@@ -7543,6 +7595,9 @@ mod tests {
                         "outputTokens": 20,
                         "reasoningTokens": 5,
                         "totalTokens": 35,
+                        "providerTotalTokens": 35,
+                        "unknownTokenRequests": 0,
+                        "inconsistentTokenRequests": 0,
                         "cachedInputTokens": 14,
                         "cacheCreationInputTokens": 2,
                         "durationMs": 500,
@@ -7621,6 +7676,8 @@ mod tests {
                         "inputTokens": 10,
                         "outputTokens": 20,
                         "totalTokens": 35,
+                        "providerTotalTokens": 35,
+                        "totalTokenSource": "reported",
                         "cachedInputTokens": 14,
                         "timeToFirstTokenMs": 120,
                         "durationMs": 500,
@@ -8420,7 +8477,7 @@ return M
         let cache_hit_rate = dashboard["summary"]["cacheHitRate"]
             .as_f64()
             .expect("read usage statistics cache hit rate");
-        assert!((cache_hit_rate - (14.0 * 100.0 / 26.0)).abs() < 0.000_001);
+        assert!((cache_hit_rate - (14.0 * 100.0 / 24.0)).abs() < 0.000_001);
         assert_eq!(dashboard["heatmap"][0]["topModelName"], "Model One");
         assert_eq!(dashboard["series"][0]["value"], 10);
         assert_eq!(dashboard["availableModels"][0]["modelRef"], 1);
@@ -8514,6 +8571,37 @@ return M
             }))
             .expect("query all-time usage statistics dashboard");
         assert_eq!(all_time["rangeDays"], 0);
+        // cleanupPreview and cleanupApply validate the explicit inclusive date scope and revision fence.
+        // cleanupPreview 与 cleanupApply 验证明确的本地日期闭区间和修订号围栏。
+        let cleanup_preview = runtime
+            .block_on(manager.invoke_action(VulcanPluginActionRequest {
+                plugin_id: String::from("vulcan-usage-statistics"),
+                action_id: String::from("statistics-clear-preview"),
+                arguments: json!({
+                    "fromDate": "2026-07-14",
+                    "toDate": "2026-07-14"
+                }),
+                caller: crate::VulcanPluginActionCaller::PluginUi,
+                workspace_root: repository_root.to_path_buf(),
+                reuse_enabled_runtime: true,
+            }))
+            .expect("preview usage statistics cleanup");
+        assert_eq!(cleanup_preview["summary"]["requests"], 1);
+        let cleanup_apply = runtime
+            .block_on(manager.invoke_action(VulcanPluginActionRequest {
+                plugin_id: String::from("vulcan-usage-statistics"),
+                action_id: String::from("statistics-clear-apply"),
+                arguments: json!({
+                    "fromDate": "2026-07-14",
+                    "toDate": "2026-07-14",
+                    "expectedRevision": cleanup_preview["revision"]
+                }),
+                caller: crate::VulcanPluginActionCaller::PluginUi,
+                workspace_root: repository_root.to_path_buf(),
+                reuse_enabled_runtime: true,
+            }))
+            .expect("apply usage statistics cleanup");
+        assert!(cleanup_apply["deletedRequests"].is_number());
         // calls proves multi-value statements use numbered placeholders accepted by Controller.
         // calls 证明多值语句使用 Controller 接受的编号占位符。
         let calls = storage.calls.lock().expect("read recording storage calls");
@@ -8522,7 +8610,9 @@ return M
                 .payload
                 .get("sql")
                 .and_then(Value::as_str)
-                .is_some_and(|sql| sql.contains("DELETE FROM api_request_events"))),
+                .is_some_and(|sql| {
+                    sql.contains("DELETE FROM api_request_events WHERE calendar_date < date")
+                })),
             "permanent retention must not delete raw request facts"
         );
         let model_insert = calls
@@ -8562,14 +8652,14 @@ return M
             fact_insert.payload["sql"]
                 .as_str()
                 .expect("request fact insert SQL text")
-                .contains("?43")
+                .contains("?46")
         );
         assert_eq!(
             fact_insert.payload["params"]
                 .as_array()
                 .expect("request fact insert parameters")
                 .len(),
-            43
+            46
         );
         // summaryQuery must retain only the date-range parameter after recent-get appends its limit.
         // summaryQuery 在 recent-get 追加 limit 后仍必须只保留日期范围参数。

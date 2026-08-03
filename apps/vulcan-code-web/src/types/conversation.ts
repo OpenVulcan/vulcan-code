@@ -423,6 +423,9 @@ export interface SessionAddonsChangedResponse extends SessionAddonsChangedDelta 
 // SubmitConversationPromptAck acknowledges that a composer prompt was accepted by the service.
 // SubmitConversationPromptAck 确认输入区提示词已被服务接收。
 export interface SubmitConversationPromptAck {
+  // Stable client-generated identifier used to reconcile the optimistic submission.
+  // 用于协调乐观提交状态的客户端稳定生成标识。
+  clientSubmissionId: string;
   // Stable conversation identifier that owns the accepted prompt.
   // 拥有已接收提示词的稳定会话标识。
   conversationId: string;
@@ -470,7 +473,8 @@ export type WorkbenchDelta =
   | {
     kind: "luaSkillsManagedRuntimeProgressChanged";
     payload: LuaSkillsManagedRuntimeProgressChangedDelta;
-  };
+  }
+  | { kind: "mediaUploadProgressChanged"; payload: MediaUploadProgressChangedDelta };
 
 // AgentSkillsCatalogChangedDelta replaces only the Agent Skills workbench domain.
 // AgentSkillsCatalogChangedDelta 仅替换工作台中的 Agent Skills 领域。
@@ -533,6 +537,33 @@ export interface LuaSkillsManagedRuntimeProgressChangedDelta {
   // Current native runtime installation progress, or null after the operation reaches a terminal state.
   // 当前原生运行时安装进度；操作到达终态后为 null。
   progress: LuaSkillsManagedRuntimeProgressSummary | null;
+}
+
+// MediaUploadProgressChangedDelta describes ephemeral bytes prepared before the prompt is sent.
+// MediaUploadProgressChangedDelta 描述提示词发送前准备的临时媒体字节进度。
+export interface MediaUploadProgressChangedDelta {
+  // Client-generated submission identity used by the cancel action.
+  // 用于取消动作的客户端提交标识。
+  clientSubmissionId: string;
+  // Existing conversation id, or null while a draft is being prepared.
+  // 已有会话标识；草稿准备期间为空。
+  conversationId?: string | null;
+  // Exact provider and model selected for this submission.
+  // 本次提交选定的精确供应商与模型。
+  providerId: string;
+  modelId: string;
+  // User-visible source metadata.
+  // 面向用户展示的源文件元数据。
+  fileName: string;
+  mediaKind: string;
+  fileIndex: number;
+  fileCount: number;
+  // Current transfer phase.
+  // 当前传输阶段。
+  phase: "preparing" | "uploading" | "completed" | "cancelled" | "failed";
+  bytesSent: number;
+  totalBytes?: number | null;
+  error?: string | null;
 }
 
 // ConversationHydrationChangedDelta replaces conversation hydration progress without a full snapshot.

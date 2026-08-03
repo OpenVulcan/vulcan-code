@@ -10,6 +10,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+async-trait.workspace = true
 base64 = "0.22.1"
 dirs.workspace = true
 encoding_rs = "0.8.35"
@@ -25,6 +26,7 @@ uuid.workspace = true
 vldb-controller-client.workspace = true
 vulcan-agent-runtime.workspace = true
 vulcan-ai-contract.workspace = true
+vulcan-ai-protocols.workspace = true
 keyring.workspace = true
 vulcan-provider-adapters.workspace = true
 luaskills.workspace = true

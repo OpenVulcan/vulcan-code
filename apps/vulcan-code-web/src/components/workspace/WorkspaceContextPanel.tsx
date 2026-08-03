@@ -54,6 +54,7 @@ import type {
   WorkspaceDiffSearchRequest,
   WorkspaceDiffSearchResponse,
   WorkspaceDiffSnapshotResponse,
+  WorkspaceReviewFocusRequest,
 } from "@/diff/types";
 import { cn } from "@/lib/utils";
 import { useI18n, type TranslationKey } from "@/i18n";
@@ -190,7 +191,7 @@ export interface WorkspaceContextPanelProps {
   onFileTabTitleChange: (tabId: string, title: string) => void;
   // Monotonic request id used to focus the review tab on uncommitted changes.
   // 用于让审核标签页聚焦未提交变更的单调请求标识。
-  reviewFocusRequest: number;
+  reviewFocusRequest: WorkspaceReviewFocusRequest;
   // Closes the right context panel.
   // 关闭右侧上下文面板。
   onClose?: () => void;
@@ -286,6 +287,9 @@ export interface WorkspaceContextPanelProps {
   // Opens the shared Git commit or push dialog.
   // 打开共享 Git 提交或推送弹窗。
   onOpenGitCommitAction?: () => void;
+  // Synchronizes the active right-panel repository with shared commit controls.
+  // 将右侧面板当前仓库同步到共享提交控件。
+  onSelectGitRepository?: (repositoryKey: string | null) => void;
   // Loads one lazy workspace file directory.
   // 加载单个懒加载工作区文件目录。
   loadWorkspaceFileDirectory: (
@@ -703,6 +707,7 @@ function WorkspaceContextTabContent(args: {
             runWorkspaceGitFileAction={args.props.runWorkspaceGitFileAction}
             onWorkspaceDiffSnapshotLoaded={args.props.onWorkspaceDiffSnapshotLoaded}
             onWorkspaceGitStateChanged={args.props.onWorkspaceGitStateChanged}
+            onSelectGitRepository={args.props.onSelectGitRepository}
             gitCommitActionBusy={args.props.gitCommitActionBusy}
             gitCommitActionDisabled={args.props.gitCommitActionDisabled}
             gitCommitActionLabel={args.props.gitCommitActionLabel}

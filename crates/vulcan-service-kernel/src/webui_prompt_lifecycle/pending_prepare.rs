@@ -4,7 +4,8 @@
 use super::*;
 use crate::{
     conversation_submission::effective_pending_prompt_reasoning_effort,
-    ensure_webui_goal_session_kernel_turn_start_allowed, start_webui_goal_session_kernel_turn,
+    ensure_webui_goal_session_kernel_turn_start_allowed, prepare_submission_media,
+    start_webui_goal_session_kernel_turn,
 };
 
 /// Prepares and dispatches the next queued WebUI pending prompt when the session is idle.
@@ -204,6 +205,43 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
     let workspace_path = workspace_path_for_session(&workspace_snapshot, session_id);
     let runtime_options = entry.runtime_options.clone();
     let entry_agent_runtime = agent_runtime_for_pending_prompt(agent_runtime, &entry);
+    // Queued media is prepared at the actual dispatch boundary so native provider references cannot expire while waiting.
+    // 排队媒体在实际分发边界准备，避免原生供应商引用在等待期间过期。
+    let pending_conversation_id = session_id.to_string();
+    if let Err(error) = prepare_submission_media(
+        app,
+        state,
+        &entry_agent_runtime,
+        entry.id.as_str(),
+        Some(pending_conversation_id.as_str()),
+        None,
+        entry.attachments.as_slice(),
+    )
+    .await
+    {
+        // Restore before returning so cancellation or upload failure never discards the unsent queued prompt.
+        // 返回前先恢复队列，确保取消或上传失败不会丢失尚未发送的排队提示词。
+        restore_webui_pending_prompt(&mut workspace_snapshot, session_id, entry)?;
+        store_workspace_snapshot_without_workbench_rebuild(state, workspace_snapshot)?;
+        emit_pending_prompts_changed_delta(app, state, session_id)?;
+        if let Ok(Some(snapshot)) = current_workspace_snapshot_from_state(state) {
+            spawn_workspace_session_persist_task(
+                state.clone(),
+                controller_runtime.clone(),
+                snapshot,
+                session_id,
+                Some(String::from("queued_media_prepare_failed")),
+            );
+        }
+        if error.starts_with("submission_cancelled:") {
+            webui_trace(
+                "pending_prompt_media_prepare_cancelled",
+                format!("session={session_id}"),
+            );
+            return Ok(false);
+        }
+        return Err(error);
+    }
     let panel_entry_id = entry.panel_entry_id.clone();
     // reasoning_effort prevents a neutral internal queue placeholder from changing the active reasoning selection.
     // reasoning_effort 防止中性的内部队列占位值改变当前推理强度选择。

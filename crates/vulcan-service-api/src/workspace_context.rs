@@ -230,6 +230,58 @@ pub struct ProjectSummary {
     pub codebase_memory_enabled: bool,
 }
 
+/// One immutable managed index job snapshot exposed to the WebUI.
+/// 暴露给 WebUI 的单个不可变托管索引任务快照。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodebaseMemoryIndexJobSummary {
+    /// Sidecar runtime identity that prevents cross-process status overwrite.
+    /// 防止跨进程状态覆盖的 Sidecar 运行时身份。
+    pub runtime_id: String,
+    /// Job identity unique inside one Sidecar runtime.
+    /// 在单个 Sidecar 运行时内唯一的任务身份。
+    pub job_id: String,
+    /// Monotonic project-local job generation.
+    /// 项目内单调递增的任务代次。
+    pub job_generation: String,
+    /// Exact execution mode: update or rebuild.
+    /// 精确执行模式：增量更新或完全重建。
+    pub mode: String,
+    /// Stable scheduling source such as initial, watcher, manual, or recovery.
+    /// 稳定调度来源，例如首次、监视器、手动或恢复。
+    pub trigger: String,
+    /// Current or terminal job state.
+    /// 当前或终态任务状态。
+    pub state: String,
+    /// Current monotonic processing phase.
+    /// 当前单调推进的处理阶段。
+    pub phase: String,
+    /// Completed work units represented as exact decimal text.
+    /// 以精确十进制文本表示的已完成工作单位。
+    pub completed_units: String,
+    /// Stable total work units when the Sidecar has a real denominator.
+    /// Sidecar 具有真实分母时的稳定总工作单位。
+    pub total_units: Option<String>,
+    /// Bounded unit label for the counters.
+    /// 计数器使用的有界单位标签。
+    pub unit: String,
+    /// RFC 3339 task start timestamp when present.
+    /// 存在时的 RFC 3339 任务开始时间。
+    pub started_at: Option<String>,
+    /// RFC 3339 latest progress timestamp when present.
+    /// 存在时的 RFC 3339 最近进度时间。
+    pub updated_at: Option<String>,
+    /// RFC 3339 terminal timestamp when present.
+    /// 存在时的 RFC 3339 终态时间。
+    pub completed_at: Option<String>,
+    /// Whether this request joined an existing same-mode physical job.
+    /// 本次请求是否合并进已有的同模式物理任务。
+    pub coalesced: bool,
+    /// Latest bounded task-specific error.
+    /// 最近一次有界任务级错误。
+    pub error: Option<String>,
+}
+
 /// Project-scoped settings and diagnostics for host-managed Codebase Memory.
 /// 宿主管理 Codebase Memory 的项目级设置与诊断信息。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -244,15 +296,30 @@ pub struct CodebaseMemoryProjectSettingsSummary {
     /// Current managed sidecar lifecycle status.
     /// 当前托管 Sidecar 生命周期状态。
     pub service_status: String,
-    /// Current project indexing status when known.
-    /// 已知时的当前项目索引状态。
-    pub index_status: Option<String>,
+    /// Availability of the currently published index snapshot.
+    /// 当前已发布索引快照的可用状态。
+    pub availability: Option<String>,
+    /// Whether the Sidecar watcher is registered for this project.
+    /// Sidecar 是否已为此项目注册监视器。
+    pub watcher_registered: Option<bool>,
     /// Last successful index timestamp reported by the sidecar.
     /// Sidecar 报告的最近成功索引时间。
     pub last_successful_index_at: Option<String>,
     /// Current project index revision reported by the sidecar.
     /// Sidecar 报告的当前项目索引修订号。
     pub index_revision: Option<String>,
+    /// Current indexed node count when a live status query has observed it.
+    /// 实时状态查询已观察到时的当前索引节点数量。
+    pub node_count: Option<String>,
+    /// Current indexed edge count when a live status query has observed it.
+    /// 实时状态查询已观察到时的当前索引边数量。
+    pub edge_count: Option<String>,
+    /// Currently executing index job, independent from published-index availability.
+    /// 当前执行中的索引任务，与已发布索引可用性相互独立。
+    pub active_job: Option<CodebaseMemoryIndexJobSummary>,
+    /// Latest immutable terminal job snapshot.
+    /// 最近一次不可变终态任务快照。
+    pub last_job: Option<CodebaseMemoryIndexJobSummary>,
     /// Latest non-sensitive project or sidecar error.
     /// 最近一次不含敏感信息的项目或 Sidecar 错误。
     pub last_error: Option<String>,

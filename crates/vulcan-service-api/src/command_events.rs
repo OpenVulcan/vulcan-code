@@ -131,6 +131,23 @@ pub struct PluginUiInvalidatedEvent {
     pub revision: u64,
 }
 
+/// Describes Git repositories whose working-tree state changed on disk.
+/// 描述磁盘上的工作树状态发生变化的 Git 仓库集合。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceGitChangedEvent {
+    /// Optional persisted project identity owning the changed repositories.
+    /// 发生变化的仓库所属的可选持久化项目标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    /// Canonical workspace path used to match the active WebUI project.
+    /// 用于匹配当前 WebUI 项目的规范化工作区路径。
+    pub workspace_path: String,
+    /// Repository keys whose watched paths contain at least one changed file.
+    /// 被监听路径包含至少一个变更文件的仓库键集合。
+    pub repository_keys: Vec<String>,
+}
+
 /// Represents one event emitted from the local service bridge.
 /// 表示本地服务桥接层发出的单个事件。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -154,6 +171,9 @@ pub enum ServiceEvent {
     /// Plugin UI data invalidation event.
     /// 插件界面数据失效事件。
     PluginUiInvalidated(Box<PluginUiInvalidatedEvent>),
+    /// Git working-tree change event for repository review refreshes.
+    /// 用于仓库审查刷新的 Git 工作树变更事件。
+    WorkspaceGitChanged(Box<WorkspaceGitChangedEvent>),
 }
 
 /// Receives one service event emitted by the Core Service boundary.

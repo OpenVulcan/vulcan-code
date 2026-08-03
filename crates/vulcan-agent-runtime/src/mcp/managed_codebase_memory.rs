@@ -8,7 +8,7 @@ use std::sync::{Arc, RwLock};
 
 /// Private protocol contract required from the Vulcan Codebase Memory sidecar.
 /// Vulcan Codebase Memory Sidecar 必须支持的私有协议契约。
-pub const MANAGED_CODEBASE_MEMORY_CONTRACT: &str = "vulcan.codebase-memory/1";
+pub const MANAGED_CODEBASE_MEMORY_CONTRACT: &str = "vulcan.codebase-memory/2";
 /// Exact initialize product name required from the packaged Codebase Memory sidecar.
 /// 打包 Codebase Memory Sidecar 在 initialize 中必须返回的精确产品名称。
 pub const MANAGED_CODEBASE_MEMORY_PRODUCT: &str = "vulcan-codebase-memory-mcp";

@@ -278,6 +278,10 @@
 
 .thinking-body {
   max-width: min(100%, 920px);
+  max-height: 300px;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
   border-left: 2px solid var(--border);
   padding-left: 12px;
   color: var(--muted-foreground);

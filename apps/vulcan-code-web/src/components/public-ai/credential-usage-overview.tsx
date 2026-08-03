@@ -161,10 +161,33 @@ function CredentialUsageSummary(props: {
   return (
     <div className="w-full space-y-1.5">
       {props.usage.quota_windows.slice(0, 3).map((window) => (
-        <UsageWindowMetric key={window.id} label={window.display_name} window={window} />
+        <UsageWindowMetric
+          key={window.id}
+          label={props.providerId === "kimi" ? kimiUsageWindowLabel(window, t) : window.display_name}
+          window={window}
+        />
       ))}
     </div>
   )
+}
+
+// kimiUsageWindowLabel translates ModelCore-compatible Kimi metrics while preserving provider-owned names.
+// kimiUsageWindowLabel 翻译与 ModelCore 兼容的 Kimi 指标，同时保留供应商拥有的名称。
+export function kimiUsageWindowLabel(
+  window: PublicAiAccountUsageWindow,
+  t: (key: TranslationKey) => string,
+): string {
+  if (window.id === "weekly_usage") {
+    return t("composer.accountCard.kimiWeeklyUsage")
+  }
+  if (window.id === "five_hour_usage" || window.id === "5_hour_usage") {
+    return t("composer.accountCard.kimiFiveHourUsage")
+  }
+  const fallbackMatch = /^limit_(\d+)$/.exec(window.id)
+  if (fallbackMatch) {
+    return `${t("composer.accountCard.kimiLimit")} ${fallbackMatch[1]}`
+  }
+  return window.display_name
 }
 
 // TavilyUsageSummary renders only provider-reported account-plan consumption.

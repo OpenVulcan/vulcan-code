@@ -545,6 +545,7 @@ pub(super) fn test_agent_runtime_bridge() -> AgentRuntimeBridge {
         configured_inference_service,
         provider_id_override: None,
         model_id_override: None,
+        connection_id_override: None,
         agent_profile_catalog: AgentProfileCatalog::default(),
         luaskills_runtime: None,
         vulcan_plugin_runtime,

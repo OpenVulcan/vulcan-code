@@ -2,6 +2,238 @@
 //! git diff services 辅助逻辑。
 
 use super::*;
+use crate::git::discover_webui_git_repository_catalog;
+use crate::git_watcher::reconcile_webui_git_repository_watches;
+use vulcan_workspace_store::workspace_store::{
+    load_git_repository_monitoring_preferences, persist_git_repository_monitoring_preference,
+};
+
+/// Process-wide weak registry for serializing writes against one canonical Git repository.
+/// 进程级弱引用注册表，用于串行化同一个规范 Git 仓库上的写操作。
+static WEBUI_GIT_REPOSITORY_OPERATION_LOCKS: std::sync::LazyLock<
+    std::sync::Mutex<
+        std::collections::HashMap<std::path::PathBuf, std::sync::Weak<tokio::sync::Mutex<()>>>,
+    >,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Acquires the exclusive write lane for one canonical Git repository.
+/// 获取单个规范 Git 仓库的独占写操作通道。
+///
+/// # Parameters
+/// 参数
+/// `repository_root` is the backend-resolved repository root used as the lock identity.
+/// `repository_root` 是后端解析出的仓库根目录，并作为锁身份。
+///
+/// # Returns
+/// 返回值
+/// Returns an owned asynchronous guard that remains held until the caller finishes its Git mutation.
+/// 返回一个自有异步守卫，调用方完成 Git 变更前持续持有该守卫。
+pub(crate) async fn begin_webui_git_repository_operation(
+    repository_root: &std::path::Path,
+) -> Result<tokio::sync::OwnedMutexGuard<()>, String> {
+    let repository_root = std::fs::canonicalize(repository_root).map_err(|error| {
+        format!(
+            "无法规范化 Git 仓库写操作锁路径 `{}`：{error}",
+            repository_root.display()
+        )
+    })?;
+    let lock = {
+        let mut registry = WEBUI_GIT_REPOSITORY_OPERATION_LOCKS
+            .lock()
+            .map_err(|error| format!("无法锁定 Git 仓库写操作注册表：{error}"))?;
+        registry.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = registry
+            .get(&repository_root)
+            .and_then(std::sync::Weak::upgrade)
+        {
+            lock
+        } else {
+            let lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+            registry.insert(repository_root, std::sync::Arc::downgrade(&lock));
+            lock
+        }
+    };
+    Ok(lock.lock_owned().await)
+}
+
+/// Discovers Git repositories for one backend-owned WebUI project.
+/// 为后端持有的单个 WebUI 项目发现 Git 仓库。
+pub(crate) async fn service_workspace_git_catalog(
+    state: SharedServiceBridgeState,
+    workspace_path: Option<String>,
+    project_id: Option<String>,
+    conversation_id: Option<String>,
+) -> Result<WebuiGitRepositoryCatalog, String> {
+    let preference_project_id = webui_diff_project_id_from_state(
+        &state,
+        project_id.as_deref(),
+        conversation_id.as_deref(),
+    )?;
+    let resolved_workspace_path = webui_diff_workspace_path_from_state(
+        &state,
+        project_id.as_deref(),
+        conversation_id.as_deref(),
+        workspace_path.as_deref(),
+    )?;
+    let mut catalog = spawn_service_blocking_task(move || {
+        discover_webui_git_repository_catalog(std::path::Path::new(&resolved_workspace_path))
+    })
+    .await
+    .map_err(|error| format!("workspace Git catalog task failed: {error}"))??;
+    if let Some(project_id) = preference_project_id.as_deref() {
+        let controller_runtime = crate::controller_runtime_from_state(&state)?;
+        let preferences =
+            load_git_repository_monitoring_preferences(controller_runtime, project_id).await?;
+        apply_git_repository_monitoring_preferences(&mut catalog, &preferences);
+    }
+    Ok(catalog)
+}
+
+/// Discovers repositories and reconciles the enabled set with the notify-backed watcher.
+/// 发现仓库并将已启用集合与基于 notify 的监听器进行重调和。
+pub(crate) async fn service_workspace_git_catalog_with_watcher(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    workspace_path: Option<String>,
+    project_id: Option<String>,
+    conversation_id: Option<String>,
+) -> Result<WebuiGitRepositoryCatalog, String> {
+    let preference_project_id = webui_diff_project_id_from_state(
+        &state,
+        project_id.as_deref(),
+        conversation_id.as_deref(),
+    )?;
+    let resolved_workspace_path = webui_diff_workspace_path_from_state(
+        &state,
+        project_id.as_deref(),
+        conversation_id.as_deref(),
+        workspace_path.as_deref(),
+    )?;
+    let catalog = service_workspace_git_catalog(
+        state,
+        Some(resolved_workspace_path.clone()),
+        project_id,
+        conversation_id,
+    )
+    .await?;
+    reconcile_webui_git_repository_watches(
+        app,
+        preference_project_id.as_deref(),
+        &resolved_workspace_path,
+        &catalog,
+    )?;
+    Ok(catalog)
+}
+
+/// Persists one repository monitoring switch and returns the refreshed catalog.
+/// 持久化单个仓库监听开关并返回刷新后的仓库目录。
+pub(crate) async fn service_set_workspace_git_monitoring(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    workspace_path: Option<String>,
+    project_id: Option<String>,
+    conversation_id: Option<String>,
+    request: WebuiGitRepositoryMonitoringRequest,
+) -> Result<WebuiGitRepositoryCatalog, String> {
+    let project_id = webui_diff_project_id_from_state(
+        &state,
+        project_id.as_deref(),
+        conversation_id.as_deref(),
+    )?
+    .ok_or_else(|| String::from("缺少 Git 审查监听设置所属项目。"))?;
+    let resolved_workspace_path = webui_diff_workspace_path_from_state(
+        &state,
+        Some(project_id.as_str()),
+        conversation_id.as_deref(),
+        workspace_path.as_deref(),
+    )?;
+    let catalog = spawn_service_blocking_task({
+        let resolved_workspace_path = resolved_workspace_path.clone();
+        move || {
+            discover_webui_git_repository_catalog(std::path::Path::new(&resolved_workspace_path))
+        }
+    })
+    .await
+    .map_err(|error| format!("workspace Git catalog task failed: {error}"))??;
+    if !catalog
+        .repositories
+        .iter()
+        .any(|repository| repository.repository_key == request.repository_key)
+    {
+        return Err(format!(
+            "未发现项目内 Git 仓库键 `{}`。",
+            request.repository_key
+        ));
+    }
+    let repository_root = crate::git::resolve_webui_repository_root_from_workspace_text_with_key(
+        &resolved_workspace_path,
+        Some(request.repository_key.as_str()),
+    )?;
+    // Preference writes share the repository mutation lane so a toggle cannot race an index or ref write.
+    // 偏好写入与仓库变更共用同一条互斥通道，避免开关切换与索引或引用写入竞态。
+    let operation_guard = begin_webui_git_repository_operation(&repository_root).await?;
+    let controller_runtime = crate::controller_runtime_from_state(&state)?;
+    persist_git_repository_monitoring_preference(
+        controller_runtime,
+        project_id.as_str(),
+        &request.repository_key,
+        request.enabled,
+    )
+    .await?;
+    drop(operation_guard);
+    service_workspace_git_catalog_with_watcher(
+        app,
+        state,
+        Some(resolved_workspace_path),
+        Some(project_id),
+        conversation_id,
+    )
+    .await
+}
+
+/// Rejects Git mutations that target a repository whose review monitoring is disabled.
+/// 拒绝指向已关闭审查监听仓库的 Git 写操作。
+pub(crate) async fn ensure_webui_git_repository_monitoring_enabled(
+    state: SharedServiceBridgeState,
+    workspace_path: Option<String>,
+    project_id: Option<String>,
+    conversation_id: Option<String>,
+    repository_key: Option<&str>,
+) -> Result<(), String> {
+    let catalog =
+        service_workspace_git_catalog(state, workspace_path, project_id, conversation_id).await?;
+    if catalog.repositories.is_empty() {
+        return Ok(());
+    }
+    let target_key = repository_key
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| catalog.repositories[0].repository_key.as_str());
+    let repository = catalog
+        .repositories
+        .iter()
+        .find(|repository| repository.repository_key == target_key)
+        .ok_or_else(|| format!("未发现项目内 Git 仓库键 `{target_key}`。"))?;
+    if !repository.monitoring_enabled {
+        return Err(format!(
+            "Git 仓库 `{target_key}` 已关闭审查监听，无法执行写操作。"
+        ));
+    }
+    Ok(())
+}
+
+/// Applies persisted monitoring flags to a discovered repository catalog.
+/// 将已持久化监听标记应用到已发现的仓库目录。
+fn apply_git_repository_monitoring_preferences(
+    catalog: &mut WebuiGitRepositoryCatalog,
+    preferences: &std::collections::BTreeMap<String, bool>,
+) {
+    for repository in &mut catalog.repositories {
+        if let Some(enabled) = preferences.get(&repository.repository_key) {
+            repository.monitoring_enabled = *enabled;
+        }
+    }
+}
 
 /// Loads a Git diff snapshot for one WebUI project workspace.
 /// 为单个 WebUI 项目工作区加载 Git diff 快照。
@@ -86,6 +318,29 @@ pub(crate) async fn service_workspace_git_file_action(
         conversation_id.as_deref(),
         workspace_path.as_deref(),
     )?;
+    let repository_key = request.repository_key.clone();
+    let repository_root = spawn_service_blocking_task({
+        let resolved_workspace_path = resolved_workspace_path.clone();
+        move || {
+            resolve_webui_repository_root_from_workspace_text_with_key(
+                &resolved_workspace_path,
+                repository_key.as_deref(),
+            )
+        }
+    })
+    .await
+    .map_err(|error| format!("workspace Git repository resolution task failed: {error}"))??;
+    // operation_guard keeps index and worktree mutations for one repository serial.
+    // operation_guard 让同一仓库的索引与工作树变更保持串行。
+    let _operation_guard = begin_webui_git_repository_operation(&repository_root).await?;
+    ensure_webui_git_repository_monitoring_enabled(
+        state,
+        Some(resolved_workspace_path.clone()),
+        project_id,
+        conversation_id,
+        request.repository_key.as_deref(),
+    )
+    .await?;
     spawn_service_blocking_task(move || {
         run_webui_workspace_git_file_action(&resolved_workspace_path, request)
     })
@@ -125,6 +380,35 @@ pub(crate) fn webui_diff_workspace_path_from_state(
         return Ok(project.path.clone());
     }
     Ok(webui_diff_fallback_workspace_path(fallback_path))
+}
+
+/// Resolves a project identity for Git preference reads without trusting a fallback path.
+/// 解析 Git 偏好读取使用的项目身份，不信任回退路径推断身份。
+pub(crate) fn webui_diff_project_id_from_state(
+    state: &SharedServiceBridgeState,
+    project_id: Option<&str>,
+    conversation_id: Option<&str>,
+) -> Result<Option<String>, String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let Some(workspace_snapshot) = guard.workspace_snapshot.as_ref() else {
+        return Ok(None);
+    };
+    let candidate = project_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            conversation_id
+                .and_then(parse_session_id)
+                .and_then(|session_id| {
+                    owning_project_id_for_session(workspace_snapshot, session_id)
+                })
+        });
+    Ok(candidate.filter(|candidate| {
+        workspace_task_project_for_project_id(workspace_snapshot, candidate).is_some()
+    }))
 }
 
 /// Returns the fallback workspace path used when backend project resolution misses.
@@ -292,5 +576,50 @@ mod tests {
                 .expect("blank project should resolve through fallback"),
             "D:/fallback"
         );
+    }
+
+    /// Verifies conversation-only catalog requests recover the owning project identity.
+    /// 验证仅携带会话标识的目录请求可以恢复所属项目身份。
+    #[test]
+    fn webui_diff_project_id_resolves_from_conversation() {
+        let state = service_state_with_workspace_snapshot(git_diff_workspace_snapshot());
+        let session_id = {
+            let guard = state.lock().expect("test service state lock must be valid");
+            guard
+                .workspace_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.sessions.first())
+                .map(|session| session.id.to_string())
+                .expect("test session should exist")
+        };
+
+        assert_eq!(
+            webui_diff_project_id_from_state(&state, None, Some(&session_id))
+                .expect("conversation project should resolve")
+                .as_deref(),
+            Some("project-a")
+        );
+    }
+
+    /// Verifies writes targeting one canonical repository wait for the active operation guard.
+    /// 验证指向同一规范仓库的写操作会等待当前活动操作守卫。
+    #[tokio::test]
+    async fn webui_git_repository_operation_lock_serializes_same_repository() {
+        let temporary = tempfile::tempdir().expect("temporary directory should be created");
+        let first_guard = begin_webui_git_repository_operation(temporary.path())
+            .await
+            .expect("first repository operation guard should be acquired");
+        let repository_root = temporary.path().to_path_buf();
+        let waiter =
+            tokio::spawn(
+                async move { begin_webui_git_repository_operation(&repository_root).await },
+            );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(25), waiter)
+                .await
+                .is_err(),
+            "a second operation should wait while the first guard is held"
+        );
+        drop(first_guard);
     }
 }

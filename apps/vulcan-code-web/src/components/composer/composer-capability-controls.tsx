@@ -466,15 +466,32 @@ function providerToolSettingsSignature(
   );
 }
 
-// orderedProviderToolCapabilities returns stable capabilities that have at least one current target.
-// orderedProviderToolCapabilities 返回至少含一个当前目标的稳定能力列表。
+// orderProviderToolCapabilities returns unique capabilities with explicit web-search priority.
+// orderProviderToolCapabilities 返回去重后且明确将网页搜索置顶的能力列表。
+export function orderProviderToolCapabilities(
+  capabilities: PublicAiProviderToolCapabilityKind[],
+): PublicAiProviderToolCapabilityKind[] {
+  const priority = (capability: PublicAiProviderToolCapabilityKind): number => {
+    if (capability === "web_search") {
+      return 0;
+    }
+    if (capability === "web_extract") {
+      return 1;
+    }
+    return 2;
+  };
+  return Array.from(new Set(capabilities)).sort((left, right) => {
+    const priorityDifference = priority(left) - priority(right);
+    return priorityDifference === 0 ? left.localeCompare(right) : priorityDifference;
+  });
+}
+
 function orderedProviderToolCapabilities(
   snapshot: PublicAiSettingsSnapshot,
 ): PublicAiProviderToolCapabilityKind[] {
-  return Array.from(new Set(
-    snapshot.providerToolTargets
-      .map((target) => target.target.contract.capability),
-  )).sort();
+  return orderProviderToolCapabilities(
+    snapshot.providerToolTargets.map((target) => target.target.contract.capability),
+  );
 }
 
 // providerToolSettingsConflicts reports stale choices without silently replacing them.

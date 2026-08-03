@@ -1,5 +1,41 @@
 use super::*;
-use crate::conversation_submission::prepare_retained_submission_preflight;
+use crate::conversation_submission::{
+    attach_client_submission_id_to_visible_user_record, commit_created_submission_workspace_slice,
+    prepare_materialized_submission_session, prepare_retained_submission_preflight,
+};
+
+/// Builds an initialized retained workspace that owns `project-a` for new-session admission tests.
+/// 构造拥有 `project-a` 的已初始化保留工作区，用于新会话准入测试。
+///
+/// # Parameters
+/// 参数
+/// `session_id` identifies the existing idle session retained by the test workspace.
+/// `session_id` 标识测试工作区保留的现有空闲会话。
+///
+/// # Returns
+/// 返回值
+/// Returns a service state whose retained workspace explicitly contains `project-a`.
+/// 返回保留工作区显式包含 `project-a` 的服务状态。
+fn initialized_project_a_service_state(session_id: SessionId) -> ServiceBridgeState {
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    let retained_workspace = service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("test workspace should exist");
+    retained_workspace
+        .task_projects
+        .push(TaskProjectSummary::new(
+            "project-a",
+            "Project A",
+            "D:/project-a",
+            false,
+            0,
+            None,
+            None,
+            Vec::new(),
+        ));
+    service_state
+}
 
 /// Verifies an existing session resolves its retained project owner before lifecycle admission.
 /// 验证已有会话会在生命周期准入前解析其保留项目所有者。
@@ -426,9 +462,8 @@ fn new_session_project_admission_blocks_lifecycle_transition_until_release() {
     let session_id = SessionId::new_v4();
     // state owns project-a and both project/session reservation tables.
     // state 持有 project-a 以及项目/会话预留表。
-    let state: SharedServiceBridgeState = Arc::new(Mutex::new(
-        test_service_state_with_parent_session(session_id),
-    ));
+    let state: SharedServiceBridgeState =
+        Arc::new(Mutex::new(initialized_project_a_service_state(session_id)));
     // preflight owns project-a across the simulated asynchronous submission window.
     // preflight 在模拟的异步提交窗口内拥有 project-a。
     let preflight = prepare_retained_submission_preflight(
@@ -456,8 +491,8 @@ fn new_session_project_admission_blocks_lifecycle_transition_until_release() {
     drop(lifecycle_guard);
 }
 
-/// Verifies unresolved project selection blocks every lifecycle target while disk loading decides ownership.
-/// 验证磁盘加载决定归属期间，未解析项目选择会阻止全部生命周期目标。
+/// Verifies a new-session submission rejects an uninitialized retained workspace without disk fallback.
+/// 验证新会话提交会拒绝未初始化的保留工作区，且不会回退磁盘加载。
 ///
 /// # Parameters
 /// 参数
@@ -466,14 +501,14 @@ fn new_session_project_admission_blocks_lifecycle_transition_until_release() {
 ///
 /// # Returns
 /// 返回值
-/// This test returns no value and fails if an exact lifecycle target bypasses unresolved selection ownership.
-/// 此测试无返回值；若精确生命周期目标绕过未解析选择所有权则失败。
+/// This test returns no value and fails if new-session preflight reserves an unresolved project or accepts disk fallback.
+/// 此测试无返回值；若新会话预检预留未解析项目或接受磁盘回退则失败。
 #[test]
-fn unresolved_project_admission_blocks_lifecycle_transition_during_workspace_load() {
+fn new_session_rejects_uninitialized_workspace_without_reservation_leak() {
     // state intentionally has no retained workspace, forcing project selection to remain unresolved.
     // state 刻意不含保留工作区，迫使项目选择保持未解析。
     let state: SharedServiceBridgeState = Arc::new(Mutex::new(
-        test_service_state_with_parent_session(SessionId::new_v4()),
+        initialized_project_a_service_state(SessionId::new_v4()),
     ));
     {
         // guard removes the startup workspace so preflight cannot infer a project identity.
@@ -481,20 +516,19 @@ fn unresolved_project_admission_blocks_lifecycle_transition_during_workspace_loa
         let mut guard = state.lock().expect("service state lock");
         guard.workspace_snapshot = None;
     }
-    // preflight owns the global unresolved selection scope through the load window.
-    // preflight 在加载窗口内拥有全局未解析选择作用域。
-    let preflight =
+    // error proves submission fails fast instead of invoking the historical full-workspace loader.
+    // error 证明提交会快速失败，而不是调用历史全工作区加载器。
+    let error =
         prepare_retained_submission_preflight(&state, None, PromptSessionTarget::Create, None)
-            .expect("draft submission should reserve unresolved project selection");
+            .err()
+            .expect("draft submission should reject an uninitialized workspace");
+    assert!(error.contains("工作区仍在初始化"));
 
-    // conflict proves no exact lifecycle target can overtake unresolved selection.
-    // conflict 证明任何精确生命周期目标都不能越过未解析选择。
-    let conflict = begin_project_lifecycle_transition(&state, "project-any", [], "归档")
-        .err()
-        .expect("unresolved submission must block project lifecycle transition");
-    assert!(conflict.contains("user prompt submission"));
-
-    drop(preflight);
+    // lifecycle_guard proves rejected admission left no unresolved reservation behind.
+    // lifecycle_guard 证明被拒绝的准入没有遗留未解析预留。
+    let lifecycle_guard = begin_project_lifecycle_transition(&state, "project-any", [], "归档")
+        .expect("rejected submission must not retain project admission");
+    drop(lifecycle_guard);
 }
 
 /// Verifies exact project admission rejects a materialization result from another project.
@@ -514,7 +548,7 @@ fn exact_project_admission_rejects_cross_project_materialization() {
     // state contains project-a as the explicit new-session target.
     // state 包含作为显式新会话目标的 project-a。
     let state: SharedServiceBridgeState = Arc::new(Mutex::new(
-        test_service_state_with_parent_session(SessionId::new_v4()),
+        initialized_project_a_service_state(SessionId::new_v4()),
     ));
     // preflight reserves only project-a.
     // preflight 仅预留 project-a。
@@ -562,7 +596,7 @@ fn stale_project_admission_cannot_release_replacement_owner() {
     // state contains project-a and the submission guard that will become stale.
     // state 包含 project-a 以及即将过期的提交守卫。
     let state: SharedServiceBridgeState = Arc::new(Mutex::new(
-        test_service_state_with_parent_session(SessionId::new_v4()),
+        initialized_project_a_service_state(SessionId::new_v4()),
     ));
     // preflight owns the first project-a reservation generation.
     // preflight 拥有第一代 project-a 预留。
@@ -619,25 +653,7 @@ fn stale_project_admission_cannot_release_replacement_owner() {
 fn implicit_new_session_admission_pins_retained_default_project() {
     // state contains project-a as the authoritative first retained project.
     // state 包含作为权威首个保留项目的 project-a。
-    let mut service_state = test_service_state_with_parent_session(SessionId::new_v4());
-    // retained_workspace installs project-a as the actual first active project.
-    // retained_workspace 将 project-a 安装为真实的首个活动项目。
-    let retained_workspace = service_state
-        .workspace_snapshot
-        .as_mut()
-        .expect("test workspace should exist");
-    retained_workspace
-        .task_projects
-        .push(TaskProjectSummary::new(
-            "project-a",
-            "Project A",
-            "D:/project-a",
-            false,
-            0,
-            None,
-            None,
-            Vec::new(),
-        ));
+    let service_state = initialized_project_a_service_state(SessionId::new_v4());
     // state exposes the retained default and project reservation table under one lock.
     // state 在同一个锁下提供保留默认项目与项目预留表。
     let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
@@ -651,4 +667,210 @@ fn implicit_new_session_admission_pins_retained_default_project() {
         preflight.project_admission.exact_project_id(),
         Some("project-a")
     );
+    let submission_slice = preflight
+        .retained_workspace_snapshot
+        .as_ref()
+        .expect("new submission should own one bounded workspace slice");
+    assert_eq!(submission_slice.task_projects.len(), 1);
+    assert_eq!(submission_slice.task_projects[0].id, "project-a");
+    assert!(submission_slice.task_projects[0].session_ids.is_empty());
+    assert!(submission_slice.sessions.is_empty());
+    assert!(submission_slice.session_messages.is_empty());
+    assert!(submission_slice.session_runtime_state.is_empty());
+}
+
+/// Verifies committing a created bounded slice preserves every historical retained conversation.
+/// 验证提交新建有界切片会保留全部历史保留会话。
+///
+/// # Parameters
+/// 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// 返回值
+/// This test returns no value and fails if the bounded commit replaces the authoritative workspace.
+/// 此测试无返回值；若有界提交替换权威工作区则失败。
+#[test]
+fn created_submission_slice_commit_preserves_retained_history() {
+    // historical_session_id identifies the row that must survive the new-session commit.
+    // historical_session_id 标识必须在新会话提交后保留的历史行。
+    let historical_session_id = SessionId::new_v4();
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(
+        initialized_project_a_service_state(historical_session_id),
+    ));
+    let preflight = prepare_retained_submission_preflight(
+        &state,
+        Some("project-a"),
+        PromptSessionTarget::Create,
+        None,
+    )
+    .expect("initialized project should admit a new conversation");
+    let mut submission_slice = preflight
+        .retained_workspace_snapshot
+        .clone()
+        .expect("new-session preflight should own one bounded slice");
+    let materialized_session = materialize_prompt_session(
+        &mut submission_slice,
+        Some("project-a"),
+        PromptSessionTarget::Create,
+        "New bounded conversation",
+    )
+    .expect("bounded slice should materialize one conversation");
+    prepare_materialized_submission_session(&mut submission_slice, &materialized_session)
+        .expect("created conversation should receive runtime defaults");
+
+    commit_created_submission_workspace_slice(&state, &submission_slice, &materialized_session)
+        .expect("bounded slice should merge into the retained workspace");
+
+    let guard = state
+        .lock()
+        .expect("service state lock after bounded commit");
+    let workspace = guard
+        .workspace_snapshot
+        .as_ref()
+        .expect("retained workspace should remain initialized");
+    assert!(
+        workspace
+            .sessions
+            .iter()
+            .any(|session| session.id == historical_session_id)
+    );
+    assert!(
+        workspace
+            .sessions
+            .iter()
+            .any(|session| session.id == materialized_session.session_id)
+    );
+    assert_eq!(workspace.sessions.len(), 2);
+}
+
+/// Verifies one browser submission identifier reaches visible and canonical user records together.
+/// 验证一个浏览器提交标识会同时到达可见与规范用户记录。
+///
+/// # Parameters
+/// 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// 返回值
+/// This test returns no value and fails if either retained projection loses correlation metadata.
+/// 此测试无返回值；若任一保留投影丢失关联元数据则失败。
+#[test]
+fn client_submission_identifier_is_attached_to_both_user_record_projections() {
+    // session_id and message_id select the exact mirrored user record pair.
+    // session_id 与 message_id 选择精确的镜像用户记录对。
+    let session_id = SessionId::new_v4();
+    let message_id = "visible-user-message";
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    let workspace = service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("test workspace should exist");
+    workspace.session_messages.insert(
+        session_id,
+        vec![
+            SessionMessageEntry::new(SessionMessageKind::User, "", "hello")
+                .with_runtime_metadata(message_id, "1000"),
+        ],
+    );
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    runtime_state
+        .conversation_state
+        .records
+        .push(vulcan_context::SessionConversationRecord {
+            id: message_id.to_string(),
+            kind: SessionMessageKind::User,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::new(),
+            body: String::from("hello"),
+            metadata: None,
+            created_at: String::from("1000"),
+        });
+    workspace
+        .session_runtime_state
+        .insert(session_id, runtime_state);
+
+    attach_client_submission_id_to_visible_user_record(
+        workspace,
+        session_id,
+        Some(message_id),
+        "submission-123",
+        "new",
+        1000,
+    )
+    .expect("both user projections should accept correlation metadata");
+
+    let visible_identifier = workspace.session_messages[&session_id][0]
+        .metadata
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .and_then(|metadata| metadata.get("client_submission_id"))
+        .and_then(serde_json::Value::as_str);
+    let canonical_identifier = workspace.session_runtime_state[&session_id]
+        .conversation_state
+        .records[0]
+        .metadata
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .and_then(|metadata| metadata.get("client_submission_id"))
+        .and_then(serde_json::Value::as_str);
+    assert_eq!(visible_identifier, Some("submission-123"));
+    assert_eq!(canonical_identifier, Some("submission-123"));
+    assert_eq!(
+        workspace.session_messages[&session_id][0]
+            .metadata
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .and_then(|metadata| metadata.get("client_submission_accepted_at_ms"))
+            .and_then(serde_json::Value::as_str),
+        Some("1000")
+    );
+}
+
+/// Verifies slow submission diagnostics are sanitized, bounded, and visible to diagnostics surfaces.
+/// 验证慢提交诊断经过净化、保持有界并可被诊断界面读取。
+///
+/// # Parameters
+/// 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// 返回值
+/// This test returns no value and fails if prompt-like delimiters leak or either buffer stays empty.
+/// 此测试无返回值；若提示词式分隔符泄漏或任一缓冲区保持为空则失败。
+#[test]
+fn slow_submission_diagnostic_is_sanitized_and_retained_for_webui() {
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(
+        test_service_state_with_parent_session(SessionId::new_v4()),
+    ));
+
+    retain_slow_submission_diagnostic(
+        &state,
+        "submission/with unsafe spaces",
+        "new",
+        "post ack/preparation",
+        201,
+    )
+    .expect("slow diagnostic should be retained");
+
+    let guard = state.lock().expect("service state lock after diagnostic");
+    let startup_line = guard
+        .startup
+        .recent_logs
+        .last()
+        .expect("startup diagnostics should contain the slow stage");
+    let workbench_line = guard
+        .workbench
+        .logs
+        .last()
+        .expect("workbench diagnostics should contain the slow stage");
+    assert!(startup_line.contains("submissionwithunsafespaces"));
+    assert!(startup_line.contains("stage=postackpreparation"));
+    assert!(!startup_line.contains('/'));
+    assert_eq!(workbench_line.source, "submission");
+    assert_eq!(workbench_line.level, "warning");
 }

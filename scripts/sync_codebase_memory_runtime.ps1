@@ -115,7 +115,7 @@ function Read-ValidatedRuntime {
     if (($PropertyNames -join "`n") -cne ($ExpectedPropertyNames -join "`n")) {
         throw "$Label manifest fields do not match the managed runtime contract."
     }
-    if ($Manifest.protocol -cne "vulcan.codebase-memory/1") {
+    if ($Manifest.protocol -cne "vulcan.codebase-memory/2") {
         throw "$Label manifest protocol is invalid."
     }
     if ($Manifest.platform -cne (Get-NativePlatformKey)) {

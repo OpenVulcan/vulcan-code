@@ -11,10 +11,10 @@ use crate::{
 use std::collections::BTreeMap;
 use vulcan_ai_contract::InferenceUsageScope;
 use vulcan_ai_protocols::{
-    ANTHROPIC_MESSAGES_PROFILE_ID, CLAUDE_CODE_MESSAGES_PROFILE_ID,
-    GEMINI_GENERATE_CONTENT_PROFILE_ID, GEMINI_INTERACTIONS_PROFILE_ID,
-    GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_CODEX_RESPONSES_PROFILE_ID,
-    OPENAI_RESPONSES_PROFILE_ID,
+    ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
+    CLAUDE_CODE_MESSAGES_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID,
+    GEMINI_INTERACTIONS_PROFILE_ID, GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
+    OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
 
 /// Creates the first-batch MiniMax provider descriptor.
@@ -154,6 +154,20 @@ pub fn kimi_descriptor() -> ProviderDescriptor {
                         ],
                         None,
                     ),
+                    protocol_route_with_overrides(
+                        ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
+                        "/messages",
+                        None,
+                        Some(AuthenticationProjection::BearerAuthorization),
+                        [
+                            ("anthropic-version", "2023-06-01"),
+                            (
+                                "anthropic-beta",
+                                "oauth-2025-04-20,interleaved-thinking-2025-05-14",
+                            ),
+                        ],
+                        None,
+                    ),
                 ],
             }),
         ],
@@ -200,6 +214,7 @@ pub fn deepseek_descriptor() -> ProviderDescriptor {
                     [("anthropic-version", "2023-06-01")],
                     None,
                 ),
+                protocol_route(OPENAI_RESPONSES_PROFILE_ID, "/responses"),
             ],
         })],
     }
@@ -1314,7 +1329,8 @@ fn minimax_protocol_routes() -> [ProtocolRoute; 2] {
 #[cfg(test)]
 mod tests {
     use super::{
-        ANTHROPIC_MESSAGES_PROFILE_ID, alibaba_descriptor, kimi_descriptor, minimax_descriptor,
+        ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID, alibaba_descriptor,
+        kimi_descriptor, minimax_descriptor,
     };
     use crate::{
         AccountUsageQueryKind, AuthenticationProjection, CredentialMode, ModelDiscoveryKind,
@@ -1408,6 +1424,12 @@ mod tests {
         assert_eq!(
             login.account_usage_query,
             AccountUsageQueryKind::KimiCodingPlan
+        );
+        assert!(
+            entry
+                .protocol_routes
+                .iter()
+                .any(|route| route.protocol_profile_id == ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID)
         );
     }
 

@@ -28,9 +28,12 @@ import type {
   WorkspaceDiffSearchRequest,
   WorkspaceDiffSearchResponse,
   WorkspaceDiffSnapshotResponse,
+  WorkspaceGitRepositorySummary,
+  WorkspaceReviewFocusRequest,
 } from "@/diff/types";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
+import { loadWorkspaceGitCatalog } from "@/service/workbench-snapshot-service";
 import { useWorkspaceReviewRequestOwnership } from "@/components/workspace/workspace-review-panel-request-ownership";
 import type {
   ConversationMessage,
@@ -91,7 +94,7 @@ export function WorkspaceReviewPanelHost(props: {
   workbench: WorkbenchSnapshot;
   // Monotonic request id used to focus the live uncommitted review source.
   // 用于聚焦实时未提交审核来源的单调请求标识。
-  reviewFocusRequest: number;
+  reviewFocusRequest: WorkspaceReviewFocusRequest;
   // Copies raw diff text using the host-aware clipboard implementation.
   // 使用宿主感知的剪贴板实现复制原始 diff 文本。
   onCopyRawDiff: (rawDiff: string) => void;
@@ -147,6 +150,7 @@ export function WorkspaceReviewPanelHost(props: {
     workspacePath: string,
     projectId: string | null,
     conversationId: string | null,
+    repositoryKey?: string | null,
   ) => Promise<void>;
   // Optional shared Git commit action label shown in the review toolbar.
   // 审核工具栏中展示的可选共享 Git 提交动作标签。
@@ -160,6 +164,9 @@ export function WorkspaceReviewPanelHost(props: {
   // Opens the shared Git commit or push dialog.
   // 打开共享 Git 提交或推送弹窗。
   onOpenGitCommitAction?: () => void;
+  // Synchronizes the active right-panel repository with shared commit controls.
+  // 将右侧面板当前仓库同步到共享提交控件。
+  onSelectGitRepository?: (repositoryKey: string | null) => void;
 }) {
   // t translates the review panel shell labels.
   // t 翻译审核面板外壳标签。
@@ -191,6 +198,12 @@ export function WorkspaceReviewPanelHost(props: {
     () => workspaceReviewPanelCacheKey(workspacePath),
     [workspacePath],
   );
+  // gitRepositories stores repositories available to the right-panel selector.
+  // gitRepositories 保存右侧面板选择器可用的仓库。
+  const [gitRepositories, setGitRepositories] = React.useState<WorkspaceGitRepositorySummary[]>([]);
+  // gitRepositoryCatalogError stores discovery or monitoring-setting errors.
+  // gitRepositoryCatalogError 保存发现或监听设置错误。
+  const [gitRepositoryCatalogError, setGitRepositoryCatalogError] = React.useState<string | null>(null);
   // requestOwnership binds all review async writers to the committed project-level cache route.
   // requestOwnership 将全部审核异步写入者绑定到已提交的项目级缓存路由。
   const requestOwnership = useWorkspaceReviewRequestOwnership(reviewPanelCacheKey);
@@ -215,6 +228,12 @@ export function WorkspaceReviewPanelHost(props: {
   const diffReviewSelectionKey = React.useMemo(
     () => diffReviewSelectionStableKey(diffReviewSelection),
     [diffReviewSelection],
+  );
+  // reviewSourceCacheKey isolates right-panel snapshots and source choices by project and repository.
+  // reviewSourceCacheKey 按项目与仓库隔离右侧面板快照及来源选择。
+  const reviewSourceCacheKey = React.useMemo(
+    () => workspaceReviewSourceCacheKey(workspacePath, diffReviewSelection.repositoryKey),
+    [diffReviewSelection.repositoryKey, workspacePath],
   );
   // workspaceReviewPath stores the project path that produced the current workspace diff snapshot.
   // workspaceReviewPath 保存生成当前工作区 diff 快照的项目路径。
@@ -252,9 +271,12 @@ export function WorkspaceReviewPanelHost(props: {
   // conversationReviewParseSeqRef prevents stale async message diff parses from replacing current state.
   // conversationReviewParseSeqRef 防止过期会话 diff 异步解析结果覆盖当前状态。
   const conversationReviewParseSeqRef = React.useRef(0);
-  // lastHydratedReviewPanelCacheKeyRef limits route-cache hydration to actual project changes.
-  // lastHydratedReviewPanelCacheKeyRef 将路由缓存水合限制为真实项目变化。
+  // lastHydratedReviewPanelCacheKeyRef limits cache hydration to actual project or repository changes.
+  // lastHydratedReviewPanelCacheKeyRef 将缓存水合限制为真实项目或仓库变化。
   const lastHydratedReviewPanelCacheKeyRef = React.useRef<string | null>(null);
+  // pendingReviewSourceHydrationRef prevents the previous repository state from overwriting a cached target.
+  // pendingReviewSourceHydrationRef 防止旧仓库状态覆盖正在水合的目标缓存。
+  const pendingReviewSourceHydrationRef = React.useRef<string | null>(null);
   // forceWorkspaceReviewRefreshRef marks real project switches while ignoring simple collapse/reopen cycles.
   // forceWorkspaceReviewRefreshRef 标记真实项目切换，同时忽略单纯折叠再展开。
   const forceWorkspaceReviewRefreshRef = React.useRef(false);
@@ -280,9 +302,58 @@ export function WorkspaceReviewPanelHost(props: {
     setWorkspaceGitActionPending(false);
   }, [reviewPanelCacheKey]);
 
+  React.useEffect(() => {
+    let cancelled = false;
+    if (!workspacePath) {
+      setGitRepositories([]);
+      setGitRepositoryCatalogError(null);
+      return undefined;
+    }
+    void loadWorkspaceGitCatalog(workspacePath, workspaceProjectId, props.selectedConversationId)
+      .then((catalog) => {
+        if (!cancelled) {
+          setGitRepositories(catalog.repositories);
+          setDiffReviewSelection((current) => {
+            const enabledRepositories = catalog.repositories.filter((repository) => repository.monitoringEnabled);
+            const currentRepository = current.repositoryKey
+              ? enabledRepositories.find((repository) => repository.repositoryKey === current.repositoryKey)
+              : null;
+            if (currentRepository) {
+              return current;
+            }
+            if (enabledRepositories.length === 0) {
+              return { ...current, repositoryKey: null };
+            }
+            const primaryRepository = enabledRepositories.find((repository) => repository.isPrimary)
+              ?? enabledRepositories[0];
+            return { ...current, repositoryKey: primaryRepository.repositoryKey };
+          });
+          setGitRepositoryCatalogError(null);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setGitRepositoryCatalogError(error instanceof Error ? error.message : String(error));
+          setGitRepositories([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [props.reviewFocusRequest.sequence, props.selectedConversationId, workspacePath, workspaceProjectId]);
+
+  const enabledGitRepositories = React.useMemo(
+    () => gitRepositories.filter((repository) => repository.monitoringEnabled),
+    [gitRepositories],
+  );
+
   React.useLayoutEffect(() => {
     latestDiffReviewSelectionRef.current = diffReviewSelection;
   }, [diffReviewSelection]);
+
+  React.useEffect(() => {
+    props.onSelectGitRepository?.(diffReviewSelection.repositoryKey ?? null);
+  }, [diffReviewSelection.repositoryKey, props.onSelectGitRepository]);
 
   React.useEffect(() => {
     const requestSeq = conversationReviewParseSeqRef.current + 1;
@@ -567,6 +638,10 @@ export function WorkspaceReviewPanelHost(props: {
       newPath: file.newPath,
       status: file.status,
     }] : [];
+    // requestSelection freezes the repository and diff mode owned by this mutation.
+    // requestSelection 固定本次变更所属的仓库与 diff 模式。
+    const requestSelection = diffReviewSelection;
+    const requestSelectionKey = diffReviewSelectionStableKey(requestSelection);
     setWorkspaceGitActionPending(true);
     try {
       // result is the authoritative Git mutation outcome for the captured project route.
@@ -575,9 +650,14 @@ export function WorkspaceReviewPanelHost(props: {
         workspacePath,
         workspaceProjectId,
         activeSurfaceId,
-        { action, files },
+        {
+          action,
+          files,
+          repositoryKey: requestSelection.repositoryKey,
+        },
       );
-      if (requestOwnership.ownsMutationRequest(ownedRequest)) {
+      const selectionStillActive = diffReviewSelectionStableKey(latestDiffReviewSelectionRef.current) === requestSelectionKey;
+      if (requestOwnership.ownsMutationRequest(ownedRequest) && selectionStillActive) {
         toast.success(result.summary);
         requestOwnership.invalidateRefreshRequest();
         setWorkspaceReviewLoading(false);
@@ -588,11 +668,16 @@ export function WorkspaceReviewPanelHost(props: {
       }
       // Shared project Git state must refresh even when the user has already navigated away.
       // 即使用户已经离开，也必须刷新共享项目 Git 状态。
-      await props.onWorkspaceGitStateChanged?.(workspacePath, workspaceProjectId, activeSurfaceId);
-      if (!requestOwnership.ownsMutationRequest(ownedRequest)) {
+      await props.onWorkspaceGitStateChanged?.(
+        workspacePath,
+        workspaceProjectId,
+        activeSurfaceId,
+        requestSelection.repositoryKey,
+      );
+      if (!requestOwnership.ownsMutationRequest(ownedRequest) || !selectionStillActive) {
         return;
       }
-      await handleRefreshWorkspaceDiff(latestDiffReviewSelectionRef.current);
+      await handleRefreshWorkspaceDiff(requestSelection);
     } catch (error) {
       if (!requestOwnership.ownsMutationRequest(ownedRequest)) {
         return;
@@ -628,6 +713,7 @@ export function WorkspaceReviewPanelHost(props: {
     // nextSelectionKey determines whether this action changes source or explicitly refreshes the current source.
     // nextSelectionKey 判断该动作是切换来源，还是显式刷新当前来源。
     const nextSelectionKey = diffReviewSelectionStableKey(selection);
+    props.onSelectGitRepository?.(selection.repositoryKey ?? null);
     requestOwnership.invalidateRefreshRequest();
     setWorkspaceReviewLoading(false);
     requestOwnership.invalidateDetailRequests();
@@ -640,14 +726,17 @@ export function WorkspaceReviewPanelHost(props: {
     setWorkspaceReviewSnapshot(null);
     setWorkspaceReviewPath(workspacePath);
     setWorkspaceReviewKey(null);
-  }, [diffReviewSelectionKey, handleRefreshWorkspaceDiff, hydratedReviewPanelCacheKey, requestOwnership, reviewPanelCacheKey, workspacePath]);
+  }, [diffReviewSelectionKey, handleRefreshWorkspaceDiff, hydratedReviewPanelCacheKey, props.onSelectGitRepository, requestOwnership, reviewPanelCacheKey, workspacePath]);
 
   React.useEffect(() => {
-    if (props.reviewFocusRequest <= 0 || handledReviewFocusRequestRef.current === props.reviewFocusRequest) {
+    if (props.reviewFocusRequest.sequence <= 0 || handledReviewFocusRequestRef.current === props.reviewFocusRequest.sequence) {
       return;
     }
-    handledReviewFocusRequestRef.current = props.reviewFocusRequest;
-    handleDiffReviewSelectionChange(DEFAULT_WORKSPACE_REVIEW_SELECTION);
+    handledReviewFocusRequestRef.current = props.reviewFocusRequest.sequence;
+    handleDiffReviewSelectionChange({
+      ...DEFAULT_WORKSPACE_REVIEW_SELECTION,
+      repositoryKey: props.reviewFocusRequest.repositoryKey,
+    });
   }, [handleDiffReviewSelectionChange, props.reviewFocusRequest]);
 
   React.useEffect(() => {
@@ -658,13 +747,16 @@ export function WorkspaceReviewPanelHost(props: {
   }, [workspacePath]);
 
   React.useEffect(() => {
-    if (lastHydratedReviewPanelCacheKeyRef.current === reviewPanelCacheKey) {
+    if (lastHydratedReviewPanelCacheKeyRef.current === reviewSourceCacheKey) {
       return;
     }
-    lastHydratedReviewPanelCacheKeyRef.current = reviewPanelCacheKey;
-    // cachedEntry is the project-level review snapshot retained across panel unmounts.
-    // cachedEntry 是面板卸载期间保留的项目级审核快照。
-    const cachedEntry = workspaceReviewPanelCache.get(reviewPanelCacheKey) ?? null;
+    lastHydratedReviewPanelCacheKeyRef.current = reviewSourceCacheKey;
+    pendingReviewSourceHydrationRef.current = reviewSourceCacheKey;
+    // cachedEntry is the repository-level review snapshot retained across panel unmounts.
+    // cachedEntry 是面板卸载期间按仓库保留的审核快照。
+    const cachedEntry = workspaceReviewPanelCache.get(reviewSourceCacheKey)
+      ?? workspaceReviewPanelCache.get(reviewPanelCacheKey)
+      ?? null;
     setDiffReviewSelection(cachedEntry?.selection ?? DEFAULT_WORKSPACE_REVIEW_SELECTION);
     setWorkspaceReviewSnapshot(cachedEntry?.snapshot ?? null);
     setWorkspaceReviewPath(cachedEntry?.workspacePath ?? workspacePath);
@@ -674,13 +766,17 @@ export function WorkspaceReviewPanelHost(props: {
     requestOwnership.invalidateDetailRequests();
     workspaceDetailAttemptedRef.current.clear();
     setHydratedReviewPanelCacheKey(reviewPanelCacheKey);
-  }, [requestOwnership, reviewPanelCacheKey, workspacePath]);
+  }, [requestOwnership, reviewPanelCacheKey, reviewSourceCacheKey, workspacePath]);
 
   React.useEffect(() => {
     if (hydratedReviewPanelCacheKey !== reviewPanelCacheKey) {
       return;
     }
-    rememberWorkspaceReviewPanelCache(reviewPanelCacheKey, {
+    if (pendingReviewSourceHydrationRef.current === reviewSourceCacheKey) {
+      pendingReviewSourceHydrationRef.current = null;
+      return;
+    }
+    rememberWorkspaceReviewPanelCache(reviewSourceCacheKey, {
       snapshot: workspaceReviewSnapshot,
       selection: diffReviewSelection,
       workspacePath: workspaceReviewPath,
@@ -691,6 +787,7 @@ export function WorkspaceReviewPanelHost(props: {
     diffReviewSelection,
     hydratedReviewPanelCacheKey,
     reviewPanelCacheKey,
+    reviewSourceCacheKey,
     workspaceReviewError,
     workspaceReviewKey,
     workspaceReviewPath,
@@ -743,10 +840,11 @@ export function WorkspaceReviewPanelHost(props: {
 
   return (
     <DiffReviewPanel
-      emptyBody={workspaceReviewError ?? conversationReviewError ?? t("contextPanel.reviewEmpty")}
+      emptyBody={workspaceReviewError ?? conversationReviewError ?? gitRepositoryCatalogError ?? t("contextPanel.reviewEmpty")}
       emptyTitle={t("contextPanel.review")}
       loading={workspaceReviewLoading || (!activeWorkspaceReviewSnapshot && conversationReviewLoading)}
       selection={diffReviewSelection}
+      repositories={enabledGitRepositories}
       snapshot={activeReviewSnapshot}
       onLoadFileDetail={activeWorkspaceReviewSnapshot ? handleLoadWorkspaceDiffFileDetail : undefined}
       onSearchWorkspaceDiff={activeWorkspaceReviewSnapshot ? handleSearchWorkspaceDiff : undefined}
@@ -767,6 +865,12 @@ export function WorkspaceReviewPanelHost(props: {
 // workspaceReviewPanelCacheKey 为右侧 Git 审核状态构建项目级缓存键。
 function workspaceReviewPanelCacheKey(workspacePath: string | null): string {
   return workspacePath ?? "no-workspace";
+}
+
+// workspaceReviewSourceCacheKey builds a bounded cache identity for one project repository source.
+// workspaceReviewSourceCacheKey 为单个项目仓库来源构建有界缓存身份。
+function workspaceReviewSourceCacheKey(workspacePath: string | null, repositoryKey: string | null | undefined): string {
+  return `${workspaceReviewPanelCacheKey(workspacePath)}\u0000${repositoryKey?.trim() || "."}`;
 }
 
 // rememberWorkspaceReviewPanelCache records one bounded review panel cache entry.

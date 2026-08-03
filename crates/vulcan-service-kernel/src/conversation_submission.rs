@@ -30,16 +30,18 @@ use super::{
     current_workspace_snapshot_from_shared_state, emit_materialized_session_message_delta,
     emit_pending_prompts_changed_delta, emit_service_event_with_trace,
     enqueue_webui_pending_prompt_from_submission, hydrate_retained_submission_session_if_needed,
-    load_workspace_for_submission, mark_webui_prompt_snapshot_preparing,
-    materialize_prompt_session, owning_project_id_for_session, parse_prompt_session_target,
-    parse_session_id, persist_initial_submission_goal, preserve_active_session_run_state,
+    load_workspace_for_submission, mark_webui_prompt_preparation_failed,
+    mark_webui_prompt_snapshot_preparing, materialize_prompt_session,
+    owning_project_id_for_session, parse_prompt_session_target, parse_session_id,
+    persist_initial_submission_goal, prepare_submission_media, preserve_active_session_run_state,
     provider_tool_capability_key, replace_conversation_messages_in_workbench_window,
-    retained_submission_snapshot_has_session_context, retained_submission_snapshot_is_usable,
-    rollback_persisted_session_before_user_prompt, runtime_parts_from_state,
-    session_has_blocking_system_prompt_work, snapshot_webui_context_before_user_prompt,
-    spawn_service_task, spawn_workspace_session_persist_task,
-    start_reserved_webui_session_kernel_user_turn, start_webui_precheck_or_continue,
-    start_webui_session_kernel_user_turn, store_workspace_snapshot_without_workbench_rebuild,
+    retain_slow_submission_diagnostic, retained_submission_snapshot_has_session_context,
+    retained_submission_snapshot_is_usable, rollback_persisted_session_before_user_prompt,
+    runtime_parts_from_state, session_has_blocking_system_prompt_work,
+    snapshot_webui_context_before_user_prompt, spawn_service_task,
+    spawn_workspace_session_persist_task, start_reserved_webui_session_kernel_user_turn,
+    start_webui_precheck_or_continue, start_webui_session_kernel_user_turn,
+    store_workspace_snapshot_without_workbench_rebuild,
     sync_hydrated_session_dialogue_ready_marker, validate_composer_attachment_summary,
     webui_session_allows_user_prompt_editing, webui_session_kernel_has_active_turn,
     webui_shared_prompt_precheck_plan, webui_submit_trace, webui_trace_if_slow,
@@ -74,16 +76,16 @@ pub(super) enum ExistingSessionHydrationPolicy {
 /// 固定提示词提交时选择的精确供应商、模型与凭据。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct SubmissionModelSelection {
+pub(crate) struct SubmissionModelSelection {
     /// Stable provider identifier selected in the composer.
     /// 输入区中选择的稳定供应商标识。
-    provider_id: String,
+    pub(crate) provider_id: String,
     /// Stable model identifier selected in the composer.
     /// 输入区中选择的稳定模型标识。
-    model_id: String,
+    pub(crate) model_id: String,
     /// Exact credential connection selected in the composer.
     /// 输入区中选择的精确凭据连接。
-    connection_id: String,
+    pub(crate) connection_id: String,
 }
 
 /// Captures one tri-state VMM policy pair selected before a conversation exists.
@@ -150,8 +152,8 @@ pub(super) struct SubmissionSessionSettings {
     /// Optional explicit VMM policy pair; absence preserves inherited defaults.
     /// 可选显式 VMM 策略对；缺省时保留继承默认值。
     vmm_policy: Option<SubmissionVmmPolicy>,
-    /// Optional complete provider-tool snapshot; absence materializes current system defaults.
-    /// 可选完整供应商工具快照；缺省时物化当前系统默认值。
+    /// Optional complete provider-tool snapshot; absence preserves initialized session state or initializes a new session from global defaults.
+    /// 可选完整供应商工具快照；缺省时保留已初始化会话状态，或为新会话从全局默认值初始化。
     provider_tool_settings: Option<SubmissionProviderToolSettings>,
     /// Optional knowledge selection; absence preserves project inheritance.
     /// 可选知识库选择；缺省时保留项目继承。
@@ -159,6 +161,15 @@ pub(super) struct SubmissionSessionSettings {
     /// Optional initial goal created before the first turn starts.
     /// 首轮开始前创建的可选初始目标。
     initial_goal: Option<SubmissionInitialGoal>,
+}
+
+/// Reports whether an absent per-turn snapshot must preserve initialized session settings.
+/// 判断缺失的本回合快照是否必须保留已初始化的会话设置。
+fn should_preserve_existing_provider_tool_settings(
+    has_explicit_settings: bool,
+    provider_tool_settings_initialized: bool,
+) -> bool {
+    !has_explicit_settings && provider_tool_settings_initialized
 }
 
 /// Converts one submitted VMM tri-state mode into the persisted optional layer value.
@@ -195,18 +206,27 @@ async fn apply_submission_session_settings(
     let configuration = runtime.configuration_snapshot()?;
     let provider_tool_settings =
         settings.and_then(|settings| settings.provider_tool_settings.as_ref());
-    let enabled_capabilities = provider_tool_settings
-        .map(|settings| &settings.enabled_capabilities)
-        .unwrap_or(&configuration.provider_tool_enabled_capabilities);
-    let provider_tool_selections = provider_tool_settings
-        .map(|settings| &settings.selections)
-        .unwrap_or(&configuration.provider_tool_selections);
-    crate::public_ai_settings::validate_provider_tool_session_settings(
-        runtime,
-        &configuration,
-        enabled_capabilities,
-        provider_tool_selections,
-    )?;
+    let preserve_existing_provider_tools = should_preserve_existing_provider_tool_settings(
+        provider_tool_settings.is_some(),
+        workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .is_some_and(|runtime_state| runtime_state.provider_tool_settings_initialized),
+    );
+    if !preserve_existing_provider_tools {
+        let enabled_capabilities = provider_tool_settings
+            .map(|settings| &settings.enabled_capabilities)
+            .unwrap_or(&configuration.provider_tool_enabled_capabilities);
+        let provider_tool_selections = provider_tool_settings
+            .map(|settings| &settings.selections)
+            .unwrap_or(&configuration.provider_tool_selections);
+        crate::public_ai_settings::validate_provider_tool_session_settings(
+            runtime,
+            &configuration,
+            enabled_capabilities,
+            provider_tool_selections,
+        )?;
+    }
     let knowledge_selection = if let Some(selection) =
         settings.and_then(|settings| settings.knowledge_selection.as_ref())
     {
@@ -257,24 +277,32 @@ async fn apply_submission_session_settings(
         runtime_state.vmm.memory_writeback_enabled =
             submission_vmm_policy_value(&policy.memory_writeback_mode)?;
     }
-    runtime_state.provider_tool_selections = provider_tool_selections
-        .iter()
-        .map(|(capability, selection)| {
-            (
-                provider_tool_capability_key(*capability),
-                SessionProviderToolTargetSelection {
-                    connection_id: selection.connection_id.clone(),
-                    target_id: selection.target_id.clone(),
-                },
-            )
-        })
-        .collect();
-    runtime_state.provider_tool_enabled_capabilities = enabled_capabilities
-        .iter()
-        .map(|capability| provider_tool_capability_key(*capability))
-        .collect();
-    runtime_state.provider_tool_settings_initialized = true;
-    runtime_state.provider_tool_selections_overridden = false;
+    if !preserve_existing_provider_tools {
+        let enabled_capabilities = provider_tool_settings
+            .map(|settings| &settings.enabled_capabilities)
+            .unwrap_or(&configuration.provider_tool_enabled_capabilities);
+        let provider_tool_selections = provider_tool_settings
+            .map(|settings| &settings.selections)
+            .unwrap_or(&configuration.provider_tool_selections);
+        runtime_state.provider_tool_selections = provider_tool_selections
+            .iter()
+            .map(|(capability, selection)| {
+                (
+                    provider_tool_capability_key(*capability),
+                    SessionProviderToolTargetSelection {
+                        connection_id: selection.connection_id.clone(),
+                        target_id: selection.target_id.clone(),
+                    },
+                )
+            })
+            .collect();
+        runtime_state.provider_tool_enabled_capabilities = enabled_capabilities
+            .iter()
+            .map(|capability| provider_tool_capability_key(*capability))
+            .collect();
+        runtime_state.provider_tool_settings_initialized = true;
+        runtime_state.provider_tool_selections_overridden = false;
+    }
     if let Some(selection) = knowledge_selection {
         runtime_state.knowledge_library_selection = selection;
     }
@@ -534,6 +562,85 @@ fn existing_submission_requires_hydration(
     session_id.is_some() && policy == ExistingSessionHydrationPolicy::HydrateIfEmpty
 }
 
+/// Inserts one client submission identifier into a visible user record and its canonical runtime record.
+/// 将一个客户端提交标识写入可见用户记录及其规范运行时记录。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` owns the newly appended transcript and runtime records.
+/// `workspace_snapshot` 持有刚追加的转录记录与运行时记录。
+/// `session_id` selects the exact accepted conversation.
+/// `session_id` 选择精确的已接纳会话。
+/// `message_id` is the visible user record identifier returned by the shared turn reducer.
+/// `message_id` 是共享回合 reducer 返回的可见用户记录标识。
+/// `client_submission_id` is the stable browser-generated correlation identifier.
+/// `client_submission_id` 是浏览器生成的稳定关联标识。
+/// `submission_target` identifies a new or existing conversation submission.
+/// `submission_target` 标识新会话或已有会话提交。
+/// `accepted_at_ms` captures the service acceptance boundary for first-semantic latency.
+/// `accepted_at_ms` 捕获用于首个语义输出延迟的服务接纳边界。
+///
+/// # Returns
+/// 返回值
+/// Success after both projections own the identifier, or an exact record-shape diagnostic.
+/// 两个投影都拥有标识后返回成功，否则返回精确的记录结构诊断。
+pub(crate) fn attach_client_submission_id_to_visible_user_record(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    message_id: Option<&str>,
+    client_submission_id: &str,
+    submission_target: &str,
+    accepted_at_ms: i128,
+) -> Result<(), String> {
+    let Some(message_id) = message_id else {
+        return Ok(());
+    };
+    // insert_identifier preserves the established object metadata contract and rejects a corrupted non-object value.
+    // insert_identifier 保留既有对象元数据契约，并拒绝损坏的非对象值。
+    let insert_identifier = |metadata: &mut Option<serde_json::Value>| -> Result<(), String> {
+        if metadata.is_none() {
+            *metadata = Some(serde_json::Value::Object(serde_json::Map::new()));
+        }
+        let object = metadata
+            .as_mut()
+            .and_then(serde_json::Value::as_object_mut)
+            .ok_or_else(|| {
+                format!("Visible user record `{message_id}` has non-object metadata.")
+            })?;
+        object.insert(
+            String::from("client_submission_id"),
+            serde_json::Value::String(client_submission_id.to_string()),
+        );
+        object.insert(
+            String::from("client_submission_target"),
+            serde_json::Value::String(submission_target.to_string()),
+        );
+        object.insert(
+            String::from("client_submission_accepted_at_ms"),
+            serde_json::Value::String(accepted_at_ms.to_string()),
+        );
+        Ok(())
+    };
+    let visible_message = workspace_snapshot
+        .session_messages
+        .get_mut(&session_id)
+        .and_then(|messages| messages.iter_mut().find(|message| message.id == message_id))
+        .ok_or_else(|| format!("Visible user record `{message_id}` was not projected."))?;
+    insert_identifier(&mut visible_message.metadata)?;
+    let runtime_record = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&session_id)
+        .and_then(|runtime_state| {
+            runtime_state
+                .conversation_state
+                .records
+                .iter_mut()
+                .find(|record| record.id == message_id)
+        })
+        .ok_or_else(|| format!("Canonical user record `{message_id}` was not retained."))?;
+    insert_identifier(&mut runtime_record.metadata)
+}
+
 /// Submits a WebUI user prompt into a new or existing conversation.
 /// 将 WebUI 用户提示词提交到新会话或已有会话。
 ///
@@ -571,6 +678,7 @@ fn existing_submission_requires_hydration(
 pub(super) async fn service_submit_conversation_prompt(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
+    client_submission_id: String,
     project_id: Option<String>,
     conversation_id: Option<String>,
     prompt: String,
@@ -586,6 +694,10 @@ pub(super) async fn service_submit_conversation_prompt(
     // Measures the whole submit RPC body from service entry to final response.
     // 衡量提交 RPC 主体从服务入口到最终返回的整体耗时。
     let submit_total_started_at = current_unix_millis_value();
+    let client_submission_id = client_submission_id.trim().to_string();
+    if client_submission_id.is_empty() {
+        return Err(String::from("clientSubmissionId must not be empty."));
+    }
     let prompt = prompt.trim().to_string();
     webui_submit_trace(
         "submit_prompt_received",
@@ -663,7 +775,18 @@ pub(super) async fn service_submit_conversation_prompt(
     let workspace_load_started_at = current_unix_millis_value();
     let (mut workspace_snapshot, workspace_source) =
         if let Some(workspace_snapshot) = retained_workspace_snapshot {
-            (workspace_snapshot, "retained")
+            (
+                workspace_snapshot,
+                if submission_session_id.is_some() {
+                    "retained-existing"
+                } else {
+                    "retained-new-slice"
+                },
+            )
+        } else if submission_session_id.is_none() {
+            return Err(String::from(
+                "工作区仍在初始化，新会话不会回退加载历史工作区；请稍后重试。",
+            ));
         } else {
             (
                 load_workspace_for_submission(controller_runtime.clone(), submission_session_id)
@@ -704,16 +827,30 @@ pub(super) async fn service_submit_conversation_prompt(
             &controller_runtime,
             &agent_runtime,
             ExistingSubmissionQueueInput {
+                client_submission_id,
                 workspace_snapshot,
                 session_id,
                 prompt,
                 hidden_model_guidance,
                 attachments,
                 reasoning_effort,
+                model_selection,
                 submit_total_started_at,
             },
         );
     }
+    // Media preparation starts only after queue admission so a queued prompt uploads at its real dispatch boundary.
+    // 媒体准备仅在队列准入判断后开始，确保排队提示词在实际分发边界上传媒体。
+    prepare_submission_media(
+        &app,
+        &state,
+        &agent_runtime,
+        client_submission_id.as_str(),
+        conversation_id.as_deref(),
+        model_selection.as_ref(),
+        attachments.as_slice(),
+    )
+    .await?;
     let materialize_started_at = current_unix_millis_value();
     // materialization_project_id pins a new session to the exact project selected under preflight ownership.
     // materialization_project_id 将新会话固定到预检所有权下选择的精确项目。
@@ -804,39 +941,6 @@ pub(super) async fn service_submit_conversation_prompt(
             current_unix_millis_value().saturating_sub(submit_run_prepare_started_at)
         ),
     );
-    let context_snapshot_started_at = current_unix_millis_value();
-    snapshot_webui_context_before_user_prompt(
-        &controller_runtime,
-        &workspace_snapshot,
-        session_id,
-        PendingSessionPromptSource::UserFollowup,
-    )?;
-    webui_submit_trace(
-        "submit_prompt_context_snapshot_ready",
-        format!(
-            "session={session_id} elapsed_ms={}",
-            current_unix_millis_value().saturating_sub(context_snapshot_started_at)
-        ),
-    );
-    // Resolves every fallible precheck-plan input before hook runtime opens a logical turn.
-    // 在 hook runtime 打开逻辑回合前解析全部可失败的 precheck 计划输入。
-    let precheck_plan_started_at = current_unix_millis_value();
-    let precheck_plan = webui_shared_prompt_precheck_plan(
-        &agent_runtime,
-        &workspace_snapshot,
-        session_id,
-        workspace_path,
-    )?;
-    webui_submit_trace(
-        "submit_prompt_precheck_plan_ready",
-        format!(
-            "session={session_id} has_hooks={} skip={} labels={} elapsed_ms={}",
-            precheck_plan.has_precheck_hooks,
-            precheck_plan.should_skip_precheck,
-            precheck_plan.progress_labels.len(),
-            current_unix_millis_value().saturating_sub(precheck_plan_started_at)
-        ),
-    );
     let turn_begin_started_at = current_unix_millis_value();
     let precheck_start = {
         let mut hook_runtime = agent_runtime
@@ -867,6 +971,19 @@ pub(super) async fn service_submit_conversation_prompt(
         )
     }?;
     let accepted_message_id = precheck_start.visible_user_prompt_record_id.clone();
+    let submission_target_label = if submission_session_id.is_some() {
+        "existing"
+    } else {
+        "new"
+    };
+    attach_client_submission_id_to_visible_user_record(
+        &mut workspace_snapshot,
+        session_id,
+        accepted_message_id.as_deref(),
+        &client_submission_id,
+        submission_target_label,
+        current_unix_millis_value(),
+    )?;
     let turn_id = Some(precheck_start.preparation_turn_id.clone());
     webui_submit_trace(
         "submit_prompt_turn_begin_ready",
@@ -875,14 +992,9 @@ pub(super) async fn service_submit_conversation_prompt(
             current_unix_millis_value().saturating_sub(turn_begin_started_at)
         ),
     );
-    // Keeps skipped precheck turns in the preparatory phase until provider execution starts.
-    // 在 precheck 跳过时保持准备阶段，直到模型执行真正开始。
-    let submit_visible_run_phase =
-        if precheck_plan.should_skip_precheck || !precheck_plan.has_precheck_hooks {
-            SessionRunPhase::Preparing
-        } else {
-            SessionRunPhase::MemoryRecall
-        };
+    // Every accepted turn starts in Preparing; post-ACK precheck moves it to MemoryRecall only when required.
+    // 每个已接纳回合都从 Preparing 开始；仅在需要时由 ACK 后预检推进到 MemoryRecall。
+    let submit_visible_run_phase = SessionRunPhase::Preparing;
     {
         let kernel_turn_started_at = current_unix_millis_value();
         let mut guard = state
@@ -912,7 +1024,15 @@ pub(super) async fn service_submit_conversation_prompt(
     }
     mark_webui_prompt_snapshot_preparing(&mut workspace_snapshot, session_id);
     let begin_commit_started_at = current_unix_millis_value();
-    store_workspace_snapshot_without_workbench_rebuild(&state, workspace_snapshot.clone())?;
+    if materialized_session.kind == PromptSessionMaterializationKind::Created {
+        commit_created_submission_workspace_slice(
+            &state,
+            &workspace_snapshot,
+            &materialized_session,
+        )?;
+    } else {
+        store_workspace_snapshot_without_workbench_rebuild(&state, workspace_snapshot.clone())?;
+    }
     webui_submit_trace(
         "submit_prompt_begin_workspace_committed",
         format!(
@@ -967,95 +1087,176 @@ pub(super) async fn service_submit_conversation_prompt(
             current_unix_millis_value().saturating_sub(submit_total_started_at)
         ),
     );
-    let outer_steps_started_at = current_unix_millis_value();
-    apply_webui_prompt_begin_outer_steps_deferred_context_persist(
-        &controller_runtime,
-        &mut workspace_snapshot,
+    // Acceptance persistence is scheduled from the bounded new-session slice before ACK; it never waits for VMM or Codebase preparation.
+    // 接纳持久化在 ACK 前从有界新会话切片调度；它绝不等待 VMM 或 Codebase 准备。
+    spawn_workspace_session_persist_task(
+        state.clone(),
+        controller_runtime.clone(),
+        workspace_snapshot.clone(),
         session_id,
-        session_title,
+        Some(String::from("submit_acceptance")),
     );
-    webui_submit_trace(
-        "submit_prompt_outer_steps_ready",
-        format!(
-            "session={session_id} elapsed_ms={}",
-            current_unix_millis_value().saturating_sub(outer_steps_started_at)
-        ),
-    );
-    let hook_snapshot_started_at = current_unix_millis_value();
-    agent_runtime
-        .vmm_hook_runtime
-        .replace_snapshot(build_vmm_hook_config_snapshot(
-            &agent_runtime.provider_configuration,
-            &workspace_snapshot,
-        ))?;
-    webui_submit_trace(
-        "submit_prompt_hook_snapshot_ready",
-        format!(
-            "session={session_id} elapsed_ms={}",
-            current_unix_millis_value().saturating_sub(hook_snapshot_started_at)
-        ),
-    );
-    let precheck_workspace_commit_started_at = current_unix_millis_value();
-    store_workspace_snapshot_without_workbench_rebuild(&state, workspace_snapshot)?;
-    webui_submit_trace(
-        "submit_prompt_precheck_workspace_committed",
-        format!(
-            "session={session_id} elapsed_ms={}",
-            current_unix_millis_value().saturating_sub(precheck_workspace_commit_started_at)
-        ),
-    );
-    let state_for_persist = state.clone();
-    let controller_runtime_for_persist = controller_runtime.clone();
-    spawn_service_task(async move {
-        let snapshot = match current_workspace_snapshot_from_shared_state(&state_for_persist) {
-            Ok(Some(snapshot)) => snapshot,
-            Ok(None) => return,
-            Err(error) => {
-                eprintln!("[webui-service] submit begin persist snapshot failed: {error}");
-                return;
-            }
-        };
-        spawn_workspace_session_persist_task(
-            state_for_persist,
-            controller_runtime_for_persist,
-            snapshot,
-            session_id,
-            Some(String::from("submit_begin")),
-        );
-    });
-    let service_state = state.clone();
-    let precheck_dispatch_started_at = current_unix_millis_value();
-    let precheck_started = start_webui_precheck_or_continue(
-        &app,
-        &service_state,
-        &controller_runtime,
-        &agent_runtime,
-        precheck_start,
-        precheck_plan,
-    )?;
     let revision = current_workbench_revision_from_state(&state)?;
-    webui_submit_trace(
-        "submit_prompt_precheck_dispatch_returned",
-        format!(
-            "session={session_id} started={precheck_started} elapsed_ms={}",
-            current_unix_millis_value().saturating_sub(precheck_dispatch_started_at)
-        ),
-    );
+    let acknowledgement_elapsed_ms =
+        current_unix_millis_value().saturating_sub(submit_total_started_at);
+    retain_slow_submission_diagnostic(
+        &state,
+        &client_submission_id,
+        submission_target_label,
+        "acceptance",
+        acknowledgement_elapsed_ms,
+    )?;
     webui_submit_trace(
         "submit_prompt_returning",
         format!(
-            "session={session_id} elapsed_ms_since_received={}",
-            current_unix_millis_value().saturating_sub(submit_total_started_at)
+            "session={session_id} client_submission_id={client_submission_id} elapsed_ms_since_received={acknowledgement_elapsed_ms}"
         ),
     );
-    Ok(SubmitConversationPromptAck {
+    let accepted_client_submission_id = client_submission_id.clone();
+    let acknowledgement = SubmitConversationPromptAck {
+        client_submission_id,
         conversation_id: session_id.to_string(),
         accepted_message_id,
         turn_id,
         run_phase: submit_visible_run_phase.to_string(),
         queued: false,
         revision,
-    })
+    };
+    // Deferred preparation begins only after the visible message and acknowledgement facts are committed.
+    // 延迟准备仅在可见消息与确认事实提交后开始。
+    let preparation_turn_id = precheck_start.preparation_turn_id.clone();
+    let session_title = session_title.to_string();
+    let workspace_path = workspace_path.to_string();
+    let app_for_preparation = app.clone();
+    let state_for_preparation = state.clone();
+    let controller_runtime_for_preparation = controller_runtime.clone();
+    let agent_runtime_for_preparation = agent_runtime.clone();
+    spawn_service_task(async move {
+        let preparation_started_at = current_unix_millis_value();
+        let preparation_result = (|| -> Result<(), String> {
+            // workspace_snapshot is cloned only after acknowledgement, so new-session acceptance never copies history.
+            // workspace_snapshot 只在确认后克隆，因此新会话接纳绝不会复制历史数据。
+            let mut workspace_snapshot = current_workspace_snapshot_from_shared_state(
+                &state_for_preparation,
+            )?
+            .ok_or_else(|| String::from("accepted submission workspace snapshot is unavailable"))?;
+            let context_snapshot_started_at = current_unix_millis_value();
+            snapshot_webui_context_before_user_prompt(
+                &controller_runtime_for_preparation,
+                &workspace_snapshot,
+                session_id,
+                PendingSessionPromptSource::UserFollowup,
+            )?;
+            webui_submit_trace(
+                "submit_prompt_context_snapshot_ready",
+                format!(
+                    "session={session_id} elapsed_ms={}",
+                    current_unix_millis_value().saturating_sub(context_snapshot_started_at)
+                ),
+            );
+            let precheck_plan_started_at = current_unix_millis_value();
+            let precheck_plan = webui_shared_prompt_precheck_plan(
+                &agent_runtime_for_preparation,
+                &workspace_snapshot,
+                session_id,
+                &workspace_path,
+            )?;
+            webui_submit_trace(
+                "submit_prompt_precheck_plan_ready",
+                format!(
+                    "session={session_id} has_hooks={} skip={} labels={} elapsed_ms={}",
+                    precheck_plan.has_precheck_hooks,
+                    precheck_plan.should_skip_precheck,
+                    precheck_plan.progress_labels.len(),
+                    current_unix_millis_value().saturating_sub(precheck_plan_started_at)
+                ),
+            );
+            let outer_steps_started_at = current_unix_millis_value();
+            apply_webui_prompt_begin_outer_steps_deferred_context_persist(
+                &controller_runtime_for_preparation,
+                &mut workspace_snapshot,
+                session_id,
+                &session_title,
+            );
+            webui_submit_trace(
+                "submit_prompt_outer_steps_ready",
+                format!(
+                    "session={session_id} elapsed_ms={}",
+                    current_unix_millis_value().saturating_sub(outer_steps_started_at)
+                ),
+            );
+            let hook_snapshot_started_at = current_unix_millis_value();
+            agent_runtime_for_preparation
+                .vmm_hook_runtime
+                .replace_snapshot(build_vmm_hook_config_snapshot(
+                    &agent_runtime_for_preparation.provider_configuration,
+                    &workspace_snapshot,
+                ))?;
+            webui_submit_trace(
+                "submit_prompt_hook_snapshot_ready",
+                format!(
+                    "session={session_id} elapsed_ms={}",
+                    current_unix_millis_value().saturating_sub(hook_snapshot_started_at)
+                ),
+            );
+            store_workspace_snapshot_without_workbench_rebuild(
+                &state_for_preparation,
+                workspace_snapshot,
+            )?;
+            let snapshot = current_workspace_snapshot_from_shared_state(&state_for_preparation)?
+                .ok_or_else(|| {
+                    String::from("accepted submission workspace snapshot is unavailable")
+                })?;
+            spawn_workspace_session_persist_task(
+                state_for_preparation.clone(),
+                controller_runtime_for_preparation.clone(),
+                snapshot,
+                session_id,
+                Some(String::from("submit_begin")),
+            );
+            let precheck_started = start_webui_precheck_or_continue(
+                &app_for_preparation,
+                &state_for_preparation,
+                &controller_runtime_for_preparation,
+                &agent_runtime_for_preparation,
+                precheck_start,
+                precheck_plan,
+            )?;
+            webui_submit_trace(
+                "submit_prompt_precheck_dispatch_returned",
+                format!("session={session_id} started={precheck_started}"),
+            );
+            Ok(())
+        })();
+        let preparation_elapsed_ms =
+            current_unix_millis_value().saturating_sub(preparation_started_at);
+        if let Err(error) = retain_slow_submission_diagnostic(
+            &state_for_preparation,
+            &accepted_client_submission_id,
+            submission_target_label,
+            "post_ack_preparation",
+            preparation_elapsed_ms,
+        ) {
+            eprintln!("[webui-service] failed to retain slow submission diagnostic: {error}");
+        }
+        if let Err(error) = preparation_result {
+            eprintln!("[webui-service] accepted submission preparation failed: {error}");
+            if let Err(cleanup_error) = mark_webui_prompt_preparation_failed(
+                &app_for_preparation,
+                &state_for_preparation,
+                &controller_runtime_for_preparation,
+                &agent_runtime_for_preparation,
+                session_id,
+                &preparation_turn_id,
+                &error,
+            ) {
+                eprintln!(
+                    "[webui-service] accepted submission preparation cleanup failed: {cleanup_error}"
+                );
+            }
+        }
+    });
+    Ok(acknowledgement)
 }
 
 /// Reads the latest accepted workbench revision from shared service state.
@@ -1172,6 +1373,22 @@ mod submission_hydration_policy_tests {
         assert!(!existing_submission_requires_hydration(
             None,
             ExistingSessionHydrationPolicy::HydrateIfEmpty,
+        ));
+    }
+}
+
+#[cfg(test)]
+mod submission_session_settings_tests {
+    use super::should_preserve_existing_provider_tool_settings;
+
+    /// Verifies an initialized session is not reset when a submission omits session settings.
+    /// 验证提交缺少会话设置时不会重置已初始化会话。
+    #[test]
+    fn omitted_settings_preserve_initialized_session() {
+        assert!(should_preserve_existing_provider_tool_settings(false, true));
+        assert!(!should_preserve_existing_provider_tool_settings(true, true));
+        assert!(!should_preserve_existing_provider_tool_settings(
+            false, false
         ));
     }
 }

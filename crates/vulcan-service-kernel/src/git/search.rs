@@ -17,6 +17,7 @@ use super::model::{
     WebuiWorkspaceDiffRequest, WebuiWorkspaceDiffSearchFileMatch, WebuiWorkspaceDiffSearchRequest,
     WebuiWorkspaceDiffSearchResponse, default_webui_workspace_diff_request,
 };
+use super::repository::resolve_webui_repository_root_for_request;
 use super::selection::load_webui_workspace_diff_selection;
 use crate::{current_unix_millis_value, normalized_workspace_path_text_from_path};
 
@@ -67,7 +68,22 @@ pub(crate) fn load_webui_workspace_diff_search(
     search: WebuiWorkspaceDiffSearchRequest,
 ) -> Result<WebuiWorkspaceDiffSearchResponse, String> {
     let workspace_path = resolve_webui_workspace_path_from_text(workspace_path)?;
-    let repository_root_text = normalized_workspace_path_text_from_path(&workspace_path);
+    let request = request.unwrap_or_else(default_webui_workspace_diff_request);
+    let repository_root = resolve_webui_repository_root_for_request(
+        &workspace_path,
+        request.repository_key.as_deref(),
+        resolve_webui_git_repository_root(&workspace_path)?,
+    )?;
+    let Some(repository_root) = repository_root else {
+        let repository_root_text = normalized_workspace_path_text_from_path(&workspace_path);
+        let query = search.query.trim().to_string();
+        return Ok(empty_webui_diff_search_response(
+            repository_root_text,
+            query,
+            String::from("当前工作区不是 Git 仓库，无法搜索代码审查 diff。"),
+        ));
+    };
+    let repository_root_text = normalized_workspace_path_text_from_path(&repository_root);
     let query = search.query.trim().to_string();
     if query.is_empty() {
         return Ok(empty_webui_diff_search_response(
@@ -76,19 +92,9 @@ pub(crate) fn load_webui_workspace_diff_search(
             String::from("搜索词为空，未执行 Git diff 搜索。"),
         ));
     }
-    let Some(repository_root) = resolve_webui_git_repository_root(&workspace_path)? else {
-        return Ok(empty_webui_diff_search_response(
-            repository_root_text,
-            query,
-            String::from("当前工作区不是 Git 仓库，无法搜索代码审查 diff。"),
-        ));
-    };
-
-    // Normalize the optional request before response-cache lookup so cached searches avoid Git IO.
-    // 在响应缓存查询前标准化可选请求，使命中的搜索缓存能避开 Git IO。
-    let request = request.unwrap_or_else(default_webui_workspace_diff_request);
+    // Normalize the selected repository before response-cache lookup so cached searches avoid Git IO.
+    // 在响应缓存查询前标准化所选仓库，使命中的搜索缓存能避开 Git IO。
     let limit = normalized_webui_diff_search_limit(search.limit);
-    let repository_root_text = normalized_workspace_path_text_from_path(&repository_root);
     let cache_key = webui_diff_search_cache_key(&repository_root_text, &request, &query, limit);
     let cache_now_ms = current_unix_millis_value();
     if let Some(response) = cached_webui_diff_search_response(&cache_key, cache_now_ms) {

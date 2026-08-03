@@ -236,6 +236,160 @@
   font-weight: 600;
 }
 
+/* The session panel owns one fixed collapse action and one optional monitoring manager. */
+/* 会话面板只保留一个固定折叠按钮，并在多仓库时提供监听管理器。 */
+.conversation-session-tool-panel-header {
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px 4px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: color-mix(in oklch, var(--card) 94%, var(--muted));
+}
+
+.conversation-session-review-manager-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  background: transparent;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.conversation-session-review-manager-trigger:hover {
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--muted) 70%, transparent);
+}
+
+.conversation-session-review-manager-dialog {
+  width: min(440px, calc(100vw - 32px));
+}
+
+.conversation-session-review-manager-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.conversation-session-review-manager-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.conversation-session-review-manager-check {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.conversation-session-review-manager-check input {
+  flex: 0 0 auto;
+  accent-color: var(--primary);
+}
+
+.conversation-session-review-manager-check span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.conversation-session-review-manager-check strong,
+.conversation-session-review-manager-check small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-session-review-manager-check strong {
+  color: var(--foreground);
+  font-size: 12px;
+}
+
+.conversation-session-review-manager-check small {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+
+.conversation-session-review-manager-order {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.conversation-session-review-manager-order .workspace-tool-panel-menu-icon-button {
+  width: 24px;
+  height: 24px;
+}
+
+/* Repository metadata and monitoring controls keep each Git node independently readable. */
+/* 仓库元数据与监听控件保持每个 Git 节点独立且清晰可读。 */
+.conversation-session-review-repository-path {
+  display: block;
+  max-width: 220px;
+  margin-top: 2px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-session-review-monitor-toggle {
+  flex: 0 0 auto;
+  min-height: 20px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  background: transparent;
+  font-size: 10px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.conversation-session-review-monitor-toggle.active {
+  border-color: color-mix(in oklab, var(--primary) 55%, var(--border));
+  color: var(--primary);
+}
+
+.conversation-session-review-monitor-toggle:hover {
+  background: color-mix(in oklab, var(--muted) 70%, transparent);
+}
+
+.conversation-session-review-monitor-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.conversation-session-review-error {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  color: var(--destructive);
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .conversation-session-review-row {
   min-width: 0;
   display: grid;
@@ -247,6 +401,13 @@
   cursor: default;
   font-size: 12px;
   font-weight: 400;
+}
+
+/* Disabled repository nodes keep settings visible while blocking stale Git actions.
+   已关闭监听的仓库节点保留设置入口，同时阻止旧 Git 快照触发操作。 */
+.conversation-session-review-row:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .conversation-session-review-row svg {

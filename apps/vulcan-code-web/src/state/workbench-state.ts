@@ -848,6 +848,10 @@ function applyWorkbenchDeltaPayloadWithSubagentSurfaceMessageCache(
           managedRuntimeProgress: envelope.delta.payload.progress,
         },
       };
+    case "mediaUploadProgressChanged":
+      // Media progress is an ordered ephemeral event; its bytes live only in the overlay state.
+      // 媒体进度是有序临时事件，字节数仅保留在浮层状态中。
+      return workbench;
   }
 }
 

@@ -23,6 +23,9 @@ pub(crate) struct AgentRuntimeBridge {
     /// Request-scoped model override retained only by a queued prompt runtime clone.
     /// 仅由排队提示词运行时克隆保留的请求级模型覆盖。
     pub(crate) model_id_override: Option<String>,
+    /// Request-scoped exact credential connection retained only by a queued prompt runtime clone.
+    /// 仅由排队提示词运行时克隆保留的请求级精确凭据连接。
+    pub(crate) connection_id_override: Option<String>,
     /// Agent profile catalog reused by runtime preparation.
     /// 运行时准备阶段复用的 Agent 画像目录。
     pub(crate) agent_profile_catalog: AgentProfileCatalog,

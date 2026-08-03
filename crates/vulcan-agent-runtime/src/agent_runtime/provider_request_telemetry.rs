@@ -802,12 +802,22 @@ fn build_completed_event(
     // outputTokens 将协议专属的思考语义转换为一个完整输出计数。
     let output_tokens =
         complete_output_tokens(context.protocol_profile_id.as_str(), &normalized_usage);
+    // outputTokensWithPresence preserves the distinction between an absent output field and a reported zero.
+    // outputTokensWithPresence 保留输出字段缺失与明确报告为零之间的区别。
+    let output_tokens_with_presence = normalized_usage.output_tokens.map(|_| output_tokens);
+    // accountedTokens keeps Provider-reported totals separate from the statistics total used by the plugin.
+    // accountedTokens 将 Provider 报告总量与插件使用的统计总量分开保存。
+    let (accounted_tokens, accounted_total_source) = accounted_total_tokens(
+        &normalized_usage,
+        uncached_input_tokens,
+        output_tokens_with_presence,
+    );
     let completed_usage = (matches!(status, ProviderRequestTerminalStatus::Succeeded)
         && usage.is_some())
     .then_some(ProviderRequestCompletedUsage {
         uncached_input_tokens,
         cached_input_tokens: normalized_usage.cached_input_tokens,
-        output_tokens: normalized_usage.output_tokens.map(|_| output_tokens),
+        output_tokens: output_tokens_with_presence,
         reasoning_tokens: normalized_usage.reasoning_tokens,
         total_tokens: normalized_usage.total_tokens,
     });
@@ -830,11 +840,13 @@ fn build_completed_event(
             duration_ms: elapsed_millis(request.started_at_ms, completed_at_ms),
             input_tokens: normalized_usage.input_tokens,
             uncached_input_tokens,
-            output_tokens: normalized_usage.output_tokens.map(|_| output_tokens),
+            output_tokens: output_tokens_with_presence,
             reasoning_tokens: normalized_usage.reasoning_tokens,
             total_tokens: normalized_usage.total_tokens,
             cached_input_tokens: normalized_usage.cached_input_tokens,
             cache_creation_input_tokens: normalized_usage.cache_creation_input_tokens,
+            accounted_total_tokens: accounted_tokens,
+            accounted_total_source,
             finish_reason: None,
             error_category,
             error_code,
@@ -886,6 +898,36 @@ fn complete_output_tokens(_protocol_profile_id: &str, usage: &ProviderUsageSnaps
     // All enabled public profiles normalize reasoning into the reported output count.
     // 所有已启用公共档案都会把推理归一化到已报告输出计数中。
     usage.output_tokens.unwrap_or_default()
+}
+
+/// Derive the statistics total while preserving the Provider-reported total and its quality.
+/// 在保留 Provider 报告总量的同时推导统计总量及其质量。
+fn accounted_total_tokens(
+    usage: &ProviderUsageSnapshot,
+    uncached_input_tokens: Option<usize>,
+    output_tokens: Option<usize>,
+) -> (Option<usize>, &'static str) {
+    // derivedTotal is available only when the normalized input and complete output are both known.
+    // derivedTotal 仅在规范化输入和完整输出都已知时可用。
+    let derived_total =
+        uncached_input_tokens
+            .zip(output_tokens)
+            .and_then(|(uncached_input, output)| {
+                uncached_input
+                    .checked_add(usage.cached_input_tokens.unwrap_or_default())?
+                    .checked_add(output)
+            });
+
+    match (usage.total_tokens, derived_total) {
+        (Some(reported), Some(derived)) if reported == derived => (Some(reported), "reported"),
+        // A zero total beside known positive components is the legacy bridge representation of a missing total.
+        // 已知分项为正而总量为零时，视为旧桥接层对缺失总量的兼容表示。
+        (Some(0), Some(derived)) if derived > 0 => (Some(derived), "inconsistent"),
+        (Some(reported), Some(_)) => (Some(reported), "inconsistent"),
+        (Some(reported), None) => (Some(reported), "reported"),
+        (None, Some(derived)) => (Some(derived), "derived"),
+        (None, None) => (None, "unknown"),
+    }
 }
 
 /// Builds one retry-wait telemetry event linked to the failed physical request.
@@ -1001,6 +1043,12 @@ struct CompletedPayload<'a> {
     /// Provider-reported total tokens, or unknown when absent.
     /// Provider 报告的总 Token，缺失时保持未知。
     total_tokens: Option<usize>,
+    /// Statistics total derived from the normalized token breakdown when needed.
+    /// 必要时根据规范化 Token 分项推导的统计总量。
+    accounted_total_tokens: Option<usize>,
+    /// Source and quality of the statistics total.
+    /// 统计总量的来源与质量。
+    accounted_total_source: &'a str,
     /// Optional provider-reported cache-hit input tokens.
     /// 可选 Provider 报告缓存命中输入 Token。
     cached_input_tokens: Option<usize>,
@@ -1199,6 +1247,8 @@ mod tests {
         assert_eq!(completed.payload["status"], "succeeded");
         assert_eq!(completed.payload["total_tokens"], 18);
         assert_eq!(completed.payload["uncached_input_tokens"], 10);
+        assert_eq!(completed.payload["accounted_total_tokens"], 18);
+        assert_eq!(completed.payload["accounted_total_source"], "reported");
         assert_eq!(
             completed.completed_usage,
             Some(ProviderRequestCompletedUsage {
@@ -1229,6 +1279,8 @@ mod tests {
         assert!(completed.payload["output_tokens"].is_null());
         assert!(completed.payload["reasoning_tokens"].is_null());
         assert!(completed.payload["total_tokens"].is_null());
+        assert!(completed.payload["accounted_total_tokens"].is_null());
+        assert_eq!(completed.payload["accounted_total_source"], "unknown");
         assert_eq!(
             completed.completed_usage,
             Some(ProviderRequestCompletedUsage {
@@ -1289,6 +1341,34 @@ mod tests {
         assert_eq!(
             uncached_input_tokens(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID, &usage),
             None
+        );
+    }
+
+    /// Verifies missing or bridged-zero Provider totals use the normalized token breakdown.
+    /// 验证缺失或被桥接为零的 Provider 总量使用规范化 Token 分项计算。
+    #[test]
+    fn derives_accounted_total_from_normalized_breakdown() {
+        let usage = ProviderUsageSnapshot {
+            input_tokens: Some(2_509),
+            uncached_input_tokens: Some(2_540),
+            output_tokens: Some(330),
+            cached_input_tokens: Some(64_000),
+            cache_creation_input_tokens: Some(31),
+            ..ProviderUsageSnapshot::default()
+        };
+
+        assert_eq!(
+            accounted_total_tokens(&usage, Some(2_540), Some(330)),
+            (Some(66_870), "derived")
+        );
+
+        let bridged_zero_usage = ProviderUsageSnapshot {
+            total_tokens: Some(0),
+            ..usage
+        };
+        assert_eq!(
+            accounted_total_tokens(&bridged_zero_usage, Some(2_540), Some(330)),
+            (Some(66_870), "inconsistent")
         );
     }
 
