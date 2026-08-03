@@ -1,5 +1,5 @@
 import * as React from "react";
-import { BookOpen, Database, Download, FolderInput, FolderPen, Plus, RefreshCw, Search, Trash2, Upload, Wrench } from "lucide-react";
+import { BookOpen, Database, Download, FolderInput, FolderPen, Plus, RefreshCw, Search, Settings2, Trash2, Upload, Wrench } from "lucide-react";
 import { toast } from "sonner";
 
 import { ProjectFolderPickerDialog } from "@/components/project/folder-picker-dialog";
@@ -7,10 +7,15 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { KnowledgeLibraryViewerDialog } from "@/components/features/knowledge/KnowledgeLibraryViewerDialog";
+import { KnowledgeLibraryCreateDialog, type KnowledgeLibraryCreateDialogModel } from "@/components/features/knowledge/KnowledgeLibraryCreateDialog";
+import { KnowledgeOperationProgress } from "@/components/features/knowledge/KnowledgeOperationProgress";
 import { KnowledgePackageImportDialog, KnowledgePackagePickerDialog } from "@/components/features/knowledge/KnowledgePackageDialogs";
 import { useI18n } from "@/i18n";
+import { loadPublicAiSettings } from "@/service/settings-actions-service";
 import {
   browseKnowledgeSourceDirectories,
+  buildKnowledgeDisplayIndex,
+  buildKnowledgeVectorIndex,
   cancelKnowledgeImport,
   createKnowledgeLibrary,
   deleteKnowledgeLibrary,
@@ -23,19 +28,24 @@ import {
   listKnowledgeLibraries,
   listKnowledgeSources,
   renameKnowledgeLibrary,
+  updateKnowledgeLibrarySettings,
   repairKnowledgeIndex,
   rebuildKnowledgeIndex,
 } from "@/service/knowledge-base-service";
-import type { KnowledgeImportJobSummary, KnowledgeIndexIntegritySummary, KnowledgeLibrarySummary, KnowledgePackageInspection, KnowledgeSourceSummary } from "@/types";
+import type { KnowledgeImportJobSummary, KnowledgeIndexIntegritySummary, KnowledgeLibrarySummary, KnowledgePackageInspection, KnowledgeRetrievalMode, KnowledgeSourceSummary } from "@/types";
+import type { PublicAiInternalInferenceCandidate } from "@/types/public-ai";
 
 // KnowledgeBusyOperation is the locale-independent identity of one serialized page mutation.
 // KnowledgeBusyOperation 是一次串行页面变更的语言无关身份。
 type KnowledgeBusyOperation =
   | "create"
+  | "settings"
   | "rename"
   | "delete"
   | "repair"
   | "rebuild"
+  | "display-build"
+  | "vector-build"
   | "refresh"
   | "directory-import"
   | "package-export"
@@ -50,11 +60,18 @@ type KnowledgeSourcePickerTarget = {
   sourceId: string | null;
 };
 
+// knowledgeCandidateRouteKey derives the same immutable route key as the creation dialog.
+// knowledgeCandidateRouteKey 根据不可变路由生成与创建对话框一致的键。
+function knowledgeCandidateRouteKey(candidate: PublicAiInternalInferenceCandidate): string {
+  const route = candidate.route;
+  return [route.provider_id, route.service_entry_id, route.connection_id, route.model_id, route.operation, route.binding.kind, route.binding.kind === "protocol" ? route.binding.protocol_profile_id : route.binding.action_binding_id].join("/");
+}
+
 // knowledgeImportProgressPercent returns a bounded determinate percentage after scanning completes.
 // knowledgeImportProgressPercent 在扫描完成后返回有界的确定进度百分比。
 export function knowledgeImportProgressPercent(job: KnowledgeImportJobSummary | null): number | null {
   if (!job) return null;
-  if (job.phase === "indexing" || job.phase === "repairing" || job.phase === "rebuilding") {
+  if (job.phase === "indexing" || job.phase === "repairing" || job.phase === "rebuilding" || job.phase === "curating" || job.phase === "embedding") {
     if (job.totalIndexItems <= 0) return null;
     return Math.min(100, Math.max(0, Math.round((job.processedIndexItems / job.totalIndexItems) * 100)));
   }
@@ -104,6 +121,33 @@ export function KnowledgeBaseArea() {
   // createName stores the new-library name field.
   // createName 保存新知识库名称字段。
   const [createName, setCreateName] = React.useState("");
+  // createDialogOpen controls the creation-time policy wizard.
+  // createDialogOpen 控制创建阶段的策略向导。
+  const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
+  // createRetrievalMode stores the selected corpus policy before submission.
+  // createRetrievalMode 保存提交前选择的内容层策略。
+  const [createRetrievalMode, setCreateRetrievalMode] = React.useState<KnowledgeRetrievalMode>("raw_bm25");
+  // createInferenceCandidates mirrors the official capability snapshot used by the wizard.
+  // createInferenceCandidates 镜像向导使用的官方能力快照候选。
+  const [createInferenceCandidates, setCreateInferenceCandidates] = React.useState<PublicAiInternalInferenceCandidate[]>([]);
+  // createCurationCandidateKey identifies the selected LLM route.
+  // createCurationCandidateKey 标识所选整理 LLM 路由。
+  const [createCurationCandidateKey, setCreateCurationCandidateKey] = React.useState("");
+  // createEmbeddingCandidateKey identifies the selected embedding route.
+  // createEmbeddingCandidateKey 标识所选向量路由。
+  const [createEmbeddingCandidateKey, setCreateEmbeddingCandidateKey] = React.useState("");
+  // createConfiguredDimension stores the selected capability dimension.
+  // createConfiguredDimension 保存所选能力维度。
+  const [createConfiguredDimension, setCreateConfiguredDimension] = React.useState("");
+  // createRequestedBatchSize stores an optional user override.
+  // createRequestedBatchSize 保存可选的用户批量覆盖值。
+  const [createRequestedBatchSize, setCreateRequestedBatchSize] = React.useState("");
+  // createCompatibilityOverride stores a deliberate same-dimension index reuse note.
+  // createCompatibilityOverride 保存明确复用同维度索引的风险说明。
+  const [createCompatibilityOverride, setCreateCompatibilityOverride] = React.useState("");
+  // settingsDialogOpen controls editing of the selected library policy.
+  // settingsDialogOpen 控制当前资料库策略编辑对话框。
+  const [settingsDialogOpen, setSettingsDialogOpen] = React.useState(false);
   // searchText filters the local library summaries.
   // searchText 筛选本地知识库摘要。
   const [searchText, setSearchText] = React.useState("");
@@ -189,10 +233,10 @@ export function KnowledgeBaseArea() {
   const pageBusy = busy !== null || operationRunning;
   // operationDialogRunning includes the short service-start window before the durable job is returned.
   // operationDialogRunning 包含持久化任务返回前的短暂服务启动窗口。
-  const operationDialogRunning = operationRunning || busy === "directory-import" || busy === "repair" || busy === "rebuild";
+  const operationDialogRunning = operationRunning || busy === "directory-import" || busy === "repair" || busy === "rebuild" || busy === "display-build" || busy === "vector-build";
   // displayedOperationKind preserves a truthful dialog title while a start request is in flight.
   // displayedOperationKind 在启动请求进行期间保持真实的对话框标题。
-  const displayedOperationKind = importJob?.operationKind ?? (busy === "repair" ? "repair" : (busy === "rebuild" ? "rebuild" : "import"));
+  const displayedOperationKind = importJob?.operationKind ?? (busy === "repair" ? "repair" : (busy === "rebuild" ? "rebuild" : (busy === "display-build" ? "display_build" : (busy === "vector-build" ? "vector_build" : "import"))));
 
   // acquireBusy atomically claims the single page mutation slot for one exact operation.
   // acquireBusy 为一个精确操作原子占用唯一页面变更槽位。
@@ -462,6 +506,38 @@ export function KnowledgeBaseArea() {
     }
   }, [acquireBusy, releaseBusy]);
 
+  // startDerivedOperation starts one detached display or vector build and reuses durable polling.
+  // startDerivedOperation 启动一个分离式显示库或向量构建，并复用持久化轮询。
+  // Parameters: operation selects the derived stage and libraryId identifies the exact target.
+  // 参数：operation 选择派生阶段，libraryId 标识精确目标。
+  const startDerivedOperation = React.useCallback(async (operation: "display-build" | "vector-build", libraryId: string): Promise<void> => {
+    if (!acquireBusy(operation)) return;
+    setImportLibraryId(libraryId);
+    trackedOperationJobId.current = null;
+    handledTerminalJobId.current = null;
+    projectedAuthoritativeJobId.current = null;
+    setImportJob(null);
+    setImportError("");
+    setImportOutcome(null);
+    setImportCancelRequested(false);
+    setImportWarnings([]);
+    setImportProgressOpen(true);
+    try {
+      const job = operation === "display-build"
+        ? await buildKnowledgeDisplayIndex(libraryId)
+        : await buildKnowledgeVectorIndex(libraryId);
+      trackedOperationJobId.current = job.id;
+      setImportJob(job);
+      setOperationPollRevision((revision) => revision + 1);
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : String(error));
+      setImportOutcome("failed");
+      setOperationPollRevision((revision) => revision + 1);
+    } finally {
+      releaseBusy(operation);
+    }
+  }, [acquireBusy, releaseBusy]);
+
   // runMutation serializes page mutations and refreshes authoritative registry state.
   // runMutation 串行化页面变更并刷新权威注册状态。
   const runMutation = React.useCallback(async (operation: KnowledgeBusyOperation, label: string, action: () => Promise<string | void>) => {
@@ -490,20 +566,117 @@ export function KnowledgeBaseArea() {
     }
   }, [acquireBusy, refreshLibraries, releaseBusy]);
 
-  // createLibrary validates and submits one named library.
-  // createLibrary 校验并提交一个命名知识库。
-  const createLibrary = React.useCallback(async () => {
+  // openCreateDialog loads the current official model capability snapshot before showing choices.
+  // openCreateDialog 在显示选项前加载当前官方模型能力快照。
+  const openCreateDialog = React.useCallback(async () => {
+    try {
+      const snapshot = await loadPublicAiSettings();
+      setCreateInferenceCandidates(snapshot.internalInferenceCandidates);
+      setCreateRetrievalMode("raw_bm25");
+      setCreateCurationCandidateKey("");
+      setCreateEmbeddingCandidateKey("");
+      setCreateConfiguredDimension("");
+      setCreateRequestedBatchSize("");
+      setCreateCompatibilityOverride("");
+      setCreateDialogOpen(true);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
+
+  // openSettingsDialog loads fresh official candidates and mirrors the persisted library choices.
+  // openSettingsDialog 加载最新官方候选并镜像持久化的资料库选择。
+  const openSettingsDialog = React.useCallback(async () => {
+    if (!selectedLibrary) return;
+    try {
+      const snapshot = await loadPublicAiSettings();
+      const settings = selectedLibrary.settings;
+      setCreateInferenceCandidates(snapshot.internalInferenceCandidates);
+      setCreateName(selectedLibrary.name);
+      setCreateRetrievalMode(settings.retrievalMode);
+      const routeKeyForSettings = (route: { providerId: string; serviceEntryId: string; connectionId?: string | null; modelId: string; protocol: string; bindingKind?: "protocol" | "action" } | null | undefined, operation: string) => route ? snapshot.internalInferenceCandidates.find((candidate) => candidate.route.operation === operation && candidate.route.provider_id === route.providerId && candidate.route.service_entry_id === route.serviceEntryId && candidate.route.connection_id === route.connectionId && candidate.route.model_id === route.modelId && candidate.route.binding.kind === (route.bindingKind ?? "protocol") && (candidate.route.binding.kind === "protocol" ? candidate.route.binding.protocol_profile_id : candidate.route.binding.action_binding_id) === route.protocol) : null;
+      const curationCandidate = routeKeyForSettings(settings.curation.route, "conversation_respond");
+      const embeddingCandidate = routeKeyForSettings(settings.embedding.route, "embedding_create");
+      setCreateCurationCandidateKey(curationCandidate ? knowledgeCandidateRouteKey(curationCandidate) : "");
+      setCreateEmbeddingCandidateKey(embeddingCandidate ? knowledgeCandidateRouteKey(embeddingCandidate) : "");
+      setCreateConfiguredDimension(settings.embedding.configuredDimension ? String(settings.embedding.configuredDimension) : "");
+      setCreateRequestedBatchSize(settings.embedding.embeddingBatchSize ? String(settings.embedding.embeddingBatchSize) : "");
+      setCreateCompatibilityOverride(settings.vectorIndex.compatibilityOverride ?? "");
+      setSettingsDialogOpen(true);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  }, [selectedLibrary]);
+
+  // createLibrary validates and submits one named library with the selected model policy.
+  // createLibrary 校验并提交一个带模型策略的命名知识库。
+  const createLibrary = React.useCallback(async (model: KnowledgeLibraryCreateDialogModel) => {
     const name = createName.trim();
     if (!name) {
       toast.error(t("knowledge.nameRequired"));
       return;
     }
+    const routeFromCandidate = (candidate: PublicAiInternalInferenceCandidate | null) => candidate ? ({
+      consumerProfileId: "knowledge_base",
+      providerId: candidate.route.provider_id,
+      protocol: candidate.route.binding.kind === "protocol" ? candidate.route.binding.protocol_profile_id : candidate.route.binding.action_binding_id,
+      bindingKind: candidate.route.binding.kind,
+      serviceEntryId: candidate.route.service_entry_id,
+      modelId: candidate.route.model_id,
+      usageScope: "internal_background" as const,
+      connectionId: candidate.route.connection_id,
+    }) : null;
+    const embeddingCapability = model.embeddingCandidate?.capabilities.embedding;
     await runMutation("create", t("knowledge.create"), async () => {
-      const created = await createKnowledgeLibrary(name, "", []);
+      const created = await createKnowledgeLibrary(name, "", [], {
+        retrievalMode: model.retrievalMode,
+        fallbackPolicy: "explicit_only",
+        curation: {
+          enabled: model.retrievalMode !== "raw_bm25",
+          route: routeFromCandidate(model.curationCandidate),
+          promptVersion: "knowledge-display-v1",
+        },
+        embedding: {
+          enabled: model.retrievalMode === "display_hybrid",
+          route: routeFromCandidate(model.embeddingCandidate),
+          configuredDimension: model.configuredDimension,
+          modelMaxBatchSize: embeddingCapability?.maximum_inputs ?? null,
+          requestedBatchSize: model.requestedBatchSize,
+          compatibilityOverride: model.compatibilityOverride.trim() || null,
+        },
+      });
       setCreateName("");
       setSelectedLibraryId(created.id);
+      setCreateDialogOpen(false);
     });
   }, [createName, runMutation, t]);
+
+  // updateLibrarySettings persists an edited policy without re-importing source files.
+  // updateLibrarySettings 持久化编辑后的策略且不重新导入原始文件。
+  const updateLibrarySettings = React.useCallback(async (model: KnowledgeLibraryCreateDialogModel) => {
+    if (!selectedLibrary) return;
+    const routeFromCandidate = (candidate: PublicAiInternalInferenceCandidate | null) => candidate ? ({
+      consumerProfileId: "knowledge_base",
+      providerId: candidate.route.provider_id,
+      protocol: candidate.route.binding.kind === "protocol" ? candidate.route.binding.protocol_profile_id : candidate.route.binding.action_binding_id,
+      bindingKind: candidate.route.binding.kind,
+      serviceEntryId: candidate.route.service_entry_id,
+      modelId: candidate.route.model_id,
+      usageScope: "internal_background" as const,
+      connectionId: candidate.route.connection_id,
+    }) : null;
+    const embeddingCapability = model.embeddingCandidate?.capabilities.embedding;
+    await runMutation("settings", "保存资料库配置", async () => {
+      await updateKnowledgeLibrarySettings(selectedLibrary.id, {
+        retrievalMode: model.retrievalMode,
+        fallbackPolicy: "explicit_only",
+        curation: { enabled: model.retrievalMode !== "raw_bm25", route: routeFromCandidate(model.curationCandidate), promptVersion: "knowledge-display-v1" },
+        embedding: { enabled: model.retrievalMode === "display_hybrid", route: routeFromCandidate(model.embeddingCandidate), configuredDimension: model.configuredDimension, modelMaxBatchSize: embeddingCapability?.maximum_inputs ?? null, requestedBatchSize: model.requestedBatchSize, compatibilityOverride: model.compatibilityOverride.trim() || null },
+      });
+      setSettingsDialogOpen(false);
+      await refreshLibraries();
+    });
+  }, [refreshLibraries, runMutation, selectedLibrary]);
 
   // exportPackage writes one consistent package to the selected host directory.
   // exportPackage 将一个一致性知识库包写入选中的宿主目录。
@@ -557,7 +730,7 @@ export function KnowledgeBaseArea() {
       <div className="knowledge-toolbar">
         <div className="knowledge-create-row">
           <Input aria-label={t("knowledge.name")} disabled={pageBusy} onChange={(event) => setCreateName(event.target.value)} placeholder={t("knowledge.name.placeholder")} value={createName} />
-          <Button disabled={pageBusy || !createName.trim()} onClick={() => void createLibrary()}><Plus size={15} />{t("knowledge.create")}</Button>
+          <Button disabled={pageBusy || !createName.trim()} onClick={() => void openCreateDialog()}><Plus size={15} />{t("knowledge.create")}</Button>
         </div>
         <label className="knowledge-search"><Search size={15} /><Input aria-label={t("knowledge.filter.aria")} onChange={(event) => setSearchText(event.target.value)} placeholder={t("knowledge.filter.placeholder")} value={searchText} /></label>
         <Button disabled={pageBusy} onClick={() => setPackagePickerOpen(true)} variant="outline"><Upload size={15} />{t("knowledge.package.import")}</Button>
@@ -590,6 +763,7 @@ export function KnowledgeBaseArea() {
               <header className="knowledge-detail-header">
                 <div className="knowledge-title-editor"><Input aria-label={t("knowledge.name")} disabled={pageBusy} onChange={(event) => setRenameDraft(event.target.value)} value={renameDraft} /><p>{selectedLibrary.description || t("knowledge.defaultDescription")}</p></div>
                 <div className="knowledge-actions">
+                  <Button disabled={pageBusy} onClick={() => void openSettingsDialog()} variant="outline"><Settings2 size={15} />配置</Button>
                   <Button disabled={pageBusy || !renameDraft.trim() || renameDraft.trim() === selectedLibrary.name} onClick={() => void runMutation("rename", t("knowledge.saveName"), async () => {
                     await renameKnowledgeLibrary(selectedLibrary.id, renameDraft.trim(), selectedLibrary.description);
                   })} variant="outline">{t("knowledge.saveName")}</Button>
@@ -627,9 +801,16 @@ export function KnowledgeBaseArea() {
                       <code>{t("knowledge.indexHealth.dictionaryRevision").replace("{indexed}", String(indexIntegrity.indexedDictionaryRevision)).replace("{current}", String(indexIntegrity.dictionaryRevision))}</code>
                       <code>{t("knowledge.indexHealth.tokenizer").replace("{tokenizer}", indexIntegrity.tokenizer || "-")}</code>
                     </div>
+                    {selectedLibrary.settings.vectorIndex.compatibilityOverride ? <p className="text-sm text-amber-700">已人工确认同维度模型兼容，当前复用旧向量索引：{selectedLibrary.settings.vectorIndex.compatibilityOverride}</p> : null}
                     <div className="knowledge-index-health-actions">
                       <Button disabled={pageBusy || indexIntegrity.searchable} onClick={() => void startIndexOperation("repair", selectedLibrary.id)} variant="outline"><Wrench size={15} />{t("knowledge.repairIndex")}</Button>
                       <Button disabled={pageBusy} onClick={() => void startIndexOperation("rebuild", selectedLibrary.id)} variant="outline"><RefreshCw size={15} />{t("knowledge.rebuildIndex")}</Button>
+                      {selectedLibrary.settings.curation.enabled ? (
+                        <Button disabled={pageBusy || selectedLibrary.settings.displayIndex.status === "building"} onClick={() => void startDerivedOperation("display-build", selectedLibrary.id)} variant="outline"><Wrench size={15} />生成显示库</Button>
+                      ) : null}
+                      {selectedLibrary.settings.embedding.enabled ? (
+                        <Button disabled={pageBusy || selectedLibrary.settings.displayIndex.status !== "ready" || selectedLibrary.settings.vectorIndex.status === "building"} onClick={() => void startDerivedOperation("vector-build", selectedLibrary.id)} variant="outline"><Database size={15} />生成向量</Button>
+                      ) : null}
                     </div>
                   </>
                 ) : null}
@@ -688,6 +869,48 @@ export function KnowledgeBaseArea() {
           ) : <div className="knowledge-empty">{t("knowledge.emptySelection")}</div>}
         </main>
       </div>
+      <KnowledgeLibraryCreateDialog
+        candidates={createInferenceCandidates}
+        configuredDimension={createConfiguredDimension}
+        compatibilityOverride={createCompatibilityOverride}
+        curationCandidateKey={createCurationCandidateKey}
+        embeddingCandidateKey={createEmbeddingCandidateKey}
+        name={createName}
+        onConfiguredDimensionChange={setCreateConfiguredDimension}
+        onCompatibilityOverrideChange={setCreateCompatibilityOverride}
+        onCurationCandidateChange={setCreateCurationCandidateKey}
+        onEmbeddingCandidateChange={setCreateEmbeddingCandidateKey}
+        onNameChange={setCreateName}
+        onOpenChange={setCreateDialogOpen}
+        onRequestedBatchSizeChange={setCreateRequestedBatchSize}
+        onRetrievalModeChange={setCreateRetrievalMode}
+        onSubmit={(model) => void createLibrary(model)}
+        open={createDialogOpen}
+        requestedBatchSize={createRequestedBatchSize}
+        retrievalMode={createRetrievalMode}
+      />
+      <KnowledgeLibraryCreateDialog
+        candidates={createInferenceCandidates}
+        configuredDimension={createConfiguredDimension}
+        compatibilityOverride={createCompatibilityOverride}
+        curationCandidateKey={createCurationCandidateKey}
+        embeddingCandidateKey={createEmbeddingCandidateKey}
+        name={createName}
+        onConfiguredDimensionChange={setCreateConfiguredDimension}
+        onCompatibilityOverrideChange={setCreateCompatibilityOverride}
+        onCurationCandidateChange={setCreateCurationCandidateKey}
+        onEmbeddingCandidateChange={setCreateEmbeddingCandidateKey}
+        onNameChange={setCreateName}
+        onOpenChange={setSettingsDialogOpen}
+        onRequestedBatchSizeChange={setCreateRequestedBatchSize}
+        onRetrievalModeChange={setCreateRetrievalMode}
+        onSubmit={(model) => void updateLibrarySettings(model)}
+        open={settingsDialogOpen}
+        requestedBatchSize={createRequestedBatchSize}
+        retrievalMode={createRetrievalMode}
+        submitLabel="保存"
+        title="资料库模型与检索配置"
+      />
       <KnowledgeLibraryViewerDialog library={viewerLibrary} onOpenChange={handleViewerOpenChange} open={viewerLibrary !== null} />
       <KnowledgePackagePickerDialog onOpenChange={setPackagePickerOpen} onSelect={inspectPackage} open={packagePickerOpen} />
       <KnowledgePackageImportDialog
@@ -739,9 +962,11 @@ export function KnowledgeBaseArea() {
           <DialogHeader>
             <DialogTitle>{displayedOperationKind === "repair"
               ? t("knowledge.operationDialog.title.repair")
-              : (displayedOperationKind === "rebuild" ? t("knowledge.operationDialog.title.rebuild") : t("knowledge.operationDialog.title.import"))}</DialogTitle>
+              : (displayedOperationKind === "rebuild"
+                ? t("knowledge.operationDialog.title.rebuild")
+                : (displayedOperationKind === "display_build" ? "生成资料库显示层" : (displayedOperationKind === "vector_build" ? "生成资料库向量索引" : t("knowledge.operationDialog.title.import"))))}</DialogTitle>
           </DialogHeader>
-          <KnowledgeImportProgress cancelRequested={importCancelRequested} job={importJob} outcome={importOutcome} running={operationDialogRunning} t={t} />
+          <KnowledgeOperationProgress cancelRequested={importCancelRequested} job={importJob} outcome={importOutcome} running={operationDialogRunning} />
           {importError ? <pre className="knowledge-import-dialog-error">{importError}</pre> : null}
           {importWarnings.length > 0 ? <pre className="knowledge-import-warnings">{importWarnings.join("\n")}</pre> : null}
           <DialogFooter>
@@ -790,7 +1015,7 @@ function KnowledgeImportProgress(props: {
   const isScanning = isImport && props.job?.phase === "scanning";
   // IsIndexing identifies incremental or recovery FTS work with its own denominator.
   // IsIndexing 标识具有独立分母的增量或恢复 FTS 工作。
-  const isIndexing = props.job?.phase === "indexing" || props.job?.phase === "repairing" || props.job?.phase === "rebuilding";
+  const isIndexing = props.job?.phase === "indexing" || props.job?.phase === "repairing" || props.job?.phase === "rebuilding" || props.job?.phase === "curating" || props.job?.phase === "embedding";
   // Status describes the exact discovery, processing, or terminal state.
   // Status 描述准确的发现、处理或终态。
   const status = props.running
@@ -801,7 +1026,11 @@ function KnowledgeImportProgress(props: {
       : (isScanning
       ? props.t("knowledge.importDialog.scanning").replace("{discovered}", String(props.job?.scannedFiles ?? 0))
       : (isIndexing
-        ? props.t(props.job?.phase === "repairing" ? "knowledge.importDialog.repairing" : (props.job?.phase === "rebuilding" ? "knowledge.importDialog.rebuilding" : "knowledge.importDialog.indexing")).replace("{processed}", String(props.job?.processedIndexItems ?? 0)).replace("{total}", String(props.job?.totalIndexItems ?? 0)).replace("{percent}", String(percentage ?? 0))
+        ? (props.job?.phase === "curating"
+          ? `正在整理显示库 ${props.job?.processedIndexItems ?? 0} / ${props.job?.totalIndexItems ?? 0}（${percentage ?? 0}%）`
+          : (props.job?.phase === "embedding"
+            ? `正在生成向量 ${props.job?.processedIndexItems ?? 0} / ${props.job?.totalIndexItems ?? 0}（${percentage ?? 0}%）`
+            : props.t(props.job?.phase === "repairing" ? "knowledge.importDialog.repairing" : (props.job?.phase === "rebuilding" ? "knowledge.importDialog.rebuilding" : "knowledge.importDialog.indexing")).replace("{processed}", String(props.job?.processedIndexItems ?? 0)).replace("{total}", String(props.job?.totalIndexItems ?? 0)).replace("{percent}", String(percentage ?? 0))))
         : importPhaseStatus(props.job, percentage ?? 0, props.t)))))
     : ((props.outcome ?? props.job?.state) === "completed"
       ? props.t("knowledge.importDialog.completed")
@@ -850,6 +1079,8 @@ function importPhaseLabel(phase: string | undefined, t: KnowledgeTranslator): st
     case "indexing": return t("knowledge.importPhase.indexing");
     case "repairing": return t("knowledge.importPhase.repairing");
     case "rebuilding": return t("knowledge.importPhase.rebuilding");
+    case "curating": return "整理显示库";
+    case "embedding": return "生成向量";
     case "verifying": return t("knowledge.importPhase.verifying");
     case "finalizing": return t("knowledge.importPhase.finalizing");
     case "completed": return t("knowledge.importPhase.completed");
@@ -866,6 +1097,8 @@ function importPhaseFallback(phase: string | undefined, t: KnowledgeTranslator):
     case "indexing": return t("knowledge.importDialog.indexingFallback");
     case "repairing": return t("knowledge.importDialog.repairingFallback");
     case "rebuilding": return t("knowledge.importDialog.rebuildingFallback");
+    case "curating": return "正在整理显示库";
+    case "embedding": return "正在生成向量索引";
     case "verifying": return t("knowledge.importDialog.verifyingFallback");
     case "finalizing": return t("knowledge.importDialog.finalizingFallback");
     default: return t("knowledge.importDialog.waiting");

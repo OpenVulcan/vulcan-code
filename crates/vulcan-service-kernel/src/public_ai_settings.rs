@@ -42,6 +42,10 @@ use crate::{
     shell_host_from_state,
 };
 
+/// Stable LLM purpose key used by the library-owned configured-inference profile.
+/// 资料库独立配置推理档案使用的稳定 LLM 用途键。
+pub(super) const KNOWLEDGE_CURATION_PURPOSE_ID: &str = "knowledge_display_curation";
+
 /// Browser-facing public AI settings snapshot.
 /// 面向浏览器的公共 AI 设置快照。
 #[derive(Debug, Clone, Serialize)]
@@ -245,19 +249,19 @@ pub(super) struct PublicAiInternalInferenceCandidate {
     model_display_name: String,
     /// Exact immutable route persisted when selected.
     /// 选中时持久化的精确不可变路由。
-    route: InferenceRouteConfiguration,
+    pub(super) route: InferenceRouteConfiguration,
     /// Process-local catalog generation that established the model route.
     /// 建立该模型路由的进程内目录代次。
-    catalog_generation: u64,
+    pub(super) catalog_generation: u64,
     /// Whether the model operation is enabled for internal use.
     /// 当前模型操作是否已为内部使用启用。
-    enabled: bool,
+    pub(super) enabled: bool,
     /// Exact usage scopes permitted by product, credential, and user narrowing.
     /// 产品、凭据与用户收窄共同允许的精确用途范围。
     usage_scopes: BTreeSet<InferenceUsageScope>,
     /// Exact model capability contract used to generate internal controls.
     /// 用于生成内部控件的精确模型能力契约。
-    capabilities: ModelCapabilities,
+    pub(super) capabilities: ModelCapabilities,
     /// Current operation-scoped model defaults.
     /// 当前操作作用域模型默认值。
     overrides: InternalModelOverrides,
@@ -5583,15 +5587,45 @@ pub(super) fn service_public_ai_session_provider_tool_selections(
             .session_runtime_state
             .get_mut(&session_id)
             .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
-        let initialized_now = if runtime_state.provider_tool_settings_initialized {
-            false
+        let mut state_changed = false;
+        if runtime_state.provider_tool_settings_initialized {
+            if !runtime_state.provider_tool_selections_overridden {
+                let next_selections = configuration
+                    .provider_tool_selections
+                    .iter()
+                    .map(|(capability, selection)| {
+                        (
+                            provider_tool_capability_key(*capability),
+                            vulcan_workbench_model::SessionProviderToolTargetSelection {
+                                connection_id: selection.connection_id.clone(),
+                                target_id: selection.target_id.clone(),
+                            },
+                        )
+                    })
+                    .collect();
+                let next_enabled_capabilities = configuration
+                    .provider_tool_enabled_capabilities
+                    .iter()
+                    .map(|capability| provider_tool_capability_key(*capability))
+                    .collect();
+                if runtime_state.provider_tool_selections != next_selections
+                    || runtime_state.provider_tool_enabled_capabilities != next_enabled_capabilities
+                {
+                    runtime_state.provider_tool_selections = next_selections;
+                    runtime_state.provider_tool_enabled_capabilities = next_enabled_capabilities;
+                    state_changed = true;
+                }
+            }
         } else {
             if runtime_state.provider_tool_selections_overridden {
-                runtime_state.provider_tool_enabled_capabilities = runtime_state
+                let next_enabled_capabilities = runtime_state
                     .provider_tool_selections
                     .keys()
                     .cloned()
                     .collect();
+                if runtime_state.provider_tool_enabled_capabilities != next_enabled_capabilities {
+                    runtime_state.provider_tool_enabled_capabilities = next_enabled_capabilities;
+                }
             } else {
                 runtime_state.provider_tool_selections = configuration
                     .provider_tool_selections
@@ -5613,14 +5647,15 @@ pub(super) fn service_public_ai_session_provider_tool_selections(
                     .collect();
             }
             runtime_state.provider_tool_settings_initialized = true;
-            runtime_state.provider_tool_selections_overridden = false;
+            state_changed = true;
+        }
+        if state_changed {
             runtime_state.updated_at = crate::current_unix_millis_text();
-            true
-        };
+        }
         let enabled_capabilities =
             session_provider_tool_enabled_capabilities_from_runtime(runtime_state)?;
         let selections = session_provider_tool_selections_from_runtime(runtime_state)?;
-        let persistence_context = initialized_now.then(|| {
+        let persistence_context = state_changed.then(|| {
             (
                 guard.controller_runtime.clone(),
                 guard.workspace_snapshot.clone(),
@@ -5713,13 +5748,14 @@ pub(super) fn service_save_public_ai_session_provider_tool_selections(
             .map(|capability| provider_tool_capability_key(*capability))
             .collect();
         runtime_state.provider_tool_settings_initialized = true;
-        runtime_state.provider_tool_selections_overridden = false;
+        runtime_state.provider_tool_selections_overridden = true;
         runtime_state.updated_at = crate::current_unix_millis_text();
         (
             guard.controller_runtime.clone(),
             guard.workspace_snapshot.clone(),
         )
     };
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
     if let (Some(controller_runtime), Some(workspace_snapshot)) = persistence_context
         && let Some(addon_state) = crate::session_addon_state_from_workspace_snapshot(
             &workspace_snapshot,
@@ -5879,6 +5915,64 @@ pub(crate) fn provider_tool_capability_key(capability: ProviderToolCapabilityKin
         .ok()
         .and_then(|value| value.as_str().map(str::to_string))
         .expect("provider tool capability must serialize as a string")
+}
+
+/// Reports whether the effective session has a valid selected image-understanding bridge.
+/// 判断当前会话生效配置是否具有有效的图片理解桥接目标。
+///
+/// Inherited sessions read the current global defaults, while explicit session overrides remain isolated.
+/// 继承全局设置的会话读取当前全局默认值，会话显式覆盖则保持隔离。
+///
+/// # Parameters
+/// 参数
+/// `runtime` resolves currently available provider-tool targets; `configuration` owns global selections; `runtime_state` is the selected session state.
+/// `runtime` 解析当前可用的供应商工具目标；`configuration` 持有全局选择；`runtime_state` 是选中会话的运行态。
+///
+/// # Returns
+/// 返回值
+/// `true` only when the effective configuration enables and selects an available image-understanding target.
+/// 仅当生效配置启用并选中了可用图片理解目标时返回 `true`。
+pub(crate) fn public_ai_session_has_image_understanding_bridge(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+    runtime_state: Option<&vulcan_workbench_model::SessionRuntimeStateEntry>,
+) -> Result<bool, String> {
+    let explicit_session_settings = runtime_state.is_some_and(|state| {
+        state.provider_tool_settings_initialized && state.provider_tool_selections_overridden
+    });
+    let (enabled, selection) = if explicit_session_settings {
+        let runtime_state = runtime_state.expect("explicit session settings require runtime state");
+        let enabled = session_provider_tool_enabled_capabilities_from_runtime(runtime_state)?;
+        let selections = session_provider_tool_selections_from_runtime(runtime_state)?;
+        (
+            enabled.contains(&ProviderToolCapabilityKind::MediaAnalyze),
+            selections
+                .get(&ProviderToolCapabilityKind::MediaAnalyze)
+                .cloned(),
+        )
+    } else {
+        (
+            configuration
+                .provider_tool_enabled_capabilities
+                .contains(&ProviderToolCapabilityKind::MediaAnalyze),
+            configuration
+                .provider_tool_selections
+                .get(&ProviderToolCapabilityKind::MediaAnalyze)
+                .cloned(),
+        )
+    };
+    if !enabled {
+        return Ok(false);
+    }
+    let Some(selection) = selection else {
+        return Ok(false);
+    };
+    let available = runtime.available_provider_tool_targets(configuration)?;
+    Ok(available.iter().any(|candidate| {
+        candidate.connection_id == selection.connection_id
+            && candidate.target.target_id == selection.target_id
+            && candidate.target.contract.capability == ProviderToolCapabilityKind::MediaAnalyze
+    }))
 }
 
 /// Selects the first stable enabled provider-model-account tuple from runtime catalogs.
@@ -6594,6 +6688,131 @@ fn build_internal_inference_candidates(
     Ok(candidates)
 }
 
+/// Resolves one exact official internal route for a knowledge-library setting.
+/// 为资料库配置解析一条精确的官方内部路由。
+pub(super) fn resolve_knowledge_internal_inference_candidate(
+    state: &SharedServiceBridgeState,
+    provider_id: &str,
+    service_entry_id: &str,
+    connection_id: Option<&str>,
+    model_id: &str,
+    binding: &InferenceRouteBinding,
+    operation: AiOperation,
+    usage_scope: InferenceUsageScope,
+) -> Result<PublicAiInternalInferenceCandidate, String> {
+    let (runtime, configuration) = public_ai_runtime_and_configuration(state)?;
+    let providers = runtime.effective_providers(&configuration)?;
+    let catalogs = runtime.catalog_snapshot()?;
+    let candidate = build_internal_inference_candidates(&configuration, &providers, &catalogs)?
+        .into_iter()
+        .find(|candidate| {
+            candidate.route.provider_id == provider_id
+                && candidate.route.service_entry_id == service_entry_id
+                && connection_id.is_none_or(|value| candidate.route.connection_id == value)
+                && candidate.route.model_id == model_id
+                && candidate.route.binding == *binding
+                && candidate.route.operation == operation
+                && candidate.route.usage_scope == usage_scope
+        })
+        .ok_or_else(|| {
+            format!(
+                "未找到可执行的官方知识库模型路由：provider={provider_id}, service={service_entry_id}, model={model_id}, operation={}",
+                operation.as_str()
+            )
+        })?;
+    if !candidate.enabled {
+        return Err(format!(
+            "知识库模型路由当前未启用内部操作：provider={provider_id}, model={model_id}, operation={}",
+            operation.as_str()
+        ));
+    }
+    Ok(candidate)
+}
+
+/// Synchronizes one library-owned inference profile with its validated model routes.
+/// 将一个资料库独立拥有的推理配置档同步为经过校验的模型路由。
+///
+/// The profile is intentionally keyed by the immutable library identifier so two libraries
+/// can select different models without overwriting one another or the VMM profile.
+/// 配置档故意使用不可变资料库标识作为键，确保不同资料库可以选择不同模型，且不会覆盖 VMM 配置档。
+pub(super) async fn sync_knowledge_inference_profile(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    consumer_profile_id: &str,
+    curation_route: Option<InferenceRouteConfiguration>,
+    embedding_route: Option<InferenceRouteConfiguration>,
+) -> Result<(), String> {
+    validate_non_empty("consumerProfileId", consumer_profile_id)?;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    let mut validation_configuration = current_configuration.clone();
+    for route in [curation_route.as_ref(), embedding_route.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        if !matches!(
+            route.operation,
+            AiOperation::ConversationRespond | AiOperation::EmbeddingCreate
+        ) {
+            return Err(format!(
+                "资料库配置档不支持内部操作 `{}`",
+                route.operation.as_str()
+            ));
+        }
+        enable_internal_inference_route(&mut validation_configuration, route);
+        let selection =
+            runtime.resolve_internal_inference_selection(&validation_configuration, route)?;
+        validate_vmm_llm_reasoning_policy(
+            consumer_profile_id,
+            route.operation,
+            &selection.model.capabilities,
+        )?;
+    }
+    let configuration = mutate_public_ai_configuration(
+        &state,
+        "保存资料库独立模型配置失败",
+        |configuration| {
+            let profile = configuration
+                .inference_profiles
+                .entry(consumer_profile_id.to_string())
+                .or_default();
+            if let Some(route) = curation_route.clone() {
+                profile
+                    .llm_routes
+                    .insert(String::from(KNOWLEDGE_CURATION_PURPOSE_ID), route);
+            } else {
+                profile.llm_routes.remove(KNOWLEDGE_CURATION_PURPOSE_ID);
+            }
+            profile.embedding = embedding_route.clone();
+            Ok(())
+        },
+    )
+    .await?;
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    Ok(())
+}
+
+/// Removes one library-owned inference profile after the library is deleted.
+/// 删除资料库后移除该资料库独立拥有的推理配置档。
+pub(super) async fn remove_knowledge_inference_profile(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    consumer_profile_id: &str,
+) -> Result<(), String> {
+    validate_non_empty("consumerProfileId", consumer_profile_id)?;
+    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
+    let configuration = mutate_public_ai_configuration(
+        &state,
+        "删除资料库独立模型配置失败",
+        |configuration| {
+            configuration.inference_profiles.remove(consumer_profile_id);
+            Ok(())
+        },
+    )
+    .await?;
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    Ok(())
+}
+
 /// Validates one complete internal override against one exact model route.
 /// 根据一条精确模型路由校验一份完整内部覆盖。
 fn validate_internal_model_overrides(
@@ -6954,6 +7173,16 @@ pub(crate) fn publish_public_ai_workbench(
                     })
             })
             .or_else(|| runtime.resolve_active_selection(configuration).ok());
+        let selected_runtime_state = guard.workspace_snapshot.as_ref().and_then(|workspace| {
+            workspace
+                .session_runtime_state
+                .get(&workspace.selected_session)
+        });
+        let bridged_image_understanding = public_ai_session_has_image_understanding_bridge(
+            runtime,
+            configuration,
+            selected_runtime_state,
+        )?;
         let rows = public_ai_provider_rows_for_selection(
             configuration,
             runtime,
@@ -6976,6 +7205,7 @@ pub(crate) fn publish_public_ai_workbench(
                     effective_selection
                         .as_ref()
                         .map(|selection| &selection.model.capabilities),
+                    bridged_image_understanding,
                 );
         }
         // A published provider projection is a new authoritative snapshot and must outrank the previous WebUI revision.

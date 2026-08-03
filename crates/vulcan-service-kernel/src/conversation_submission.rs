@@ -112,6 +112,10 @@ pub(super) struct SubmissionKnowledgeSelection {
     /// Exact authorized library identifiers.
     /// 精确且已授权的知识库标识列表。
     library_ids: Vec<String>,
+    /// Optional explicit retrieval policy for knowledge tools.
+    /// 知识库工具可选的显式检索策略。
+    #[serde(default)]
+    retrieval_mode: Option<String>,
 }
 
 /// Captures one initial user goal created before the first prompt is submitted.
@@ -152,8 +156,8 @@ pub(super) struct SubmissionSessionSettings {
     /// Optional explicit VMM policy pair; absence preserves inherited defaults.
     /// 可选显式 VMM 策略对；缺省时保留继承默认值。
     vmm_policy: Option<SubmissionVmmPolicy>,
-    /// Optional complete provider-tool snapshot; absence preserves initialized session state or initializes a new session from global defaults.
-    /// 可选完整供应商工具快照；缺省时保留已初始化会话状态，或为新会话从全局默认值初始化。
+    /// Optional complete provider-tool snapshot; absence preserves an explicit session override or inherits current global defaults.
+    /// 可选完整供应商工具快照；缺省时保留会话显式覆盖，或继承当前全局默认值。
     provider_tool_settings: Option<SubmissionProviderToolSettings>,
     /// Optional knowledge selection; absence preserves project inheritance.
     /// 可选知识库选择；缺省时保留项目继承。
@@ -163,13 +167,16 @@ pub(super) struct SubmissionSessionSettings {
     initial_goal: Option<SubmissionInitialGoal>,
 }
 
-/// Reports whether an absent per-turn snapshot must preserve initialized session settings.
-/// 判断缺失的本回合快照是否必须保留已初始化的会话设置。
+/// Reports whether an absent per-turn snapshot must preserve an explicit session override.
+/// 判断缺失的本回合快照是否必须保留会话显式覆盖。
 fn should_preserve_existing_provider_tool_settings(
     has_explicit_settings: bool,
     provider_tool_settings_initialized: bool,
+    provider_tool_selections_overridden: bool,
 ) -> bool {
-    !has_explicit_settings && provider_tool_settings_initialized
+    !has_explicit_settings
+        && provider_tool_settings_initialized
+        && provider_tool_selections_overridden
 }
 
 /// Converts one submitted VMM tri-state mode into the persisted optional layer value.
@@ -206,12 +213,17 @@ async fn apply_submission_session_settings(
     let configuration = runtime.configuration_snapshot()?;
     let provider_tool_settings =
         settings.and_then(|settings| settings.provider_tool_settings.as_ref());
+    let has_explicit_provider_tool_settings = provider_tool_settings.is_some();
     let preserve_existing_provider_tools = should_preserve_existing_provider_tool_settings(
-        provider_tool_settings.is_some(),
+        has_explicit_provider_tool_settings,
         workspace_snapshot
             .session_runtime_state
             .get(&session_id)
             .is_some_and(|runtime_state| runtime_state.provider_tool_settings_initialized),
+        workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .is_some_and(|runtime_state| runtime_state.provider_tool_selections_overridden),
     );
     if !preserve_existing_provider_tools {
         let enabled_capabilities = provider_tool_settings
@@ -257,10 +269,19 @@ async fn apply_submission_session_settings(
         {
             return Err(format!("知识库未授权给当前项目：{denied}"));
         }
+        if let Some(retrieval_mode) = selection.retrieval_mode.as_deref()
+            && !matches!(
+                retrieval_mode,
+                "raw_bm25" | "display_bm25" | "display_hybrid"
+            )
+        {
+            return Err(format!("未知知识库检索策略：{retrieval_mode}"));
+        }
         Some(
             SessionKnowledgeLibrarySelection {
                 mode,
                 library_ids: selection.library_ids.clone(),
+                retrieval_mode: selection.retrieval_mode.clone(),
             }
             .normalized(),
         )
@@ -301,7 +322,7 @@ async fn apply_submission_session_settings(
             .map(|capability| provider_tool_capability_key(*capability))
             .collect();
         runtime_state.provider_tool_settings_initialized = true;
-        runtime_state.provider_tool_selections_overridden = false;
+        runtime_state.provider_tool_selections_overridden = has_explicit_provider_tool_settings;
     }
     if let Some(selection) = knowledge_selection {
         runtime_state.knowledge_library_selection = selection;
@@ -1381,14 +1402,21 @@ mod submission_hydration_policy_tests {
 mod submission_session_settings_tests {
     use super::should_preserve_existing_provider_tool_settings;
 
-    /// Verifies an initialized session is not reset when a submission omits session settings.
-    /// 验证提交缺少会话设置时不会重置已初始化会话。
+    /// Verifies only an explicitly overridden session is preserved when a submission omits settings.
+    /// 验证提交缺少设置时仅保留显式覆盖的会话。
     #[test]
-    fn omitted_settings_preserve_initialized_session() {
-        assert!(should_preserve_existing_provider_tool_settings(false, true));
-        assert!(!should_preserve_existing_provider_tool_settings(true, true));
+    fn omitted_settings_preserve_explicit_session_only() {
+        assert!(should_preserve_existing_provider_tool_settings(
+            false, true, true
+        ));
         assert!(!should_preserve_existing_provider_tool_settings(
-            false, false
+            true, true, true
+        ));
+        assert!(!should_preserve_existing_provider_tool_settings(
+            false, true, false
+        ));
+        assert!(!should_preserve_existing_provider_tool_settings(
+            false, false, false
         ));
     }
 }

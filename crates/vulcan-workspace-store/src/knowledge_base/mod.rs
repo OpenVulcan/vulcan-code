@@ -7,15 +7,23 @@ mod runtime;
 mod schema;
 
 pub use markdown::{
-    CHUNK_OVERLAP_TOKENS, HARD_CHUNK_TOKENS, TARGET_CHUNK_TOKENS, extract_document_title,
+    CHUNK_OVERLAP_TOKENS, HARD_CHUNK_TOKENS, TARGET_CHUNK_TOKENS, chunk_markdown,
+    extract_document_title, normalize_markdown_newlines, sha256_hex,
 };
 pub use models::{
-    KNOWLEDGE_PACKAGE_FORMAT, KNOWLEDGE_PACKAGE_VERSION, KnowledgeChunk, KnowledgeDocumentContent,
-    KnowledgeDocumentSummary, KnowledgeImportJobSummary, KnowledgeImportReport,
-    KnowledgeIndexIntegritySummary, KnowledgeLibrarySummary, KnowledgeOperationKind,
+    KNOWLEDGE_DEFAULT_EMBEDDING_BATCH_SIZE, KNOWLEDGE_PACKAGE_FORMAT, KNOWLEDGE_PACKAGE_VERSION,
+    KnowledgeBatchSizeSource, KnowledgeChunk, KnowledgeCurationSettings, KnowledgeDisplayChunk,
+    KnowledgeDisplayDocument, KnowledgeDisplayIndexState, KnowledgeDisplayIndexStatus,
+    KnowledgeDocumentContent, KnowledgeDocumentSummary, KnowledgeEmbeddingSettings,
+    KnowledgeFallbackPolicy, KnowledgeFtsQuery, KnowledgeImportJobSummary, KnowledgeImportReport,
+    KnowledgeIndexIntegritySummary, KnowledgeLibrarySettings, KnowledgeLibrarySummary,
+    KnowledgeModelSnapshot, KnowledgeOperationCurrentRequest, KnowledgeOperationKind,
+    KnowledgeOperationObservability, KnowledgeOperationRequestSummary, KnowledgePackageArtifact,
     KnowledgePackageExportResult, KnowledgePackageImportResult, KnowledgePackageInspection,
-    KnowledgePackageManifest, KnowledgeProjectBinding, KnowledgeSearchFailure, KnowledgeSearchHit,
-    KnowledgeSearchResult, KnowledgeSourceSummary, MAX_KNOWLEDGE_PACKAGE_BYTES,
+    KnowledgePackageManifest, KnowledgeProjectBinding, KnowledgeRetrievalMode,
+    KnowledgeRouteBindingKind, KnowledgeRouteReference, KnowledgeSearchFailure, KnowledgeSearchHit,
+    KnowledgeSearchResult, KnowledgeSourceSummary, KnowledgeVectorIndexState,
+    KnowledgeVectorIndexStatus, MAX_KNOWLEDGE_PACKAGE_BYTES, resolve_embedding_batch_size,
 };
 pub use runtime::KnowledgeBaseRuntime;
 pub(crate) use runtime::KnowledgeBaseRuntimeSharedState;

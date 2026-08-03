@@ -2141,8 +2141,30 @@ impl ConfiguredInferenceService {
     ) -> Result<LlmInferenceResponse, ConfiguredInferenceError> {
         let caller_id = caller.caller_id.clone();
         let execution_id = self.start_llm(caller, request).await?;
+        self.wait_llm(caller_id.as_str(), execution_id.as_str())
+            .await
+    }
+
+    /// Waits for one already-started restricted LLM execution without starting a duplicate request.
+    /// 等待一项已经启动的受限 LLM 执行，且不会重新发起重复请求。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `caller_id` must own `execution_id`; the execution identifier must have been returned by
+    /// `start_llm` for the same caller.
+    /// `caller_id` 必须拥有 `execution_id`；执行标识必须由同一调用方的 `start_llm` 返回。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The retained completed aggregate response or its exact terminal failure.
+    /// 保留的完整聚合响应或其精确终态失败。
+    pub async fn wait_llm(
+        &self,
+        caller_id: &str,
+        execution_id: &str,
+    ) -> Result<LlmInferenceResponse, ConfiguredInferenceError> {
         loop {
-            let state = self.owned_llm_execution(caller_id.as_str(), execution_id.as_str())?;
+            let state = self.owned_llm_execution(caller_id, execution_id)?;
             // Register the notification future before reading the phase so a terminal
             // transition between the read and the await cannot be missed.
             // 在读取阶段前注册通知 Future，避免终态转换发生在读取与等待之间而丢失唤醒。
@@ -3401,7 +3423,7 @@ fn materialize_restricted_structured_output<'a>(
     structured_output: &'a mut Option<serde_json::Value>,
 ) -> Result<&'a serde_json::Value, ConfiguredInferenceError> {
     if structured_output.is_none() {
-        let value = serde_json::from_str(output_text).map_err(|_| {
+        let value = parse_restricted_json_text(output_text).ok_or_else(|| {
             ConfiguredInferenceError::new(
                 ConfiguredInferenceErrorCategory::Execution,
                 "Restricted LLM response was not valid JSON.",
@@ -3414,6 +3436,37 @@ fn materialize_restricted_structured_output<'a>(
             ConfiguredInferenceErrorCategory::Execution,
             "Restricted LLM response did not contain structured output.",
         )
+    })
+}
+
+/// Parses one complete JSON response or one complete JSON code fence without accepting prose.
+/// 解析一份完整 JSON 响应或完整 JSON 代码围栏，但不接受夹杂说明文字的内容。
+///
+/// # Parameters
+/// 参数
+/// `output_text` is the provider text accumulated for a restricted structured-output request.
+/// `output_text` 是受限结构化输出请求累计的供应商文本。
+///
+/// # Returns
+/// 返回值
+/// The parsed JSON value only when the whole response is JSON or one fenced JSON document.
+/// 仅当整个响应是 JSON 或一个代码围栏 JSON 文档时返回解析值。
+fn parse_restricted_json_text(output_text: &str) -> Option<serde_json::Value> {
+    let trimmed = output_text.trim();
+    serde_json::from_str(trimmed).ok().or_else(|| {
+        let lines = trimmed.lines().collect::<Vec<_>>();
+        if lines.len() < 3 {
+            return None;
+        }
+        let opening = lines.first()?.trim().to_ascii_lowercase();
+        if opening != "```" && opening != "```json" {
+            return None;
+        }
+        if lines.last()?.trim() != "```" {
+            return None;
+        }
+        let body = lines[1..lines.len() - 1].join("\n");
+        serde_json::from_str(body.trim()).ok()
     })
 }
 
@@ -5272,6 +5325,25 @@ mod tests {
             &mut structured_output,
         )
         .expect("valid JSON object should materialize");
+
+        assert_eq!(
+            structured_output,
+            Some(serde_json::json!({ "accepted": true }))
+        );
+    }
+
+    /// Verifies a provider JSON code fence remains parseable before schema validation.
+    /// 验证供应商返回的 JSON 代码围栏会在 Schema 校验前保持可解析。
+    #[test]
+    fn structured_output_materializes_fenced_json_object() {
+        let mut structured_output = None;
+
+        finalize_restricted_structured_output(
+            &StructuredOutputPolicy::JsonObject,
+            "```json\n{\"accepted\":true}\n```",
+            &mut structured_output,
+        )
+        .expect("a complete JSON code fence should materialize");
 
         assert_eq!(
             structured_output,

@@ -298,6 +298,18 @@ pub struct VmmMaintenanceSummary {
     /// Whether a complete backup was created before rebuild began.
     /// 重建开始前是否已创建完整备份。
     pub backup_created: bool,
+    /// Optional current rebuild sub-stage reported by the official maintenance process.
+    /// 正式维护进程报告的可选当前重建子阶段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_stage: Option<String>,
+    /// Optional number of records completed in the current rebuild sub-stage.
+    /// 当前重建子阶段已完成的可选记录数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processed_items: Option<u64>,
+    /// Optional total number of records in the current rebuild sub-stage.
+    /// 当前重建子阶段的可选记录总数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_items: Option<u64>,
     /// Optional maintenance start time in Unix milliseconds.
     /// 可选维护开始时间，单位为 Unix 毫秒。
     pub started_at_unix_ms: Option<u64>,

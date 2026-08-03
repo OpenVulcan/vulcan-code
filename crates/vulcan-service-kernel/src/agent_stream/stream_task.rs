@@ -141,6 +141,12 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     }
                 };
         }
+        if let Some(access) = request.knowledge_access.as_mut()
+            && access.knowledge_search_handler.is_none()
+        {
+            access.knowledge_search_handler =
+                Some(build_knowledge_search_handler(task_state.clone()));
+        }
         let stream_task_started_at = current_unix_millis_value();
         webui_after_precheck_trace(
             "after_precheck_20_stream_task_entered",
@@ -606,6 +612,8 @@ async fn resolve_turn_knowledge_access(
     Ok(Some(ExecutionKnowledgeAccessContext {
         project_id,
         library_ids,
+        retrieval_mode: selection.retrieval_mode,
+        knowledge_search_handler: Some(build_knowledge_search_handler(state.clone())),
     }))
 }
 use content_delta::handle_content_delta_stream_event;

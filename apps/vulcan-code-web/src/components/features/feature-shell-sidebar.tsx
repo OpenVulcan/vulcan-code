@@ -285,7 +285,7 @@ function SettingsSidebarGroupRow(props: {
           props.onSelectSettingsSubArea(firstItem.id)
         }
       }}
-      tooltip={props.group.label}
+      tooltip={isSidebarCollapsed ? undefined : props.group.label}
     >
       {props.group.icon}
       <span className="vcn-sidebar-label project-folder-label">

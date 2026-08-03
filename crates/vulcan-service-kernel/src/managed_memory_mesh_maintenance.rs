@@ -2,17 +2,18 @@
 //! 宿主持有的托管 VMM 数据备份与正式向量重建编排。
 
 use crate::managed_memory_mesh_runtime::{
-    ManagedVmmMaintenancePreparation, cleanup_managed_vmm_maintenance_manifest,
-    finalize_managed_vmm_rebuild,
+    cleanup_managed_vmm_maintenance_manifest, finalize_managed_vmm_rebuild,
+    ManagedVmmMaintenancePreparation,
 };
+use serde::Deserialize;
 use std::{
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
-        Arc, OnceLock, RwLock,
         atomic::{AtomicBool, Ordering},
+        Arc, OnceLock, RwLock,
     },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -23,6 +24,25 @@ use vulcan_service_api::{VmmMaintenancePhase, VmmMaintenanceSummary};
 /// Polling interval used while the official maintenance process owns the data space.
 /// 正式维护进程持有数据空间期间使用的轮询间隔。
 const MAINTENANCE_POLL_INTERVAL: Duration = Duration::from_millis(200);
+
+/// Machine-readable progress emitted by the official vector rebuild child process.
+/// 正式向量重建子进程发出的机器可读进度。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct OfficialVectorRebuildProgress {
+    /// Current child-process sub-stage.
+    /// 子进程当前的重建子阶段。
+    stage: String,
+    /// Completed records in the current sub-stage.
+    /// 当前子阶段已完成的记录数。
+    processed: u64,
+    /// Total records in the current sub-stage.
+    /// 当前子阶段的记录总数。
+    total: u64,
+    /// Child progress write timestamp.
+    /// 子进程写入进度的时间戳。
+    updated_at_unix_ms: u64,
+}
 
 /// Process-local owner retained across WebUI navigation and workbench refreshes.
 /// 跨 WebUI 导航与工作台刷新保留的进程内所有者。
@@ -107,6 +127,9 @@ impl ManagedVmmMaintenanceRuntime {
                 message: String::from("正在安全备份历史记忆数据…"),
                 can_cancel: true,
                 backup_created: false,
+                progress_stage: None,
+                processed_items: None,
+                total_items: None,
                 started_at_unix_ms: Some(now),
                 updated_at_unix_ms: Some(now),
                 technical_detail: None,
@@ -171,6 +194,7 @@ fn run_maintenance(
 ) {
     let result = run_maintenance_inner(&snapshot, &cancel, &preparation);
     cleanup_managed_vmm_maintenance_manifest(&preparation.manifest_path);
+    cleanup_vector_rebuild_progress_file(&preparation.manifest_path);
     match result {
         Ok(()) => update_terminal(
             &snapshot,
@@ -392,6 +416,18 @@ fn collect_backup_files(root: &Path) -> Result<Vec<PathBuf>, String> {
 
 /// Runs the official VMM maintenance companion and observes cancellation.
 /// 运行 VMM 正式维护配套程序并观察取消请求。
+/// Returns the exact host-owned progress path for one maintenance manifest.
+/// 返回一个维护清单对应的精确宿主进度文件路径。
+fn vector_rebuild_progress_path(manifest_path: &Path) -> PathBuf {
+    manifest_path.with_file_name("managed-maintenance-progress.json")
+}
+
+/// Removes the exact host-owned child progress file after a terminal outcome.
+/// 在维护进入终态后删除精确的宿主子进程进度文件。
+fn cleanup_vector_rebuild_progress_file(manifest_path: &Path) {
+    let _ = fs::remove_file(vector_rebuild_progress_path(manifest_path));
+}
+
 fn run_official_vector_rebuild(
     preparation: &ManagedVmmMaintenancePreparation,
     snapshot: &Arc<RwLock<VmmMaintenanceSummary>>,
@@ -400,6 +436,10 @@ fn run_official_vector_rebuild(
     let log_path = preparation
         .manifest_path
         .with_file_name("managed-maintenance.log");
+    // progress_path is the exact per-maintenance child-to-host progress channel.
+    // progress_path 是本次维护专用的子进程到宿主进度通道。
+    let progress_path = vector_rebuild_progress_path(&preparation.manifest_path);
+    let _ = fs::remove_file(&progress_path);
     let output = fs::OpenOptions::new()
         .create(true)
         .truncate(true)
@@ -415,6 +455,8 @@ fn run_official_vector_rebuild(
         .arg(&preparation.manifest_path)
         .arg("-vector-rebuild")
         .arg("-confirm-vector-rebuild")
+        .arg("-vector-rebuild-progress-file")
+        .arg(&progress_path)
         .stdin(Stdio::null())
         .stdout(Stdio::from(output))
         .stderr(Stdio::from(error_output));
@@ -435,13 +477,17 @@ fn run_official_vector_rebuild(
             .try_wait()
             .map_err(|error| format!("查询 VMM 向量重建状态失败：{error}"))?
         {
-            Some(status) if status.success() => break,
+            Some(status) if status.success() => {
+                publish_official_vector_rebuild_progress(snapshot, &progress_path);
+                break;
+            }
             Some(status) => {
                 let detail = fs::read_to_string(&log_path)
                     .unwrap_or_else(|_| format!("vmm-migrate 退出状态：{status}"));
                 return Err(format!("VMM 向量重建失败：{detail}"));
             }
             None => {
+                publish_official_vector_rebuild_progress(snapshot, &progress_path);
                 let current = snapshot
                     .read()
                     .map(|current| current.clone())
@@ -458,6 +504,127 @@ fn run_official_vector_rebuild(
         }
     }
     Ok(())
+}
+
+/// Reads and validates one child progress record before projecting it into the host snapshot.
+/// 读取并校验一条子进程进度记录，再将其投影到宿主状态。
+fn publish_official_vector_rebuild_progress(
+    snapshot: &Arc<RwLock<VmmMaintenanceSummary>>,
+    progress_path: &Path,
+) {
+    let Ok(bytes) = fs::read(progress_path) else {
+        return;
+    };
+    let Ok(progress) = serde_json::from_slice::<OfficialVectorRebuildProgress>(&bytes) else {
+        return;
+    };
+    // stage is normalized before whitelist and ordering checks.
+    // stage 在白名单和顺序校验前先完成规范化。
+    let stage = progress.stage.trim();
+    if stage.is_empty()
+        || !matches!(stage, "embedding" | "writing" | "committing")
+        || progress.updated_at_unix_ms == 0
+    {
+        return;
+    }
+    if progress.total == 0 {
+        if progress.processed != 0 {
+            return;
+        }
+    } else if progress.processed > progress.total {
+        return;
+    }
+    // current is the last host-authoritative projection used to reject stale child records.
+    // current 是宿主上一次权威投影，用于拒绝过期的子进程记录。
+    let current = snapshot
+        .read()
+        .map(|current| current.clone())
+        .unwrap_or_default();
+    // stage_changed distinguishes a new ordered sub-stage from an in-stage batch update.
+    // stage_changed 区分有序新子阶段与同阶段批次更新。
+    let stage_changed = current.progress_stage.as_deref() != Some(stage);
+    if let Some(current_stage) = current.progress_stage.as_deref() {
+        if vector_rebuild_progress_stage_rank(stage)
+            < vector_rebuild_progress_stage_rank(current_stage)
+        {
+            return;
+        }
+    }
+    if !stage_changed {
+        if current
+            .processed_items
+            .is_some_and(|processed| progress.processed < processed)
+        {
+            return;
+        }
+        if current
+            .total_items
+            .is_some_and(|total| total != progress.total)
+        {
+            return;
+        }
+    }
+    // progress_percent reserves the host's 50-99 rebuild range for the child workflow.
+    // progress_percent 将宿主的 50-99 重建区间分配给子进程流程。
+    let progress_percent =
+        vector_rebuild_progress_percent(stage, progress.processed, progress.total);
+    // message is the localized host activity derived only from validated stage/count data.
+    // message 是仅由已校验阶段和计数数据生成的宿主活动文案。
+    let message = match stage {
+        "embedding" => format!("正在生成向量：{} / {}", progress.processed, progress.total),
+        "writing" => format!(
+            "正在写入向量索引：{} / {}",
+            progress.processed, progress.total
+        ),
+        "committing" => String::from("正在提交新的向量维度与索引…"),
+        _ => format!(
+            "正在重建向量索引：{} / {}",
+            progress.processed, progress.total
+        ),
+    };
+    update_snapshot(
+        snapshot,
+        VmmMaintenanceSummary {
+            progress_percent: current.progress_percent.max(progress_percent).min(99),
+            message,
+            progress_stage: Some(stage.to_string()),
+            processed_items: Some(progress.processed),
+            total_items: Some(progress.total),
+            updated_at_unix_ms: Some(current_unix_millis()),
+            ..current
+        },
+    );
+}
+
+/// Orders the child stages so stale earlier-stage records cannot overwrite later progress.
+/// 为子进程阶段排序，防止过期的前序阶段记录覆盖后续进度。
+fn vector_rebuild_progress_stage_rank(stage: &str) -> u8 {
+    match stage {
+        "embedding" => 0,
+        "writing" => 1,
+        "committing" => 2,
+        _ => u8::MAX,
+    }
+}
+
+/// Maps child sub-stage progress into the host's reserved rebuild range from 50 through 99 percent.
+/// 将子进程子阶段进度映射到宿主保留的 50 到 99 百分比重建区间。
+fn vector_rebuild_progress_percent(stage: &str, processed: u64, total: u64) -> u8 {
+    if total == 0 {
+        return 99;
+    }
+    // ratio converts validated record counts into a bounded stage fraction.
+    // ratio 将已校验的记录计数转换为有界的阶段比例。
+    let ratio = (processed as f64 / total as f64).clamp(0.0, 1.0);
+    // base and span reserve non-overlapping host percentage bands for each stage.
+    // base 和 span 为每个阶段保留互不重叠的宿主百分比区间。
+    let (base, span) = match stage {
+        "embedding" => (50.0, 29.0),
+        "writing" => (80.0, 18.0),
+        "committing" => (98.0, 1.0),
+        _ => (50.0, 49.0),
+    };
+    (base + (ratio * span).round()).min(99.0) as u8
 }
 
 /// Publishes one complete operation snapshot without exposing its lock to callers.
@@ -510,6 +677,73 @@ fn current_unix_millis() -> u64 {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// Verifies child progress maps into monotonic host rebuild ranges.
+    /// 验证子进程进度会映射到单调递增的宿主重建区间。
+    #[test]
+    fn vector_rebuild_progress_percent_maps_stages() {
+        assert_eq!(vector_rebuild_progress_percent("embedding", 0, 10), 50);
+        assert_eq!(vector_rebuild_progress_percent("embedding", 10, 10), 79);
+        assert_eq!(vector_rebuild_progress_percent("writing", 0, 10), 80);
+        assert_eq!(vector_rebuild_progress_percent("writing", 10, 10), 98);
+        assert_eq!(vector_rebuild_progress_percent("committing", 10, 10), 99);
+        assert_eq!(vector_rebuild_progress_percent("unknown", 10, 10), 99);
+        assert_eq!(vector_rebuild_progress_percent("writing", 0, 0), 99);
+    }
+
+    /// Verifies malformed, stale, or regressing child records cannot overwrite authoritative progress.
+    /// 验证格式错误、过期或倒退的子进程记录不能覆盖权威进度。
+    #[test]
+    fn official_progress_projection_rejects_regression() {
+        let root = tempdir().expect("temporary root");
+        let progress_path = root.path().join("progress.json");
+        let snapshot = Arc::new(RwLock::new(VmmMaintenanceSummary {
+            phase: VmmMaintenancePhase::Rebuilding,
+            progress_percent: 50,
+            can_cancel: true,
+            ..VmmMaintenanceSummary::default()
+        }));
+        fs::write(
+            &progress_path,
+            br#"{"stage":"embedding","processed":5,"total":10,"updated_at_unix_ms":1}"#,
+        )
+        .expect("write progress");
+        publish_official_vector_rebuild_progress(&snapshot, &progress_path);
+        let first = snapshot.read().expect("read first snapshot").clone();
+        assert_eq!(first.processed_items, Some(5));
+        assert_eq!(first.total_items, Some(10));
+        assert!(first.progress_percent > 50);
+
+        fs::write(
+            &progress_path,
+            br#"{"stage":"embedding","processed":4,"total":10,"updated_at_unix_ms":2}"#,
+        )
+        .expect("write regressing progress");
+        publish_official_vector_rebuild_progress(&snapshot, &progress_path);
+        let second = snapshot.read().expect("read second snapshot").clone();
+        assert_eq!(second.processed_items, Some(5));
+        assert_eq!(second.progress_stage.as_deref(), Some("embedding"));
+
+        fs::write(
+            &progress_path,
+            br#"{"stage":"writing","processed":1,"total":10,"updated_at_unix_ms":3}"#,
+        )
+        .expect("write next-stage progress");
+        publish_official_vector_rebuild_progress(&snapshot, &progress_path);
+        let third = snapshot.read().expect("read next-stage snapshot").clone();
+        assert_eq!(third.progress_stage.as_deref(), Some("writing"));
+        assert_eq!(third.processed_items, Some(1));
+
+        fs::write(
+            &progress_path,
+            br#"{"stage":"embedding","processed":10,"total":10,"updated_at_unix_ms":4}"#,
+        )
+        .expect("write stale earlier-stage progress");
+        publish_official_vector_rebuild_progress(&snapshot, &progress_path);
+        let fourth = snapshot.read().expect("read stale-stage snapshot").clone();
+        assert_eq!(fourth.progress_stage.as_deref(), Some("writing"));
+        assert_eq!(fourth.processed_items, Some(1));
+    }
 
     /// Verifies backup discovery rejects links instead of silently following data outside the root.
     /// 验证备份发现会拒绝链接，而不是静默跟随数据根之外的内容。

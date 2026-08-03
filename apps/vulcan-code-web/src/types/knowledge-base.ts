@@ -1,5 +1,122 @@
 import type { ProjectDirectoryListing } from "./projects-files";
 
+// KnowledgeRetrievalMode selects the corpus and index family used by one search.
+// KnowledgeRetrievalMode 选择一次检索所使用的内容层与索引类型。
+export type KnowledgeRetrievalMode = "raw_bm25" | "display_bm25" | "display_hybrid";
+
+// KnowledgeFallbackPolicy prevents accidental silent corpus changes.
+// KnowledgeFallbackPolicy 防止内容层被静默切换。
+export type KnowledgeFallbackPolicy = "explicit_only" | "raw_only_when_display_missing";
+
+// KnowledgeRouteBindingKind preserves whether a route points to a protocol profile or native action.
+// KnowledgeRouteBindingKind 保留路由指向协议配置还是原生动作。
+export type KnowledgeRouteBindingKind = "protocol" | "action";
+
+// KnowledgeRouteReference stores a credential-free inference route identity.
+// KnowledgeRouteReference 保存不含凭据的推理路由身份。
+export interface KnowledgeRouteReference {
+  consumerProfileId: string;
+  providerId: string;
+  protocol: string;
+  bindingKind: KnowledgeRouteBindingKind;
+  serviceEntryId: string;
+  modelId: string;
+  usageScope: "internal_background";
+  connectionId?: string | null;
+}
+
+// KnowledgeModelSnapshot records a non-secret model identity and dimension.
+// KnowledgeModelSnapshot 记录不含秘密的模型身份与维度。
+export interface KnowledgeModelSnapshot {
+  route: KnowledgeRouteReference;
+  dimensions?: number | null;
+  capabilityRevision?: string | null;
+  capturedAtMs: number;
+}
+
+// KnowledgeCurationSettings records fixed-prompt LLM configuration.
+// KnowledgeCurationSettings 记录固定提示词 LLM 配置。
+export interface KnowledgeCurationSettings {
+  enabled: boolean;
+  route?: KnowledgeRouteReference | null;
+  promptVersion: string;
+  desiredModelFingerprint?: string | null;
+  createdModelSnapshot?: KnowledgeModelSnapshot | null;
+  lastSuccessfulSyncSnapshot?: KnowledgeModelSnapshot | null;
+}
+
+// KnowledgeEmbeddingSettings records official capability and index dimensions.
+// KnowledgeEmbeddingSettings 记录官方能力与索引维度。
+export interface KnowledgeEmbeddingSettings {
+  enabled: boolean;
+  route?: KnowledgeRouteReference | null;
+  desiredModelFingerprint?: string | null;
+  configuredDimension?: number | null;
+  observedDimension?: number | null;
+  indexedDimension?: number | null;
+  embeddingBatchSize: number;
+  modelMaxBatchSize?: number | null;
+  batchSizeSource: "model_capability" | "fallback_default" | "user_override";
+  createdModelSnapshot?: KnowledgeModelSnapshot | null;
+  lastSuccessfulSyncSnapshot?: KnowledgeModelSnapshot | null;
+}
+
+// KnowledgeVectorIndexState records derived vector-index lifecycle.
+// KnowledgeVectorIndexState 记录派生向量索引生命周期。
+export interface KnowledgeVectorIndexState {
+  status: "disabled" | "pending" | "building" | "ready" | "stale" | "failed";
+  activeGeneration?: string | null;
+  indexedModelFingerprint?: string | null;
+  indexedDimension?: number | null;
+  compatibilityOverride?: string | null;
+  lastError?: string | null;
+}
+
+// KnowledgeDisplayIndexState records AI-curated corpus lifecycle and provenance.
+// KnowledgeDisplayIndexState 记录 AI 整理内容层生命周期与来源。
+export interface KnowledgeDisplayIndexState {
+  status: "not_created" | "pending" | "building" | "ready" | "stale" | "failed";
+  activeGeneration?: string | null;
+  sourceContentRevision?: number | null;
+  indexedPromptVersion?: string | null;
+  indexedModelFingerprint?: string | null;
+  generatedDocumentCount: number;
+  lastError?: string | null;
+}
+
+// KnowledgeLibrarySettings is the durable library-level policy snapshot.
+// KnowledgeLibrarySettings 是持久化的资料库级策略快照。
+export interface KnowledgeLibrarySettings {
+  retrievalMode: KnowledgeRetrievalMode;
+  fallbackPolicy: KnowledgeFallbackPolicy;
+  curation: KnowledgeCurationSettings;
+  displayIndex: KnowledgeDisplayIndexState;
+  embedding: KnowledgeEmbeddingSettings;
+  vectorIndex: KnowledgeVectorIndexState;
+}
+
+// KnowledgeLibrarySettingsRequest is the creation/update payload derived from official model capabilities.
+// KnowledgeLibrarySettingsRequest 是根据官方模型能力生成的创建/更新请求。
+export interface KnowledgeLibrarySettingsRequest {
+  retrievalMode?: KnowledgeRetrievalMode;
+  fallbackPolicy?: KnowledgeFallbackPolicy;
+  curation?: {
+    enabled?: boolean;
+    route?: KnowledgeRouteReference | null;
+    promptVersion?: string;
+    desiredModelFingerprint?: string | null;
+  };
+  embedding?: {
+    enabled?: boolean;
+    route?: KnowledgeRouteReference | null;
+    desiredModelFingerprint?: string | null;
+    configuredDimension?: number | null;
+    modelMaxBatchSize?: number | null;
+    requestedBatchSize?: number | null;
+    compatibilityOverride?: string | null;
+  };
+}
+
 // KnowledgeLibrarySummary mirrors one host-managed knowledge library.
 // KnowledgeLibrarySummary 对齐一个宿主管理知识库。
 export interface KnowledgeLibrarySummary {
@@ -12,6 +129,9 @@ export interface KnowledgeLibrarySummary {
   // User-visible description.
   // 用户可见说明。
   description: string;
+  // Durable per-library retrieval and model settings.
+  // 持久化的按资料库检索与模型配置。
+  settings: KnowledgeLibrarySettings;
   // Durable lifecycle state.
   // 持久化生命周期状态。
   lifecycleState: string;
@@ -188,6 +308,9 @@ export interface KnowledgeSearchResult {
   // Exact per-library vldb FTS expressions.
   // 精确的逐库 vldb FTS 表达式。
   ftsQueries: Array<{ libraryId: string; expression: string }>;
+  // Explicit compatibility and retrieval warnings.
+  // 显式兼容性与检索风险提示。
+  warnings?: string[];
 }
 
 // KnowledgeImportReport is the terminal result of one Markdown import.
@@ -225,6 +348,56 @@ export interface KnowledgeImportReport {
   warnings: string[];
 }
 
+// KnowledgeOperationCurrentRequest describes the live LLM or embedding request shown in the progress panel.
+// KnowledgeOperationCurrentRequest 描述进度面板展示的实时 LLM 或向量请求。
+export interface KnowledgeOperationCurrentRequest {
+  requestId: string;
+  label: string;
+  phase: string;
+  provider: string;
+  model: string;
+  protocol: string;
+  status: string;
+  outputMarkdown: string;
+  startedAtMs: number;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  cacheReadTokens?: number | null;
+  cacheWriteTokens?: number | null;
+}
+
+// KnowledgeOperationRequestSummary is one compact completed request row retained for recent history.
+// KnowledgeOperationRequestSummary 是保留在最近记录中的一条紧凑已完成请求。
+export interface KnowledgeOperationRequestSummary {
+  requestId: string;
+  label: string;
+  phase: string;
+  provider: string;
+  model: string;
+  protocol: string;
+  status: string;
+  durationMs?: number | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  cacheReadTokens?: number | null;
+  cacheWriteTokens?: number | null;
+}
+
+// KnowledgeOperationObservability contains bounded live output and cumulative request statistics.
+// KnowledgeOperationObservability 包含有界实时输出与累计请求统计。
+export interface KnowledgeOperationObservability {
+  llmRequestCount: number;
+  llmRetryCount: number;
+  embeddingRequestCount: number;
+  generatedVectorCount: number;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  cacheReadTokens?: number | null;
+  cacheWriteTokens?: number | null;
+  currentRequest?: KnowledgeOperationCurrentRequest | null;
+  recentRequests: KnowledgeOperationRequestSummary[];
+}
+
 // KnowledgeImportJobSummary is one dedicated import-progress snapshot.
 // KnowledgeImportJobSummary 是一份专用导入进度快照。
 export interface KnowledgeImportJobSummary {
@@ -236,7 +409,7 @@ export interface KnowledgeImportJobSummary {
   libraryId: string;
   // Exact operation category retained across page refreshes.
   // 跨页面刷新保留的精确操作类别。
-  operationKind: "import" | "repair" | "rebuild";
+  operationKind: "import" | "repair" | "rebuild" | "display_build" | "vector_build";
   // Durable job state.
   // 持久化任务状态。
   state: string;
@@ -270,6 +443,9 @@ export interface KnowledgeImportJobSummary {
   // Optional terminal error.
   // 可选终态错误。
   errorMessage?: string | null;
+  // Bounded live LLM/embedding output and request statistics.
+  // 有界实时 LLM/向量输出与请求统计。
+  observability?: KnowledgeOperationObservability;
 }
 
 // KnowledgeIndexIntegritySummary combines revision gates with exact physical row checks.
@@ -328,6 +504,9 @@ export interface SessionKnowledgeLibrarySelectionSummary {
   // Effective identifiers after authorization.
   // 授权校验后的生效标识符。
   effectiveLibraryIds: string[];
+  // Optional explicit retrieval policy selected for this session.
+  // 会话显式选择的可选检索策略。
+  retrievalMode?: KnowledgeRetrievalMode | null;
 }
 
 // KnowledgePackageManifest describes the validated package.json inside one .vkb archive.
@@ -348,6 +527,9 @@ export interface KnowledgePackageManifest {
   // Original library description.
   // 原始知识库说明。
   description: string;
+  // Portable per-library settings snapshot, absent in legacy packages.
+  // 可移植的按资料库配置快照，旧版本包中可能不存在。
+  settings?: KnowledgeLibrarySettings | null;
   // Authoritative per-library schema version.
   // 权威单库结构版本。
   schemaVersion: number;

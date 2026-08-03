@@ -22,12 +22,14 @@ use std::time::{Duration, Instant, SystemTime};
 use vulcan_ai_contract::{
     AiErrorCategory, AiExecutionError, AiExecutionRequest, AiStreamEvent, AiStreamStateMachine,
     DispatchOutcome, InputTokenCount, ModelParameterValue, PromptCachePolicy, ReasoningEffort,
-    ResourceKind, RetryAfterHint, RetryAfterSource,
+    ResourceKind, RetryAfterHint, RetryAfterSource, StructuredOutputPolicy,
 };
 use vulcan_ai_protocols::{
-    EncodedWireRequest, ProtocolConversionError, ProtocolRegistry, ProtocolStreamFraming,
-    ProtocolTransportProfile, decode_gemini_count_tokens_response,
-    encode_gemini_count_tokens_request,
+    ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
+    CLAUDE_CODE_MESSAGES_PROFILE_ID, EncodedWireRequest, OPENAI_CHAT_PROFILE_ID,
+    OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID, ProtocolConversionError,
+    ProtocolRegistry, ProtocolStreamFraming, ProtocolTransportProfile,
+    decode_gemini_count_tokens_response, encode_gemini_count_tokens_request,
 };
 
 /// MiniMax documented maximum JSON request-body size.
@@ -1248,7 +1250,65 @@ fn project_provider_request(
     if let Some(projection) = route.custom_model_projection.as_ref() {
         project_custom_model_request(projection, request, &mut encoded)?;
     }
+    validate_structured_output_projection(route, request, &encoded)?;
     Ok(encoded)
+}
+
+/// Verifies protocol-native JSON Schema fields survive provider-specific request projection.
+/// 验证协议原生 JSON Schema 字段在供应商专属请求投影后仍然存在。
+///
+/// # Parameters
+/// 参数
+/// `route` identifies the exact protocol, `request` carries the requested schema, and `encoded`
+/// is the final request after all provider and custom projections.
+/// `route` 标识精确协议，`request` 携带请求 Schema，`encoded` 是完成全部供应商与自定义投影后的最终请求。
+///
+/// # Returns
+/// 返回值
+/// Success when the protocol carries the exact requested schema, or a pre-dispatch failure when
+/// a supported Chat/Responses/Messages projection dropped or changed it.
+/// 当协议携带精确请求 Schema 时返回成功；支持的 Chat、Responses、Messages 投影丢失或改写 Schema 时返回分派前失败。
+fn validate_structured_output_projection(
+    route: &ProviderExecutionRoute,
+    request: &AiExecutionRequest,
+    encoded: &EncodedWireRequest,
+) -> Result<(), ProviderExecutionFailure> {
+    let StructuredOutputPolicy::JsonSchema { schema, .. } = &request.structured_output else {
+        return Ok(());
+    };
+    let protocol_id = route.protocol_route.protocol_profile_id.as_str();
+    let (projected_type, projected_schema) = match protocol_id {
+        ANTHROPIC_MESSAGES_PROFILE_ID
+        | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
+        | CLAUDE_CODE_MESSAGES_PROFILE_ID => (
+            encoded
+                .body
+                .pointer("/output_config/format/type")
+                .and_then(Value::as_str),
+            encoded.body.pointer("/output_config/format/schema"),
+        ),
+        OPENAI_CHAT_PROFILE_ID => (
+            encoded
+                .body
+                .pointer("/response_format/type")
+                .and_then(Value::as_str),
+            encoded.body.pointer("/response_format/json_schema/schema"),
+        ),
+        OPENAI_RESPONSES_PROFILE_ID | OPENAI_CODEX_RESPONSES_PROFILE_ID => (
+            encoded
+                .body
+                .pointer("/text/format/type")
+                .and_then(Value::as_str),
+            encoded.body.pointer("/text/format/schema"),
+        ),
+        _ => return Ok(()),
+    };
+    if projected_type == Some("json_schema") && projected_schema == Some(schema) {
+        return Ok(());
+    }
+    Err(pre_dispatch_failure(format!(
+        "Protocol `{protocol_id}` dropped or changed the requested structured-output JSON Schema.",
+    )))
 }
 
 /// Applies one validated custom model projection after standard protocol encoding.
@@ -3503,6 +3563,82 @@ mod tests {
             assert_eq!(encoded.body["provider"]["order"], json!(["anthropic"]));
             assert_eq!(encoded.body["provider"]["allow_fallbacks"], false);
         }
+    }
+
+    /// Verifies Chat, Responses, and Anthropic routes retain one exact structured-output schema.
+    /// 验证 Chat、Responses 与 Anthropic 路由都会保留同一份精确结构化输出 Schema。
+    #[test]
+    fn encode_request_preserves_structured_output_schema_for_supported_protocols() {
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let schema = json!({
+            "type": "object",
+            "properties": { "accepted": { "type": "boolean" } },
+            "required": ["accepted"],
+            "additionalProperties": false,
+        });
+
+        for protocol_id in [
+            OPENAI_CHAT_PROFILE_ID,
+            OPENAI_RESPONSES_PROFILE_ID,
+            ANTHROPIC_MESSAGES_PROFILE_ID,
+        ] {
+            let mut request = minimal_request();
+            request.structured_output = StructuredOutputPolicy::JsonSchema {
+                name: String::from("result"),
+                description: Some(String::from("Structured result")),
+                schema: schema.clone(),
+                strict: true,
+            };
+            let encoded = client
+                .encode_request(&pinned_openrouter_route(protocol_id), &request)
+                .expect("supported protocol should preserve structured output schema");
+            let projected_schema = match protocol_id {
+                OPENAI_CHAT_PROFILE_ID => {
+                    encoded.body.pointer("/response_format/json_schema/schema")
+                }
+                OPENAI_RESPONSES_PROFILE_ID => encoded.body.pointer("/text/format/schema"),
+                ANTHROPIC_MESSAGES_PROFILE_ID => {
+                    encoded.body.pointer("/output_config/format/schema")
+                }
+                _ => unreachable!("the loop only contains supported protocol profiles"),
+            };
+            assert_eq!(projected_schema, Some(&schema));
+        }
+    }
+
+    /// Verifies a custom projector cannot silently remove the required Anthropic schema.
+    /// 验证自定义投影器不能静默删除 Anthropic 所需的 Schema。
+    #[test]
+    fn encode_request_rejects_structured_schema_loss_after_custom_projection() {
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let mut route = pinned_openrouter_route(ANTHROPIC_MESSAGES_PROFILE_ID);
+        route.custom_model_projection = Some(CustomModelRequestProjection {
+            delete: vec![String::from("output_config")],
+            ..Default::default()
+        });
+        let mut request = minimal_request();
+        request.structured_output = StructuredOutputPolicy::JsonSchema {
+            name: String::from("result"),
+            description: None,
+            schema: json!({
+                "type": "object",
+                "properties": { "accepted": { "type": "boolean" } },
+                "required": ["accepted"],
+                "additionalProperties": false,
+            }),
+            strict: true,
+        };
+
+        let error = client
+            .encode_request(&route, &request)
+            .expect_err("schema loss must fail before dispatch");
+        assert!(error.error.message.contains("dropped or changed"));
     }
 
     /// Verifies Kimi Coding projection uses thinking.type and the OAuth-bound device identity.

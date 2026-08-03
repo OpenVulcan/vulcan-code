@@ -10,8 +10,9 @@ use crate::provider_config::{
     PersistedPromptConfiguration, PersistedPromptPersonalitySelection,
     ProjectPromptSkillsConfiguration,
 };
+use futures_util::future::BoxFuture;
 use serde_json::Value;
-use std::path::PathBuf;
+use std::{fmt, path::PathBuf, sync::Arc};
 use vulcan_context::{
     ContextAssembly, ContextBaseline, ContextRequestMode, RuntimeSystemUpdateEvent,
 };
@@ -161,6 +162,81 @@ pub struct ExecutionSessionGoalContext {
     pub prompt_context: String,
 }
 
+/// Host callback used when a knowledge retrieval policy needs service-owned inference.
+/// 当知识检索策略需要宿主服务推理时使用的宿主回调。
+/// KnowledgeSearchCallback is the erased callback signature shared by host and executor.
+/// KnowledgeSearchCallback 是宿主与执行器共享的类型擦除回调签名。
+type KnowledgeSearchCallback = dyn Fn(
+        String,
+        Vec<String>,
+        String,
+        u32,
+        Option<String>,
+    ) -> BoxFuture<'static, Result<Value, String>>
+    + Send
+    + Sync;
+
+/// KnowledgeSearchHandler exposes one host-owned authorized knowledge search callback.
+/// KnowledgeSearchHandler 暴露一个由宿主持有且已授权的知识检索回调。
+#[derive(Clone)]
+pub struct KnowledgeSearchHandler {
+    /// Shared asynchronous callback that performs one authorized federated search.
+    /// 执行一次已授权联合检索的共享异步回调。
+    invoke: Arc<KnowledgeSearchCallback>,
+}
+
+impl fmt::Debug for KnowledgeSearchHandler {
+    /// Redacts the callback implementation while keeping the runtime field visible in diagnostics.
+    /// 隐藏回调实现细节，同时在诊断中保留运行时字段可见性。
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("KnowledgeSearchHandler(..)")
+    }
+}
+
+impl PartialEq for KnowledgeSearchHandler {
+    /// Compares callback identity rather than capturing implementation details.
+    /// 比较回调身份，而不是比较捕获的实现细节。
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.invoke, &other.invoke)
+    }
+}
+
+impl Eq for KnowledgeSearchHandler {}
+
+impl KnowledgeSearchHandler {
+    /// Creates one host-owned callback wrapper.
+    /// 创建一个由宿主持有的回调包装器。
+    pub fn new(
+        invoke: impl Fn(
+            String,
+            Vec<String>,
+            String,
+            u32,
+            Option<String>,
+        ) -> BoxFuture<'static, Result<Value, String>>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self {
+            invoke: Arc::new(invoke),
+        }
+    }
+
+    /// Executes the callback with the immutable project and session selection inputs.
+    /// 使用不可变项目与会话选择输入执行回调。
+    pub async fn search(
+        &self,
+        project_id: String,
+        library_ids: Vec<String>,
+        query: String,
+        limit: u32,
+        retrieval_mode: Option<String>,
+    ) -> Result<Value, String> {
+        (self.invoke)(project_id, library_ids, query, limit, retrieval_mode).await
+    }
+}
+
 /// Immutable knowledge-library authorization captured for one provider execution.
 /// 为一次 Provider 执行捕获的不可变知识库授权快照。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,6 +247,12 @@ pub struct ExecutionKnowledgeAccessContext {
     /// Exact authorized and session-enabled library identifiers.
     /// 精确的已授权且已在会话启用的知识库标识符。
     pub library_ids: Vec<String>,
+    /// Optional retrieval policy selected for this session turn.
+    /// 本次会话回合选择的可选检索策略。
+    pub retrieval_mode: Option<String>,
+    /// Optional service callback for retrieval modes that need host-owned inference.
+    /// 需要宿主服务推理的检索模式使用的可选服务回调。
+    pub knowledge_search_handler: Option<KnowledgeSearchHandler>,
 }
 
 /// Minimal execution request captured from the current workbench state.

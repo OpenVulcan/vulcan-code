@@ -26,6 +26,29 @@ pub(crate) fn build_missing_attachment_replay_text(attachment: &ConversationAtta
     )
 }
 
+/// Builds a provider-visible hint for an attachment that must be analyzed through a host tool.
+/// 为必须通过宿主工具分析的附件构建 Provider 可见提示。
+///
+/// # Parameters
+/// 参数
+/// `attachment` supplies the retained file name and local path; `tool_id` and `path_argument` identify the visible tool contract.
+/// `attachment` 提供保留的文件名与本地路径；`tool_id` 与 `path_argument` 标识可见工具契约。
+///
+/// # Returns
+/// 返回值
+/// A deterministic informational line that instructs the model to call the selected host tool.
+/// 一条确定性信息，指导模型调用选中的宿主工具。
+pub(crate) fn build_attachment_provider_tool_hint(
+    attachment: &ConversationAttachment,
+    tool_id: &str,
+    path_argument: &str,
+) -> String {
+    format!(
+        "INFO: Attachment \"{}\" is kept locally because the selected model does not support image input. Use host AI tool `{tool_id}` with `{path_argument}` set to `{}`.",
+        attachment.file_name, attachment.local_path
+    )
+}
+
 #[cfg(test)]
 mod tests {
     //! Focused tests for attachment fallback diagnostics.

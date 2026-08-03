@@ -142,15 +142,18 @@ export function DiffPanelToolbar(props: {
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button className="diff-review-repository-trigger" type="button">
-                  {props.repositories.find((repository) => repository.repositoryKey === selectedRepositoryKey)?.name
-                    ?? props.repositories[0]?.name
-                    ?? "Git"}
+                  <span className="diff-review-repository-trigger-label">
+                    {props.repositories.find((repository) => repository.repositoryKey === selectedRepositoryKey)?.name
+                      ?? props.repositories[0]?.name
+                      ?? "Git"}
+                  </span>
                   <ChevronDown size={12} />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
+              <DropdownMenuContent align="start" className="diff-review-repository-menu">
                 {props.repositories.map((repository) => (
                   <DropdownMenuItem
+                    className="diff-review-repository-menu-item"
                     key={repository.repositoryKey}
                     onSelect={() => props.onSelectionChange?.({
                       ...props.selection,
@@ -158,8 +161,8 @@ export function DiffPanelToolbar(props: {
                     })}
                   >
                     {repository.repositoryKey === selectedRepositoryKey ? <Check size={13} /> : <span className="diff-review-repository-check-spacer" />}
-                    <span>{repository.name}</span>
-                    {repository.relativePath !== repository.name ? <small>{repository.relativePath}</small> : null}
+                    <span className="diff-review-repository-name">{repository.name}</span>
+                    {repository.relativePath !== repository.name ? <small className="diff-review-repository-path">{repository.relativePath}</small> : null}
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuContent>

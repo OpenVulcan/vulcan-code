@@ -9,11 +9,816 @@ pub const KNOWLEDGE_PACKAGE_FORMAT: &str = "vulcan-code-knowledge-base";
 
 /// Current portable knowledge package version.
 /// 当前可移植知识库包版本。
-pub const KNOWLEDGE_PACKAGE_VERSION: u32 = 1;
+pub const KNOWLEDGE_PACKAGE_VERSION: u32 = 2;
 
 /// Maximum accepted portable package archive size.
 /// 可接受的可移植知识库归档最大字节数。
 pub const MAX_KNOWLEDGE_PACKAGE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Selects which durable corpus is allowed to answer a knowledge search.
+/// 选择知识库检索时允许使用的持久化内容层。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeRetrievalMode {
+    /// Search only the authoritative source corpus with Jieba BM25.
+    /// 仅使用权威原始库执行 Jieba BM25 检索。
+    RawBm25,
+    /// Search the curated display corpus with Jieba BM25.
+    /// 仅使用整理后的显示库执行 Jieba BM25 检索。
+    DisplayBm25,
+    /// Fuse display-corpus BM25 with a compatible vector index.
+    /// 将显示库 BM25 与兼容的向量索引融合检索。
+    DisplayHybrid,
+}
+
+impl Default for KnowledgeRetrievalMode {
+    /// Returns the zero-cost, backwards-compatible retrieval mode.
+    /// 返回零成本且兼容旧库的检索模式。
+    fn default() -> Self {
+        Self::RawBm25
+    }
+}
+
+/// Controls whether a missing display corpus may be used as an implicit fallback.
+/// 控制显示库缺失时是否允许隐式回退。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeFallbackPolicy {
+    /// Never silently switch corpus; the caller must explicitly select raw mode.
+    /// 禁止静默切换内容层，调用方必须显式选择原始库模式。
+    ExplicitOnly,
+    /// Permit raw BM25 only when the display corpus has not been created.
+    /// 仅在显示库尚未创建时允许回退到原始库 BM25。
+    RawOnlyWhenDisplayMissing,
+}
+
+impl Default for KnowledgeFallbackPolicy {
+    /// Returns the fail-closed policy required for curated retrieval.
+    /// 返回整理检索所需的失败关闭策略。
+    fn default() -> Self {
+        Self::ExplicitOnly
+    }
+}
+
+/// Identifies a configured inference route without storing credentials.
+/// 标识一个推理路由，但不保存任何凭据。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeRouteBindingKind {
+    /// Selects a protocol profile route.
+    /// 选择协议配置路由。
+    Protocol,
+    /// Selects a provider-native action route.
+    /// 选择供应商原生动作路由。
+    Action,
+}
+
+impl Default for KnowledgeRouteBindingKind {
+    /// Preserves the legacy protocol interpretation for old settings snapshots.
+    /// 为旧配置快照保留协议路由解释。
+    fn default() -> Self {
+        Self::Protocol
+    }
+}
+
+/// Returns the stable persisted label for one route binding kind.
+/// 返回一种路由绑定类型的稳定持久化标签。
+impl KnowledgeRouteBindingKind {
+    /// Returns the exact wire label used in fingerprints and diagnostics.
+    /// 返回指纹与诊断使用的精确线协议标签。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Protocol => "protocol",
+            Self::Action => "action",
+        }
+    }
+}
+
+/// KnowledgeRouteReference stores one credential-free route identity.
+/// KnowledgeRouteReference 保存一条不含凭据的路由身份。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeRouteReference {
+    /// Consumer profile that owns authorization and budgets.
+    /// 负责授权与配额的消费方配置名称。
+    pub consumer_profile_id: String,
+    /// Provider catalog identifier.
+    /// Provider 目录标识。
+    pub provider_id: String,
+    /// Transport protocol or route family.
+    /// 传输协议或路由类型。
+    pub protocol: String,
+    /// Exact binding kind used to interpret `protocol`.
+    /// 用于解释 `protocol` 的精确绑定类型。
+    #[serde(default)]
+    pub binding_kind: KnowledgeRouteBindingKind,
+    /// Normalized service-entry identifier.
+    /// 规范化服务端点标识。
+    pub service_entry_id: String,
+    /// Model identifier exposed by the provider.
+    /// Provider 暴露的模型标识。
+    pub model_id: String,
+    /// Usage scope authorized for the background knowledge operation.
+    /// 知识库后台操作获授权的使用范围。
+    #[serde(default = "default_knowledge_route_usage_scope")]
+    pub usage_scope: String,
+    /// Optional connection identifier used by the host configuration.
+    /// 宿主配置中可选的连接标识。
+    #[serde(default)]
+    pub connection_id: Option<String>,
+}
+
+/// Returns the only usage scope accepted by detached knowledge processing.
+/// 返回分离式知识库处理唯一接受的使用范围。
+fn default_knowledge_route_usage_scope() -> String {
+    String::from("internal_background")
+}
+
+/// Immutable model metadata captured at configuration or successful indexing time.
+/// 在配置或索引成功时捕获的不可变模型元数据。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeModelSnapshot {
+    /// Route identity used for the model request.
+    /// 模型请求使用的路由身份。
+    pub route: KnowledgeRouteReference,
+    /// Dimension declared or observed for an embedding space.
+    /// 向量空间声明或实际观测到的维度。
+    #[serde(default)]
+    pub dimensions: Option<u32>,
+    /// Provider capability revision, when supplied by the catalog.
+    /// Provider 能力配置提供的版本号（如果有）。
+    #[serde(default)]
+    pub capability_revision: Option<String>,
+    /// Capture timestamp in Unix milliseconds.
+    /// 捕获时间的 Unix 毫秒时间戳。
+    pub captured_at_ms: i64,
+}
+
+/// Records the model and prompt history for curated display-corpus generation.
+/// 记录整理显示库所使用的模型与提示词历史。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeCurationSettings {
+    /// Whether LLM curation is enabled for this library.
+    /// 此资料库是否启用 LLM 整理。
+    #[serde(default)]
+    pub enabled: bool,
+    /// Desired route for the next curation run.
+    /// 下一次整理任务期望使用的路由。
+    #[serde(default)]
+    pub route: Option<KnowledgeRouteReference>,
+    /// Versioned fixed prompt identifier.
+    /// 固定提示词的版本标识。
+    #[serde(default = "default_knowledge_prompt_version")]
+    pub prompt_version: String,
+    /// Desired model fingerprint retained for change warnings.
+    /// 用于检测模型变化的期望模型指纹。
+    #[serde(default)]
+    pub desired_model_fingerprint: Option<String>,
+    /// Snapshot captured when the library was first configured.
+    /// 资料库首次配置时捕获的模型快照。
+    #[serde(default)]
+    pub created_model_snapshot: Option<KnowledgeModelSnapshot>,
+    /// Snapshot captured by the last fully successful curation sync.
+    /// 最近一次完整成功整理同步时捕获的模型快照。
+    #[serde(default)]
+    pub last_successful_sync_snapshot: Option<KnowledgeModelSnapshot>,
+}
+
+/// Returns the fixed prompt version used by newly-created or migrated display settings.
+/// 返回新建或迁移显示配置使用的固定提示词版本。
+fn default_knowledge_prompt_version() -> String {
+    String::from("knowledge-display-v1")
+}
+
+/// Describes how embedding batches are selected and which model space is valid.
+/// 描述向量批量大小如何确定以及当前有效的向量空间。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeEmbeddingSettings {
+    /// Whether vector generation and vector retrieval are enabled.
+    /// 是否启用向量生成与向量检索。
+    #[serde(default)]
+    pub enabled: bool,
+    /// Desired embedding route for future indexing.
+    /// 后续索引期望使用的向量路由。
+    #[serde(default)]
+    pub route: Option<KnowledgeRouteReference>,
+    /// Fingerprint of the desired embedding model.
+    /// 期望向量模型的指纹。
+    #[serde(default)]
+    pub desired_model_fingerprint: Option<String>,
+    /// User-configured expected dimension.
+    /// 用户配置的期望维度。
+    #[serde(default)]
+    pub configured_dimension: Option<u32>,
+    /// Dimension observed from a capability probe or response.
+    /// 从能力探测或实际响应观测到的维度。
+    #[serde(default)]
+    pub observed_dimension: Option<u32>,
+    /// Dimension used by the last successful vector index.
+    /// 最近一次成功向量索引实际使用的维度。
+    #[serde(default)]
+    pub indexed_dimension: Option<u32>,
+    /// Effective batch size used by the next or current build.
+    /// 下一次或当前构建使用的有效批量大小。
+    #[serde(default = "default_knowledge_embedding_batch_size")]
+    pub embedding_batch_size: u32,
+    /// Maximum input count declared by the selected model capability.
+    /// 所选模型能力配置声明的最大输入数量。
+    #[serde(default)]
+    pub model_max_batch_size: Option<u32>,
+    /// Source of the effective batch size.
+    /// 有效批量大小的来源。
+    #[serde(default = "default_knowledge_batch_size_source")]
+    pub batch_size_source: KnowledgeBatchSizeSource,
+    /// Snapshot captured when vector indexing was first configured.
+    /// 首次配置向量索引时捕获的模型快照。
+    #[serde(default)]
+    pub created_model_snapshot: Option<KnowledgeModelSnapshot>,
+    /// Snapshot captured by the last fully successful vector sync.
+    /// 最近一次完整成功向量同步时捕获的模型快照。
+    #[serde(default)]
+    pub last_successful_sync_snapshot: Option<KnowledgeModelSnapshot>,
+}
+
+impl Default for KnowledgeEmbeddingSettings {
+    /// Returns a disabled embedding configuration with the documented fallback batch.
+    /// 返回关闭向量且使用文档化回退批量大小的配置。
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            route: None,
+            desired_model_fingerprint: None,
+            configured_dimension: None,
+            observed_dimension: None,
+            indexed_dimension: None,
+            embedding_batch_size: KNOWLEDGE_DEFAULT_EMBEDDING_BATCH_SIZE,
+            model_max_batch_size: None,
+            batch_size_source: KnowledgeBatchSizeSource::FallbackDefault,
+            created_model_snapshot: None,
+            last_successful_sync_snapshot: None,
+        }
+    }
+}
+
+/// Records how the persisted embedding batch size was selected.
+/// 记录持久化向量批量大小的选择来源。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeBatchSizeSource {
+    /// Read from the selected model's official capability configuration.
+    /// 直接读取所选模型的官方能力配置。
+    ModelCapability,
+    /// Used because the capability did not declare a maximum input count.
+    /// 因能力配置未声明最大输入数量而使用回退值。
+    FallbackDefault,
+    /// Explicitly overridden by the user within the model capability limit.
+    /// 用户在模型能力上限内显式覆盖的值。
+    UserOverride,
+}
+
+/// Returns the fallback batch-size source used by legacy settings snapshots.
+/// 返回旧配置快照使用的回退批量来源。
+fn default_knowledge_batch_size_source() -> KnowledgeBatchSizeSource {
+    KnowledgeBatchSizeSource::FallbackDefault
+}
+
+/// Fallback batch size used only when official capability data is absent.
+/// 仅在官方能力数据缺失时使用的回退批量大小。
+pub const KNOWLEDGE_DEFAULT_EMBEDDING_BATCH_SIZE: u32 = 10;
+
+/// Returns the documented fallback batch size for legacy or incomplete settings.
+/// 返回旧配置或不完整配置使用的文档化回退批量大小。
+fn default_knowledge_embedding_batch_size() -> u32 {
+    KNOWLEDGE_DEFAULT_EMBEDDING_BATCH_SIZE
+}
+
+/// Describes the lifecycle and compatibility state of the vector index.
+/// 描述向量索引的生命周期与兼容状态。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeVectorIndexStatus {
+    /// Vector retrieval is disabled by policy or compatibility checks.
+    /// 因策略或兼容性检查而关闭向量检索。
+    Disabled,
+    /// A build has been requested but has not started.
+    /// 已请求构建但尚未开始。
+    Pending,
+    /// A vector build is currently running.
+    /// 向量构建正在执行。
+    Building,
+    /// The active index passed model and dimension checks.
+    /// 当前索引通过了模型与维度校验。
+    Ready,
+    /// The source/display corpus changed after the last vector sync.
+    /// 原始库或显示库在最近一次向量同步后发生变化。
+    Stale,
+    /// The last vector build failed.
+    /// 最近一次向量构建失败。
+    Failed,
+}
+
+/// Describes the lifecycle of the derived AI-curated display corpus.
+/// 描述 AI 整理显示库的派生内容生命周期。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeDisplayIndexStatus {
+    /// No display corpus has been generated yet.
+    /// 尚未生成显示库。
+    NotCreated,
+    /// A display build is queued.
+    /// 显示库构建已排队。
+    Pending,
+    /// A display build is running.
+    /// 显示库构建正在执行。
+    Building,
+    /// The display corpus passed validation and indexing.
+    /// 显示库已通过校验与索引。
+    Ready,
+    /// Source or curation configuration changed after the last build.
+    /// 原始库或整理配置在上次构建后发生变化。
+    Stale,
+    /// The last display build failed.
+    /// 最近一次显示库构建失败。
+    Failed,
+}
+
+impl Default for KnowledgeDisplayIndexStatus {
+    /// Starts every library without an AI-generated display corpus.
+    /// 新资料库默认不包含 AI 生成的显示库。
+    fn default() -> Self {
+        Self::NotCreated
+    }
+}
+
+/// Stores durable display-corpus generation state independently from raw content.
+/// 将显示库生成状态与原始内容独立持久化。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeDisplayIndexState {
+    /// Current display-corpus lifecycle status.
+    /// 当前显示库生命周期状态。
+    #[serde(default)]
+    pub status: KnowledgeDisplayIndexStatus,
+    /// Active display generation used for atomic publication.
+    /// 用于原子发布的当前显示库代次。
+    #[serde(default)]
+    pub active_generation: Option<String>,
+    /// Raw content revision represented by the display corpus.
+    /// 显示库所对应的原始内容修订号。
+    #[serde(default)]
+    pub source_content_revision: Option<u64>,
+    /// Prompt version used by the active display generation.
+    /// 当前显示库代次使用的提示词版本。
+    #[serde(default)]
+    pub indexed_prompt_version: Option<String>,
+    /// Curation model fingerprint used by the active display generation.
+    /// 当前显示库代次使用的整理模型指纹。
+    #[serde(default)]
+    pub indexed_model_fingerprint: Option<String>,
+    /// Number of validated display documents in the active generation.
+    /// 当前显示库代次中已校验的显示文档数量。
+    #[serde(default)]
+    pub generated_document_count: u64,
+    /// Last explicit display-corpus error.
+    /// 最近一次显示库构建错误。
+    #[serde(default)]
+    pub last_error: Option<String>,
+}
+
+impl Default for KnowledgeVectorIndexStatus {
+    /// Starts every newly-created raw library with vector retrieval disabled.
+    /// 新建原始资料库默认关闭向量检索。
+    fn default() -> Self {
+        Self::Disabled
+    }
+}
+
+/// Stores durable vector-index state independently from the desired model settings.
+/// 将持久化向量索引状态与期望模型配置分离保存。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeVectorIndexState {
+    /// Current derived-index lifecycle state.
+    /// 当前派生索引生命周期状态。
+    #[serde(default)]
+    pub status: KnowledgeVectorIndexStatus,
+    /// Active generation identifier for atomic index swaps.
+    /// 用于原子切换索引的当前代次标识。
+    #[serde(default)]
+    pub active_generation: Option<String>,
+    /// Model fingerprint used by the active vector index.
+    /// 当前向量索引实际使用的模型指纹。
+    #[serde(default)]
+    pub indexed_model_fingerprint: Option<String>,
+    /// Dimension used by the active vector index.
+    /// 当前向量索引实际使用的维度。
+    #[serde(default)]
+    pub indexed_dimension: Option<u32>,
+    /// User-confirmed compatibility override, including its risk note.
+    /// 用户确认的兼容性覆盖记录及其风险说明。
+    #[serde(default)]
+    pub compatibility_override: Option<String>,
+    /// Last explicit vector-index error.
+    /// 最近一次明确的向量索引错误。
+    #[serde(default)]
+    pub last_error: Option<String>,
+}
+
+/// Complete per-library policy and model configuration persisted as JSON.
+/// 按资料库持久化的完整策略与模型配置。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeLibrarySettings {
+    /// Initialization and retrieval mode selected by the user.
+    /// 用户选择的初始化与检索模式。
+    #[serde(default)]
+    pub retrieval_mode: KnowledgeRetrievalMode,
+    /// Policy controlling implicit raw-corpus fallback.
+    /// 控制是否允许隐式回退原始库的策略。
+    #[serde(default)]
+    pub fallback_policy: KnowledgeFallbackPolicy,
+    /// Display-corpus curation configuration.
+    /// 显示库整理配置。
+    #[serde(default)]
+    pub curation: KnowledgeCurationSettings,
+    /// Derived AI-curated display-corpus state.
+    /// 派生 AI 整理显示库状态。
+    #[serde(default)]
+    pub display_index: KnowledgeDisplayIndexState,
+    /// Embedding configuration and official capability snapshot.
+    /// 向量配置及官方能力快照。
+    #[serde(default)]
+    pub embedding: KnowledgeEmbeddingSettings,
+    /// Derived vector-index state.
+    /// 派生向量索引状态。
+    #[serde(default)]
+    pub vector_index: KnowledgeVectorIndexState,
+}
+
+impl Default for KnowledgeLibrarySettings {
+    /// Returns the raw-BM25 policy used by legacy libraries.
+    /// 返回旧资料库兼容的原始 BM25 策略。
+    fn default() -> Self {
+        Self {
+            retrieval_mode: KnowledgeRetrievalMode::RawBm25,
+            fallback_policy: KnowledgeFallbackPolicy::ExplicitOnly,
+            curation: KnowledgeCurationSettings {
+                enabled: false,
+                prompt_version: String::from("knowledge-display-v1"),
+                ..KnowledgeCurationSettings::default()
+            },
+            display_index: KnowledgeDisplayIndexState::default(),
+            embedding: KnowledgeEmbeddingSettings::default(),
+            vector_index: KnowledgeVectorIndexState::default(),
+        }
+    }
+}
+
+impl KnowledgeLibrarySettings {
+    /// Disables an unsafe vector index when persisted dimensions no longer agree.
+    /// 当持久化维度不一致时关闭不安全的向量索引。
+    pub fn normalize_derived_compatibility(&mut self) {
+        if !self.embedding.enabled {
+            self.vector_index = KnowledgeVectorIndexState::default();
+            return;
+        }
+        let dimensions = [
+            self.embedding.configured_dimension,
+            self.embedding.observed_dimension,
+            self.embedding.indexed_dimension,
+            self.vector_index.indexed_dimension,
+        ];
+        let known_dimensions = dimensions.iter().flatten().copied().collect::<Vec<_>>();
+        let dimension_mismatch = known_dimensions
+            .first()
+            .is_some_and(|first| known_dimensions.iter().any(|dimension| dimension != first))
+            || matches!(self.vector_index.status, KnowledgeVectorIndexStatus::Ready)
+                && self.vector_index.indexed_dimension.is_none();
+        if dimension_mismatch {
+            self.vector_index.status = KnowledgeVectorIndexStatus::Disabled;
+            self.vector_index.compatibility_override = None;
+            self.vector_index.last_error = Some(String::from(
+                "向量配置、实际观测与索引维度不一致，向量检索已自动关闭",
+            ));
+        } else if matches!(self.vector_index.status, KnowledgeVectorIndexStatus::Ready)
+            && (self.vector_index.active_generation.is_none()
+                || self.vector_index.indexed_model_fingerprint.is_none()
+                || self.vector_index.indexed_dimension.is_none())
+        {
+            self.vector_index.status = KnowledgeVectorIndexStatus::Disabled;
+            self.vector_index.compatibility_override = None;
+            self.vector_index.last_error = Some(String::from(
+                "向量索引就绪状态缺少活动代次、模型指纹或维度，向量检索已自动关闭",
+            ));
+        } else if matches!(self.vector_index.status, KnowledgeVectorIndexStatus::Ready)
+            && self.vector_index.compatibility_override.is_none()
+            && self.embedding.desired_model_fingerprint.is_some()
+            && self.embedding.desired_model_fingerprint
+                != self.vector_index.indexed_model_fingerprint
+        {
+            self.vector_index.status = KnowledgeVectorIndexStatus::Stale;
+            self.vector_index.last_error = Some(String::from(
+                "向量模型指纹发生变化，旧索引仍保留，必须重建或明确确认同维度兼容",
+            ));
+        }
+    }
+
+    /// Validates mode-dependent settings before they are persisted.
+    /// 在持久化前校验依赖检索模式的配置约束。
+    pub fn validate(&self) -> Result<(), String> {
+        match self.retrieval_mode {
+            KnowledgeRetrievalMode::RawBm25 => {
+                if self.curation.enabled || self.embedding.enabled {
+                    return Err(String::from("原始 BM25 模式不能启用显示库整理或向量检索"));
+                }
+            }
+            KnowledgeRetrievalMode::DisplayBm25 => {
+                if !self.curation.enabled {
+                    return Err(String::from("显示库 BM25 模式必须启用整理模型"));
+                }
+                if self.embedding.enabled {
+                    return Err(String::from("显示库 BM25 模式不能启用向量检索"));
+                }
+            }
+            KnowledgeRetrievalMode::DisplayHybrid => {
+                if !self.curation.enabled {
+                    return Err(String::from("显示库混合模式必须启用整理模型"));
+                }
+                if !self.embedding.enabled {
+                    return Err(String::from("显示库混合模式必须启用向量检索配置"));
+                }
+            }
+        }
+        if self.curation.enabled && self.curation.route.is_none() {
+            return Err(String::from("启用显示库整理时必须选择整理模型路由"));
+        }
+        if let Some(route) = self.curation.route.as_ref() {
+            validate_knowledge_route_reference(route, "整理")?;
+        }
+        if self.curation.enabled && self.curation.prompt_version.trim().is_empty() {
+            return Err(String::from("显示库整理提示词版本不能为空"));
+        }
+        if self.embedding.enabled && self.embedding.route.is_none() {
+            return Err(String::from("启用向量检索时必须选择向量模型路由"));
+        }
+        if let Some(route) = self.embedding.route.as_ref() {
+            validate_knowledge_route_reference(route, "向量")?;
+        }
+        if self.embedding.enabled && self.embedding.configured_dimension.is_none() {
+            return Err(String::from("启用向量检索时必须配置向量维度"));
+        }
+        if self.embedding.embedding_batch_size == 0 {
+            return Err(String::from("向量批量大小必须大于 0"));
+        }
+        if let Some(maximum) = self.embedding.model_max_batch_size {
+            if maximum == 0 {
+                return Err(String::from("模型能力配置的最大向量批量不能为 0"));
+            }
+            if self.embedding.embedding_batch_size > maximum {
+                return Err(format!(
+                    "向量批量大小 {} 超过模型能力上限 {}",
+                    self.embedding.embedding_batch_size, maximum
+                ));
+            }
+        }
+        if self.embedding.enabled && self.embedding.configured_dimension == Some(0) {
+            return Err(String::from("向量维度必须大于 0"));
+        }
+        if let Some(note) = self.vector_index.compatibility_override.as_deref() {
+            if !self.embedding.enabled {
+                return Err(String::from("关闭向量检索时不能保留兼容性覆盖记录"));
+            }
+            if note.trim().is_empty() {
+                return Err(String::from("向量兼容性覆盖说明不能为空"));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Validates one persisted route identity before it can authorize background inference.
+/// 在授权后台推理前校验一条持久化路由身份。
+fn validate_knowledge_route_reference(
+    route: &KnowledgeRouteReference,
+    label: &str,
+) -> Result<(), String> {
+    if route.consumer_profile_id.trim().is_empty()
+        || route.provider_id.trim().is_empty()
+        || route.protocol.trim().is_empty()
+        || route.service_entry_id.trim().is_empty()
+        || route.model_id.trim().is_empty()
+    {
+        return Err(format!("{label}模型路由身份不能为空"));
+    }
+    if route.usage_scope != "internal_background" {
+        return Err(format!(
+            "{label}模型路由必须使用 internal_background 使用范围"
+        ));
+    }
+    Ok(())
+}
+
+/// Resolves a user override against the official embedding capability limit.
+/// 根据官方向量能力上限解析用户覆盖值。
+pub fn resolve_embedding_batch_size(
+    user_override: Option<u32>,
+    model_maximum_inputs: Option<u32>,
+) -> Result<(u32, KnowledgeBatchSizeSource), String> {
+    if model_maximum_inputs == Some(0) {
+        return Err(String::from("模型能力配置的最大向量批量不能为 0"));
+    }
+    let batch_size = user_override
+        .unwrap_or_else(|| model_maximum_inputs.unwrap_or(KNOWLEDGE_DEFAULT_EMBEDDING_BATCH_SIZE));
+    if batch_size == 0 {
+        return Err(String::from("向量批量大小必须大于 0"));
+    }
+    if let Some(maximum) = model_maximum_inputs.filter(|maximum| batch_size > *maximum) {
+        return Err(format!(
+            "向量批量大小 {} 超过模型能力上限 {}",
+            batch_size, maximum
+        ));
+    }
+    let source = if user_override.is_some() {
+        KnowledgeBatchSizeSource::UserOverride
+    } else if model_maximum_inputs.is_some() {
+        KnowledgeBatchSizeSource::ModelCapability
+    } else {
+        KnowledgeBatchSizeSource::FallbackDefault
+    };
+    Ok((batch_size, source))
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::{
+        KnowledgeBatchSizeSource, KnowledgeCurationSettings, KnowledgeEmbeddingSettings,
+        KnowledgeLibrarySettings, KnowledgeRetrievalMode, KnowledgeRouteReference,
+        KnowledgeVectorIndexState, KnowledgeVectorIndexStatus, resolve_embedding_batch_size,
+    };
+
+    /// Verifies the official capability maximum is used without a provider-specific branch.
+    /// 验证无供应商特判时直接使用官方能力上限。
+    #[test]
+    fn capability_maximum_is_the_default_batch() {
+        let (batch, source) = resolve_embedding_batch_size(None, Some(20)).expect("valid batch");
+        assert_eq!(batch, 20);
+        assert_eq!(source, KnowledgeBatchSizeSource::ModelCapability);
+    }
+
+    /// Verifies missing capability data uses the documented fallback and records its source.
+    /// 验证缺失能力数据时使用文档化回退值并记录来源。
+    #[test]
+    fn missing_capability_uses_fallback_batch() {
+        let (batch, source) = resolve_embedding_batch_size(None, None).expect("valid fallback");
+        assert_eq!(batch, 10);
+        assert_eq!(source, KnowledgeBatchSizeSource::FallbackDefault);
+    }
+
+    /// Verifies a user override cannot exceed the official capability limit.
+    /// 验证用户覆盖值不能超过官方能力上限。
+    #[test]
+    fn user_override_is_bounded_by_capability() {
+        let error = resolve_embedding_batch_size(Some(21), Some(20)).expect_err("must reject");
+        assert!(error.contains("超过模型能力上限"));
+    }
+
+    /// Verifies the raw-BM25 default remains valid for legacy libraries.
+    /// 验证旧资料库的原始 BM25 默认配置仍然有效。
+    #[test]
+    fn raw_settings_are_backward_compatible() {
+        let settings = KnowledgeLibrarySettings::default();
+        assert_eq!(settings.retrieval_mode, KnowledgeRetrievalMode::RawBm25);
+        settings.validate().expect("raw defaults are valid");
+    }
+
+    /// Verifies incomplete persisted settings are upgraded through serde defaults.
+    /// 验证字段不完整的持久化配置可以通过 serde 默认值升级。
+    #[test]
+    fn incomplete_settings_are_backward_compatible() {
+        let settings: KnowledgeLibrarySettings =
+            serde_json::from_str(r#"{"retrievalMode":"raw_bm25"}"#)
+                .expect("legacy settings should deserialize");
+        assert_eq!(settings.retrieval_mode, KnowledgeRetrievalMode::RawBm25);
+        assert_eq!(settings.embedding.embedding_batch_size, 10);
+        settings.validate().expect("legacy raw settings are valid");
+    }
+
+    /// Verifies a persisted dimension mismatch closes vector retrieval before exposure.
+    /// 验证持久化维度不一致会在对外暴露前关闭向量检索。
+    #[test]
+    fn dimension_mismatch_disables_vector_index() {
+        let mut settings = KnowledgeLibrarySettings {
+            retrieval_mode: KnowledgeRetrievalMode::DisplayHybrid,
+            curation: KnowledgeCurationSettings {
+                enabled: true,
+                ..KnowledgeCurationSettings::default()
+            },
+            embedding: KnowledgeEmbeddingSettings {
+                enabled: true,
+                configured_dimension: Some(1024),
+                observed_dimension: Some(1536),
+                indexed_dimension: Some(1024),
+                ..KnowledgeEmbeddingSettings::default()
+            },
+            vector_index: KnowledgeVectorIndexState {
+                status: KnowledgeVectorIndexStatus::Ready,
+                indexed_dimension: Some(1024),
+                ..KnowledgeVectorIndexState::default()
+            },
+            ..KnowledgeLibrarySettings::default()
+        };
+        settings.normalize_derived_compatibility();
+        assert_eq!(
+            settings.vector_index.status,
+            KnowledgeVectorIndexStatus::Disabled
+        );
+        assert!(settings.vector_index.last_error.is_some());
+    }
+
+    /// Verifies an explicit compatibility note is valid only for enabled vector settings.
+    /// 验证显式兼容性说明只能存在于启用向量的配置中。
+    #[test]
+    fn compatibility_override_requires_enabled_vectors() {
+        let disabled_settings = KnowledgeLibrarySettings {
+            vector_index: KnowledgeVectorIndexState {
+                compatibility_override: Some(String::from("same space")),
+                ..KnowledgeVectorIndexState::default()
+            },
+            ..KnowledgeLibrarySettings::default()
+        };
+        assert!(disabled_settings.validate().is_err());
+        let curation_route = KnowledgeRouteReference {
+            consumer_profile_id: String::from("knowledge_base"),
+            provider_id: String::from("provider"),
+            protocol: String::from("protocol"),
+            service_entry_id: String::from("curation"),
+            model_id: String::from("model"),
+            usage_scope: String::from("internal_background"),
+            ..KnowledgeRouteReference::default()
+        };
+        let embedding_route = KnowledgeRouteReference {
+            consumer_profile_id: String::from("knowledge_base"),
+            provider_id: String::from("provider"),
+            protocol: String::from("protocol"),
+            service_entry_id: String::from("embedding"),
+            model_id: String::from("model"),
+            usage_scope: String::from("internal_background"),
+            ..KnowledgeRouteReference::default()
+        };
+        let settings = KnowledgeLibrarySettings {
+            retrieval_mode: KnowledgeRetrievalMode::DisplayHybrid,
+            curation: KnowledgeCurationSettings {
+                enabled: true,
+                route: Some(curation_route),
+                prompt_version: String::from("knowledge-display-v1"),
+                ..KnowledgeCurationSettings::default()
+            },
+            embedding: KnowledgeEmbeddingSettings {
+                enabled: true,
+                configured_dimension: Some(1024),
+                route: Some(embedding_route),
+                ..KnowledgeEmbeddingSettings::default()
+            },
+            vector_index: KnowledgeVectorIndexState {
+                compatibility_override: Some(String::from("same space")),
+                ..KnowledgeVectorIndexState::default()
+            },
+            ..KnowledgeLibrarySettings::default()
+        };
+        assert!(settings.validate().is_ok());
+    }
+
+    /// Verifies a ready index missing immutable identity is closed before it can be queried.
+    /// 验证缺失不可变身份的 ready 索引会在可检索前被关闭。
+    #[test]
+    fn incomplete_ready_vector_index_is_disabled() {
+        let mut settings = KnowledgeLibrarySettings {
+            retrieval_mode: KnowledgeRetrievalMode::DisplayHybrid,
+            curation: KnowledgeCurationSettings {
+                enabled: true,
+                ..KnowledgeCurationSettings::default()
+            },
+            embedding: KnowledgeEmbeddingSettings {
+                enabled: true,
+                configured_dimension: Some(1024),
+                ..KnowledgeEmbeddingSettings::default()
+            },
+            vector_index: KnowledgeVectorIndexState {
+                status: KnowledgeVectorIndexStatus::Ready,
+                ..KnowledgeVectorIndexState::default()
+            },
+            ..KnowledgeLibrarySettings::default()
+        };
+        settings.normalize_derived_compatibility();
+        assert_eq!(
+            settings.vector_index.status,
+            KnowledgeVectorIndexStatus::Disabled
+        );
+    }
+}
 
 /// Portable metadata stored as package.json inside one .vkb archive.
 /// 单个 .vkb 归档内以 package.json 保存的可移植元数据。
@@ -35,6 +840,10 @@ pub struct KnowledgePackageManifest {
     /// Original user-visible library description.
     /// 原始用户可见知识库说明。
     pub description: String,
+    /// Optional per-library settings snapshot retained for portable migration.
+    /// 可选的按资料库配置快照，用于可移植迁移。
+    #[serde(default)]
+    pub settings: Option<KnowledgeLibrarySettings>,
     /// Authoritative per-library SQLite schema version.
     /// 权威单库 SQLite 结构版本。
     pub schema_version: i64,
@@ -56,6 +865,26 @@ pub struct KnowledgePackageManifest {
     /// Exact uncompressed SQLite byte size.
     /// SQLite 文件的精确未压缩字节数。
     pub content_bytes: u64,
+    /// Checksummed derived files retained so imports do not need to rebuild them.
+    /// 保存派生文件校验摘要，使导入无需重建派生索引。
+    #[serde(default)]
+    pub derived_artifacts: Vec<KnowledgePackageArtifact>,
+}
+
+/// One checksummed derived artifact stored inside a portable knowledge package.
+/// 可移植知识库包内保存的一项带校验摘要的派生产物。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgePackageArtifact {
+    /// Exact safe ZIP path and corresponding relative library path.
+    /// 精确的安全 ZIP 路径及其对应的资料库相对路径。
+    pub archive_path: String,
+    /// Lowercase SHA-256 digest of the uncompressed artifact bytes.
+    /// 派生产物未压缩字节的小写 SHA-256 摘要。
+    pub sha256: String,
+    /// Exact uncompressed artifact byte size.
+    /// 派生产物的精确未压缩字节数。
+    pub bytes: u64,
 }
 
 /// Result returned after one package is exported.
@@ -130,6 +959,10 @@ pub struct KnowledgeLibrarySummary {
     /// Optional user-visible library description.
     /// 可选的用户可见知识库说明。
     pub description: String,
+    /// Durable per-library retrieval and model settings.
+    /// 持久化的按资料库检索与模型配置。
+    #[serde(default)]
+    pub settings: KnowledgeLibrarySettings,
     /// Durable lifecycle state such as active, deleting, or error.
     /// 持久化生命周期状态，例如 active、deleting 或 error。
     pub lifecycle_state: String,
@@ -181,8 +1014,8 @@ pub struct KnowledgeSourceSummary {
     pub last_scanned_at_ms: i64,
 }
 
-/// Stable kind for one durable knowledge import or index-maintenance operation.
-/// 一次持久化资料导入或索引维护操作的稳定类型。
+/// Stable kind for one durable knowledge import, derivation, or index-maintenance operation.
+/// 一次持久化资料导入、派生构建或索引维护操作的稳定类型。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum KnowledgeOperationKind {
@@ -195,19 +1028,27 @@ pub enum KnowledgeOperationKind {
     /// Destructive FTS-only rebuild from all authoritative chunks.
     /// 从全部权威切片执行仅针对 FTS 的破坏性重建。
     Rebuild,
+    /// AI curation build for the derived display corpus.
+    /// 面向派生显示库的 AI 整理构建。
+    DisplayBuild,
+    /// Embedding build for the active derived display generation.
+    /// 面向当前显示库活动代次的向量构建。
+    VectorBuild,
 }
 
 impl KnowledgeOperationKind {
     /// Returns the stable database and wire representation for this operation kind.
     /// 返回该操作类型稳定的数据库与线协议表示。
     ///
-    /// Returns: one of `import`, `repair`, or `rebuild`.
-    /// 返回值：`import`、`repair` 或 `rebuild` 之一。
+    /// Returns: one of the stable persisted operation names.
+    /// 返回值：稳定的持久化操作名称之一。
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Import => "import",
             Self::Repair => "repair",
             Self::Rebuild => "rebuild",
+            Self::DisplayBuild => "display_build",
+            Self::VectorBuild => "vector_build",
         }
     }
 
@@ -222,6 +1063,8 @@ impl KnowledgeOperationKind {
             "import" => Ok(Self::Import),
             "repair" => Ok(Self::Repair),
             "rebuild" => Ok(Self::Rebuild),
+            "display_build" => Ok(Self::DisplayBuild),
+            "vector_build" => Ok(Self::VectorBuild),
             _ => Err(format!("未知的知识库操作类型：{value}")),
         }
     }
@@ -334,6 +1177,88 @@ pub struct KnowledgeDocumentContent {
     /// Newline-normalized UTF-8 Markdown content.
     /// 换行规范化后的 UTF-8 Markdown 内容。
     pub content: String,
+}
+
+/// One AI-curated display document retained as a derived projection of an authoritative document.
+/// 一份由 AI 整理、作为权威文档派生投影保存的显示库文档。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeDisplayDocument {
+    /// Stable display-document identifier.
+    /// 稳定的显示文档标识符。
+    pub id: String,
+    /// Immutable authoritative document identifier.
+    /// 不可变的权威原始文档标识符。
+    pub source_document_id: String,
+    /// Source file hash used for incremental rebuild decisions.
+    /// 用于增量重建判断的源文件哈希。
+    pub source_sha256: String,
+    /// Slash-normalized source path.
+    /// 斜杠规范化后的来源路径。
+    pub relative_path: String,
+    /// Slash-normalized source folder.
+    /// 斜杠规范化后的来源文件夹。
+    pub folder_path: String,
+    /// LLM-normalized display title.
+    /// LLM 规范化后的显示标题。
+    pub title: String,
+    /// LLM-generated concise summary.
+    /// LLM 生成的精炼摘要。
+    pub summary: String,
+    /// Keywords and aliases used for exact display search.
+    /// 用于显示库精确搜索的关键词与别名。
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    /// Functions, commands, or symbols extracted by the curation model.
+    /// 整理模型提取的函数、命令或符号。
+    #[serde(default)]
+    pub symbols: Vec<String>,
+    /// Stable semantic text sent to the embedding model.
+    /// 发送给向量模型的稳定语义文本。
+    pub embedding_text: String,
+    /// Validated normalized Markdown shown to users.
+    /// 展示给用户的已校验规范 Markdown。
+    pub markdown: String,
+    /// Generation that produced this document.
+    /// 生成当前文档的显示库代次。
+    pub generation: String,
+    /// Unix timestamp of successful curation.
+    /// 整理成功时的 Unix 毫秒时间戳。
+    pub generated_at_ms: i64,
+}
+
+/// One searchable display chunk with its source mapping.
+/// 一条带来源映射的可检索显示库切片。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeDisplayChunk {
+    /// Stable display chunk identifier.
+    /// 稳定的显示库切片标识符。
+    pub id: String,
+    /// Owning display-document identifier.
+    /// 所属显示文档标识符。
+    pub display_document_id: String,
+    /// Zero-based chunk ordinal.
+    /// 从零开始的切片序号。
+    pub ordinal: u64,
+    /// Display Markdown heading ancestry.
+    /// 显示 Markdown 标题层级。
+    pub heading_path: String,
+    /// One-based inclusive display line range.
+    /// 从一开始且包含边界的显示行范围。
+    pub start_line: u64,
+    /// One-based inclusive display line range end.
+    /// 从一开始且包含边界的显示行范围结束。
+    pub end_line: u64,
+    /// Normalized display Markdown chunk content.
+    /// 规范化后的显示 Markdown 切片内容。
+    pub content: String,
+    /// Semantic text used to generate the vector for this chunk.
+    /// 用于为当前切片生成向量的语义文本。
+    pub embedding_text: String,
+    /// Generation that produced this chunk.
+    /// 生成当前切片的显示库代次。
+    pub generation: String,
 }
 
 /// One authoritative Markdown chunk and its source citation.
@@ -456,6 +1381,10 @@ pub struct KnowledgeSearchResult {
     /// Library-level failures not hidden from the caller.
     /// 不向调用方隐藏的知识库级失败。
     pub failures: Vec<KnowledgeSearchFailure>,
+    /// Explicit compatibility and retrieval warnings for the caller.
+    /// 返回给调用方的兼容性与检索风险提示。
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 /// Final report for one synchronous Markdown directory import.
@@ -493,6 +1422,151 @@ pub struct KnowledgeImportReport {
     /// Bounded user-visible warnings.
     /// 有界的用户可见告警。
     pub warnings: Vec<String>,
+}
+
+/// Describes the current request being surfaced by one durable knowledge operation.
+/// 描述一个持久化资料库操作当前正在展示的请求。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeOperationCurrentRequest {
+    /// Stable request identity assigned by the knowledge worker.
+    /// 知识库工作器分配的稳定请求标识。
+    pub request_id: String,
+    /// Human-readable batch or file label.
+    /// 面向用户的批次或文件标签。
+    pub label: String,
+    /// Current request phase.
+    /// 当前请求阶段。
+    pub phase: String,
+    /// Exact provider identifier when resolved.
+    /// 已解析时的精确供应商标识。
+    pub provider: String,
+    /// Exact model identifier when resolved.
+    /// 已解析时的精确模型标识。
+    pub model: String,
+    /// Exact protocol or action binding label.
+    /// 精确协议或动作绑定标签。
+    pub protocol: String,
+    /// Current request lifecycle status.
+    /// 当前请求生命周期状态。
+    pub status: String,
+    /// Current Markdown-formatted stream preview.
+    /// 当前 Markdown 格式的流式预览内容。
+    pub output_markdown: String,
+    /// Request start timestamp in Unix milliseconds.
+    /// 请求开始时间的 Unix 毫秒时间戳。
+    pub started_at_ms: u64,
+    /// Latest known input token count for the request.
+    /// 当前请求最新已知输入 Token 数量。
+    pub input_tokens: Option<u64>,
+    /// Latest known output token count for the request.
+    /// 当前请求最新已知输出 Token 数量。
+    pub output_tokens: Option<u64>,
+    /// Latest known cache-read token count for the request.
+    /// 当前请求最新已知缓存读取 Token 数量。
+    pub cache_read_tokens: Option<u64>,
+    /// Latest known cache-write token count for the request.
+    /// 当前请求最新已知缓存写入 Token 数量。
+    pub cache_write_tokens: Option<u64>,
+}
+
+/// Summarizes one completed knowledge operation request for the compact history panel.
+/// 概括资料库操作最近请求面板中的一条已完成请求。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeOperationRequestSummary {
+    /// Stable request identity.
+    /// 稳定请求标识。
+    pub request_id: String,
+    /// Batch or file label shown to the user.
+    /// 面向用户显示的批次或文件标签。
+    pub label: String,
+    /// Operation phase that produced this request.
+    /// 产生该请求的操作阶段。
+    pub phase: String,
+    /// Provider identifier.
+    /// 供应商标识。
+    pub provider: String,
+    /// Model identifier.
+    /// 模型标识。
+    pub model: String,
+    /// Request protocol or action binding.
+    /// 请求协议或动作绑定。
+    pub protocol: String,
+    /// Terminal request status.
+    /// 请求终态状态。
+    pub status: String,
+    /// Request duration in milliseconds.
+    /// 请求耗时毫秒数。
+    pub duration_ms: u64,
+    /// Final known input token count.
+    /// 最终已知输入 Token 数量。
+    pub input_tokens: Option<u64>,
+    /// Final known output token count.
+    /// 最终已知输出 Token 数量。
+    pub output_tokens: Option<u64>,
+    /// Final known cache-read token count.
+    /// 最终已知缓存读取 Token 数量。
+    pub cache_read_tokens: Option<u64>,
+    /// Final known cache-write token count.
+    /// 最终已知缓存写入 Token 数量。
+    pub cache_write_tokens: Option<u64>,
+}
+
+/// Aggregates observable usage and request state for one knowledge operation.
+/// 聚合一个资料库操作的可观察用量与请求状态。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct KnowledgeOperationObservability {
+    /// Number of LLM API requests dispatched by the worker.
+    /// 工作器实际发起的 LLM API 请求数量。
+    pub llm_request_count: u64,
+    /// Number of explicit schema-repair or provider retry requests.
+    /// 明确的 Schema 修复或供应商重试请求数量。
+    pub llm_retry_count: u64,
+    /// Number of embedding API batches dispatched by the worker.
+    /// 工作器实际发起的向量 API 批次数量。
+    pub embedding_request_count: u64,
+    /// Number of successfully returned embedding vectors.
+    /// 成功返回的向量数量。
+    pub generated_vector_count: u64,
+    /// Cumulative input token count, or null when a request did not report it.
+    /// 累计输入 Token 数量；任一请求未报告时为 null。
+    pub input_tokens: Option<u64>,
+    /// Cumulative output token count, or null when a request did not report it.
+    /// 累计输出 Token 数量；任一请求未报告时为 null。
+    pub output_tokens: Option<u64>,
+    /// Cumulative cache-read token count, or null when a request did not report it.
+    /// 累计缓存读取 Token 数量；任一请求未报告时为 null。
+    pub cache_read_tokens: Option<u64>,
+    /// Cumulative cache-write token count, or null when a request did not report it.
+    /// 累计缓存写入 Token 数量；任一请求未报告时为 null。
+    pub cache_write_tokens: Option<u64>,
+    /// Current active request, if one is in flight.
+    /// 当前正在执行的请求；没有活动请求时为空。
+    pub current_request: Option<KnowledgeOperationCurrentRequest>,
+    /// Bounded newest-first request history; the host retains at most three items.
+    /// 有界的最新请求优先历史；宿主最多保留三条记录。
+    pub recent_requests: Vec<KnowledgeOperationRequestSummary>,
+}
+
+impl Default for KnowledgeOperationObservability {
+    /// Creates a zeroed observable snapshot whose cumulative usage is known to be zero.
+    /// 创建一份累计用量明确为零的初始可观测快照。
+    fn default() -> Self {
+        Self {
+            llm_request_count: 0,
+            llm_retry_count: 0,
+            embedding_request_count: 0,
+            generated_vector_count: 0,
+            input_tokens: Some(0),
+            output_tokens: Some(0),
+            cache_read_tokens: Some(0),
+            cache_write_tokens: Some(0),
+            current_request: None,
+            recent_requests: Vec::new(),
+        }
+    }
 }
 
 /// Durable import or index-maintenance job progress and terminal state.
@@ -542,6 +1616,10 @@ pub struct KnowledgeImportJobSummary {
     /// Optional terminal error.
     /// 可选终态错误。
     pub error_message: Option<String>,
+    /// Live request and usage observability snapshot.
+    /// 实时请求与用量可观测快照。
+    #[serde(default)]
+    pub observability: KnowledgeOperationObservability,
 }
 
 #[cfg(test)]
@@ -569,6 +1647,7 @@ mod tests {
             processed_bytes: 1024,
             warnings: Vec::new(),
             error_message: None,
+            observability: Default::default(),
         };
         // Value exposes the exact JSON shape consumed by KnowledgeBaseArea.
         // Value 暴露 KnowledgeBaseArea 使用的准确 JSON 结构。
@@ -583,6 +1662,17 @@ mod tests {
         assert_eq!(value["currentFile"], "guide/intro.md");
         assert_eq!(value["processedBytes"], 1024);
         assert!(value.get("total_files").is_none());
+    }
+
+    /// Verifies legacy empty observability payloads migrate through serde defaults.
+    /// 验证旧版本空的可观测载荷可以通过 serde 默认值完成迁移。
+    #[test]
+    fn empty_observability_payload_uses_safe_defaults() {
+        let snapshot: super::KnowledgeOperationObservability =
+            serde_json::from_str("{}").expect("empty observability payload should parse");
+        assert_eq!(snapshot.llm_request_count, 0);
+        assert!(snapshot.current_request.is_none());
+        assert!(snapshot.recent_requests.is_empty());
     }
 
     /// Verifies durable source management uses the browser's camelCase contract.
@@ -609,5 +1699,23 @@ mod tests {
         assert_eq!(value["chunkCount"], 128);
         assert_eq!(value["lastScannedAtMs"], 200);
         assert!(value.get("canonical_root").is_none());
+    }
+
+    /// Verifies every durable operation kind has one stable wire representation.
+    /// 验证每个持久化操作类型都拥有唯一稳定的线协议表示。
+    #[test]
+    fn operation_kinds_round_trip_without_aliases() {
+        let kinds = [
+            KnowledgeOperationKind::Import,
+            KnowledgeOperationKind::Repair,
+            KnowledgeOperationKind::Rebuild,
+            KnowledgeOperationKind::DisplayBuild,
+            KnowledgeOperationKind::VectorBuild,
+        ];
+        for kind in kinds {
+            assert_eq!(KnowledgeOperationKind::parse(kind.as_str()), Ok(kind));
+        }
+        assert!(KnowledgeOperationKind::parse("display-build").is_err());
+        assert!(KnowledgeOperationKind::parse("vector-build").is_err());
     }
 }

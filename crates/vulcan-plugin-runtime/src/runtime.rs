@@ -7559,6 +7559,13 @@ mod tests {
                     Ok(json!({"rows": [{"normalized_date": "2026-07-14"}], "row_count": 1}))
                 }
                 VulcanPluginStorageOperation::SqliteQuery
+                    if sql.contains("SELECT COUNT(*) AS count") =>
+                {
+                    // expiredCount forces the automatic-retention branch without requiring a real SQLite fixture.
+                    // expiredCount 强制进入自动保留期分支，无需依赖真实 SQLite 测试夹具。
+                    Ok(json!({"rows": [{"count": 1}], "row_count": 1}))
+                }
+                VulcanPluginStorageOperation::SqliteQuery
                     if sql.contains("FROM statistics_meta") =>
                 {
                     Ok(json!({"rows": [{"revision": 1}], "row_count": 1}))
@@ -8438,7 +8445,7 @@ return M
             },
         };
         runtime
-            .block_on(manager.invoke_hook(&completed_hook, completed_invocation))
+            .block_on(manager.invoke_hook(&completed_hook, completed_invocation.clone()))
             .expect("persist one real usage statistics terminal Hook");
         // recent validates that an omitted optional owner does not mutate shared Lua parameters.
         // recent 验证省略可选归属时不会修改共享 Lua 参数。
@@ -8602,9 +8609,56 @@ return M
             }))
             .expect("apply usage statistics cleanup");
         assert!(cleanup_apply["deletedRequests"].is_number());
+        let calls = storage.calls.lock().expect("read recording storage calls");
+        // cleanupScript uses validated SQL literals because the host rejects parameters on multi-statement scripts.
+        // cleanupScript 使用已校验的 SQL 字面量，因为宿主拒绝为多语句脚本绑定参数。
+        let cleanup_script = calls
+            .iter()
+            .find(|request| {
+                request
+                    .payload
+                    .get("sql")
+                    .and_then(Value::as_str)
+                    .is_some_and(|sql| {
+                        sql.contains("CREATE TEMP TABLE IF NOT EXISTS statistics_clear_state")
+                    })
+            })
+            .expect("record statistics cleanup transaction script");
+        let cleanup_sql = cleanup_script.payload["sql"]
+            .as_str()
+            .expect("statistics cleanup SQL text");
+        // assertModelCleanupSql verifies orphan model deletion follows aggregate rebuilding in both cleanup paths.
+        // assertModelCleanupSql 验证孤立模型删除位于聚合重建之后，并覆盖两条清理路径。
+        let assert_model_cleanup_sql = |sql: &str| {
+            let aggregate_position = sql
+                .find("DELETE FROM usage_daily_model")
+                .expect("cleanup must rebuild daily aggregates");
+            let model_position = sql
+                .find("DELETE FROM models")
+                .expect("cleanup must delete orphan models");
+            let revision_position = sql
+                .find("UPDATE statistics_meta")
+                .expect("cleanup must update statistics revision");
+            assert!(aggregate_position < model_position);
+            assert!(model_position < revision_position);
+            assert_eq!(sql.matches("WHERE NOT EXISTS").count(), 1);
+            assert_eq!(sql.matches("AND NOT EXISTS").count(), 1);
+            assert!(sql.contains("api_request_events.model_ref = models.model_ref"));
+            assert!(sql.contains("usage_daily_model.model_ref = models.model_ref"));
+        };
+        assert_model_cleanup_sql(cleanup_sql);
+        assert!(cleanup_sql.contains("calendar_date >= '2026-07-14'"));
+        assert!(cleanup_sql.contains("calendar_date <= '2026-07-14'"));
+        assert!(!cleanup_sql.contains('?'));
+        assert_eq!(
+            cleanup_script.payload["params"]
+                .as_array()
+                .expect("statistics cleanup parameters")
+                .len(),
+            0
+        );
         // calls proves multi-value statements use numbered placeholders accepted by Controller.
         // calls 证明多值语句使用 Controller 接受的编号占位符。
-        let calls = storage.calls.lock().expect("read recording storage calls");
         assert!(
             !calls.iter().any(|request| request
                 .payload
@@ -8799,6 +8853,70 @@ return M
                 revision: 1,
             }]
         );
+        // automaticRetention proves the periodic cleanup script also obeys the host parameter contract.
+        // automaticRetention 证明周期性清理脚本同样遵守宿主参数契约。
+        runtime
+            .block_on(manager.invoke_action(VulcanPluginActionRequest {
+                plugin_id: String::from("vulcan-usage-statistics"),
+                action_id: String::from("settings-update"),
+                arguments: json!({
+                    "enabled": true,
+                    "retentionDays": 30,
+                    "defaultRangeDays": 30,
+                    "defaultMetric": "total_tokens"
+                }),
+                caller: crate::VulcanPluginActionCaller::PluginUi,
+                workspace_root: repository_root.to_path_buf(),
+                reuse_enabled_runtime: true,
+            }))
+            .expect("enable finite usage statistics retention");
+        let mut retention_invocation = completed_invocation.clone();
+        retention_invocation.context.run_id = String::from("execution-retention");
+        let retention_payload = retention_invocation
+            .payload
+            .value
+            .as_object_mut()
+            .expect("retention Provider telemetry payload must be an object");
+        retention_payload.insert(
+            String::from("request_id"),
+            Value::String(String::from("request-retention")),
+        );
+        retention_payload.insert(
+            String::from("execution_id"),
+            Value::String(String::from("execution-retention")),
+        );
+        retention_payload.insert(String::from("completed_at_ms"), Value::from(2_500));
+        retention_payload.insert(String::from("started_at_ms"), Value::from(2_000));
+        runtime
+            .block_on(manager.invoke_hook(&completed_hook, retention_invocation))
+            .expect("persist automatic retention usage statistics terminal Hook");
+        let retention_calls = storage.calls.lock().expect("read retention storage calls");
+        let retention_cleanup_script = retention_calls
+            .iter()
+            .rev()
+            .find(|request| {
+                request
+                    .payload
+                    .get("sql")
+                    .and_then(Value::as_str)
+                    .is_some_and(|sql| {
+                        sql.contains("DELETE FROM api_request_events WHERE calendar_date < date('2026-07-14', '-30 days')")
+                    })
+            })
+            .expect("record automatic retention cleanup transaction script");
+        let retention_sql = retention_cleanup_script.payload["sql"]
+            .as_str()
+            .expect("automatic retention cleanup SQL text");
+        assert_model_cleanup_sql(retention_sql);
+        assert!(!retention_sql.contains('?'));
+        assert_eq!(
+            retention_cleanup_script.payload["params"]
+                .as_array()
+                .expect("automatic retention cleanup parameters")
+                .len(),
+            0
+        );
+        drop(retention_calls);
         // disableReport proves the real plugin can drain its persistent lease before lifecycle cleanup.
         // disableReport 证明真实插件可在生命周期清理前排空其持久租约。
         manager

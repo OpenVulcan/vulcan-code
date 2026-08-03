@@ -474,6 +474,8 @@ fn prepare_execution_exposes_knowledge_tools_for_effective_access() {
     request.knowledge_access = Some(ExecutionKnowledgeAccessContext {
         project_id: String::from("project-a"),
         library_ids: vec![String::from("550e8400-e29b-41d4-a716-446655440000")],
+        retrieval_mode: None,
+        knowledge_search_handler: None,
     });
 
     let prepared = prepare_execution_with_tool_snapshot(&foundation, None, &config, &request)

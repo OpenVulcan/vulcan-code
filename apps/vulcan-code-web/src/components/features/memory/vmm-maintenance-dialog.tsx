@@ -22,6 +22,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Progress } from "@/components/ui/progress"
+import { formatSkillText } from "@/components/features/featureText"
 import { useI18n } from "@/i18n"
 import type { VmmMaintenanceSummary } from "@/types"
 
@@ -188,6 +189,14 @@ function VmmMaintenanceDialog({
                 <span>{maintenance.message || t("memory.common.loading")}</span>
                 <span className="tabular-nums">{maintenance.progressPercent}%</span>
               </div>
+              {maintenance.processedItems != null && maintenance.totalItems != null ? (
+                <p className="text-xs text-muted-foreground">
+                  {formatSkillText(t("memory.maintenance.progressCount"), {
+                    processed: maintenance.processedItems,
+                    total: maintenance.totalItems,
+                  })}
+                </p>
+              ) : null}
               <Progress value={maintenance.progressPercent} />
             </div>
           </div>

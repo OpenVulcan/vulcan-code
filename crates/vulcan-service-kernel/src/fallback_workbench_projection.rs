@@ -84,7 +84,7 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
         git_commit: git_commit_settings(&provider_configuration),
         provider_retry: provider_retry_settings(&provider_configuration),
         host_tools: host_tools_settings(&provider_configuration),
-        composer_attachment_capabilities: composer_attachment_capabilities(None),
+        composer_attachment_capabilities: composer_attachment_capabilities(None, false),
         composer_slash_commands: vulcan_service_api::composer_slash_command_catalog(),
         pending_prompts: Vec::new(),
         pending_prompts_by_conversation: Vec::new(),

@@ -11,6 +11,7 @@ import type {
   KnowledgeImportJobSummary,
   KnowledgeIndexIntegritySummary,
   KnowledgeLibrarySummary,
+  KnowledgeLibrarySettingsRequest,
   KnowledgeSourceSummary,
   KnowledgeProjectBinding,
   KnowledgeSearchResult,
@@ -61,9 +62,25 @@ export async function listKnowledgeLibraries(projectId?: string): Promise<Knowle
 
 // createKnowledgeLibrary creates one host-owned isolated library.
 // createKnowledgeLibrary 创建一个宿主持有的隔离知识库。
-export async function createKnowledgeLibrary(name: string, description: string, projectIds: string[]): Promise<KnowledgeLibrarySummary> {
+export async function createKnowledgeLibrary(
+  name: string,
+  description: string,
+  projectIds: string[],
+  settings: KnowledgeLibrarySettingsRequest = {},
+): Promise<KnowledgeLibrarySummary> {
   return serviceClient.request<KnowledgeLibrarySummary>("service_create_knowledge_library", {
-    request: { name, description, projectIds },
+    request: { name, description, projectIds, settings },
+  });
+}
+
+// updateKnowledgeLibrarySettings persists a library-level policy without mutating source documents.
+// updateKnowledgeLibrarySettings 持久化资料库级策略且不修改原始文档。
+export async function updateKnowledgeLibrarySettings(
+  libraryId: string,
+  settings: KnowledgeLibrarySettingsRequest,
+): Promise<KnowledgeLibrarySummary> {
+  return serviceClient.request<KnowledgeLibrarySummary>("service_set_knowledge_library_settings", {
+    request: { libraryId, settings },
   });
 }
 
@@ -193,10 +210,26 @@ export async function readManagedKnowledgeDocument(libraryId: string, documentId
 
 // searchManagedKnowledgeLibrary searches only the library selected in the management surface.
 // searchManagedKnowledgeLibrary 仅检索管理界面中选中的知识库。
-export async function searchManagedKnowledgeLibrary(libraryId: string, query: string): Promise<KnowledgeSearchResult> {
+export async function searchManagedKnowledgeLibrary(
+  libraryId: string,
+  query: string,
+  retrievalMode?: "raw_bm25" | "display_bm25" | "display_hybrid",
+): Promise<KnowledgeSearchResult> {
   return serviceClient.request<KnowledgeSearchResult>("service_search_knowledge_library", {
-    request: { libraryId, query, limit: 20 },
+    request: { libraryId, query, limit: 20, retrievalMode: retrievalMode ?? null },
   });
+}
+
+// buildKnowledgeDisplayIndex runs the fixed-prompt display-corpus compiler for one library.
+// buildKnowledgeDisplayIndex 为一个资料库运行固定提示词显示库编译器。
+export async function buildKnowledgeDisplayIndex(libraryId: string): Promise<KnowledgeImportJobSummary> {
+  return serviceClient.request<KnowledgeImportJobSummary>("service_build_knowledge_display_index", { libraryId });
+}
+
+// buildKnowledgeVectorIndex compiles vectors for the active curated display generation.
+// buildKnowledgeVectorIndex 为当前活动整理显示代次生成向量索引。
+export async function buildKnowledgeVectorIndex(libraryId: string): Promise<KnowledgeImportJobSummary> {
+  return serviceClient.request<KnowledgeImportJobSummary>("service_build_knowledge_vector_index", { libraryId });
 }
 
 // exportKnowledgePackage writes one complete ready library into a timestamped .vkb archive.
@@ -256,9 +289,14 @@ export async function readKnowledgeDocument(projectId: string, libraryId: string
 
 // searchKnowledge executes bounded federated Jieba BM25 search.
 // searchKnowledge 执行有界联合 Jieba BM25 检索。
-export async function searchKnowledge(projectId: string, libraryIds: string[], query: string): Promise<KnowledgeSearchResult> {
+export async function searchKnowledge(
+  projectId: string,
+  libraryIds: string[],
+  query: string,
+  retrievalMode?: "raw_bm25" | "display_bm25" | "display_hybrid",
+): Promise<KnowledgeSearchResult> {
   return serviceClient.request<KnowledgeSearchResult>("service_search_knowledge", {
-    request: { projectId, libraryIds, query, limit: 20 },
+    request: { projectId, libraryIds, query, limit: 20, retrievalMode: retrievalMode ?? null },
   });
 }
 
@@ -276,8 +314,14 @@ export async function getSessionKnowledgeLibraries(conversationId: string): Prom
 
 // setSessionKnowledgeLibraries persists one project-authorized conversation selection.
 // setSessionKnowledgeLibraries 持久化一份经过项目授权的会话选择。
-export async function setSessionKnowledgeLibraries(projectId: string, conversationId: string, mode: "inherit" | "explicit", libraryIds: string[]): Promise<void> {
+export async function setSessionKnowledgeLibraries(
+  projectId: string,
+  conversationId: string,
+  mode: "inherit" | "explicit",
+  libraryIds: string[],
+  retrievalMode?: "raw_bm25" | "display_bm25" | "display_hybrid",
+): Promise<void> {
   await serviceClient.request("service_set_session_knowledge_libraries", {
-    request: { projectId, conversationId, mode, libraryIds },
+    request: { projectId, conversationId, mode, libraryIds, retrievalMode: retrievalMode ?? null },
   });
 }

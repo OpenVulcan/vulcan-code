@@ -68,9 +68,12 @@ pub fn normalize_connection_service_origin_override(
         ));
     }
     let path = parsed.path().trim_end_matches('/');
-    if !matches!(path, "" | "/compatible-mode/v1" | "/apps/anthropic") {
+    if !matches!(
+        path,
+        "" | "/compatible-mode/v1" | "/compatible-api/v1" | "/apps/anthropic"
+    ) {
         return Err(String::from(
-            "The Model Studio service origin path must be empty, `/compatible-mode/v1`, or `/apps/anthropic`.",
+            "The Model Studio service origin path must be empty, `/compatible-mode/v1`, `/compatible-api/v1`, or `/apps/anthropic`.",
         ));
     }
     Ok(Some(format!("https://{host}")))
@@ -160,6 +163,16 @@ mod tests {
             )
             .expect("Anthropic compatibility URL"),
             Some(host.to_string())
+        );
+        let china_host = "https://ws-example.cn-beijing.maas.aliyuncs.com";
+        assert_eq!(
+            normalize_connection_service_origin_override(
+                "alibaba",
+                "model-studio-cn",
+                Some(format!("{china_host}/compatible-api/v1").as_str()),
+            )
+            .expect("China compatible API URL"),
+            Some(china_host.to_string())
         );
     }
 

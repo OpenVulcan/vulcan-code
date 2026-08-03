@@ -79,6 +79,9 @@ export function KnowledgeLibraryViewerDialog(props: {
   // searchText stores the explicit Jieba BM25 query.
   // searchText 保存显式的 Jieba BM25 查询。
   const [searchText, setSearchText] = React.useState("");
+  // searchRetrievalMode stores the explicit corpus selected by this management search.
+  // searchRetrievalMode 保存本次管理界面搜索显式选择的内容层。
+  const [searchRetrievalMode, setSearchRetrievalMode] = React.useState<"raw_bm25" | "display_bm25" | "display_hybrid">("raw_bm25");
   // searchResult stores the latest library-scoped search response.
   // searchResult 保存最近一次知识库范围搜索响应。
   const [searchResult, setSearchResult] = React.useState<KnowledgeSearchResult | null>(null);
@@ -197,6 +200,7 @@ export function KnowledgeLibraryViewerDialog(props: {
     setCatalogLoading(true);
     setDocumentLoading(false);
     setSearchText("");
+    setSearchRetrievalMode(library.settings.retrievalMode);
     setSearchResult(null);
     setSearching(false);
     setIsMaximized(false);
@@ -265,7 +269,7 @@ export function KnowledgeLibraryViewerDialog(props: {
     try {
       // result is the authoritative library-scoped Jieba BM25 response.
       // result 是权威的知识库范围 Jieba BM25 响应。
-      const result = await searchManagedKnowledgeLibrary(props.library.id, query);
+      const result = await searchManagedKnowledgeLibrary(props.library.id, query, searchRetrievalMode);
       if (searchRequestSequence.current !== sequence) return;
       setSearchResult(result);
       if (result.failures.length > 0) toast.error(result.failures.map((failure) => failure.error).join("\n"));
@@ -275,7 +279,7 @@ export function KnowledgeLibraryViewerDialog(props: {
     } finally {
       if (searchRequestSequence.current === sequence) setSearching(false);
     }
-  }, [openDocument, props.library, searchText, searching]);
+  }, [openDocument, props.library, searchRetrievalMode, searchText, searching]);
 
   // toggleDirectory changes expansion and loads the first page only when a folder is opened first.
   // toggleDirectory 改变展开状态，并且仅在目录首次打开时加载第一页。
@@ -321,6 +325,11 @@ export function KnowledgeLibraryViewerDialog(props: {
         </header>
         <div className="knowledge-viewer-search">
           <Search size={16} />
+          <select aria-label="检索层" className="knowledge-viewer-search-mode" disabled={searching} onChange={(event) => setSearchRetrievalMode(event.target.value as "raw_bm25" | "display_bm25" | "display_hybrid")} value={searchRetrievalMode}>
+            <option value="raw_bm25">原始库 BM25</option>
+            <option value="display_bm25">显示库 BM25</option>
+            <option value="display_hybrid">显示库混合检索</option>
+          </select>
           <Input aria-label={t("knowledge.search.placeholder")} disabled={searching} onChange={(event) => {
             setSearchText(event.target.value);
             if (!event.target.value.trim()) clearSearch();
@@ -334,6 +343,7 @@ export function KnowledgeLibraryViewerDialog(props: {
             {t(searching ? "knowledge.searching" : "knowledge.search")}
           </Button>
         </div>
+        {searchResult?.warnings?.map((warning) => <p className="text-sm text-amber-700" key={warning}>{warning}</p>)}
         <div className="knowledge-viewer-body">
           <aside className="knowledge-viewer-tree">
             {catalogLoading ? <div className="knowledge-viewer-state"><LoaderCircle className="animate-spin" size={18} />{t("knowledge.viewer.loadingDocuments")}</div> : null}

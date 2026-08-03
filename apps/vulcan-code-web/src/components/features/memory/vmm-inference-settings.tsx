@@ -15,6 +15,16 @@ import { formatSkillText } from "@/components/features/featureText"
 import { PublicAiInternalOverridesDialog } from "@/components/features/settings/public-ai-internal-overrides-dialog"
 import { Button } from "@/components/ui/button"
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuTrigger,
@@ -44,6 +54,12 @@ import type {
 // VmmInferenceSettingsProps 向首次配置流程暴露必需基础能力就绪状态。
 interface VmmInferenceSettingsProps {
   onRequiredRouteReady?: (ready: boolean) => void
+  // Restarts the single managed VMM after a persisted rerank route change.
+  // 在持久化重排路由变更后重启唯一的托管 VMM。
+  onRestartVmm?: () => Promise<boolean>
+  // Blocks inference-route mutations while the exclusive memory maintenance owner holds the data space.
+  // 在记忆维护独占所有者持有数据空间时阻止推理路由变更。
+  maintenanceActive?: boolean
 }
 
 // VMM_REQUIRED_LLM_PURPOSES lists the foundational LLM routes required before VMM can be initialized.
@@ -107,7 +123,9 @@ export function vmmRequiredInferenceReady(
 // VmmInferenceSettings owns VMM inference route loading, mutation, and validation.
 // VmmInferenceSettings 管理 VMM 推理路由的加载、变更与验证。
 export function VmmInferenceSettings({
+  maintenanceActive = false,
   onRequiredRouteReady,
+  onRestartVmm,
 }: VmmInferenceSettingsProps = {}) {
   const { t } = useI18n()
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null)
@@ -118,6 +136,13 @@ export function VmmInferenceSettings({
   const [testSummaries, setTestSummaries] =
     React.useState<Partial<Record<PublicAiOperation, string>>>({})
   const [pendingMutationKey, setPendingMutationKey] = React.useState<string | null>(null)
+  // rerankRestartConfirmationOpen keeps route writes blocked while the restart decision is visible.
+  // rerankRestartConfirmationOpen 在显示重启决策时阻止路由写入。
+  const [rerankRestartConfirmationOpen, setRerankRestartConfirmationOpen] =
+    React.useState(false)
+  // rerankRestartConfirmationResolver completes the deferred route change exactly once.
+  // rerankRestartConfirmationResolver 只完成一次延迟的路由变更。
+  const rerankRestartConfirmationResolver = React.useRef<((confirmed: boolean) => void) | null>(null)
   const mutationInFlightRef = React.useRef(false)
 
   React.useEffect(() => {
@@ -144,19 +169,27 @@ export function VmmInferenceSettings({
   const runSnapshotMutation = React.useCallback((
     key: string,
     mutation: () => Promise<PublicAiSettingsSnapshot>,
-  ) => {
+    // afterSuccess performs the controlled runtime action after the snapshot write succeeds.
+    // afterSuccess 在快照写入成功后执行受控运行时动作。
+    afterSuccess?: () => Promise<void>,
+  ): Promise<boolean> => {
     if (mutationInFlightRef.current) {
-      return
+      return Promise.resolve(false)
     }
     mutationInFlightRef.current = true
     setPendingMutationKey(key)
-    void mutation()
-      .then((next) => {
+    return mutation()
+      .then(async (next) => {
         setSnapshot(next)
         setError(null)
+        if (afterSuccess) {
+          await afterSuccess()
+        }
+        return true
       })
       .catch((reason) => {
         setError(errorMessage(reason))
+        return false
       })
       .finally(() => {
         mutationInFlightRef.current = false
@@ -183,6 +216,12 @@ export function VmmInferenceSettings({
   // requiredRoutesReady gates first initialization on embedding plus all PreCheck/PostAction LLM routes.
   // requiredRoutesReady 使用向量路由和全部 PreCheck/PostAction LLM 路由共同门控首次初始化。
   const requiredRoutesReady = vmmRequiredInferenceReady(snapshot)
+  // routesDisabled prevents settings writes while a route mutation, connection test, or data rebuild owns the workflow.
+  // routesDisabled 在路由变更、连接测试或数据重建占用流程时阻止设置写入。
+  const routesDisabled = maintenanceActive
+    || pendingMutationKey !== null
+    || testingOperation !== null
+    || rerankRestartConfirmationOpen
 
   React.useEffect(() => {
     onRequiredRouteReady?.(requiredRoutesReady)
@@ -270,13 +309,56 @@ export function VmmInferenceSettings({
   ) => {
     const key = `${operation}/${purposeId ?? "default"}`
     setTestSummaries((current) => ({ ...current, [operation]: undefined }))
-    runSnapshotMutation(key, () => savePublicAiInferenceRoute({
-      consumerProfileId: "vmm",
-      purposeId,
-      operation,
-      route,
-    }))
-  }, [runSnapshotMutation])
+    // restartAfterSave keeps rerank persistence and the required managed-runtime restart in one guarded sequence.
+    // restartAfterSave 将重排持久化与所需的托管运行时重启放在同一条受保护序列中。
+    const restartAfterSave = operation === "rerank_documents" && onRestartVmm
+      ? async () => {
+          try {
+            if (!await onRestartVmm()) {
+              setError(t("settings.inference.rerankRestartFailed"))
+            }
+          } catch (reason) {
+            setError(errorMessage(reason))
+          }
+        }
+      : undefined
+    return runSnapshotMutation(
+      key,
+      () => savePublicAiInferenceRoute({
+        consumerProfileId: "vmm",
+        purposeId,
+        operation,
+        route,
+      }),
+      restartAfterSave,
+    )
+  }, [onRestartVmm, runSnapshotMutation, t])
+
+  // confirmRerankChange delays the route mutation until the user accepts the required VMM restart.
+  // confirmRerankChange 在用户确认需要重启 VMM 前延迟路由变更。
+  const confirmRerankChange = React.useCallback(() => {
+    if (!onRestartVmm) {
+      return Promise.resolve(true)
+    }
+    return new Promise<boolean>((resolve) => {
+      rerankRestartConfirmationResolver.current = resolve
+      setRerankRestartConfirmationOpen(true)
+    })
+  }, [onRestartVmm])
+
+  // resolveRerankChangeConfirmation closes the dialog and resolves the pending route request exactly once.
+  // resolveRerankChangeConfirmation 关闭对话框并且只解析一次等待中的路由请求。
+  const resolveRerankChangeConfirmation = React.useCallback((confirmed: boolean) => {
+    setRerankRestartConfirmationOpen(false)
+    const resolve = rerankRestartConfirmationResolver.current
+    rerankRestartConfirmationResolver.current = null
+    resolve?.(confirmed)
+  }, [])
+
+  React.useEffect(() => () => {
+    rerankRestartConfirmationResolver.current?.(false)
+    rerankRestartConfirmationResolver.current = null
+  }, [])
 
   return (
     <section className="rounded-xl border bg-card p-3">
@@ -292,6 +374,11 @@ export function VmmInferenceSettings({
         <span>{t("settings.inference.vmmReasoningNotice")}</span>
       </div>
       {error ? <p className="settings-muted-line settings-error-text mb-2">{error}</p> : null}
+      {maintenanceActive ? (
+        <p className="mb-2 text-xs text-muted-foreground">
+          {t("settings.inference.maintenanceLocked")}
+        </p>
+      ) : null}
       {!snapshot ? (
         <p className="settings-muted-line">{t("settings.models.loadingCatalog")}</p>
       ) : (
@@ -300,7 +387,7 @@ export function VmmInferenceSettings({
             {purposes.map((purpose) => (
               <InferenceRouteField
                 candidates={llmCandidates}
-                disabled={pendingMutationKey !== null || testingOperation !== null}
+                disabled={routesDisabled}
                 description={purpose.description}
                 key={purpose.id}
                 label={`${t("settings.inference.modelRegion")} · ${purpose.label}`}
@@ -317,7 +404,7 @@ export function VmmInferenceSettings({
               candidates={candidates.filter((candidate) => (
                 candidate.route.operation === "embedding_create"
               ))}
-              disabled={pendingMutationKey !== null || testingOperation !== null}
+              disabled={routesDisabled}
               label={t("settings.inference.embedding")}
               onConfigure={setEditingCandidate}
               onChange={(route) => saveRoute("embedding_create", undefined, route)}
@@ -334,9 +421,10 @@ export function VmmInferenceSettings({
               candidates={candidates.filter((candidate) => (
                 candidate.route.operation === "rerank_documents"
               ))}
-              disabled={pendingMutationKey !== null || testingOperation !== null}
+              disabled={routesDisabled}
               label={t("settings.inference.rerank")}
               onConfigure={setEditingCandidate}
+              onBeforeChange={confirmRerankChange}
               onChange={(route) => saveRoute("rerank_documents", undefined, route)}
               onTest={() => void testRoute("rerank_documents")}
               route={profile?.rerank}
@@ -362,6 +450,36 @@ export function VmmInferenceSettings({
             }}
             open={editingCandidate !== null}
           />
+          <AlertDialog
+            onOpenChange={(open) => {
+              if (!open) {
+                resolveRerankChangeConfirmation(false)
+              }
+            }}
+            open={rerankRestartConfirmationOpen}
+          >
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>{t("settings.inference.rerankRestartTitle")}</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {t("settings.inference.rerankRestartDescription")}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel onClick={() => resolveRerankChangeConfirmation(false)}>
+                  {t("settings.inference.rerankRestartCancel")}
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={(event) => {
+                    event.preventDefault()
+                    resolveRerankChangeConfirmation(true)
+                  }}
+                >
+                  {t("settings.inference.rerankRestartConfirm")}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </>
       )}
     </section>
@@ -408,7 +526,10 @@ function InferenceRouteField(props: {
   disabled: boolean
   // Receives an exact route replacement or clear request.
   // 接收精确路由替换或清除请求。
-  onChange: (route: PublicAiInferenceRoute | null) => void
+  onChange: (route: PublicAiInferenceRoute | null) => void | Promise<boolean>
+  // Optionally confirms a route change before local and persisted state changes.
+  // 可选地在本地状态和持久化状态变更前确认路由变更。
+  onBeforeChange?: (route: PublicAiInferenceRoute | null) => Promise<boolean>
   // Opens operation-scoped defaults for one selected route.
   // 打开所选路由的操作作用域默认值。
   onConfigure: (candidate: PublicAiInternalInferenceCandidate) => void
@@ -497,6 +618,31 @@ function InferenceRouteField(props: {
   // fallbackAttemptKey 防止不可用的已持久化账号替换失败时重复写入。
   const fallbackAttemptKey = React.useRef<string | null>(null)
 
+  // requestRouteChange confirms before committing the local model draft and exact route.
+  // requestRouteChange 在提交本地模型草稿和精确路由前执行确认。
+  const requestRouteChange = React.useCallback(async (
+    route: PublicAiInferenceRoute | null,
+    nextModelKey: string | null,
+  ) => {
+    // nextRouteKey identifies the exact provider/account route before any confirmation or write.
+    // nextRouteKey 在确认或写入前标识精确的提供商/账户路由。
+    const nextRouteKey = route ? inferenceRouteKey(route) : ""
+    if (persistedRouteKey === nextRouteKey) {
+      setSelectedModelKey(nextModelKey)
+      return
+    }
+    if (props.onBeforeChange && !await props.onBeforeChange(route)) {
+      return
+    }
+    setSelectedModelKey(nextModelKey)
+    // persisted is the asynchronous route-write outcome used to restore the previous draft on failure.
+    // persisted 是异步路由写入结果，用于失败时恢复之前的草稿。
+    const persisted = props.onChange(route)
+    if (persisted instanceof Promise && !await persisted) {
+      setSelectedModelKey(persistedModelKey)
+    }
+  }, [persistedModelKey, persistedRouteKey, props.onBeforeChange, props.onChange])
+
   React.useEffect(() => {
     setSelectedModelKey(persistedModelKey)
   }, [persistedRouteKey])
@@ -523,14 +669,17 @@ function InferenceRouteField(props: {
       return
     }
     fallbackAttemptKey.current = attemptKey
-    props.onChange(firstAvailableAccount.route)
+    void requestRouteChange(
+      firstAvailableAccount.route,
+      inferenceModelKey(firstAvailableAccount.route),
+    )
   }, [
     accountCandidates,
     candidateByRouteKey,
     persistedRouteKey,
     props.disabled,
-    props.onChange,
     props.route,
+    requestRouteChange,
   ])
 
   return (
@@ -566,12 +715,12 @@ function InferenceRouteField(props: {
             filterPlaceholder={t("composer.modelPicker.filter")}
             icon={<Cpu className="size-4" />}
             onValueChange={(value) => {
-              setSelectedModelKey(value)
               if (value === null) {
-                props.onChange(null)
+                void requestRouteChange(null, null)
                 return
               }
               if (props.route && value === persistedModelKey) {
+                setSelectedModelKey(value)
                 return
               }
               // firstAvailableAccount immediately applies the first account for a newly selected model.
@@ -580,7 +729,9 @@ function InferenceRouteField(props: {
                 inferenceModelKey(candidate.route) === value
               ))
               if (firstAvailableAccount) {
-                props.onChange(firstAvailableAccount.route)
+                void requestRouteChange(firstAvailableAccount.route, value)
+              } else {
+                setSelectedModelKey(value)
               }
             }}
             options={modelOptions}
@@ -600,7 +751,10 @@ function InferenceRouteField(props: {
             filterPlaceholder={t("settings.inference.accountFilter")}
             icon={<UserRound className="size-4" />}
             onValueChange={(value) => {
-              props.onChange(value ? candidateByRouteKey.get(value)?.route ?? null : null)
+              void requestRouteChange(
+                value ? candidateByRouteKey.get(value)?.route ?? null : null,
+                selectedModelKey,
+              )
             }}
             options={accountOptions}
             placeholder={selectedModelKey

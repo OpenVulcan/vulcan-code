@@ -615,12 +615,15 @@ function providerToolCapabilityLabel(
   >> = {
     web_search: "settings.providerTools.webSearch",
     web_extract: "settings.providerTools.webExtract",
-    media_analyze: "settings.providerTools.mediaAnalyze",
+    media_analyze: "settings.aiUnderstandImage",
     image_generate: "settings.providerTools.imageGenerate",
+    image_edit: "settings.providerTools.imageEdit",
     video_generate: "settings.providerTools.videoGenerate",
     video_edit: "settings.providerTools.videoEdit",
     speech_synthesize: "settings.providerTools.speechSynthesize",
+    speech_transcribe: "settings.providerTools.speechTranscribe",
     music_generate: "settings.providerTools.musicGenerate",
+    music_cover: "settings.providerTools.musicCover",
   };
   const key = keys[capability];
   return key ? t(key) : capability;

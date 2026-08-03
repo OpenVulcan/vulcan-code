@@ -37,7 +37,7 @@ use vulcan_agent_runtime::session_event_runtime::{
 use vulcan_agent_runtime::{
     ExecutionKnowledgeAccessContext, ExecutionPreparation, ExecutionPreparationRequest,
     ExecutionProviderVisibleAgentMessage, ExecutionRunReport, ExecutionStreamEvent,
-    RuntimePromptIntervention, RuntimePromptInterventionError,
+    KnowledgeSearchHandler, RuntimePromptIntervention, RuntimePromptInterventionError,
     agent_profile::AgentProfileCatalog,
     agent_runtime::{
         context_injection_runtime::context_injection_panel_cards_for_kind,

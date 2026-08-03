@@ -5,7 +5,7 @@ use crate::agent_runtime::execution_models::{
     ExecutionPreparation, ExecutionProviderVisibleAgentMessage,
 };
 use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
-use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history_for_model_with_system_updates;
+use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history_for_model_with_system_updates_and_tool_bridges;
 use crate::agent_runtime::provider_request_bridge_tools::resolved_tool_definition_to_core_tool_schema;
 use crate::agent_runtime::provider_request_controller_config::build_core_controller_config_with_layers;
 use crate::agent_runtime::provider_request_snapshot_preview::CoreRequestPreviewProviderAdapter;
@@ -35,12 +35,17 @@ pub(crate) async fn build_core_provider_request_snapshot(
         .iter()
         .map(resolved_tool_definition_to_core_tool_schema)
         .collect::<Vec<_>>();
+    let bridge_tool_ids = resolved_tools
+        .iter()
+        .map(|tool| tool.descriptor.id.clone())
+        .collect::<Vec<_>>();
     let mut core_snapshot = build_core_conversation_snapshot(conversation_state)?;
     core_snapshot.messages =
-        core_messages_to_provider_visible_history_for_model_with_system_updates(
+        core_messages_to_provider_visible_history_for_model_with_system_updates_and_tool_bridges(
             &core_snapshot.messages,
             Some(preparation.model_blueprint.protocol_profile_id.as_str()),
             Some(&preparation.model_blueprint.public_capabilities),
+            &bridge_tool_ids,
             &preparation.runtime_system_updates,
             ProviderSystemUpdateLoweringPolicy::default(),
         )?;

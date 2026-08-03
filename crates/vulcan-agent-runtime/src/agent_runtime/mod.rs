@@ -77,7 +77,7 @@ pub use events::ExecutionStreamEvent;
 pub use execution_models::{
     ExecutionKnowledgeAccessContext, ExecutionPreparation, ExecutionPreparationRequest,
     ExecutionPromptPurpose, ExecutionProviderVisibleAgentMessage, ExecutionRunReport,
-    ExecutionSessionGoalContext,
+    ExecutionSessionGoalContext, KnowledgeSearchHandler,
 };
 pub use extension_generation::ExtensionGeneration;
 pub use runtime::RuntimeFoundation;

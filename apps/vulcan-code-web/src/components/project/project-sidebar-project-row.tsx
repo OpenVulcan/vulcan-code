@@ -101,7 +101,7 @@ export function SortableProjectRow(props: {
         }
         props.onToggleOpen(props.project.id);
       }}
-      tooltip={`${props.project.name}\n${props.project.path}`}
+      tooltip={isSidebarCollapsed ? undefined : `${props.project.name}\n${props.project.path}`}
     >
       <ProjectIcon isOpen={props.isOpen && !isSidebarCollapsed} project={props.project} size={16} />
       <span className="vcn-sidebar-label project-folder-label">

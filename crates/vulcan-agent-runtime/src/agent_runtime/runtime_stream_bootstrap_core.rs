@@ -5,7 +5,7 @@ use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::context_request_mode::resolve_preparation_context_request_mode;
 use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPreparationRequest};
 use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
-use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history_for_model_with_system_updates;
+use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history_for_model_with_system_updates_and_tool_bridges;
 use crate::agent_runtime::provider_request_controller_config::build_core_controller_config_with_layers;
 use crate::agent_runtime::provider_request_preview::build_provider_request_preview_markdown;
 use crate::agent_runtime::provider_request_snapshot_builder::build_core_provider_request_snapshot;
@@ -130,6 +130,11 @@ pub(crate) fn build_runtime_bootstrap_core(
     let runtime_prompt = build_runtime_prompt_layers_for_agent(preparation, active_agent)?;
     let system_preamble = runtime_prompt.fallback_text.clone();
     let mut core_snapshot = build_core_conversation_snapshot(&request.conversation_state)?;
+    let bridge_tool_ids = preparation
+        .tool_descriptors
+        .iter()
+        .map(|tool| tool.id.clone())
+        .collect::<Vec<_>>();
     let system_update_policy = ProviderSystemUpdateLoweringPolicy::default();
     let lowering_repair_events = collect_system_update_lowering_repairs(
         preparation,
@@ -137,10 +142,11 @@ pub(crate) fn build_runtime_bootstrap_core(
         system_update_policy,
     );
     core_snapshot.messages =
-        core_messages_to_provider_visible_history_for_model_with_system_updates(
+        core_messages_to_provider_visible_history_for_model_with_system_updates_and_tool_bridges(
             &core_snapshot.messages,
             Some(preparation.model_blueprint.protocol_profile_id.as_str()),
             Some(&preparation.model_blueprint.public_capabilities),
+            &bridge_tool_ids,
             &preparation.runtime_system_updates,
             system_update_policy,
         )?;

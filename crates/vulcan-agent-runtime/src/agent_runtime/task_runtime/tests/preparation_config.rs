@@ -1222,6 +1222,8 @@ fn task_runtime_preparation_request_preserves_enabled_knowledge_access() {
     parent_request.knowledge_access = Some(ExecutionKnowledgeAccessContext {
         project_id: String::from("project-a"),
         library_ids: vec![String::from("550e8400-e29b-41d4-a716-446655440000")],
+        retrieval_mode: None,
+        knowledge_search_handler: None,
     });
     let context = TaskExecutionRuntimeContext::new(
         provider_config,

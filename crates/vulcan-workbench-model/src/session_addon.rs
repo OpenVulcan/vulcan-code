@@ -749,6 +749,10 @@ pub struct SessionKnowledgeLibrarySelection {
     /// 显式知识库标识符，仅在 explicit 模式下使用。
     #[serde(default)]
     pub library_ids: Vec<String>,
+    /// Optional retrieval policy explicitly selected for the session tools.
+    /// 会话工具显式选择的可选检索策略。
+    #[serde(default)]
+    pub retrieval_mode: Option<String>,
 }
 
 impl SessionKnowledgeLibrarySelection {
@@ -764,6 +768,13 @@ impl SessionKnowledgeLibrarySelection {
         self.library_ids.dedup();
         if self.mode == SessionKnowledgeLibrarySelectionMode::Inherit {
             self.library_ids.clear();
+        }
+        if self
+            .retrieval_mode
+            .as_deref()
+            .is_some_and(|mode| !matches!(mode, "raw_bm25" | "display_bm25" | "display_hybrid"))
+        {
+            self.retrieval_mode = None;
         }
         self
     }
@@ -821,8 +832,8 @@ pub struct SessionRuntimeControls {
     /// 供应商工具默认值是否已经物化到当前会话。
     #[serde(default)]
     pub provider_tool_settings_initialized: bool,
-    /// Legacy marker used only to recognize earlier session snapshots.
-    /// 仅用于识别早期会话快照的旧标记。
+    /// Whether this session owns an explicit provider-tool selection instead of inheriting global defaults.
+    /// 当前会话是否拥有显式供应商工具选择，而不是继承全局默认值。
     #[serde(default)]
     pub provider_tool_selections_overridden: bool,
 }
@@ -916,6 +927,7 @@ mod knowledge_library_selection_tests {
         let selection = SessionKnowledgeLibrarySelection {
             mode: SessionKnowledgeLibrarySelectionMode::Explicit,
             library_ids: vec![String::from("b"), String::from("a"), String::from("b")],
+            retrieval_mode: None,
         };
 
         assert!(addon.set_knowledge_library_selection(&selection, String::from("1")));
@@ -934,6 +946,7 @@ mod knowledge_library_selection_tests {
         let selection = SessionKnowledgeLibrarySelection {
             mode: SessionKnowledgeLibrarySelectionMode::Inherit,
             library_ids: vec![String::from("ignored")],
+            retrieval_mode: None,
         };
 
         addon.set_knowledge_library_selection(&selection, String::from("1"));

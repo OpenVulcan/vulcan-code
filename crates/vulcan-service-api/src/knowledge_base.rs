@@ -3,6 +3,199 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Selects one of the supported knowledge retrieval policies at creation time.
+/// 在创建资料库时选择一种受支持的检索策略。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeRetrievalModeRequest {
+    /// Use only the authoritative Jieba BM25 corpus.
+    /// 仅使用权威原始库 Jieba BM25。
+    RawBm25,
+    /// Use the curated display corpus with Jieba BM25.
+    /// 使用整理后的显示库 Jieba BM25。
+    DisplayBm25,
+    /// Use display-corpus BM25 and a vector index.
+    /// 使用显示库 BM25 与向量索引。
+    DisplayHybrid,
+}
+
+impl Default for KnowledgeRetrievalModeRequest {
+    /// Returns the backwards-compatible raw BM25 policy.
+    /// 返回兼容旧资料库的原始 BM25 策略。
+    fn default() -> Self {
+        Self::RawBm25
+    }
+}
+
+/// Selects whether raw-corpus fallback is implicit.
+/// 选择是否允许隐式回退原始库。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeFallbackPolicyRequest {
+    /// Require an explicit raw-corpus selection.
+    /// 要求显式选择原始库。
+    ExplicitOnly,
+    /// Fall back only when the display corpus is absent.
+    /// 仅在显示库不存在时回退。
+    RawOnlyWhenDisplayMissing,
+}
+
+impl Default for KnowledgeFallbackPolicyRequest {
+    /// Returns the fail-closed default.
+    /// 返回失败关闭默认值。
+    fn default() -> Self {
+        Self::ExplicitOnly
+    }
+}
+
+/// Identifies one inference route without carrying credentials.
+/// 标识一个推理路由且不携带凭据。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeRouteBindingKindRequest {
+    /// Selects a protocol profile route.
+    /// 选择协议配置路由。
+    Protocol,
+    /// Selects a provider-native action route.
+    /// 选择供应商原生动作路由。
+    Action,
+}
+
+impl Default for KnowledgeRouteBindingKindRequest {
+    /// Preserves the legacy protocol interpretation for older callers.
+    /// 为旧调用方保留协议路由解释。
+    fn default() -> Self {
+        Self::Protocol
+    }
+}
+
+/// Returns the default usage scope accepted by knowledge background tasks.
+/// 返回知识库后台任务接受的默认使用范围。
+fn default_knowledge_route_usage_scope() -> String {
+    String::from("internal_background")
+}
+
+/// KnowledgeRouteReferenceRequest carries a credential-free selected route from the browser.
+/// KnowledgeRouteReferenceRequest 承载浏览器选择的不含凭据路由。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeRouteReferenceRequest {
+    /// Consumer profile used for authorization and budgets.
+    /// 用于授权与配额的消费方配置。
+    pub consumer_profile_id: String,
+    /// Provider catalog identifier.
+    /// Provider 目录标识。
+    pub provider_id: String,
+    /// Transport protocol or route family.
+    /// 传输协议或路由类型。
+    pub protocol: String,
+    /// Exact binding kind used to interpret `protocol`.
+    /// 用于解释 `protocol` 的精确绑定类型。
+    #[serde(default)]
+    pub binding_kind: KnowledgeRouteBindingKindRequest,
+    /// Normalized service-entry identifier.
+    /// 规范化服务端点标识。
+    pub service_entry_id: String,
+    /// Provider model identifier.
+    /// Provider 模型标识。
+    pub model_id: String,
+    /// Usage scope authorized for detached knowledge processing.
+    /// 分离式知识库处理获授权的使用范围。
+    #[serde(default = "default_knowledge_route_usage_scope")]
+    pub usage_scope: String,
+    /// Optional host connection identifier.
+    /// 可选的宿主连接标识。
+    #[serde(default)]
+    pub connection_id: Option<String>,
+}
+
+/// Creation-time curation model configuration.
+/// 创建时的整理模型配置。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeCurationSettingsRequest {
+    /// Enables fixed-prompt JSON curation.
+    /// 是否启用固定提示词 JSON 整理。
+    #[serde(default)]
+    pub enabled: bool,
+    /// Route selected for curation.
+    /// 整理任务选择的路由。
+    #[serde(default)]
+    pub route: Option<KnowledgeRouteReferenceRequest>,
+    /// Versioned fixed prompt identifier.
+    /// 固定提示词版本标识。
+    #[serde(default = "default_knowledge_prompt_version")]
+    pub prompt_version: String,
+    /// Desired model fingerprint used for change warnings.
+    /// 用于模型变化警告的期望模型指纹。
+    #[serde(default)]
+    pub desired_model_fingerprint: Option<String>,
+}
+
+/// Creation-time embedding model and official capability configuration.
+/// 创建时的向量模型与官方能力配置。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeEmbeddingSettingsRequest {
+    /// Enables vector generation and retrieval.
+    /// 是否启用向量生成与检索。
+    #[serde(default)]
+    pub enabled: bool,
+    /// Route selected for embeddings.
+    /// 向量任务选择的路由。
+    #[serde(default)]
+    pub route: Option<KnowledgeRouteReferenceRequest>,
+    /// Desired embedding model fingerprint.
+    /// 期望向量模型指纹。
+    #[serde(default)]
+    pub desired_model_fingerprint: Option<String>,
+    /// User-configured expected dimension.
+    /// 用户配置的期望维度。
+    #[serde(default)]
+    pub configured_dimension: Option<u32>,
+    /// Maximum input count read from the official model capability entry.
+    /// 从官方模型能力条目读取的最大输入数量。
+    #[serde(default)]
+    pub model_max_batch_size: Option<u32>,
+    /// Optional user override; the service validates it against the capability.
+    /// 可选用户覆盖值，服务端会根据能力上限校验。
+    #[serde(default)]
+    pub requested_batch_size: Option<u32>,
+    /// User-confirmed same-dimension compatibility note for an existing index.
+    /// 用户确认同维度兼容时填写的现有索引风险说明。
+    #[serde(default)]
+    pub compatibility_override: Option<String>,
+}
+
+/// Complete creation-time per-library settings request.
+/// 完整的创建时按资料库配置请求。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeLibrarySettingsRequest {
+    /// Retrieval policy selected by the user.
+    /// 用户选择的检索策略。
+    #[serde(default)]
+    pub retrieval_mode: KnowledgeRetrievalModeRequest,
+    /// Fallback policy selected by the user.
+    /// 用户选择的回退策略。
+    #[serde(default)]
+    pub fallback_policy: KnowledgeFallbackPolicyRequest,
+    /// Curated display-corpus configuration.
+    /// 整理显示库配置。
+    #[serde(default)]
+    pub curation: KnowledgeCurationSettingsRequest,
+    /// Embedding configuration sourced from official capabilities.
+    /// 来源于官方能力配置的向量设置。
+    #[serde(default)]
+    pub embedding: KnowledgeEmbeddingSettingsRequest,
+}
+
+/// Returns the version of the fixed display-corpus prompt.
+/// 返回显示库固定提示词版本。
+fn default_knowledge_prompt_version() -> String {
+    String::from("knowledge-display-v1")
+}
+
 /// Creates one named knowledge library and optionally binds initial projects.
 /// 创建一个命名知识库并可选绑定初始项目。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -19,6 +212,23 @@ pub struct KnowledgeLibraryCreateRequest {
     /// 初始授权给该知识库的项目标识符。
     #[serde(default)]
     pub project_ids: Vec<String>,
+    /// Per-library retrieval and model policy selected during creation.
+    /// 创建时选择的按资料库检索与模型策略。
+    #[serde(default)]
+    pub settings: KnowledgeLibrarySettingsRequest,
+}
+
+/// Updates one existing library's retrieval and model settings.
+/// 更新一个已有资料库的检索与模型配置。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeLibrarySettingsUpdateRequest {
+    /// Immutable target library identifier.
+    /// 不可变目标资料库标识。
+    pub library_id: String,
+    /// New validated per-library configuration.
+    /// 新的、经过校验的按资料库配置。
+    pub settings: KnowledgeLibrarySettingsRequest,
 }
 
 /// Renames one library without changing its immutable identity.
@@ -237,6 +447,10 @@ pub struct KnowledgeSearchRequest {
     /// Non-empty search query.
     /// 非空搜索词。
     pub query: String,
+    /// Optional explicit corpus policy for this search; omitted means the library policy.
+    /// 本次检索可选的显式内容层策略；缺省时使用资料库自身策略。
+    #[serde(default)]
+    pub retrieval_mode: Option<KnowledgeRetrievalModeRequest>,
     /// Maximum result count.
     /// 最大结果数量。
     #[serde(default = "default_search_limit")]
@@ -254,10 +468,24 @@ pub struct KnowledgeLibrarySearchRequest {
     /// Non-empty search query.
     /// 非空搜索词。
     pub query: String,
+    /// Optional explicit corpus policy for this management search.
+    /// 管理界面本次检索可选的显式内容层策略。
+    #[serde(default)]
+    pub retrieval_mode: Option<KnowledgeRetrievalModeRequest>,
     /// Maximum result count.
     /// 最大结果数量。
     #[serde(default = "default_search_limit")]
     pub limit: u32,
+}
+
+/// Requests one complete AI-curated display-corpus rebuild.
+/// 请求一次完整的 AI 整理显示库重建。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeDisplayBuildRequest {
+    /// Immutable target library identifier.
+    /// 不可变目标资料库标识符。
+    pub library_id: String,
 }
 
 /// Persists one session's knowledge-library selection.
@@ -278,6 +506,10 @@ pub struct SessionKnowledgeLibrarySelectionRequest {
     /// explicit 模式下的显式知识库标识符。
     #[serde(default)]
     pub library_ids: Vec<String>,
+    /// Optional corpus policy applied by the session's knowledge tools.
+    /// 会话知识库工具使用的可选内容层策略。
+    #[serde(default)]
+    pub retrieval_mode: Option<KnowledgeRetrievalModeRequest>,
 }
 
 /// Current session selection together with its effective authorized library identifiers.
@@ -294,6 +526,10 @@ pub struct SessionKnowledgeLibrarySelectionSummary {
     /// Effective identifiers after project authorization and default selection.
     /// 经过项目授权与默认选择后的生效标识符。
     pub effective_library_ids: Vec<String>,
+    /// Optional corpus policy persisted for this session.
+    /// 为该会话持久化的可选内容层策略。
+    #[serde(default)]
+    pub retrieval_mode: Option<KnowledgeRetrievalModeRequest>,
 }
 
 /// Returns the default document page size.

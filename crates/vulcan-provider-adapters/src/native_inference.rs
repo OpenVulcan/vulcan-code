@@ -43,9 +43,9 @@ const ALIBABA_EMBEDDING_BINDING_ID: &str = "alibaba.model_studio.embeddings.v1";
 /// 阿里云重排的稳定原生绑定标识。
 const ALIBABA_RERANK_BINDING_ID: &str = "alibaba.model_studio.rerank.v1";
 
-/// Exact documented DashScope path for Alibaba text reranking.
-/// 阿里云文本重排的精确文档化 DashScope 路径。
-const ALIBABA_RERANK_ENDPOINT_PATH: &str = "/api/v1/services/rerank/text-rerank/text-rerank";
+/// Exact compatible endpoint for Alibaba Qwen3 reranking.
+/// 阿里云 Qwen3 重排使用的精确兼容接口端点。
+const ALIBABA_QWEN3_RERANK_ENDPOINT_PATH: &str = "/reranks";
 
 /// Returns the exact registered native action binding for one provider product operation.
 /// 返回一个供应商产品操作对应的精确已注册原生动作绑定。
@@ -183,7 +183,7 @@ impl NativeInferenceRoute {
             }
             ("alibaba", "model-studio-cn" | "model-studio-singapore") => Ok((
                 Self::AlibabaModelStudio,
-                ALIBABA_RERANK_ENDPOINT_PATH,
+                ALIBABA_QWEN3_RERANK_ENDPOINT_PATH,
                 ALIBABA_RERANK_BINDING_ID,
             )),
             _ => Err(pre_dispatch_failure(format!(
@@ -617,7 +617,13 @@ impl ProviderExecutionClient {
             &route.entry,
             &route.protocol_route,
         );
-        let url = native_request_url(native_route, base_url.as_str(), endpoint)?;
+        let url = native_request_url(
+            native_route,
+            route.entry.id.as_str(),
+            route.connection.service_origin_override.as_deref(),
+            base_url.as_str(),
+            endpoint,
+        )?;
         let response = self
             .http
             .post(url.as_str())
@@ -661,13 +667,60 @@ impl ProviderExecutionClient {
     }
 }
 
+/// Builds one Alibaba Qwen3 rerank URL from a validated workspace origin and regional entry.
+/// 根据已校验的工作区源地址与区域入口构建一个阿里云 Qwen3 重排 URL。
+///
+/// # Parameters
+/// 参数
+/// `service_entry_id` selects the regional Model Studio API root, while `service_origin_override`
+/// supplies the required workspace origin and `endpoint` is the registered rerank suffix.
+/// `service_entry_id` 选择区域 Model Studio API 根，`service_origin_override` 提供必需的工作区源地址，
+/// `endpoint` 是已注册的重排后缀。
+///
+/// # Returns
+/// 返回值
+/// A workspace-scoped regional Qwen3 rerank URL or a controlled pre-dispatch configuration error.
+/// 返回工作区作用域的区域 Qwen3 重排 URL，或受控的分派前配置错误。
+fn alibaba_qwen3_rerank_url(
+    service_entry_id: &str,
+    service_origin_override: Option<&str>,
+    endpoint: &str,
+) -> Result<String, ProviderExecutionFailure> {
+    let origin = service_origin_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            pre_dispatch_failure(format!(
+                "Alibaba Qwen3 rerank requires a workspace-scoped service origin for `{service_entry_id}`; configure the Model Studio workspace origin before testing."
+            ))
+        })?;
+    let api_root = match service_entry_id {
+        "model-studio-cn" => "/compatible-api/v1",
+        "model-studio-singapore" => "/compatible-mode/v1",
+        _ => {
+            return Err(pre_dispatch_failure(format!(
+                "Alibaba Qwen3 rerank is not registered for service entry `{service_entry_id}`."
+            )));
+        }
+    };
+    Ok(format!(
+        "{}{}{}",
+        origin.trim_end_matches('/'),
+        api_root,
+        endpoint
+    ))
+}
+
 /// Joins one registered native endpoint to its exact service-entry base URL.
 /// 将一个已注册原生端点拼接到其精确服务入口基础 URL。
 ///
 /// # Parameters
 /// 参数
-/// `base_url` already contains the product-specific API root and `endpoint` is relative to it.
-/// `base_url` 已包含产品专属 API 根，`endpoint` 相对于该根。
+/// `native_route` selects provider-specific URL rules; `service_entry_id` and
+/// `service_origin_override` identify the exact configured service; `base_url` already contains
+/// the generic product API root and `endpoint` is relative to it.
+/// `native_route` 选择供应商专属 URL 规则；`service_entry_id` 与 `service_origin_override` 标识精确配置服务；
+/// `base_url` 已包含通用产品 API 根，`endpoint` 相对于该根。
 ///
 /// # Returns
 /// 返回值
@@ -675,21 +728,15 @@ impl ProviderExecutionClient {
 /// 返回不虚构或重复协议路径段的 URL。
 fn native_request_url(
     native_route: NativeInferenceRoute,
+    service_entry_id: &str,
+    service_origin_override: Option<&str>,
     base_url: &str,
     endpoint: &str,
 ) -> Result<String, ProviderExecutionFailure> {
     if native_route == NativeInferenceRoute::AlibabaModelStudio
-        && endpoint == ALIBABA_RERANK_ENDPOINT_PATH
+        && endpoint == ALIBABA_QWEN3_RERANK_ENDPOINT_PATH
     {
-        let origin = base_url
-            .trim_end_matches('/')
-            .strip_suffix("/compatible-mode/v1")
-            .ok_or_else(|| {
-                pre_dispatch_failure(format!(
-                    "Alibaba Model Studio rerank route requires a `/compatible-mode/v1` service root, received `{base_url}`."
-                ))
-            })?;
-        return Ok(format!("{origin}{endpoint}"));
+        return alibaba_qwen3_rerank_url(service_entry_id, service_origin_override, endpoint);
     }
     Ok(format!("{}{}", base_url.trim_end_matches('/'), endpoint))
 }
@@ -1261,15 +1308,23 @@ mod tests {
             truncation: RerankTruncation::Disabled,
             return_content: true,
         };
-        assert!(
-            project_rerank_request(
-                NativeInferenceRoute::OpenRouter,
-                &crate::SecondaryRouteSelection::Automatic,
-                "cohere/rerank-v3.5",
-                &request,
-            )
-            .is_ok()
+        let openrouter_projected = project_rerank_request(
+            NativeInferenceRoute::OpenRouter,
+            &crate::SecondaryRouteSelection::Automatic,
+            "cohere/rerank-v3.5",
+            &request,
+        )
+        .expect("OpenRouter rerank should use the disabled truncation mode");
+        let openrouter_encoded = serde_json::to_value(openrouter_projected)
+            .expect("OpenRouter request should serialize");
+        assert_eq!(openrouter_encoded["query"], "capital");
+        assert_eq!(
+            openrouter_encoded["documents"],
+            serde_json::json!(["Paris"])
         );
+        assert_eq!(openrouter_encoded["top_n"], 1);
+        assert_eq!(openrouter_encoded["provider"]["allow_fallbacks"], false);
+        assert_eq!(openrouter_encoded["provider"]["require_parameters"], false);
         assert!(
             project_rerank_request(
                 NativeInferenceRoute::AlibabaModelStudio,
@@ -1280,14 +1335,49 @@ mod tests {
             .is_err()
         );
         request.truncation = RerankTruncation::ProviderDefault;
+        let projected = project_rerank_request(
+            NativeInferenceRoute::AlibabaModelStudio,
+            &crate::SecondaryRouteSelection::Automatic,
+            "qwen3-rerank",
+            &request,
+        )
+        .expect("Qwen3 rerank should use the provider-default truncation mode");
+        let encoded = serde_json::to_value(projected).expect("Qwen3 request should serialize");
+        assert_eq!(encoded["model"], "qwen3-rerank");
+        assert_eq!(encoded["query"], "capital");
+        assert_eq!(encoded["documents"], serde_json::json!(["Paris"]));
+        assert_eq!(encoded["top_n"], 1);
+        assert!(encoded.get("input").is_none());
+        assert!(encoded.get("parameters").is_none());
+        assert!(encoded.get("provider").is_none());
+    }
+
+    /// Verifies Alibaba Qwen3 rerank reads the documented top-level compatible response.
+    /// 验证阿里云 Qwen3 重排读取文档规定的顶层兼容响应。
+    #[test]
+    fn alibaba_qwen3_rerank_reads_top_level_compatible_response() {
+        let wire: WireRerankResponse = serde_json::from_value(serde_json::json!({
+            "object": "list",
+            "results": [
+                {"index": 0, "relevance_score": 0.93},
+                {"index": 2, "relevance_score": 0.34}
+            ],
+            "model": "qwen3-rerank",
+            "id": "request-1",
+            "usage": {"total_tokens": 79}
+        }))
+        .expect("Qwen3 compatible response should deserialize");
+
+        assert_eq!(wire.model.as_deref(), Some("qwen3-rerank"));
+        assert_eq!(wire.results.len(), 2);
+        assert_eq!(wire.results[1].index, 2);
+        assert_eq!(wire.usage.total_tokens, Some(79));
         assert!(
-            project_rerank_request(
-                NativeInferenceRoute::AlibabaModelStudio,
-                &crate::SecondaryRouteSelection::Automatic,
-                "qwen3-rerank",
-                &request,
-            )
-            .is_ok()
+            serde_json::from_value::<WireRerankResponse>(serde_json::json!({
+                "output": {"results": [{"index": 0, "relevance_score": 0.93}]},
+                "usage": {"total_tokens": 79}
+            }))
+            .is_err()
         );
     }
 
@@ -1298,6 +1388,8 @@ mod tests {
         assert_eq!(
             native_request_url(
                 NativeInferenceRoute::AlibabaModelStudio,
+                "model-studio-cn",
+                None,
                 "https://dashscope.aliyuncs.com/compatible-mode/v1",
                 "/embeddings",
             )
@@ -1307,29 +1399,44 @@ mod tests {
         assert_eq!(
             native_request_url(
                 NativeInferenceRoute::AlibabaModelStudio,
-                "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                ALIBABA_RERANK_ENDPOINT_PATH,
+                "model-studio-singapore",
+                Some("https://ws-example.ap-southeast-1.maas.aliyuncs.com"),
+                "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+                ALIBABA_QWEN3_RERANK_ENDPOINT_PATH,
             )
             .expect("rerank URL"),
-            "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
+            "https://ws-example.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/reranks"
+        );
+        assert_eq!(
+            native_request_url(
+                NativeInferenceRoute::AlibabaModelStudio,
+                "model-studio-cn",
+                Some("https://ws-example.cn-beijing.maas.aliyuncs.com"),
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                ALIBABA_QWEN3_RERANK_ENDPOINT_PATH,
+            )
+            .expect("China rerank URL"),
+            "https://ws-example.cn-beijing.maas.aliyuncs.com/compatible-api/v1/reranks"
         );
     }
 
-    /// Verifies Alibaba rerank refuses a service root whose product identity is unknown.
-    /// 验证阿里云重排会拒绝产品身份未知的服务根。
+    /// Verifies Alibaba Qwen3 rerank refuses to dispatch without a workspace-scoped origin.
+    /// 验证阿里云 Qwen3 重排没有工作区作用域源地址时拒绝分派。
     #[test]
-    fn alibaba_rerank_rejects_an_unregistered_service_root() {
+    fn alibaba_qwen3_rerank_requires_workspace_service_origin() {
         let error = native_request_url(
             NativeInferenceRoute::AlibabaModelStudio,
-            "https://dashscope.aliyuncs.com/api/v1",
-            ALIBABA_RERANK_ENDPOINT_PATH,
+            "model-studio-singapore",
+            None,
+            "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+            ALIBABA_QWEN3_RERANK_ENDPOINT_PATH,
         )
-        .expect_err("unregistered Alibaba service root must be rejected");
+        .expect_err("Qwen3 rerank must require a workspace origin");
 
         assert!(
             error
                 .to_string()
-                .contains("requires a `/compatible-mode/v1` service root"),
+                .contains("requires a workspace-scoped service origin"),
             "{error}"
         );
     }

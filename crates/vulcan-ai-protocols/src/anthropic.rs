@@ -440,8 +440,11 @@ fn project_anthropic_request_controls(
     match &request.structured_output {
         StructuredOutputPolicy::None => {}
         StructuredOutputPolicy::JsonObject => {
-            // Anthropic has no schema-free JSON-object switch. Keep this provider-neutral policy non-blocking and let the shared finalizer parse the returned text as JSON.
-            // Anthropic 没有无 Schema 的 JSON 对象开关；此处保持公共策略非阻断，再由共享终结器把返回文本解析为 JSON。
+            // Anthropic structured JSON output is schema-driven; refusing schema-free JSON prevents a false text-only guarantee.
+            // Anthropic 的结构化 JSON 输出由 Schema 驱动；拒绝无 Schema 请求可避免把纯文本回退误报为结构化保证。
+            return Err(ProtocolConversionError::new(
+                "Anthropic Messages requires an explicit JSON Schema for structured JSON output.",
+            ));
         }
         StructuredOutputPolicy::JsonSchema { schema, .. } => {
             let output_config = body
@@ -1348,16 +1351,16 @@ mod tests {
         assert!(encoded.body.get("tool_choice").is_none());
     }
 
-    /// Verifies schema-free JSON-object requests fall back to text JSON instead of failing protocol conversion.
-    /// 验证无 Schema 的 JSON 对象请求会回退为文本 JSON，而不是在协议转换阶段失败。
+    /// Verifies schema-free JSON-object requests are rejected before dispatch.
+    /// 验证无 Schema 的 JSON 对象请求会在分派前被拒绝。
     #[test]
-    fn json_object_uses_non_blocking_text_fallback() {
+    fn json_object_requires_explicit_schema() {
         let mut public_request = request(PromptCachePolicy::ProviderDefault);
         public_request.structured_output = StructuredOutputPolicy::JsonObject;
-        let encoded = AnthropicMessagesProfile
+        let error = AnthropicMessagesProfile
             .encode(&public_request)
-            .expect("schema-free JSON object request should encode");
-        assert!(encoded.body.get("output_config").is_none());
+            .expect_err("schema-free JSON object request must be rejected");
+        assert!(error.message.contains("explicit JSON Schema"));
     }
 
     /// Verifies explicit JSON Schema requests use Anthropic native structured output.

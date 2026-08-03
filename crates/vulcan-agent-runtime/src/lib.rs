@@ -39,7 +39,7 @@ pub mod workspace_path;
 pub use agent_runtime::{
     ExecutionKnowledgeAccessContext, ExecutionPreparation, ExecutionPreparationRequest,
     ExecutionPromptPurpose, ExecutionProviderVisibleAgentMessage, ExecutionRunReport,
-    ExecutionSessionGoalContext, ExecutionStreamEvent, RuntimeFoundation,
+    ExecutionSessionGoalContext, ExecutionStreamEvent, KnowledgeSearchHandler, RuntimeFoundation,
     RuntimePromptIntervention, RuntimePromptInterventionError, RuntimeSkillKind,
     ensure_runtime_defaults, stream_runtime_run, stream_runtime_run_with_intervention,
     stream_runtime_run_with_intervention_and_plugins,

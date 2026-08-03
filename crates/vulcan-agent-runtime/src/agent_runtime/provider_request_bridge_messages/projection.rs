@@ -34,10 +34,41 @@ pub(crate) fn core_messages_to_provider_visible_history_for_model_with_system_up
     system_updates: &[RuntimeSystemUpdateEvent],
     system_update_policy: ProviderSystemUpdateLoweringPolicy,
 ) -> Result<Vec<CoreConversationMessage>, String> {
+    core_messages_to_provider_visible_history_for_model_with_system_updates_and_tool_bridges(
+        messages,
+        protocol_profile_id,
+        capabilities,
+        &[],
+        system_updates,
+        system_update_policy,
+    )
+}
+
+/// Converts canonical messages with exact visible host-tool bridges into provider-visible history.
+/// 使用精确可见宿主工具桥接将规范消息转换为 Provider 可见历史。
+///
+/// # Parameters
+/// 参数
+/// `bridge_tool_ids` contains the exact resolved tool identifiers for this execution turn.
+/// `bridge_tool_ids` 包含本次执行回合精确解析出的工具标识。
+///
+/// # Returns
+/// 返回值
+/// Provider-visible history after attachment and system-update projection, or a precise lowering error.
+/// 完成附件与系统更新投影后的 Provider 可见历史，或精确的降级错误。
+pub(crate) fn core_messages_to_provider_visible_history_for_model_with_system_updates_and_tool_bridges(
+    messages: &[CoreConversationMessage],
+    protocol_profile_id: Option<&str>,
+    capabilities: Option<&ModelCapabilities>,
+    bridge_tool_ids: &[String],
+    system_updates: &[RuntimeSystemUpdateEvent],
+    system_update_policy: ProviderSystemUpdateLoweringPolicy,
+) -> Result<Vec<CoreConversationMessage>, String> {
     let mut projected = project_core_messages_to_provider_visible_history_for_model(
         messages,
         protocol_profile_id,
         capabilities,
+        bridge_tool_ids,
     );
     apply_provider_visible_system_updates(&mut projected, system_updates, system_update_policy)?;
 
@@ -53,6 +84,7 @@ fn project_core_messages_to_provider_visible_history_for_model(
     messages: &[CoreConversationMessage],
     protocol_profile_id: Option<&str>,
     capabilities: Option<&ModelCapabilities>,
+    bridge_tool_ids: &[String],
 ) -> Vec<CoreConversationMessage> {
     let mut projected = Vec::with_capacity(messages.len());
     let mut index = 0usize;
@@ -68,6 +100,7 @@ fn project_core_messages_to_provider_visible_history_for_model(
                         attachments,
                         protocol_profile_id,
                         capabilities,
+                        bridge_tool_ids,
                     ),
                 });
                 index += 1;
@@ -432,14 +465,16 @@ fn normalized_user_text_payload(
     attachments: &[vulcan_core::types::ConversationAttachment],
     protocol_profile_id: Option<&str>,
     capabilities: Option<&ModelCapabilities>,
+    bridge_tool_ids: &[String],
 ) -> CoreConversationPayload {
     match protocol_profile_id {
         Some(protocol_profile_id) => {
-            let normalized = normalize_provider_user_input_for_model(
+            let normalized = normalize_provider_user_input_for_model_with_tool_bridges(
                 protocol_profile_id,
                 capabilities,
                 text,
                 attachments,
+                bridge_tool_ids,
             );
             CoreConversationPayload::UserText {
                 text: normalized.text,

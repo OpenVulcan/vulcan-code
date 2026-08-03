@@ -501,6 +501,7 @@ CREATE TABLE IF NOT EXISTS knowledge_libraries (
     chunk_count INTEGER NOT NULL DEFAULT 0,
     index_status TEXT NOT NULL DEFAULT 'empty',
     last_completed_import_at_ms INTEGER,
+    settings_json TEXT NOT NULL DEFAULT '{}',
     created_at_ms INTEGER NOT NULL,
     updated_at_ms INTEGER NOT NULL
 );
@@ -538,6 +539,7 @@ CREATE TABLE IF NOT EXISTS knowledge_import_jobs (
     skipped_files INTEGER NOT NULL DEFAULT 0,
     processed_bytes INTEGER NOT NULL DEFAULT 0,
     warnings_json TEXT NOT NULL DEFAULT '[]',
+    observability_json TEXT NOT NULL DEFAULT '{}',
     error_message TEXT,
     created_at_ms INTEGER NOT NULL,
     started_at_ms INTEGER,
@@ -548,6 +550,12 @@ CREATE TABLE IF NOT EXISTS knowledge_import_jobs (
 CREATE INDEX IF NOT EXISTS idx_knowledge_import_jobs_library
 ON knowledge_import_jobs(library_id, created_at_ms DESC);
 "#,
+    )
+    .await?;
+    ensure_optional_schema_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE knowledge_libraries ADD COLUMN settings_json TEXT NOT NULL DEFAULT '{}';",
     )
     .await?;
     ensure_optional_schema_column(
@@ -584,6 +592,12 @@ ON knowledge_import_jobs(library_id, created_at_ms DESC);
         client,
         sqlite_binding_id,
         "ALTER TABLE knowledge_import_jobs ADD COLUMN processed_index_items INTEGER NOT NULL DEFAULT 0;",
+    )
+    .await?;
+    ensure_optional_schema_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE knowledge_import_jobs ADD COLUMN observability_json TEXT NOT NULL DEFAULT '{}';",
     )
     .await?;
     Ok(())

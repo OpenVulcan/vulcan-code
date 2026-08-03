@@ -32,6 +32,13 @@
   white-space: nowrap;
 }
 
+.diff-review-repository-trigger-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .diff-review-repository-trigger:hover,
 .diff-review-repository-trigger[aria-expanded="true"] {
   background: color-mix(in oklab, var(--muted) 74%, transparent);
@@ -41,6 +48,36 @@
   display: inline-block;
   width: 13px;
   height: 13px;
+}
+
+/* Repository menus size to their content while keeping long paths bounded. */
+/* 仓库菜单按内容自适应宽度，同时限制过长路径的最大占用空间。 */
+.diff-review-repository-menu {
+  width: max-content;
+  min-width: min(180px, calc(100vw - 32px));
+  max-width: min(420px, calc(100vw - 32px));
+}
+
+.diff-review-repository-menu-item {
+  display: grid !important;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, auto);
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.diff-review-repository-name,
+.diff-review-repository-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-review-repository-path {
+  max-width: 220px;
+  color: var(--muted-foreground);
+  font-size: 12px;
 }
 
 .diff-panel-title-text {

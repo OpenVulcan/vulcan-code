@@ -44,6 +44,7 @@ import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ConversationSummary, MainAreaId, ProjectSummary } from "@/types";
 import { ConversationTreeRow } from "./project-sidebar-conversation-row";
+import { CollapsedFeatureMenu } from "./project-sidebar-menus";
 import { SortableProjectRow } from "./project-sidebar-project-row";
 import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
 
@@ -305,6 +306,15 @@ export function ProjectSidebar(props: {
       project={conversation.projectId ? projectsById.get(conversation.projectId) : undefined}
     />
   );
+  // collapsedFeatureMenuItems groups the five feature shortcuts under one collapsed plugin icon.
+  // collapsedFeatureMenuItems 将五个功能快捷入口归组到折叠后的单个插件图标下。
+  const collapsedFeatureMenuItems = [
+    { id: "skills", label: t("area.skills"), icon: <Puzzle size={16} />, active: props.skillsActive, onSelect: props.onOpenSkills },
+    { id: "agent-skills", label: t("area.agentSkills"), icon: <Hammer size={16} />, active: props.agentSkillsActive, onSelect: props.onOpenAgentSkills },
+    { id: "agents", label: t("area.agents"), icon: <Bot size={16} />, active: props.agentsActive, onSelect: props.onOpenAgents },
+    { id: "memory", label: t("area.memory"), icon: <BrainCircuit size={16} />, active: props.memoryActive, onSelect: props.onOpenMemory },
+    { id: "knowledge", label: t("area.knowledge"), icon: <BookMarked size={16} />, active: props.knowledgeActive, onSelect: props.onOpenKnowledge },
+  ];
 
   return (
     <Sidebar className={cn(activeProjectDragId && "project-drag-active")} collapsible="icon" variant="inset">
@@ -316,9 +326,21 @@ export function ProjectSidebar(props: {
           titlebarDragRegion={props.titlebarDragRegion}
           onTitlebarDoubleClick={props.onTitlebarDoubleClick}
         />
-        {/* Hide primary feature shortcuts in icon-only mode so collapsed navigation stays project-focused. */}
-        {/* 在纯图标折叠模式隐藏主功能快捷入口，使折叠导航只聚焦项目。 */}
-        {sidebarState !== "collapsed" ? <SidebarMenu>
+        {sidebarState === "collapsed" ? (
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <CollapsedFeatureMenu items={collapsedFeatureMenuItems} label={t("area.skills")}>
+                <SidebarMenuButton
+                  active={featureSurfaceActive}
+                  aria-label={t("area.skills")}
+                  className="workspace-sidebar-feature-button collapsed-feature-menu-button"
+                >
+                  <Puzzle size={16} />
+                </SidebarMenuButton>
+              </CollapsedFeatureMenu>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        ) : <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
               active={props.skillsActive}
@@ -374,7 +396,7 @@ export function ProjectSidebar(props: {
               <span className="vcn-sidebar-label workspace-sidebar-feature-label">{t("area.knowledge")}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
-        </SidebarMenu> : null}
+        </SidebarMenu>}
       </SidebarHeader>
       <SidebarContent>
         {pinnedConversations.length > 0 || visiblePinnedProjects.length > 0 ? (

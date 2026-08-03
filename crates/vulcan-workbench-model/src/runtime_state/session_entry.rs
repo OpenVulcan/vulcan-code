@@ -37,8 +37,8 @@ pub struct SessionRuntimeStateEntry {
     /// 供应商工具默认值是否已经物化到当前会话。
     #[serde(default, skip_serializing_if = "is_false")]
     pub provider_tool_settings_initialized: bool,
-    /// Legacy marker used to migrate earlier session selection snapshots.
-    /// 用于迁移早期会话选择快照的旧标记。
+    /// Whether this session owns an explicit provider-tool selection instead of inheriting global defaults.
+    /// 当前会话是否拥有显式供应商工具选择，而不是继承全局默认值。
     #[serde(default, skip_serializing_if = "is_false")]
     pub provider_tool_selections_overridden: bool,
     /// Last user-selected work mode key for this session.

@@ -271,7 +271,19 @@ export function MemoryArea(props: {
       <section className="vmm-memory-page">
         <div className="vmm-memory-shell status-only">
           <main className="vmm-memory-main vmm-status-page">
-            <VmmInferenceSettings />
+            <VmmInferenceSettings
+              maintenanceActive={["backing_up", "rebuilding", "cancelling"].includes(
+                props.snapshot.maintenance.phase,
+              )}
+              onRestartVmm={async () => {
+                // Never start VMM while the exclusive backup/rebuild owner still holds the data space.
+                // 在备份/重建独占所有者仍持有数据空间时，绝不启动 VMM。
+                if (["backing_up", "rebuilding", "cancelling"].includes(props.snapshot.maintenance.phase)) {
+                  return false
+                }
+                return Boolean(await runAction("managed_runtime_restart"))
+              }}
+            />
           </main>
         </div>
       </section>

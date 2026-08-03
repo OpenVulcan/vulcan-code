@@ -6,14 +6,20 @@ use super::markdown::{
 };
 use super::models::{
     KNOWLEDGE_PACKAGE_FORMAT, KNOWLEDGE_PACKAGE_VERSION, KnowledgeChunk, KnowledgeCustomWord,
+    KnowledgeDisplayChunk, KnowledgeDisplayDocument, KnowledgeDisplayIndexStatus,
     KnowledgeDocumentContent, KnowledgeDocumentSummary, KnowledgeFtsQuery,
     KnowledgeImportJobSummary, KnowledgeImportReport, KnowledgeIndexIntegritySummary,
-    KnowledgeLibrarySummary, KnowledgeOperationKind, KnowledgePackageExportResult,
-    KnowledgePackageImportResult, KnowledgePackageInspection, KnowledgePackageManifest,
-    KnowledgeProjectBinding, KnowledgeSearchFailure, KnowledgeSearchHit, KnowledgeSearchResult,
-    KnowledgeSourceSummary, MAX_KNOWLEDGE_PACKAGE_BYTES,
+    KnowledgeLibrarySettings, KnowledgeLibrarySummary, KnowledgeModelSnapshot,
+    KnowledgeOperationKind, KnowledgeOperationObservability, KnowledgePackageArtifact,
+    KnowledgePackageExportResult, KnowledgePackageImportResult, KnowledgePackageInspection,
+    KnowledgePackageManifest, KnowledgeProjectBinding, KnowledgeSearchFailure, KnowledgeSearchHit,
+    KnowledgeSearchResult, KnowledgeSourceSummary, KnowledgeVectorIndexStatus,
+    MAX_KNOWLEDGE_PACKAGE_BYTES,
 };
-use super::schema::{KNOWLEDGE_FTS_INDEX, KNOWLEDGE_SCHEMA_VERSION, library_schema_script};
+use super::schema::{
+    KNOWLEDGE_DISPLAY_FTS_INDEX_PREFIX, KNOWLEDGE_FTS_INDEX, KNOWLEDGE_SCHEMA_VERSION,
+    display_schema_script, library_schema_script,
+};
 use crate::data_plane::{APP_SPACE_ID, ControllerRuntimeHandle};
 use crate::runtime_assets;
 use futures_util::{StreamExt, stream::FuturesUnordered};
@@ -29,8 +35,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, mpsc};
 use uuid::Uuid;
 use vldb_controller_client::{
-    ControllerSqliteEnableRequest, ControllerSqliteTokenizerMode, ControllerSqliteValue, SpaceKind,
-    SpaceRegistration,
+    ControllerLanceDbColumnDef, ControllerLanceDbColumnType, ControllerLanceDbEnableRequest,
+    ControllerLanceDbInputFormat, ControllerLanceDbOutputFormat, ControllerSqliteEnableRequest,
+    ControllerSqliteTokenizerMode, ControllerSqliteValue, SpaceKind, SpaceRegistration,
 };
 use vulcan_runtime_assets::text_decode::decode_complete_user_text;
 use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
@@ -77,6 +84,12 @@ const KNOWLEDGE_PACKAGE_LIBRARY_MANIFEST_ENTRY: &str = "library/manifest.json";
 /// Exact portable SQLite entry.
 /// 可移植包 SQLite 的精确条目名称。
 const KNOWLEDGE_PACKAGE_DATABASE_ENTRY: &str = "library/content.sqlite3";
+/// Exact portable derived SQLite entry.
+/// 可移植派生 SQLite 的精确条目名称。
+const KNOWLEDGE_PACKAGE_DISPLAY_DATABASE_ENTRY: &str = "library/display.sqlite3";
+/// Portable derived vector files share this safe archive prefix.
+/// 可移植派生向量文件共享这个安全归档前缀。
+const KNOWLEDGE_PACKAGE_VECTOR_PREFIX: &str = "library/lancedb/";
 /// Prefix reserved for host-owned package extraction directories removed during startup recovery.
 /// 宿主持有的知识库包解压目录保留前缀，启动恢复期间会清理这些目录。
 const KNOWLEDGE_PACKAGE_INSPECTION_TEMP_PREFIX: &str = ".package-inspect-";
@@ -110,6 +123,12 @@ pub struct KnowledgeBaseRuntime {
     /// Library identifiers whose controller SQLite binding is already active.
     /// 控制器 SQLite 绑定已经激活的知识库标识符。
     active_bindings: Arc<Mutex<BTreeSet<String>>>,
+    /// Library identifiers whose derived display SQLite binding is already active.
+    /// 派生显示库 SQLite 绑定已经激活的知识库标识符。
+    active_display_bindings: Arc<Mutex<BTreeSet<String>>>,
+    /// Library identifiers whose derived LanceDB binding is already active.
+    /// 派生 LanceDB 绑定已经激活的知识库标识符。
+    active_vector_bindings: Arc<Mutex<BTreeSet<String>>>,
     /// Exact active import or index-maintenance operations with cooperative cancellation.
     /// 支持协作取消的精确活动导入或索引维护操作。
     active_operations: Arc<Mutex<BTreeMap<String, ActiveKnowledgeOperation>>>,
@@ -128,6 +147,12 @@ pub(crate) struct KnowledgeBaseRuntimeSharedState {
     /// Library identifiers whose controller SQLite binding is already active.
     /// 控制器 SQLite 绑定已经激活的知识库标识符。
     active_bindings: Arc<Mutex<BTreeSet<String>>>,
+    /// Library identifiers whose derived display SQLite binding is already active.
+    /// 派生显示库 SQLite 绑定已经激活的知识库标识符。
+    active_display_bindings: Arc<Mutex<BTreeSet<String>>>,
+    /// Library identifiers whose derived LanceDB binding is already active.
+    /// 派生 LanceDB 绑定已经激活的知识库标识符。
+    active_vector_bindings: Arc<Mutex<BTreeSet<String>>>,
     /// Exact active import or index-maintenance operations with cooperative cancellation.
     /// 支持协作取消的精确活动导入或索引维护操作。
     active_operations: Arc<Mutex<BTreeMap<String, ActiveKnowledgeOperation>>>,
@@ -209,6 +234,12 @@ struct PreparedKnowledgePackage {
     /// Validated source internal manifest.
     /// 已校验的来源内部清单。
     source_manifest: KnowledgeManifest,
+    /// Optional extracted display SQLite database.
+    /// 可选的已解压显示库 SQLite 数据库。
+    display_database_path: Option<PathBuf>,
+    /// Optional extracted LanceDB directory containing vector artifacts.
+    /// 可选的已解压 LanceDB 向量派生目录。
+    vector_root: Option<PathBuf>,
 }
 
 /// Durable state required to recover an interrupted two-rename library replacement.
@@ -289,6 +320,18 @@ impl PreparedKnowledgePackage {
     fn database_path(&self) -> PathBuf {
         self.temporary.path().join("content.sqlite3")
     }
+
+    /// Returns the optional extracted display SQLite path.
+    /// 返回可选的已解压显示库 SQLite 路径。
+    fn display_database_path(&self) -> Option<PathBuf> {
+        self.display_database_path.clone()
+    }
+
+    /// Returns the optional extracted LanceDB root.
+    /// 返回可选的已解压 LanceDB 根目录。
+    fn vector_root(&self) -> Option<PathBuf> {
+        self.vector_root.clone()
+    }
 }
 
 /// One registry row decoded from the application database.
@@ -316,6 +359,9 @@ struct LibraryRow {
     /// Derived index state.
     /// 派生索引状态。
     index_status: String,
+    /// JSON-encoded per-library settings.
+    /// JSON 编码的按资料库配置。
+    settings_json: String,
     /// Most recent completed import timestamp.
     /// 最近完成导入时间戳。
     last_completed_import_at_ms: Option<i64>,
@@ -598,6 +644,9 @@ struct ImportJobRow {
     /// JSON warnings payload.
     /// JSON 告警载荷。
     warnings_json: String,
+    /// JSON request and usage observability payload.
+    /// JSON 请求与用量可观测载荷。
+    observability_json: String,
     /// Optional terminal error.
     /// 可选终态错误。
     error_message: Option<String>,
@@ -640,6 +689,182 @@ struct CountRow {
     /// Chunk count.
     /// 切片数量。
     chunk_count: i64,
+}
+
+/// One display-document count returned by a generation aggregate query.
+/// 一次显示库代次聚合查询返回的文档计数。
+#[derive(Debug, Deserialize)]
+struct DisplayCountRow {
+    /// Number of display documents in the generation.
+    /// 当前代次中的显示文档数量。
+    count: i64,
+}
+
+/// Active-generation display metadata returned by one aggregate query.
+/// 一次聚合查询返回的活动显示代次元数据。
+#[derive(Debug, Deserialize)]
+struct DisplayMetadataRow {
+    /// Active display generation, if one has been published.
+    /// 已发布时的活动显示库代次。
+    active_generation: Option<String>,
+    /// Active generation-scoped FTS index name.
+    /// 活动代次对应的 FTS 索引名称。
+    active_fts_index: Option<String>,
+}
+
+/// Complete display-document row decoded from the derived SQLite database.
+/// 从派生 SQLite 显示库解码的一份完整显示文档记录。
+#[derive(Debug, Deserialize)]
+struct DisplayDocumentRow {
+    /// Stable display-document identifier.
+    /// 稳定显示文档标识符。
+    id: String,
+    /// Source document identifier.
+    /// 原始文档标识符。
+    source_document_id: String,
+    /// Source file hash.
+    /// 来源文件哈希。
+    source_sha256: String,
+    /// Relative source path.
+    /// 相对来源路径。
+    relative_path: String,
+    /// Source folder path.
+    /// 来源文件夹路径。
+    folder_path: String,
+    /// Curated display title.
+    /// 整理后的显示标题。
+    title: String,
+    /// Curated summary.
+    /// 整理后的摘要。
+    summary: String,
+    /// JSON encoded keyword list.
+    /// JSON 编码的关键词列表。
+    keywords_json: String,
+    /// JSON encoded symbol list.
+    /// JSON 编码的符号列表。
+    symbols_json: String,
+    /// Semantic text used for embeddings.
+    /// 用于向量生成的语义文本。
+    embedding_text: String,
+    /// Normalized display Markdown.
+    /// 规范化显示 Markdown。
+    markdown: String,
+    /// Generation identity.
+    /// 代次身份。
+    generation: String,
+    /// Successful generation timestamp.
+    /// 生成成功时间戳。
+    generated_at_ms: i64,
+}
+
+impl DisplayDocumentRow {
+    /// Converts one decoded database row into the public display-document contract.
+    /// 将一条已解码数据库记录转换为公开显示文档契约。
+    fn into_display_document(self) -> Result<KnowledgeDisplayDocument, String> {
+        let keywords = serde_json::from_str(&self.keywords_json)
+            .map_err(|error| format!("解析显示库关键词失败：{error}"))?;
+        let symbols = serde_json::from_str(&self.symbols_json)
+            .map_err(|error| format!("解析显示库符号失败：{error}"))?;
+        Ok(KnowledgeDisplayDocument {
+            id: self.id,
+            source_document_id: self.source_document_id,
+            source_sha256: self.source_sha256,
+            relative_path: self.relative_path,
+            folder_path: self.folder_path,
+            title: self.title,
+            summary: self.summary,
+            keywords,
+            symbols,
+            embedding_text: self.embedding_text,
+            markdown: self.markdown,
+            generation: self.generation,
+            generated_at_ms: self.generated_at_ms,
+        })
+    }
+}
+
+/// One display search row joined with its curated document metadata.
+/// 一条联结整理文档元数据的显示库搜索记录。
+#[derive(Debug, Deserialize)]
+struct DisplaySearchRow {
+    /// Stable display chunk identifier.
+    /// 稳定显示库切片标识符。
+    id: String,
+    /// Source document identifier.
+    /// 原始来源文档标识符。
+    source_document_id: String,
+    /// Display title.
+    /// 显示标题。
+    title: String,
+    /// Relative source path.
+    /// 相对来源路径。
+    relative_path: String,
+    /// Heading ancestry.
+    /// 标题层级。
+    heading_path: String,
+    /// Display chunk start line.
+    /// 显示切片起始行。
+    start_line: i64,
+    /// Display chunk end line.
+    /// 显示切片结束行。
+    end_line: i64,
+    /// Display chunk content.
+    /// 显示切片内容。
+    content: String,
+    /// Raw ascending BM25 score.
+    /// 原始升序 BM25 分值。
+    raw_score: f64,
+}
+
+/// One display-chunk row decoded for vector generation.
+/// 为向量生成解码的一条显示库切片记录。
+#[derive(Debug, Deserialize)]
+struct DisplayChunkRow {
+    /// Stable display chunk identifier.
+    /// 稳定显示库切片标识符。
+    id: String,
+    /// Owning display-document identifier.
+    /// 所属显示文档标识符。
+    display_document_id: String,
+    /// Zero-based chunk ordinal.
+    /// 从零开始的切片序号。
+    ordinal: i64,
+    /// Display Markdown heading ancestry.
+    /// 显示 Markdown 标题层级。
+    heading_path: String,
+    /// One-based inclusive display line range start.
+    /// 从一开始且包含边界的显示行范围起点。
+    start_line: i64,
+    /// One-based inclusive display line range end.
+    /// 从一开始且包含边界的显示行范围终点。
+    end_line: i64,
+    /// Display chunk content.
+    /// 显示库切片正文。
+    content: String,
+    /// Stable semantic text used for embeddings.
+    /// 用于生成向量的稳定语义文本。
+    embedding_text: String,
+    /// Generation that owns this row.
+    /// 拥有当前记录的显示库代次。
+    generation: String,
+}
+
+impl DisplayChunkRow {
+    /// Converts one decoded row into the public display-chunk contract.
+    /// 将一条已解码记录转换为公开显示库切片契约。
+    fn into_display_chunk(self) -> Result<KnowledgeDisplayChunk, String> {
+        Ok(KnowledgeDisplayChunk {
+            id: self.id,
+            display_document_id: self.display_document_id,
+            ordinal: nonnegative_u64(self.ordinal, "display_chunk_ordinal")?,
+            heading_path: self.heading_path,
+            start_line: nonnegative_u64(self.start_line, "display_chunk_start_line")?,
+            end_line: nonnegative_u64(self.end_line, "display_chunk_end_line")?,
+            content: self.content,
+            embedding_text: self.embedding_text,
+            generation: self.generation,
+        })
+    }
 }
 
 /// One checked scalar chunk count returned by a bounded aggregate query.
@@ -713,6 +938,8 @@ impl KnowledgeBaseRuntime {
             mutation_locks: shared_state.mutation_locks.clone(),
             binding_activation_lock: shared_state.binding_activation_lock.clone(),
             active_bindings: shared_state.active_bindings.clone(),
+            active_display_bindings: shared_state.active_display_bindings.clone(),
+            active_vector_bindings: shared_state.active_vector_bindings.clone(),
             active_operations: shared_state.active_operations.clone(),
         }
     }
@@ -950,7 +1177,7 @@ impl KnowledgeBaseRuntime {
         validate_library_id(library_id)?;
         let rows: Vec<ImportJobRow> = self
             .query_app_rows(
-                "SELECT id, library_id, operation_kind, state, phase, scanned_files, total_files, processed_files, total_index_items, processed_index_items, current_file, processed_bytes, warnings_json, error_message FROM knowledge_import_jobs WHERE library_id = ? ORDER BY created_at_ms DESC LIMIT 1;",
+                "SELECT id, library_id, operation_kind, state, phase, scanned_files, total_files, processed_files, total_index_items, processed_index_items, current_file, processed_bytes, warnings_json, observability_json, error_message FROM knowledge_import_jobs WHERE library_id = ? ORDER BY created_at_ms DESC LIMIT 1;",
                 vec![text(library_id)],
             )
             .await?;
@@ -976,9 +1203,217 @@ impl KnowledgeBaseRuntime {
                     warnings: serde_json::from_str(&row.warnings_json)
                         .map_err(|error| format!("解析知识库导入告警失败：{error}"))?,
                     error_message: row.error_message,
+                    observability: serde_json::from_str::<KnowledgeOperationObservability>(
+                        &row.observability_json,
+                    )
+                    .map_err(|error| format!("解析知识库操作可观测状态失败：{error}"))?,
                 })
             })
             .transpose()
+    }
+
+    /// Reserves one service-owned derivation operation and returns its durable queued snapshot.
+    /// 预留一个由服务层执行的派生操作，并返回持久化排队快照。
+    ///
+    /// Parameters: `library_id` selects the library, `operation_kind` must be a derivation kind,
+    /// and `total_items` is the known document or chunk total used by the progress surface.
+    /// Returns: the exact queued operation identity consumed by the detached service worker.
+    /// 参数：`library_id` 选择知识库，`operation_kind` 必须是派生类型，`total_items` 是进度界面使用的
+    /// 已知文档或切片总数。返回值：由分离服务执行器消费的精确排队操作身份。
+    pub async fn start_external_operation(
+        &self,
+        library_id: &str,
+        operation_kind: KnowledgeOperationKind,
+        total_items: u64,
+    ) -> Result<KnowledgeImportJobSummary, String> {
+        if !matches!(
+            operation_kind,
+            KnowledgeOperationKind::DisplayBuild | KnowledgeOperationKind::VectorBuild
+        ) {
+            return Err(String::from(
+                "外部资料库操作必须使用 display_build 或 vector_build 类型。",
+            ));
+        }
+        self.require_active_library(library_id).await?;
+        let operation = self
+            .prepare_operation(library_id, operation_kind, None)
+            .await?;
+        let phase = match operation_kind {
+            KnowledgeOperationKind::DisplayBuild => "curating",
+            KnowledgeOperationKind::VectorBuild => "embedding",
+            _ => unreachable!("validated external knowledge operation kind"),
+        };
+        if let Err(error) = self
+            .update_operation_phase(&operation.job_id, "running", phase)
+            .await
+        {
+            let _ = self
+                .finish_failed_operation_job(&operation.job_id, &error)
+                .await;
+            self.release_active_operation(library_id, &operation.job_id)
+                .await;
+            return Err(error);
+        }
+        if let Err(error) = self
+            .update_import_index_progress(&operation.job_id, 0, total_items, None)
+            .await
+        {
+            let _ = self
+                .finish_failed_operation_job(&operation.job_id, &error)
+                .await;
+            self.release_active_operation(library_id, &operation.job_id)
+                .await;
+            return Err(error);
+        }
+        Ok(KnowledgeImportJobSummary {
+            id: operation.job_id,
+            library_id: operation.library_id,
+            operation_kind,
+            state: String::from("running"),
+            phase: phase.to_string(),
+            scanned_files: 0,
+            total_files: 0,
+            processed_files: 0,
+            total_index_items: total_items,
+            processed_index_items: 0,
+            current_file: None,
+            processed_bytes: 0,
+            warnings: Vec::new(),
+            error_message: None,
+            observability: Default::default(),
+        })
+    }
+
+    /// Reports one durable progress boundary for a service-owned derivation operation.
+    /// 为由服务层执行的派生操作报告一个持久化进度边界。
+    ///
+    /// Parameters: `job_id` identifies the exact operation; `phase`, counters, and `current_file`
+    /// are persisted atomically enough for refresh polling and cancellation checkpoints.
+    /// Returns: success after the progress row is updated, or an explicit stale-operation error.
+    /// 参数：`job_id` 标识精确操作；`phase`、计数器和 `current_file` 会持久化，供刷新轮询与取消检查点使用。
+    /// 返回值：进度行更新成功，或明确的过期操作错误。
+    pub async fn update_external_operation_progress(
+        &self,
+        job_id: &str,
+        phase: &str,
+        processed_items: u64,
+        total_items: u64,
+        current_file: Option<&str>,
+    ) -> Result<(), String> {
+        if phase.trim().is_empty() {
+            return Err(String::from("资料库派生操作阶段不能为空。"));
+        }
+        let active = self.active_operation_for_job(job_id).await?;
+        if !active {
+            return Err(format!("资料库派生操作已不再活动：job_id={job_id}"));
+        }
+        self.update_operation_phase(job_id, "running", phase)
+            .await?;
+        self.update_import_index_progress(job_id, processed_items, total_items, current_file)
+            .await
+    }
+
+    /// Persists one bounded live request and usage snapshot for refresh-safe progress rendering.
+    /// 持久化一份有界实时请求与用量快照，供刷新后安全恢复进度展示。
+    ///
+    /// Parameters: `job_id` selects the active operation and `observability` is the sanitized snapshot.
+    /// Returns: success after the snapshot is committed, or an explicit stale-operation error.
+    /// 参数：`job_id` 选择活动操作，`observability` 是已脱敏快照。返回值：快照提交成功，或明确的过期操作错误。
+    pub async fn update_operation_observability(
+        &self,
+        job_id: &str,
+        observability: &KnowledgeOperationObservability,
+    ) -> Result<(), String> {
+        if !self.active_operation_for_job(job_id).await? {
+            return Err(format!("资料库派生操作已不再活动：job_id={job_id}"));
+        }
+        let observability_json = serde_json::to_string(observability)
+            .map_err(|error| format!("序列化知识库操作可观测状态失败：{error}"))?;
+        self.controller
+            .client
+            .execute_sqlite_script_typed(
+                APP_SPACE_ID,
+                self.controller.sqlite_binding_id.as_str(),
+                "UPDATE knowledge_import_jobs SET observability_json = ? WHERE id = ? AND state = 'running';",
+                vec![text(observability_json), text(job_id)],
+            )
+            .await
+            .map_err(|error| format!("更新知识库操作可观测状态失败：{error}"))?;
+        Ok(())
+    }
+
+    /// Returns whether one service-owned operation still holds the exact runtime reservation.
+    /// 返回一个由服务层执行的操作是否仍持有精确运行时预留。
+    ///
+    /// Parameters: `job_id` is the operation identity to check.
+    /// Returns: `true` while the operation may continue, otherwise `false`.
+    /// 参数：`job_id` 是待检查的操作身份。返回值：操作可继续时为 `true`，否则为 `false`。
+    pub async fn operation_is_active(&self, job_id: &str) -> Result<bool, String> {
+        self.active_operation_for_job(job_id).await
+    }
+
+    /// Checks whether one library owns any active import or derived-index operation.
+    /// 检查一个资料库是否拥有任一活动导入或派生索引操作。
+    pub async fn operation_is_active_for_library(&self, library_id: &str) -> Result<bool, String> {
+        validate_library_id(library_id)?;
+        let operations = self.active_operations.lock().await;
+        Ok(operations.contains_key(library_id))
+    }
+
+    /// Returns whether one exact service-owned operation has received cancellation.
+    /// 返回一个精确的服务层操作是否已经收到取消请求。
+    ///
+    /// Parameters: `job_id` is the durable operation identity.
+    /// Returns: `true` only when the active operation's cooperative signal is set.
+    /// 参数：`job_id` 是持久化操作身份。返回值：仅当活动操作的协作信号已设置时为 `true`。
+    pub async fn operation_is_cancelled(&self, job_id: &str) -> Result<bool, String> {
+        Uuid::parse_str(job_id).map_err(|error| format!("知识库操作任务标识符无效：{error}"))?;
+        let operations = self.active_operations.lock().await;
+        Ok(operations
+            .values()
+            .find(|active| active.job_id == job_id)
+            .is_some_and(|active| active.signal.load(Ordering::Acquire)))
+    }
+
+    /// Marks one service-owned operation completed and releases its exact runtime reservation.
+    /// 将一个由服务层执行的操作标记为完成，并释放精确运行时预留。
+    ///
+    /// Parameters: `job_id` identifies the operation and `processed_items` is its verified total.
+    /// Returns: success after the terminal row and in-memory reservation converge.
+    /// 参数：`job_id` 标识操作，`processed_items` 是经过验证的完成总数。返回值：终态行与内存预留收敛后成功。
+    pub async fn finish_external_operation(
+        &self,
+        job_id: &str,
+        processed_items: u64,
+    ) -> Result<(), String> {
+        self.finish_index_operation_job(job_id, processed_items)
+            .await?;
+        self.release_operation_by_job(job_id).await;
+        Ok(())
+    }
+
+    /// Marks one service-owned operation failed and releases its exact runtime reservation.
+    /// 将一个由服务层执行的操作标记为失败，并释放精确运行时预留。
+    ///
+    /// Parameters: `job_id` identifies the operation and `error` is the bounded terminal detail.
+    /// Returns: success after the failed row and in-memory reservation converge.
+    /// 参数：`job_id` 标识操作，`error` 是有界终态错误详情。返回值：失败行与内存预留收敛后成功。
+    pub async fn fail_external_operation(&self, job_id: &str, error: &str) -> Result<(), String> {
+        self.finish_failed_operation_job(job_id, error).await?;
+        self.release_operation_by_job(job_id).await;
+        Ok(())
+    }
+
+    /// Marks one service-owned operation cancelled and releases its exact runtime reservation.
+    /// 将一个由服务层执行的操作标记为取消，并释放精确运行时预留。
+    ///
+    /// Parameters: `job_id` identifies the operation.
+    /// Returns: success after the cancelled row and in-memory reservation converge.
+    /// 参数：`job_id` 标识操作。返回值：取消行与内存预留收敛后成功。
+    pub async fn finish_cancelled_external_operation(&self, job_id: &str) -> Result<(), String> {
+        self.finish_cancelled_operation_job(job_id).await?;
+        self.release_operation_by_job(job_id).await;
+        Ok(())
     }
 
     /// Creates one isolated knowledge library and optional initial project bindings.
@@ -1000,13 +1435,14 @@ impl KnowledgeBaseRuntime {
                 self.controller.sqlite_binding_id.as_str(),
                 r#"INSERT INTO knowledge_libraries(
                     id, name, name_key, description, lifecycle_state, document_count,
-                    chunk_count, index_status, created_at_ms, updated_at_ms
-                ) VALUES (?, ?, ?, ?, 'active', 0, 0, 'empty', ?, ?);"#,
+                    chunk_count, index_status, settings_json, created_at_ms, updated_at_ms
+                ) VALUES (?, ?, ?, ?, 'active', 0, 0, 'empty', ?, ?, ?);"#,
                 vec![vec![
                     text(&library_id),
                     text(&normalized_name),
                     text(&name_key),
                     text(description.trim()),
+                    text("{}"),
                     int(now),
                     int(now),
                 ]],
@@ -1043,6 +1479,238 @@ impl KnowledgeBaseRuntime {
         }
 
         self.get_library(&library_id).await
+    }
+
+    /// Creates one library with an explicitly validated per-library retrieval configuration.
+    /// 使用经过显式校验的按资料库检索配置创建一个资料库。
+    pub async fn create_library_with_settings(
+        &self,
+        name: &str,
+        description: &str,
+        project_ids: &[String],
+        settings: &KnowledgeLibrarySettings,
+    ) -> Result<KnowledgeLibrarySummary, String> {
+        settings.validate()?;
+        let normalized_name = validate_library_name(name)?;
+        let library_id = Uuid::new_v4().to_string();
+        let now = unix_epoch_millis()?;
+        let settings_json = serde_json::to_string(settings)
+            .map_err(|error| format!("序列化知识库配置失败：{error}"))?;
+        self.controller
+            .client
+            .execute_sqlite_batch_typed(
+                APP_SPACE_ID,
+                self.controller.sqlite_binding_id.as_str(),
+                r#"INSERT INTO knowledge_libraries(
+                    id, name, name_key, description, lifecycle_state, document_count,
+                    chunk_count, index_status, settings_json, created_at_ms, updated_at_ms
+                ) VALUES (?, ?, ?, ?, 'active', 0, 0, 'empty', ?, ?, ?);"#,
+                vec![vec![
+                    text(&library_id),
+                    text(&normalized_name),
+                    text(library_name_key(&normalized_name)),
+                    text(description.trim()),
+                    text(&settings_json),
+                    int(now),
+                    int(now),
+                ]],
+            )
+            .await
+            .map_err(|error| format!("创建知识库注册记录失败：{error}"))?;
+        let initialize_result = async {
+            self.initialize_library_storage(&library_id, &normalized_name)
+                .await?;
+            for project_id in project_ids {
+                self.set_project_binding(&library_id, project_id, true, true)
+                    .await?;
+            }
+            Ok::<(), String>(())
+        }
+        .await;
+        if let Err(error) = initialize_result {
+            let _ = self.release_library_binding(&library_id).await;
+            let _ = self
+                .controller
+                .client
+                .execute_sqlite_script_typed(
+                    APP_SPACE_ID,
+                    self.controller.sqlite_binding_id.as_str(),
+                    "DELETE FROM knowledge_libraries WHERE id = ?;",
+                    vec![text(&library_id)],
+                )
+                .await;
+            let root = self.library_root(&library_id)?;
+            let _ = self.remove_host_owned_child_directory_if_exists(&root, &library_id);
+            return Err(error);
+        }
+        if settings.curation.enabled {
+            let mut persisted = settings.clone();
+            persisted.display_index.status = KnowledgeDisplayIndexStatus::Pending;
+            if persisted.embedding.enabled {
+                persisted.vector_index.status = KnowledgeVectorIndexStatus::Pending;
+            }
+            let settings_json = serde_json::to_string(&persisted)
+                .map_err(|error| format!("序列化显示库初始状态失败：{error}"))?;
+            self.controller
+                .client
+                .execute_sqlite_script_typed(
+                    APP_SPACE_ID,
+                    self.controller.sqlite_binding_id.as_str(),
+                    "UPDATE knowledge_libraries SET settings_json = ? WHERE id = ? AND lifecycle_state = 'active';",
+                    vec![text(&settings_json), text(&library_id)],
+                )
+                .await
+                .map_err(|error| format!("保存显示库初始状态失败：{error}"))?;
+        }
+        self.get_library(&library_id).await
+    }
+
+    /// Updates and returns one library's durable retrieval and model configuration.
+    /// 更新并返回一个资料库持久化的检索与模型配置。
+    pub async fn set_library_settings(
+        &self,
+        library_id: &str,
+        settings: &KnowledgeLibrarySettings,
+    ) -> Result<KnowledgeLibrarySummary, String> {
+        validate_library_id(library_id)?;
+        // The settings row participates in the same mutation domain as imports and index swaps.
+        // 配置记录与导入、索引切换属于同一变更域，必须使用同一把锁。
+        let _guard = self.library_mutation_guard(library_id).await?;
+        let current = self.get_library(library_id).await?;
+        let mut next = settings.clone();
+        // Preserve immutable model identity while allowing profile canonicalization to update its owner.
+        // 保留不可变模型身份，同时允许 profile 规范化更新快照所属者。
+        let retain_snapshot_owner = |current_snapshot: &Option<KnowledgeModelSnapshot>,
+                                     requested_snapshot: &Option<KnowledgeModelSnapshot>|
+         -> Option<KnowledgeModelSnapshot> {
+            match (current_snapshot, requested_snapshot) {
+                (Some(current_snapshot), Some(requested_snapshot)) => {
+                    let mut retained = current_snapshot.clone();
+                    retained.route.consumer_profile_id =
+                        requested_snapshot.route.consumer_profile_id.clone();
+                    Some(retained)
+                }
+                (Some(current_snapshot), None) => Some(current_snapshot.clone()),
+                (None, Some(requested_snapshot)) => Some(requested_snapshot.clone()),
+                (None, None) => None,
+            }
+        };
+        if next.curation.last_successful_sync_snapshot.is_none() {
+            next.curation.last_successful_sync_snapshot = current
+                .settings
+                .curation
+                .last_successful_sync_snapshot
+                .clone();
+        }
+        if next.embedding.last_successful_sync_snapshot.is_none() {
+            next.embedding.last_successful_sync_snapshot = current
+                .settings
+                .embedding
+                .last_successful_sync_snapshot
+                .clone();
+        }
+        // The creation snapshot is immutable after the first successful configuration.
+        // 创建快照在首次成功配置后不可变，后续设置请求不能覆盖历史模型。
+        next.curation.created_model_snapshot = retain_snapshot_owner(
+            &current.settings.curation.created_model_snapshot,
+            &next.curation.created_model_snapshot,
+        );
+        next.embedding.created_model_snapshot = retain_snapshot_owner(
+            &current.settings.embedding.created_model_snapshot,
+            &next.embedding.created_model_snapshot,
+        );
+        let embedding_model_changed = current.settings.embedding.route != next.embedding.route
+            || current.settings.embedding.desired_model_fingerprint
+                != next.embedding.desired_model_fingerprint;
+        let embedding_dimension_changed =
+            current.settings.embedding.configured_dimension != next.embedding.configured_dimension;
+        let curation_configuration_changed = current.settings.curation.enabled
+            != next.curation.enabled
+            || current.settings.curation.route != next.curation.route
+            || current.settings.curation.desired_model_fingerprint
+                != next.curation.desired_model_fingerprint
+            || current.settings.curation.prompt_version != next.curation.prompt_version;
+        if !curation_configuration_changed {
+            next.display_index = current.settings.display_index.clone();
+        } else {
+            next.display_index = current.settings.display_index.clone();
+            next.display_index.status = if matches!(
+                next.display_index.status,
+                KnowledgeDisplayIndexStatus::NotCreated
+            ) && next.curation.enabled
+            {
+                KnowledgeDisplayIndexStatus::Pending
+            } else {
+                KnowledgeDisplayIndexStatus::Stale
+            };
+            next.display_index.last_error = Some(String::from(
+                "显示库整理模型或固定提示词发生变化，必须重新生成显示库",
+            ));
+        }
+
+        if !embedding_model_changed && !embedding_dimension_changed && next.embedding.enabled {
+            next.vector_index = current.settings.vector_index.clone();
+            next.vector_index.compatibility_override =
+                settings.vector_index.compatibility_override.clone();
+            if next.vector_index.compatibility_override.is_none() {
+                next.vector_index.last_error = None;
+            }
+        }
+        if next.embedding.enabled && (embedding_model_changed || embedding_dimension_changed) {
+            next.vector_index = current.settings.vector_index.clone();
+            let override_note = settings
+                .vector_index
+                .compatibility_override
+                .as_deref()
+                .map(str::trim)
+                .filter(|note| !note.is_empty());
+            let same_dimension_override = !embedding_dimension_changed
+                && current.settings.vector_index.status == KnowledgeVectorIndexStatus::Ready
+                && current.settings.vector_index.indexed_dimension
+                    == next.embedding.configured_dimension
+                && override_note.is_some();
+            if embedding_dimension_changed {
+                next.vector_index.status = KnowledgeVectorIndexStatus::Disabled;
+                next.vector_index.compatibility_override = None;
+                next.vector_index.last_error = Some(String::from(
+                    "向量配置维度发生变化，必须重新探测并重建索引后才能恢复向量检索",
+                ));
+            } else if same_dimension_override {
+                next.vector_index.status = KnowledgeVectorIndexStatus::Ready;
+                next.vector_index.compatibility_override = override_note.map(ToOwned::to_owned);
+                next.vector_index.last_error = Some(format!(
+                    "已人工确认同维度模型兼容，查询继续复用旧向量索引：{}",
+                    next.vector_index
+                        .compatibility_override
+                        .as_deref()
+                        .unwrap_or_default()
+                ));
+            } else {
+                next.vector_index.status = KnowledgeVectorIndexStatus::Stale;
+                next.vector_index.compatibility_override = None;
+                next.vector_index.last_error = Some(String::from(
+                    "向量模型路由发生变化，旧索引仍保留，必须重新构建或确认兼容性",
+                ));
+            }
+        }
+        if !next.embedding.enabled {
+            next.vector_index = super::models::KnowledgeVectorIndexState::default();
+        }
+        next.validate()?;
+        let settings_json = serde_json::to_string(&next)
+            .map_err(|error| format!("序列化知识库配置失败：{error}"))?;
+        let updated_at_ms = unix_epoch_millis()?;
+        self.controller
+            .client
+            .execute_sqlite_script_typed(
+                APP_SPACE_ID,
+                self.controller.sqlite_binding_id.as_str(),
+                "UPDATE knowledge_libraries SET settings_json = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
+                vec![text(&settings_json), int(updated_at_ms), text(library_id)],
+            )
+            .await
+            .map_err(|error| format!("保存知识库配置失败：{error}"))?;
+        self.get_library(library_id).await
     }
 
     /// Renames one active library without moving its physical directory or rebuilding FTS.
@@ -1116,7 +1784,41 @@ impl KnowledgeBaseRuntime {
                 library.index_status
             ));
         }
+        if self.operation_is_active_for_library(library_id).await? {
+            return Err(String::from(
+                "知识库仍有导入或派生索引操作运行中，拒绝导出。",
+            ));
+        }
+        if matches!(
+            library.settings.display_index.status,
+            KnowledgeDisplayIndexStatus::Building
+        ) || matches!(
+            library.settings.vector_index.status,
+            KnowledgeVectorIndexStatus::Building
+        ) {
+            return Err(String::from("知识库派生索引仍在构建中，拒绝导出。"));
+        }
         let destination_directory = canonical_existing_directory(destination_directory)?;
+        let display_path = self.library_root(library_id)?.join("display.sqlite3");
+        if library.settings.display_index.status == KnowledgeDisplayIndexStatus::Ready
+            && !display_path
+                .try_exists()
+                .map_err(|error| format!("检查知识库显示库是否存在失败：{error}"))?
+        {
+            return Err(String::from(
+                "知识库显示库状态为 ready，但显示库文件不存在。",
+            ));
+        }
+        let vector_root = self.library_root(library_id)?.join("lancedb");
+        if library.settings.vector_index.status == KnowledgeVectorIndexStatus::Ready
+            && !vector_root
+                .try_exists()
+                .map_err(|error| format!("检查知识库 LanceDB 是否存在失败：{error}"))?
+        {
+            return Err(String::from(
+                "知识库向量索引状态为 ready，但 LanceDB 目录不存在。",
+            ));
+        }
         let (space_id, binding_id) = self.ensure_library_binding(library_id).await?;
         self.verify_sqlite_quick_check(&space_id, &binding_id)
             .await?;
@@ -1143,6 +1845,23 @@ impl KnowledgeBaseRuntime {
             )
             .await
             .map_err(|error| format!("导出前收口知识库 SQLite 日志失败：{error}"))?;
+        if display_path
+            .try_exists()
+            .map_err(|error| format!("检查知识库显示库是否存在失败：{error}"))?
+        {
+            let (display_space_id, display_binding_id) =
+                self.ensure_display_binding(library_id).await?;
+            self.controller
+                .client
+                .execute_sqlite_script_typed(
+                    &display_space_id,
+                    &display_binding_id,
+                    "PRAGMA wal_checkpoint(TRUNCATE);",
+                    Vec::new(),
+                )
+                .await
+                .map_err(|error| format!("导出前收口知识库显示库日志失败：{error}"))?;
+        }
         self.release_library_binding(library_id).await?;
         let export_result = export_knowledge_package_files(
             &library,
@@ -1258,6 +1977,7 @@ impl KnowledgeBaseRuntime {
             id: library_id,
             name: normalized_name,
             description: prepared.package.description.clone(),
+            settings: prepared.package.settings.clone().unwrap_or_default(),
             lifecycle_state: String::from("active"),
             document_count: prepared.package.document_count,
             chunk_count: prepared.package.chunk_count,
@@ -1526,7 +2246,7 @@ impl KnowledgeBaseRuntime {
         let (sql, params) = if let Some(project_id) = project_id {
             (
                 r#"SELECT l.id, l.name, l.description, l.lifecycle_state, l.document_count,
-                           l.chunk_count, l.index_status, l.last_completed_import_at_ms,
+                           l.chunk_count, l.index_status, l.settings_json, l.last_completed_import_at_ms,
                            l.created_at_ms, l.updated_at_ms
                     FROM knowledge_libraries l
                     INNER JOIN knowledge_library_project_bindings b ON b.library_id = l.id
@@ -1537,7 +2257,7 @@ impl KnowledgeBaseRuntime {
         } else {
             (
                 r#"SELECT id, name, description, lifecycle_state, document_count, chunk_count,
-                           index_status, last_completed_import_at_ms, created_at_ms, updated_at_ms
+                           index_status, settings_json, last_completed_import_at_ms, created_at_ms, updated_at_ms
                     FROM knowledge_libraries ORDER BY name_key ASC;"#,
                 Vec::new(),
             )
@@ -1553,7 +2273,7 @@ impl KnowledgeBaseRuntime {
         let rows: Vec<LibraryRow> = self
             .query_app_rows(
                 r#"SELECT id, name, description, lifecycle_state, document_count, chunk_count,
-                           index_status, last_completed_import_at_ms, created_at_ms, updated_at_ms
+                           index_status, settings_json, last_completed_import_at_ms, created_at_ms, updated_at_ms
                     FROM knowledge_libraries WHERE id = ?;"#,
                 vec![text(library_id)],
             )
@@ -2038,6 +2758,912 @@ impl KnowledgeBaseRuntime {
         chunk_from_joined_row(&row)
     }
 
+    /// Ensures the AI-curated display database, schema, and generation FTS index are available.
+    /// 确保 AI 整理显示库、结构与代次 FTS 索引可用。
+    pub async fn ensure_display_storage(&self, library_id: &str) -> Result<(), String> {
+        self.require_active_library(library_id).await?;
+        let (space_id, binding_id) = self.activate_display_binding(library_id, true).await?;
+        self.controller
+            .client
+            .execute_sqlite_script_typed(
+                &space_id,
+                &binding_id,
+                &display_schema_script(library_id),
+                Vec::new(),
+            )
+            .await
+            .map_err(|error| format!("初始化知识库显示库 SQLite 结构失败：{error}"))?;
+        Ok(())
+    }
+
+    /// Starts one isolated display generation and returns its FTS index identity.
+    /// 启动一个隔离显示库代次并返回其 FTS 索引身份。
+    pub async fn prepare_display_generation(
+        &self,
+        library_id: &str,
+        generation: &str,
+    ) -> Result<String, String> {
+        validate_generation_id(generation)?;
+        self.ensure_display_storage(library_id).await?;
+        let (space_id, binding_id) = self.ensure_display_binding(library_id).await?;
+        let fts_index = display_fts_index_name(generation)?;
+        self.controller
+            .client
+            .ensure_sqlite_fts_index(
+                &space_id,
+                &binding_id,
+                &fts_index,
+                ControllerSqliteTokenizerMode::Jieba,
+            )
+            .await
+            .map_err(|error| format!("初始化显示库 Jieba FTS 索引失败：{error}"))?;
+        self.controller
+            .client
+            .execute_sqlite_script_typed(
+                &space_id,
+                &binding_id,
+                "DELETE FROM display_chunks WHERE generation = ?;",
+                vec![text(generation)],
+            )
+            .await
+            .map_err(|error| format!("清理显示库代次切片失败：{error}"))?;
+        self.controller
+            .client
+            .execute_sqlite_script_typed(
+                &space_id,
+                &binding_id,
+                "DELETE FROM display_documents WHERE generation = ?;",
+                vec![text(generation)],
+            )
+            .await
+            .map_err(|error| format!("清理显示库代次文档失败：{error}"))?;
+        Ok(fts_index)
+    }
+
+    /// Writes one validated display document and its searchable chunks into a pending generation.
+    /// 将一份已校验显示文档及其可检索切片写入待发布代次。
+    pub async fn write_display_document(
+        &self,
+        library_id: &str,
+        fts_index: &str,
+        document: &super::models::KnowledgeDisplayDocument,
+        chunks: &[super::models::KnowledgeDisplayChunk],
+    ) -> Result<(), String> {
+        validate_generation_id(document.generation.as_str())?;
+        if document.generation.trim().is_empty() || chunks.is_empty() {
+            return Err(String::from("显示库文档代次与切片不能为空"));
+        }
+        if chunks
+            .iter()
+            .any(|chunk| chunk.generation != document.generation)
+        {
+            return Err(String::from("显示库文档与切片代次不一致"));
+        }
+        let (space_id, binding_id) = self.ensure_display_binding(library_id).await?;
+        let keywords_json = serde_json::to_string(&document.keywords)
+            .map_err(|error| format!("序列化显示库关键词失败：{error}"))?;
+        let symbols_json = serde_json::to_string(&document.symbols)
+            .map_err(|error| format!("序列化显示库符号失败：{error}"))?;
+        self.controller
+            .client
+            .execute_sqlite_script_typed(
+                &space_id,
+                &binding_id,
+                r#"INSERT INTO display_documents(
+                    id, source_document_id, source_sha256, relative_path, folder_path, title,
+                    summary, keywords_json, symbols_json, embedding_text, markdown, generation,
+                    generated_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"#,
+                vec![
+                    text(&document.id),
+                    text(&document.source_document_id),
+                    text(&document.source_sha256),
+                    text(&document.relative_path),
+                    text(&document.folder_path),
+                    text(&document.title),
+                    text(&document.summary),
+                    text(&keywords_json),
+                    text(&symbols_json),
+                    text(&document.embedding_text),
+                    text(&document.markdown),
+                    text(&document.generation),
+                    int(document.generated_at_ms),
+                ],
+            )
+            .await
+            .map_err(|error| format!("写入显示库文档失败：{error}"))?;
+        for chunk in chunks {
+            self.controller
+                .client
+                .execute_sqlite_script_typed(
+                    &space_id,
+                    &binding_id,
+                    r#"INSERT INTO display_chunks(
+                        id, display_document_id, ordinal, heading_path, start_line, end_line,
+                        content, embedding_text, generation
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);"#,
+                    vec![
+                        text(&chunk.id),
+                        text(&chunk.display_document_id),
+                        int(i64::try_from(chunk.ordinal)
+                            .map_err(|_| String::from("显示库切片序号超出 SQLite 整数范围"))?),
+                        text(&chunk.heading_path),
+                        int(i64::try_from(chunk.start_line)
+                            .map_err(|_| String::from("显示库切片起始行超出 SQLite 整数范围"))?),
+                        int(i64::try_from(chunk.end_line)
+                            .map_err(|_| String::from("显示库切片结束行超出 SQLite 整数范围"))?),
+                        text(&chunk.content),
+                        text(&chunk.embedding_text),
+                        text(&chunk.generation),
+                    ],
+                )
+                .await
+                .map_err(|error| format!("写入显示库切片失败：{error}"))?;
+            self.controller
+                .client
+                .upsert_sqlite_fts_document(
+                    &space_id,
+                    &binding_id,
+                    fts_index,
+                    ControllerSqliteTokenizerMode::Jieba,
+                    &chunk.id,
+                    &document.relative_path,
+                    &document.title,
+                    &format!(
+                        "{}\n{}\n{}\n{}",
+                        document.title,
+                        document.summary,
+                        document.keywords.join(" "),
+                        chunk.content
+                    ),
+                )
+                .await
+                .map_err(|error| format!("写入显示库 Jieba FTS 切片失败：{error}"))?;
+        }
+        Ok(())
+    }
+
+    /// Atomically publishes a fully validated display generation and its source revision.
+    /// 原子发布一份完整校验的显示库代次及其来源修订。
+    pub async fn activate_display_generation(
+        &self,
+        library_id: &str,
+        generation: &str,
+        fts_index: &str,
+        source_content_revision: i64,
+    ) -> Result<u64, String> {
+        validate_generation_id(generation)?;
+        let (space_id, binding_id) = self.ensure_display_binding(library_id).await?;
+        let rows: Vec<DisplayCountRow> = self
+            .query_library_rows(
+                &space_id,
+                &binding_id,
+                "SELECT COUNT(*) AS count FROM display_documents WHERE generation = ?;",
+                vec![text(generation)],
+            )
+            .await?;
+        let document_count = rows
+            .first()
+            .map(|row| nonnegative_u64(row.count, "display_document_count"))
+            .transpose()?
+            .unwrap_or(0);
+        if document_count == 0 {
+            return Err(String::from("显示库代次没有可发布文档"));
+        }
+        let source_integrity = self.inspect_index_integrity(library_id).await?;
+        if source_integrity.content_revision != source_content_revision as u64 {
+            return Err(String::from(
+                "原始库在显示库生成期间发生变化，已拒绝发布过期显示代次",
+            ));
+        }
+        self.controller
+            .client
+            .execute_sqlite_script_typed(
+                &space_id,
+                &binding_id,
+                "INSERT INTO display_metadata(key, value) VALUES ('active_generation', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value;",
+                vec![text(generation)],
+            )
+            .await
+            .map_err(|error| format!("发布显示库活动代次失败：{error}"))?;
+        self.controller
+            .client
+            .execute_sqlite_script_typed(
+                &space_id,
+                &binding_id,
+                "INSERT INTO display_metadata(key, value) VALUES ('active_fts_index', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value;",
+                vec![text(fts_index)],
+            )
+            .await
+            .map_err(|error| format!("发布显示库活动 FTS 索引失败：{error}"))?;
+        self.controller
+            .client
+            .execute_sqlite_script_typed(
+                &space_id,
+                &binding_id,
+                "INSERT INTO display_metadata(key, value) VALUES ('source_content_revision', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value;",
+                vec![int(source_content_revision)],
+            )
+            .await
+            .map_err(|error| format!("发布显示库来源修订失败：{error}"))?;
+        Ok(document_count)
+    }
+
+    /// Persists a successful display generation without re-evaluating its unchanged model policy.
+    /// 持久化成功显示库代次，但不重新计算未变化的模型策略。
+    pub async fn mark_display_generation_ready(
+        &self,
+        library_id: &str,
+        generation: &str,
+        source_content_revision: u64,
+        curation_snapshot: KnowledgeModelSnapshot,
+        document_count: u64,
+    ) -> Result<KnowledgeLibrarySummary, String> {
+        validate_generation_id(generation)?;
+        let _guard = self.library_mutation_guard(library_id).await?;
+        let current = self.require_active_library(library_id).await?;
+        if !current.settings.curation.enabled {
+            return Err(String::from("当前资料库未启用显示库整理"));
+        }
+        let mut settings = current.settings.clone();
+        settings.display_index.status = KnowledgeDisplayIndexStatus::Ready;
+        settings.display_index.active_generation = Some(generation.to_string());
+        settings.display_index.source_content_revision = Some(source_content_revision);
+        settings.display_index.indexed_prompt_version =
+            Some(settings.curation.prompt_version.clone());
+        settings.display_index.indexed_model_fingerprint =
+            settings.curation.desired_model_fingerprint.clone();
+        settings.display_index.generated_document_count = document_count;
+        settings.display_index.last_error = None;
+        if settings.embedding.enabled {
+            settings.vector_index.status = KnowledgeVectorIndexStatus::Stale;
+            settings.vector_index.active_generation = None;
+            settings.vector_index.last_error =
+                Some(String::from("显示库活动代次发生变化，必须重新构建向量索引"));
+        }
+        settings.curation.last_successful_sync_snapshot = Some(curation_snapshot);
+        settings.validate()?;
+        let settings_json = serde_json::to_string(&settings)
+            .map_err(|error| format!("序列化显示库成功状态失败：{error}"))?;
+        self.controller
+            .client
+            .execute_sqlite_script_typed(
+                APP_SPACE_ID,
+                self.controller.sqlite_binding_id.as_str(),
+                "UPDATE knowledge_libraries SET settings_json = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
+                vec![
+                    text(&settings_json),
+                    int(unix_epoch_millis()?),
+                    text(library_id),
+                ],
+            )
+            .await
+            .map_err(|error| format!("保存显示库成功状态失败：{error}"))?;
+        self.get_library(library_id).await
+    }
+
+    /// Persists a display build lifecycle status without changing model configuration.
+    /// 持久化显示库构建生命周期状态，但不改变模型配置。
+    pub async fn set_display_index_status(
+        &self,
+        library_id: &str,
+        status: KnowledgeDisplayIndexStatus,
+        last_error: Option<String>,
+    ) -> Result<KnowledgeLibrarySummary, String> {
+        let _guard = self.library_mutation_guard(library_id).await?;
+        let current = self.require_active_library(library_id).await?;
+        let mut settings = current.settings.clone();
+        settings.display_index.status = status;
+        settings.display_index.last_error = last_error;
+        settings.validate()?;
+        let settings_json = serde_json::to_string(&settings)
+            .map_err(|error| format!("序列化显示库状态失败：{error}"))?;
+        self.controller
+            .client
+            .execute_sqlite_script_typed(
+                APP_SPACE_ID,
+                self.controller.sqlite_binding_id.as_str(),
+                "UPDATE knowledge_libraries SET settings_json = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
+                vec![
+                    text(&settings_json),
+                    int(unix_epoch_millis()?),
+                    text(library_id),
+                ],
+            )
+            .await
+            .map_err(|error| format!("保存显示库生命周期状态失败：{error}"))?;
+        self.get_library(library_id).await
+    }
+
+    /// Searches the active display generation with the controller-managed Jieba BM25 index.
+    /// 使用控制器管理的 Jieba BM25 索引检索当前活动显示库代次。
+    pub async fn search_display(
+        &self,
+        library_id: &str,
+        query: &str,
+        limit: u32,
+    ) -> Result<(Vec<KnowledgeSearchHit>, String), String> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Err(String::from("显示库搜索词不能为空。"));
+        }
+        let library = self.require_active_library(library_id).await?;
+        let (space_id, binding_id) = self.ensure_display_binding(library_id).await?;
+        let metadata_rows: Vec<DisplayMetadataRow> = self
+            .query_library_rows(
+                &space_id,
+                &binding_id,
+                "SELECT MAX(CASE WHEN key = 'active_generation' THEN value END) AS active_generation, MAX(CASE WHEN key = 'active_fts_index' THEN value END) AS active_fts_index FROM display_metadata;",
+                Vec::new(),
+            )
+            .await?;
+        let metadata = metadata_rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| String::from("显示库元数据缺失。"))?;
+        let generation = metadata
+            .active_generation
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| String::from("显示库尚未发布活动代次。"))?;
+        let fts_index = metadata
+            .active_fts_index
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| String::from("显示库活动 FTS 索引缺失。"))?;
+        validate_generation_id(&generation)?;
+        validate_display_fts_index(&fts_index)?;
+        let tokenized_query = self
+            .controller
+            .client
+            .tokenize_sqlite_text(
+                &space_id,
+                &binding_id,
+                ControllerSqliteTokenizerMode::Jieba,
+                query,
+                true,
+            )
+            .await
+            .map_err(|error| format!("构建显示库 Jieba FTS 查询失败：{error}"))?;
+        let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
+        let sql = format!(
+            r#"SELECT f.id, d.source_document_id, d.title, d.relative_path,
+                      c.heading_path, c.start_line, c.end_line, c.content,
+                      bm25({fts_index}, 2.0, 1.0) AS raw_score
+               FROM {fts_index} AS f
+               JOIN display_chunks AS c ON c.id = f.id AND c.generation = ?
+               JOIN display_documents AS d ON d.id = c.display_document_id
+                    AND d.generation = c.generation
+               WHERE {fts_index} MATCH ?
+               ORDER BY raw_score ASC, d.relative_path ASC, c.id ASC
+               LIMIT ?;"#,
+        );
+        let ranked_rows: Vec<DisplaySearchRow> = self
+            .query_library_rows(
+                &space_id,
+                &binding_id,
+                &sql,
+                vec![
+                    text(&generation),
+                    text(&tokenized_query.fts_query),
+                    int(i64::from(limit)),
+                ],
+            )
+            .await
+            .map_err(|error| format!("执行显示库 Jieba BM25 检索失败：{error}"))?;
+        let hits = ranked_rows
+            .into_iter()
+            .map(|row| {
+                Ok(KnowledgeSearchHit {
+                    library_id: library.id.clone(),
+                    library_name: library.name.clone(),
+                    document_id: row.source_document_id,
+                    chunk_id: row.id,
+                    title: row.title,
+                    relative_path: row.relative_path,
+                    heading_path: row.heading_path,
+                    start_line: nonnegative_u64(row.start_line, "display_start_line")?,
+                    end_line: nonnegative_u64(row.end_line, "display_end_line")?,
+                    content: row.content,
+                    match_kind: String::from("display_bm25"),
+                    bm25_score: -row.raw_score,
+                    rrf_score: None,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok((hits, tokenized_query.fts_query))
+    }
+
+    /// Fuses active display BM25 ranks with precomputed vector ranks using reciprocal rank fusion.
+    /// 使用倒数排名融合将活动显示库 BM25 排名与预计算向量排名合并。
+    pub async fn search_display_hybrid_with_vector(
+        &self,
+        library_id: &str,
+        query: &str,
+        query_vector: Vec<f32>,
+        limit: u32,
+    ) -> Result<(Vec<KnowledgeSearchHit>, String), String> {
+        let library = self.require_active_library(library_id).await?;
+        if library.settings.vector_index.status != KnowledgeVectorIndexStatus::Ready {
+            return Err(String::from("资料库向量索引尚未就绪"));
+        }
+        let generation = library
+            .settings
+            .vector_index
+            .active_generation
+            .clone()
+            .ok_or_else(|| String::from("资料库向量活动代次缺失"))?;
+        let display_generation = library
+            .settings
+            .display_index
+            .active_generation
+            .clone()
+            .ok_or_else(|| String::from("显示库活动代次缺失"))?;
+        if generation != display_generation {
+            return Err(String::from("资料库向量索引与显示库代次不一致"));
+        }
+        let table_name = vector_table_name(&generation)?;
+        let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
+        let vector_rows = self
+            .search_vector_rows(
+                library_id,
+                &table_name,
+                &generation,
+                query_vector,
+                limit.saturating_mul(2),
+            )
+            .await?;
+        let (mut hits, expression) = self
+            .search_display(library_id, query, limit.saturating_mul(2))
+            .await?;
+        let bm25_ranks = hits
+            .iter()
+            .enumerate()
+            .map(|(rank, hit)| (hit.chunk_id.clone(), rank))
+            .collect::<BTreeMap<_, _>>();
+        let mut vector_scores = BTreeMap::<String, f64>::new();
+        for (rank, row) in vector_rows.iter().enumerate() {
+            let id = row
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| String::from("LanceDB 向量结果缺少 id 字段"))?;
+            vector_scores.insert(id.to_string(), 1.0 / (RRF_K + rank as f64 + 1.0));
+        }
+        let vector_only_ids = vector_scores
+            .keys()
+            .filter(|id| !hits.iter().any(|hit| &hit.chunk_id == *id))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !vector_only_ids.is_empty() {
+            let (space_id, binding_id) = self.ensure_display_binding(library_id).await?;
+            let placeholders = (0..vector_only_ids.len())
+                .map(|_| "?")
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "SELECT c.id, d.source_document_id, d.title, d.relative_path, c.heading_path, c.start_line, c.end_line, c.content, 0.0 AS raw_score FROM display_chunks AS c JOIN display_documents AS d ON d.id = c.display_document_id AND d.generation = c.generation WHERE c.generation = ? AND c.id IN ({placeholders});"
+            );
+            let mut params = vec![text(&display_generation)];
+            params.extend(vector_only_ids.iter().cloned().map(text));
+            let rows: Vec<DisplaySearchRow> = self
+                .query_library_rows(&space_id, &binding_id, &sql, params)
+                .await?;
+            for row in rows {
+                hits.push(KnowledgeSearchHit {
+                    library_id: library.id.clone(),
+                    library_name: library.name.clone(),
+                    document_id: row.source_document_id,
+                    chunk_id: row.id,
+                    title: row.title,
+                    relative_path: row.relative_path,
+                    heading_path: row.heading_path,
+                    start_line: nonnegative_u64(row.start_line, "display_start_line")?,
+                    end_line: nonnegative_u64(row.end_line, "display_end_line")?,
+                    content: row.content,
+                    match_kind: String::from("display_vector"),
+                    bm25_score: 0.0,
+                    rrf_score: None,
+                });
+            }
+        }
+        for hit in hits.iter_mut() {
+            let bm25_rank_score = bm25_ranks
+                .get(&hit.chunk_id)
+                .map(|rank| 1.0 / (RRF_K + *rank as f64 + 1.0))
+                .unwrap_or(0.0);
+            let vector_rank_score = vector_scores.get(&hit.chunk_id).copied().unwrap_or(0.0);
+            hit.rrf_score = Some(bm25_rank_score + vector_rank_score);
+        }
+        hits.sort_by(|left, right| {
+            right
+                .rrf_score
+                .partial_cmp(&left.rrf_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.library_id.cmp(&right.library_id))
+                .then_with(|| left.chunk_id.cmp(&right.chunk_id))
+        });
+        hits.truncate(limit as usize);
+        Ok((hits, format!("{expression};vector")))
+    }
+
+    /// Reads one active display document and all of its generation-scoped chunks.
+    /// 读取当前活动显示代次中的一份显示文档及其全部切片。
+    pub async fn read_display_document(
+        &self,
+        library_id: &str,
+        document_id: &str,
+    ) -> Result<KnowledgeDisplayDocument, String> {
+        let (space_id, binding_id) = self.ensure_display_binding(library_id).await?;
+        let metadata_rows: Vec<DisplayMetadataRow> = self
+            .query_library_rows(
+                &space_id,
+                &binding_id,
+                "SELECT MAX(CASE WHEN key = 'active_generation' THEN value END) AS active_generation, MAX(CASE WHEN key = 'active_fts_index' THEN value END) AS active_fts_index FROM display_metadata;",
+                Vec::new(),
+            )
+            .await?;
+        let generation = metadata_rows
+            .into_iter()
+            .next()
+            .and_then(|row| row.active_generation)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| String::from("显示库尚未发布活动代次。"))?;
+        let rows: Vec<DisplayDocumentRow> = self
+            .query_library_rows(
+                &space_id,
+                &binding_id,
+                "SELECT id, source_document_id, source_sha256, relative_path, folder_path, title, summary, keywords_json, symbols_json, embedding_text, markdown, generation, generated_at_ms FROM display_documents WHERE id = ? AND generation = ? LIMIT 1;",
+                vec![text(document_id), text(&generation)],
+            )
+            .await?;
+        let row = rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| format!("显示库文档不存在：{document_id}"))?;
+        row.into_display_document()
+    }
+
+    /// Lists active display chunks in deterministic pages for vector generation.
+    /// 按确定性分页读取活动显示库切片，供向量生成使用。
+    pub async fn list_display_chunks(
+        &self,
+        library_id: &str,
+        limit: u32,
+        offset: u64,
+    ) -> Result<Vec<KnowledgeDisplayChunk>, String> {
+        let (space_id, binding_id) = self.ensure_display_binding(library_id).await?;
+        let metadata_rows: Vec<DisplayMetadataRow> = self
+            .query_library_rows(
+                &space_id,
+                &binding_id,
+                "SELECT MAX(CASE WHEN key = 'active_generation' THEN value END) AS active_generation, MAX(CASE WHEN key = 'active_fts_index' THEN value END) AS active_fts_index FROM display_metadata;",
+                Vec::new(),
+            )
+            .await?;
+        let generation = metadata_rows
+            .into_iter()
+            .next()
+            .and_then(|row| row.active_generation)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| String::from("显示库尚未发布活动代次。"))?;
+        validate_generation_id(&generation)?;
+        let limit = limit.clamp(1, 500);
+        let offset =
+            i64::try_from(offset).map_err(|_| String::from("显示库切片偏移量超出支持范围"))?;
+        let rows: Vec<DisplayChunkRow> = self
+            .query_library_rows(
+                &space_id,
+                &binding_id,
+                "SELECT id, display_document_id, ordinal, heading_path, start_line, end_line, content, embedding_text, generation FROM display_chunks WHERE generation = ? ORDER BY display_document_id ASC, ordinal ASC, id ASC LIMIT ? OFFSET ?;",
+                vec![text(&generation), int(i64::from(limit)), int(offset)],
+            )
+            .await?;
+        rows.into_iter()
+            .map(DisplayChunkRow::into_display_chunk)
+            .collect()
+    }
+
+    /// Counts active display chunks before vector generation starts.
+    /// 在向量生成开始前统计活动显示库切片总数。
+    pub async fn count_display_chunks(&self, library_id: &str) -> Result<u64, String> {
+        let (space_id, binding_id) = self.ensure_display_binding(library_id).await?;
+        let metadata_rows: Vec<DisplayMetadataRow> = self
+            .query_library_rows(
+                &space_id,
+                &binding_id,
+                "SELECT MAX(CASE WHEN key = 'active_generation' THEN value END) AS active_generation, MAX(CASE WHEN key = 'active_fts_index' THEN value END) AS active_fts_index FROM display_metadata;",
+                Vec::new(),
+            )
+            .await?;
+        let generation = metadata_rows
+            .into_iter()
+            .next()
+            .and_then(|row| row.active_generation)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| String::from("显示库尚未发布活动代次。"))?;
+        validate_generation_id(&generation)?;
+        let rows: Vec<DisplayCountRow> = self
+            .query_library_rows(
+                &space_id,
+                &binding_id,
+                "SELECT COUNT(*) AS count FROM display_chunks WHERE generation = ?;",
+                vec![text(&generation)],
+            )
+            .await?;
+        rows.into_iter()
+            .next()
+            .map(|row| nonnegative_u64(row.count, "display_chunk_count"))
+            .transpose()?
+            .ok_or_else(|| String::from("显示库切片计数查询未返回结果。"))
+    }
+
+    /// Ensures the isolated LanceDB backend used by one library's vector generations.
+    /// 确保一个资料库向量代次使用的隔离 LanceDB 后端。
+    pub async fn ensure_vector_storage(&self, library_id: &str) -> Result<(), String> {
+        self.require_active_library(library_id).await?;
+        self.activate_vector_binding(library_id, true).await?;
+        Ok(())
+    }
+
+    /// Creates one dimension-specific LanceDB vector generation table.
+    /// 创建一张维度固定且按代次隔离的 LanceDB 向量表。
+    pub async fn prepare_vector_generation(
+        &self,
+        library_id: &str,
+        generation: &str,
+        dimension: u32,
+    ) -> Result<String, String> {
+        validate_generation_id(generation)?;
+        if dimension == 0 {
+            return Err(String::from("向量代次维度必须大于 0"));
+        }
+        let previous_dimension = self
+            .get_library(library_id)
+            .await?
+            .settings
+            .vector_index
+            .indexed_dimension;
+        self.ensure_vector_storage(library_id).await?;
+        let (space_id, binding_id) = self.vector_binding_identity(library_id)?;
+        let table_name = vector_table_name(generation)?;
+        // A changed dimension cannot reuse the old Lance schema; same-dimension retries remain upserts.
+        // 维度变化不能复用旧 Lance 表结构；同维度重试仍使用 upsert 保留可恢复性。
+        let drop_error = if previous_dimension != Some(dimension) {
+            self.controller
+                .client
+                .drop_lancedb_table(&space_id, &binding_id, &table_name)
+                .await
+                .err()
+        } else {
+            None
+        };
+        let create_result = self
+            .controller
+            .client
+            .create_lancedb_table_typed(
+                &space_id,
+                &binding_id,
+                &table_name,
+                vec![
+                    ControllerLanceDbColumnDef {
+                        name: String::from("id"),
+                        column_type: ControllerLanceDbColumnType::String,
+                        vector_dim: 0,
+                        nullable: false,
+                    },
+                    ControllerLanceDbColumnDef {
+                        name: String::from("display_chunk_id"),
+                        column_type: ControllerLanceDbColumnType::String,
+                        vector_dim: 0,
+                        nullable: false,
+                    },
+                    ControllerLanceDbColumnDef {
+                        name: String::from("generation"),
+                        column_type: ControllerLanceDbColumnType::String,
+                        vector_dim: 0,
+                        nullable: false,
+                    },
+                    ControllerLanceDbColumnDef {
+                        name: String::from("vector"),
+                        column_type: ControllerLanceDbColumnType::VectorFloat32,
+                        vector_dim: dimension,
+                        nullable: false,
+                    },
+                ],
+                true,
+            )
+            .await;
+        if let Err(error) = create_result {
+            return Err(match drop_error {
+                Some(drop_error) => format!(
+                    "创建知识库 LanceDB 向量代次失败：{error}；清理旧维度表也失败：{drop_error}"
+                ),
+                None => format!("创建知识库 LanceDB 向量代次失败：{error}"),
+            });
+        }
+        Ok(table_name)
+    }
+
+    /// Writes one complete embedding batch into a validated vector generation.
+    /// 将一个完整的 Embedding 批次写入已校验的向量代次。
+    pub async fn write_vector_rows(
+        &self,
+        library_id: &str,
+        table_name: &str,
+        generation: &str,
+        rows: &[serde_json::Value],
+        dimension: u32,
+    ) -> Result<u64, String> {
+        validate_generation_id(generation)?;
+        validate_vector_table_name(table_name)?;
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        let expected_dimension =
+            usize::try_from(dimension).map_err(|_| String::from("向量维度超出当前平台支持范围"))?;
+        for row in rows {
+            let vector = row
+                .get("vector")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| String::from("向量写入行缺少 vector 数组"))?;
+            if vector.len() != expected_dimension {
+                return Err(format!(
+                    "向量写入维度 {} 与配置维度 {} 不一致",
+                    vector.len(),
+                    expected_dimension
+                ));
+            }
+            if row.get("generation").and_then(serde_json::Value::as_str) != Some(generation) {
+                return Err(String::from("向量写入行代次不一致"));
+            }
+        }
+        let (space_id, binding_id) = self.vector_binding_identity(library_id)?;
+        let data = serde_json::to_vec(rows)
+            .map_err(|error| format!("编码 LanceDB 向量行失败：{error}"))?;
+        let result = self
+            .controller
+            .client
+            .upsert_lancedb_typed(
+                &space_id,
+                &binding_id,
+                table_name,
+                ControllerLanceDbInputFormat::JsonRows,
+                data,
+                vec![String::from("id")],
+            )
+            .await
+            .map_err(|error| format!("写入知识库 LanceDB 向量批次失败：{error}"))?;
+        Ok(result.input_rows)
+    }
+
+    /// Searches one active vector generation and returns controller JSON rows.
+    /// 检索一份活动向量代次并返回控制器 JSON 行。
+    pub async fn search_vector_rows(
+        &self,
+        library_id: &str,
+        table_name: &str,
+        generation: &str,
+        vector: Vec<f32>,
+        limit: u32,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        validate_generation_id(generation)?;
+        validate_vector_table_name(table_name)?;
+        if vector.is_empty() {
+            return Err(String::from("向量查询不能为空"));
+        }
+        let (space_id, binding_id) = self.vector_binding_identity(library_id)?;
+        let result = self
+            .controller
+            .client
+            .search_lancedb_typed(
+                &space_id,
+                &binding_id,
+                table_name,
+                vector,
+                limit.clamp(1, MAX_SEARCH_LIMIT),
+                format!("generation = '{generation}'"),
+                "vector",
+                ControllerLanceDbOutputFormat::JsonRows,
+            )
+            .await
+            .map_err(|error| format!("检索知识库 LanceDB 向量失败：{error}"))?;
+        serde_json::from_slice(&result.data)
+            .map_err(|error| format!("解析知识库 LanceDB 检索结果失败：{error}"))
+    }
+
+    /// Persists a successful vector generation and its exact model-space snapshot.
+    /// 持久化成功的向量代次及其精确模型空间快照。
+    pub async fn mark_vector_generation_ready(
+        &self,
+        library_id: &str,
+        generation: &str,
+        model_snapshot: KnowledgeModelSnapshot,
+        dimension: u32,
+    ) -> Result<KnowledgeLibrarySummary, String> {
+        validate_generation_id(generation)?;
+        if dimension == 0 {
+            return Err(String::from("向量索引维度必须大于 0"));
+        }
+        let _guard = self.library_mutation_guard(library_id).await?;
+        let current = self.require_active_library(library_id).await?;
+        if !current.settings.embedding.enabled {
+            return Err(String::from("当前资料库未启用向量模型"));
+        }
+        if current.settings.display_index.status != KnowledgeDisplayIndexStatus::Ready
+            || current.settings.display_index.active_generation.as_deref() != Some(generation)
+        {
+            return Err(String::from(
+                "显示库活动代次已变化，拒绝发布不匹配的向量索引",
+            ));
+        }
+        let mut settings = current.settings.clone();
+        let model_fingerprint = settings
+            .embedding
+            .desired_model_fingerprint
+            .clone()
+            .ok_or_else(|| String::from("向量模型指纹尚未配置"))?;
+        settings.vector_index.status = KnowledgeVectorIndexStatus::Ready;
+        settings.vector_index.active_generation = Some(generation.to_string());
+        settings.vector_index.indexed_model_fingerprint = Some(model_fingerprint);
+        settings.vector_index.indexed_dimension = Some(dimension);
+        settings.vector_index.compatibility_override = None;
+        settings.vector_index.last_error = None;
+        settings.embedding.observed_dimension = Some(dimension);
+        settings.embedding.indexed_dimension = Some(dimension);
+        settings.embedding.last_successful_sync_snapshot = Some(model_snapshot);
+        settings.normalize_derived_compatibility();
+        settings.validate()?;
+        let settings_json = serde_json::to_string(&settings)
+            .map_err(|error| format!("序列化向量索引成功状态失败：{error}"))?;
+        self.controller
+            .client
+            .execute_sqlite_script_typed(
+                APP_SPACE_ID,
+                self.controller.sqlite_binding_id.as_str(),
+                "UPDATE knowledge_libraries SET settings_json = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
+                vec![
+                    text(&settings_json),
+                    int(unix_epoch_millis()?),
+                    text(library_id),
+                ],
+            )
+            .await
+            .map_err(|error| format!("保存向量索引成功状态失败：{error}"))?;
+        self.get_library(library_id).await
+    }
+
+    /// Persists one vector-build lifecycle status without mutating model choices.
+    /// 持久化向量构建生命周期状态且不改变模型选择。
+    pub async fn set_vector_index_status(
+        &self,
+        library_id: &str,
+        status: KnowledgeVectorIndexStatus,
+        last_error: Option<String>,
+    ) -> Result<KnowledgeLibrarySummary, String> {
+        let _guard = self.library_mutation_guard(library_id).await?;
+        let current = self.require_active_library(library_id).await?;
+        let mut settings = current.settings.clone();
+        settings.vector_index.status = status;
+        settings.vector_index.last_error = last_error;
+        settings.normalize_derived_compatibility();
+        settings.validate()?;
+        let settings_json = serde_json::to_string(&settings)
+            .map_err(|error| format!("序列化向量索引状态失败：{error}"))?;
+        self.controller
+            .client
+            .execute_sqlite_script_typed(
+                APP_SPACE_ID,
+                self.controller.sqlite_binding_id.as_str(),
+                "UPDATE knowledge_libraries SET settings_json = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
+                vec![
+                    text(&settings_json),
+                    int(unix_epoch_millis()?),
+                    text(library_id),
+                ],
+            )
+            .await
+            .map_err(|error| format!("保存向量索引生命周期状态失败：{error}"))?;
+        self.get_library(library_id).await
+    }
+
     /// Searches one or more authorized physical libraries using Jieba FTS5 and BM25.
     /// 使用 Jieba FTS5 与 BM25 检索一个或多个已授权物理知识库。
     pub async fn search(
@@ -2045,6 +3671,18 @@ impl KnowledgeBaseRuntime {
         library_ids: &[String],
         query: &str,
         limit: u32,
+    ) -> Result<KnowledgeSearchResult, String> {
+        self.search_with_mode(library_ids, query, limit, None).await
+    }
+
+    /// Searches authorized libraries using an explicit corpus policy when provided.
+    /// 在提供显式内容层策略时，按该策略检索已授权资料库。
+    pub async fn search_with_mode(
+        &self,
+        library_ids: &[String],
+        query: &str,
+        limit: u32,
+        retrieval_mode: Option<super::models::KnowledgeRetrievalMode>,
     ) -> Result<KnowledgeSearchResult, String> {
         let query = query.trim();
         if query.is_empty() {
@@ -2059,7 +3697,9 @@ impl KnowledgeBaseRuntime {
         let mut searches = FuturesUnordered::new();
         for library_id in unique_ids {
             searches.push(async move {
-                let result = self.search_one_library(&library_id, query, limit).await;
+                let result = self
+                    .search_one_library(&library_id, query, limit, retrieval_mode)
+                    .await;
                 (library_id, result)
             });
         }
@@ -2104,6 +3744,7 @@ impl KnowledgeBaseRuntime {
             hits,
             fts_queries,
             failures,
+            warnings: Vec::new(),
         })
     }
 
@@ -2174,8 +3815,13 @@ impl KnowledgeBaseRuntime {
         library_id: &str,
         operation_kind: KnowledgeOperationKind,
     ) -> Result<KnowledgeImportJobSummary, String> {
-        if operation_kind == KnowledgeOperationKind::Import {
-            return Err(String::from("索引维护操作不能使用 import 类型。"));
+        if !matches!(
+            operation_kind,
+            KnowledgeOperationKind::Repair | KnowledgeOperationKind::Rebuild
+        ) {
+            return Err(String::from(
+                "索引维护操作只能使用 repair 或 rebuild 类型。",
+            ));
         }
         self.require_active_library(library_id).await?;
         // Operation is visible to refresh recovery before detached execution starts.
@@ -2230,6 +3876,9 @@ impl KnowledgeBaseRuntime {
                 KnowledgeOperationKind::Import => {
                     return Err(String::from("导入操作不能进入索引维护执行器。"));
                 }
+                KnowledgeOperationKind::DisplayBuild | KnowledgeOperationKind::VectorBuild => {
+                    return Err(String::from("派生构建操作不能进入原始 FTS 维护执行器。"));
+                }
             };
             self.update_operation_phase(&operation.job_id, "running", phase)
                 .await?;
@@ -2264,6 +3913,9 @@ impl KnowledgeBaseRuntime {
                 }
                 KnowledgeOperationKind::Import => {
                     Err(String::from("导入操作不能进入索引维护执行器。"))
+                }
+                KnowledgeOperationKind::DisplayBuild | KnowledgeOperationKind::VectorBuild => {
+                    Err(String::from("派生构建操作不能进入原始 FTS 维护执行器。"))
                 }
             }
         }
@@ -2623,6 +4275,7 @@ impl KnowledgeBaseRuntime {
                 now,
             )
             .await?;
+            self.mark_derived_indexes_stale(library_id).await?;
             if require_operation_not_cancelled(cancellation).is_err() {
                 return Err(String::from(KNOWLEDGE_OPERATION_CANCELLED_ERROR));
             }
@@ -3414,8 +5067,49 @@ COMMIT;
         library_id: &str,
         query: &str,
         limit: u32,
+        retrieval_mode: Option<super::models::KnowledgeRetrievalMode>,
     ) -> Result<(Vec<KnowledgeSearchHit>, String), String> {
         let library = self.require_active_library(library_id).await?;
+        let effective_mode = retrieval_mode.unwrap_or(library.settings.retrieval_mode);
+        if !matches!(
+            effective_mode,
+            super::models::KnowledgeRetrievalMode::RawBm25
+        ) {
+            if !matches!(
+                library.settings.display_index.status,
+                super::models::KnowledgeDisplayIndexStatus::Ready
+            ) {
+                if retrieval_mode.is_none()
+                    && matches!(
+                        library.settings.fallback_policy,
+                        super::models::KnowledgeFallbackPolicy::RawOnlyWhenDisplayMissing
+                    )
+                    && matches!(
+                        library.settings.display_index.status,
+                        super::models::KnowledgeDisplayIndexStatus::NotCreated
+                    )
+                {
+                    // Explicit fallback is limited to a display corpus that has never existed.
+                    // 显式回退仅适用于显示库从未创建的状态。
+                } else {
+                    return Err(String::from(
+                        "当前资料库显示库尚未生成或索引尚未就绪；请显式切换到原始库 BM25，或先完成显示库构建。",
+                    ));
+                }
+            } else {
+                let (display_hits, expression) =
+                    self.search_display(library_id, query, limit).await?;
+                if matches!(
+                    effective_mode,
+                    super::models::KnowledgeRetrievalMode::DisplayHybrid
+                ) {
+                    return Err(String::from(
+                        "当前版本尚未启用显示库向量融合执行器；请显式切换到显示库 BM25。",
+                    ));
+                }
+                return Ok((display_hits, expression));
+            }
+        }
         let (space_id, binding_id) = self.ensure_library_binding(library_id).await?;
         self.verify_index_gate(&space_id, &binding_id).await?;
         // tokenized_query is produced by the VLDB SQLite Jieba tokenizer and contains a safe MATCH expression.
@@ -4077,6 +5771,59 @@ COMMIT;
         Ok(())
     }
 
+    /// Marks derived display and vector indexes stale after authoritative content changes.
+    /// 在权威内容发生变化后将派生显示层与向量索引标记为过期。
+    async fn mark_derived_indexes_stale(&self, library_id: &str) -> Result<(), String> {
+        let library = self.get_library(library_id).await?;
+        let mut settings = library.settings;
+        let mut changed = false;
+        if settings.curation.enabled
+            && matches!(
+                settings.display_index.status,
+                KnowledgeDisplayIndexStatus::Ready | KnowledgeDisplayIndexStatus::Failed
+            )
+        {
+            settings.display_index.status = KnowledgeDisplayIndexStatus::Stale;
+            settings.display_index.last_error = Some(String::from(
+                "原始 Markdown 内容发生变化，显示库需要重新生成",
+            ));
+            changed = true;
+        }
+        if settings.embedding.enabled
+            && matches!(
+                settings.vector_index.status,
+                KnowledgeVectorIndexStatus::Ready | KnowledgeVectorIndexStatus::Failed
+            )
+        {
+            settings.vector_index.status = KnowledgeVectorIndexStatus::Stale;
+            settings.vector_index.last_error = Some(String::from(
+                "原始或显示 Markdown 内容发生变化，向量索引需要重新构建",
+            ));
+            changed = true;
+        }
+        if !changed {
+            return Ok(());
+        }
+        settings.validate()?;
+        let settings_json = serde_json::to_string(&settings)
+            .map_err(|error| format!("序列化派生索引过期状态失败：{error}"))?;
+        self.controller
+            .client
+            .execute_sqlite_script_typed(
+                APP_SPACE_ID,
+                self.controller.sqlite_binding_id.as_str(),
+                "UPDATE knowledge_libraries SET settings_json = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
+                vec![
+                    text(&settings_json),
+                    int(unix_epoch_millis()?),
+                    text(library_id),
+                ],
+            )
+            .await
+            .map_err(|error| format!("保存派生索引过期状态失败：{error}"))?;
+        Ok(())
+    }
+
     /// Finds one registry row by its exact normalized user-visible name.
     /// 按精确规范化用户可见名称查找一条注册记录。
     async fn find_library_by_normalized_name(
@@ -4094,7 +5841,7 @@ COMMIT;
         };
         let sql = format!(
             r#"SELECT id, name, description, lifecycle_state, document_count, chunk_count,
-                      index_status, last_completed_import_at_ms, created_at_ms, updated_at_ms
+                      index_status, settings_json, last_completed_import_at_ms, created_at_ms, updated_at_ms
                FROM knowledge_libraries {predicate} LIMIT 1;"#
         );
         let rows: Vec<LibraryRow> = self.query_app_rows(&sql, params).await?;
@@ -4126,6 +5873,7 @@ COMMIT;
                 target_database.display()
             )
         })?;
+        copy_prepared_derived_artifacts(prepared, &root)?;
         self.write_manifest_atomic(&KnowledgeManifest {
             library_id: target_library_id.to_string(),
             name: target_name.to_string(),
@@ -4152,6 +5900,33 @@ COMMIT;
         self.validate_bound_library_metadata(target_library_id, &space_id, &binding_id)
             .await?;
         self.verify_index_integrity(&space_id, &binding_id).await?;
+        if prepared.display_database_path().is_some() {
+            let (display_space_id, display_binding_id) = self
+                .activate_display_binding(target_library_id, false)
+                .await?;
+            self.controller
+                .client
+                .execute_sqlite_script_typed(
+                    &display_space_id,
+                    &display_binding_id,
+                    "UPDATE display_metadata SET value = ? WHERE key = 'library_id' AND value = ?;",
+                    vec![
+                        text(target_library_id),
+                        text(&prepared.source_manifest.library_id),
+                    ],
+                )
+                .await
+                .map_err(|error| format!("重写导入显示库内部标识失败：{error}"))?;
+            self.validate_display_bound_metadata(
+                target_library_id,
+                &display_space_id,
+                &display_binding_id,
+            )
+            .await?;
+        }
+        if prepared.vector_root().is_some() {
+            self.enable_vector_binding(target_library_id, false).await?;
+        }
         let counts = self.authoritative_counts(&space_id, &binding_id).await?;
         if nonnegative_u64(counts.document_count, "document_count")?
             != prepared.package.document_count
@@ -4194,6 +5969,30 @@ COMMIT;
         self.validate_bound_library_metadata(target_library_id, &space_id, &binding_id)
             .await?;
         self.verify_index_integrity(&space_id, &binding_id).await?;
+        if prepared.display_database_path().is_some() {
+            let (display_space_id, display_binding_id) = self
+                .activate_display_binding(target_library_id, false)
+                .await?;
+            self.controller
+                .client
+                .execute_sqlite_script_typed(
+                    &display_space_id,
+                    &display_binding_id,
+                    "UPDATE display_metadata SET value = ? WHERE key = 'library_id' AND value = ?;",
+                    vec![text(target_library_id), text(staging_library_id)],
+                )
+                .await
+                .map_err(|error| format!("提交覆盖显示库内部标识失败：{error}"))?;
+            self.validate_display_bound_metadata(
+                target_library_id,
+                &display_space_id,
+                &display_binding_id,
+            )
+            .await?;
+        }
+        if prepared.vector_root().is_some() {
+            self.enable_vector_binding(target_library_id, false).await?;
+        }
         // counts proves the switched database still matches the inspected package before registry commit.
         // counts 证明切换后的数据库在注册表提交前仍与已检查知识库包匹配。
         let counts = self.authoritative_counts(&space_id, &binding_id).await?;
@@ -4223,6 +6022,11 @@ COMMIT;
         package: &KnowledgePackageManifest,
         now: i64,
     ) -> Result<(), String> {
+        let mut settings = package.settings.clone().unwrap_or_default();
+        settings.normalize_derived_compatibility();
+        settings.validate()?;
+        let settings_json = serde_json::to_string(&settings)
+            .map_err(|error| format!("序列化导入知识库配置失败：{error}"))?;
         self.controller
             .client
             .execute_sqlite_batch_typed(
@@ -4230,8 +6034,8 @@ COMMIT;
                 self.controller.sqlite_binding_id.as_str(),
                 r#"INSERT INTO knowledge_libraries(
                     id, name, name_key, description, lifecycle_state, document_count,
-                    chunk_count, index_status, created_at_ms, updated_at_ms
-                ) VALUES (?, ?, ?, ?, 'active', ?, ?, 'ready', ?, ?);"#,
+                    chunk_count, index_status, settings_json, created_at_ms, updated_at_ms
+                ) VALUES (?, ?, ?, ?, 'active', ?, ?, 'ready', ?, ?, ?);"#,
                 vec![vec![
                     text(library_id),
                     text(name),
@@ -4242,6 +6046,7 @@ COMMIT;
                         "document_count",
                     )?),
                     int(checked_package_count(package.chunk_count, "chunk_count")?),
+                    text(&settings_json),
                     int(now),
                     int(now),
                 ]],
@@ -4260,6 +6065,11 @@ COMMIT;
         package: &KnowledgePackageManifest,
     ) -> Result<(), String> {
         let now = unix_epoch_millis()?;
+        let mut settings = package.settings.clone().unwrap_or_default();
+        settings.normalize_derived_compatibility();
+        settings.validate()?;
+        let settings_json = serde_json::to_string(&settings)
+            .map_err(|error| format!("序列化被覆盖知识库配置失败：{error}"))?;
         self.controller
             .client
             .execute_sqlite_script_typed(
@@ -4267,7 +6077,8 @@ COMMIT;
                 self.controller.sqlite_binding_id.as_str(),
                 r#"UPDATE knowledge_libraries SET name = ?, name_key = ?, description = ?,
                     lifecycle_state = 'active', document_count = ?, chunk_count = ?,
-                    index_status = 'ready', last_completed_import_at_ms = NULL, updated_at_ms = ?
+                    settings_json = ?, index_status = 'ready',
+                    last_completed_import_at_ms = NULL, updated_at_ms = ?
                     WHERE id = ?;"#,
                 vec![
                     text(name),
@@ -4278,6 +6089,7 @@ COMMIT;
                         "document_count",
                     )?),
                     int(checked_package_count(package.chunk_count, "chunk_count")?),
+                    text(&settings_json),
                     int(now),
                     text(library_id),
                 ],
@@ -4331,6 +6143,7 @@ COMMIT;
                 self.controller.sqlite_binding_id.as_str(),
                 r#"UPDATE knowledge_libraries SET name = ?, name_key = ?, description = ?,
                     lifecycle_state = ?, document_count = ?, chunk_count = ?, index_status = ?,
+                    settings_json = ?,
                     last_completed_import_at_ms = ?, created_at_ms = ?, updated_at_ms = ?
                     WHERE id = ?;"#,
                 vec![
@@ -4344,6 +6157,10 @@ COMMIT;
                     )?),
                     int(checked_package_count(previous.chunk_count, "chunk_count")?),
                     text(&previous.index_status),
+                    text(
+                        &serde_json::to_string(&previous.settings)
+                            .map_err(|error| format!("序列化恢复知识库配置失败：{error}"))?,
+                    ),
                     previous
                         .last_completed_import_at_ms
                         .map_or(ControllerSqliteValue::Null, int),
@@ -4386,6 +6203,15 @@ COMMIT;
         Ok(identities)
     }
 
+    /// Ensures the derived display SQLite binding is active without re-enabling it repeatedly.
+    /// 确保派生显示库 SQLite 绑定已激活，避免重复启用同一文件锁。
+    async fn ensure_display_binding(&self, library_id: &str) -> Result<(String, String), String> {
+        let identities = self.activate_display_binding(library_id, false).await?;
+        self.validate_display_bound_metadata(library_id, &identities.0, &identities.1)
+            .await?;
+        Ok(identities)
+    }
+
     /// Activates one controller binding exactly once for the lifetime of this runtime handle.
     /// 在当前运行时句柄生命周期内仅激活一次控制器绑定。
     async fn activate_library_binding(
@@ -4411,17 +6237,274 @@ COMMIT;
     /// Disables and forgets one active controller binding after failed creation cleanup.
     /// 在创建失败清理后停用并遗忘一个活动控制器绑定。
     async fn release_library_binding(&self, library_id: &str) -> Result<(), String> {
+        {
+            let _activation_guard = self.binding_activation_lock.lock().await;
+            if self.active_bindings.lock().await.contains(library_id) {
+                let (space_id, binding_id) = self.library_binding_identity(library_id)?;
+                self.controller
+                    .client
+                    .disable_sqlite(&space_id, &binding_id)
+                    .await
+                    .map_err(|error| format!("停用知识库 SQLite 绑定失败：{error}"))?;
+                self.active_bindings.lock().await.remove(library_id);
+            }
+        }
+        self.release_display_binding(library_id).await?;
+        self.release_vector_binding(library_id).await
+    }
+
+    /// Disables one active derived display binding after a library is removed or replaced.
+    /// 删除或替换资料库后停用一个活动的派生显示库绑定。
+    async fn release_display_binding(&self, library_id: &str) -> Result<(), String> {
         let _activation_guard = self.binding_activation_lock.lock().await;
-        if !self.active_bindings.lock().await.contains(library_id) {
+        if !self
+            .active_display_bindings
+            .lock()
+            .await
+            .contains(library_id)
+        {
             return Ok(());
         }
-        let (space_id, binding_id) = self.library_binding_identity(library_id)?;
+        let (space_id, binding_id) = self.display_binding_identity(library_id)?;
         self.controller
             .client
             .disable_sqlite(&space_id, &binding_id)
             .await
-            .map_err(|error| format!("停用知识库 SQLite 绑定失败：{error}"))?;
-        self.active_bindings.lock().await.remove(library_id);
+            .map_err(|error| format!("停用知识库显示库 SQLite 绑定失败：{error}"))?;
+        self.active_display_bindings.lock().await.remove(library_id);
+        Ok(())
+    }
+
+    /// Disables one active derived LanceDB binding after library removal or replacement.
+    /// 删除或替换资料库后停用一个活动的派生 LanceDB 绑定。
+    async fn release_vector_binding(&self, library_id: &str) -> Result<(), String> {
+        let _activation_guard = self.binding_activation_lock.lock().await;
+        if !self
+            .active_vector_bindings
+            .lock()
+            .await
+            .contains(library_id)
+        {
+            return Ok(());
+        }
+        let (space_id, binding_id) = self.vector_binding_identity(library_id)?;
+        self.controller
+            .client
+            .disable_lancedb(&space_id, &binding_id)
+            .await
+            .map_err(|error| format!("停用知识库 LanceDB 绑定失败：{error}"))?;
+        self.active_vector_bindings.lock().await.remove(library_id);
+        Ok(())
+    }
+
+    /// Activates one LanceDB binding exactly once for the current runtime handle.
+    /// 在当前运行时句柄内只激活一次 LanceDB 绑定。
+    async fn activate_vector_binding(
+        &self,
+        library_id: &str,
+        allow_database_creation: bool,
+    ) -> Result<(String, String), String> {
+        validate_library_id(library_id)?;
+        let _activation_guard = self.binding_activation_lock.lock().await;
+        if self
+            .active_vector_bindings
+            .lock()
+            .await
+            .contains(library_id)
+        {
+            return self.vector_binding_identity(library_id);
+        }
+        let identities = self
+            .enable_vector_binding(library_id, allow_database_creation)
+            .await?;
+        self.active_vector_bindings
+            .lock()
+            .await
+            .insert(library_id.to_string());
+        Ok(identities)
+    }
+
+    /// Validates and enables the host-derived LanceDB directory for one library.
+    /// 校验并启用一个资料库宿主派生的 LanceDB 目录。
+    async fn enable_vector_binding(
+        &self,
+        library_id: &str,
+        allow_database_creation: bool,
+    ) -> Result<(String, String), String> {
+        let (space_id, binding_id) = self.vector_binding_identity(library_id)?;
+        let root = self.library_root(library_id)?;
+        let lancedb_root = root.join("lancedb");
+        match fs::symlink_metadata(&lancedb_root) {
+            Ok(metadata) => {
+                if !metadata.is_dir() || metadata_is_link_or_reparse(&metadata) {
+                    return Err(format!(
+                        "知识库 LanceDB 目录不是可信普通目录：{}",
+                        lancedb_root.display()
+                    ));
+                }
+            }
+            Err(error)
+                if allow_database_creation && error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                fs::create_dir_all(&lancedb_root).map_err(|create_error| {
+                    format!(
+                        "创建知识库 LanceDB 目录失败（{}）：{create_error}",
+                        lancedb_root.display()
+                    )
+                })?;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "读取知识库 LanceDB 目录失败（{}）：{error}",
+                    lancedb_root.display()
+                ));
+            }
+        }
+        self.controller
+            .client
+            .attach_space(SpaceRegistration {
+                space_id: space_id.clone(),
+                space_label: format!("Knowledge {library_id}"),
+                space_kind: SpaceKind::User,
+                space_root: runtime_assets::native_host_path_text_from_path(&root),
+            })
+            .await
+            .map_err(|error| format!("附着知识库 LanceDB 控制器空间失败：{error}"))?;
+        self.controller
+            .client
+            .enable_lancedb(ControllerLanceDbEnableRequest {
+                space_id: space_id.clone(),
+                binding_id: binding_id.clone(),
+                default_db_path: runtime_assets::native_host_path_text_from_path(&lancedb_root),
+                db_root: Some(runtime_assets::native_host_path_text_from_path(
+                    &lancedb_root,
+                )),
+                read_consistency_interval_ms: Some(250),
+                max_upsert_payload: 16 * 1024 * 1024,
+                max_search_limit: MAX_SEARCH_LIMIT as usize,
+                max_concurrent_requests: 16,
+            })
+            .await
+            .map_err(|error| format!("启用知识库 LanceDB 失败：{error}"))?;
+        Ok((space_id, binding_id))
+    }
+
+    /// Activates one display binding exactly once for the current runtime handle.
+    /// 在当前运行时句柄内只激活一次显示库绑定。
+    async fn activate_display_binding(
+        &self,
+        library_id: &str,
+        allow_database_creation: bool,
+    ) -> Result<(String, String), String> {
+        validate_library_id(library_id)?;
+        let _activation_guard = self.binding_activation_lock.lock().await;
+        if self
+            .active_display_bindings
+            .lock()
+            .await
+            .contains(library_id)
+        {
+            return self.display_binding_identity(library_id);
+        }
+        let identities = self
+            .enable_display_binding(library_id, allow_database_creation)
+            .await?;
+        self.active_display_bindings
+            .lock()
+            .await
+            .insert(library_id.to_string());
+        Ok(identities)
+    }
+
+    /// Validates the display artifact and enables its isolated SQLite backend.
+    /// 校验显示库存储产物并启用隔离 SQLite 后端。
+    async fn enable_display_binding(
+        &self,
+        library_id: &str,
+        allow_database_creation: bool,
+    ) -> Result<(String, String), String> {
+        let (space_id, binding_id) = self.display_binding_identity(library_id)?;
+        let root = self.library_root(library_id)?;
+        let database_path = root.join("display.sqlite3");
+        match fs::symlink_metadata(&database_path) {
+            Ok(metadata) => {
+                if !metadata.is_file() || metadata_is_link_or_reparse(&metadata) {
+                    return Err(format!(
+                        "知识库显示库不是可信普通文件：{}",
+                        database_path.display()
+                    ));
+                }
+            }
+            Err(error)
+                if allow_database_creation && error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "读取知识库显示库失败（{}）：{error}",
+                    database_path.display()
+                ));
+            }
+        }
+        self.controller
+            .client
+            .attach_space(SpaceRegistration {
+                space_id: space_id.clone(),
+                space_label: format!("Knowledge {library_id}"),
+                space_kind: SpaceKind::User,
+                space_root: runtime_assets::native_host_path_text_from_path(&root),
+            })
+            .await
+            .map_err(|error| format!("附着知识库显示库控制器空间失败：{error}"))?;
+        self.controller
+            .client
+            .enable_sqlite(ControllerSqliteEnableRequest {
+                space_id: space_id.clone(),
+                binding_id: binding_id.clone(),
+                db_path: runtime_assets::native_host_path_text_from_path(&database_path),
+                busy_timeout_ms: 10_000,
+                ..ControllerSqliteEnableRequest::default()
+            })
+            .await
+            .map_err(|error| format!("启用知识库显示库 SQLite 失败：{error}"))?;
+        Ok((space_id, binding_id))
+    }
+
+    /// Verifies display metadata belongs to the requested library and schema version.
+    /// 校验显示库元数据属于目标资料库且结构版本一致。
+    async fn validate_display_bound_metadata(
+        &self,
+        library_id: &str,
+        space_id: &str,
+        binding_id: &str,
+    ) -> Result<(), String> {
+        #[derive(Deserialize)]
+        struct DisplayBoundMetadataRow {
+            /// Stored display library identifier.
+            /// 已存储的显示库资料库标识符。
+            library_id: String,
+            /// Stored display schema version.
+            /// 已存储的显示库结构版本。
+            schema_version: String,
+        }
+        let rows: Vec<DisplayBoundMetadataRow> = self
+            .query_library_rows(
+                space_id,
+                binding_id,
+                "SELECT MAX(CASE WHEN key = 'library_id' THEN value END) AS library_id, MAX(CASE WHEN key = 'schema_version' THEN value END) AS schema_version FROM display_metadata;",
+                Vec::new(),
+            )
+            .await?;
+        let row = rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| String::from("知识库显示库元数据缺失。"))?;
+        if row.library_id != library_id
+            || row.schema_version != KNOWLEDGE_SCHEMA_VERSION.to_string()
+        {
+            return Err(format!(
+                "知识库显示库身份或结构版本不匹配：library={}, schema={}",
+                row.library_id, row.schema_version
+            ));
+        }
         Ok(())
     }
 
@@ -4623,6 +6706,32 @@ COMMIT;
             format!("knowledge-{library_id}"),
             format!(
                 "knowledge-{}-{library_id}",
+                self.controller.sqlite_binding_id
+            ),
+        ))
+    }
+
+    /// Returns the stable controller identities for one derived display database.
+    /// 返回一个派生显示库数据库使用的稳定控制器身份。
+    fn display_binding_identity(&self, library_id: &str) -> Result<(String, String), String> {
+        validate_library_id(library_id)?;
+        Ok((
+            format!("knowledge-{library_id}"),
+            format!(
+                "knowledge-display-{}-{library_id}",
+                self.controller.sqlite_binding_id
+            ),
+        ))
+    }
+
+    /// Returns the stable controller identities for one derived vector backend.
+    /// 返回一个派生向量后端使用的稳定控制器身份。
+    fn vector_binding_identity(&self, library_id: &str) -> Result<(String, String), String> {
+        validate_library_id(library_id)?;
+        Ok((
+            format!("knowledge-{library_id}"),
+            format!(
+                "knowledge-vector-{}-{library_id}",
                 self.controller.sqlite_binding_id
             ),
         ))
@@ -5015,6 +7124,27 @@ COMMIT;
         }
     }
 
+    /// Checks whether an exact job identity still owns any library reservation.
+    /// 检查精确任务身份是否仍持有任一知识库预留。
+    async fn active_operation_for_job(&self, job_id: &str) -> Result<bool, String> {
+        Uuid::parse_str(job_id).map_err(|error| format!("知识库操作任务标识符无效：{error}"))?;
+        let operations = self.active_operations.lock().await;
+        Ok(operations.values().any(|active| active.job_id == job_id))
+    }
+
+    /// Releases the reservation owned by one exact job identity.
+    /// 释放一个精确任务身份持有的预留。
+    async fn release_operation_by_job(&self, job_id: &str) {
+        let mut operations = self.active_operations.lock().await;
+        let library_id = operations
+            .iter()
+            .find(|(_, active)| active.job_id == job_id)
+            .map(|(library_id, _)| library_id.clone());
+        if let Some(library_id) = library_id {
+            operations.remove(&library_id);
+        }
+    }
+
     /// Scans Markdown candidates on a blocking worker while persisting throttled discovery progress.
     /// 在阻塞工作器中扫描 Markdown 候选文件，同时持久化节流后的发现进度。
     async fn scan_markdown_files_with_progress(
@@ -5315,6 +7445,7 @@ fn queued_operation_summary(operation: &PreparedKnowledgeOperation) -> Knowledge
         processed_bytes: 0,
         warnings: Vec::new(),
         error_message: None,
+        observability: Default::default(),
     }
 }
 
@@ -5565,6 +7696,61 @@ fn validate_library_id(library_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validates one generation identity used to isolate derived display data.
+/// 校验用于隔离派生显示数据的一份代次身份。
+fn validate_generation_id(generation: &str) -> Result<(), String> {
+    let parsed = Uuid::parse_str(generation)
+        .map_err(|error| format!("显示库代次标识符不是有效 UUID：{error}"))?;
+    if parsed.to_string() != generation {
+        return Err(String::from("显示库代次必须使用规范小写 UUID 格式。"));
+    }
+    Ok(())
+}
+
+/// Returns the generation-scoped display FTS index name after validating its UUID.
+/// 校验代次 UUID 后返回代次作用域的显示库 FTS 索引名称。
+fn display_fts_index_name(generation: &str) -> Result<String, String> {
+    validate_generation_id(generation)?;
+    Ok(format!(
+        "{}_{}",
+        KNOWLEDGE_DISPLAY_FTS_INDEX_PREFIX,
+        generation.replace('-', "")
+    ))
+}
+
+/// Validates an activity pointer loaded from display metadata before SQL interpolation.
+/// 在将活动指针插入 SQL 前校验从显示元数据读取的索引名称。
+fn validate_display_fts_index(index_name: &str) -> Result<(), String> {
+    let prefix = format!("{}{}", KNOWLEDGE_DISPLAY_FTS_INDEX_PREFIX, "_");
+    let suffix = index_name
+        .strip_prefix(&prefix)
+        .ok_or_else(|| String::from("显示库活动 FTS 索引名称前缀无效。"))?;
+    if suffix.len() != 32 || !suffix.chars().all(|value| value.is_ascii_hexdigit()) {
+        return Err(String::from("显示库活动 FTS 索引名称格式无效。"));
+    }
+    Ok(())
+}
+
+/// Returns the generation-scoped LanceDB table name after validating its UUID.
+/// 校验代次 UUID 后返回代次作用域的 LanceDB 表名称。
+fn vector_table_name(generation: &str) -> Result<String, String> {
+    validate_generation_id(generation)?;
+    Ok(format!("knowledge_vectors_{}", generation.replace('-', "")))
+}
+
+/// Validates an activity pointer loaded from vector metadata before table access.
+/// 在访问向量表前校验从元数据读取的活动表名称。
+fn validate_vector_table_name(table_name: &str) -> Result<(), String> {
+    let prefix = "knowledge_vectors_";
+    let suffix = table_name
+        .strip_prefix(prefix)
+        .ok_or_else(|| String::from("知识库向量表名称前缀无效。"))?;
+    if suffix.len() != 32 || !suffix.chars().all(|value| value.is_ascii_hexdigit()) {
+        return Err(String::from("知识库向量表名称格式无效。"));
+    }
+    Ok(())
+}
+
 /// Returns whether one direct child name is reserved for package extraction cleanup.
 /// 返回一个直属子项名称是否保留用于知识库包解压清理。
 ///
@@ -5696,15 +7882,22 @@ fn prepare_knowledge_package(
         .map_err(|error| format!("打开知识库包失败（{}）：{error}", archive_path.display()))?;
     let mut archive =
         ZipArchive::new(input).map_err(|error| format!("解析知识库 ZIP 包失败：{error}"))?;
-    if archive.len() != 3 {
+    if archive.len() < 3 {
         return Err(format!(
-            "知识库包条目数量无效：{}，预期为 3。",
+            "知识库包条目数量无效：{}，至少需要 3 项。",
             archive.len()
         ));
+    }
+    if archive.len() > 10_000 {
+        return Err(String::from("知识库包条目数量超过安全上限。"));
     }
     let mut package_bytes: Option<Vec<u8>> = None;
     let mut manifest_bytes: Option<Vec<u8>> = None;
     let database_path = temporary.path().join("content.sqlite3");
+    let display_database_path = temporary.path().join("display.sqlite3");
+    let vector_root = temporary.path().join("lancedb");
+    let mut extracted_artifacts = BTreeMap::<String, PathBuf>::new();
+    let mut extracted_bytes = 0_u64;
     let mut database_seen = false;
     let mut seen = BTreeSet::new();
     for index in 0..archive.len() {
@@ -5740,31 +7933,55 @@ fn prepare_knowledge_package(
                 )?);
             }
             KNOWLEDGE_PACKAGE_DATABASE_ENTRY => {
-                // expectedBytes is the central-directory size used only as a consistency check after bounded streaming.
-                // expectedBytes 是中央目录声明大小，仅在有界流式解压后用于一致性校验。
                 let expected_bytes = entry.size();
-                if expected_bytes > MAX_KNOWLEDGE_PACKAGE_BYTES {
-                    return Err(String::from("知识库包 SQLite 条目超过大小上限。"));
-                }
-                let mut output = File::create(&database_path)
-                    .map_err(|error| format!("创建知识库包临时 SQLite 失败：{error}"))?;
-                // copied is bounded independently from untrusted ZIP size metadata to prevent expansion bombs.
-                // copied 独立于不可信 ZIP 大小元数据进行限制，以防止解压膨胀攻击。
-                let copied = std::io::copy(
-                    &mut entry.by_ref().take(MAX_KNOWLEDGE_PACKAGE_BYTES + 1),
-                    &mut output,
-                )
-                .map_err(|error| format!("解压知识库 SQLite 失败：{error}"))?;
-                if copied > MAX_KNOWLEDGE_PACKAGE_BYTES {
-                    return Err(String::from("知识库包 SQLite 解压内容超过大小上限。"));
-                }
-                output
-                    .sync_all()
-                    .map_err(|error| format!("同步知识库临时 SQLite 失败：{error}"))?;
-                if copied != expected_bytes {
-                    return Err(String::from("知识库 SQLite 解压字节数不一致。"));
+                extracted_bytes = extracted_bytes.saturating_add(extract_bounded_zip_file(
+                    &mut entry,
+                    &database_path,
+                    MAX_KNOWLEDGE_PACKAGE_BYTES,
+                    expected_bytes,
+                    KNOWLEDGE_PACKAGE_DATABASE_ENTRY,
+                )?);
+                if extracted_bytes > MAX_KNOWLEDGE_PACKAGE_BYTES {
+                    return Err(String::from("知识库包解压总大小超过安全上限。"));
                 }
                 database_seen = true;
+            }
+            KNOWLEDGE_PACKAGE_DISPLAY_DATABASE_ENTRY => {
+                let expected_bytes = entry.size();
+                extracted_bytes = extracted_bytes.saturating_add(extract_bounded_zip_file(
+                    &mut entry,
+                    &display_database_path,
+                    MAX_KNOWLEDGE_PACKAGE_BYTES,
+                    expected_bytes,
+                    KNOWLEDGE_PACKAGE_DISPLAY_DATABASE_ENTRY,
+                )?);
+                if extracted_bytes > MAX_KNOWLEDGE_PACKAGE_BYTES {
+                    return Err(String::from("知识库包解压总大小超过安全上限。"));
+                }
+                extracted_artifacts.insert(
+                    String::from(KNOWLEDGE_PACKAGE_DISPLAY_DATABASE_ENTRY),
+                    display_database_path.clone(),
+                );
+            }
+            _ if name.starts_with(KNOWLEDGE_PACKAGE_VECTOR_PREFIX) => {
+                let relative = safe_vector_archive_relative_path(&name)?;
+                let target = vector_root.join(&relative);
+                if let Some(parent) = target.parent() {
+                    fs::create_dir_all(parent)
+                        .map_err(|error| format!("创建知识库向量临时目录失败：{error}"))?;
+                }
+                let expected_bytes = entry.size();
+                extracted_bytes = extracted_bytes.saturating_add(extract_bounded_zip_file(
+                    &mut entry,
+                    &target,
+                    MAX_KNOWLEDGE_PACKAGE_BYTES,
+                    expected_bytes,
+                    &name,
+                )?);
+                if extracted_bytes > MAX_KNOWLEDGE_PACKAGE_BYTES {
+                    return Err(String::from("知识库包解压总大小超过安全上限。"));
+                }
+                extracted_artifacts.insert(name, target);
             }
             _ => return Err(format!("知识库包包含未知条目：{name}")),
         }
@@ -5780,12 +7997,72 @@ fn prepare_knowledge_package(
     if !database_seen {
         return Err(String::from("知识库包缺少 content.sqlite3。"));
     }
-    validate_knowledge_package_metadata(&package, &source_manifest, &database_path)?;
+    validate_knowledge_package_metadata(
+        &package,
+        &source_manifest,
+        &database_path,
+        &extracted_artifacts,
+    )?;
     Ok(PreparedKnowledgePackage {
         temporary,
         package,
         source_manifest,
+        display_database_path: extracted_artifacts
+            .get(KNOWLEDGE_PACKAGE_DISPLAY_DATABASE_ENTRY)
+            .cloned(),
+        vector_root: extracted_artifacts
+            .values()
+            .any(|path| path.starts_with(&vector_root))
+            .then_some(vector_root),
     })
+}
+
+/// Extracts one ordinary ZIP file with both metadata and expansion bounds.
+/// 在元数据与解压膨胀双重限制下解压一个普通 ZIP 文件。
+fn extract_bounded_zip_file<R: Read>(
+    entry: &mut R,
+    target: &Path,
+    limit: u64,
+    expected_bytes: u64,
+    name: &str,
+) -> Result<u64, String> {
+    if expected_bytes > limit {
+        return Err(format!("知识库包条目超过大小上限：{name}"));
+    }
+    let mut output = File::create(target)
+        .map_err(|error| format!("创建知识库包临时条目失败（{}）：{error}", target.display()))?;
+    let copied = std::io::copy(&mut entry.by_ref().take(limit + 1), &mut output)
+        .map_err(|error| format!("解压知识库包条目失败（{name}）：{error}"))?;
+    if copied > limit {
+        return Err(format!("知识库包条目解压内容超过大小上限：{name}"));
+    }
+    output
+        .sync_all()
+        .map_err(|error| format!("同步知识库临时条目失败（{name}）：{error}"))?;
+    if copied != expected_bytes {
+        return Err(format!("知识库包条目解压字节数不一致：{name}"));
+    }
+    Ok(copied)
+}
+
+/// Validates one LanceDB ZIP path and returns its relative ordinary path.
+/// 校验一个 LanceDB ZIP 路径并返回其相对普通路径。
+fn safe_vector_archive_relative_path(name: &str) -> Result<PathBuf, String> {
+    let relative = name
+        .strip_prefix(KNOWLEDGE_PACKAGE_VECTOR_PREFIX)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("知识库向量条目路径无效：{name}"))?;
+    if relative.contains('\\') || relative.contains(':') {
+        return Err(format!("知识库向量条目包含非法路径字符：{name}"));
+    }
+    let path = PathBuf::from(relative);
+    if path
+        .components()
+        .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(format!("知识库向量条目包含非法路径组件：{name}"));
+    }
+    Ok(path)
 }
 
 /// Reads one bounded JSON entry without accepting decompression expansion beyond its limit.
@@ -5812,9 +8089,10 @@ fn validate_knowledge_package_metadata(
     package: &KnowledgePackageManifest,
     source_manifest: &KnowledgeManifest,
     database_path: &Path,
+    extracted_artifacts: &BTreeMap<String, PathBuf>,
 ) -> Result<(), String> {
     if package.format != KNOWLEDGE_PACKAGE_FORMAT
-        || package.package_version != KNOWLEDGE_PACKAGE_VERSION
+        || !matches!(package.package_version, 1 | KNOWLEDGE_PACKAGE_VERSION)
     {
         return Err(String::from("知识库包格式或包版本不受支持。"));
     }
@@ -5838,6 +8116,19 @@ fn validate_knowledge_package_metadata(
     if package.index_status != "ready" {
         return Err(String::from("知识库包不包含 ready 状态的可直接使用索引。"));
     }
+    let mut settings = package.settings.clone().unwrap_or_default();
+    settings.normalize_derived_compatibility();
+    settings.validate()?;
+    if package.package_version == 1
+        && !matches!(
+            settings.retrieval_mode,
+            super::models::KnowledgeRetrievalMode::RawBm25
+        )
+    {
+        return Err(String::from(
+            "旧版知识库包未包含可验证的显示库实体，只能以原始库 BM25 状态导入。",
+        ));
+    }
     if package.content_sha256.len() != 64
         || !package
             .content_sha256
@@ -5855,6 +8146,78 @@ fn validate_knowledge_package_metadata(
     let digest = sha256_file_hex(database_path)?;
     if digest != package.content_sha256.to_ascii_lowercase() {
         return Err(String::from("知识库包 SQLite SHA-256 校验失败。"));
+    }
+    let declared_artifacts = package
+        .derived_artifacts
+        .iter()
+        .map(|artifact| (artifact.archive_path.as_str(), artifact))
+        .collect::<BTreeMap<_, _>>();
+    if declared_artifacts.len() != package.derived_artifacts.len() {
+        return Err(String::from("知识库包派生文件清单包含重复路径。"));
+    }
+    let extracted_names = extracted_artifacts
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let declared_names = declared_artifacts.keys().copied().collect::<BTreeSet<_>>();
+    if extracted_names != declared_names {
+        return Err(String::from("知识库包派生文件清单与实际归档条目不一致。"));
+    }
+    for artifact in &package.derived_artifacts {
+        let path = extracted_artifacts
+            .get(&artifact.archive_path)
+            .ok_or_else(|| format!("知识库包缺少派生文件：{}", artifact.archive_path))?;
+        if !matches!(
+            artifact.archive_path.as_str(),
+            KNOWLEDGE_PACKAGE_DISPLAY_DATABASE_ENTRY
+        ) && !artifact
+            .archive_path
+            .starts_with(KNOWLEDGE_PACKAGE_VECTOR_PREFIX)
+        {
+            return Err(format!(
+                "知识库包派生文件路径不受支持：{}",
+                artifact.archive_path
+            ));
+        }
+        let metadata = fs::symlink_metadata(path)
+            .map_err(|error| format!("读取知识库派生文件失败：{error}"))?;
+        if !metadata.is_file() || metadata_is_link_or_reparse(&metadata) {
+            return Err(format!(
+                "知识库派生文件不是可信普通文件：{}",
+                path.display()
+            ));
+        }
+        if metadata.len() != artifact.bytes {
+            return Err(format!(
+                "知识库派生文件大小校验失败：{}",
+                artifact.archive_path
+            ));
+        }
+        if artifact.sha256.len() != 64
+            || !artifact.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || sha256_file_hex(path)? != artifact.sha256.to_ascii_lowercase()
+        {
+            return Err(format!(
+                "知识库派生文件 SHA-256 校验失败：{}",
+                artifact.archive_path
+            ));
+        }
+    }
+    if settings.display_index.status == super::models::KnowledgeDisplayIndexStatus::Ready
+        && !extracted_artifacts.contains_key(KNOWLEDGE_PACKAGE_DISPLAY_DATABASE_ENTRY)
+    {
+        return Err(String::from(
+            "知识库包声明显示库 ready，但缺少 display.sqlite3。",
+        ));
+    }
+    if settings.vector_index.status == KnowledgeVectorIndexStatus::Ready
+        && !extracted_artifacts
+            .keys()
+            .any(|path| path.starts_with(KNOWLEDGE_PACKAGE_VECTOR_PREFIX))
+    {
+        return Err(String::from(
+            "知识库包声明向量索引 ready，但缺少 LanceDB 派生文件。",
+        ));
     }
     Ok(())
 }
@@ -5889,6 +8252,9 @@ fn export_knowledge_package_files(
         "content.sqlite3-wal",
         "content.sqlite3-shm",
         "content.sqlite3-journal",
+        "display.sqlite3-wal",
+        "display.sqlite3-shm",
+        "display.sqlite3-journal",
     ] {
         // transientPath must be absent after the owning SQLite binding is stopped.
         // transientPath 在所属 SQLite 绑定停止后必须不存在。
@@ -5913,6 +8279,34 @@ fn export_knowledge_package_files(
     {
         return Err(String::from("待导出知识库清单与注册记录不一致。"));
     }
+    let artifact_files = collect_export_artifact_files(library_root)?;
+    let artifact_bytes = artifact_files.iter().try_fold(0_u64, |total, (_, path)| {
+        let bytes = fs::metadata(path)
+            .map_err(|error| format!("读取知识库派生产物大小失败：{error}"))?
+            .len();
+        total
+            .checked_add(bytes)
+            .ok_or_else(|| String::from("知识库派生产物总大小超出支持范围。"))
+    })?;
+    if database_metadata
+        .len()
+        .checked_add(artifact_bytes)
+        .is_none_or(|total| total > MAX_KNOWLEDGE_PACKAGE_BYTES)
+    {
+        return Err(String::from("知识库可移植包未压缩内容超过大小上限。"));
+    }
+    let derived_artifacts = artifact_files
+        .iter()
+        .map(|(archive_path, path)| {
+            let metadata = fs::metadata(path)
+                .map_err(|error| format!("读取知识库派生产物元数据失败：{error}"))?;
+            Ok(KnowledgePackageArtifact {
+                archive_path: archive_path.clone(),
+                sha256: sha256_file_hex(path)?,
+                bytes: metadata.len(),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     let exported_at_ms = unix_epoch_millis()?;
     let package = KnowledgePackageManifest {
         format: KNOWLEDGE_PACKAGE_FORMAT.to_string(),
@@ -5920,6 +8314,7 @@ fn export_knowledge_package_files(
         source_library_id: library.id.clone(),
         name: library.name.clone(),
         description: library.description.clone(),
+        settings: Some(library.settings.clone()),
         schema_version: KNOWLEDGE_SCHEMA_VERSION,
         document_count: library.document_count,
         chunk_count: library.chunk_count,
@@ -5927,6 +8322,7 @@ fn export_knowledge_package_files(
         exported_at_ms,
         content_sha256: sha256_file_hex(&database_path)?,
         content_bytes: database_metadata.len(),
+        derived_artifacts,
     };
     // exportId prevents same-millisecond or sanitized-name collisions from overwriting another package.
     // exportId 防止同毫秒或名称清理冲突覆盖另一份知识库包。
@@ -5968,6 +8364,15 @@ fn export_knowledge_package_files(
             .map_err(|error| format!("打开待导出 SQLite 失败：{error}"))?;
         std::io::copy(&mut database, &mut writer)
             .map_err(|error| format!("写入知识库 SQLite 条目失败：{error}"))?;
+        for (archive_path, source_path) in &artifact_files {
+            writer
+                .start_file(archive_path, options)
+                .map_err(|error| format!("创建知识库派生条目失败：{archive_path}：{error}"))?;
+            let mut source = File::open(source_path)
+                .map_err(|error| format!("打开知识库派生产物失败：{error}"))?;
+            std::io::copy(&mut source, &mut writer)
+                .map_err(|error| format!("写入知识库派生条目失败：{archive_path}：{error}"))?;
+        }
         writer
             .finish()
             .map_err(|error| format!("完成知识库 ZIP 包失败：{error}"))?;
@@ -5995,6 +8400,189 @@ fn export_knowledge_package_files(
         archive_path: runtime_assets::native_host_path_text_from_path(&archive_path),
         package,
     })
+}
+
+/// Collects optional display and LanceDB files in deterministic archive order.
+/// 按确定性归档顺序收集可选显示库与 LanceDB 文件。
+fn collect_export_artifact_files(library_root: &Path) -> Result<Vec<(String, PathBuf)>, String> {
+    let mut artifacts = Vec::new();
+    let display_path = library_root.join("display.sqlite3");
+    match fs::symlink_metadata(&display_path) {
+        Ok(metadata) if metadata.is_file() && !metadata_is_link_or_reparse(&metadata) => {
+            if metadata.len() > MAX_KNOWLEDGE_PACKAGE_BYTES {
+                return Err(String::from("知识库显示库 SQLite 超过可移植包大小上限。"));
+            }
+            artifacts.push((
+                String::from(KNOWLEDGE_PACKAGE_DISPLAY_DATABASE_ENTRY),
+                display_path,
+            ));
+        }
+        Ok(_) => {
+            return Err(String::from("知识库显示库文件不是可信普通文件。"));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("读取知识库显示库文件失败：{error}")),
+    }
+    let vector_root = library_root.join("lancedb");
+    match fs::symlink_metadata(&vector_root) {
+        Ok(metadata) if metadata.is_dir() && !metadata_is_link_or_reparse(&metadata) => {
+            let mut files = Vec::new();
+            collect_ordinary_files_recursively(&vector_root, &mut files)?;
+            for path in files {
+                let relative = path
+                    .strip_prefix(&vector_root)
+                    .map_err(|error| format!("计算知识库向量归档路径失败：{error}"))?;
+                let archive_path = format!(
+                    "{}{}",
+                    KNOWLEDGE_PACKAGE_VECTOR_PREFIX,
+                    relative_to_zip_path(relative)?
+                );
+                let metadata = fs::metadata(&path)
+                    .map_err(|error| format!("读取知识库向量文件元数据失败：{error}"))?;
+                if metadata.len() > MAX_KNOWLEDGE_PACKAGE_BYTES {
+                    return Err(format!("知识库向量文件超过大小上限：{archive_path}"));
+                }
+                artifacts.push((archive_path, path));
+            }
+        }
+        Ok(_) => return Err(String::from("知识库 LanceDB 根目录不是可信普通目录。")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("读取知识库 LanceDB 根目录失败：{error}")),
+    }
+    artifacts.sort_by(|left, right| left.0.cmp(&right.0));
+    let total_bytes = artifacts.iter().try_fold(0_u64, |total, (_, path)| {
+        let bytes = fs::metadata(path)
+            .map_err(|error| format!("读取知识库派生产物大小失败：{error}"))?
+            .len();
+        total
+            .checked_add(bytes)
+            .ok_or_else(|| String::from("知识库派生产物总大小超出支持范围。"))
+    })?;
+    if total_bytes > MAX_KNOWLEDGE_PACKAGE_BYTES {
+        return Err(String::from("知识库派生产物总大小超过可移植包上限。"));
+    }
+    Ok(artifacts)
+}
+
+/// Copies all extracted derived artifacts into one host-owned library directory.
+/// 将所有已解压派生产物复制到一个宿主持有的资料库目录。
+fn copy_prepared_derived_artifacts(
+    prepared: &PreparedKnowledgePackage,
+    target_root: &Path,
+) -> Result<(), String> {
+    if let Some(source) = prepared.display_database_path() {
+        let metadata = fs::symlink_metadata(&source)
+            .map_err(|error| format!("读取暂存显示库失败：{error}"))?;
+        if !metadata.is_file() || metadata_is_link_or_reparse(&metadata) {
+            return Err(String::from("暂存显示库不是可信普通文件。"));
+        }
+        fs::copy(&source, target_root.join("display.sqlite3"))
+            .map_err(|error| format!("复制知识库显示库失败：{error}"))?;
+    }
+    if let Some(source_root) = prepared.vector_root() {
+        let target_root = target_root.join("lancedb");
+        copy_ordinary_directory_recursively(&source_root, &target_root)?;
+    }
+    Ok(())
+}
+
+/// Copies one ordinary directory tree without following links or reparse points.
+/// 在不跟随链接或重解析点的前提下复制一个普通目录树。
+fn copy_ordinary_directory_recursively(source: &Path, target: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(source)
+        .map_err(|error| format!("读取暂存派生目录失败（{}）：{error}", source.display()))?;
+    if !metadata.is_dir() || metadata_is_link_or_reparse(&metadata) {
+        return Err(format!(
+            "暂存派生目录不是可信普通目录：{}",
+            source.display()
+        ));
+    }
+    fs::create_dir_all(target)
+        .map_err(|error| format!("创建目标派生目录失败（{}）：{error}", target.display()))?;
+    let mut entries = fs::read_dir(source)
+        .map_err(|error| format!("读取暂存派生目录失败：{error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("读取暂存派生条目失败：{error}"))?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        let metadata = fs::symlink_metadata(&source_path)
+            .map_err(|error| format!("读取暂存派生条目失败：{error}"))?;
+        if metadata_is_link_or_reparse(&metadata) {
+            return Err(format!(
+                "暂存派生目录包含链接条目：{}",
+                source_path.display()
+            ));
+        }
+        if metadata.is_dir() {
+            copy_ordinary_directory_recursively(&source_path, &target_path)?;
+        } else if metadata.is_file() {
+            fs::copy(&source_path, &target_path)
+                .map_err(|error| format!("复制知识库派生文件失败：{error}"))?;
+        } else {
+            return Err(format!(
+                "暂存派生目录包含非普通条目：{}",
+                source_path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Walks one host-owned ordinary directory without following links or reparse points.
+/// 在不跟随链接或重解析点的前提下遍历一个宿主持有的普通目录。
+fn collect_ordinary_files_recursively(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    let mut entries = fs::read_dir(root)
+        .map_err(|error| format!("读取知识库派生目录失败（{}）：{error}", root.display()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("读取知识库派生目录条目失败：{error}"))?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| format!("读取知识库派生条目失败（{}）：{error}", path.display()))?;
+        if metadata_is_link_or_reparse(&metadata) {
+            return Err(format!("知识库派生目录包含链接条目：{}", path.display()));
+        }
+        if metadata.is_dir() {
+            collect_ordinary_files_recursively(&path, files)?;
+        } else if metadata.is_file() {
+            files.push(path);
+        } else {
+            return Err(format!("知识库派生目录包含非普通条目：{}", path.display()));
+        }
+    }
+    Ok(())
+}
+
+/// Converts a relative host path into a safe slash-separated ZIP path.
+/// 将相对宿主路径转换为安全的斜杠分隔 ZIP 路径。
+fn relative_to_zip_path(path: &Path) -> Result<String, String> {
+    let mut parts = Vec::new();
+    for component in path.components() {
+        let Component::Normal(value) = component else {
+            return Err(format!(
+                "知识库派生产物相对路径包含非法组件：{}",
+                path.display()
+            ));
+        };
+        let value = value
+            .to_str()
+            .ok_or_else(|| format!("知识库派生产物路径不是有效 UTF-8：{}", path.display()))?;
+        if value.is_empty()
+            || value
+                .chars()
+                .any(|character| matches!(character, '/' | '\\' | ':'))
+        {
+            return Err(format!("知识库派生产物路径包含非法字符：{value}"));
+        }
+        parts.push(value);
+    }
+    if parts.is_empty() {
+        return Err(String::from("知识库派生产物相对路径不能为空。"));
+    }
+    Ok(parts.join("/"))
 }
 
 /// Computes a streaming lowercase SHA-256 digest for one ordinary file.
@@ -6074,10 +8662,19 @@ fn decode_rows<T: DeserializeOwned>(json: &str) -> Result<Vec<T>, String> {
 /// Maps one registry row into the checked public summary.
 /// 将一条注册记录映射为已检查的公共摘要。
 fn library_summary_from_row(row: LibraryRow) -> Result<KnowledgeLibrarySummary, String> {
+    let mut settings = if row.settings_json.trim().is_empty() || row.settings_json.trim() == "{}" {
+        KnowledgeLibrarySettings::default()
+    } else {
+        serde_json::from_str::<KnowledgeLibrarySettings>(&row.settings_json)
+            .map_err(|error| format!("解析知识库 {} 的持久化配置失败：{error}", row.id))?
+    };
+    settings.normalize_derived_compatibility();
+    settings.validate()?;
     Ok(KnowledgeLibrarySummary {
         id: row.id,
         name: row.name,
         description: row.description,
+        settings,
         lifecycle_state: row.lifecycle_state,
         document_count: nonnegative_u64(row.document_count, "document_count")?,
         chunk_count: nonnegative_u64(row.chunk_count, "chunk_count")?,
@@ -6267,6 +8864,7 @@ mod tests {
             source_library_id: source_library_id.clone(),
             name: String::from("测试知识库"),
             description: String::from("fixture"),
+            settings: Some(KnowledgeLibrarySettings::default()),
             schema_version: KNOWLEDGE_SCHEMA_VERSION,
             document_count: 0,
             chunk_count: 0,
@@ -6274,6 +8872,7 @@ mod tests {
             exported_at_ms: 1,
             content_sha256: format!("{:x}", Sha256::digest(database)),
             content_bytes: database.len() as u64,
+            derived_artifacts: Vec::new(),
         };
         let manifest = KnowledgeManifest {
             library_id: source_library_id,
@@ -6367,6 +8966,7 @@ mod tests {
             id: target_id.clone(),
             name: String::from("恢复测试知识库"),
             description: String::from("fixture"),
+            settings: KnowledgeLibrarySettings::default(),
             lifecycle_state: String::from("active"),
             document_count: 2,
             chunk_count: 3,

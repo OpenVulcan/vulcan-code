@@ -165,6 +165,15 @@ export interface VmmMaintenanceSummary {
   message: string;
   canCancel: boolean;
   backupCreated: boolean;
+  // Current machine-reported rebuild sub-stage, when available.
+  // 当前可用时由机器报告的重建子阶段。
+  progressStage?: string | null;
+  // Number of records completed in the current rebuild sub-stage.
+  // 当前重建子阶段已完成的记录数。
+  processedItems?: number | null;
+  // Total records in the current rebuild sub-stage.
+  // 当前重建子阶段的记录总数。
+  totalItems?: number | null;
   startedAtUnixMs?: number | null;
   updatedAtUnixMs?: number | null;
   technicalDetail?: string | null;

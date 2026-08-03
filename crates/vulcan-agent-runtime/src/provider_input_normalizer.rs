@@ -2,7 +2,8 @@
 //! 面向 Vulcan AI 公共契约的宿主附件归一化模块。
 
 use crate::agent_runtime::provider_attachment::{
-    build_attachment_transport_error_text, build_missing_attachment_replay_text,
+    build_attachment_provider_tool_hint, build_attachment_transport_error_text,
+    build_missing_attachment_replay_text,
 };
 use crate::attachment_asset_index::{AttachmentReplayStatus, resolve_attachment_replay_status};
 use vulcan_ai_contract::{ModelCapabilities, ResourceKind};
@@ -53,9 +54,35 @@ pub fn normalize_provider_user_input_for_model(
     text: &str,
     attachments: &[ConversationAttachment],
 ) -> NormalizedProviderUserInput {
+    normalize_provider_user_input_for_model_with_tool_bridges(
+        protocol_profile_id,
+        capabilities,
+        text,
+        attachments,
+        &[],
+    )
+}
+
+/// Normalizes one user payload while allowing an exact registered image-understanding bridge.
+/// 在允许精确注册的图片理解桥接工具时归一化一条用户载荷。
+///
+/// `bridge_tool_ids` contains only the tool identifiers visible in the current frozen execution.
+/// `bridge_tool_ids` 只包含当前冻结执行中对模型可见的工具标识。
+///
+/// # Returns
+/// 返回值
+/// A normalized payload with bridged images removed from native attachments and described in text.
+/// 返回从原生附件中移除桥接图片并在文本中描述的规范载荷。
+pub fn normalize_provider_user_input_for_model_with_tool_bridges(
+    protocol_profile_id: &str,
+    capabilities: Option<&ModelCapabilities>,
+    text: &str,
+    attachments: &[ConversationAttachment],
+    bridge_tool_ids: &[String],
+) -> NormalizedProviderUserInput {
     let mut supported_attachments = Vec::new();
     let mut downgraded_attachments = Vec::new();
-    let mut rejection_lines = Vec::new();
+    let mut diagnostic_lines = Vec::new();
 
     for attachment in attachments.iter().cloned() {
         let replayable = !matches!(
@@ -75,23 +102,31 @@ pub fn normalize_provider_user_input_for_model(
         if replayable && protocol_supported && model_supported {
             supported_attachments.push(attachment);
         } else {
-            let rejection = if !replayable {
+            let diagnostic = if !replayable {
                 build_missing_attachment_replay_text(&attachment)
             } else if !protocol_supported {
                 build_attachment_transport_error_text(&attachment, "the selected protocol profile")
+            } else if !model_supported {
+                if let Some((tool_id, path_argument)) =
+                    image_understanding_bridge_for_attachment(&attachment, bridge_tool_ids)
+                {
+                    build_attachment_provider_tool_hint(&attachment, tool_id, path_argument)
+                } else {
+                    build_attachment_transport_error_text(&attachment, "the selected model")
+                }
             } else {
                 build_attachment_transport_error_text(&attachment, "the selected model")
             };
-            rejection_lines.push(rejection);
+            diagnostic_lines.push(diagnostic);
             downgraded_attachments.push(attachment);
         }
     }
 
-    let text = match (text.trim().is_empty(), rejection_lines.is_empty()) {
+    let text = match (text.trim().is_empty(), diagnostic_lines.is_empty()) {
         (true, true) => String::new(),
         (false, true) => text.to_string(),
-        (true, false) => rejection_lines.join("\n"),
-        (false, false) => format!("{}\n\n{}", text.trim_end(), rejection_lines.join("\n")),
+        (true, false) => diagnostic_lines.join("\n"),
+        (false, false) => format!("{}\n\n{}", text.trim_end(), diagnostic_lines.join("\n")),
     };
 
     NormalizedProviderUserInput {
@@ -99,6 +134,37 @@ pub fn normalize_provider_user_input_for_model(
         attachments: supported_attachments,
         downgraded_attachments,
     }
+}
+
+/// Selects the exact path argument contract for one registered image bridge.
+/// 选择一个已注册图片桥接工具的精确路径参数契约。
+///
+/// # Parameters
+/// 参数
+/// `attachment` is the retained conversation attachment; `bridge_tool_ids` are the exact visible tool identifiers.
+/// `attachment` 是保留的会话附件；`bridge_tool_ids` 是精确可见的工具标识。
+///
+/// # Returns
+/// 返回值
+/// The visible tool identifier and its path argument name, or `None` when no exact bridge applies.
+/// 返回可见工具标识及其路径参数名；没有精确桥接时返回 `None`。
+fn image_understanding_bridge_for_attachment<'a>(
+    attachment: &ConversationAttachment,
+    bridge_tool_ids: &'a [String],
+) -> Option<(&'a str, &'static str)> {
+    if !matches!(attachment.kind, ConversationAttachmentKind::Image) {
+        return None;
+    }
+    bridge_tool_ids
+        .iter()
+        .find(|tool_id| tool_id.as_str() == "image_understand")
+        .map(|tool_id| (tool_id.as_str(), "image_path"))
+        .or_else(|| {
+            bridge_tool_ids
+                .iter()
+                .find(|tool_id| tool_id.as_str() == "vulcan_media_analyze")
+                .map(|tool_id| (tool_id.as_str(), "media_paths"))
+        })
 }
 
 /// Reports whether a protocol profile has a real encoder for one attachment kind.
@@ -143,7 +209,10 @@ mod tests {
     //! Public protocol attachment normalization regression tests.
     //! 公共协议附件归一化回归测试。
 
-    use super::{normalize_provider_user_input, normalize_provider_user_input_for_model};
+    use super::{
+        normalize_provider_user_input, normalize_provider_user_input_for_model,
+        normalize_provider_user_input_for_model_with_tool_bridges,
+    };
     use vulcan_ai_contract::{ModelCapabilities, ResourceKind};
     use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 
@@ -247,6 +316,31 @@ mod tests {
 
         assert!(normalized.attachments.is_empty());
         assert!(normalized.text.contains("selected model"));
+    }
+
+    /// Downgrades unsupported image input to the exact visible image-understanding host tool.
+    /// 将模型不支持的图片输入降级为精确可见的图片理解宿主工具。
+    #[test]
+    fn image_understanding_bridge_keeps_local_path_and_tool_contract() {
+        let capabilities = ModelCapabilities::default();
+        let bridge_tool_ids = vec![String::from("image_understand")];
+        let normalized = normalize_provider_user_input_for_model_with_tool_bridges(
+            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+            Some(&capabilities),
+            "inspect",
+            &[test_attachment(
+                ConversationAttachmentKind::Image,
+                "a.png",
+                "image/png",
+            )],
+            &bridge_tool_ids,
+        );
+
+        assert!(normalized.attachments.is_empty());
+        assert_eq!(normalized.downgraded_attachments.len(), 1);
+        assert!(normalized.text.contains("image_understand"));
+        assert!(normalized.text.contains("image_path"));
+        assert!(!normalized.text.contains("ERROR: Cannot read"));
     }
 
     /// Rejects every attachment for an unregistered protocol profile.

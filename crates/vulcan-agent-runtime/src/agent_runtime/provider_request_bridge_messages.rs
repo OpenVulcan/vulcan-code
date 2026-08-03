@@ -7,7 +7,7 @@ use crate::agent_runtime::provider_system_update_lowering::{
 use crate::conversation_protocol::{
     SessionConversationMessage, SessionConversationPayload, SessionConversationToolCall,
 };
-use crate::provider_input_normalizer::normalize_provider_user_input_for_model;
+use crate::provider_input_normalizer::normalize_provider_user_input_for_model_with_tool_bridges;
 use std::collections::BTreeSet;
 use vulcan_ai_contract::ModelCapabilities;
 use vulcan_context::RuntimeSystemUpdateEvent;
@@ -24,9 +24,11 @@ mod tests;
 pub(crate) use conversions::{core_message_to_session_message, session_message_to_core_message};
 pub(crate) use projection::{
     core_messages_to_provider_visible_history,
-    core_messages_to_provider_visible_history_for_model_with_system_updates,
+    core_messages_to_provider_visible_history_for_model_with_system_updates_and_tool_bridges,
 };
 #[cfg(test)]
 pub(crate) use projection::{
-    core_messages_to_provider_visible_history_for_model, validate_provider_visible_tool_topology,
+    core_messages_to_provider_visible_history_for_model,
+    core_messages_to_provider_visible_history_for_model_with_system_updates,
+    validate_provider_visible_tool_topology,
 };

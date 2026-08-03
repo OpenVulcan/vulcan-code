@@ -63,6 +63,24 @@ local function sql_integer(value)
     return { kind = "int64", value = value }
 end
 
+-- Encode one validated integer SQL literal for an unbound multi-statement script.
+-- 为不带绑定参数的多语句脚本编码一个已校验的整数 SQL 字面量。
+local function sql_integer_literal(value, field_name)
+    if type(value) ~= "number" or value % 1 ~= 0 then
+        error((field_name or "integer") .. " must be an integer")
+    end
+    return tostring(value)
+end
+
+-- Encode one escaped string SQL literal for an unbound multi-statement script.
+-- 为不带绑定参数的多语句脚本编码一个完成转义的字符串 SQL 字面量。
+local function sql_string_literal(value, field_name)
+    if type(value) ~= "string" then
+        error((field_name or "string") .. " must be a string")
+    end
+    return "'" .. string.gsub(value, "'", "''") .. "'"
+end
+
 -- Build one explicit SQLite null parameter.
 -- 构建一个显式 SQLite 空值参数。
 local function sql_null()
@@ -96,8 +114,8 @@ local function read_config()
     return vulcan.host.call("vulcan.plugin.config.get", {})
 end
 
--- Execute one parameterized write inside the plugin-owned SQLite database.
--- 在插件自有 SQLite 数据库内执行一条参数化写语句。
+-- Execute one SQLite write, optionally parameterized for a single statement or atomic script.
+-- 在插件自有 SQLite 数据库内执行一次 SQLite 写入，单语句可绑定参数，原子脚本不绑定参数。
 local function sqlite_execute(sql, params)
     return vulcan.host.call("vulcan.plugin.storage.sqlite.execute", {
         sql = sql,
@@ -614,8 +632,24 @@ local function aggregate_rebuild_sql()
     ]]
 end
 
--- Delete expired raw request facts while retaining permanent model dimension records.
--- 删除过期原始请求事实，同时永久保留模型与每日聚合记录。
+-- Return SQL that removes model dimensions with no remaining raw facts or daily aggregates.
+-- 返回删除不再拥有原始事实或每日聚合的模型维度的 SQL。
+local function orphan_model_cleanup_sql()
+    return [[
+        DELETE FROM models
+        WHERE NOT EXISTS (
+            SELECT 1 FROM api_request_events
+            WHERE api_request_events.model_ref = models.model_ref
+        )
+        AND NOT EXISTS (
+            SELECT 1 FROM usage_daily_model
+            WHERE usage_daily_model.model_ref = models.model_ref
+        );
+    ]]
+end
+
+-- Delete expired raw request facts and orphaned model dimensions atomically.
+-- 原子删除过期原始请求事实与孤立模型维度。
 local function cleanup_expired_facts(config, calendar_date)
     -- A zero retention sentinel keeps raw statistics indefinitely and performs no destructive cleanup.
     -- 零值保留期哨兵表示永久保留原始统计，并且不执行任何破坏性清理。
@@ -640,16 +674,20 @@ local function cleanup_expired_facts(config, calendar_date)
     -- cleanup_script deletes facts, rebuilds aggregates, and advances the revision atomically.
     -- cleanup_script 原子删除事实、重建聚合并推进修订号。
     local cleanup_script = [[BEGIN IMMEDIATE;
-        DELETE FROM api_request_events WHERE calendar_date < date(?1, ?2);
-    ]] .. aggregate_rebuild_sql() .. [[
+        DELETE FROM api_request_events WHERE calendar_date < date(]]
+        .. sql_string_literal(calendar_date, "calendarDate")
+        .. [[, ]] .. sql_string_literal(retention_modifier, "retentionModifier") .. [[);
+    ]]
+        .. aggregate_rebuild_sql()
+        .. orphan_model_cleanup_sql()
+        .. [[
         UPDATE statistics_meta
         SET meta_value = CAST(CAST(meta_value AS INTEGER) + 1 AS TEXT)
         WHERE meta_key = 'data_revision';
         COMMIT;]]
-    sqlite_execute(
-        cleanup_script,
-        { sql_string(calendar_date), sql_string(retention_modifier) }
-    )
+    -- The host accepts parameters only for one SQL statement, so this atomic script is parameter-free.
+    -- 宿主仅允许单条 SQL 语句绑定参数，因此这个原子脚本不携带参数。
+    sqlite_execute(cleanup_script)
     last_cleanup_date = calendar_date
 end
 
@@ -716,18 +754,31 @@ local function clear_filter(input, event_alias)
         end
     end
     local predicates = {}
+    local literal_predicates = {}
     local params = {}
     if model_ref ~= nil then
         table.insert(predicates, " AND " .. alias .. ".model_ref = ?" .. tostring(#params + 1))
+        table.insert(
+            literal_predicates,
+            " AND " .. alias .. ".model_ref = " .. sql_integer_literal(model_ref, "modelRef")
+        )
         table.insert(params, sql_integer(model_ref))
     end
     if from_date ~= nil then
         table.insert(predicates, " AND " .. alias .. ".calendar_date >= ?" .. tostring(#params + 1))
+        table.insert(
+            literal_predicates,
+            " AND " .. alias .. ".calendar_date >= " .. sql_string_literal(from_date, "fromDate")
+        )
         table.insert(params, sql_string(from_date))
         table.insert(predicates, " AND " .. alias .. ".calendar_date <= ?" .. tostring(#params + 1))
+        table.insert(
+            literal_predicates,
+            " AND " .. alias .. ".calendar_date <= " .. sql_string_literal(to_date, "toDate")
+        )
         table.insert(params, sql_string(to_date))
     end
-    return table.concat(predicates), params, model_ref, from_date, to_date
+    return table.concat(predicates), params, table.concat(literal_predicates), model_ref, from_date, to_date
 end
 
 -- Return the current complete plugin configuration to the mounted UI.
@@ -1326,7 +1377,7 @@ end
 function M.statistics_clear_preview(args)
     ensure_schema(0)
     local input = args.arguments
-    local filter_sql, params, model_ref, from_date, to_date = clear_filter(input, "e")
+    local filter_sql, params, _, model_ref, from_date, to_date = clear_filter(input, "e")
     return success({
         revision = current_revision(),
         modelRef = model_ref or vulcan.json.null,
@@ -1341,31 +1392,31 @@ end
 function M.statistics_clear_apply(args)
     ensure_schema(0)
     local input = args.arguments
-    local filter_sql, filter_params, model_ref, from_date, to_date = clear_filter(input, "e")
+    local filter_sql, filter_params, literal_filter_sql, model_ref, from_date, to_date =
+        clear_filter(input, "e")
     local expected_revision = input.expectedRevision
     local current = current_revision()
     if expected_revision ~= current then
         error("Statistics cleanup preview is stale; refresh the preview")
     end
     local before = clear_summary(filter_sql, filter_params, "cleanup.apply.before")
-    local revision_parameter_index = #filter_params + 1
-    table.insert(filter_params, sql_integer(expected_revision))
     local cleanup_script = [[BEGIN IMMEDIATE;
         CREATE TEMP TABLE IF NOT EXISTS statistics_clear_state(deleted_count INTEGER NOT NULL);
         DELETE FROM statistics_clear_state;
         DELETE FROM api_request_events AS e
-        WHERE 1 = 1]] .. filter_sql .. [[
-          AND (SELECT CAST(meta_value AS INTEGER) FROM statistics_meta WHERE meta_key = 'data_revision') = ?]] .. tostring(revision_parameter_index) .. [[;
+        WHERE 1 = 1]] .. literal_filter_sql .. [[
+          AND (SELECT CAST(meta_value AS INTEGER) FROM statistics_meta WHERE meta_key = 'data_revision') = ]] .. sql_integer_literal(expected_revision, "expectedRevision") .. [[;
         INSERT INTO statistics_clear_state(deleted_count) VALUES (changes());
-    ]] .. aggregate_rebuild_sql() .. [[
+    ]] .. aggregate_rebuild_sql() .. orphan_model_cleanup_sql() .. [[
         UPDATE statistics_meta
         SET meta_value = CAST(CAST(meta_value AS INTEGER) +
             CASE WHEN (SELECT deleted_count FROM statistics_clear_state) > 0 THEN 1 ELSE 0 END AS TEXT)
         WHERE meta_key = 'data_revision';
         DROP TABLE statistics_clear_state;
         COMMIT;]]
-    sqlite_execute(cleanup_script, filter_params)
-    table.remove(filter_params, #filter_params)
+    -- The host executes parameter-free scripts atomically with sqlite3_exec/execute_batch.
+    -- 宿主会通过 sqlite3_exec/execute_batch 原子执行不带参数的多语句脚本。
+    sqlite_execute(cleanup_script)
     local after = clear_summary(filter_sql, filter_params, "cleanup.apply.after")
     local revision = current_revision()
     local deleted_requests = math.max(0, before.requests - after.requests)

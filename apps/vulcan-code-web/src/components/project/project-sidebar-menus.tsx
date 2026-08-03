@@ -30,6 +30,132 @@ import { cn } from "@/lib/utils";
 import type { ConversationSummary, ProjectSummary } from "@/types";
 import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
 
+// CollapsedFeatureMenuItem describes one feature entry in the collapsed navigation flyout.
+// CollapsedFeatureMenuItem 描述折叠导航悬浮菜单中的单个功能入口。
+type CollapsedFeatureMenuItem = {
+  // Stable key used to render the feature entry.
+  // 用于渲染功能入口的稳定键。
+  id: string;
+  // Icon shown before the feature label.
+  // 显示在功能标签前的图标。
+  icon: React.ReactNode;
+  // Localized feature label.
+  // 本地化的功能标签。
+  label: string;
+  // Whether the feature is currently active.
+  // 当前功能是否处于激活状态。
+  active: boolean;
+  // Opens the selected feature area.
+  // 打开选中的功能区域。
+  onSelect: () => void;
+};
+
+// CollapsedFeatureMenu renders one grouped hover menu for feature navigation.
+// CollapsedFeatureMenu 在折叠侧栏中渲染功能导航的分组悬浮菜单。
+export function CollapsedFeatureMenu(props: {
+  // Trigger row shown in the collapsed sidebar.
+  // 折叠侧栏中显示的触发行。
+  children: React.ReactNode;
+  // Feature entries shown in the hover flyout.
+  // 悬浮菜单中显示的功能入口。
+  items: readonly CollapsedFeatureMenuItem[];
+  // Accessible label for the grouped entry.
+  // 分组入口的无障碍标签。
+  label: string;
+}) {
+  // anchorRef points to the grouped trigger used to place the hover flyout.
+  // anchorRef 指向分组触发器，用于定位悬浮菜单。
+  const anchorRef = React.useRef<HTMLDivElement | null>(null);
+  // closeTimerRef keeps the flyout open while the pointer crosses the small gap.
+  // closeTimerRef 在指针跨越小间隙时保持悬浮菜单打开。
+  const closeTimerRef = React.useRef<number | null>(null);
+  // flyoutOpen tracks whether the feature flyout is visible.
+  // flyoutOpen 跟踪功能悬浮菜单是否可见。
+  const [flyoutOpen, setFlyoutOpen] = React.useState(false);
+  // flyoutPosition stores viewport coordinates for the fixed flyout.
+  // flyoutPosition 保存固定悬浮菜单的视口坐标。
+  const [flyoutPosition, setFlyoutPosition] = React.useState<{ left: number; top: number } | null>(null);
+
+  // clearCloseTimer cancels a pending delayed close when the pointer returns.
+  // clearCloseTimer 在指针返回时取消等待中的延迟关闭。
+  const clearCloseTimer = React.useCallback(() => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  // openFlyout positions and shows the grouped feature flyout.
+  // openFlyout 定位并显示分组功能悬浮菜单。
+  const openFlyout = React.useCallback(() => {
+    clearCloseTimer();
+    const rect = anchorRef.current?.getBoundingClientRect();
+    if (!rect) {
+      return;
+    }
+    setFlyoutPosition({
+      left: rect.right + 8,
+      top: rect.top,
+    });
+    setFlyoutOpen(true);
+  }, [clearCloseTimer]);
+
+  // scheduleClose delays closing so pointer travel between trigger and flyout remains stable.
+  // scheduleClose 延迟关闭，让指针在触发器与悬浮菜单之间移动时保持稳定。
+  const scheduleClose = React.useCallback(() => {
+    clearCloseTimer();
+    closeTimerRef.current = window.setTimeout(() => {
+      setFlyoutOpen(false);
+    }, 140);
+  }, [clearCloseTimer]);
+
+  React.useEffect(() => clearCloseTimer, [clearCloseTimer]);
+
+  // selectFeature closes the flyout before opening the chosen feature area.
+  // selectFeature 在打开选中功能区域前关闭悬浮菜单。
+  const selectFeature = React.useCallback((item: CollapsedFeatureMenuItem) => {
+    setFlyoutOpen(false);
+    item.onSelect();
+  }, []);
+
+  return (
+    <>
+      <div
+        className="collapsed-project-hover-root collapsed-feature-hover-root"
+        onMouseEnter={openFlyout}
+        onMouseLeave={scheduleClose}
+        ref={anchorRef}
+      >
+        {props.children}
+      </div>
+      {flyoutOpen && flyoutPosition ? (
+        <div
+          aria-label={props.label}
+          className="collapsed-project-flyout collapsed-feature-flyout"
+          onMouseEnter={openFlyout}
+          onMouseLeave={scheduleClose}
+          role="menu"
+          style={{ left: flyoutPosition.left, top: flyoutPosition.top }}
+        >
+          {props.items.map((item) => (
+            <button
+              aria-current={item.active ? "page" : undefined}
+              className={cn("collapsed-project-flyout-item", item.active && "active")}
+              key={item.id}
+              onClick={() => selectFeature(item)}
+              role="menuitem"
+              type="button"
+            >
+              {item.icon}
+              <span className="collapsed-project-menu-title">{item.label}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 // CollapsedProjectMenu renders project actions as a hover flyout while the sidebar is collapsed.
 // CollapsedProjectMenu 在侧栏折叠时以悬停浮层展示项目操作。
 export function CollapsedProjectMenu(props: {

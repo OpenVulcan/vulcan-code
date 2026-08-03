@@ -10,6 +10,18 @@ function libraryFixture(id: string, name: string): KnowledgeLibrarySummary {
     id,
     name,
     description: "",
+    settings: {
+      retrievalMode: "raw_bm25",
+      fallbackPolicy: "explicit_only",
+      curation: { enabled: false, promptVersion: "knowledge-display-v1" },
+      displayIndex: { status: "not_created", generatedDocumentCount: 0 },
+      embedding: {
+        enabled: false,
+        embeddingBatchSize: 10,
+        batchSizeSource: "fallback_default",
+      },
+      vectorIndex: { status: "disabled" },
+    },
     lifecycleState: "active",
     documentCount: 0,
     chunkCount: 0,

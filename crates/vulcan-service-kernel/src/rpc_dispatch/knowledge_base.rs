@@ -9,6 +9,7 @@ use super::*;
 pub(super) const RPC_METHODS: &[&str] = &[
     "service_list_knowledge_libraries",
     "service_create_knowledge_library",
+    "service_set_knowledge_library_settings",
     "service_rename_knowledge_library",
     "service_delete_knowledge_library",
     "service_set_knowledge_project_binding",
@@ -28,6 +29,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_list_knowledge_library_folders",
     "service_read_knowledge_library_document",
     "service_search_knowledge_library",
+    "service_build_knowledge_display_index",
+    "service_build_knowledge_vector_index",
     "service_export_knowledge_package",
     "service_inspect_knowledge_package",
     "service_import_knowledge_package",
@@ -56,13 +59,23 @@ pub(super) async fn dispatch(
             service_list_knowledge_libraries(state, project_id).await
         }
         "service_create_knowledge_library" => {
-            service_create_knowledge_library(state, rpc_required_param(params, "request")?).await
+            service_create_knowledge_library(app, state, rpc_required_param(params, "request")?)
+                .await
+        }
+        "service_set_knowledge_library_settings" => {
+            service_set_knowledge_library_settings(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await
         }
         "service_rename_knowledge_library" => {
             service_rename_knowledge_library(state, rpc_required_param(params, "request")?).await
         }
         "service_delete_knowledge_library" => {
-            service_delete_knowledge_library(state, rpc_required_param(params, "libraryId")?).await
+            service_delete_knowledge_library(app, state, rpc_required_param(params, "libraryId")?)
+                .await
         }
         "service_set_knowledge_project_binding" => {
             service_set_knowledge_project_binding(state, rpc_required_param(params, "request")?)
@@ -138,6 +151,14 @@ pub(super) async fn dispatch(
         "service_search_knowledge_library" => {
             service_search_knowledge_library(state, rpc_required_param(params, "request")?).await
         }
+        "service_build_knowledge_display_index" => {
+            service_build_knowledge_display_index(state, rpc_required_param(params, "libraryId")?)
+                .await
+        }
+        "service_build_knowledge_vector_index" => {
+            service_build_knowledge_vector_index(state, rpc_required_param(params, "libraryId")?)
+                .await
+        }
         "service_export_knowledge_package" => {
             service_export_knowledge_package(state, rpc_required_param(params, "request")?).await
         }
@@ -145,7 +166,8 @@ pub(super) async fn dispatch(
             service_inspect_knowledge_package(state, rpc_required_param(params, "request")?).await
         }
         "service_import_knowledge_package" => {
-            service_import_knowledge_package(state, rpc_required_param(params, "request")?).await
+            service_import_knowledge_package(app, state, rpc_required_param(params, "request")?)
+                .await
         }
         "service_browse_knowledge_packages" => service_browse_knowledge_packages(
             state,

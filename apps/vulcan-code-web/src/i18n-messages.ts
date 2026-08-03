@@ -1432,6 +1432,7 @@ export type TranslationKey =
   | "memory.maintenance.later"
   | "memory.maintenance.progressTitle"
   | "memory.maintenance.progressDescription"
+  | "memory.maintenance.progressCount"
   | "memory.maintenance.cancel"
   | "memory.maintenance.completed"
   | "memory.maintenance.failed"
@@ -2198,7 +2199,13 @@ export type TranslationKey =
   | "settings.inference.rerankTopN"
   | "settings.inference.rerankTruncation"
   | "settings.inference.rerankReturnContent"
-| "settings.inference.purpose.precheckL1"
+  | "settings.inference.rerankRestartTitle"
+  | "settings.inference.rerankRestartDescription"
+  | "settings.inference.rerankRestartCancel"
+  | "settings.inference.rerankRestartConfirm"
+  | "settings.inference.rerankRestartFailed"
+  | "settings.inference.maintenanceLocked"
+  | "settings.inference.purpose.precheckL1"
 | "settings.inference.purpose.precheckL1Description"
 | "settings.inference.purpose.precheckL2"
 | "settings.inference.purpose.precheckL2Description"
@@ -2216,9 +2223,12 @@ export type TranslationKey =
   | "settings.providerTools.disabled"
   | "settings.providerTools.unavailable"
   | "settings.providerTools.imageGenerate"
+  | "settings.providerTools.imageEdit"
   | "settings.providerTools.mediaAnalyze"
   | "settings.providerTools.musicGenerate"
+  | "settings.providerTools.musicCover"
   | "settings.providerTools.speechSynthesize"
+  | "settings.providerTools.speechTranscribe"
   | "settings.providerTools.videoGenerate"
   | "settings.providerTools.videoEdit"
   | "settings.providerTools.webSearch"
@@ -3940,6 +3950,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.maintenance.later": "稍后处理",
     "memory.maintenance.progressTitle": "正在处理记忆数据",
     "memory.maintenance.progressDescription": "离开当前页面不会中断操作；重新打开高级设置仍可查看进度。",
+    "memory.maintenance.progressCount": "已处理 {processed} / {total}",
     "memory.maintenance.cancel": "取消维护",
     "memory.maintenance.completed": "数据处理完成",
     "memory.maintenance.failed": "数据处理失败",
@@ -4287,7 +4298,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.aiVendors": "能力供应商",
     "settings.aiWebSearch": "网页搜索",
     "settings.aiWebExtract": "网页抓取",
-    "settings.aiUnderstandImage": "媒体理解工具",
+    "settings.aiUnderstandImage": "图片理解",
     "settings.aiUnderstandVideo": "视频理解",
     "settings.aiUnderstandAudio": "音频理解",
     "settings.aiImageGeneration": "图片生成",
@@ -4308,7 +4319,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.aiVendors.description": "多个语义 AI 工具共用的能力供应商与路由目标。",
     "settings.aiWebSearch.description": "网页搜索能力的启用状态与可用目标。",
     "settings.aiWebExtract.description": "网页抓取能力的启用状态与可用目标。",
-    "settings.aiUnderstandImage.description": "独立供应商媒体理解工具的启用状态与可用目标；不等同于模型原生附件能力。",
+    "settings.aiUnderstandImage.description": "图片理解能力的启用状态与可用目标。",
     "settings.aiUnderstandVideo.description": "视频理解能力入口与接入状态。",
     "settings.aiUnderstandAudio.description": "音频理解能力入口与接入状态。",
     "settings.aiImageGeneration.description": "图片生成能力的启用状态与可用目标。",
@@ -4706,6 +4717,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.inference.rerankTopN": "默认返回数量",
     "settings.inference.rerankTruncation": "截断策略",
     "settings.inference.rerankReturnContent": "返回候选正文",
+    "settings.inference.rerankRestartTitle": "修改重排设置并重启 VMM？",
+    "settings.inference.rerankRestartDescription": "启用、关闭或更换重排模型会写入新配置，并需要重启 VMM 才能生效。是否确认继续？",
+    "settings.inference.rerankRestartCancel": "取消",
+    "settings.inference.rerankRestartConfirm": "保存并重启",
+    "settings.inference.rerankRestartFailed": "重排配置已保存，但 VMM 重启失败；请从 VMM 状态页重试。",
+    "settings.inference.maintenanceLocked": "记忆备份与向量重建进行中，推理路由暂时锁定，避免并发修改数据空间。",
     "settings.inference.purpose.precheckL1": "快速判断",
     "settings.inference.purpose.precheckL1Description": "PreCheck L1：低延迟判断本轮是否需要召回长期记忆。",
     "settings.inference.purpose.precheckL2": "深度判断",
@@ -4724,9 +4741,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerTools.disabled": "不启用",
     "settings.providerTools.unavailable": "已选目标不可用",
     "settings.providerTools.imageGenerate": "图片生成",
-    "settings.providerTools.mediaAnalyze": "媒体理解工具",
+    "settings.providerTools.imageEdit": "图片编辑工具",
+    "settings.providerTools.mediaAnalyze": "图片理解工具",
     "settings.providerTools.musicGenerate": "音乐生成",
+    "settings.providerTools.musicCover": "音乐翻唱",
     "settings.providerTools.speechSynthesize": "语音合成",
+    "settings.providerTools.speechTranscribe": "语音转写",
     "settings.providerTools.videoGenerate": "视频生成",
     "settings.providerTools.videoEdit": "视频编辑",
     "settings.providerTools.webSearch": "网页搜索",
@@ -6445,6 +6465,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.maintenance.later": "Handle later",
     "memory.maintenance.progressTitle": "Processing memory data",
     "memory.maintenance.progressDescription": "Leaving this page does not interrupt the operation. Reopen Advanced settings to see progress.",
+    "memory.maintenance.progressCount": "Processed {processed} / {total}",
     "memory.maintenance.cancel": "Cancel maintenance",
     "memory.maintenance.completed": "Data processing complete",
     "memory.maintenance.failed": "Data processing failed",
@@ -6792,7 +6813,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.aiVendors": "Capability vendors",
     "settings.aiWebSearch": "Web search",
     "settings.aiWebExtract": "Web extract",
-    "settings.aiUnderstandImage": "Media understanding tool",
+    "settings.aiUnderstandImage": "Image understanding",
     "settings.aiUnderstandVideo": "Video understanding",
     "settings.aiUnderstandAudio": "Audio understanding",
     "settings.aiImageGeneration": "Image generation",
@@ -6813,7 +6834,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.aiVendors.description": "Capability vendors and route targets shared by semantic AI tools.",
     "settings.aiWebSearch.description": "Web-search capability state and available targets.",
     "settings.aiWebExtract.description": "Web-extraction capability state and available targets.",
-    "settings.aiUnderstandImage.description": "State and available targets for the independent provider media-understanding tool; this is separate from native model attachments.",
+    "settings.aiUnderstandImage.description": "Image-understanding capability state and available targets.",
     "settings.aiUnderstandVideo.description": "Video-understanding capability entry and connection status.",
     "settings.aiUnderstandAudio.description": "Audio-understanding capability entry and connection status.",
     "settings.aiImageGeneration.description": "Image-generation capability state and available targets.",
@@ -7211,6 +7232,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.inference.rerankTopN": "Default result count",
     "settings.inference.rerankTruncation": "Truncation policy",
     "settings.inference.rerankReturnContent": "Return candidate content",
+    "settings.inference.rerankRestartTitle": "Change reranking settings and restart VMM?",
+    "settings.inference.rerankRestartDescription": "Enabling, disabling, or changing the rerank model saves a new configuration and requires a VMM restart to take effect. Continue?",
+    "settings.inference.rerankRestartCancel": "Cancel",
+    "settings.inference.rerankRestartConfirm": "Save and restart",
+    "settings.inference.rerankRestartFailed": "The rerank configuration was saved, but VMM restart failed. Retry from the VMM status page.",
+    "settings.inference.maintenanceLocked": "Memory backup and vector rebuild are running. Inference routes are locked to prevent concurrent data-space changes.",
     "settings.inference.purpose.precheckL1": "Fast decision",
     "settings.inference.purpose.precheckL1Description": "PreCheck L1: quickly decides whether this turn needs long-term memory recall.",
     "settings.inference.purpose.precheckL2": "Deep decision",
@@ -7229,9 +7256,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerTools.disabled": "Disabled",
     "settings.providerTools.unavailable": "Selected target unavailable",
     "settings.providerTools.imageGenerate": "Image generation",
-    "settings.providerTools.mediaAnalyze": "Media understanding tool",
+    "settings.providerTools.imageEdit": "Image editing tool",
+    "settings.providerTools.mediaAnalyze": "Image understanding tool",
     "settings.providerTools.musicGenerate": "Music generation",
+    "settings.providerTools.musicCover": "Music cover",
     "settings.providerTools.speechSynthesize": "Speech synthesis",
+    "settings.providerTools.speechTranscribe": "Speech transcription",
     "settings.providerTools.videoGenerate": "Video generation",
     "settings.providerTools.videoEdit": "Video editing",
     "settings.providerTools.webSearch": "Web search",

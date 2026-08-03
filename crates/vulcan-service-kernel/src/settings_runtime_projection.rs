@@ -487,6 +487,27 @@ pub(crate) fn refresh_settings_projection_locked(
             .ok()
             .map(|selection| selection.model.capabilities)
     });
+    let bridged_image_understanding = guard
+        .agent_runtime
+        .as_ref()
+        .and_then(|agent_runtime| {
+            let configuration = agent_runtime
+                .public_ai_runtime
+                .configuration_snapshot()
+                .ok()?;
+            let runtime_state = guard.workspace_snapshot.as_ref().and_then(|workspace| {
+                workspace
+                    .session_runtime_state
+                    .get(&workspace.selected_session)
+            });
+            crate::public_ai_settings::public_ai_session_has_image_understanding_bridge(
+                agent_runtime.public_ai_runtime.as_ref(),
+                &configuration,
+                runtime_state,
+            )
+            .ok()
+        })
+        .unwrap_or(false);
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
     guard.workbench.ui_locale = provider_configuration.ui_locale.clone();
@@ -505,8 +526,10 @@ pub(crate) fn refresh_settings_projection_locked(
     guard.workbench.git_commit = git_commit_settings(provider_configuration);
     guard.workbench.provider_retry = provider_retry_settings(provider_configuration);
     guard.workbench.host_tools = host_tools_settings(provider_configuration);
-    guard.workbench.composer_attachment_capabilities =
-        composer_attachment_capabilities(public_model_capabilities.as_ref());
+    guard.workbench.composer_attachment_capabilities = composer_attachment_capabilities(
+        public_model_capabilities.as_ref(),
+        bridged_image_understanding,
+    );
 }
 
 /// Returns the mutable runtime state for the currently selected regular session.
@@ -651,6 +674,27 @@ pub(crate) fn sync_workbench_runtime_control_fields_locked(
             public_model_capabilities.as_ref(),
         )
     });
+    let bridged_image_understanding = guard
+        .agent_runtime
+        .as_ref()
+        .and_then(|agent_runtime| {
+            let configuration = agent_runtime
+                .public_ai_runtime
+                .configuration_snapshot()
+                .ok()?;
+            let runtime_state = guard.workspace_snapshot.as_ref().and_then(|workspace| {
+                workspace
+                    .session_runtime_state
+                    .get(&workspace.selected_session)
+            });
+            crate::public_ai_settings::public_ai_session_has_image_understanding_bridge(
+                agent_runtime.public_ai_runtime.as_ref(),
+                &configuration,
+                runtime_state,
+            )
+            .ok()
+        })
+        .unwrap_or(false);
     if let Some(agent_runtime) = guard.agent_runtime.as_ref()
         && let Ok(configuration) = agent_runtime.public_ai_runtime.configuration_snapshot()
         && let Ok(rows) = public_ai_provider_rows_for_selection(
@@ -663,8 +707,10 @@ pub(crate) fn sync_workbench_runtime_control_fields_locked(
     }
     guard.workbench.reasoning_selection =
         reasoning_selection(provider_configuration, public_model_capabilities.as_ref());
-    guard.workbench.composer_attachment_capabilities =
-        composer_attachment_capabilities(public_model_capabilities.as_ref());
+    guard.workbench.composer_attachment_capabilities = composer_attachment_capabilities(
+        public_model_capabilities.as_ref(),
+        bridged_image_understanding,
+    );
     guard.workbench.context_usage = context_usage;
 }
 

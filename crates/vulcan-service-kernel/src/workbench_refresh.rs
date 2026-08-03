@@ -848,6 +848,17 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 })
                 .or_else(|| runtime.resolve_active_selection(configuration).ok())
         });
+    let bridged_image_understanding = public_ai_runtime
+        .zip(public_ai_configuration.as_ref())
+        .and_then(|(runtime, configuration)| {
+            crate::public_ai_settings::public_ai_session_has_image_understanding_bridge(
+                runtime,
+                configuration,
+                selected_runtime_state,
+            )
+            .ok()
+        })
+        .unwrap_or(false);
     let public_ai_model_selectors = public_ai_runtime
         .zip(public_ai_configuration.as_ref())
         .and_then(|(runtime, configuration)| runtime.available_model_selectors(configuration).ok());
@@ -1096,6 +1107,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
             public_ai_selection
                 .as_ref()
                 .map(|selection| &selection.model.capabilities),
+            bridged_image_understanding,
         ),
         composer_slash_commands: vulcan_service_api::composer_slash_command_catalog(),
         pending_prompts: selected_runtime_state
