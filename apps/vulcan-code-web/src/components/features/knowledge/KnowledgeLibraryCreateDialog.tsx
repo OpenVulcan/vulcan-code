@@ -15,6 +15,9 @@ export interface KnowledgeLibraryCreateDialogModel {
   // Selected curation candidate, or null for raw BM25.
   // 选中的整理模型候选，原始 BM25 模式下为空。
   curationCandidate: PublicAiInternalInferenceCandidate | null;
+  // Selected provider-neutral reasoning effort for the curation model.
+  // 整理模型选中的供应商无关推理级别。
+  reasoningEffort: string;
   // Selected embedding candidate, or null when vectors are disabled.
   // 选中的向量模型候选，关闭向量时为空。
   embeddingCandidate: PublicAiInternalInferenceCandidate | null;
@@ -53,6 +56,9 @@ export interface KnowledgeLibraryCreateDialogProps {
   // Current curation candidate key.
   // 当前整理候选键。
   curationCandidateKey: string;
+  // Current curation reasoning effort.
+  // 当前整理推理级别。
+  reasoningEffort: string;
   // Current embedding candidate key.
   // 当前向量候选键。
   embeddingCandidateKey: string;
@@ -71,6 +77,7 @@ export interface KnowledgeLibraryCreateDialogProps {
   onNameChange: (name: string) => void;
   onRetrievalModeChange: (mode: KnowledgeRetrievalMode) => void;
   onCurationCandidateChange: (key: string) => void;
+  onReasoningEffortChange: (value: string) => void;
   onEmbeddingCandidateChange: (key: string) => void;
   onConfiguredDimensionChange: (value: string) => void;
   onRequestedBatchSizeChange: (value: string) => void;
@@ -103,6 +110,7 @@ export function KnowledgeLibraryCreateDialog({
   candidates,
   retrievalMode,
   curationCandidateKey,
+  reasoningEffort,
   embeddingCandidateKey,
   configuredDimension,
   requestedBatchSize,
@@ -111,6 +119,7 @@ export function KnowledgeLibraryCreateDialog({
   onNameChange,
   onRetrievalModeChange,
   onCurationCandidateChange,
+  onReasoningEffortChange,
   onEmbeddingCandidateChange,
   onConfiguredDimensionChange,
   onRequestedBatchSizeChange,
@@ -119,7 +128,21 @@ export function KnowledgeLibraryCreateDialog({
 }: KnowledgeLibraryCreateDialogProps) {
   const curationCandidates = candidates.filter((candidate) => candidate.enabled && candidate.route.usage_scope === "internal_background" && candidate.route.operation === "conversation_respond");
   const embeddingCandidates = candidates.filter((candidate) => candidate.enabled && candidate.route.usage_scope === "internal_background" && candidate.route.operation === "embedding_create" && candidate.capabilities.embedding);
+  const requiresCuration = retrievalMode !== "raw_bm25";
+  const requiresEmbedding = retrievalMode === "display_hybrid";
   const curationCandidate = curationCandidates.find((candidate) => routeKey(candidate) === curationCandidateKey) ?? null;
+  const reasoningEfforts = React.useMemo(
+    () => Array.from(new Set(curationCandidate?.capabilities.reasoning_efforts ?? [])),
+    [curationCandidate],
+  );
+  React.useEffect(() => {
+    if (!requiresCuration || reasoningEfforts.length === 0) {
+      if (reasoningEffort) onReasoningEffortChange("");
+      return;
+    }
+    if (reasoningEfforts.includes(reasoningEffort)) return;
+    onReasoningEffortChange(reasoningEfforts[0]);
+  }, [onReasoningEffortChange, reasoningEffort, reasoningEfforts, requiresCuration]);
   const embeddingCandidate = embeddingCandidates.find((candidate) => routeKey(candidate) === embeddingCandidateKey) ?? null;
   const embeddingCapabilities = embeddingCandidate?.capabilities.embedding;
   const dimensions = React.useMemo(() => {
@@ -141,9 +164,6 @@ export function KnowledgeLibraryCreateDialog({
       && (embeddingCapabilities.minimum_dimensions === undefined || configuredDimensionNumber >= embeddingCapabilities.minimum_dimensions)
       && (embeddingCapabilities.maximum_dimensions === undefined || configuredDimensionNumber <= embeddingCapabilities.maximum_dimensions)
     : false;
-  const requiresCuration = retrievalMode !== "raw_bm25";
-  const requiresEmbedding = retrievalMode === "display_hybrid";
-
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
       <DialogContent>
@@ -162,6 +182,10 @@ export function KnowledgeLibraryCreateDialog({
             <SelectTrigger><SelectValue placeholder={curationCandidates.length ? "选择整理模型" : "没有可用的整理模型"} /></SelectTrigger>
             <SelectContent>{curationCandidates.map((candidate) => <SelectItem key={routeKey(candidate)} value={routeKey(candidate)}>{candidateLabel(candidate)}</SelectItem>)}</SelectContent>
           </Select></label> : null}
+          {requiresCuration && reasoningEfforts.length > 0 ? <label className="space-y-1"><span>思考级别</span><Select onValueChange={onReasoningEffortChange} value={reasoningEffort || undefined}>
+            <SelectTrigger><SelectValue placeholder="选择模型声明的思考级别" /></SelectTrigger>
+            <SelectContent>{reasoningEfforts.map((effort) => <SelectItem key={effort} value={effort}>{effort}</SelectItem>)}</SelectContent>
+          </Select><span className="text-sm text-muted-foreground">当前模型声明的级别会随资料库配置保存，并用于整理请求。</span></label> : null}
           {requiresEmbedding ? <>
             <label className="space-y-1"><span>向量模型</span><Select onValueChange={onEmbeddingCandidateChange} value={embeddingCandidateKey}>
               <SelectTrigger><SelectValue placeholder={embeddingCandidates.length ? "选择向量模型" : "没有可用的向量模型"} /></SelectTrigger>
@@ -177,7 +201,7 @@ export function KnowledgeLibraryCreateDialog({
         </div>
         <DialogFooter>
           <Button onClick={() => onOpenChange(false)} variant="outline">取消</Button>
-          <Button disabled={!name.trim() || (requiresCuration && !curationCandidate) || (requiresEmbedding && (!embeddingCandidate || !dimensionValid))} onClick={() => onSubmit({ retrievalMode, curationCandidate, embeddingCandidate, configuredDimension: configuredDimensionNumber, requestedBatchSize: requestedBatchSize ? Number(requestedBatchSize) : null, compatibilityOverride: compatibilityOverride.trim() })}>{submitLabel}</Button>
+          <Button disabled={!name.trim() || (requiresCuration && !curationCandidate) || (requiresEmbedding && (!embeddingCandidate || !dimensionValid))} onClick={() => onSubmit({ retrievalMode, curationCandidate, reasoningEffort, embeddingCandidate, configuredDimension: configuredDimensionNumber, requestedBatchSize: requestedBatchSize ? Number(requestedBatchSize) : null, compatibilityOverride: compatibilityOverride.trim() })}>{submitLabel}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

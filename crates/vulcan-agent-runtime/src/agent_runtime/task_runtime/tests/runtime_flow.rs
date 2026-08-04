@@ -50,6 +50,7 @@ fn build_task_start_test_runtime_context(
             session_title: String::from("Parent session"),
             workspace_path: String::from("D:\\openvulcan\\test-project"),
             prompt: String::from("parent prompt"),
+            output_style_snapshot: None,
             provider_visible_agent_messages: Vec::new(),
             conversation_state: SessionConversationState::default(),
             context_compaction_policy: None,

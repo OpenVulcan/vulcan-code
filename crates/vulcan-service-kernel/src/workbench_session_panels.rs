@@ -115,6 +115,28 @@ pub(crate) fn session_vmm_policy_summary_from_layers(
     }
 }
 
+/// Projects session output-style state while preserving the safe-boundary pending marker.
+/// 投影会话输出风格状态，并保留安全边界待激活标记。
+pub(crate) fn session_output_style_summary_from_runtime_state(
+    runtime_state: Option<&SessionRuntimeStateEntry>,
+    global_style_id: &str,
+) -> Option<SessionOutputStyleSummary> {
+    let runtime_state = runtime_state?;
+    if runtime_state.output_style.is_empty() {
+        return None;
+    }
+    let output_style = &runtime_state.output_style;
+    Some(SessionOutputStyleSummary {
+        override_style_id: output_style.override_style_id.clone(),
+        desired_style_id: output_style.desired_style_id(global_style_id),
+        applied_style_id: output_style.applied_style_id.clone(),
+        pending_activation: output_style.has_pending_activation(global_style_id),
+        applied_fingerprint: output_style.applied_fingerprint,
+        applied_at: output_style.applied_at.clone(),
+        next_activation_boundary: String::from("new-session-or-context-compaction"),
+    })
+}
+
 /// Builds one retained session-addons list entry when it has visible content.
 /// 当会话附属保留列表项存在可见内容时构建该条目。
 ///
@@ -141,11 +163,13 @@ pub(crate) fn session_addons_changed_delta_for_retained_list(
     session_todolist: Option<SessionTodolistSummary>,
     session_plan_mode: Option<SessionPlanModeSummary>,
     session_vmm_policy: Option<SessionVmmPolicySummary>,
+    session_output_style: Option<SessionOutputStyleSummary>,
 ) -> Option<SessionAddonsChangedDelta> {
     if session_goal.is_none()
         && session_todolist.is_none()
         && session_plan_mode.is_none()
         && session_vmm_policy.is_none()
+        && session_output_style.is_none()
     {
         return None;
     }
@@ -155,6 +179,7 @@ pub(crate) fn session_addons_changed_delta_for_retained_list(
         session_todolist,
         session_plan_mode,
         session_vmm_policy,
+        session_output_style,
     })
 }
 
@@ -753,6 +778,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         assert!(entry.is_none());
@@ -772,6 +798,7 @@ mod tests {
             None,
             None,
             Some(plan_mode),
+            None,
             None,
         )
         .expect("plan mode should produce a retained addon entry");

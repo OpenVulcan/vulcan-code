@@ -13,6 +13,7 @@ import {
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { CustomProviderModelsDialog } from "@/components/features/settings/custom-provider-models-dialog"
+import { ProviderModelAccessDialog } from "@/components/features/settings/provider-model-access-dialog"
 import { localizedProviderDescription } from "@/components/features/settings/provider-presentation"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
@@ -72,6 +73,7 @@ import type {
   PublicAiCustomProviderSaveRequest,
   PublicAiConnection,
   PublicAiModelCapabilityEvidence,
+  PublicAiModelOverrideRecord,
   PublicAiProviderDescriptor,
   PublicAiServiceEntry,
   PublicAiSettingsSnapshot,
@@ -144,13 +146,16 @@ export function ProviderManagementArea() {
     }
   }, [snapshot])
 
-  // removeProvider removes one custom provider only when no credential references it.
-  // removeProvider 仅在没有凭据引用时移除一个自定义供应商。
-  const removeProvider = React.useCallback(async (provider: PublicAiProviderDescriptor) => {
+  // removeProvider performs the explicit provider-removal confirmation, including credential deletion.
+  // removeProvider 执行明确的供应商移除确认，包括凭据删除确认。
+  const removeProvider = React.useCallback(async (
+    provider: PublicAiProviderDescriptor,
+    confirmCredentialDeletion: boolean,
+  ) => {
     setBusyProviderId(provider.id)
     setError(null)
     try {
-      setSnapshot(await removePublicAiCustomProvider(provider.id))
+      setSnapshot(await removePublicAiCustomProvider(provider.id, confirmCredentialDeletion))
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
@@ -165,6 +170,70 @@ export function ProviderManagementArea() {
   // customProviders contains the user-managed provider definitions.
   // customProviders 包含用户管理的供应商定义。
   const customProviders = snapshot?.providers.filter((provider) => provider.kind === "custom") ?? []
+
+  // providerToRemoveConnectionCount counts credentials that the confirmation may delete with the provider.
+  // providerToRemoveConnectionCount 统计确认后可能与供应商一并删除的凭据数量。
+  const providerToRemoveConnectionCount = snapshot && providerToRemove
+    ? snapshot.connections.filter((connection) => connection.provider_id === providerToRemove.id).length
+    : 0
+  // providerToRemoveConnectionIds scopes account-level model settings to the provider being removed.
+  // providerToRemoveConnectionIds 将账号级模型设置限定到当前待移除供应商。
+  const providerToRemoveConnectionIds = new Set(
+    snapshot && providerToRemove
+      ? snapshot.connections
+          .filter((connection) => connection.provider_id === providerToRemove.id)
+          .map((connection) => connection.id)
+      : [],
+  )
+  // providerToRemoveModelCustomizationCount detects model-owned settings that must be cleared first.
+  // providerToRemoveModelCustomizationCount 检测必须先清理的模型自定义信息。
+  const providerToRemoveModelCustomizationCount = snapshot && providerToRemove
+    ? [
+        Object.keys(snapshot.customModels?.[providerToRemove.id] ?? {}).length,
+        snapshot.customProviderModelDefaults?.[providerToRemove.id] ? 1 : 0,
+        snapshot.customModelTemplateDecisionRecords?.filter((record) => record.providerId === providerToRemove.id).length ?? 0,
+        snapshot.modelOverrideRecords.filter((record) => record.providerId === providerToRemove.id).length,
+        snapshot.modelAccessRecords.filter((record) => (
+          record.providerId === providerToRemove.id && record.enabled !== record.defaultEnabled
+        )).length,
+        snapshot.modelCapabilityOverrideRecords?.filter((record) => record.providerId === providerToRemove.id).length ?? 0,
+        snapshot.customModelConnectionAvailabilityRecords?.filter((record) => (
+          snapshot.connections.some((connection) => connection.id === record.connectionId && connection.provider_id === providerToRemove.id)
+        )).length ?? 0,
+        snapshot.connectionModelAccessPolicyRecords.filter((record) => (
+          providerToRemoveConnectionIds.has(record.connectionId)
+          && (!record.defaultEnabled || Object.keys(record.modelEnabledOverrides).length > 0)
+        )).length,
+        Object.values(snapshot.inferenceProfiles).reduce((count, profile) => (
+          count
+          + Object.values(profile.llm_routes ?? {}).filter((route) => route.provider_id === providerToRemove.id).length
+          + Number(profile.embedding?.provider_id === providerToRemove.id)
+          + Number(profile.rerank?.provider_id === providerToRemove.id)
+        ), 0),
+      ].reduce((total, count) => total + count, 0)
+    : 0
+  // providerRemovalBlocked is the backend-authoritative deletion guard, including settings not expanded in the browser snapshot.
+  // providerRemovalBlocked 是后端权威删除护栏，包含浏览器快照未展开的设置。
+  const providerRemovalBlocked = Boolean(
+    providerToRemove
+    && snapshot?.providersWithModelCustomizations?.includes(providerToRemove.id),
+  )
+  // providerRemovalDescription combines every destructive consequence known by the settings snapshot.
+  // providerRemovalDescription 组合设置快照已知的全部破坏性后果。
+  const providerRemovalDescription = providerToRemove
+    ? [
+        t("settings.customProviders.removeDescription").replace("{name}", providerToRemove.display_name),
+        providerRemovalBlocked
+          ? providerToRemoveModelCustomizationCount > 0
+            ? t("settings.customProviders.removeModelsBlocked").replace("{count}", String(providerToRemoveModelCustomizationCount))
+            : t("settings.customProviders.removeModelsBlockedGeneric")
+          : null,
+        providerToRemoveConnectionCount > 0
+          ? t("settings.customProviders.removeCredentialsWarning").replace("{count}", String(providerToRemoveConnectionCount))
+          : null,
+        t("settings.customProviders.removeSessionsWarning"),
+      ].filter((value): value is string => value !== null)
+    : []
 
   return (
     <div className="settings-direct-content provider-management-surface space-y-6 px-4 lg:px-6">
@@ -196,39 +265,55 @@ export function ProviderManagementArea() {
       <SystemProviderTable
         connections={snapshot?.connections ?? []}
         loading={!snapshot}
+        onManageModels={openModels}
         providers={systemProviders}
       />
 
       <CustomProviderDialog
         connections={snapshot?.connections ?? []}
+        modelOverrideRecords={snapshot?.modelOverrideRecords ?? []}
         onOpenChange={setDialogOpen}
         onSaved={handleProviderSaved}
         open={dialogOpen}
         provider={editingProvider}
       />
-      <CustomProviderModelsDialog
-        onOpenChange={setModelsDialogOpen}
-        onSaved={setSnapshot}
-        open={modelsDialogOpen}
-        provider={modelsProvider}
-        snapshot={snapshot}
-      />
+      {modelsProvider?.kind === "custom" ? (
+        <CustomProviderModelsDialog
+          onOpenChange={setModelsDialogOpen}
+          onSaved={setSnapshot}
+          open={modelsDialogOpen}
+          provider={modelsProvider}
+          snapshot={snapshot}
+        />
+      ) : (
+        <ProviderModelAccessDialog
+          onOpenChange={setModelsDialogOpen}
+          onSaved={setSnapshot}
+          open={modelsDialogOpen && modelsProvider?.kind === "system"}
+          provider={modelsProvider}
+          snapshot={snapshot}
+        />
+      )}
       <AlertDialog onOpenChange={(open) => !open && setProviderToRemove(null)} open={providerToRemove !== null}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{t("settings.customProviders.removeTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              {t("settings.customProviders.removeDescription").replace("{name}", providerToRemove?.display_name ?? "")}
+              <div className="space-y-2">
+                {providerRemovalDescription.map((description) => <p key={description}>{description}</p>)}
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{t("memory.common.cancel")}</AlertDialogCancel>
             <AlertDialogAction
-              disabled={providerToRemove ? busyProviderId === providerToRemove.id : true}
+              disabled={providerToRemove
+                ? busyProviderId === providerToRemove.id || providerRemovalBlocked
+                : true}
               onClick={(event) => {
                 event.preventDefault()
-                if (providerToRemove) {
-                  void removeProvider(providerToRemove)
+                if (providerToRemove && !providerRemovalBlocked) {
+                  void removeProvider(providerToRemove, providerToRemoveConnectionCount > 0)
                 }
               }}
               variant="destructive"
@@ -397,6 +482,7 @@ function CustomProviderTable(props: {
 function SystemProviderTable(props: {
   connections: PublicAiSettingsSnapshot["connections"]
   loading: boolean
+  onManageModels: (provider: PublicAiProviderDescriptor) => void
   providers: PublicAiProviderDescriptor[]
 }) {
   const { t } = useI18n()
@@ -430,6 +516,7 @@ function SystemProviderTable(props: {
                 <TableHead className="w-[18rem]">供应商</TableHead>
                 <TableHead>详情</TableHead>
                 <TableHead className="w-32 text-right">配置状态</TableHead>
+                <TableHead className="w-20 text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -486,6 +573,18 @@ function SystemProviderTable(props: {
                         {credentialCount > 0 ? `${credentialCount} 个凭据` : "未配置"}
                       </Badge>
                     </TableCell>
+                    <TableCell className="py-3 text-right align-top">
+                      <Button
+                        aria-label={t("settings.customProviders.manageModelsFor").replace("{provider}", provider.display_name)}
+                        onClick={() => props.onManageModels(provider)}
+                        size="icon-sm"
+                        title={t("settings.customProviders.manageModels")}
+                        type="button"
+                        variant="outline"
+                      >
+                        <ListTree className="size-4" />
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 )
               })}
@@ -501,6 +600,7 @@ function SystemProviderTable(props: {
 // CustomProviderDialog 编辑精确的公开自定义供应商契约。
 function CustomProviderDialog(props: {
   connections: PublicAiConnection[]
+  modelOverrideRecords: PublicAiModelOverrideRecord[]
   onOpenChange: (open: boolean) => void
   onSaved: (snapshot: PublicAiSettingsSnapshot) => void
   open: boolean
@@ -521,12 +621,31 @@ function CustomProviderDialog(props: {
   const [probing, setProbing] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
   const [pendingConfirmation, setPendingConfirmation] = React.useState<"manual" | "pending" | null>(null)
+  // protocolOverrideConfirmation retains the original save intent while incompatible route settings are confirmed.
+  // protocolOverrideConfirmation 在确认不兼容路由设置期间保留原始保存意图。
+  const [protocolOverrideConfirmation, setProtocolOverrideConfirmation] = React.useState<"ready" | "manual" | "pending" | null>(null)
   const [error, setError] = React.useState<string | null>(null)
+  // providerConnections is the complete account set owned by the edited provider.
+  // providerConnections 是被编辑供应商持有的完整账号集合。
+  const providerConnections = React.useMemo(() => props.connections.filter(
+    (connection) => connection.provider_id === props.provider?.id,
+  ), [props.connections, props.provider?.id])
+  // initializedDialogIdentity prevents background snapshots from erasing an in-progress provider edit.
+  // initializedDialogIdentity 防止后台快照清除正在进行的供应商编辑。
+  const initializedDialogIdentity = React.useRef<string | null>(null)
 
   React.useEffect(() => {
     if (!props.open) {
+      initializedDialogIdentity.current = null
       return
     }
+    // dialogIdentity distinguishes provider creation from each concrete provider editor.
+    // dialogIdentity 区分供应商新建窗口与每一个具体供应商编辑器。
+    const dialogIdentity = props.provider?.id ?? "__new_custom_provider__"
+    if (initializedDialogIdentity.current === dialogIdentity) {
+      return
+    }
+    initializedDialogIdentity.current = dialogIdentity
     const entry = props.provider?.service_entries[0]
     setDisplayName(props.provider?.display_name ?? "")
     setBaseUrl(entry?.base_url ?? "")
@@ -536,18 +655,28 @@ function CustomProviderDialog(props: {
     setModelDiscoveryPath(entry?.protocol_routes[0]?.model_discovery_path ?? "")
     setCredentialDisplayName(props.provider?.display_name ?? "")
     setSecret("")
-    setValidationConnectionId(
-      props.connections.find((connection) => connection.provider_id === props.provider?.id)?.id ?? "",
-    )
+    setValidationConnectionId(providerConnections[0]?.id ?? "")
     setStep("connection")
     setProbeResult(null)
     setPendingConfirmation(null)
+    setProtocolOverrideConfirmation(null)
     setError(null)
-  }, [props.connections, props.open, props.provider])
+  }, [props.open, props.provider, providerConnections])
 
-  // continueToCredential validates the endpoint contract before asking for a secret.
-  // continueToCredential 在请求秘密前校验入口契约。
-  const continueToCredential = React.useCallback(() => {
+  React.useEffect(() => {
+    if (!props.open || !props.provider) {
+      return
+    }
+    setValidationConnectionId((current) => (
+      providerConnections.some((connection) => connection.id === current)
+        ? current
+        : (providerConnections[0]?.id ?? "")
+    ))
+  }, [props.open, props.provider, providerConnections])
+
+  // validateConnectionDraft validates the complete locally editable endpoint contract.
+  // validateConnectionDraft 校验完整的本地可编辑入口契约。
+  const validateConnectionDraft = React.useCallback((): boolean => {
     const validationError = validateCustomProviderConnectionStep({
       baseUrl,
       displayName,
@@ -556,23 +685,35 @@ function CustomProviderDialog(props: {
     })
     if (validationError) {
       setError(t(validationError))
-      return
+      return false
     }
     setError(null)
+    return true
+  }, [baseUrl, displayName, modelDiscoveryMode, modelDiscoveryPath, t])
+
+  // continueToCredential validates the endpoint contract before asking for a secret.
+  // continueToCredential 在请求秘密前校验入口契约。
+  const continueToCredential = React.useCallback(() => {
+    if (!validateConnectionDraft()) {
+      return
+    }
     setProbeResult(null)
     setStep("credential")
-  }, [baseUrl, displayName, modelDiscoveryMode, modelDiscoveryPath, t])
+  }, [validateConnectionDraft])
 
   // requestBody builds the exact typed service request from the current form.
   // requestBody 从当前表单构造精确的类型化服务请求。
-  const requestBody = React.useCallback((acceptance?: "manual" | "pending"): PublicAiCustomProviderSaveRequest => ({
+  const requestBody = React.useCallback((
+    acceptance?: "manual" | "pending",
+    confirmInactiveProtocolOverrideDeletion = false,
+  ): PublicAiCustomProviderSaveRequest => ({
     providerId: props.provider?.id,
     displayName: displayName.trim(),
     baseUrl: baseUrl.trim(),
     protocol,
     authentication,
     ...(props.provider
-      ? { validationConnectionId }
+      ? (validationConnectionId ? { validationConnectionId } : {})
       : {
           credentialDisplayName: credentialDisplayName.trim(),
           secret: secret.trim(),
@@ -581,6 +722,7 @@ function CustomProviderDialog(props: {
     modelDiscoveryPath: modelDiscoveryMode === "custom_path" ? modelDiscoveryPath.trim() : undefined,
     allowManualFallback: acceptance === "manual",
     allowPendingValidation: acceptance === "pending",
+    confirmInactiveProtocolOverrideDeletion,
   }), [authentication, baseUrl, credentialDisplayName, displayName, modelDiscoveryMode, modelDiscoveryPath, props.provider, protocol, secret, validationConnectionId])
 
   // probe verifies authentication and model discovery without persisting the provider or secret.
@@ -606,13 +748,44 @@ function CustomProviderDialog(props: {
     }
   }, [credentialDisplayName, props.provider, requestBody, secret, t, validationConnectionId])
 
+  // originalEntry is the persisted technical contract used to distinguish cosmetic edits.
+  // originalEntry 是用于区分纯展示编辑的持久化技术契约。
+  const originalEntry = props.provider?.service_entries[0]
+  // originalProtocol is the exact persisted profile projected into the browser-editable contract.
+  // originalProtocol 是投影到浏览器可编辑契约中的精确持久化协议配置档。
+  const originalProtocol = customProtocolFromProfile(
+    originalEntry?.protocol_routes[0]?.protocol_profile_id ?? "",
+  ) ?? "open_ai_responses"
+  // protocolChanged distinguishes destructive route transitions from other technical edits.
+  // protocolChanged 将破坏性路由切换与其他技术编辑区分开。
+  const protocolChanged = Boolean(props.provider) && protocol !== originalProtocol
+  // inactiveProtocolOverrideCount counts exact old-route settings requiring explicit deletion confirmation.
+  // inactiveProtocolOverrideCount 统计需要显式确认删除的精确旧路由设置。
+  const inactiveProtocolOverrideCount = protocolChanged && props.provider
+    ? props.modelOverrideRecords.filter((record) => (
+        record.providerId === props.provider?.id
+        && record.protocolId !== customProtocolProfileId(protocol)
+      )).length
+    : 0
+
   // save persists only the explicit action represented by the result screen.
   // save 仅持久化结果页明确表示的操作。
-  const save = React.useCallback(async (acceptance?: "manual" | "pending") => {
+  const save = React.useCallback(async (
+    acceptance?: "manual" | "pending",
+    confirmInactiveProtocolOverrideDeletion = false,
+  ) => {
+    if (inactiveProtocolOverrideCount > 0 && !confirmInactiveProtocolOverrideDeletion) {
+      setPendingConfirmation(null)
+      setProtocolOverrideConfirmation(acceptance ?? "ready")
+      return
+    }
     setSaving(true)
     setError(null)
     try {
-      const nextSnapshot = await savePublicAiCustomProvider(requestBody(acceptance))
+      const nextSnapshot = await savePublicAiCustomProvider(requestBody(
+        acceptance,
+        confirmInactiveProtocolOverrideDeletion,
+      ))
       props.onSaved(nextSnapshot)
       props.onOpenChange(false)
     } catch (reason) {
@@ -620,20 +793,62 @@ function CustomProviderDialog(props: {
     } finally {
       setSaving(false)
     }
-  }, [props, requestBody])
+  }, [inactiveProtocolOverrideCount, props, requestBody])
+
+  // saveCredentialFreeEdit persists a valid provider contract when no account exists to probe.
+  // saveCredentialFreeEdit 在不存在可探测账号时持久化有效的供应商契约。
+  const saveCredentialFreeEdit = React.useCallback(() => {
+    if (!validateConnectionDraft()) {
+      return
+    }
+    void save()
+  }, [save, validateConnectionDraft])
 
   const protocolEndpoint = customProviderEndpointPreview(baseUrl, protocol)
   const discoveryEndpoint = customProviderDiscoveryEndpointPreview(baseUrl, modelDiscoveryMode, modelDiscoveryPath)
   const acceptedWithoutOverride = probeResult?.status.state === "ready"
-  const providerConnections = props.connections.filter(
-    (connection) => connection.provider_id === props.provider?.id,
-  )
   const validationConnection = providerConnections.find(
     (connection) => connection.id === validationConnectionId,
   )
+  // connectionContractChanged mirrors the backend service-entry comparison for user-facing routing.
+  // connectionContractChanged 镜像后端服务入口比较，用于决定界面流程。
+  const connectionContractChanged = Boolean(props.provider) && (
+    !originalEntry
+    || baseUrl.trim().replace(/\/+$/, "") !== originalEntry.base_url.replace(/\/+$/, "")
+    || protocolChanged
+    || authentication !== (originalEntry.authentication === "x_api_key" ? "x_api_key" : "bearer_authorization")
+    || modelDiscoveryMode !== customProviderDiscoveryMode(originalEntry)
+    || (modelDiscoveryMode === "custom_path"
+      && modelDiscoveryPath.trim() !== (originalEntry.protocol_routes[0]?.model_discovery_path ?? ""))
+  )
+  // cosmeticEditOnly permits a direct save when only the provider display name changed.
+  // cosmeticEditOnly 仅在供应商展示名称变化时允许直接保存。
+  const cosmeticEditOnly = Boolean(
+    props.provider
+    && displayName.trim()
+    && displayName.trim() !== props.provider.display_name
+    && !connectionContractChanged,
+  )
+  // credentialFreeEdit identifies an existing provider whose contract cannot be remotely probed yet.
+  // credentialFreeEdit 标识当前尚无法远程探测契约的无账号现有供应商。
+  const credentialFreeEdit = Boolean(props.provider) && providerConnections.length === 0
+  // providerChanged prevents an unchanged editor from starting unnecessary validation work.
+  // providerChanged 防止未发生变化的编辑器启动不必要的验证工作。
+  const providerChanged = Boolean(props.provider) && (
+    displayName.trim() !== props.provider?.display_name
+    || connectionContractChanged
+  )
 
   return (
-    <Dialog onOpenChange={props.onOpenChange} open={props.open}>
+    <Dialog
+      onOpenChange={(open) => {
+        if (!open && (probing || saving)) {
+          return
+        }
+        props.onOpenChange(open)
+      }}
+      open={props.open}
+    >
       <DialogContent className="max-h-[min(760px,calc(100vh-2rem))] overflow-y-auto sm:max-w-[620px]">
         <DialogHeader>
           <DialogTitle>{t(props.provider ? "settings.customProviders.editTitle" : "settings.customProviders.addTitle")}</DialogTitle>
@@ -662,7 +877,7 @@ function CustomProviderDialog(props: {
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="settings-form-field">
                 <span>{t("settings.customProviders.protocol")}</span>
-                <Select disabled={Boolean(props.provider)} onValueChange={(value) => setProtocol(value as PublicAiCustomProviderProtocol)} value={protocol}>
+                  <Select onValueChange={(value) => setProtocol(value as PublicAiCustomProviderProtocol)} value={protocol}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {customProtocolOptions.map((option) => (
@@ -703,6 +918,13 @@ function CustomProviderDialog(props: {
               <p><span className="font-medium text-foreground">{t("settings.customProviders.protocolEndpoint")}</span> {protocolEndpoint || "—"}</p>
               <p className="mt-1"><span className="font-medium text-foreground">{t("settings.customProviders.modelsEndpoint")}</span> {discoveryEndpoint || t("settings.customProviders.manualOnly")}</p>
             </div>
+            {credentialFreeEdit ? (
+              <Alert>
+                <CircleAlert className="size-4" />
+                <AlertTitle>{t("settings.customProviders.credentialFreeEditTitle")}</AlertTitle>
+                <AlertDescription>{t("settings.customProviders.credentialFreeEditDescription")}</AlertDescription>
+              </Alert>
+            ) : null}
           </div>
         ) : null}
 
@@ -765,8 +987,10 @@ function CustomProviderDialog(props: {
 
         {error ? <p className="settings-muted-line settings-error-text">{error}</p> : null}
         <DialogFooter>
-          {step === "connection" ? <Button onClick={() => props.onOpenChange(false)} type="button" variant="outline">{t("memory.common.cancel")}</Button> : <Button disabled={probing || saving} onClick={() => setStep(step === "result" ? "credential" : "connection")} type="button" variant="outline">{t("settings.customProviders.back")}</Button>}
-          {step === "connection" ? <Button onClick={continueToCredential} type="button">{t("settings.customProviders.next")}</Button> : null}
+          {step === "connection" ? <Button disabled={probing || saving} onClick={() => props.onOpenChange(false)} type="button" variant="outline">{t("memory.common.cancel")}</Button> : <Button disabled={probing || saving} onClick={() => setStep(step === "result" ? "credential" : "connection")} type="button" variant="outline">{t("settings.customProviders.back")}</Button>}
+          {step === "connection" && props.provider && !providerChanged ? <Button disabled type="button">{t("memory.common.save")}</Button> : null}
+          {step === "connection" && providerChanged && (cosmeticEditOnly || credentialFreeEdit) ? <Button disabled={saving} onClick={credentialFreeEdit ? saveCredentialFreeEdit : () => void save()} type="button">{saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}{t("memory.common.save")}</Button> : null}
+          {step === "connection" && (!props.provider || (providerChanged && !cosmeticEditOnly && !credentialFreeEdit)) ? <Button onClick={continueToCredential} type="button">{t("settings.customProviders.next")}</Button> : null}
           {step === "credential" ? <Button disabled={probing} onClick={() => void probe()} type="button">{probing ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}{t(probing ? "settings.customProviders.probing" : "settings.customProviders.probe")}</Button> : null}
           {step === "result" && acceptedWithoutOverride ? <Button disabled={saving} onClick={() => void save()} type="button">{t(saving ? "settings.customProviders.saving" : "settings.customProviders.saveVerified")}</Button> : null}
           {step === "result" && probeResult?.manualFallbackAvailable ? <Button disabled={saving} onClick={() => setPendingConfirmation("manual")} type="button">{t(saving ? "settings.customProviders.saving" : "settings.customProviders.saveManual")}</Button> : null}
@@ -793,6 +1017,38 @@ function CustomProviderDialog(props: {
               >
                 {saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
                 {t("settings.customProviders.confirmPending")}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+        <AlertDialog
+          onOpenChange={(open) => {
+            if (!open && !saving) setProtocolOverrideConfirmation(null)
+          }}
+          open={protocolOverrideConfirmation !== null}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t("settings.customProviders.protocolOverridesConfirmTitle")}</AlertDialogTitle>
+              <AlertDialogDescription>
+                {t("settings.customProviders.protocolOverridesConfirmDescription")
+                  .replace("{count}", String(inactiveProtocolOverrideCount))
+                  .replace("{protocol}", protocolDisplayName(customProtocolProfileId(protocol)))}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={saving}>{t("memory.common.cancel")}</AlertDialogCancel>
+              <AlertDialogAction
+                disabled={saving || protocolOverrideConfirmation === null}
+                onClick={() => {
+                  const acceptance = protocolOverrideConfirmation === "ready"
+                    ? undefined
+                    : protocolOverrideConfirmation ?? undefined
+                  void save(acceptance, true)
+                }}
+              >
+                {saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
+                {t("settings.customProviders.protocolOverridesConfirmAction")}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
@@ -1073,6 +1329,18 @@ function customProtocolFromProfile(profileId: string): PublicAiCustomProviderPro
     return "open_ai_responses"
   }
   return null
+}
+
+// customProtocolProfileId maps one browser protocol choice to its exact runtime profile identifier.
+// customProtocolProfileId 将一个浏览器协议选择映射到精确运行时配置档标识。
+function customProtocolProfileId(protocol: PublicAiCustomProviderProtocol): string {
+  if (protocol === "anthropic_messages") {
+    return "anthropic-messages.v1"
+  }
+  if (protocol === "open_ai_chat") {
+    return "openai-chat-completions.v1"
+  }
+  return "openai-responses.v1"
 }
 
 // protocolDisplayName returns the user-visible label for one exact profile.

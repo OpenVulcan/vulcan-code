@@ -234,6 +234,9 @@ export interface WorkspaceShellProps {
   // Persists one current session VMM memory policy mode.
   // 持久化当前会话的单个 VMM 记忆策略模式。
   onSetSessionVmmPolicy: (policy: string, mode: string) => Promise<boolean>;
+  // Persists one selected conversation output-style override.
+  // 持久化当前会话的输出风格覆盖。
+  onSetSessionOutputStyle: (styleId: string | null) => Promise<boolean>;
   // Stops the selected conversation run.
   // 停止当前选中会话运行。
   onStopConversationRun: () => Promise<boolean>;

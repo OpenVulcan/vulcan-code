@@ -100,19 +100,20 @@ export function KnowledgeOperationProgress(props: {
           {currentRequest ? <span>{currentRequest.provider} / {currentRequest.model}</span> : <span>尚未发起请求</span>}
         </div>
         {currentRequest ? (
-          <>
-            <div className="knowledge-operation-request-meta">
-              <span>{currentRequest.phase} · {currentRequest.protocol || "provider"}</span>
-              <span>{currentRequest.status} · 输入 {formatCount(currentRequest.inputTokens)} / 输出 {formatCount(currentRequest.outputTokens)}</span>
-            </div>
-            <div className="knowledge-operation-stream">
-              <MarkdownMessage content={currentRequest.outputMarkdown || "```json\n等待 JSON 流输出…\n```"} eager streaming={props.running} />
-            </div>
-          </>
+          <div className="knowledge-operation-request-meta">
+            <span>{currentRequest.phase} · {currentRequest.protocol || "provider"}</span>
+            <span>{currentRequest.status} · 输入 {formatCount(currentRequest.inputTokens)} / 输出 {formatCount(currentRequest.outputTokens)}</span>
+          </div>
         ) : (
           <div className="knowledge-operation-empty">文件扫描或索引准备阶段，暂时没有 LLM 流输出。</div>
         )}
       </section>
+
+      {currentRequest ? (
+        <div className="knowledge-operation-stream">
+          <MarkdownMessage key={currentRequest.requestId} content={currentRequest.outputMarkdown || "```json\n等待 JSON 流输出…\n```"} defaultCodeWrap eager streaming={props.running} />
+        </div>
+      ) : null}
 
       <section className="knowledge-operation-history">
         <div className="knowledge-operation-section-title">

@@ -1,6 +1,57 @@
 use super::*;
 use std::collections::BTreeMap;
 
+/// Describes one selectable output-style catalog entry.
+/// 描述一个可选择的输出风格目录项。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputStyleCatalogEntry {
+    /// Stable style identifier.
+    /// 稳定风格标识。
+    pub id: String,
+    /// Chinese display label.
+    /// 中文显示名称。
+    pub label_zh: String,
+    /// English display label.
+    /// 英文显示名称。
+    pub label_en: String,
+    /// Constraint level shown in selectors.
+    /// 选择器中显示的约束等级。
+    pub constraint_level: String,
+    /// Prompt body character count, used to communicate persistence cost.
+    /// 提示词正文字符数，用于展示持久化成本。
+    pub prompt_char_count: usize,
+    /// Whether this entry is the built-in catalog default.
+    /// 该项是否为内置目录默认项。
+    pub is_default: bool,
+}
+
+/// Carries the global output-style selection and the available catalog.
+/// 携带全局输出风格选择与可用目录。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputStyleCatalogSummary {
+    /// Built-in default style identifier.
+    /// 内置默认风格标识。
+    pub default_id: String,
+    /// Persisted global style identifier.
+    /// 已持久化的全局风格标识。
+    pub selected_id: String,
+    /// Stable catalog entries.
+    /// 稳定的目录项列表。
+    pub entries: Vec<OutputStyleCatalogEntry>,
+}
+
+/// Requests a global output-style selection change.
+/// 请求修改全局输出风格选择。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptOutputStyleSaveRequest {
+    /// Stable style identifier from the output-style catalog.
+    /// 输出风格目录中的稳定风格标识。
+    pub style_id: String,
+}
+
 /// Summarizes one model-visible tool declared by a plugin package.
 /// 汇总插件包声明的单个模型可见工具。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]

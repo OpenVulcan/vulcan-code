@@ -27,6 +27,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_update_session_goal_status",
     "service_set_session_plan_mode",
     "service_set_session_vmm_policy",
+    "service_set_session_output_style",
     "service_compact_selected_conversation_context",
     "service_reply_pending_question",
     "service_reject_pending_question",
@@ -178,6 +179,10 @@ pub(super) async fn dispatch(
         ),
         "service_set_session_vmm_policy" => rpc_json_result(
             service_set_session_vmm_policy(app, state, rpc_required_param(params, "request")?)
+                .await,
+        ),
+        "service_set_session_output_style" => rpc_json_result(
+            service_set_session_output_style(app, state, rpc_required_param(params, "request")?)
                 .await,
         ),
         "service_compact_selected_conversation_context" => {

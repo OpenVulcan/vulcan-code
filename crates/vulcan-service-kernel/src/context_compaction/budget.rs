@@ -127,6 +127,9 @@ pub(crate) struct WebuiContextCompactionBaseline {
     /// Context-start anchor active when the draft was built.
     /// 构建候选状态时生效的上下文起始锚点。
     context_start_message_id: Option<String>,
+    /// Explicit output-style override active when the draft was built.
+    /// 构建候选状态时生效的显式输出风格覆盖。
+    output_style_override_id: Option<String>,
 }
 
 impl WebuiContextCompactionBaseline {
@@ -157,6 +160,7 @@ impl WebuiContextCompactionBaseline {
                 .last()
                 .map(|record| record.id.clone()),
             context_start_message_id: runtime_state.context_start_message_id.clone(),
+            output_style_override_id: runtime_state.output_style.override_style_id.clone(),
         }
     }
 

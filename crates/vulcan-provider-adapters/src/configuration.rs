@@ -2,25 +2,26 @@
 //! 不包含供应商目录或秘钥的持久化公共 AI 配置。
 
 use crate::{
-    CustomModelDefinition, CustomModelTemplateDecision, CustomProviderModelDefaults,
-    PersistedConnectionGraph, ProviderDescriptor, ProviderToolCapabilityKind,
-    ProviderToolTargetSelection, SecondaryRouteSelection,
+    CustomModelDefinition, CustomModelRequestProjection, CustomModelTemplateDecision,
+    CustomProviderModelDefaults, PersistedConnectionGraph, ProviderDescriptor,
+    ProviderToolCapabilityKind, ProviderToolTargetSelection, SecondaryRouteSelection,
+    validate_custom_provider_reasoning_settings, validate_custom_provider_tool_calling_setting,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::{
-    AiOperation, EmbeddingEncoding, EmbeddingOutputKind, EmbeddingTask, InferenceUsageScope,
-    ModelCapabilities, ModelParameterValue, PromptCachePolicy, ReasoningEffort, RerankTruncation,
-    ResourceKind,
+    AiOperation, CapabilitySupport, EmbeddingEncoding, EmbeddingOutputKind, EmbeddingTask,
+    InferenceUsageScope, ModelCapabilities, ModelParameterValue, PromptCachePolicy,
+    ReasoningControlMode, ReasoningEffort, RerankTruncation, ResourceKind,
 };
 
 /// Identifies the current persisted AI configuration schema.
 /// 标识当前持久化 AI 配置 Schema。
-pub const PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION: u32 = 7;
+pub const PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION: u32 = 10;
 
 /// Stores only user-declared differences from immutable model capability sources.
 /// 仅保存用户相对于不可变模型能力来源声明的差异。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ModelCapabilityOverrides {
     /// Optional user context-window replacement.
@@ -35,10 +36,30 @@ pub struct ModelCapabilityOverrides {
     /// 可选的完整非文本输入资源替换集合。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_resources: Option<Vec<ResourceKind>>,
-    /// Optional complete non-text output resource replacement.
-    /// 可选的完整非文本输出资源替换集合。
+    /// Legacy non-text output replacement retained only for schema-seven decoding.
+    /// 仅为读取 Schema 7 而保留的旧版非文本输出替换值。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_resources: Option<Vec<ResourceKind>>,
+    /// Optional complete reasoning support replacement.
+    /// 可选的完整思考支持状态替换值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<CapabilitySupport>,
+    /// Optional complete reasoning-control replacement.
+    /// 可选的完整思考控制替换值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_control: Option<ReasoningControlMode>,
+    /// Optional complete reasoning-level replacement.
+    /// 可选的完整思考档位替换值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_efforts: Option<Vec<ReasoningEffort>>,
+    /// Optional complete tool-calling support replacement.
+    /// 可选的完整工具调用支持状态替换值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calling: Option<CapabilitySupport>,
+    /// Optional exact request projection used by the selected model.
+    /// 可选的选定模型精确请求投影。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_projection: Option<CustomModelRequestProjection>,
 }
 
 impl ModelCapabilityOverrides {
@@ -49,11 +70,106 @@ impl ModelCapabilityOverrides {
     /// 返回值
     /// `true` when every optional difference is absent.
     /// 当全部可选差异均不存在时返回 `true`。
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.context_limit.is_none()
             && self.output_limit.is_none()
             && self.input_resources.is_none()
             && self.output_resources.is_none()
+            && self.reasoning.is_none()
+            && self.reasoning_control.is_none()
+            && self.reasoning_efforts.is_none()
+            && self.tool_calling.is_none()
+            && self.request_projection.is_none()
+    }
+
+    /// Validates one direct model-setting record before it can enter persisted configuration.
+    /// 在一份直接模型设置进入持久化配置前对其进行校验。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success only when output remains text-only and reasoning fields form one complete policy.
+    /// 仅在输出保持纯文本且思考字段形成完整策略时返回成功。
+    pub fn validate(&self) -> Result<(), String> {
+        if self.context_limit == Some(0) {
+            return Err(String::from(
+                "A direct model context limit must be greater than zero.",
+            ));
+        }
+        if self.output_limit == Some(0) {
+            return Err(String::from(
+                "A direct model output limit must be greater than zero.",
+            ));
+        }
+        if let (Some(context_limit), Some(output_limit)) = (self.context_limit, self.output_limit)
+            && output_limit > context_limit
+        {
+            return Err(String::from(
+                "A direct model output limit cannot exceed its context limit.",
+            ));
+        }
+        if self.output_resources.is_some() {
+            return Err(String::from(
+                "Non-text model output cannot be configured through the generic provider settings contract.",
+            ));
+        }
+        // reasoning_field_count prevents partially persisted reasoning contracts.
+        // reasoning_field_count 防止持久化不完整的思考能力契约。
+        let reasoning_field_count = usize::from(self.reasoning.is_some())
+            + usize::from(self.reasoning_control.is_some())
+            + usize::from(self.reasoning_efforts.is_some());
+        if reasoning_field_count != 0 && reasoning_field_count != 3 {
+            return Err(String::from(
+                "Model reasoning support, control, and levels must be saved together.",
+            ));
+        }
+        if let (Some(reasoning), Some(control), Some(efforts)) = (
+            self.reasoning,
+            self.reasoning_control,
+            self.reasoning_efforts.as_deref(),
+        ) {
+            validate_custom_provider_reasoning_settings(reasoning, control, efforts)?;
+        }
+        if let Some(tool_calling) = self.tool_calling {
+            validate_custom_provider_tool_calling_setting(tool_calling)?;
+        }
+        if let Some(request_projection) = self.request_projection.as_ref() {
+            request_projection.validate_paths()?;
+        }
+        Ok(())
+    }
+}
+
+/// Applies only the fields explicitly owned by one sparse capability layer.
+/// 仅应用一层稀疏能力配置中明确由用户持有的字段。
+///
+/// # Parameters
+/// 参数
+/// `overrides` is a provider- or model-scoped sparse layer and `capabilities` is mutated in place.
+/// `overrides` 是供应商级或模型级稀疏层，`capabilities` 会被原地修改。
+fn apply_capability_overrides(
+    overrides: &ModelCapabilityOverrides,
+    capabilities: &mut ModelCapabilities,
+) {
+    if let Some(context_limit) = overrides.context_limit {
+        capabilities.context_limit = Some(context_limit);
+    }
+    if let Some(output_limit) = overrides.output_limit {
+        capabilities.output_limit = Some(output_limit);
+    }
+    if let Some(input_resources) = overrides.input_resources.as_ref() {
+        capabilities.input_resources = input_resources.clone();
+    }
+    if let Some(reasoning) = overrides.reasoning {
+        capabilities.reasoning = reasoning;
+    }
+    if let Some(reasoning_control) = overrides.reasoning_control {
+        capabilities.reasoning_control = reasoning_control;
+    }
+    if let Some(reasoning_efforts) = overrides.reasoning_efforts.as_ref() {
+        capabilities.reasoning_efforts = reasoning_efforts.clone();
+    }
+    if let Some(tool_calling) = overrides.tool_calling {
+        capabilities.tool_calling = tool_calling;
     }
 }
 
@@ -94,16 +210,16 @@ pub struct ActiveAiModelSelection {
     pub connection_id: String,
 }
 
-/// Stores local limit overrides and parameter choices for one connection-model pair.
-/// 保存一个连接与模型组合的本地限制覆盖及参数选择。
+/// Stores protocol-specific cache and adapter parameter choices for one provider model.
+/// 保存一个供应商模型的协议专属缓存与适配器参数选择。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ModelExecutionOverrides {
-    /// Optional context-window override, bounded by a declared provider maximum when present.
-    /// 可选上下文窗口覆盖；供应商声明上限时不得超过该上限。
+    /// Legacy protocol-specific context limit retained only for schema-seven decoding.
+    /// 仅为读取 Schema 7 而保留的旧版协议专属上下文限制。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_limit: Option<u64>,
-    /// Optional output-token override, bounded by declared provider and effective context limits.
-    /// 可选输出 Token 覆盖；受供应商已声明上限及有效上下文限制约束。
+    /// Legacy protocol-specific output limit retained only for schema-seven decoding.
+    /// 仅为读取 Schema 7 而保留的旧版协议专属输出限制。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_limit: Option<u64>,
     /// Optional model-level prompt-cache override.
@@ -114,6 +230,22 @@ pub struct ModelExecutionOverrides {
     /// 适配器注册的模型独立参数值。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub model_parameters: BTreeMap<String, ModelParameterValue>,
+}
+
+impl ModelExecutionOverrides {
+    /// Reports whether this protocol-specific record contains no user-owned setting.
+    /// 报告此协议专属记录是否不包含任何用户持有设置。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when every legacy limit, cache choice, and model parameter is absent.
+    /// 当全部旧限制、缓存选择与模型参数均不存在时返回 `true`。
+    pub fn is_empty(&self) -> bool {
+        self.context_limit.is_none()
+            && self.output_limit.is_none()
+            && self.prompt_cache.is_none()
+            && self.model_parameters.is_empty()
+    }
 }
 
 /// Selects one exact protocol or action binding for internal inference.
@@ -373,6 +505,10 @@ pub struct PersistedAiConfiguration {
     /// 按供应商与模型索引的用户自有能力差异。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub model_capability_overrides: BTreeMap<String, ModelCapabilityOverrides>,
+    /// User-owned provider capability defaults inherited by every provider model.
+    /// 由供应商全部模型继承的用户自有供应商级能力默认值。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub provider_capability_overrides: BTreeMap<String, ModelCapabilityOverrides>,
     /// Internal model access choices scoped by provider, model, and operation.
     /// 按供应商、模型与操作限定作用域的内部模型访问选择。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -410,6 +546,68 @@ fn default_usage_refresh_interval_seconds() -> u64 {
     300
 }
 
+/// Reads one byte-length-prefixed UTF-8 segment from a persisted composite key.
+/// 从持久化组合键中读取一个以字节长度为前缀的 UTF-8 片段。
+///
+/// # Parameters
+/// 参数
+/// `value` is the remaining composite-key text beginning with `<byte-length>:`.
+/// `value` 是以 `<字节长度>:` 开头的组合键剩余文本。
+///
+/// # Returns
+/// 返回值
+/// The exact segment and unconsumed suffix, or `None` for a malformed boundary.
+/// 返回精确片段与未消费后缀；边界格式错误时返回 `None`。
+fn take_length_prefixed_segment(value: &str) -> Option<(&str, &str)> {
+    let (length_text, payload) = value.split_once(':')?;
+    let length = length_text.parse::<usize>().ok()?;
+    let segment = payload.get(..length)?;
+    let remainder = payload.get(length..)?;
+    Some((segment, remainder))
+}
+
+/// Converts one provider-model-protocol key into its provider-model scope.
+/// 将一个供应商-模型-协议组合键转换为供应商-模型作用域。
+///
+/// # Parameters
+/// 参数
+/// `key` is produced by `provider_model_protocol_key` in an older configuration schema.
+/// `key` 由旧配置 Schema 中的 `provider_model_protocol_key` 生成。
+///
+/// # Returns
+/// 返回值
+/// The canonical provider-model key when all three segments are exact and complete.
+/// 当三个片段均精确且完整时返回规范供应商-模型键。
+fn provider_model_key_from_protocol_key(key: &str) -> Option<String> {
+    let (provider_id, model_id, _) =
+        PersistedAiConfiguration::provider_model_protocol_key_parts(key)?;
+    Some(PersistedAiConfiguration::provider_model_key(
+        provider_id,
+        model_id,
+    ))
+}
+
+/// Merges one legacy protocol-specific limit into a conservative model-wide value.
+/// 将一个旧版协议专属限制合并为保守的模型级值。
+///
+/// # Parameters
+/// 参数
+/// `current` is the already merged value and `candidate` is one protocol-specific value.
+/// `current` 是已合并值，`candidate` 是一个协议专属值。
+///
+/// # Returns
+/// 返回值
+/// The smallest configured value so the migration never expands a previous protocol limit.
+/// 返回最小已配置值，确保迁移不会扩大旧协议限制。
+fn conservative_legacy_limit(current: Option<u64>, candidate: Option<u64>) -> Option<u64> {
+    match (current, candidate) {
+        (Some(current), Some(candidate)) => Some(current.min(candidate)),
+        (Some(current), None) => Some(current),
+        (None, Some(candidate)) => Some(candidate),
+        (None, None) => None,
+    }
+}
+
 impl Default for PersistedAiConfiguration {
     /// Builds one configuration with no providers and a five-minute usage refresh interval.
     /// 构建一个不含供应商且用量刷新间隔为五分钟的配置。
@@ -429,6 +627,7 @@ impl Default for PersistedAiConfiguration {
             model_overrides: BTreeMap::new(),
             model_enabled_overrides: BTreeMap::new(),
             model_capability_overrides: BTreeMap::new(),
+            provider_capability_overrides: BTreeMap::new(),
             internal_model_enabled_overrides: BTreeMap::new(),
             inference_profiles: BTreeMap::from([(
                 String::from("vmm"),
@@ -454,25 +653,58 @@ impl PersistedAiConfiguration {
     pub fn migrate_to_current_schema(&mut self) -> Result<bool, String> {
         match self.schema_version {
             PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION => {
-                if self.inference_profiles.contains_key("vmm") {
-                    Ok(false)
+                // normalized records whether a current-version file still carried ignored legacy output fields.
+                // normalized 记录当前版本文件是否仍携带已忽略的旧版输出字段。
+                let normalized = self.normalize_direct_provider_model_settings();
+                // inserted_vmm records whether the required VMM profile was repaired.
+                // inserted_vmm 记录是否补齐了必需的 VMM 配置档。
+                let inserted_vmm = if self.inference_profiles.contains_key("vmm") {
+                    false
                 } else {
                     self.inference_profiles
                         .insert(String::from("vmm"), InferenceProfile::default());
-                    Ok(true)
-                }
+                    true
+                };
+                Ok(normalized || inserted_vmm)
+            }
+            9 => {
+                self.normalize_direct_provider_model_settings();
+                self.inference_profiles
+                    .entry(String::from("vmm"))
+                    .or_default();
+                self.schema_version = PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION;
+                Ok(true)
+            }
+            8 => {
+                self.normalize_direct_provider_model_settings();
+                self.inference_profiles
+                    .entry(String::from("vmm"))
+                    .or_default();
+                self.schema_version = PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION;
+                Ok(true)
+            }
+            7 => {
+                self.normalize_direct_provider_model_settings();
+                self.inference_profiles
+                    .entry(String::from("vmm"))
+                    .or_default();
+                self.schema_version = PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION;
+                Ok(true)
             }
             6 => {
+                self.normalize_direct_provider_model_settings();
                 self.schema_version = PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION;
                 Ok(true)
             }
             3..=5 => {
                 self.migrate_legacy_custom_model_capabilities();
+                self.normalize_direct_provider_model_settings();
                 self.schema_version = PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION;
                 Ok(true)
             }
             2 => {
                 self.migrate_legacy_custom_model_capabilities();
+                self.normalize_direct_provider_model_settings();
                 self.inference_profiles
                     .entry(String::from("vmm"))
                     .or_default();
@@ -503,6 +735,7 @@ impl PersistedAiConfiguration {
                     .collect();
                 self.provider_tool_disabled_targets.clear();
                 self.migrate_legacy_custom_model_capabilities();
+                self.normalize_direct_provider_model_settings();
                 self.inference_profiles
                     .entry(String::from("vmm"))
                     .or_default();
@@ -513,6 +746,143 @@ impl PersistedAiConfiguration {
                 "Unsupported persisted AI configuration schema version {unsupported}; supported version is {PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION}."
             )),
         }
+    }
+
+    /// Removes legacy non-text output settings and collapses records equal to the system baseline.
+    /// 移除旧版非文本输出设置，并折叠与系统基线完全相同的记录。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when at least one persisted record changed.
+    /// 当至少一项持久化记录发生变化时返回 `true`。
+    fn normalize_direct_provider_model_settings(&mut self) -> bool {
+        // changed tracks whether normalization must be persisted by the caller.
+        // changed 跟踪调用方是否需要持久化规范化结果。
+        let mut changed = false;
+        for defaults in self.custom_provider_model_defaults.values_mut() {
+            if !defaults.output_resources.is_empty() {
+                defaults.output_resources.clear();
+                changed = true;
+            }
+        }
+        for models in self.custom_models.values_mut() {
+            for model in models.values_mut() {
+                if !model.capabilities.output_resources.is_empty() {
+                    model.capabilities.output_resources.clear();
+                    changed = true;
+                }
+            }
+        }
+        for decision in self.custom_model_template_decisions.values_mut() {
+            if let CustomModelTemplateDecision::Applied { selection } = decision
+                && !selection.output_resources.is_empty()
+            {
+                selection.output_resources.clear();
+                changed = true;
+            }
+        }
+        // default_provider_count captures entries that represent no user-owned provider layer.
+        // default_provider_count 统计不代表用户供应商层设置的系统默认记录。
+        let default_provider_count = self
+            .custom_provider_model_defaults
+            .values()
+            .filter(|defaults| **defaults == CustomProviderModelDefaults::default())
+            .count();
+        if default_provider_count > 0 {
+            self.custom_provider_model_defaults
+                .retain(|_, defaults| *defaults != CustomProviderModelDefaults::default());
+            changed = true;
+        }
+        for overrides in self.model_capability_overrides.values_mut() {
+            if overrides.output_resources.take().is_some() {
+                changed = true;
+            }
+        }
+        for overrides in self.provider_capability_overrides.values_mut() {
+            if overrides.output_resources.take().is_some() {
+                changed = true;
+            }
+        }
+        // legacy_limits merges protocol-specific limits into their exact provider-model scope.
+        // legacy_limits 将协议专属限制合并到其精确供应商模型作用域。
+        let mut legacy_limits = BTreeMap::<String, (Option<u64>, Option<u64>)>::new();
+        for (key, overrides) in &self.model_overrides {
+            if overrides.context_limit.is_none() && overrides.output_limit.is_none() {
+                continue;
+            }
+            let Some(model_key) = provider_model_key_from_protocol_key(key) else {
+                continue;
+            };
+            let entry = legacy_limits.entry(model_key).or_default();
+            entry.0 = conservative_legacy_limit(entry.0, overrides.context_limit);
+            entry.1 = conservative_legacy_limit(entry.1, overrides.output_limit);
+        }
+        for (model_key, (legacy_context, legacy_output)) in legacy_limits {
+            let overrides = self
+                .model_capability_overrides
+                .entry(model_key)
+                .or_default();
+            // context_was_missing distinguishes migrated data from an existing direct model choice.
+            // context_was_missing 区分迁移数据与既有直接模型选择。
+            let context_was_missing = overrides.context_limit.is_none();
+            // output_was_missing distinguishes migrated data from an existing direct model choice.
+            // output_was_missing 区分迁移数据与既有直接模型选择。
+            let output_was_missing = overrides.output_limit.is_none();
+            if context_was_missing {
+                overrides.context_limit = legacy_context;
+                changed |= legacy_context.is_some();
+            }
+            if output_was_missing {
+                overrides.output_limit = legacy_output.map(|output| {
+                    overrides
+                        .context_limit
+                        .map_or(output, |context| output.min(context))
+                });
+                changed |= legacy_output.is_some();
+            }
+            if context_was_missing
+                && !output_was_missing
+                && let (Some(context), Some(output)) =
+                    (overrides.context_limit, overrides.output_limit)
+                && output > context
+            {
+                overrides.context_limit = Some(output);
+                changed = true;
+            }
+        }
+        for overrides in self.model_overrides.values_mut() {
+            if overrides.context_limit.take().is_some() {
+                changed = true;
+            }
+            if overrides.output_limit.take().is_some() {
+                changed = true;
+            }
+        }
+        // empty_execution_count captures protocol records that held only deprecated model limits.
+        // empty_execution_count 统计仅包含已弃用模型限制的协议记录。
+        let empty_execution_count = self
+            .model_overrides
+            .values()
+            .filter(|overrides| overrides.is_empty())
+            .count();
+        if empty_execution_count > 0 {
+            self.model_overrides
+                .retain(|_, overrides| !overrides.is_empty());
+            changed = true;
+        }
+        // empty_model_count captures records that became empty after removing legacy output settings.
+        // empty_model_count 统计移除旧版输出设置后变为空的模型记录。
+        let empty_model_count = self
+            .model_capability_overrides
+            .values()
+            .filter(|overrides| overrides.is_empty())
+            .count();
+        if empty_model_count > 0 {
+            self.model_capability_overrides
+                .retain(|_, overrides| !overrides.is_empty());
+            changed = true;
+        }
+        changed
     }
 
     /// Migrates legacy complete custom-model capabilities into explicit field differences.
@@ -543,9 +913,8 @@ impl PersistedAiConfiguration {
                         input_resources: (model.capabilities.input_resources
                             != defaults.input_resources)
                             .then(|| model.capabilities.input_resources.clone()),
-                        output_resources: (model.capabilities.output_resources
-                            != defaults.output_resources)
-                            .then(|| model.capabilities.output_resources.clone()),
+                        output_resources: None,
+                        ..ModelCapabilityOverrides::default()
                     };
                     // Supported historical schemas stored resolved basic capabilities inside each
                     // model. Clear those fields after extracting differences so later
@@ -597,6 +966,28 @@ impl PersistedAiConfiguration {
         )
     }
 
+    /// Parses one canonical provider-model-protocol key without guessing delimiters inside identifiers.
+    /// 解析一个规范供应商-模型-协议键，且不会猜测标识符内部的分隔符。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `key` is a length-prefixed key produced by `provider_model_protocol_key`.
+    /// `key` 是由 `provider_model_protocol_key` 生成的长度前缀键。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The exact provider, model, and protocol slices, or `None` for a malformed key.
+    /// 返回精确的供应商、模型与协议切片；键格式错误时返回 `None`。
+    pub fn provider_model_protocol_key_parts(key: &str) -> Option<(&str, &str, &str)> {
+        let (provider_id, remainder) = take_length_prefixed_segment(key)?;
+        let (model_id, remainder) = take_length_prefixed_segment(remainder.strip_prefix(':')?)?;
+        let (protocol_id, remainder) = take_length_prefixed_segment(remainder.strip_prefix(':')?)?;
+        if !remainder.is_empty() {
+            return None;
+        }
+        Some((provider_id, model_id, protocol_id))
+    }
+
     /// Builds a stable key for one connection-model scoped setting.
     /// 为一个连接模型作用域设置构建稳定键。
     ///
@@ -637,6 +1028,27 @@ impl PersistedAiConfiguration {
         )
     }
 
+    /// Parses one canonical provider-model key without guessing delimiters inside identifiers.
+    /// 解析一个规范供应商模型键，且不会猜测标识符内部的分隔符。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `key` is a length-prefixed key produced by `provider_model_key`.
+    /// `key` 是由 `provider_model_key` 生成的长度前缀键。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The exact provider and model slices, or `None` for a malformed key.
+    /// 返回精确的供应商与模型切片；键格式错误时返回 `None`。
+    pub fn provider_model_key_parts(key: &str) -> Option<(&str, &str)> {
+        let (provider_id, remainder) = take_length_prefixed_segment(key)?;
+        let (model_id, remainder) = take_length_prefixed_segment(remainder.strip_prefix(':')?)?;
+        if !remainder.is_empty() {
+            return None;
+        }
+        Some((provider_id, model_id))
+    }
+
     /// Returns one user-owned custom model by exact provider and model identifiers.
     /// 按精确供应商与模型标识返回一个用户自有自定义模型。
     ///
@@ -668,6 +1080,25 @@ impl PersistedAiConfiguration {
     ) -> Option<&ModelCapabilityOverrides> {
         self.model_capability_overrides
             .get(Self::provider_model_key(provider_id, model_id).as_str())
+    }
+
+    /// Returns one explicit provider-level capability layer when it exists.
+    /// 返回一个存在时的显式供应商级能力层。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` identifies the exact provider whose models inherit this layer.
+    /// `provider_id` 标识继承此层的精确供应商。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The sparse provider-level difference, or `None` when the provider inherits catalog defaults.
+    /// 返回稀疏供应商级差异；供应商继承目录默认值时返回 `None`。
+    pub fn provider_capability_overrides(
+        &self,
+        provider_id: &str,
+    ) -> Option<&ModelCapabilityOverrides> {
+        self.provider_capability_overrides.get(provider_id)
     }
 
     /// Returns provider defaults for one custom provider, falling back to safe built-in values.
@@ -890,13 +1321,68 @@ impl PersistedAiConfiguration {
         Ok(())
     }
 
-    /// Applies user differences after all immutable capability sources have resolved.
-    /// 在全部不可变能力来源解析后应用用户差异。
+    /// Applies provider defaults only to fields omitted by the model source evidence.
+    /// 仅将供应商默认应用到模型来源证据未声明的字段。
     ///
     /// # Parameters
     /// 参数
-    /// `provider_id` and `model_id` identify the model; `capabilities` is mutated in place.
-    /// `provider_id` 与 `model_id` 标识模型；`capabilities` 会被原地修改。
+    /// `provider_id` selects the provider layer, `evidence` identifies explicit directory fields,
+    /// and `capabilities` is mutated before source fallbacks are filled.
+    /// `provider_id` 选择供应商层，`evidence` 标识目录明确字段，`capabilities` 会在来源回退填充前被修改。
+    pub fn apply_provider_capability_defaults(
+        &self,
+        provider_id: &str,
+        evidence: &crate::ModelCapabilityEvidence,
+        capabilities: &mut ModelCapabilities,
+    ) {
+        let Some(overrides) = self.provider_capability_overrides(provider_id) else {
+            return;
+        };
+        if !evidence.context_limit_declared
+            && capabilities.context_limit.is_none()
+            && let Some(context_limit) = overrides.context_limit
+        {
+            capabilities.context_limit = Some(context_limit);
+        }
+        if !evidence.output_limit_declared
+            && capabilities.output_limit.is_none()
+            && let Some(output_limit) = overrides.output_limit
+        {
+            capabilities.output_limit = Some(output_limit);
+        }
+        if !evidence.input_modalities_declared
+            && capabilities.input_resources.is_empty()
+            && let Some(input_resources) = overrides.input_resources.as_ref()
+        {
+            capabilities.input_resources = input_resources.clone();
+        }
+        // Reasoning fields are resolved independently because a directory may declare support
+        // while omitting its control mode or selectable levels.
+        // 思考字段按字段独立解析，因为目录可能声明支持却省略控制模式或可选档位。
+        if capabilities.reasoning == CapabilitySupport::Unknown
+            && let Some(reasoning) = overrides.reasoning
+        {
+            capabilities.reasoning = reasoning;
+        }
+        if capabilities.reasoning_control == ReasoningControlMode::Unknown
+            && let Some(reasoning_control) = overrides.reasoning_control
+        {
+            capabilities.reasoning_control = reasoning_control;
+        }
+        if capabilities.reasoning_efforts.is_empty()
+            && let Some(reasoning_efforts) = overrides.reasoning_efforts.as_ref()
+        {
+            capabilities.reasoning_efforts = reasoning_efforts.clone();
+        }
+        if capabilities.tool_calling == CapabilitySupport::Unknown
+            && let Some(tool_calling) = overrides.tool_calling
+        {
+            capabilities.tool_calling = tool_calling;
+        }
+    }
+
+    /// Applies one model-level capability layer above the provider layer.
+    /// 应用位于供应商层之上的模型级能力层。
     pub fn apply_model_capability_overrides(
         &self,
         provider_id: &str,
@@ -906,18 +1392,7 @@ impl PersistedAiConfiguration {
         let Some(overrides) = self.model_capability_overrides(provider_id, model_id) else {
             return;
         };
-        if let Some(context_limit) = overrides.context_limit {
-            capabilities.context_limit = Some(context_limit);
-        }
-        if let Some(output_limit) = overrides.output_limit {
-            capabilities.output_limit = Some(output_limit);
-        }
-        if let Some(input_resources) = overrides.input_resources.as_ref() {
-            capabilities.input_resources = input_resources.clone();
-        }
-        if let Some(output_resources) = overrides.output_resources.as_ref() {
-            capabilities.output_resources = output_resources.clone();
-        }
+        apply_capability_overrides(overrides, capabilities);
     }
 
     /// Removes non-route settings owned by one model after reference validation succeeds.
@@ -960,6 +1435,151 @@ impl PersistedAiConfiguration {
         }
     }
 
+    /// Reports whether a provider still owns any user-customized model or route state.
+    /// 报告供应商是否仍持有任何用户自定义模型或路由状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` identifies the exact provider whose deletion is being checked.
+    /// `provider_id` 标识当前正在检查是否删除的精确供应商。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when deletion would silently discard user-owned model or route information.
+    /// 如果删除会静默丢弃用户持有的模型或路由信息，则返回 `true`。
+    pub fn provider_has_model_customizations(&self, provider_id: &str) -> bool {
+        if self
+            .custom_models
+            .get(provider_id)
+            .is_some_and(|models| !models.is_empty())
+            || self
+                .custom_provider_model_defaults
+                .contains_key(provider_id)
+            || self.provider_capability_overrides.contains_key(provider_id)
+        {
+            return true;
+        }
+
+        let provider_model_prefix = format!("{}:{provider_id}:", provider_id.len());
+        if self
+            .custom_model_template_decisions
+            .keys()
+            .any(|key| key.starts_with(provider_model_prefix.as_str()))
+            || self
+                .model_enabled_overrides
+                .keys()
+                .any(|key| key.starts_with(provider_model_prefix.as_str()))
+            || self
+                .model_capability_overrides
+                .keys()
+                .any(|key| key.starts_with(provider_model_prefix.as_str()))
+            || self
+                .model_overrides
+                .keys()
+                .any(|key| key.starts_with(provider_model_prefix.as_str()))
+            || self
+                .internal_model_enabled_overrides
+                .keys()
+                .any(|key| key.starts_with(provider_model_prefix.as_str()))
+            || self
+                .internal_model_overrides
+                .keys()
+                .any(|key| key.starts_with(provider_model_prefix.as_str()))
+        {
+            return true;
+        }
+
+        let provider_connection_ids = self
+            .connection_graph
+            .connections
+            .values()
+            .filter(|connection| connection.provider_id == provider_id)
+            .map(|connection| connection.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let connection_model_prefixes = provider_connection_ids
+            .iter()
+            .map(|connection_id| format!("{}:{connection_id}:", connection_id.len()))
+            .collect::<Vec<_>>();
+        if self
+            .custom_model_connection_enabled_overrides
+            .keys()
+            .chain(self.secondary_routes.keys())
+            .any(|key| {
+                connection_model_prefixes
+                    .iter()
+                    .any(|prefix| key.starts_with(prefix.as_str()))
+            })
+            || self
+                .connection_model_access_policies
+                .iter()
+                .any(|(connection_id, policy)| {
+                    provider_connection_ids.contains(connection_id.as_str())
+                        && *policy != ConnectionModelAccessPolicy::default()
+                })
+        {
+            return true;
+        }
+
+        self.inference_profiles.values().any(|profile| {
+            profile
+                .llm_routes
+                .values()
+                .chain(profile.embedding.iter())
+                .chain(profile.rerank.iter())
+                .any(|route| route.provider_id == provider_id)
+        })
+    }
+
+    /// Counts protocol-scoped model settings that cannot apply to a selected provider protocol.
+    /// 统计无法应用于所选供应商协议的协议作用域模型设置。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` identifies the edited provider and `protocol_id` is its selected target route.
+    /// `provider_id` 标识正在编辑的供应商，`protocol_id` 是其选定目标路由。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The number of exact provider-owned records bound to another protocol.
+    /// 返回绑定到其他协议的精确供应商自有记录数量。
+    pub fn inactive_provider_model_override_count(
+        &self,
+        provider_id: &str,
+        protocol_id: &str,
+    ) -> usize {
+        self.model_overrides
+            .keys()
+            .filter(|key| {
+                Self::provider_model_protocol_key_parts(key).is_some_and(
+                    |(record_provider_id, _, record_protocol_id)| {
+                        record_provider_id == provider_id && record_protocol_id != protocol_id
+                    },
+                )
+            })
+            .count()
+    }
+
+    /// Removes protocol-scoped model settings that cannot apply after a confirmed protocol switch.
+    /// 在已确认协议切换后移除无法继续应用的协议作用域模型设置。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` identifies the edited provider and `protocol_id` is the retained target route.
+    /// `provider_id` 标识正在编辑的供应商，`protocol_id` 是要保留的目标路由。
+    pub fn remove_inactive_provider_model_overrides(
+        &mut self,
+        provider_id: &str,
+        protocol_id: &str,
+    ) {
+        self.model_overrides.retain(|key, _| {
+            Self::provider_model_protocol_key_parts(key).is_none_or(
+                |(record_provider_id, _, record_protocol_id)| {
+                    record_provider_id != provider_id || record_protocol_id == protocol_id
+                },
+            )
+        });
+    }
+
     /// Removes every persisted model setting owned by one provider after its routes are detached.
     /// 在供应商路由全部解除后移除该供应商持有的全部持久化模型设置。
     ///
@@ -970,6 +1590,7 @@ impl PersistedAiConfiguration {
     pub fn remove_provider_owned_model_settings(&mut self, provider_id: &str) {
         let provider_model_prefix = format!("{}:{provider_id}:", provider_id.len());
         self.custom_provider_model_defaults.remove(provider_id);
+        self.provider_capability_overrides.remove(provider_id);
         self.custom_model_template_decisions
             .retain(|key, _| !key.starts_with(provider_model_prefix.as_str()));
         self.model_enabled_overrides
@@ -1089,8 +1710,8 @@ impl PersistedAiConfiguration {
             })
     }
 
-    /// Stores only a model enabled choice that differs from the provider default.
-    /// 仅保存与供应商默认值不同的模型启用选择。
+    /// Stores one explicit model enabled choice, including a value equal to its inherited default.
+    /// 保存一个明确的模型启用选择，即使该值与继承默认值相同也保留。
     ///
     /// # Parameters
     /// 参数
@@ -1098,15 +1719,19 @@ impl PersistedAiConfiguration {
     /// `provider_id`、`model_id` 与 `enabled` 标识精确用户选择。
     pub fn set_model_enabled(&mut self, provider_id: &str, model_id: &str, enabled: bool) {
         let key = Self::provider_model_key(provider_id, model_id);
-        let default_enabled = self.custom_model(provider_id, model_id).map_or_else(
-            || default_model_enabled(provider_id, model_id),
-            |model| model.enabled,
-        );
-        if enabled == default_enabled {
-            self.model_enabled_overrides.remove(key.as_str());
-        } else {
-            self.model_enabled_overrides.insert(key, enabled);
-        }
+        self.model_enabled_overrides.insert(key, enabled);
+    }
+
+    /// Restores one model enabled choice to its inherited provider or model default.
+    /// 将一个模型启用选择恢复为继承的供应商或模型默认值。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` and `model_id` identify the exact model layer to remove.
+    /// `provider_id` 与 `model_id` 标识要移除的精确模型层。
+    pub fn restore_model_enabled(&mut self, provider_id: &str, model_id: &str) {
+        self.model_enabled_overrides
+            .remove(Self::provider_model_key(provider_id, model_id).as_str());
     }
 }
 
@@ -1145,13 +1770,86 @@ mod tests {
     /// 验证模型覆盖独立于凭据连接标识。
     #[test]
     fn model_override_key_uses_provider_model_and_protocol_scope() {
+        let model_key = PersistedAiConfiguration::provider_model_key("custom:迁移", "model:alpha");
         assert_eq!(
-            PersistedAiConfiguration::provider_model_protocol_key(
-                "minimax",
-                "MiniMax-M3",
-                "anthropic-messages.v1",
-            ),
-            "7:minimax:10:MiniMax-M3:21:anthropic-messages.v1",
+            PersistedAiConfiguration::provider_model_key_parts(model_key.as_str()),
+            Some(("custom:迁移", "model:alpha"))
+        );
+        assert!(
+            PersistedAiConfiguration::provider_model_key_parts(
+                format!("{model_key}:trailing").as_str()
+            )
+            .is_none()
+        );
+
+        let key = PersistedAiConfiguration::provider_model_protocol_key(
+            "custom:迁移",
+            "model:alpha",
+            "anthropic-messages.v1",
+        );
+        assert_eq!(
+            PersistedAiConfiguration::provider_model_protocol_key_parts(key.as_str()),
+            Some(("custom:迁移", "model:alpha", "anthropic-messages.v1"))
+        );
+        assert!(
+            PersistedAiConfiguration::provider_model_protocol_key_parts(
+                format!("{key}:trailing").as_str()
+            )
+            .is_none()
+        );
+    }
+
+    /// Verifies a confirmed protocol switch removes only incompatible route settings for that provider.
+    /// 验证已确认协议切换只会移除该供应商不兼容的路由设置。
+    #[test]
+    fn protocol_switch_cleanup_preserves_target_and_other_provider_settings() {
+        let mut configuration = PersistedAiConfiguration::default();
+        for (provider_id, protocol_id) in [
+            ("custom:test", "openai-chat-completions.v1"),
+            ("custom:test", "openai-responses.v1"),
+            ("custom:other", "openai-chat-completions.v1"),
+        ] {
+            configuration.model_overrides.insert(
+                PersistedAiConfiguration::provider_model_protocol_key(
+                    provider_id,
+                    "private/chat",
+                    protocol_id,
+                ),
+                ModelExecutionOverrides {
+                    prompt_cache: Some(PromptCachePolicy::ProviderDefault),
+                    ..ModelExecutionOverrides::default()
+                },
+            );
+        }
+
+        assert_eq!(
+            configuration
+                .inactive_provider_model_override_count("custom:test", "openai-responses.v1"),
+            1
+        );
+        configuration
+            .remove_inactive_provider_model_overrides("custom:test", "openai-responses.v1");
+
+        assert_eq!(configuration.model_overrides.len(), 2);
+        assert!(
+            configuration.model_overrides.contains_key(
+                PersistedAiConfiguration::provider_model_protocol_key(
+                    "custom:test",
+                    "private/chat",
+                    "openai-responses.v1"
+                )
+                .as_str()
+            )
+        );
+        assert!(
+            configuration.model_overrides.contains_key(
+                PersistedAiConfiguration::provider_model_protocol_key(
+                    "custom:other",
+                    "private/chat",
+                    "openai-chat-completions.v1"
+                )
+                .as_str()
+            )
         );
     }
 
@@ -1180,8 +1878,10 @@ mod tests {
         assert_eq!(configuration.model_enabled_overrides.len(), 1);
 
         configuration.set_model_enabled("openrouter", "vendor/unreviewed-model", false);
-        assert!(configuration.model_enabled_overrides.is_empty());
+        assert_eq!(configuration.model_enabled_overrides.len(), 1);
         assert!(!configuration.model_is_enabled("openrouter", "vendor/unreviewed-model"));
+        configuration.restore_model_enabled("openrouter", "vendor/unreviewed-model");
+        assert!(configuration.model_enabled_overrides.is_empty());
     }
 
     /// Verifies one account stores only model decisions that differ from its inherited default.
@@ -1218,8 +1918,8 @@ mod tests {
         assert!(!configuration.connection_model_is_enabled("account-a", "another-future-model"));
     }
 
-    /// Verifies schema six loads without account policy data and migrates to schema seven exactly.
-    /// 验证 Schema 6 在没有账号策略数据时可加载，并精确迁移到 Schema 7。
+    /// Verifies schema six loads without account policy data and migrates to the current schema exactly.
+    /// 验证 Schema 6 在没有账号策略数据时可加载，并精确迁移到当前 Schema。
     #[test]
     fn schema_six_migration_initializes_connection_model_access_policies() {
         let mut historical: PersistedAiConfiguration =
@@ -1236,6 +1936,164 @@ mod tests {
             PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
         );
         assert!(historical.connection_model_access_policies.is_empty());
+    }
+
+    /// Verifies schema seven preserves the required VMM profile repair while upgrading direct settings.
+    /// 验证 Schema 7 在升级直接设置时仍会修复必需的 VMM 配置档。
+    #[test]
+    fn schema_seven_migration_repairs_missing_vmm_profile() {
+        // historical represents a valid schema-seven file whose required profile was lost before persistence.
+        // historical 表示一份持久化前丢失必需配置档的有效 Schema 7 文件。
+        let mut historical = PersistedAiConfiguration::default();
+        historical.schema_version = 7;
+        historical.inference_profiles.remove("vmm");
+
+        assert!(
+            historical
+                .migrate_to_current_schema()
+                .expect("schema seven must migrate")
+        );
+
+        assert_eq!(
+            historical.schema_version,
+            PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
+        );
+        assert!(historical.inference_profiles.contains_key("vmm"));
+    }
+
+    /// Verifies schema-seven protocol limits become one conservative direct model setting.
+    /// 验证 Schema 7 协议限制会转化为一份保守的直接模型设置。
+    #[test]
+    fn schema_seven_migrates_protocol_limits_to_direct_model_settings() {
+        let mut historical = PersistedAiConfiguration::default();
+        historical.schema_version = 7;
+        let first_key = PersistedAiConfiguration::provider_model_protocol_key(
+            "custom:迁移",
+            "model:alpha",
+            "openai-chat-completions.v1",
+        );
+        let second_key = PersistedAiConfiguration::provider_model_protocol_key(
+            "custom:迁移",
+            "model:alpha",
+            "openai-responses.v1",
+        );
+        historical.model_overrides.insert(
+            first_key.clone(),
+            ModelExecutionOverrides {
+                context_limit: Some(16_384),
+                output_limit: Some(4_096),
+                prompt_cache: Some(PromptCachePolicy::ProviderDefault),
+                model_parameters: BTreeMap::new(),
+            },
+        );
+        historical.model_overrides.insert(
+            second_key.clone(),
+            ModelExecutionOverrides {
+                context_limit: Some(8_192),
+                output_limit: Some(2_048),
+                ..ModelExecutionOverrides::default()
+            },
+        );
+
+        assert!(
+            historical
+                .migrate_to_current_schema()
+                .expect("schema seven must migrate")
+        );
+
+        let model_key = PersistedAiConfiguration::provider_model_key("custom:迁移", "model:alpha");
+        let model_settings = historical
+            .model_capability_overrides
+            .get(model_key.as_str())
+            .expect("legacy limits must become direct model settings");
+        assert_eq!(model_settings.context_limit, Some(8_192));
+        assert_eq!(model_settings.output_limit, Some(2_048));
+        let protocol_settings = historical
+            .model_overrides
+            .get(first_key.as_str())
+            .expect("protocol cache settings must remain");
+        assert_eq!(
+            protocol_settings.prompt_cache,
+            Some(PromptCachePolicy::ProviderDefault)
+        );
+        assert!(protocol_settings.context_limit.is_none());
+        assert!(protocol_settings.output_limit.is_none());
+        assert!(!historical.model_overrides.contains_key(second_key.as_str()));
+    }
+
+    /// Verifies schema-seven user-owned non-text output declarations are removed during migration.
+    /// 验证 Schema 7 中用户持有的非文本输出声明会在迁移时移除。
+    #[test]
+    fn schema_seven_removes_custom_non_text_output_declarations() {
+        let provider_id = "custom:legacy-output";
+        let model_id = "legacy-image-model";
+        let mut historical = PersistedAiConfiguration::default();
+        historical.schema_version = 7;
+        historical.custom_provider_model_defaults.insert(
+            String::from(provider_id),
+            CustomProviderModelDefaults {
+                context_limit: 150_000,
+                output_resources: vec![ResourceKind::Image],
+                ..CustomProviderModelDefaults::default()
+            },
+        );
+        historical.custom_models.insert(
+            String::from(provider_id),
+            BTreeMap::from([(
+                String::from(model_id),
+                CustomModelDefinition {
+                    id: String::from(model_id),
+                    display_name: String::from("Legacy Image Model"),
+                    enabled: true,
+                    capabilities: ModelCapabilities {
+                        output_resources: vec![ResourceKind::Image],
+                        ..ModelCapabilities::default()
+                    },
+                    request_projection: Default::default(),
+                },
+            )]),
+        );
+        historical.custom_model_template_decisions.insert(
+            PersistedAiConfiguration::provider_model_key(provider_id, model_id),
+            CustomModelTemplateDecision::Applied {
+                selection: crate::CustomModelTemplateSelection {
+                    template_key: String::from("openai/gpt-image-1"),
+                    template_revision: String::from(crate::CUSTOM_MODEL_TEMPLATE_REVISION),
+                    context_limit: 32_768,
+                    supports_text_input: true,
+                    supports_text_output: false,
+                    input_resources: Vec::new(),
+                    output_resources: vec![ResourceKind::Image],
+                },
+            },
+        );
+
+        assert!(
+            historical
+                .migrate_to_current_schema()
+                .expect("schema seven must migrate")
+        );
+
+        assert!(
+            historical
+                .custom_provider_model_defaults
+                .get(provider_id)
+                .expect("non-default provider settings must remain")
+                .output_resources
+                .is_empty()
+        );
+        assert!(
+            historical.custom_models[provider_id][model_id]
+                .capabilities
+                .output_resources
+                .is_empty()
+        );
+        let decision = &historical.custom_model_template_decisions
+            [&PersistedAiConfiguration::provider_model_key(provider_id, model_id)];
+        let CustomModelTemplateDecision::Applied { selection } = decision else {
+            panic!("applied template decision must remain");
+        };
+        assert!(selection.output_resources.is_empty());
     }
 
     /// Verifies custom model availability uses the definition default and persists only deviations.
@@ -1262,6 +2120,8 @@ mod tests {
         assert!(configuration.model_is_enabled("custom-provider", "private-model"));
         assert_eq!(configuration.model_enabled_overrides.len(), 1);
         configuration.set_model_enabled("custom-provider", "private-model", false);
+        assert_eq!(configuration.model_enabled_overrides.len(), 1);
+        configuration.restore_model_enabled("custom-provider", "private-model");
         assert!(configuration.model_enabled_overrides.is_empty());
     }
 
@@ -1278,6 +2138,7 @@ mod tests {
                 output_limit: None,
                 input_resources: Some(vec![ResourceKind::Image]),
                 output_resources: None,
+                ..ModelCapabilityOverrides::default()
             },
         );
         let mut effective = ModelCapabilities {
@@ -1401,6 +2262,31 @@ mod tests {
         );
     }
 
+    /// Verifies provider removal detects user-owned model information before any cascade cleanup.
+    /// 验证移除供应商前会检测用户自有模型信息，而不会直接执行级联清理。
+    #[test]
+    fn provider_model_customization_detection_blocks_silent_cleanup() {
+        let provider_id = "custom-provider";
+        let model_id = "private-model";
+        let mut configuration = PersistedAiConfiguration::default();
+        assert!(!configuration.provider_has_model_customizations(provider_id));
+
+        configuration.custom_models.insert(
+            String::from(provider_id),
+            BTreeMap::from([(
+                String::from(model_id),
+                CustomModelDefinition {
+                    id: String::from(model_id),
+                    display_name: String::from("Private Model"),
+                    enabled: true,
+                    capabilities: ModelCapabilities::default(),
+                    request_projection: Default::default(),
+                },
+            )]),
+        );
+        assert!(configuration.provider_has_model_customizations(provider_id));
+    }
+
     /// Verifies deleting a provider clears every provider-scoped model setting without touching peers.
     /// 验证删除供应商会清理全部供应商作用域模型设置且不会影响其他供应商。
     #[test]
@@ -1522,6 +2408,7 @@ mod tests {
                 output_limit: None,
                 input_resources: Some(Vec::new()),
                 output_resources: None,
+                ..ModelCapabilityOverrides::default()
             },
         );
 
@@ -1640,6 +2527,7 @@ mod tests {
                     output_limit: Some(8_192),
                     input_resources: Some(Vec::new()),
                     output_resources: None,
+                    ..ModelCapabilityOverrides::default()
                 },
             )]),
             ..PersistedAiConfiguration::default()
@@ -1666,6 +2554,7 @@ mod tests {
                 output_limit: Some(8_192),
                 input_resources: Some(Vec::new()),
                 output_resources: None,
+                ..ModelCapabilityOverrides::default()
             })
         );
     }
@@ -1713,6 +2602,7 @@ mod tests {
                 output_limit: Some(4_096),
                 input_resources: Some(vec![ResourceKind::Image]),
                 output_resources: None,
+                ..ModelCapabilityOverrides::default()
             })
         );
         let migrated_model = historical

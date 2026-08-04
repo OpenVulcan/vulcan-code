@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   accountActuallyDiscoveredModel,
   accountExposesModel,
+  accountIncludesModel,
   buildCustomProviderModelRows,
   shouldBlockManualModelSubmission,
   shouldReplaceManualModelDrafts,
@@ -128,6 +129,15 @@ function snapshotFixture(): PublicAiSettingsSnapshot {
       "custom:test": { "manual/chat": manualModelFixture("manual/chat") },
     },
     customProviderModelDefaults: {},
+    customProviderSystemModelDefaults: {
+      context_limit: 200_000,
+      output_limit: 32_768,
+      input_resources: [],
+      reasoning: "native",
+      reasoning_control: "effort_selection",
+      reasoning_efforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+      tool_calling: "native",
+    },
     customModelTemplateDecisionRecords: [],
     customModelConnectionAvailabilityRecords: [
       { connectionId: "beta", modelId: "shared/chat", enabled: false },
@@ -168,6 +178,23 @@ describe("custom provider model state", () => {
     expect(accountActuallyDiscoveredModel(betaOnly!.accounts[1])).toBe(true)
     expect(accountExposesModel(betaOnly!.accounts[1])).toBe(true)
     expect(betaOnly?.manualDefinition).toBeUndefined()
+  })
+
+  it("retains provider-resolved capabilities when account access hides every model", () => {
+    const snapshot = snapshotFixture()
+    snapshot.catalogs = {
+      alpha: { ...snapshot.catalogs.alpha!, models: [] },
+      beta: { ...snapshot.catalogs.beta!, models: [] },
+    }
+
+    const shared = buildCustomProviderModelRows(snapshot, "custom:test")
+      .find((row) => row.id === "shared/chat")
+
+    expect(shared?.effectiveModel).toBeUndefined()
+    expect(shared?.capabilityModel?.capabilities.context_limit).toBe(64_000)
+    expect(shared?.accounts.every((account) => !accountExposesModel(account))).toBe(true)
+    expect(shared?.accounts.every(accountIncludesModel)).toBe(true)
+    expect(shared?.accounts[0].supportModel?.capabilities.context_limit).toBe(64_000)
   })
 
   it("uses an explicit user display name without replacing account discovery facts", () => {

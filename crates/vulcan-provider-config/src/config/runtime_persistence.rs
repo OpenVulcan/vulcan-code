@@ -783,6 +783,75 @@ impl Default for PersistedPromptPersonalitySelection {
     }
 }
 
+/// Persisted output-style selection used as the default for new conversations.
+/// 用作新会话默认值的持久化输出风格选择。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PersistedPromptOutputStyleSelection {
+    /// Disable generic output-style instructions.
+    /// 禁用通用输出风格指令。
+    Unrestricted,
+    /// Concise general-purpose output style.
+    /// 简洁通用输出风格。
+    Balanced,
+    /// Structured technical-report output style.
+    /// 分层技术报告输出风格。
+    Structured,
+    /// Strict engineering-audit output style.
+    /// 严格工程审计输出风格。
+    Rigorous,
+}
+
+impl Default for PersistedPromptOutputStyleSelection {
+    /// Returns the concise general-purpose default.
+    /// 返回简洁通用默认值。
+    fn default() -> Self {
+        Self::Balanced
+    }
+}
+
+impl PersistedPromptOutputStyleSelection {
+    /// Parses one stable catalog identifier.
+    /// 解析一个稳定目录标识。
+    pub fn from_id(value: &str) -> Option<Self> {
+        match value.trim() {
+            "unrestricted" => Some(Self::Unrestricted),
+            "balanced" => Some(Self::Balanced),
+            "structured" => Some(Self::Structured),
+            "rigorous" => Some(Self::Rigorous),
+            _ => None,
+        }
+    }
+
+    /// Returns the stable catalog identifier.
+    /// 返回稳定目录标识。
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Unrestricted => "unrestricted",
+            Self::Balanced => "balanced",
+            Self::Structured => "structured",
+            Self::Rigorous => "rigorous",
+        }
+    }
+
+    /// Returns whether this selection is the persisted default.
+    /// 返回该选择是否为持久化默认值。
+    pub const fn is_default(&self) -> bool {
+        matches!(self, Self::Balanced)
+    }
+
+    /// Returns the compact Chinese selector label.
+    /// 返回紧凑中文选择器名称。
+    pub const fn label_zh(self) -> &'static str {
+        match self {
+            Self::Unrestricted => "不限定",
+            Self::Balanced => "清晰均衡",
+            Self::Structured => "分层报告",
+            Self::Rigorous => "工程严谨",
+        }
+    }
+}
+
 /// Prompt-composer configuration persisted in the shared Vulcan file.
 /// 持久化在共享 Vulcan 文件中的提示词组合配置。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -795,6 +864,13 @@ pub struct PersistedPromptConfiguration {
         skip_serializing_if = "PersistedPromptPersonalitySelection::is_default"
     )]
     pub personality: PersistedPromptPersonalitySelection,
+    /// Default output style applied when a new conversation is materialized.
+    /// 新会话物化时使用的默认输出风格。
+    #[serde(
+        default,
+        skip_serializing_if = "PersistedPromptOutputStyleSelection::is_default"
+    )]
+    pub output_style: PersistedPromptOutputStyleSelection,
     /// Whether workspace-local `.vulcan/code/prompt.md` should be injected.
     /// 是否注入工作区本地 `.vulcan/code/prompt.md`。
     #[serde(default = "default_true")]
@@ -811,6 +887,7 @@ impl Default for PersistedPromptConfiguration {
     fn default() -> Self {
         Self {
             personality: PersistedPromptPersonalitySelection::Default,
+            output_style: PersistedPromptOutputStyleSelection::Balanced,
             project_prompt_enabled: true,
             project_prompt_path: default_project_prompt_path(),
         }

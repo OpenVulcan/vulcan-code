@@ -89,7 +89,10 @@ pub(crate) fn public_ai_provider_rows_for_selection(
     runtime: &vulcan_provider_adapters::PublicAiRuntime,
     active_selection: Option<&vulcan_provider_adapters::ResolvedPublicAiSelection>,
 ) -> Result<Vec<ProviderSummary>, String> {
-    let mut catalog_snapshot = runtime.catalog_snapshot()?;
+    // Rebuild the effective snapshot from immutable catalogs and persisted overlays so model rows
+    // immediately reflect capability edits instead of a stale in-memory catalog copy.
+    // 从不可变目录与持久化覆盖重新构建有效快照，确保模型行立即反映能力编辑而不是旧的内存目录副本。
+    let mut catalog_snapshot = runtime.resolved_model_catalog_snapshot(configuration)?;
     catalog_snapshot.retain(|connection_id, _| {
         !configuration.connection_is_pending_validation(connection_id.as_str())
     });
@@ -167,7 +170,11 @@ pub(crate) fn public_ai_provider_rows_for_selection(
                                 .capabilities
                                 .output_limit
                                 .and_then(|value| usize::try_from(value).ok()),
-                            reasoning: Some(!model.capabilities.reasoning_efforts.is_empty()),
+                            reasoning: Some(
+                                vulcan_provider_adapters::model_supports_reasoning(
+                                    &model.capabilities,
+                                ),
+                            ),
                             attachment: Some(!model.capabilities.input_resources.is_empty()),
                             input_modalities: model
                                 .capabilities

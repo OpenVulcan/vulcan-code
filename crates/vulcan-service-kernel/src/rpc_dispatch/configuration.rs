@@ -13,6 +13,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_select_workbench_thinking_display_mode",
     "service_select_webui_locale",
     "service_save_provider_retry_settings",
+    "service_output_style_catalog",
+    "service_save_prompt_output_style",
     "service_public_ai_settings_snapshot",
     "service_start_public_ai_oauth",
     "service_public_ai_oauth_status",
@@ -35,6 +37,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_public_ai_connection_model_enabled",
     "service_save_public_ai_connection_models_enabled",
     "service_save_public_ai_model_capability_overrides",
+    "service_save_public_ai_provider_capability_overrides",
     "service_sync_public_ai_connection",
     "service_query_public_ai_connection_usage",
     "service_save_public_ai_usage_refresh_settings",
@@ -123,6 +126,13 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "request")?,
             )
             .await,
+        ),
+        "service_output_style_catalog" => {
+            rpc_json_result(service_output_style_catalog(state).await)
+        }
+        "service_save_prompt_output_style" => rpc_json_result(
+            service_save_prompt_output_style(app, state, rpc_required_param(params, "request")?)
+                .await,
         ),
         "service_public_ai_settings_snapshot" => {
             rpc_json_result(service_public_ai_settings_snapshot(state).await)
@@ -254,6 +264,14 @@ pub(super) async fn dispatch(
         ),
         "service_save_public_ai_model_capability_overrides" => rpc_json_result(
             service_save_public_ai_model_capability_overrides(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_save_public_ai_provider_capability_overrides" => rpc_json_result(
+            service_save_public_ai_provider_capability_overrides(
                 app,
                 state,
                 rpc_required_param(params, "request")?,

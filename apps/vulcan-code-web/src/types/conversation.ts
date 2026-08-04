@@ -382,6 +382,35 @@ export interface SessionAddonsChangedDelta {
   // Current session VMM memory policy overrides.
   // 当前会话 VMM 记忆策略覆盖。
   sessionVmmPolicy?: SessionVmmPolicySummary | null;
+  // Current output-style override and the last safely applied snapshot.
+  // 当前会话输出风格覆盖与最近一次安全应用的快照。
+  sessionOutputStyle?: SessionOutputStyleSummary | null;
+}
+
+// SessionOutputStyleSummary describes a pending per-session style override without mutating the active prompt context.
+// SessionOutputStyleSummary 描述待生效的会话风格覆盖，不直接修改当前提示词上下文。
+export interface SessionOutputStyleSummary {
+  // Explicit per-session override, or null when inheriting the global setting.
+  // 会话显式覆盖；继承全局设置时为空。
+  overrideStyleId?: string | null;
+  // Desired style after resolving the session override against the global setting.
+  // 将会话覆盖与全局设置解析后的目标风格。
+  desiredStyleId: string;
+  // Last style snapshot safely applied at a prompt boundary.
+  // 最近一次在提示词边界安全应用的风格快照。
+  appliedStyleId?: string | null;
+  // Whether the desired style waits for a new session or compaction boundary.
+  // 目标风格是否等待新会话或压缩边界。
+  pendingActivation: boolean;
+  // Fingerprint of the applied prompt text when available.
+  // 已应用提示词正文的指纹（如可用）。
+  appliedFingerprint?: number | null;
+  // Timestamp of the last safe application.
+  // 最近一次安全应用的时间戳。
+  appliedAt?: string | null;
+  // Next lifecycle boundary that can activate a pending selection.
+  // 可激活待生效选择的下一个生命周期边界。
+  nextActivationBoundary?: string | null;
 }
 
 // SessionVmmPolicySummary describes session VMM policy override and effective state.

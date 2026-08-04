@@ -81,3 +81,24 @@ describe("clearDraftSessionSettingsEntry", () => {
     expect(clearDraftSessionSettingsEntry(entries, "missing", null)).toBe(entries);
   });
 });
+
+describe("output-style draft inheritance", () => {
+  it("keeps other draft settings when the output-style override is cleared", () => {
+    const draft: {
+      outputStyleId?: string;
+      initialGoal: { objective: string; tokenBudget: null };
+    } = {
+      outputStyleId: "rigorous",
+      initialGoal: {
+        objective: "Keep this goal",
+        tokenBudget: null,
+      },
+    };
+    const next = { ...draft };
+    delete next.outputStyleId;
+
+    expect(next).toEqual({
+      initialGoal: draft.initialGoal,
+    });
+  });
+});

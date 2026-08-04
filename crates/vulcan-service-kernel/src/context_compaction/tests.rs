@@ -4,6 +4,7 @@
 use super::*;
 use vulcan_agent_runtime::agent_runtime::prompt_compaction::PromptCompactionExecutionProfile;
 use vulcan_agent_runtime::conversation_protocol::conversation_state_from_session_messages;
+use vulcan_agent_runtime::provider_config::PersistedPromptOutputStyleSelection;
 use vulcan_context_injection::{InjectionInsert, InjectionKind};
 use vulcan_workbench_model::SessionTurnStats;
 
@@ -23,6 +24,19 @@ fn contains_cjk_text(text: &str) -> bool {
             || (0x3400..=0x4DBF).contains(&codepoint)
             || (0xF900..=0xFAFF).contains(&codepoint)
     })
+}
+
+/// Verifies a style override change invalidates an in-flight compaction draft.
+/// 验证压缩进行中修改输出风格覆盖会使旧候选失效。
+#[test]
+fn compaction_baseline_rejects_concurrent_output_style_override_change() {
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    runtime_state.output_style.override_style_id = Some(String::from("structured"));
+    let baseline = WebuiContextCompactionBaseline::capture(&runtime_state);
+
+    runtime_state.output_style.override_style_id = Some(String::from("rigorous"));
+
+    assert!(!baseline.matches(&runtime_state));
 }
 
 /// Removes the variable last-user payload from an automatic compaction continuation prompt.
@@ -108,6 +122,7 @@ fn webui_context_compaction_draft_prunes_expired_transient_injections_transactio
         1,
         "## Goal\n- 保留上下文压缩升级目标。",
         &execution,
+        PersistedPromptOutputStyleSelection::default(),
     )
     .expect("draft should be built from a valid summary");
 
@@ -208,6 +223,7 @@ fn webui_context_compaction_draft_keeps_status_markers_unanchored() {
         1,
         "## Goal\n- 保留上下文压缩升级目标。",
         &execution,
+        PersistedPromptOutputStyleSelection::default(),
     )
     .expect("draft should be built from a valid summary");
 
@@ -326,6 +342,7 @@ fn webui_context_compaction_draft_separates_manual_stats_and_auto_continuation()
         1,
         "## Goal\n- Keep automatic compaction continuation semantics.",
         &manual_execution,
+        PersistedPromptOutputStyleSelection::default(),
     )
     .expect("manual draft should be built from a valid summary");
     assert!(
@@ -418,6 +435,7 @@ fn webui_context_compaction_draft_separates_manual_stats_and_auto_continuation()
         1,
         "## Goal\n- Keep automatic compaction continuation semantics.",
         &auto_execution,
+        PersistedPromptOutputStyleSelection::default(),
     )
     .expect("automatic draft should be built from a valid summary");
     assert!(

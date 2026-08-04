@@ -3,6 +3,7 @@
 
 use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::execution_models::ExecutionPreparation;
+use crate::agent_runtime::provider_reasoning::resolve_effective_wire_reasoning_effort;
 use crate::agent_runtime::provider_runtime_inputs::one_shot_provider_error_stream;
 use crate::agent_runtime::provider_stream::ProviderDeltaStream;
 use crate::agent_runtime::provider_transport::build_provider_transport_execution_request;
@@ -103,31 +104,34 @@ fn resolve_runtime_reasoning_effort(
     execution: &ResolvedPublicAiExecution,
     requested: crate::provider_config::ReasoningEffortLevel,
 ) -> Result<Option<ReasoningEffort>, String> {
-    let effort = match requested {
-        crate::provider_config::ReasoningEffortLevel::Off => return Ok(None),
-        crate::provider_config::ReasoningEffortLevel::None => ReasoningEffort::None,
-        crate::provider_config::ReasoningEffortLevel::Adaptive => ReasoningEffort::Adaptive,
-        crate::provider_config::ReasoningEffortLevel::Minimal => ReasoningEffort::Minimal,
-        crate::provider_config::ReasoningEffortLevel::Low => ReasoningEffort::Low,
-        crate::provider_config::ReasoningEffortLevel::Medium => ReasoningEffort::Medium,
-        crate::provider_config::ReasoningEffortLevel::High => ReasoningEffort::High,
-        crate::provider_config::ReasoningEffortLevel::XHigh => ReasoningEffort::XHigh,
-        crate::provider_config::ReasoningEffortLevel::Max => ReasoningEffort::Max,
-        crate::provider_config::ReasoningEffortLevel::Ultra => ReasoningEffort::Ultra,
-    };
-    if execution
-        .model
-        .capabilities
-        .reasoning_efforts
-        .contains(&effort)
-    {
-        Ok(Some(effort))
-    } else {
-        // A saved workbench preference can outlive the selected model. The catalog remains
-        // authoritative, so an unsupported preference means provider-default reasoning.
-        // 已保存的工作台偏好可能比所选模型存活更久。目录保持权威，因此不受支持的偏好表示使用供应商默认推理。
-        Ok(None)
-    }
+    Ok(resolve_runtime_reasoning_effort_for_capabilities(
+        &execution.model.capabilities,
+        requested,
+    ))
+}
+
+/// Converts one resolved model capability contract into the final provider-neutral wire effort.
+/// 将解析后的模型能力契约转换为最终供应商无关的 Wire 推理档位。
+///
+/// # Parameters
+/// 参数
+/// `capabilities` is the exact model contract after catalog overlays.
+/// `capabilities` 是应用目录覆盖后的精确模型契约。
+/// `requested` is the workbench preference, where `Off` means provider default.
+/// `requested` 是工作台偏好，其中 `Off` 表示供应商默认行为。
+///
+/// # Returns
+/// 返回值
+/// Returns `None` only when the model has no explicit reasoning effort contract.
+/// 仅当模型没有显式推理档位契约时返回 `None`。
+fn resolve_runtime_reasoning_effort_for_capabilities(
+    capabilities: &vulcan_ai_contract::ModelCapabilities,
+    requested: crate::provider_config::ReasoningEffortLevel,
+) -> Option<ReasoningEffort> {
+    // Reuse the shared wire resolver so catalog defaults, explicit disablement, and stale
+    // capability contracts have one final interpretation before transport encoding.
+    // 复用共享 Wire 解析器，确保目录默认值、显式关闭和旧能力契约在编码前只有一种解释。
+    resolve_effective_wire_reasoning_effort(capabilities, Some(requested))
 }
 
 /// Executes one provider prompt against the currently selected runtime family and returns a delta stream.
@@ -333,4 +337,73 @@ fn execute_provider_prompt_stream_with_capture_mode(
             yield delta;
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_runtime_reasoning_effort_for_capabilities;
+    use crate::provider_config::ReasoningEffortLevel;
+    use vulcan_ai_contract::{
+        CapabilitySupport, ModelCapabilities, ReasoningControlMode, ReasoningEffort,
+    };
+
+    /// Verifies the legacy `Off` sentinel now selects an enabled default for a text model.
+    /// 验证旧版 `Off` 哨兵现在会为文本模型选择启用的默认档位。
+    #[test]
+    fn off_preference_resolves_to_enabled_default() {
+        let capabilities = ModelCapabilities {
+            reasoning: CapabilitySupport::Native,
+            reasoning_control: ReasoningControlMode::EffortSelection,
+            reasoning_efforts: vec![ReasoningEffort::None, ReasoningEffort::Medium],
+            ..ModelCapabilities::default()
+        };
+
+        assert_eq!(
+            resolve_runtime_reasoning_effort_for_capabilities(
+                &capabilities,
+                ReasoningEffortLevel::Off,
+            ),
+            Some(ReasoningEffort::Medium)
+        );
+    }
+
+    /// Verifies an explicit disabled contract cannot be re-enabled by stale effort metadata.
+    /// 验证明确的关闭契约不会被旧推理档位元数据重新开启。
+    #[test]
+    fn explicit_disabled_contract_wins_over_stale_efforts() {
+        let capabilities = ModelCapabilities {
+            reasoning: CapabilitySupport::Unsupported,
+            reasoning_control: ReasoningControlMode::FixedOff,
+            reasoning_efforts: vec![ReasoningEffort::None, ReasoningEffort::High],
+            ..ModelCapabilities::default()
+        };
+
+        assert_eq!(
+            resolve_runtime_reasoning_effort_for_capabilities(
+                &capabilities,
+                ReasoningEffortLevel::Off,
+            ),
+            None
+        );
+    }
+
+    /// Verifies an explicit workbench disabled choice remains authoritative for an enabled model.
+    /// 验证启用模型上的工作台明确关闭选择仍然保持权威。
+    #[test]
+    fn explicit_none_remains_disabled() {
+        let capabilities = ModelCapabilities {
+            reasoning: CapabilitySupport::Native,
+            reasoning_control: ReasoningControlMode::EffortSelection,
+            reasoning_efforts: vec![ReasoningEffort::None, ReasoningEffort::High],
+            ..ModelCapabilities::default()
+        };
+
+        assert_eq!(
+            resolve_runtime_reasoning_effort_for_capabilities(
+                &capabilities,
+                ReasoningEffortLevel::None,
+            ),
+            Some(ReasoningEffort::None)
+        );
+    }
 }

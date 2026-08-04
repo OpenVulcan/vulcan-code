@@ -107,7 +107,9 @@ export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
   if (props.activeSettingsSubArea === "prompt-composer") {
     return (
       <PromptComposerSettingsArea
+        actions={props.actions}
         attachmentCapabilities={props.workbench.composerAttachmentCapabilities ?? []}
+        outputStyleCatalog={props.workbench.outputStyleCatalog}
         reasoningSelection={props.workbench.reasoningSelection ?? null}
         slashCommands={props.workbench.composerSlashCommands ?? []}
       />

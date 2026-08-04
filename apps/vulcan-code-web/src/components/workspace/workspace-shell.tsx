@@ -1300,6 +1300,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onUpdateSessionGoalStatus={props.onUpdateSessionGoalStatus}
         onSetSessionPlanMode={props.onSetSessionPlanMode}
         onSetSessionVmmPolicy={props.onSetSessionVmmPolicy}
+        onSetSessionOutputStyle={props.onSetSessionOutputStyle}
         onStopConversationRun={props.onStopConversationRun}
         onOpenSubagentPanel={handleOpenSubagentPanel}
         onStopSubagentTask={props.onStopSubagentTask}

@@ -26,8 +26,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 use vulcan_ai_contract::{
-    AccountUsageSnapshot, AiExecutionRequest, AiOperation, EmbeddingRequest, EmbeddingResponse,
-    InferenceUsageScope, ModelCapabilities, PromptCachePolicy, RerankRequest, RerankResponse,
+    AccountUsageSnapshot, AiExecutionRequest, AiOperation, CapabilitySupport, EmbeddingRequest,
+    EmbeddingResponse, InferenceUsageScope, ModelCapabilities, PromptCachePolicy,
+    ReasoningControlMode, RerankRequest, RerankResponse,
 };
 use vulcan_ai_protocols::ProtocolRegistry;
 
@@ -50,6 +51,10 @@ const PROVIDER_ASYNC_TASK_POLL_INTERVAL: Duration = Duration::from_secs(15);
 /// Maximum wall time for one provider task poll or cancellation observation.
 /// 单次供应商任务轮询或取消观测的最大墙钟时间。
 const PROVIDER_ASYNC_TASK_OBSERVATION_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Identifies the host-owned default reasoning policy applied to unknown text models.
+/// 标识应用于未知文本模型的宿主默认思考策略。
+const HOST_DEFAULT_REASONING_EVIDENCE_REVISION: &str = "host-default-reasoning.v1";
 
 /// Identifies the closed outcome of one credential-scoped model discovery attempt.
 /// 标识一次凭据作用域模型发现尝试的封闭结果。
@@ -157,6 +162,29 @@ pub fn model_supports_text_conversation(capabilities: &ModelCapabilities) -> boo
     capabilities
         .operations
         .contains(&AiOperation::ConversationRespond)
+}
+
+/// Reports whether one model contract exposes an enabled reasoning capability to the host.
+/// 报告一个模型契约是否向宿主公开已启用的思考能力。
+///
+/// # Parameters
+/// 参数
+/// `capabilities` is the provider-neutral capability contract after discovery and user overlays.
+/// `capabilities` 是应用发现结果与用户覆盖后的供应商无关能力契约。
+///
+/// # Returns
+/// 返回值
+/// `true` when the model is a text conversation model whose reasoning contract is supported and
+/// is not explicitly fixed off. Unknown text models receive the host's enabled default policy.
+/// 当模型是文本会话模型、其思考契约受支持且没有明确固定关闭时返回 `true`；未知文本模型使用宿主的默认开启策略。
+pub fn model_supports_reasoning(capabilities: &ModelCapabilities) -> bool {
+    let mut effective = capabilities.clone();
+    apply_host_default_reasoning_policy(&mut effective);
+    effective
+        .operations
+        .contains(&AiOperation::ConversationRespond)
+        && effective.reasoning.is_supported()
+        && effective.reasoning_control != ReasoningControlMode::FixedOff
 }
 
 /// Awaits one provider-task network operation without allowing it to block the recovery scheduler forever.
@@ -1066,6 +1094,46 @@ impl PublicAiRuntime {
             .snapshot())
     }
 
+    /// Reports provider-level model support independently from account access switches.
+    /// 报告独立于账号访问开关的供应商级模型支持状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration` owns provider membership, while `provider_id` and `model_id` select one model.
+    /// `configuration` 持有供应商成员关系，`provider_id` 与 `model_id` 选择一个模型。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when a manual declaration or any account support catalog contains the model.
+    /// 当手工声明或任一账号支持目录包含该模型时返回 `true`。
+    pub fn provider_model_is_supported(
+        &self,
+        configuration: &PersistedAiConfiguration,
+        provider_id: &str,
+        model_id: &str,
+    ) -> Result<bool, String> {
+        if configuration.custom_model(provider_id, model_id).is_some() {
+            return Ok(true);
+        }
+        // support_configuration removes only account access policy; provider membership remains authoritative.
+        // support_configuration 只移除账号访问策略；供应商成员关系仍保持权威。
+        let mut support_configuration = configuration.clone();
+        support_configuration
+            .connection_model_access_policies
+            .clear();
+        let catalogs = self.resolved_model_catalog_snapshot(&support_configuration)?;
+        Ok(support_configuration
+            .connection_graph
+            .connections
+            .values()
+            .filter(|connection| connection.provider_id == provider_id)
+            .any(|connection| {
+                catalogs
+                    .get(connection.id.as_str())
+                    .is_some_and(|catalog| catalog.models.iter().any(|model| model.id == model_id))
+            }))
+    }
+
     /// Applies one candidate configuration to immutable source catalogs in memory.
     /// 在内存中把一份候选配置应用到不可变源目录。
     ///
@@ -1187,7 +1255,15 @@ impl PublicAiRuntime {
         model_id: &str,
         overrides: Option<&crate::ModelCapabilityOverrides>,
     ) -> Result<(), String> {
+        if let Some(overrides) = overrides {
+            overrides.validate()?;
+        }
         let mut candidate_configuration = configuration.clone();
+        // Provider-level capability settings must remain editable when every account hides the model.
+        // 即使全部账号都隐藏该模型，供应商级能力设置仍必须可编辑。
+        candidate_configuration
+            .connection_model_access_policies
+            .clear();
         let provider_model_key =
             PersistedAiConfiguration::provider_model_key(provider_id, model_id);
         if let Some(overrides) = overrides {
@@ -1236,10 +1312,153 @@ impl PublicAiRuntime {
                 model.id.as_str(),
                 &model.capabilities,
             )?;
+            if let Some(overrides) = overrides
+                && let Some(projection) = overrides.request_projection.as_ref()
+            {
+                projection.validate_for_capabilities(&model.capabilities)?;
+            }
+        }
+        if !matched_connection
+            && let Some(mut catalog) = manual_custom_catalog_for_provider(
+                &candidate_configuration,
+                provider_id,
+                "provider-settings-validation",
+                1,
+            )
+        {
+            apply_model_catalog_overlays_with_account_plan(
+                &candidate_configuration,
+                provider_id,
+                "",
+                None,
+                &mut catalog,
+            )?;
+            if let Some(model) = catalog.models.iter().find(|model| model.id == model_id) {
+                matched_connection = true;
+                validate_resolved_model_capability_limits(
+                    "provider-settings-validation",
+                    model.id.as_str(),
+                    &model.capabilities,
+                )?;
+                if let Some(overrides) = overrides
+                    && let Some(projection) = overrides.request_projection.as_ref()
+                {
+                    projection.validate_for_capabilities(&model.capabilities)?;
+                }
+            }
         }
         if !matched_connection {
             return Err(format!(
                 "Provider `{provider_id}` has no immutable or manual catalog source for model `{model_id}`. Synchronize the model catalog before saving capability overrides."
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validates one provider-level capability layer against every synchronized provider model.
+    /// 针对供应商全部已同步模型校验一层供应商级能力配置。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration` is the current persisted state, `provider_id` identifies the provider,
+    /// and `overrides` is the candidate sparse layer or `None` for restoration.
+    /// `configuration` 是当前持久化状态，`provider_id` 标识供应商，`overrides` 是候选稀疏层，
+    /// 为 `None` 时表示恢复继承。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success only when every provider model resolves valid limits and request projections.
+    /// 仅当供应商每个模型的限制与请求投影均解析有效时返回成功。
+    pub fn validate_provider_capability_override_candidate(
+        &self,
+        configuration: &PersistedAiConfiguration,
+        provider_id: &str,
+        overrides: Option<&crate::ModelCapabilityOverrides>,
+    ) -> Result<(), String> {
+        if let Some(overrides) = overrides {
+            overrides.validate()?;
+        }
+        let mut candidate_configuration = configuration.clone();
+        candidate_configuration
+            .connection_model_access_policies
+            .clear();
+        if let Some(overrides) = overrides {
+            candidate_configuration
+                .provider_capability_overrides
+                .insert(provider_id.to_string(), overrides.clone());
+        } else {
+            candidate_configuration
+                .provider_capability_overrides
+                .remove(provider_id);
+        }
+        let catalogs = self.resolved_model_catalog_snapshot(&candidate_configuration)?;
+        let matched = candidate_configuration
+            .connection_graph
+            .connections
+            .values()
+            .filter(|connection| connection.provider_id == provider_id)
+            .any(|connection| {
+                catalogs
+                    .get(connection.id.as_str())
+                    .is_some_and(|catalog| !catalog.models.is_empty())
+            });
+        if !matched {
+            return Err(format!(
+                "Provider `{provider_id}` has no synchronized model catalog for provider-level capability settings."
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validates one protocol-specific model setting against every account support route.
+    /// 针对每条账号支持路由校验一项协议专属模型设置。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `configuration` owns immutable membership; provider, model, and protocol identify the
+    /// shared route; `overrides` contains the proposed exact adapter controls.
+    /// `configuration` 持有不可变成员关系；供应商、模型与协议标识共享路由；`overrides`
+    /// 包含候选精确适配器控制项。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success only when at least one support route exists and every matching model accepts the settings.
+    /// 仅当至少存在一条支持路由且每个匹配模型都接受设置时返回成功。
+    pub fn validate_model_execution_override_candidate(
+        &self,
+        configuration: &PersistedAiConfiguration,
+        provider_id: &str,
+        model_id: &str,
+        protocol_id: &str,
+        overrides: &crate::ModelExecutionOverrides,
+    ) -> Result<(), String> {
+        // support_configuration removes account visibility without weakening provider membership.
+        // support_configuration 移除账号可见性，但不会削弱供应商成员关系。
+        let mut support_configuration = configuration.clone();
+        support_configuration
+            .connection_model_access_policies
+            .clear();
+        let catalogs = self.resolved_model_catalog_snapshot(&support_configuration)?;
+        let mut matched_connection = false;
+        for connection in support_configuration
+            .connection_graph
+            .connections
+            .values()
+            .filter(|connection| connection.provider_id == provider_id)
+            .filter(|connection| connection.selected_protocol == protocol_id)
+        {
+            let Some(model) = catalogs
+                .get(connection.id.as_str())
+                .and_then(|catalog| catalog.models.iter().find(|model| model.id == model_id))
+            else {
+                continue;
+            };
+            matched_connection = true;
+            validate_model_overrides(model, protocol_id, overrides)?;
+        }
+        if !matched_connection {
+            return Err(format!(
+                "Provider `{provider_id}` model `{model_id}` has no synchronized account using protocol `{protocol_id}`."
             ));
         }
         Ok(())
@@ -2608,11 +2827,27 @@ impl PublicAiRuntime {
         provider_id: &str,
         model_id: &str,
     ) -> Result<ResolvedPublicAiSelection, String> {
+        // Route selection must use the same persisted-overlay projection as execution. Keep the
+        // mutable snapshot only for manual catalogs created before immutable source tracking.
+        // 路由选择必须使用与执行相同的持久化覆盖投影；仅对尚未建立不可变源跟踪的手工目录保留可变快照回退。
+        let source_catalogs = self.source_catalog_snapshot()?;
+        let mut eligible_catalogs = self.resolved_model_catalog_snapshot(configuration)?;
+        // Merge only source-less legacy catalogs that the immutable resolver could not rebuild.
+        // Do not replace the complete effective snapshot merely because another connection has a
+        // source catalog; mixed workspaces must retain both modern and legacy/manual connections.
+        // 仅合并不可变解析器无法重建的无源旧目录。不能因为另一个连接存在源目录就替换
+        // 完整有效快照；混合工作区必须同时保留现代连接与旧版/手工连接。
         let catalogs = self
             .catalogs
             .read()
             .map_err(|_| String::from("The AI model catalog lock is poisoned."))?;
-        let mut eligible_catalogs = catalogs.snapshot();
+        for (connection_id, catalog) in catalogs.snapshot() {
+            if !eligible_catalogs.contains_key(connection_id.as_str())
+                && !source_catalogs.contains_key(connection_id.as_str())
+            {
+                eligible_catalogs.insert(connection_id, catalog);
+            }
+        }
         eligible_catalogs.retain(|connection_id, _| {
             !configuration.connection_is_pending_validation(connection_id.as_str())
         });
@@ -2621,7 +2856,6 @@ impl PublicAiRuntime {
             .connection_graph
             .resolve_connection(provider_id, model_id, &eligible_catalogs)?
             .clone();
-        drop(catalogs);
         self.resolve_selection_for_connection(
             configuration,
             connection,
@@ -2915,16 +3149,40 @@ impl PublicAiRuntime {
             ));
         }
         let (model, catalog_revision) = {
-            let catalogs = self
-                .catalogs
-                .read()
-                .map_err(|_| String::from("The AI model catalog lock is poisoned."))?;
-            let catalog = catalogs.get(connection.id.as_str()).ok_or_else(|| {
-                format!(
-                    "No in-memory catalog exists for connection `{}`.",
-                    connection.id
-                )
-            })?;
+            // Resolve the immutable source catalog with current persisted overlays at the
+            // execution boundary; the mutable catalog is only a compatibility fallback for
+            // legacy/manual catalogs that have no source snapshot.
+            // 在执行边界使用当前持久化覆盖重建不可变源目录；只有没有源快照的旧版/手工目录才回退到可变目录。
+            let resolved_catalog = self
+                .resolved_model_catalog_snapshot(configuration)?
+                .remove(connection.id.as_str());
+            let source_has_connection = self
+                .source_catalog_snapshot()?
+                .contains_key(connection.id.as_str());
+            let catalog = match resolved_catalog {
+                Some(catalog) => catalog,
+                None if source_has_connection => {
+                    return Err(format!(
+                        "Connection `{}` has no effective catalog after applying persisted model access and capability overlays.",
+                        connection.id
+                    ));
+                }
+                None => {
+                    let catalogs = self
+                        .catalogs
+                        .read()
+                        .map_err(|_| String::from("The AI model catalog lock is poisoned."))?;
+                    catalogs
+                        .get(connection.id.as_str())
+                        .cloned()
+                        .ok_or_else(|| {
+                            format!(
+                                "No in-memory catalog exists for connection `{}`.",
+                                connection.id
+                            )
+                        })?
+                }
+            };
             let model = catalog
                 .models
                 .iter()
@@ -2932,7 +3190,7 @@ impl PublicAiRuntime {
                 .cloned()
                 .ok_or_else(|| {
                     format!(
-                        "Model `{}` is not present in the in-memory catalog for connection `{}`.",
+                        "Model `{}` is not present in the effective catalog for connection `{}`.",
                         model_id, connection.id
                     )
                 })?;
@@ -3006,9 +3264,10 @@ impl PublicAiRuntime {
         let mut route =
             ProviderExecutionRoute::resolve(provider, entry, connection.clone(), secondary_route)
                 .map_err(|failure| failure.error.message.clone())?;
-        route.custom_model_projection = configuration
-            .custom_model(provider_id, model_id)
-            .map(|definition| definition.request_projection.clone());
+        // Custom and native models share one merged projection chain instead of replacing an inherited layer.
+        // 自定义模型与系统模型共用一条合并投影链，而不是替换掉已继承的上级层。
+        route.custom_model_projection =
+            resolve_request_projection(configuration, provider_id, model_id)?;
         Ok(ResolvedPublicAiSelection {
             route,
             model,
@@ -3016,6 +3275,58 @@ impl PublicAiRuntime {
             catalog_revision,
         })
     }
+}
+
+/// Resolves provider and model request projections from low to high precedence.
+/// 按从低到高的优先级解析供应商与模型请求投影。
+///
+/// # Parameters
+/// 参数
+/// `configuration` owns sparse layers, while `provider_id` and `model_id` identify the route.
+/// `configuration` 持有稀疏配置层，`provider_id` 与 `model_id` 标识目标路由。
+///
+/// # Returns
+/// 返回值
+/// A merged projection, or `None` when no layer declares one.
+/// 返回合并后的投影；没有任何层声明投影时返回 `None`。
+fn resolve_request_projection(
+    configuration: &PersistedAiConfiguration,
+    provider_id: &str,
+    model_id: &str,
+) -> Result<Option<crate::CustomModelRequestProjection>, String> {
+    let mut merged = crate::CustomModelRequestProjection::default();
+    let mut found = false;
+
+    // Custom-provider defaults and generic provider overrides are alternative provider layers.
+    // 自定义供应商默认与通用供应商覆盖是两种互斥的供应商层来源。
+    if provider_id.starts_with("custom:") {
+        if let Some(projection) = configuration
+            .custom_provider_model_defaults
+            .get(provider_id)
+            .and_then(|defaults| defaults.request_projection.as_ref())
+        {
+            merged.merge_overlay(projection)?;
+            found = true;
+        }
+    } else if let Some(projection) = configuration
+        .provider_capability_overrides(provider_id)
+        .and_then(|overrides| overrides.request_projection.as_ref())
+    {
+        merged.merge_overlay(projection)?;
+        found = true;
+    }
+    if let Some(projection) = configuration
+        .model_capability_overrides(provider_id, model_id)
+        .and_then(|overrides| overrides.request_projection.as_ref())
+    {
+        merged.merge_overlay(projection)?;
+        found = true;
+    }
+    if let Some(definition) = configuration.custom_model(provider_id, model_id) {
+        merged.merge_overlay(&definition.request_projection)?;
+        found = true;
+    }
+    Ok(found.then_some(merged))
 }
 
 /// Builds an empty discovery baseline only when one provider owns manual model definitions.
@@ -3036,12 +3347,40 @@ fn manual_custom_catalog(
     connection: &CredentialConnection,
     generation: u64,
 ) -> Option<ConnectionModelCatalog> {
+    manual_custom_catalog_for_provider(
+        configuration,
+        connection.provider_id.as_str(),
+        connection.id.as_str(),
+        generation,
+    )
+}
+
+/// Builds an empty manual baseline for an exact provider and catalog scope.
+/// 为精确供应商与目录作用域构建空手工基线。
+///
+/// # Parameters
+/// 参数
+/// `configuration` owns custom definitions, `provider_id` selects them, `connection_id` labels
+/// the isolated catalog, and `generation` is process-local.
+/// `configuration` 持有自定义定义，`provider_id` 选择这些定义，`connection_id` 标记隔离目录，
+/// `generation` 仅存在于进程内。
+///
+/// # Returns
+/// 返回值
+/// An empty catalog baseline when the provider owns manual definitions, otherwise `None`.
+/// 当供应商持有手工定义时返回空目录基线，否则返回 `None`。
+fn manual_custom_catalog_for_provider(
+    configuration: &PersistedAiConfiguration,
+    provider_id: &str,
+    connection_id: &str,
+    generation: u64,
+) -> Option<ConnectionModelCatalog> {
     configuration
         .custom_models
-        .get(connection.provider_id.as_str())
+        .get(provider_id)
         .filter(|definitions| !definitions.is_empty())
         .map(|_| ConnectionModelCatalog {
-            connection_id: connection.id.clone(),
+            connection_id: connection_id.to_string(),
             models: Vec::new(),
             generation,
             page_count: 0,
@@ -3065,6 +3404,55 @@ fn apply_model_catalog_overlays(
     apply_model_catalog_overlays_with_account_plan(configuration, provider_id, "", None, catalog)
 }
 
+/// Applies the host default reasoning contract only to unknown text-conversation models.
+/// 仅为能力未知的文本会话模型应用宿主默认思考契约。
+///
+/// # Parameters
+/// 参数
+///
+/// `capabilities` is the fully merged model capability snapshot before model-level user overrides.
+/// `capabilities` 是应用模型级用户覆盖前的完整合并模型能力快照。
+///
+/// # Returns
+/// 返回值
+///
+/// `true` when the host policy filled an otherwise unknown reasoning contract.
+/// 当宿主策略填充了原本未知的思考契约时返回 `true`。
+pub fn apply_host_default_reasoning_policy(capabilities: &mut ModelCapabilities) -> bool {
+    let is_text_conversation = capabilities
+        .operations
+        .contains(&AiOperation::ConversationRespond);
+    // A text model remains unresolved when it has no selectable levels and no explicit control
+    // mode. Unknown or legacy supported markers can use the host default; Unsupported/FixedOff
+    // is an authoritative provider or user declaration and must never be silently re-enabled.
+    // 文本模型没有可选档位且没有明确控制模式时仍未解析。未知或旧版支持标记可以使用宿主默认；
+    // Unsupported/FixedOff 是供应商或用户的权威声明，绝不能被宿主默认静默重新开启。
+    let is_unresolved_reasoning = capabilities.reasoning_efforts.is_empty()
+        && capabilities.reasoning_control == ReasoningControlMode::Unknown
+        && matches!(
+            capabilities.reasoning,
+            CapabilitySupport::Unknown
+                | CapabilitySupport::Native
+                | CapabilitySupport::Equivalent
+                | CapabilitySupport::Lossy
+        );
+    if !is_text_conversation || !is_unresolved_reasoning {
+        return false;
+    }
+
+    // Keep this standard set shared with custom compatible providers so the editor,
+    // workbench selector, and execution resolver expose one closed vocabulary.
+    // 与自定义兼容供应商共享这组标准档位，确保编辑器、工作台选择器和执行解析器使用同一封闭词表。
+    capabilities.reasoning = CapabilitySupport::Native;
+    capabilities.reasoning_control = ReasoningControlMode::EffortSelection;
+    capabilities.reasoning_efforts = crate::CUSTOM_PROVIDER_OPENAI_REASONING_EFFORTS.to_vec();
+    capabilities.evidence_revision = format!(
+        "{}+{}",
+        capabilities.evidence_revision, HOST_DEFAULT_REASONING_EVIDENCE_REVISION
+    );
+    true
+}
+
 /// Applies catalog overlays together with the exact account-level Kimi entitlement observation.
 /// 应用目录覆盖，并叠加精确账号级 Kimi 权益观测。
 fn apply_model_catalog_overlays_with_account_plan(
@@ -3075,10 +3463,20 @@ fn apply_model_catalog_overlays_with_account_plan(
     catalog: &mut ConnectionModelCatalog,
 ) -> Result<(), String> {
     let custom_provider = provider_id.starts_with("custom:");
-    let custom_defaults =
-        custom_provider.then(|| configuration.custom_provider_model_defaults(provider_id));
-    if let Some(defaults) = custom_defaults.as_ref() {
-        defaults.validate()?;
+    // custom_baseline is the in-memory system layer and is never persisted merely by provider creation.
+    // custom_baseline 是内存中的系统层，不会仅因创建供应商而持久化。
+    let custom_baseline = custom_provider.then(crate::CustomProviderModelDefaults::default);
+    // custom_provider_settings is the optional user-owned provider layer above catalog declarations.
+    // custom_provider_settings 是位于目录声明之上的可选用户供应商层。
+    let custom_provider_settings = custom_provider
+        .then(|| {
+            configuration
+                .custom_provider_model_defaults
+                .get(provider_id)
+        })
+        .flatten();
+    if let Some(settings) = custom_provider_settings {
+        settings.validate()?;
     }
     let source_model_ids = catalog
         .models
@@ -3094,27 +3492,41 @@ fn apply_model_catalog_overlays_with_account_plan(
         .drain(..)
         .map(|mut model| {
             if custom_provider {
+                configuration.apply_provider_capability_defaults(
+                    provider_id,
+                    &model.capability_evidence,
+                    &mut model.capabilities,
+                );
                 apply_custom_model_defaults(
                     configuration,
                     provider_id,
                     model.id.as_str(),
-                    custom_defaults
+                    custom_baseline
                         .as_ref()
-                        .expect("custom defaults must exist"),
+                        .expect("custom baseline must exist"),
+                    custom_provider_settings,
                     &model.capability_evidence,
                     &mut model.capabilities,
                 );
             } else {
+                configuration.apply_provider_capability_defaults(
+                    provider_id,
+                    &model.capability_evidence,
+                    &mut model.capabilities,
+                );
                 crate::apply_common_model_context_default(
                     model.id.as_str(),
                     &mut model.capabilities,
                 );
+                apply_host_default_reasoning_policy(&mut model.capabilities);
             }
-            configuration.apply_model_capability_overrides(
-                provider_id,
-                model.id.as_str(),
-                &mut model.capabilities,
-            );
+            if !custom_provider {
+                configuration.apply_model_capability_overrides(
+                    provider_id,
+                    model.id.as_str(),
+                    &mut model.capabilities,
+                );
+            }
             (model.id.clone(), model)
         })
         .collect::<BTreeMap<_, _>>();
@@ -3148,27 +3560,48 @@ fn apply_model_catalog_overlays_with_account_plan(
             let mut capabilities = definition.capabilities.clone();
             let capability_evidence = manual_model_capability_evidence(&capabilities);
             if custom_provider {
+                configuration.apply_provider_capability_defaults(
+                    provider_id,
+                    &capability_evidence,
+                    &mut capabilities,
+                );
                 apply_custom_model_defaults(
                     configuration,
                     provider_id,
                     definition.id.as_str(),
-                    custom_defaults
+                    custom_baseline
                         .as_ref()
-                        .expect("custom defaults must exist"),
+                        .expect("custom baseline must exist"),
+                    custom_provider_settings,
                     &capability_evidence,
                     &mut capabilities,
                 );
+                // The manual advanced declaration is a model-owned layer above the provider policy,
+                // including for models admitted without a matching discovery record.
+                // 手工高级声明是位于供应商策略之上的模型自有层，也适用于无对应发现记录的准入模型。
+                apply_custom_model_advanced_declaration(
+                    &definition.capabilities,
+                    &mut capabilities,
+                );
             } else {
+                configuration.apply_provider_capability_defaults(
+                    provider_id,
+                    &capability_evidence,
+                    &mut capabilities,
+                );
                 crate::apply_common_model_context_default(
                     definition.id.as_str(),
                     &mut capabilities,
                 );
+                apply_host_default_reasoning_policy(&mut capabilities);
             }
-            configuration.apply_model_capability_overrides(
-                provider_id,
-                definition.id.as_str(),
-                &mut capabilities,
-            );
+            if !custom_provider {
+                configuration.apply_model_capability_overrides(
+                    provider_id,
+                    definition.id.as_str(),
+                    &mut capabilities,
+                );
+            }
             models.insert(
                 definition.id.clone(),
                 ConnectionModel {
@@ -3178,6 +3611,35 @@ fn apply_model_catalog_overlays_with_account_plan(
                     capability_evidence,
                 },
             );
+        }
+    }
+    if custom_provider {
+        // Direct model settings are the strongest user layer and must follow any advanced manual declaration.
+        // 直接模型设置是最高用户层，必须在任何高级手工声明之后应用。
+        for model in models.values_mut() {
+            configuration.apply_model_capability_overrides(
+                provider_id,
+                model.id.as_str(),
+                &mut model.capabilities,
+            );
+        }
+        // Custom providers are conversation-only adapters; resource-producing models require a native provider contract.
+        // 自定义供应商是纯会话适配器；资源生成模型必须使用原生供应商契约。
+        models.retain(|_, model| {
+            model
+                .capabilities
+                .operations
+                .contains(&AiOperation::ConversationRespond)
+        });
+    }
+    // Validate the single merged projection against the fully resolved catalog before exposing
+    // or routing any model from this snapshot.
+    // 在暴露或路由目录中的任何模型前，先根据完整解析目录校验唯一合并投影。
+    for model in models.values() {
+        if let Some(projection) =
+            resolve_request_projection(configuration, provider_id, model.id.as_str())?
+        {
+            projection.validate_for_capabilities(&model.capabilities)?;
         }
     }
     // Account access is evaluated after support membership and capability resolution so it can
@@ -3323,8 +3785,8 @@ fn apply_custom_model_advanced_declaration(
     }
 }
 
-/// Resolves custom-provider template and provider defaults without overriding credential evidence.
-/// 在不覆盖凭据证据的前提下解析自定义供应商模板与供应商默认值。
+/// Resolves custom-provider source fallbacks, system policy, and explicit provider settings.
+/// 解析自定义供应商的来源回退、系统策略与显式供应商设置。
 ///
 /// # Parameters
 /// 参数
@@ -3337,6 +3799,7 @@ fn apply_custom_model_defaults(
     provider_id: &str,
     model_id: &str,
     defaults: &crate::CustomProviderModelDefaults,
+    provider_settings: Option<&crate::CustomProviderModelDefaults>,
     evidence: &crate::ModelCapabilityEvidence,
     capabilities: &mut ModelCapabilities,
 ) {
@@ -3349,6 +3812,12 @@ fn apply_custom_model_defaults(
         None
     };
     defaults.apply_missing(capabilities, evidence);
+    // The system policy fills only fields the catalog did not declare.
+    // 系统策略只填充目录未声明的字段。
+    defaults.apply_system_capability_policy(capabilities);
+    if let Some(settings) = provider_settings {
+        settings.apply_provider_settings(capabilities, evidence);
+    }
 
     let existing_conversation = capabilities
         .operations
@@ -3366,7 +3835,7 @@ fn apply_custom_model_defaults(
         .supports_text_output
         .or_else(|| selection.map(|value| value.supports_text_output))
         .unwrap_or(implicit_text_default);
-    set_conversation_operation(capabilities, supports_text_input && supports_text_output);
+    set_custom_conversation_contract(capabilities, supports_text_input && supports_text_output);
 }
 
 /// Captures the explicit basic-capability facts carried by one manual model definition.
@@ -3397,23 +3866,20 @@ fn manual_model_capability_evidence(
     }
 }
 
-/// Adds or removes conversation capability according to the resolved text contract.
-/// 根据解析后的文本契约添加或移除会话能力。
+/// Closes one custom-provider model to the generic text-conversation contract.
+/// 将一个自定义供应商模型收敛到通用文本会话契约。
 ///
 /// # Parameters
 /// 参数
 /// `capabilities` is mutated in place and `supported` is the final bidirectional-text result.
 /// `capabilities` 会被原地修改，`supported` 是最终双向文本支持结果。
-fn set_conversation_operation(capabilities: &mut ModelCapabilities, supported: bool) {
-    capabilities
-        .operations
-        .retain(|operation| *operation != AiOperation::ConversationRespond);
+fn set_custom_conversation_contract(capabilities: &mut ModelCapabilities, supported: bool) {
+    capabilities.output_resources.clear();
+    capabilities.operations.clear();
     if supported {
         capabilities
             .operations
             .push(AiOperation::ConversationRespond);
-        capabilities.operations.sort();
-        capabilities.operations.dedup();
     }
 }
 
@@ -3860,6 +4326,140 @@ mod tests {
         (runtime, configuration)
     }
 
+    /// Verifies unknown text models use the host's enabled reasoning default in public capability views.
+    /// 验证未知文本模型在公共能力视图中使用宿主默认的开启思考策略。
+    #[test]
+    fn unknown_text_model_reasoning_is_enabled_by_default() {
+        let capabilities = ModelCapabilities {
+            operations: vec![AiOperation::ConversationRespond],
+            reasoning: CapabilitySupport::Unknown,
+            reasoning_control: ReasoningControlMode::Unknown,
+            reasoning_efforts: Vec::new(),
+            ..ModelCapabilities::default()
+        };
+
+        assert!(model_supports_reasoning(&capabilities));
+
+        // The discovery fixture intentionally omits reasoning metadata, matching the real
+        // `/models` payload that previously surfaced as Unsupported/FixedOff.
+        // 发现夹具故意省略思考元数据，模拟此前会被显示为 Unsupported/FixedOff 的真实 `/models` 响应。
+        let discovered = catalog("one")
+            .models
+            .into_iter()
+            .next()
+            .expect("model fixture should exist");
+        assert!(model_supports_reasoning(&discovered.capabilities));
+    }
+
+    /// Verifies an explicit fixed-off contract remains authoritative over the host default.
+    /// 验证明确固定关闭契约仍然高于宿主默认策略。
+    #[test]
+    fn explicit_fixed_off_reasoning_remains_disabled() {
+        let mut capabilities = catalog("one")
+            .models
+            .into_iter()
+            .next()
+            .expect("model fixture should exist")
+            .capabilities;
+        capabilities.reasoning = CapabilitySupport::Unsupported;
+        capabilities.reasoning_control = ReasoningControlMode::FixedOff;
+        capabilities.reasoning_efforts = vec![vulcan_ai_contract::ReasoningEffort::None];
+
+        assert!(!model_supports_reasoning(&capabilities));
+    }
+
+    /// Verifies a fixed-off declaration without stale effort entries is still authoritative.
+    /// 验证即使没有残留档位，固定关闭声明仍然具有权威性。
+    #[test]
+    fn explicit_fixed_off_without_efforts_remains_disabled() {
+        let capabilities = ModelCapabilities {
+            operations: vec![AiOperation::ConversationRespond],
+            reasoning: CapabilitySupport::Unsupported,
+            reasoning_control: ReasoningControlMode::FixedOff,
+            ..ModelCapabilities::default()
+        };
+
+        assert!(!model_supports_reasoning(&capabilities));
+    }
+
+    /// Verifies execution resolves persisted reasoning overrides instead of a stale mutable catalog copy.
+    /// 验证执行解析使用持久化思考覆盖，而不是旧的可变目录副本。
+    #[test]
+    fn selection_uses_persisted_reasoning_override_when_runtime_catalog_is_stale() {
+        let (runtime, mut configuration) = two_account_runtime();
+        configuration.model_capability_overrides.insert(
+            PersistedAiConfiguration::provider_model_key("openrouter", "vendor/model"),
+            crate::ModelCapabilityOverrides {
+                reasoning: Some(CapabilitySupport::Native),
+                reasoning_control: Some(ReasoningControlMode::EffortSelection),
+                reasoning_efforts: Some(vec![
+                    vulcan_ai_contract::ReasoningEffort::None,
+                    vulcan_ai_contract::ReasoningEffort::Medium,
+                ]),
+                request_projection: Some(crate::CustomModelRequestProjection {
+                    reasoning: BTreeMap::from([(
+                        vulcan_ai_contract::ReasoningEffort::Medium,
+                        crate::CustomRequestMutation {
+                            set: BTreeMap::from([(
+                                String::from("thinking.type"),
+                                serde_json::Value::String(String::from("enabled")),
+                            )]),
+                            delete: vec![String::from("reasoning_effort")],
+                        },
+                    )]),
+                    ..crate::CustomModelRequestProjection::default()
+                }),
+                ..crate::ModelCapabilityOverrides::default()
+            },
+        );
+
+        let mut stale_catalog = catalog("one");
+        let stale_model = stale_catalog
+            .models
+            .first_mut()
+            .expect("model fixture should exist");
+        stale_model.capabilities.reasoning = CapabilitySupport::Unsupported;
+        stale_model.capabilities.reasoning_control = ReasoningControlMode::FixedOff;
+        stale_model.capabilities.reasoning_efforts =
+            vec![vulcan_ai_contract::ReasoningEffort::None];
+        runtime
+            .replace_catalog(stale_catalog)
+            .expect("stale catalog should install");
+
+        let selection = runtime
+            .resolve_connection_model_selection(&configuration, "one", "openrouter", "vendor/model")
+            .expect("selection should use the persisted capability override");
+        assert_eq!(
+            selection.model.capabilities.reasoning,
+            CapabilitySupport::Native
+        );
+        assert_eq!(
+            selection.model.capabilities.reasoning_control,
+            ReasoningControlMode::EffortSelection
+        );
+        assert_eq!(
+            selection.model.capabilities.reasoning_efforts,
+            vec![
+                vulcan_ai_contract::ReasoningEffort::None,
+                vulcan_ai_contract::ReasoningEffort::Medium,
+            ]
+        );
+        let projection = selection
+            .route
+            .custom_model_projection
+            .as_ref()
+            .expect("persisted request projection should reach the execution route");
+        let medium = projection
+            .reasoning
+            .get(&vulcan_ai_contract::ReasoningEffort::Medium)
+            .expect("medium reasoning projection should remain available");
+        assert_eq!(
+            medium.set.get("thinking.type"),
+            Some(&serde_json::Value::String(String::from("enabled")))
+        );
+        assert_eq!(medium.delete, vec![String::from("reasoning_effort")]);
+    }
+
     /// Verifies rebuilding user overlays never mutates the immutable synchronized catalog snapshot.
     /// 验证重建用户覆盖绝不会修改不可变的已同步目录快照。
     #[test]
@@ -3886,6 +4486,7 @@ mod tests {
                 output_limit: None,
                 input_resources: Some(vec![vulcan_ai_contract::ResourceKind::Image]),
                 output_resources: None,
+                ..crate::ModelCapabilityOverrides::default()
             },
         );
 
@@ -4028,7 +4629,7 @@ mod tests {
                     output_limit: Some(0),
                     ..crate::ModelCapabilityOverrides::default()
                 },
-                "effective output limit of zero",
+                "output limit must be greater than zero",
             ),
             (
                 crate::ModelCapabilityOverrides {
@@ -4071,6 +4672,87 @@ mod tests {
                 }),
             )
             .expect("valid final limits should be accepted");
+    }
+
+    /// Verifies provider-level model management ignores account visibility while preserving route validation.
+    /// 验证供应商级模型管理忽略账号可见性，同时保留路由校验。
+    #[test]
+    fn provider_model_management_uses_support_catalog_when_account_is_disabled() {
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .connection_graph
+            .add_connection(runtime.providers(), connection("one"))
+            .expect("connection should register");
+        install_source_catalog(&runtime, catalog("one"));
+        configuration.set_connection_models_enabled("one", false);
+
+        assert!(
+            runtime
+                .provider_model_is_supported(&configuration, "openrouter", "vendor/model")
+                .expect("provider support should resolve")
+        );
+        runtime
+            .validate_model_capability_override_candidate(
+                &configuration,
+                "openrouter",
+                "vendor/model",
+                Some(&crate::ModelCapabilityOverrides {
+                    context_limit: Some(8_192),
+                    output_limit: Some(4_096),
+                    ..crate::ModelCapabilityOverrides::default()
+                }),
+            )
+            .expect("account visibility must not block provider capability settings");
+        runtime
+            .validate_model_execution_override_candidate(
+                &configuration,
+                "openrouter",
+                "vendor/model",
+                OPENAI_CHAT_PROFILE_ID,
+                &crate::ModelExecutionOverrides {
+                    prompt_cache: Some(vulcan_ai_contract::PromptCachePolicy::ProviderDefault),
+                    ..crate::ModelExecutionOverrides::default()
+                },
+            )
+            .expect("account visibility must not block protocol settings");
+    }
+
+    /// Verifies a credential-free custom provider can retain direct settings for its manual model.
+    /// 验证无凭据自定义供应商可以保留其手工模型的直接设置。
+    #[test]
+    fn credential_free_manual_model_accepts_direct_capability_settings() {
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.custom_models.insert(
+            String::from("custom:test"),
+            BTreeMap::from([(
+                String::from("private/chat"),
+                crate::CustomModelDefinition {
+                    id: String::from("private/chat"),
+                    display_name: String::from("Private Chat"),
+                    enabled: true,
+                    capabilities: ModelCapabilities {
+                        operations: vec![AiOperation::ConversationRespond],
+                        ..ModelCapabilities::default()
+                    },
+                    request_projection: crate::CustomModelRequestProjection::default(),
+                },
+            )]),
+        );
+
+        runtime
+            .validate_model_capability_override_candidate(
+                &configuration,
+                "custom:test",
+                "private/chat",
+                Some(&crate::ModelCapabilityOverrides {
+                    context_limit: Some(8_192),
+                    output_limit: Some(1_024),
+                    ..crate::ModelCapabilityOverrides::default()
+                }),
+            )
+            .expect("manual provider-only validation should not require a credential");
     }
 
     /// Verifies a provider-wide difference must remain valid for every credential source.
@@ -4293,6 +4975,30 @@ mod tests {
         let model = catalog.models.first().expect("model should remain visible");
         assert_eq!(model.capabilities.context_limit, Some(200_000));
         assert_eq!(model.capabilities.output_limit, Some(32_768));
+        assert_eq!(
+            model.capabilities.tool_calling,
+            vulcan_ai_contract::CapabilitySupport::Native
+        );
+        assert_eq!(
+            model.capabilities.reasoning,
+            vulcan_ai_contract::CapabilitySupport::Native
+        );
+        assert_eq!(
+            model.capabilities.reasoning_control,
+            vulcan_ai_contract::ReasoningControlMode::EffortSelection
+        );
+        assert_eq!(
+            model.capabilities.reasoning_efforts,
+            vec![
+                vulcan_ai_contract::ReasoningEffort::None,
+                vulcan_ai_contract::ReasoningEffort::Minimal,
+                vulcan_ai_contract::ReasoningEffort::Low,
+                vulcan_ai_contract::ReasoningEffort::Medium,
+                vulcan_ai_contract::ReasoningEffort::High,
+                vulcan_ai_contract::ReasoningEffort::XHigh,
+                vulcan_ai_contract::ReasoningEffort::Max,
+            ]
+        );
         assert!(
             model
                 .capabilities
@@ -4301,10 +5007,156 @@ mod tests {
         );
     }
 
-    /// Verifies explicit credential fields outrank templates and provider defaults field by field.
-    /// 验证凭据明确字段会逐字段优先于模板与供应商默认值。
+    /// Verifies unknown compatible text models receive the host default reasoning contract.
+    /// 验证未知兼容文本模型会获得宿主默认思考契约。
     #[test]
-    fn explicit_custom_catalog_evidence_outranks_template_and_defaults() {
+    fn unknown_compatible_conversation_defaults_to_enabled_reasoning() {
+        let configuration = PersistedAiConfiguration::default();
+        let mut catalog = crate::parse_openai_model_catalog(
+            "apikeyfun-account",
+            1,
+            r#"{"data":[{"id":"gpt-5.6-luna"}]}"#,
+        )
+        .expect("compatible source catalog should parse");
+
+        apply_model_catalog_overlays(&configuration, "apikeyfun", &mut catalog)
+            .expect("host reasoning defaults should resolve");
+
+        let model = catalog.models.first().expect("model should remain visible");
+        assert_eq!(model.capabilities.reasoning, CapabilitySupport::Native);
+        assert_eq!(
+            model.capabilities.reasoning_control,
+            ReasoningControlMode::EffortSelection
+        );
+        assert_eq!(
+            model.capabilities.reasoning_efforts,
+            crate::CUSTOM_PROVIDER_OPENAI_REASONING_EFFORTS
+        );
+        assert!(
+            model
+                .capabilities
+                .evidence_revision
+                .contains(HOST_DEFAULT_REASONING_EVIDENCE_REVISION)
+        );
+    }
+
+    /// Verifies a legacy Native-only declaration receives the same host default levels.
+    /// 验证只有 Native 支持标记的旧声明也会获得相同的宿主默认档位。
+    #[test]
+    fn native_only_conversation_declaration_defaults_to_enabled_reasoning() {
+        let configuration = PersistedAiConfiguration::default();
+        let mut catalog = crate::parse_openai_model_catalog(
+            "apikeyfun-account",
+            1,
+            r#"{"data":[{"id":"gpt-5.6-luna"}]}"#,
+        )
+        .expect("compatible source catalog should parse");
+        let model = catalog
+            .models
+            .first_mut()
+            .expect("compatible model should exist");
+        model.capabilities.reasoning = CapabilitySupport::Native;
+
+        apply_model_catalog_overlays(&configuration, "apikeyfun", &mut catalog)
+            .expect("partial reasoning declaration should resolve");
+
+        let model = catalog.models.first().expect("model should remain visible");
+        assert_eq!(model.capabilities.reasoning, CapabilitySupport::Native);
+        assert_eq!(
+            model.capabilities.reasoning_control,
+            ReasoningControlMode::EffortSelection
+        );
+        assert_eq!(
+            model.capabilities.reasoning_efforts,
+            crate::CUSTOM_PROVIDER_OPENAI_REASONING_EFFORTS
+        );
+    }
+
+    /// Verifies an explicit model-level disablement outranks the host default reasoning policy.
+    /// 验证显式模型级关闭配置优先于宿主默认思考策略。
+    #[test]
+    fn explicit_model_reasoning_disablement_outranks_host_default() {
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.model_capability_overrides.insert(
+            PersistedAiConfiguration::provider_model_key("apikeyfun", "gpt-5.6-luna"),
+            crate::ModelCapabilityOverrides {
+                reasoning: Some(CapabilitySupport::Unsupported),
+                reasoning_control: Some(ReasoningControlMode::FixedOff),
+                reasoning_efforts: Some(vec![vulcan_ai_contract::ReasoningEffort::None]),
+                ..crate::ModelCapabilityOverrides::default()
+            },
+        );
+        let mut catalog = crate::parse_openai_model_catalog(
+            "apikeyfun-account",
+            1,
+            r#"{"data":[{"id":"gpt-5.6-luna"}]}"#,
+        )
+        .expect("compatible source catalog should parse");
+
+        apply_model_catalog_overlays(&configuration, "apikeyfun", &mut catalog)
+            .expect("explicit disablement should resolve");
+
+        let model = catalog.models.first().expect("model should remain visible");
+        assert_eq!(model.capabilities.reasoning, CapabilitySupport::Unsupported);
+        assert_eq!(
+            model.capabilities.reasoning_control,
+            ReasoningControlMode::FixedOff
+        );
+        assert_eq!(
+            model.capabilities.reasoning_efforts,
+            vec![vulcan_ai_contract::ReasoningEffort::None]
+        );
+    }
+
+    /// Verifies an explicit model-level enablement reaches the effective catalog even when discovery says off.
+    /// 验证显式模型级开启配置会抵达有效目录，即使发现结果声明模型关闭思考。
+    #[test]
+    fn explicit_model_reasoning_enablement_outranks_disabled_discovery() {
+        let model_id = "gpt-5.6-luna";
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.model_capability_overrides.insert(
+            PersistedAiConfiguration::provider_model_key("apikeyfun", model_id),
+            crate::ModelCapabilityOverrides {
+                reasoning: Some(CapabilitySupport::Native),
+                reasoning_control: Some(ReasoningControlMode::EffortSelection),
+                reasoning_efforts: Some(crate::CUSTOM_PROVIDER_OPENAI_REASONING_EFFORTS.to_vec()),
+                ..crate::ModelCapabilityOverrides::default()
+            },
+        );
+        let mut catalog = crate::parse_openai_model_catalog(
+            "apikeyfun-account",
+            1,
+            r#"{"data":[{"id":"gpt-5.6-luna"}]}"#,
+        )
+        .expect("compatible source catalog should parse");
+        let source_capabilities = &mut catalog
+            .models
+            .first_mut()
+            .expect("source model should exist")
+            .capabilities;
+        source_capabilities.reasoning = CapabilitySupport::Unsupported;
+        source_capabilities.reasoning_control = ReasoningControlMode::FixedOff;
+        source_capabilities.reasoning_efforts = vec![vulcan_ai_contract::ReasoningEffort::None];
+
+        apply_model_catalog_overlays(&configuration, "apikeyfun", &mut catalog)
+            .expect("explicit enablement should resolve");
+
+        let model = catalog.models.first().expect("model should remain visible");
+        assert_eq!(model.capabilities.reasoning, CapabilitySupport::Native);
+        assert_eq!(
+            model.capabilities.reasoning_control,
+            ReasoningControlMode::EffortSelection
+        );
+        assert_eq!(
+            model.capabilities.reasoning_efforts,
+            crate::CUSTOM_PROVIDER_OPENAI_REASONING_EFFORTS
+        );
+    }
+
+    /// Verifies direct provider settings outrank catalog values inside the text-conversation contract.
+    /// 验证直接供应商设置会在文本会话契约内覆盖目录值。
+    #[test]
+    fn provider_settings_outrank_catalog_values_within_text_contract() {
         let mut configuration = PersistedAiConfiguration::default();
         configuration.custom_provider_model_defaults.insert(
             String::from("custom:test"),
@@ -4312,18 +5164,18 @@ mod tests {
                 context_limit: 200_000,
                 output_limit: 32_768,
                 input_resources: vec![vulcan_ai_contract::ResourceKind::Image],
-                output_resources: vec![vulcan_ai_contract::ResourceKind::Image],
+                ..crate::CustomProviderModelDefaults::default()
             },
         );
         configuration.custom_model_template_decisions.insert(
-            PersistedAiConfiguration::provider_model_key("custom:test", "private/embedding"),
+            PersistedAiConfiguration::provider_model_key("custom:test", "private/chat"),
             crate::CustomModelTemplateDecision::Applied {
                 selection: crate::CustomModelTemplateSelection {
-                    template_key: String::from("openai/text-embedding-3-small"),
+                    template_key: String::from("openai/gpt-5.2"),
                     template_revision: String::from(crate::CUSTOM_MODEL_TEMPLATE_REVISION),
                     context_limit: 100_000,
                     supports_text_input: true,
-                    supports_text_output: false,
+                    supports_text_output: true,
                     input_resources: vec![vulcan_ai_contract::ResourceKind::File],
                     output_resources: Vec::new(),
                 },
@@ -4332,7 +5184,7 @@ mod tests {
         let mut catalog = crate::parse_openai_model_catalog(
             "custom-account",
             1,
-            r#"{"data":[{"id":"private/embedding","context_window":64000,"max_output_tokens":4096,"input_modalities":["text"],"output_modalities":["embedding"]}]}"#,
+            r#"{"data":[{"id":"private/chat","context_window":64000,"max_output_tokens":4096,"input_modalities":["text"],"output_modalities":["text"]}]}"#,
         )
         .expect("explicit compatible catalog should parse");
 
@@ -4340,15 +5192,232 @@ mod tests {
             .expect("custom evidence should resolve");
 
         let model = catalog.models.first().expect("model should remain visible");
-        assert_eq!(model.capabilities.context_limit, Some(64_000));
-        assert_eq!(model.capabilities.output_limit, Some(4_096));
-        assert!(model.capabilities.input_resources.is_empty());
+        assert_eq!(model.capabilities.context_limit, Some(200_000));
+        assert_eq!(model.capabilities.output_limit, Some(32_768));
+        assert_eq!(
+            model.capabilities.input_resources,
+            vec![vulcan_ai_contract::ResourceKind::Image]
+        );
         assert!(model.capabilities.output_resources.is_empty());
         assert!(
-            !model
+            model
                 .capabilities
                 .operations
                 .contains(&AiOperation::ConversationRespond)
+        );
+    }
+
+    /// Verifies custom providers do not publish resource-producing models as generic conversation choices.
+    /// 验证自定义供应商不会把资源生成模型发布为通用会话选项。
+    #[test]
+    fn custom_provider_filters_explicit_non_text_output_models() {
+        let configuration = PersistedAiConfiguration::default();
+        let mut catalog = crate::parse_openai_model_catalog(
+            "custom-account",
+            1,
+            r#"{"data":[{"id":"private/image","input_modalities":["text"],"output_modalities":["image"]},{"id":"private/mixed","input_modalities":["text"],"output_modalities":["text","image"]}]}"#,
+        )
+        .expect("explicit non-text model should parse");
+
+        apply_model_catalog_overlays(&configuration, "custom:test", &mut catalog)
+            .expect("custom conversation contract should resolve");
+
+        assert_eq!(catalog.models.len(), 1);
+        let model = &catalog.models[0];
+        assert_eq!(model.id, "private/mixed");
+        assert_eq!(
+            model.capabilities.operations,
+            vec![AiOperation::ConversationRespond]
+        );
+        assert!(model.capabilities.output_resources.is_empty());
+    }
+
+    /// Verifies system defaults outrank conservative source flags until a user explicitly disables them.
+    /// 验证系统默认值会覆盖保守来源标记，直到用户显式关闭相应能力。
+    #[test]
+    fn custom_provider_system_baseline_enables_reasoning_and_tool_calling() {
+        let configuration = PersistedAiConfiguration::default();
+        let mut catalog = crate::parse_openai_model_catalog(
+            "custom-account",
+            1,
+            r#"{"data":[{"id":"private/chat"}]}"#,
+        )
+        .expect("compatible catalog should parse");
+        let source_capabilities = &mut catalog
+            .models
+            .first_mut()
+            .expect("source model should exist")
+            .capabilities;
+        source_capabilities.reasoning = vulcan_ai_contract::CapabilitySupport::Unsupported;
+        source_capabilities.reasoning_control = vulcan_ai_contract::ReasoningControlMode::FixedOff;
+        source_capabilities.reasoning_efforts = vec![vulcan_ai_contract::ReasoningEffort::None];
+        source_capabilities.tool_calling = vulcan_ai_contract::CapabilitySupport::Unsupported;
+
+        apply_model_catalog_overlays(&configuration, "custom:test", &mut catalog)
+            .expect("system baseline should resolve");
+
+        let capabilities = &catalog
+            .models
+            .first()
+            .expect("model should remain visible")
+            .capabilities;
+        assert_eq!(
+            capabilities.reasoning,
+            vulcan_ai_contract::CapabilitySupport::Native
+        );
+        assert_eq!(
+            capabilities.reasoning_control,
+            vulcan_ai_contract::ReasoningControlMode::EffortSelection
+        );
+        assert_eq!(
+            capabilities.reasoning_efforts,
+            vec![
+                vulcan_ai_contract::ReasoningEffort::None,
+                vulcan_ai_contract::ReasoningEffort::Minimal,
+                vulcan_ai_contract::ReasoningEffort::Low,
+                vulcan_ai_contract::ReasoningEffort::Medium,
+                vulcan_ai_contract::ReasoningEffort::High,
+                vulcan_ai_contract::ReasoningEffort::XHigh,
+                vulcan_ai_contract::ReasoningEffort::Max,
+            ]
+        );
+        assert_eq!(
+            capabilities.tool_calling,
+            vulcan_ai_contract::CapabilitySupport::Native
+        );
+    }
+
+    /// Verifies an explicit provider setting can disable the system reasoning and tool defaults.
+    /// 验证显式供应商设置可以关闭系统默认的思考与工具能力。
+    #[test]
+    fn explicit_provider_settings_can_disable_system_reasoning_and_tools() {
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.custom_provider_model_defaults.insert(
+            String::from("custom:test"),
+            crate::CustomProviderModelDefaults {
+                reasoning: vulcan_ai_contract::CapabilitySupport::Unsupported,
+                reasoning_control: vulcan_ai_contract::ReasoningControlMode::FixedOff,
+                reasoning_efforts: vec![vulcan_ai_contract::ReasoningEffort::None],
+                tool_calling: vulcan_ai_contract::CapabilitySupport::Unsupported,
+                ..crate::CustomProviderModelDefaults::default()
+            },
+        );
+        let mut catalog = crate::parse_openai_model_catalog(
+            "custom-account",
+            1,
+            r#"{"data":[{"id":"private/chat"}]}"#,
+        )
+        .expect("compatible catalog should parse");
+
+        apply_model_catalog_overlays(&configuration, "custom:test", &mut catalog)
+            .expect("explicit provider settings should resolve");
+
+        let capabilities = &catalog
+            .models
+            .first()
+            .expect("model should remain visible")
+            .capabilities;
+        assert_eq!(
+            capabilities.reasoning,
+            vulcan_ai_contract::CapabilitySupport::Unsupported
+        );
+        assert_eq!(
+            capabilities.reasoning_control,
+            vulcan_ai_contract::ReasoningControlMode::FixedOff
+        );
+        assert_eq!(
+            capabilities.reasoning_efforts,
+            vec![vulcan_ai_contract::ReasoningEffort::None]
+        );
+        assert_eq!(
+            capabilities.tool_calling,
+            vulcan_ai_contract::CapabilitySupport::Unsupported
+        );
+    }
+
+    /// Verifies one direct model layer outranks disabled provider reasoning and tool settings.
+    /// 验证一层直接模型设置会覆盖供应商层已关闭的思考与工具设置。
+    #[test]
+    fn direct_model_settings_outrank_provider_reasoning_and_tool_settings() {
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.custom_provider_model_defaults.insert(
+            String::from("custom:test"),
+            crate::CustomProviderModelDefaults {
+                reasoning: vulcan_ai_contract::CapabilitySupport::Unsupported,
+                reasoning_control: vulcan_ai_contract::ReasoningControlMode::FixedOff,
+                reasoning_efforts: vec![vulcan_ai_contract::ReasoningEffort::None],
+                tool_calling: vulcan_ai_contract::CapabilitySupport::Unsupported,
+                ..crate::CustomProviderModelDefaults::default()
+            },
+        );
+        configuration.model_capability_overrides.insert(
+            PersistedAiConfiguration::provider_model_key("custom:test", "private/chat"),
+            crate::ModelCapabilityOverrides {
+                reasoning: Some(vulcan_ai_contract::CapabilitySupport::Native),
+                reasoning_control: Some(vulcan_ai_contract::ReasoningControlMode::EffortSelection),
+                reasoning_efforts: Some(vec![
+                    vulcan_ai_contract::ReasoningEffort::None,
+                    vulcan_ai_contract::ReasoningEffort::Medium,
+                    vulcan_ai_contract::ReasoningEffort::High,
+                ]),
+                tool_calling: Some(vulcan_ai_contract::CapabilitySupport::Native),
+                ..crate::ModelCapabilityOverrides::default()
+            },
+        );
+        configuration.custom_models.insert(
+            String::from("custom:test"),
+            BTreeMap::from([(
+                String::from("private/chat"),
+                crate::CustomModelDefinition {
+                    id: String::from("private/chat"),
+                    display_name: String::from("Advanced Private Chat"),
+                    enabled: true,
+                    capabilities: ModelCapabilities {
+                        reasoning: vulcan_ai_contract::CapabilitySupport::Unsupported,
+                        reasoning_control: vulcan_ai_contract::ReasoningControlMode::FixedOff,
+                        reasoning_efforts: vec![vulcan_ai_contract::ReasoningEffort::None],
+                        tool_calling: vulcan_ai_contract::CapabilitySupport::Unsupported,
+                        evidence_revision: String::from("manual-advanced.v1"),
+                        ..ModelCapabilities::default()
+                    },
+                    request_projection: crate::CustomModelRequestProjection::default(),
+                },
+            )]),
+        );
+        let mut catalog = crate::parse_openai_model_catalog(
+            "custom-account",
+            1,
+            r#"{"data":[{"id":"private/chat"}]}"#,
+        )
+        .expect("compatible catalog should parse");
+
+        apply_model_catalog_overlays(&configuration, "custom:test", &mut catalog)
+            .expect("model settings should resolve");
+
+        let capabilities = &catalog
+            .models
+            .first()
+            .expect("model should remain visible")
+            .capabilities;
+        assert_eq!(
+            capabilities.reasoning,
+            vulcan_ai_contract::CapabilitySupport::Native
+        );
+        assert_eq!(
+            capabilities.reasoning_control,
+            vulcan_ai_contract::ReasoningControlMode::EffortSelection
+        );
+        assert_eq!(
+            capabilities.reasoning_efforts,
+            vec![
+                vulcan_ai_contract::ReasoningEffort::None,
+                vulcan_ai_contract::ReasoningEffort::Medium,
+                vulcan_ai_contract::ReasoningEffort::High,
+            ]
+        );
+        assert_eq!(
+            capabilities.tool_calling,
+            vulcan_ai_contract::CapabilitySupport::Native
         );
     }
 
@@ -4363,7 +5432,8 @@ mod tests {
                 context_limit: Some(32_000),
                 output_limit: Some(2_000),
                 input_resources: Some(vec![vulcan_ai_contract::ResourceKind::File]),
-                output_resources: Some(vec![vulcan_ai_contract::ResourceKind::Image]),
+                output_resources: None,
+                ..crate::ModelCapabilityOverrides::default()
             },
         );
         let mut catalog = crate::parse_openai_model_catalog(
@@ -4383,10 +5453,7 @@ mod tests {
             model.capabilities.input_resources,
             vec![vulcan_ai_contract::ResourceKind::File]
         );
-        assert_eq!(
-            model.capabilities.output_resources,
-            vec![vulcan_ai_contract::ResourceKind::Image]
-        );
+        assert!(model.capabilities.output_resources.is_empty());
     }
 
     /// Verifies discovered basics survive while explicit manual advanced declarations become effective.
@@ -4409,7 +5476,6 @@ mod tests {
                         context_limit: Some(1_024),
                         output_limit: Some(512),
                         input_resources: vec![vulcan_ai_contract::ResourceKind::File],
-                        output_resources: vec![vulcan_ai_contract::ResourceKind::Audio],
                         tool_calling: vulcan_ai_contract::CapabilitySupport::Native,
                         reasoning: vulcan_ai_contract::CapabilitySupport::Native,
                         reasoning_control:
@@ -4477,6 +5543,61 @@ mod tests {
                 .evidence_revision
                 .contains("user.custom-model.v2")
         );
+    }
+
+    /// Verifies provider capability defaults are inherited before a stronger model override.
+    /// 验证供应商能力默认值先被继承，再由更高优先级的模型覆盖取代。
+    #[test]
+    fn provider_capability_defaults_are_overridden_by_model_capabilities() {
+        let provider_id = "system-provider";
+        let model_id = "chat-model";
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.provider_capability_overrides.insert(
+            String::from(provider_id),
+            crate::ModelCapabilityOverrides {
+                context_limit: Some(32_000),
+                output_limit: Some(2_000),
+                reasoning: Some(vulcan_ai_contract::CapabilitySupport::Native),
+                reasoning_control: Some(vulcan_ai_contract::ReasoningControlMode::EffortSelection),
+                reasoning_efforts: Some(vec![vulcan_ai_contract::ReasoningEffort::Low]),
+                ..crate::ModelCapabilityOverrides::default()
+            },
+        );
+        configuration.model_capability_overrides.insert(
+            PersistedAiConfiguration::provider_model_key(provider_id, model_id),
+            crate::ModelCapabilityOverrides {
+                context_limit: Some(16_000),
+                ..crate::ModelCapabilityOverrides::default()
+            },
+        );
+        let mut catalog = crate::parse_openai_model_catalog(
+            "system-account",
+            1,
+            r#"{"data":[{"id":"chat-model"},{"id":"source-model","context_window":64000,"max_output_tokens":4096}]}"#,
+        )
+        .expect("system catalog should parse");
+
+        apply_model_catalog_overlays(&configuration, provider_id, &mut catalog)
+            .expect("provider and model layers should resolve");
+
+        let model = catalog
+            .models
+            .iter()
+            .find(|model| model.id == model_id)
+            .expect("model should remain visible");
+        assert_eq!(model.capabilities.context_limit, Some(16_000));
+        assert_eq!(model.capabilities.output_limit, Some(2_000));
+        assert_eq!(
+            model.capabilities.reasoning_efforts,
+            vec![vulcan_ai_contract::ReasoningEffort::Low]
+        );
+        let source_model = catalog
+            .models
+            .iter()
+            .find(|model| model.id == "source-model")
+            .expect("source model should remain visible");
+        assert_eq!(source_model.capabilities.context_limit, Some(64_000));
+        assert_eq!(source_model.capabilities.output_limit, Some(4_096));
     }
 
     /// Verifies an authoritative non-empty account catalog hides absent manual models until forced.

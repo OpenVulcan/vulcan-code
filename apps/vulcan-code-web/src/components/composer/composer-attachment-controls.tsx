@@ -7,6 +7,7 @@ import {
   ListChecks,
   Music2,
   Paperclip,
+  Palette,
   Plus,
   Target,
   Video,
@@ -38,6 +39,8 @@ import { cn } from "@/lib/utils";
 import type {
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentSummary,
+  OutputStyleCatalogSummary,
+  SessionOutputStyleSummary,
   SessionVmmPolicySummary,
 } from "@/types";
 
@@ -96,6 +99,18 @@ export function ComposerAttachmentMenu(props: {
   // Saves one new-conversation knowledge selection.
   // 保存一份新会话知识库选择。
   onDraftKnowledgeSelectionChange?: (selection: ComposerKnowledgeSelectionSnapshot) => void;
+  // Output-style catalog projected by the shared service.
+  // 共享服务投影的输出风格目录。
+  outputStyleCatalog: OutputStyleCatalogSummary;
+  // Current persisted session output-style state, when editing an existing conversation.
+  // 编辑已有会话时的持久化输出风格状态。
+  sessionOutputStyle?: SessionOutputStyleSummary | null;
+  // Draft-only output-style override for a new conversation.
+  // 新会话草稿的输出风格覆盖。
+  draftOutputStyleId?: string | null;
+  // Applies one output-style selection without changing the active prompt context.
+  // 应用输出风格选择，但不直接改变当前提示词上下文。
+  onOutputStyleChange: (styleId: string | null) => void;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -148,6 +163,13 @@ export function ComposerAttachmentMenu(props: {
             )}
           </DropdownMenuSubContent>
         </DropdownMenuSub>
+        <OutputStyleSubMenu
+          catalog={props.outputStyleCatalog}
+          conversationId={props.conversationId}
+          draftStyleId={props.draftOutputStyleId}
+          onChange={props.onOutputStyleChange}
+          sessionOutputStyle={props.sessionOutputStyle}
+        />
         <ComposerKnowledgeControl
           conversationId={props.conversationId}
           draftSelection={props.draftKnowledgeSelection}
@@ -207,6 +229,55 @@ export function ComposerAttachmentMenu(props: {
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+// OutputStyleSubMenu renders the selectable prompt-style variants and their persistence cost.
+// OutputStyleSubMenu 渲染可选择的提示词风格变体及其持久化成本。
+function OutputStyleSubMenu(props: {
+  catalog: OutputStyleCatalogSummary;
+  conversationId: string | null;
+  draftStyleId?: string | null;
+  sessionOutputStyle?: SessionOutputStyleSummary | null;
+  onChange: (styleId: string | null) => void;
+}) {
+  const { locale } = useI18n();
+  const selectedId = props.conversationId
+    ? props.sessionOutputStyle?.overrideStyleId ?? null
+    : props.draftStyleId ?? null;
+  const globalEntry = props.catalog.entries.find((entry) => entry.id === props.catalog.selectedId);
+  const globalLabel = globalEntry
+    ? locale === "en-US" ? globalEntry.labelEn : globalEntry.labelZh
+    : props.catalog.selectedId;
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
+        <Palette size={15} />
+        <span>{locale === "en-US" ? "Output style" : "输出风格"}</span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="composer-thinking-menu">
+        <DropdownMenuItem onSelect={() => props.onChange(null)}>
+          <span className="composer-thinking-mode-label">
+            <span>{locale === "en-US" ? "Inherit global" : "继承全局"}</span>
+            <small>
+              {locale === "en-US"
+                ? `Use system setting: ${globalLabel}`
+                : `使用系统设置：${globalLabel}`}
+            </small>
+          </span>
+          {selectedId === null ? <CheckCircle2 size={14} /> : null}
+        </DropdownMenuItem>
+        {props.catalog.entries.map((entry) => (
+          <DropdownMenuItem key={entry.id} onSelect={() => props.onChange(entry.id)}>
+            <span className="composer-thinking-mode-label">
+              <span>{locale === "en-US" ? entry.labelEn : entry.labelZh}</span>
+              <small>{`${entry.constraintLevel} · ${entry.promptCharCount} chars`}</small>
+            </span>
+            {selectedId === entry.id ? <CheckCircle2 size={14} /> : null}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   );
 }
 

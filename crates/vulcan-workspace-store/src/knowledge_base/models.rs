@@ -176,6 +176,10 @@ pub struct KnowledgeCurationSettings {
     /// 用于检测模型变化的期望模型指纹。
     #[serde(default)]
     pub desired_model_fingerprint: Option<String>,
+    /// Selected provider-neutral reasoning effort for curation requests.
+    /// 整理请求选中的供应商无关推理级别。
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
     /// Snapshot captured when the library was first configured.
     /// 资料库首次配置时捕获的模型快照。
     #[serde(default)]
@@ -366,6 +370,22 @@ pub struct KnowledgeDisplayIndexState {
     /// 用于原子发布的当前显示库代次。
     #[serde(default)]
     pub active_generation: Option<String>,
+    /// Pending generation retained so a failed build can resume without discarding completed documents.
+    /// 保留待完成代次，使失败构建可以继续补齐而无需丢弃已完成文档。
+    #[serde(default)]
+    pub pending_generation: Option<String>,
+    /// Source revision captured when the pending generation started.
+    /// 待完成代次开始时记录的原始库修订号。
+    #[serde(default)]
+    pub pending_source_content_revision: Option<u64>,
+    /// Prompt version captured when the pending generation started.
+    /// 待完成代次开始时记录的提示词版本。
+    #[serde(default)]
+    pub pending_prompt_version: Option<String>,
+    /// Curation model fingerprint captured when the pending generation started.
+    /// 待完成代次开始时记录的整理模型指纹。
+    #[serde(default)]
+    pub pending_model_fingerprint: Option<String>,
     /// Raw content revision represented by the display corpus.
     /// 显示库所对应的原始内容修订号。
     #[serde(default)]

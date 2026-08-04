@@ -12,6 +12,7 @@ use std::{
 use time::OffsetDateTime;
 use tokio::sync::{Mutex as AsyncMutex, Notify, broadcast, watch};
 use uuid::Uuid;
+use vulcan_agent_runtime::agent_runtime::provider_reasoning::resolve_effective_public_reasoning_effort;
 use vulcan_agent_runtime::agent_runtime::provider_transport_retry::{
     ProviderRetryDecision, ProviderRetryPolicy,
 };
@@ -24,6 +25,10 @@ use vulcan_ai_contract::{
     ModelCapabilities, ModelParameterValue, ParallelToolCallPolicy, ReasoningControlMode,
     ReasoningEffort, RequestUsage, RerankRequest, RerankResponse, StructuredOutputPolicy,
     ToolChoicePolicy, UsageValue,
+};
+use vulcan_ai_protocols::{
+    ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
+    CLAUDE_CODE_MESSAGES_PROFILE_ID,
 };
 use vulcan_hooks::{HookContext, HookScope};
 use vulcan_plugin_runtime::VulcanPluginRuntimeManager;
@@ -3439,8 +3444,8 @@ fn materialize_restricted_structured_output<'a>(
     })
 }
 
-/// Parses one complete JSON response or one complete JSON code fence without accepting prose.
-/// 解析一份完整 JSON 响应或完整 JSON 代码围栏，但不接受夹杂说明文字的内容。
+/// Parses one complete JSON response, fenced document, or uniquely embedded JSON value.
+/// 解析一份完整 JSON 响应、代码围栏文档或唯一嵌入的 JSON 值。
 ///
 /// # Parameters
 /// 参数
@@ -3449,25 +3454,104 @@ fn materialize_restricted_structured_output<'a>(
 ///
 /// # Returns
 /// 返回值
-/// The parsed JSON value only when the whole response is JSON or one fenced JSON document.
-/// 仅当整个响应是 JSON 或一个代码围栏 JSON 文档时返回解析值。
+/// The parsed JSON value only when exactly one complete object or array can be identified.
+/// 仅当能够识别唯一完整对象或数组时返回解析值。
 fn parse_restricted_json_text(output_text: &str) -> Option<serde_json::Value> {
     let trimmed = output_text.trim();
-    serde_json::from_str(trimmed).ok().or_else(|| {
-        let lines = trimmed.lines().collect::<Vec<_>>();
-        if lines.len() < 3 {
-            return None;
+    serde_json::from_str(trimmed)
+        .ok()
+        .or_else(|| {
+            let lines = trimmed.lines().collect::<Vec<_>>();
+            if lines.len() < 3 {
+                return None;
+            }
+            let opening = lines.first()?.trim().to_ascii_lowercase();
+            if opening != "```" && opening != "```json" {
+                return None;
+            }
+            if lines.last()?.trim() != "```" {
+                return None;
+            }
+            let body = lines[1..lines.len() - 1].join("\n");
+            serde_json::from_str(body.trim()).ok()
+        })
+        .or_else(|| first_unique_embedded_json_value(trimmed))
+}
+
+/// Extracts one unique complete top-level JSON value from surrounding provider text.
+/// 从供应商前后说明文字中提取唯一一份完整的顶层 JSON 值。
+fn first_unique_embedded_json_value(text: &str) -> Option<serde_json::Value> {
+    let bytes = text.as_bytes();
+    let mut start = 0_usize;
+    while start < bytes.len() {
+        if bytes[start] == b'{' || bytes[start] == b'[' {
+            if let Some((value, end)) = complete_json_value_at(text, start) {
+                if first_complete_json_value(text.get(end.saturating_add(1)..)?).is_some() {
+                    return None;
+                }
+                return Some(value);
+            }
         }
-        let opening = lines.first()?.trim().to_ascii_lowercase();
-        if opening != "```" && opening != "```json" {
-            return None;
+        start = start.saturating_add(1);
+    }
+    None
+}
+
+/// Finds one balanced JSON object or array while respecting strings and escapes.
+/// 在尊重字符串与转义的前提下查找一份平衡的 JSON 对象或数组。
+fn complete_json_value_at(text: &str, start: usize) -> Option<(serde_json::Value, usize)> {
+    let bytes = text.as_bytes();
+    let mut stack = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut index = start;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            index = index.saturating_add(1);
+            continue;
         }
-        if lines.last()?.trim() != "```" {
-            return None;
+        match byte {
+            b'"' => in_string = true,
+            b'{' => stack.push(b'}'),
+            b'[' => stack.push(b']'),
+            b'}' | b']' => {
+                if stack.pop() != Some(byte) {
+                    return None;
+                }
+                if stack.is_empty() {
+                    let value = serde_json::from_str(&text[start..=index]).ok()?;
+                    return Some((value, index));
+                }
+            }
+            _ => {}
         }
-        let body = lines[1..lines.len() - 1].join("\n");
-        serde_json::from_str(body.trim()).ok()
-    })
+        index = index.saturating_add(1);
+    }
+    None
+}
+
+/// Finds whether the trailing text contains another complete JSON object or array.
+/// 查找尾部文本中是否还存在另一份完整 JSON 对象或数组。
+fn first_complete_json_value(text: &str) -> Option<serde_json::Value> {
+    let bytes = text.as_bytes();
+    let mut start = 0_usize;
+    while start < bytes.len() {
+        if bytes[start] == b'{' || bytes[start] == b'[' {
+            if let Some((value, _)) = complete_json_value_at(text, start) {
+                return Some(value);
+            }
+        }
+        start = start.saturating_add(1);
+    }
+    None
 }
 
 /// Builds one restricted provider request from an authorized LLM contract.
@@ -3508,6 +3592,10 @@ fn restricted_provider_request(
         model_parameters.extend(overrides.model_parameters.clone());
     }
     model_parameters.extend(request.model_parameters.clone());
+    // Resolve the same host-default capability contract used by ordinary conversation dispatch.
+    // 解析与普通会话分发使用的同一宿主默认能力契约。
+    let mut effective_capabilities = selection.model.capabilities.clone();
+    vulcan_provider_adapters::apply_host_default_reasoning_policy(&mut effective_capabilities);
     let requested_reasoning_effort = request
         .reasoning_effort
         .or_else(|| internal_overrides.and_then(|overrides| overrides.reasoning_effort));
@@ -3517,9 +3605,15 @@ fn restricted_provider_request(
         &mut model_parameters,
         requested_reasoning_effort,
     )?;
+    // A missing restricted-request preference means provider default, which must still resolve to
+    // an enabled host default for ordinary text models; explicit `none` remains authoritative.
+    // 受限请求缺少思考偏好表示使用供应商默认，但普通文本模型仍必须解析为宿主启用默认；
+    // 显式 `none` 仍然具有最高优先级。
+    let reasoning_effort = reasoning_effort
+        .or_else(|| resolve_effective_public_reasoning_effort(&effective_capabilities, None));
     validate_reasoning_effort(
-        selection.model.capabilities.reasoning_control,
-        selection.model.capabilities.reasoning_efforts.as_slice(),
+        effective_capabilities.reasoning_control,
+        effective_capabilities.reasoning_efforts.as_slice(),
         reasoning_effort,
     )?;
     let messages = request
@@ -3547,6 +3641,10 @@ fn restricted_provider_request(
                 .collect(),
         })
         .collect();
+    let structured_output = structured_output_policy_for_protocol(
+        selection.route.protocol_route.protocol_profile_id.as_str(),
+        &request.structured_output,
+    );
     Ok(AiExecutionRequest {
         operation: AiOperation::ConversationRespond,
         model_id: selection.model.id.clone(),
@@ -3560,7 +3658,7 @@ fn restricted_provider_request(
         native_tools: Vec::new(),
         tool_choice: ToolChoicePolicy::Disabled,
         parallel_tool_calls: ParallelToolCallPolicy::Disabled,
-        structured_output: request.structured_output.clone(),
+        structured_output,
         stop_sequences: Vec::new(),
         prompt_cache,
         reasoning_effort,
@@ -3569,6 +3667,38 @@ fn restricted_provider_request(
         resources: Vec::new(),
         output_token_limit,
     })
+}
+
+/// Selects the provider-wire structured-output projection while retaining host-side validation.
+/// 选择供应商 Wire 结构化输出投影，同时保留宿主侧的结果校验。
+///
+/// # Parameters
+/// 参数
+/// `protocol_id` is the exact frozen protocol profile and `policy` is the caller-owned JSON contract.
+/// `protocol_id` 是冻结的精确协议 Profile，`policy` 是调用方拥有的 JSON 契约。
+///
+/// # Returns
+/// 返回值
+/// The native policy for Anthropic Messages profiles; otherwise `None`, so the provider receives
+/// the existing prompt contract and the shared host finalizer still parses and validates JSON.
+/// Anthropic Messages Profile 返回原生策略；其他协议返回 `None`，供应商继续接收已有提示词契约，
+/// 共享宿主终结器仍负责解析并校验 JSON。
+fn structured_output_policy_for_protocol(
+    protocol_id: &str,
+    policy: &StructuredOutputPolicy,
+) -> StructuredOutputPolicy {
+    if matches!(policy, StructuredOutputPolicy::None) {
+        return StructuredOutputPolicy::None;
+    }
+    if matches!(
+        protocol_id,
+        ANTHROPIC_MESSAGES_PROFILE_ID
+            | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
+            | CLAUDE_CODE_MESSAGES_PROFILE_ID
+    ) {
+        return policy.clone();
+    }
+    StructuredOutputPolicy::None
 }
 
 /// Forces the VMM LLM contract to disable reasoning and removes conflicting provider controls.
@@ -5366,6 +5496,36 @@ mod tests {
         assert!(error.message.contains("not valid JSON"));
     }
 
+    /// Verifies one JSON object surrounded by provider prose is accepted without weakening schema checks.
+    /// 验证供应商说明文字包裹单个 JSON 对象时仍可解析，且不会削弱 Schema 校验。
+    #[test]
+    fn structured_output_accepts_one_unique_embedded_json_value() {
+        let mut structured_output = None;
+        finalize_restricted_structured_output(
+            &StructuredOutputPolicy::JsonObject,
+            "Here is the result: {\"accepted\":true}.",
+            &mut structured_output,
+        )
+        .expect("one unique embedded JSON object should materialize");
+        assert_eq!(
+            structured_output,
+            Some(serde_json::json!({ "accepted": true }))
+        );
+    }
+
+    /// Verifies multiple embedded JSON objects are rejected instead of silently choosing one.
+    /// 验证多份嵌入 JSON 会被拒绝，而不是静默选择其中一份。
+    #[test]
+    fn structured_output_rejects_multiple_embedded_json_values() {
+        let error = finalize_restricted_structured_output(
+            &StructuredOutputPolicy::JsonObject,
+            "first {\"accepted\":true}; second {\"accepted\":false}",
+            &mut None,
+        )
+        .expect_err("multiple embedded JSON objects must fail");
+        assert!(error.message.contains("not valid JSON"));
+    }
+
     /// Verifies JSON Schema output is independently checked after provider completion.
     /// 验证 JSON Schema 输出会在供应商完成后被独立校验。
     #[test]
@@ -5392,5 +5552,41 @@ mod tests {
         assert_eq!(error.category, ConfiguredInferenceErrorCategory::Execution);
         assert!(error.message.contains("JSON Schema"));
         assert!(error.message.contains("/accepted"));
+    }
+
+    /// Verifies protocol selection suppresses unsupported native response controls on the first request.
+    /// 验证协议选择会在首次请求前抑制不支持的原生响应控制。
+    #[test]
+    fn structured_output_native_projection_is_limited_to_anthropic_messages() {
+        let policy = StructuredOutputPolicy::JsonSchema {
+            name: String::from("decision"),
+            description: None,
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": { "accepted": { "type": "boolean" } },
+                "required": ["accepted"],
+                "additionalProperties": false
+            }),
+            strict: true,
+        };
+
+        assert_eq!(
+            structured_output_policy_for_protocol(ANTHROPIC_MESSAGES_PROFILE_ID, &policy),
+            policy
+        );
+        assert_eq!(
+            structured_output_policy_for_protocol(
+                vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+                &policy
+            ),
+            StructuredOutputPolicy::None
+        );
+        assert_eq!(
+            structured_output_policy_for_protocol(
+                vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID,
+                &policy
+            ),
+            StructuredOutputPolicy::None
+        );
     }
 }

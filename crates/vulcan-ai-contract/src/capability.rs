@@ -32,6 +32,7 @@ pub enum ReasoningEffort {
     High,
     /// Requests an extra-high reasoning effort.
     /// 请求超高推理强度。
+    #[serde(rename = "xhigh", alias = "x_high")]
     XHigh,
     /// Requests the provider's maximum reasoning effort.
     /// 请求供应商的最大推理强度。
@@ -221,7 +222,30 @@ impl Default for ModelCapabilities {
 
 #[cfg(test)]
 mod tests {
-    use super::{ModelCapabilities, NativeToolKind};
+    use super::{ModelCapabilities, NativeToolKind, ReasoningEffort};
+
+    /// Verifies the public wire contract serializes extra-high reasoning only as `xhigh`.
+    /// 验证公共 Wire 契约仅将超高推理强度序列化为 `xhigh`。
+    #[test]
+    fn xhigh_serializes_with_the_canonical_public_label() {
+        let value = serde_json::to_string(&ReasoningEffort::XHigh)
+            .expect("xhigh reasoning effort should serialize");
+
+        assert_eq!(value, r#""xhigh""#);
+    }
+
+    /// Verifies both the canonical public label and the historical alias remain readable.
+    /// 验证规范公共标签与历史别名均可继续读取。
+    #[test]
+    fn xhigh_deserializes_from_public_and_historical_labels() {
+        let canonical: ReasoningEffort =
+            serde_json::from_str(r#""xhigh""#).expect("public xhigh label should deserialize");
+        let historical: ReasoningEffort = serde_json::from_str(r#""x_high""#)
+            .expect("historical x_high alias should deserialize");
+
+        assert_eq!(canonical, ReasoningEffort::XHigh);
+        assert_eq!(historical, ReasoningEffort::XHigh);
+    }
 
     /// Verifies old capability snapshots without the native-tool field remain readable.
     /// 验证缺少原生工具字段的旧能力快照仍可正常读取。

@@ -6955,6 +6955,7 @@ dependencies = [
  "vulcan-host-tools",
  "vulcan-luaskills-config",
  "vulcan-plugin-runtime",
+ "vulcan-prompt-composer",
  "vulcan-prompt-skills",
  "vulcan-provider-adapters",
  "vulcan-provider-config",

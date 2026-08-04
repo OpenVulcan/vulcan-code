@@ -1,3 +1,4 @@
+use crate::output_style::PromptOutputStyleSnapshot;
 use crate::source::snapshot::{
     AgentPromptSnapshot, EnvironmentContextSnapshot, ProjectRulesSnapshot, ProviderPromptSnapshot,
     SubagentSnapshot, TaskGoalSnapshot, ToolCatalogSnapshot,
@@ -23,6 +24,9 @@ pub struct PromptAssemblyInput {
     /// Requested personality selection.
     /// 请求的人格选择。
     pub personality: PersonalitySelection,
+    /// Immutable output-style snapshot captured at a safe session boundary.
+    /// 在安全会话边界捕获的不可变输出风格快照。
+    pub output_style: Option<PromptOutputStyleSnapshot>,
     /// Optional project rules snapshot.
     /// 可选项目规则快照。
     pub project_rules: Option<ProjectRulesSnapshot>,

@@ -28,6 +28,7 @@ import type {
   PublicAiSettingsSnapshot,
   ProviderModelSecondaryRouteSelection,
   ProviderModelSecondaryRouteSummary,
+  OutputStyleCatalogSummary,
   WorkbenchSnapshot,
 } from "@/types";
 import {
@@ -35,6 +36,26 @@ import {
   serviceClient,
 } from "@/service/webui-service-runtime";
 import { loadWorkbenchSnapshot } from "@/service/workbench-snapshot-service";
+
+// loadOutputStyleCatalog reads the packaged prompt-style catalog and persisted global selection.
+// loadOutputStyleCatalog 读取打包的提示词风格目录与已持久化全局选择。
+export async function loadOutputStyleCatalog(): Promise<OutputStyleCatalogSummary | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<OutputStyleCatalogSummary>("service_output_style_catalog");
+}
+
+// savePromptOutputStyle persists the global default for future sessions and compaction boundaries.
+// savePromptOutputStyle 持久化供未来会话与压缩边界使用的全局默认风格。
+export async function savePromptOutputStyle(styleId: string): Promise<OutputStyleCatalogSummary | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<OutputStyleCatalogSummary>("service_save_prompt_output_style", {
+    request: { styleId },
+  });
+}
 
 // loadPublicAiSettings loads persisted connections and memory-only catalogs.
 // loadPublicAiSettings 加载持久化连接与仅内存目录。
@@ -141,10 +162,11 @@ export async function validatePublicAiCustomModel(request: {
 // removePublicAiCustomProvider 移除一个未被引用的用户自定义供应商。
 export async function removePublicAiCustomProvider(
   providerId: string,
+  confirmCredentialDeletion = false,
 ): Promise<PublicAiSettingsSnapshot> {
   return serviceClient.request<PublicAiSettingsSnapshot>(
     "service_remove_public_ai_custom_provider",
-    { request: { providerId } },
+    { request: { providerId, confirmCredentialDeletion } },
   );
 }
 
@@ -165,7 +187,7 @@ export async function savePublicAiCustomModels(
 // savePublicAiCustomProviderModelDefaults 持久化安全的供应商级回退契约。
 export async function savePublicAiCustomProviderModelDefaults(request: {
   providerId: string;
-  defaults: PublicAiCustomProviderModelDefaults;
+  defaults?: PublicAiCustomProviderModelDefaults;
 }): Promise<PublicAiSettingsSnapshot> {
   return serviceClient.request<PublicAiSettingsSnapshot>(
     "service_save_public_ai_custom_provider_model_defaults",
@@ -271,6 +293,18 @@ export async function savePublicAiModelCapabilityOverrides(request: {
   );
 }
 
+// savePublicAiProviderCapabilityOverrides saves one supplier-level difference or restores inheritance.
+// savePublicAiProviderCapabilityOverrides 保存一项供应商级差异或恢复继承。
+export async function savePublicAiProviderCapabilityOverrides(request: {
+  providerId: string;
+  overrides?: PublicAiModelCapabilityOverrides;
+}): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_provider_capability_overrides",
+    { request },
+  );
+}
+
 // syncPublicAiConnection refreshes one model catalog into memory.
 // syncPublicAiConnection 将一个模型目录刷新到内存。
 export async function syncPublicAiConnection(connectionId: string): Promise<PublicAiSettingsSnapshot> {
@@ -318,7 +352,7 @@ export async function savePublicAiModelOverrides(request: {
   providerId: string;
   modelId: string;
   protocolId: string;
-  overrides: PublicAiModelOverrides;
+  overrides?: PublicAiModelOverrides;
 }): Promise<PublicAiSettingsSnapshot> {
   return serviceClient.request<PublicAiSettingsSnapshot>("service_save_public_ai_model_overrides", { request });
 }
@@ -329,6 +363,7 @@ export async function savePublicAiModelEnabled(request: {
   providerId: string;
   modelId: string;
   enabled: boolean;
+  restore?: boolean;
 }): Promise<PublicAiSettingsSnapshot> {
   return serviceClient.request<PublicAiSettingsSnapshot>(
     "service_save_public_ai_model_enabled",

@@ -650,6 +650,7 @@ fn build_prompt_compaction_launch_request(
         session_title: session_title.to_string(),
         workspace_path: workspace_path.to_string(),
         prompt: build_compaction_request_prompt_for_mode(prompt_mode),
+        output_style_snapshot: None,
         provider_visible_agent_messages: Vec::new(),
         conversation_state,
         context_compaction_policy: None,

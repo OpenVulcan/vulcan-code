@@ -144,6 +144,9 @@ export interface PublicAiCustomProviderSaveRequest {
   modelDiscoveryPath?: string;
   allowManualFallback?: boolean;
   allowPendingValidation?: boolean;
+  // Confirms deletion of model settings bound to protocols other than the selected target.
+  // 确认删除绑定到所选目标之外协议的模型设置。
+  confirmInactiveProtocolOverrideDeletion?: boolean;
 }
 
 // PublicAiCustomProviderProbeResult is one typed non-persistent credential observation.
@@ -188,7 +191,13 @@ export interface PublicAiModelCapabilityOverrides {
   context_limit?: number;
   output_limit?: number;
   input_resources?: PublicAiResourceKind[];
-  output_resources?: PublicAiResourceKind[];
+  reasoning?: string;
+  reasoning_control?: string;
+  reasoning_efforts?: string[];
+  tool_calling?: string;
+  // Optional exact request projection shared by custom and native provider models.
+  // 自定义供应商与系统供应商模型共同使用的可选精确请求投影。
+  request_projection?: PublicAiCustomModelRequestProjection;
 }
 
 // PublicAiCustomProviderModelDefaults is the safe provider-wide fallback capability contract.
@@ -197,7 +206,13 @@ export interface PublicAiCustomProviderModelDefaults {
   context_limit: number;
   output_limit: number;
   input_resources?: PublicAiResourceKind[];
-  output_resources?: PublicAiResourceKind[];
+  reasoning: string;
+  reasoning_control: string;
+  reasoning_efforts: string[];
+  tool_calling: string;
+  // Optional provider-wide request projection inherited by compatible models.
+  // 可选的兼容模型继承供应商级请求投影。
+  request_projection?: PublicAiCustomModelRequestProjection;
 }
 
 // PublicAiCustomModelTemplateSelection is one immutable user-reviewed template snapshot.
@@ -499,6 +514,7 @@ export interface PublicAiModelAccessRecord {
   modelId: string;
   enabled: boolean;
   defaultEnabled: boolean;
+  customized?: boolean;
 }
 
 // PublicAiModelCapabilityOverrideRecord identifies one capability difference without key parsing.
@@ -770,11 +786,20 @@ export interface PublicAiSettingsSnapshot {
   modelAccessRecords: PublicAiModelAccessRecord[];
   customModels?: Record<string, Record<string, PublicAiCustomModelDefinition>>;
   customProviderModelDefaults?: Record<string, PublicAiCustomProviderModelDefaults>;
+  // customProviderSystemModelDefaults is the backend-owned baseline shown before any provider override.
+  // customProviderSystemModelDefaults 是尚无供应商覆盖时展示的后端持有基线。
+  customProviderSystemModelDefaults: PublicAiCustomProviderModelDefaults;
+  // providersWithModelCustomizations is the backend-authoritative provider deletion blocklist.
+  // providersWithModelCustomizations 是后端权威的供应商删除阻止列表。
+  providersWithModelCustomizations?: string[];
   customModelTemplateDecisionRecords?: PublicAiCustomModelTemplateDecisionRecord[];
   customModelConnectionAvailabilityRecords?: PublicAiCustomModelConnectionAvailabilityRecord[];
   connectionModelAccessPolicyRecords: PublicAiConnectionModelAccessPolicyRecord[];
   modelCapabilityOverrides?: Record<string, PublicAiModelCapabilityOverrides>;
   modelCapabilityOverrideRecords?: PublicAiModelCapabilityOverrideRecord[];
+  // providerCapabilityOverrides stores explicit supplier-level layers by provider id.
+  // providerCapabilityOverrides 按供应商标识保存显式供应商级能力层。
+  providerCapabilityOverrides?: Record<string, PublicAiModelCapabilityOverrides>;
   providerToolTargets: PublicAiProviderToolTargetSnapshot[];
   providerToolSelections: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection>

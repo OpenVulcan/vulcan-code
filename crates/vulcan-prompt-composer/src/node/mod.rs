@@ -94,6 +94,24 @@ pub fn render_node(
                 ),
             )
         }),
+        PlannedNode::OutputStyle => input
+            .output_style
+            .as_ref()
+            .filter(|snapshot| snapshot.is_injected())
+            .map(|snapshot| {
+                build_cached_segment(
+                    &mut segment_context,
+                    CachedSegmentDescriptor::new(
+                        "output_style",
+                        snapshot.fingerprint,
+                        PromptNodeKind::System,
+                        PromptTarget::System,
+                        format!("Output Style {}", snapshot.label),
+                        &snapshot.text,
+                        snapshot.source_label.clone(),
+                    ),
+                )
+            }),
         PlannedNode::ProjectRules => input.project_rules.as_ref().map(|snapshot| {
             build_cached_segment(
                 &mut segment_context,

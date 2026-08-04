@@ -99,6 +99,12 @@ pub(super) struct PublicAiSettingsSnapshot {
     /// Capability defaults grouped by custom provider identifier.
     /// 按自定义供应商标识分组的能力默认值。
     custom_provider_model_defaults: BTreeMap<String, CustomProviderModelDefaults>,
+    /// Code-owned baseline rendered when a custom provider has no saved provider-level layer.
+    /// 自定义供应商没有已保存供应商层时展示的代码持有基线。
+    custom_provider_system_model_defaults: CustomProviderModelDefaults,
+    /// Custom providers blocked from deletion by any backend-owned model or route customization.
+    /// 因任意后端模型或路由自定义而禁止删除的自定义供应商。
+    providers_with_model_customizations: BTreeSet<String>,
     /// Explicit template decisions without browser-side composite-key parsing.
     /// 不需要浏览器解析组合键的显式模板决策记录。
     custom_model_template_decision_records: Vec<PublicAiCustomModelTemplateDecisionRecord>,
@@ -112,6 +118,9 @@ pub(super) struct PublicAiSettingsSnapshot {
     /// User capability differences stored separately from immutable catalogs.
     /// 与不可变目录分离保存的用户能力差异。
     model_capability_overrides: BTreeMap<String, ModelCapabilityOverrides>,
+    /// Provider-level capability differences inherited by every provider model.
+    /// 由供应商全部模型继承的供应商级能力差异。
+    provider_capability_overrides: BTreeMap<String, ModelCapabilityOverrides>,
     /// Explicit capability difference records that avoid composite-key parsing in the browser.
     /// 避免浏览器解析组合键的显式能力差异记录。
     model_capability_override_records: Vec<PublicAiModelCapabilityOverrideRecord>,
@@ -463,6 +472,9 @@ pub(super) struct PublicAiModelAccessRecord {
     /// Code-owned provider default before applying a user choice.
     /// 应用用户选择前由代码拥有的供应商默认值。
     default_enabled: bool,
+    /// Whether this exact model has an explicit user-owned access layer.
+    /// 此精确模型是否存在明确的用户持有访问层。
+    customized: bool,
 }
 
 /// Browser-facing model capability difference without a composite key.
@@ -597,9 +609,9 @@ pub(super) struct PublicAiModelOverridesSaveRequest {
     /// Exact protocol profile identifier.
     /// 精确协议配置档标识。
     protocol_id: String,
-    /// Complete replacement override value.
-    /// 完整替换覆盖值。
-    overrides: ModelExecutionOverrides,
+    /// Complete replacement override value, or null to restore protocol defaults.
+    /// 完整替换覆盖值；为 null 时还原协议默认值。
+    overrides: Option<ModelExecutionOverrides>,
 }
 
 /// Saves one provider-model access choice independent from credentials and protocols.
@@ -616,6 +628,10 @@ pub(super) struct PublicAiModelEnabledSaveRequest {
     /// Requested enabled state.
     /// 请求的启用状态。
     enabled: bool,
+    /// Restores the inherited value instead of creating or replacing a model layer.
+    /// 恢复继承值，而不是创建或替换模型层。
+    #[serde(default)]
+    restore: bool,
 }
 
 /// Saves one enabled state for every synchronized model owned by a provider.
@@ -865,6 +881,10 @@ pub(super) struct PublicAiCustomProviderSaveRequest {
     /// 允许在可重试发现失败后将供应商保存为待验证状态。
     #[serde(default)]
     allow_pending_validation: bool,
+    /// Confirms deletion of protocol-scoped model settings that cannot apply after a protocol switch.
+    /// 确认删除协议切换后无法继续应用的协议作用域模型设置。
+    #[serde(default)]
+    confirm_inactive_protocol_override_deletion: bool,
 }
 
 /// Returns one typed, non-persistent custom-provider validation observation.
@@ -932,6 +952,10 @@ pub(super) struct PublicAiCustomProviderRemoveRequest {
     /// Exact custom provider identifier.
     /// 精确自定义供应商标识。
     provider_id: String,
+    /// Whether the user explicitly confirmed deleting all credentials owned by this provider.
+    /// 用户是否明确确认同时删除该供应商持有的全部凭据。
+    #[serde(default)]
+    confirm_credential_deletion: bool,
 }
 
 /// Replaces the complete user-owned model set for one custom provider.
@@ -951,17 +975,17 @@ pub(super) struct PublicAiCustomModelsSaveRequest {
     template_decisions: Vec<PublicAiCustomModelTemplateDecisionBatchItem>,
 }
 
-/// Saves provider-wide fallback capabilities for one custom provider.
-/// 保存一个自定义供应商的供应商级回退能力。
+/// Saves or restores the direct provider-wide model settings for one custom provider.
+/// 保存或还原一个自定义供应商的直接供应商级模型设置。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct PublicAiCustomProviderModelDefaultsSaveRequest {
     /// Exact custom provider identifier.
     /// 精确自定义供应商标识。
     provider_id: String,
-    /// Complete provider fallback contract.
-    /// 完整供应商回退契约。
-    defaults: CustomProviderModelDefaults,
+    /// Complete provider layer, or null to restore the in-memory system baseline.
+    /// 完整供应商层；为 null 时还原内存中的系统基线。
+    defaults: Option<CustomProviderModelDefaults>,
 }
 
 /// Saves or clears one reviewed common-template decision.
@@ -1104,6 +1128,19 @@ pub(super) struct PublicAiModelCapabilityOverridesSaveRequest {
     overrides: Option<ModelCapabilityOverrides>,
 }
 
+/// Saves or restores one provider-level capability layer.
+/// 保存或恢复一层供应商级能力配置。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiProviderCapabilityOverridesSaveRequest {
+    /// Exact provider identifier.
+    /// 精确供应商标识。
+    provider_id: String,
+    /// Replacement difference, or null to restore inherited catalog defaults.
+    /// 替换差异；为 null 时恢复继承的目录默认值。
+    overrides: Option<ModelCapabilityOverrides>,
+}
+
 /// Carries one isolated custom-provider candidate through validation and optional persistence.
 /// 承载一个隔离的自定义供应商候选项，供验证及可选持久化使用。
 struct PreparedCustomProviderCandidate {
@@ -1113,15 +1150,36 @@ struct PreparedCustomProviderCandidate {
     /// Strict projected provider descriptor.
     /// 严格投影后的供应商描述。
     descriptor: ProviderDescriptor,
-    /// Temporary connection used by the metadata request.
-    /// 元数据请求使用的临时连接。
-    connection: CredentialConnection,
+    /// Exact service, credential-profile, and protocol target used by every migrated account.
+    /// 每个迁移账号使用的精确服务、凭据配置档与协议目标。
+    connection_target: CustomProviderConnectionTarget,
+    /// Optional temporary connection used only when a metadata request has credential material.
+    /// 仅在元数据请求具有凭据材料时使用的可选临时连接。
+    validation_connection: Option<CredentialConnection>,
     /// New candidate-owned secret created only for first-provider setup.
     /// 仅在首次供应商设置时创建且由候选项拥有的新秘密。
     temporary_secret: Option<CredentialSecretEnvelope>,
     /// Whether the request edits one existing provider.
     /// 请求是否编辑一个现有供应商。
     updating_existing: bool,
+}
+
+/// Identifies the non-secret connection contract produced by one custom-provider descriptor.
+/// 标识一个自定义供应商描述符产生的非秘密连接契约。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CustomProviderConnectionTarget {
+    /// Exact service entry selected by the provider descriptor.
+    /// 供应商描述符选定的精确服务入口。
+    service_entry_id: String,
+    /// Exact credential profile selected by the provider descriptor.
+    /// 供应商描述符选定的精确凭据配置档。
+    credential_profile_id: String,
+    /// Exact selected single protocol.
+    /// 精确选定的唯一协议。
+    selected_protocol: String,
+    /// Closed verified protocol set admitted by the strict connection graph.
+    /// 严格连接图允许的封闭已验证协议集合。
+    verified_protocols: BTreeSet<String>,
 }
 
 /// Stores one candidate observation before the caller decides whether it may be persisted.
@@ -1136,6 +1194,15 @@ struct CustomProviderCandidateObservation {
     /// Original refresh failure retained for save-policy diagnostics.
     /// 为保存策略诊断保留的原始刷新失败。
     refresh_error: Option<String>,
+}
+
+/// Records the exact durable state allowed by one credential-specific provider observation.
+/// 记录一次凭据级供应商观测所允许的精确持久化状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CustomProviderConnectionValidationOutcome {
+    /// Whether the migrated credential must remain unavailable until a later successful validation.
+    /// 迁移后的凭据是否必须保持不可用，直到后续验证成功。
+    pending_validation: bool,
 }
 
 /// Builds one strict candidate and its temporary credential connection.
@@ -1182,35 +1249,50 @@ fn prepare_custom_provider_candidate(
         .credential_profiles
         .first()
         .ok_or_else(|| String::from("Custom provider must declare one credential profile."))?;
+    // connection_target contains only descriptor-owned identities and remains valid without credentials.
+    // connection_target 仅包含描述符持有的身份，因此在没有凭据时仍然有效。
+    let connection_target = CustomProviderConnectionTarget {
+        service_entry_id: entry.id.clone(),
+        credential_profile_id: profile.id.clone(),
+        selected_protocol: route.protocol_profile_id.clone(),
+        verified_protocols: BTreeSet::from([route.protocol_profile_id.clone()]),
+    };
     let temporary_connection_id = format!("connection_{}", uuid::Uuid::new_v4().simple());
-    let (connection, temporary_secret) = if updating_existing {
+    let (validation_connection, temporary_secret) = if updating_existing {
         if request.credential_display_name.is_some() || request.secret.is_some() {
             return Err(String::from(
                 "Editing a custom provider must reuse one existing credential and cannot create a new secret.",
             ));
         }
-        let validation_connection_id =
-            request.validation_connection_id.as_deref().ok_or_else(|| {
-                String::from("validationConnectionId is required while editing a custom provider.")
-            })?;
-        let existing_connection = current
-            .connection_graph
-            .connections
-            .get(validation_connection_id)
-            .ok_or_else(|| {
-                format!("Validation connection `{validation_connection_id}` is not configured.")
-            })?;
-        if existing_connection.provider_id != provider_id {
-            return Err(format!(
-                "Validation connection `{validation_connection_id}` does not belong to custom provider `{provider_id}`."
-            ));
-        }
+        // existing_connection is optional because a provider remains editable after its last credential is removed.
+        // existing_connection 为可选值，因为供应商在最后一份凭据被移除后仍应可编辑。
+        let existing_connection = request
+            .validation_connection_id
+            .as_deref()
+            .map(|validation_connection_id| {
+                let existing_connection = current
+                    .connection_graph
+                    .connections
+                    .get(validation_connection_id)
+                    .ok_or_else(|| {
+                        format!(
+                            "Validation connection `{validation_connection_id}` is not configured."
+                        )
+                    })?;
+                if existing_connection.provider_id != provider_id {
+                    return Err(format!(
+                        "Validation connection `{validation_connection_id}` does not belong to custom provider `{provider_id}`."
+                    ));
+                }
+                Ok(existing_connection)
+            })
+            .transpose()?;
         (
-            CredentialConnection {
+            existing_connection.map(|existing_connection| CredentialConnection {
                 id: temporary_connection_id,
                 provider_id: provider_id.clone(),
-                service_entry_id: entry.id.clone(),
-                credential_profile_id: profile.id.clone(),
+                service_entry_id: connection_target.service_entry_id.clone(),
+                credential_profile_id: connection_target.credential_profile_id.clone(),
                 credential_mode: existing_connection.credential_mode,
                 credential_id: existing_connection.credential_id.clone(),
                 display_name: existing_connection.display_name.clone(),
@@ -1219,11 +1301,11 @@ fn prepare_custom_provider_candidate(
                     .management_secret_reference
                     .clone(),
                 service_origin_override: existing_connection.service_origin_override.clone(),
-                verified_protocols: BTreeSet::from([route.protocol_profile_id.clone()]),
-                selected_protocol: route.protocol_profile_id.clone(),
+                verified_protocols: connection_target.verified_protocols.clone(),
+                selected_protocol: connection_target.selected_protocol.clone(),
                 prompt_cache_by_protocol: existing_connection.prompt_cache_by_protocol.clone(),
                 usage_scope_override: existing_connection.usage_scope_override.clone(),
-            },
+            }),
             None,
         )
     } else {
@@ -1244,29 +1326,30 @@ fn prepare_custom_provider_candidate(
         validate_non_empty("secret", secret)?;
         let secret_reference = format!("ai_secret_{}", uuid::Uuid::new_v4().simple());
         (
-            CredentialConnection {
+            Some(CredentialConnection {
                 id: temporary_connection_id,
                 provider_id: provider_id.clone(),
-                service_entry_id: entry.id.clone(),
-                credential_profile_id: profile.id.clone(),
-                credential_mode: CredentialMode::Token,
+                service_entry_id: connection_target.service_entry_id.clone(),
+                credential_profile_id: connection_target.credential_profile_id.clone(),
+                credential_mode: profile.credential_mode,
                 credential_id: format!("credential_{}", uuid::Uuid::new_v4().simple()),
                 display_name: credential_display_name.trim().to_string(),
                 secret_reference,
                 management_secret_reference: None,
                 service_origin_override: None,
-                verified_protocols: BTreeSet::from([route.protocol_profile_id.clone()]),
-                selected_protocol: route.protocol_profile_id.clone(),
+                verified_protocols: connection_target.verified_protocols.clone(),
+                selected_protocol: connection_target.selected_protocol.clone(),
                 prompt_cache_by_protocol: BTreeMap::new(),
                 usage_scope_override: None,
-            },
+            }),
             Some(CredentialSecretEnvelope::new_api_key(secret.to_string())?),
         )
     };
     Ok(PreparedCustomProviderCandidate {
         provider_id,
         descriptor,
-        connection,
+        connection_target,
+        validation_connection,
         temporary_secret,
         updating_existing,
     })
@@ -1305,31 +1388,376 @@ fn custom_provider_validation_configuration(
         }
         Some(_) | None => {}
     }
-    let candidate_protocol = candidate.connection.selected_protocol.as_str();
-    for existing_connection in current
-        .connection_graph
-        .connections
-        .values()
-        .filter(|connection| connection.provider_id == candidate.provider_id)
-    {
-        if existing_connection.selected_protocol != candidate_protocol {
-            return Err(format!(
-                "Custom provider `{}` cannot change protocol while credential `{}` uses `{}`.",
-                candidate.provider_id,
-                existing_connection.display_name,
-                existing_connection.selected_protocol
-            ));
-        }
-    }
     let mut validation = current.clone();
     validation
         .custom_providers
         .insert(candidate.provider_id.clone(), candidate.descriptor.clone());
     let providers = runtime.effective_providers(&validation)?;
+    // validation_connection is absent only for credential-free provider edits, which do not perform metadata requests.
+    // validation_connection 仅在无凭据供应商编辑时缺失，而此类编辑不会执行元数据请求。
+    let validation_connection = candidate.validation_connection.as_ref().ok_or_else(|| {
+        format!(
+            "Custom provider `{}` has no credential connection available for validation.",
+            candidate.provider_id
+        )
+    })?;
     validation
         .connection_graph
-        .add_connection(&providers, candidate.connection.clone())?;
+        .add_connection(&providers, validation_connection.clone())?;
     Ok(validation)
+}
+
+/// Reports whether an edited provider changes the credential-facing transport contract.
+/// 报告供应商编辑是否改变面向凭据的传输契约。
+///
+/// # Parameters
+/// 参数
+/// `current` is the durable configuration and `candidate` is the strict edited descriptor.
+/// `current` 是持久化配置，`candidate` 是严格的编辑后描述符。
+///
+/// # Returns
+/// 返回值
+/// `true` for protocol, endpoint, authentication, or discovery changes; cosmetic names return `false`.
+/// 协议、端点、鉴权或发现方式变化时返回 `true`；仅名称变化时返回 `false`。
+fn custom_provider_connection_contract_changed(
+    current: &PersistedAiConfiguration,
+    candidate: &PreparedCustomProviderCandidate,
+) -> Result<bool, String> {
+    if !candidate.updating_existing {
+        return Ok(true);
+    }
+    // existing is the exact persisted custom descriptor being edited.
+    // existing 是正在编辑的精确持久化自定义描述符。
+    let existing = current
+        .custom_providers
+        .get(candidate.provider_id.as_str())
+        .ok_or_else(|| {
+            format!(
+                "Custom provider `{}` is not configured.",
+                candidate.provider_id
+            )
+        })?;
+    if existing.kind != ProviderKind::Custom {
+        return Err(format!(
+            "Provider `{}` is not a user-defined provider.",
+            candidate.provider_id
+        ));
+    }
+    Ok(existing.service_entries != candidate.descriptor.service_entries)
+}
+
+/// Reports whether an edited custom provider selects a different single protocol.
+/// 报告被编辑的自定义供应商是否选择了不同的唯一协议。
+///
+/// # Parameters
+/// 参数
+/// `current` owns the durable descriptor and `candidate` contains the selected target route.
+/// `current` 持有持久化描述符，`candidate` 包含选定的目标路由。
+///
+/// # Returns
+/// 返回值
+/// `true` only when an existing provider changes its exact protocol profile.
+/// 仅当现有供应商改变精确协议配置档时返回 `true`。
+fn custom_provider_protocol_changed(
+    current: &PersistedAiConfiguration,
+    candidate: &PreparedCustomProviderCandidate,
+) -> Result<bool, String> {
+    if !candidate.updating_existing {
+        return Ok(false);
+    }
+    // existing_protocol is read from the same strict one-entry, one-route descriptor contract.
+    // existing_protocol 从同一严格单入口、单路由描述符契约中读取。
+    let existing_protocol = current
+        .custom_providers
+        .get(candidate.provider_id.as_str())
+        .and_then(|provider| provider.service_entries.first())
+        .and_then(|entry| entry.protocol_routes.first())
+        .map(|route| route.protocol_profile_id.as_str())
+        .ok_or_else(|| {
+            format!(
+                "Custom provider `{}` has no persisted protocol route.",
+                candidate.provider_id
+            )
+        })?;
+    Ok(existing_protocol != candidate.connection_target.selected_protocol)
+}
+
+/// Builds one isolated validation candidate for every credential owned by an edited provider.
+/// 为被编辑供应商持有的每份凭据构建一个隔离验证候选项。
+///
+/// # Parameters
+/// 参数
+/// `current` is the durable configuration and `candidate` contains the newly selected provider contract.
+/// `current` 是持久化配置，`candidate` 包含新选择的供应商契约。
+///
+/// # Returns
+/// 返回值
+/// Exact source connection identifiers paired with temporary credential-preserving candidates.
+/// 返回精确源连接标识及其保留原凭据的临时候选项。
+fn custom_provider_edit_validation_candidates(
+    current: &PersistedAiConfiguration,
+    candidate: &PreparedCustomProviderCandidate,
+) -> Result<Vec<(String, PreparedCustomProviderCandidate)>, String> {
+    if !candidate.updating_existing {
+        return Err(String::from(
+            "Credential-wide validation candidates are available only while editing a custom provider.",
+        ));
+    }
+    // existing_connections freezes the complete credential set before any remote validation starts.
+    // existing_connections 在开始任何远程验证前冻结完整凭据集合。
+    let existing_connections = current
+        .connection_graph
+        .connections
+        .values()
+        .filter(|connection| connection.provider_id == candidate.provider_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    Ok(existing_connections
+        .into_iter()
+        .map(|existing| {
+            // source_connection_id preserves the durable identity used by the atomic migration.
+            // source_connection_id 保留原子迁移使用的持久化身份。
+            let source_connection_id = existing.id.clone();
+            // validation_connection reuses only this account's credential and secret references under the new protocol.
+            // validation_connection 仅在新协议下复用此账号自身的凭据与秘密引用。
+            let validation_connection = CredentialConnection {
+                id: format!("connection_{}", uuid::Uuid::new_v4().simple()),
+                provider_id: candidate.provider_id.clone(),
+                service_entry_id: candidate.connection_target.service_entry_id.clone(),
+                credential_profile_id: candidate.connection_target.credential_profile_id.clone(),
+                credential_mode: existing.credential_mode,
+                credential_id: existing.credential_id,
+                display_name: existing.display_name,
+                secret_reference: existing.secret_reference,
+                management_secret_reference: existing.management_secret_reference,
+                service_origin_override: existing.service_origin_override,
+                verified_protocols: candidate.connection_target.verified_protocols.clone(),
+                selected_protocol: candidate.connection_target.selected_protocol.clone(),
+                prompt_cache_by_protocol: existing.prompt_cache_by_protocol,
+                usage_scope_override: existing.usage_scope_override,
+            };
+            (
+                source_connection_id,
+                PreparedCustomProviderCandidate {
+                    provider_id: candidate.provider_id.clone(),
+                    descriptor: candidate.descriptor.clone(),
+                    connection_target: candidate.connection_target.clone(),
+                    validation_connection: Some(validation_connection),
+                    temporary_secret: None,
+                    updating_existing: true,
+                },
+            )
+        })
+        .collect())
+}
+
+/// Validates every existing credential against an edited provider before durable migration.
+/// 在持久化迁移前，使用编辑后的供应商逐一验证全部现有凭据。
+///
+/// # Parameters
+/// 参数
+/// `runtime`, `current`, and `candidate` provide isolated discovery; the two flags preserve explicit fallback choices.
+/// `runtime`、`current` 与 `candidate` 提供隔离发现；两个标志保留显式回退选择。
+///
+/// # Returns
+/// 返回值
+/// One exact validation outcome per durable connection, or an error before any configuration write.
+/// 返回每条持久化连接的精确验证结果；任一失败都会在配置写入前返回错误。
+async fn validate_custom_provider_edit_connections(
+    runtime: &PublicAiRuntime,
+    current: &PersistedAiConfiguration,
+    candidate: &PreparedCustomProviderCandidate,
+    allow_manual_fallback: bool,
+    allow_pending_validation: bool,
+) -> Result<BTreeMap<String, CustomProviderConnectionValidationOutcome>, String> {
+    // candidates contains one temporary catalog scope per durable credential.
+    // candidates 为每份持久化凭据保存一个临时目录作用域。
+    let candidates = custom_provider_edit_validation_candidates(current, candidate)?;
+    // outcomes is complete only after every credential reaches an explicitly accepted state.
+    // outcomes 仅在全部凭据均达到显式接受状态后才完整。
+    let mut outcomes = BTreeMap::new();
+    for (source_connection_id, validation_candidate) in candidates {
+        // validation_configuration binds this credential to the new descriptor without mutating durable state.
+        // validation_configuration 将此凭据绑定到新描述符，且不修改持久化状态。
+        let validation_configuration =
+            custom_provider_validation_configuration(runtime, current, &validation_candidate)?;
+        // observation_result is paired with mandatory temporary-catalog cleanup below.
+        // observation_result 与下方强制临时目录清理配对。
+        let observation_result = observe_custom_provider_candidate(
+            runtime,
+            &validation_configuration,
+            &validation_candidate,
+        )
+        .await;
+        // cleanup_result proves no temporary edit artifact survives before the next credential.
+        // cleanup_result 确保进入下一份凭据前不残留任何临时编辑工件。
+        let cleanup_result =
+            cleanup_custom_provider_candidate(runtime, &validation_candidate).await;
+        // observation converts transport failure plus cleanup status into one actionable atomic error.
+        // observation 将传输失败与清理状态合并为一条可操作的原子错误。
+        let observation = match observation_result {
+            Ok(observation) => {
+                cleanup_result?;
+                observation
+            }
+            Err(error) => {
+                return Err(compensated_operation_error(error, cleanup_result, Ok(())));
+            }
+        };
+        if !custom_provider_observation_is_accepted(
+            observation.status.state,
+            allow_manual_fallback,
+            allow_pending_validation,
+        ) {
+            // diagnostic preserves the exact provider response for the credential that blocks migration.
+            // diagnostic 保留阻止迁移的精确凭据所对应的供应商响应。
+            let diagnostic = observation
+                .refresh_error
+                .as_deref()
+                .or(observation.status.message.as_deref())
+                .unwrap_or("The provider model catalog was not validated.");
+            return Err(format!(
+                "Custom provider credential `{source_connection_id}` cannot migrate to the selected protocol: {diagnostic}"
+            ));
+        }
+        outcomes.insert(
+            source_connection_id,
+            CustomProviderConnectionValidationOutcome {
+                pending_validation: custom_provider_save_requires_pending_validation(
+                    observation.status.state,
+                    allow_manual_fallback,
+                    allow_pending_validation,
+                ),
+            },
+        );
+    }
+    Ok(outcomes)
+}
+
+/// Migrates every existing credential of a custom provider to its newly selected single protocol.
+/// 将自定义供应商的全部既有凭据迁移到新选择的唯一协议。
+///
+/// # Parameters
+/// 参数
+/// `providers` validates the new descriptor, `configuration` owns the connection graph,
+/// `provider_id` scopes the migration, `target` supplies the new route identity, and
+/// `validation_outcomes` binds verification to each exact credential.
+/// `providers` 校验新描述，`configuration` 持有连接图，`provider_id` 限定迁移范围，
+/// `target` 提供新的路由身份，`validation_outcomes` 将验证结果绑定到每份精确凭据。
+///
+/// # Returns
+/// 返回值
+/// Success only when every migrated credential is valid under the new provider descriptor.
+/// 仅当每个迁移后的凭据在新供应商描述下均有效时返回成功。
+fn migrate_custom_provider_connections(
+    providers: &ProviderRegistry,
+    configuration: &mut PersistedAiConfiguration,
+    provider_id: &str,
+    target: &CustomProviderConnectionTarget,
+    validation_outcomes: &BTreeMap<String, CustomProviderConnectionValidationOutcome>,
+) -> Result<(), String> {
+    // migrated_connections freezes the complete replacement set before any graph is mutated.
+    // migrated_connections 在修改任何连接图前冻结完整替换集合。
+    let migrated_connections = configuration
+        .connection_graph
+        .connections
+        .values()
+        .filter(|connection| connection.provider_id == provider_id)
+        .cloned()
+        .map(|mut connection| {
+            // _validation_outcome proves this exact credential was observed before migration.
+            // _validation_outcome 证明此精确凭据已在迁移前完成观测。
+            let _validation_outcome = validation_outcomes
+                .get(connection.id.as_str())
+                .copied()
+                .ok_or_else(|| {
+                    format!(
+                        "Custom provider credential `{}` has no validation outcome for the protocol migration.",
+                        connection.id
+                    )
+                })?;
+            connection.service_entry_id = target.service_entry_id.clone();
+            connection.credential_profile_id = target.credential_profile_id.clone();
+            connection.selected_protocol = target.selected_protocol.clone();
+            // verified_protocols admits the selected route into the strict graph; pending_validation separately blocks non-ready credentials.
+            // verified_protocols 将所选路由纳入严格连接图；pending_validation 另行封锁尚未就绪的凭据。
+            connection.verified_protocols = target.verified_protocols.clone();
+            Ok(connection)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    // migrated_connection_ids scopes every dependent inference-route rewrite to the exact account set.
+    // migrated_connection_ids 将每项依赖推理路由改写限定到精确账号集合。
+    let migrated_connection_ids = migrated_connections
+        .iter()
+        .map(|connection| connection.id.clone())
+        .collect::<BTreeSet<_>>();
+    // migrated_graph provides function-local all-or-nothing validation before the durable configuration changes.
+    // migrated_graph 在持久化配置改变前提供函数内全有或全无校验。
+    let mut migrated_graph = configuration.connection_graph.clone();
+    for connection in migrated_connections {
+        migrated_graph.connections.remove(connection.id.as_str());
+        migrated_graph.add_connection(providers, connection)?;
+    }
+    // migrated_profiles keeps protocol-bound internal routes consistent with the same atomic connection migration.
+    // migrated_profiles 使协议绑定的内部路由与同一次原子连接迁移保持一致。
+    let mut migrated_profiles = configuration.inference_profiles.clone();
+    for profile in migrated_profiles.values_mut() {
+        for route in profile.llm_routes.values_mut() {
+            migrate_custom_provider_inference_route(
+                route,
+                provider_id,
+                &migrated_connection_ids,
+                target,
+            )?;
+        }
+    }
+    configuration.connection_graph = migrated_graph;
+    configuration.inference_profiles = migrated_profiles;
+    Ok(())
+}
+
+/// Migrates one dependent conversation inference route to a custom provider's new single protocol.
+/// 将一条依赖的会话推理路由迁移到自定义供应商的新唯一协议。
+///
+/// # Parameters
+/// 参数
+/// `route` is one persisted internal route, `provider_id` and `connection_ids` define ownership,
+/// and `target` supplies the new service-entry and protocol identities.
+/// `route` 是一条持久化内部路由，`provider_id` 与 `connection_ids` 定义归属，`target`
+/// 提供新的服务入口与协议身份。
+///
+/// # Returns
+/// 返回值
+/// Success after an owned protocol route is rewritten, or an explicit error for an invalid binding.
+/// 改写归属协议路由后返回成功；绑定无效时返回明确错误。
+fn migrate_custom_provider_inference_route(
+    route: &mut InferenceRouteConfiguration,
+    provider_id: &str,
+    connection_ids: &BTreeSet<String>,
+    target: &CustomProviderConnectionTarget,
+) -> Result<(), String> {
+    if route.provider_id != provider_id || !connection_ids.contains(route.connection_id.as_str()) {
+        return Ok(());
+    }
+    if route.operation != AiOperation::ConversationRespond {
+        return Err(format!(
+            "Custom provider inference route for connection `{}` cannot migrate non-conversation operation `{}`.",
+            route.connection_id,
+            route.operation.as_str()
+        ));
+    }
+    let InferenceRouteBinding::Protocol {
+        protocol_profile_id,
+    } = &mut route.binding
+    else {
+        return Err(format!(
+            "Custom provider conversation route for connection `{}` does not use a protocol binding.",
+            route.connection_id
+        ));
+    };
+    route.service_entry_id = target.service_entry_id.clone();
+    *protocol_profile_id = target.selected_protocol.clone();
+    Ok(())
 }
 
 /// Executes one candidate discovery request while retaining its typed status for policy decisions.
@@ -1349,22 +1777,30 @@ async fn observe_custom_provider_candidate(
     validation: &PersistedAiConfiguration,
     candidate: &PreparedCustomProviderCandidate,
 ) -> Result<CustomProviderCandidateObservation, String> {
+    // validation_connection is mandatory for every remote observation and contains no new durable state.
+    // validation_connection 是每次远程观测的必需输入，且不包含新的持久化状态。
+    let validation_connection = candidate.validation_connection.as_ref().ok_or_else(|| {
+        format!(
+            "Custom provider `{}` has no credential connection available for observation.",
+            candidate.provider_id
+        )
+    })?;
     let secret_store = runtime.credential_secret_store();
     if let Some(secret) = candidate.temporary_secret.as_ref() {
         CredentialSecretStore::create_secret(
             secret_store.as_ref(),
-            candidate.connection.secret_reference.as_str(),
+            validation_connection.secret_reference.as_str(),
             secret,
         )
         .await?;
     }
     let refresh_error = runtime
-        .refresh_connection_catalog(validation, candidate.connection.id.as_str())
+        .refresh_connection_catalog(validation, validation_connection.id.as_str())
         .await
         .err();
     let status = runtime
         .catalog_status_snapshot()?
-        .remove(candidate.connection.id.as_str())
+        .remove(validation_connection.id.as_str())
         .ok_or_else(|| {
             refresh_error.clone().unwrap_or_else(|| {
                 String::from("Custom provider discovery did not publish a typed status.")
@@ -1372,7 +1808,7 @@ async fn observe_custom_provider_candidate(
         })?;
     let catalog = runtime
         .source_catalog_snapshot()?
-        .remove(candidate.connection.id.as_str());
+        .remove(validation_connection.id.as_str());
     Ok(CustomProviderCandidateObservation {
         status,
         catalog,
@@ -1396,11 +1832,16 @@ async fn cleanup_custom_provider_candidate(
     runtime: &PublicAiRuntime,
     candidate: &PreparedCustomProviderCandidate,
 ) -> Result<(), String> {
+    // validation_connection is absent only when no temporary runtime or secure-store artifact could have been created.
+    // validation_connection 仅在不可能创建临时运行时或安全存储工件时缺失。
+    let Some(validation_connection) = candidate.validation_connection.as_ref() else {
+        return Ok(());
+    };
     let secret_store = runtime.credential_secret_store();
     let secret_cleanup = if candidate.temporary_secret.is_some() {
         CredentialSecretStore::delete_secret(
             secret_store.as_ref(),
-            candidate.connection.secret_reference.as_str(),
+            validation_connection.secret_reference.as_str(),
         )
         .await
     } else {
@@ -1408,7 +1849,7 @@ async fn cleanup_custom_provider_candidate(
     };
     combine_results(
         secret_cleanup,
-        runtime.remove_connection_catalog(candidate.connection.id.as_str()),
+        runtime.remove_connection_catalog(validation_connection.id.as_str()),
     )
 }
 
@@ -1521,67 +1962,110 @@ pub(super) async fn service_save_public_ai_custom_provider(
     let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
     let candidate = prepare_custom_provider_candidate(&request, &current_configuration)?;
-    let validation_configuration = custom_provider_validation_configuration(
-        runtime.as_ref(),
-        &current_configuration,
-        &candidate,
-    )?;
-    let observation = match observe_custom_provider_candidate(
-        runtime.as_ref(),
-        &validation_configuration,
-        &candidate,
-    )
-    .await
-    {
-        Ok(observation) => observation,
-        Err(error) => {
-            let cleanup = cleanup_custom_provider_candidate(runtime.as_ref(), &candidate).await;
-            return Err(compensated_operation_error(error, cleanup, Ok(())));
-        }
+    // connection_contract_changed prevents cosmetic provider edits from forcing account revalidation.
+    // connection_contract_changed 防止仅修改供应商展示信息时强制重新验证账号。
+    let connection_contract_changed =
+        custom_provider_connection_contract_changed(&current_configuration, &candidate)?;
+    // protocol_changed scopes destructive cleanup to an actual user-selected protocol transition.
+    // protocol_changed 将破坏性清理限定到用户实际选择的协议切换。
+    let protocol_changed = custom_provider_protocol_changed(&current_configuration, &candidate)?;
+    // inactive_protocol_override_count identifies route settings that the target protocol cannot expose.
+    // inactive_protocol_override_count 标识目标协议无法公开的路由设置。
+    let inactive_protocol_override_count = if protocol_changed {
+        current_configuration.inactive_provider_model_override_count(
+            candidate.provider_id.as_str(),
+            candidate.connection_target.selected_protocol.as_str(),
+        )
+    } else {
+        0
     };
-    let save_as_pending = custom_provider_save_requires_pending_validation(
-        observation.status.state,
-        request.allow_manual_fallback,
-        request.allow_pending_validation,
-    );
-    let accepted = custom_provider_observation_is_accepted(
-        observation.status.state,
-        request.allow_manual_fallback,
-        request.allow_pending_validation,
-    );
-    if !accepted {
-        let diagnostic = observation
-            .refresh_error
-            .as_deref()
-            .or(observation.status.message.as_deref())
-            .unwrap_or_else(|| {
-                if observation.status.state == CatalogDiscoveryState::Empty {
-                    "The provider returned an empty model catalog."
-                } else {
-                    "The provider model catalog was not validated."
-                }
-            });
-        let cleanup = cleanup_custom_provider_candidate(runtime.as_ref(), &candidate).await;
-        return Err(compensated_operation_error(
-            format!(
-                "Custom provider validation requires an explicit supported action: {diagnostic}"
-            ),
-            cleanup,
-            Ok(()),
+    if inactive_protocol_override_count > 0 && !request.confirm_inactive_protocol_override_deletion
+    {
+        return Err(format!(
+            "Switching custom provider `{}` to protocol `{}` would deactivate {inactive_protocol_override_count} protocol-scoped model setting(s). Explicit confirmation is required to delete those incompatible settings.",
+            candidate.provider_id, candidate.connection_target.selected_protocol
         ));
     }
-
-    if candidate.updating_existing {
-        // Existing-provider validation artifacts are temporary and must be removed before the
-        // durable edit, so a cleanup failure cannot report a false transactional rollback.
-        // 既有供应商的验证工件属于临时数据，必须在持久化编辑前移除，避免清理失败造成虚假的事务回滚提示。
-        cleanup_custom_provider_candidate(runtime.as_ref(), &candidate).await?;
-    }
+    // edit_validation_outcomes remains empty for creation and complete for every existing credential during edits.
+    // edit_validation_outcomes 在新建时为空，在编辑时包含每份现有凭据的完整结果。
+    let edit_validation_outcomes = if candidate.updating_existing && connection_contract_changed {
+        validate_custom_provider_edit_connections(
+            runtime.as_ref(),
+            &current_configuration,
+            &candidate,
+            request.allow_manual_fallback,
+            request.allow_pending_validation,
+        )
+        .await?
+    } else {
+        BTreeMap::new()
+    };
+    // save_as_pending belongs only to the single newly created credential.
+    // save_as_pending 仅属于新建供应商时的单一凭据。
+    let save_as_pending = if candidate.updating_existing {
+        false
+    } else {
+        // validation_configuration isolates the new provider and its not-yet-durable credential.
+        // validation_configuration 隔离新供应商及其尚未持久化的凭据。
+        let validation_configuration = custom_provider_validation_configuration(
+            runtime.as_ref(),
+            &current_configuration,
+            &candidate,
+        )?;
+        // observation retains the new connection catalog for immediate durable adoption on success.
+        // observation 在成功时保留新连接目录，以供持久化状态立即接管。
+        let observation = match observe_custom_provider_candidate(
+            runtime.as_ref(),
+            &validation_configuration,
+            &candidate,
+        )
+        .await
+        {
+            Ok(observation) => observation,
+            Err(error) => {
+                let cleanup = cleanup_custom_provider_candidate(runtime.as_ref(), &candidate).await;
+                return Err(compensated_operation_error(error, cleanup, Ok(())));
+            }
+        };
+        if !custom_provider_observation_is_accepted(
+            observation.status.state,
+            request.allow_manual_fallback,
+            request.allow_pending_validation,
+        ) {
+            // diagnostic preserves the exact discovery reason for the explicit save choice.
+            // diagnostic 为显式保存选择保留精确的目录发现原因。
+            let diagnostic = observation
+                .refresh_error
+                .as_deref()
+                .or(observation.status.message.as_deref())
+                .unwrap_or_else(|| {
+                    if observation.status.state == CatalogDiscoveryState::Empty {
+                        "The provider returned an empty model catalog."
+                    } else {
+                        "The provider model catalog was not validated."
+                    }
+                });
+            let cleanup = cleanup_custom_provider_candidate(runtime.as_ref(), &candidate).await;
+            return Err(compensated_operation_error(
+                format!(
+                    "Custom provider validation requires an explicit supported action: {diagnostic}"
+                ),
+                cleanup,
+                Ok(()),
+            ));
+        }
+        custom_provider_save_requires_pending_validation(
+            observation.status.state,
+            request.allow_manual_fallback,
+            request.allow_pending_validation,
+        )
+    };
 
     let provider_id = candidate.provider_id.clone();
     let updating_existing = candidate.updating_existing;
     let descriptor = candidate.descriptor.clone();
-    let connection = candidate.connection.clone();
+    let validation_connection = candidate.validation_connection.clone();
+    let connection_target = candidate.connection_target.clone();
     let persist_result = mutate_public_ai_configuration_in_transaction(
         &state,
         "保存自定义供应商失败",
@@ -1589,34 +2073,47 @@ pub(super) async fn service_save_public_ai_custom_provider(
             configuration
                 .custom_providers
                 .insert(provider_id.clone(), descriptor.clone());
-            configuration
-                .custom_provider_model_defaults
-                .entry(provider_id.clone())
-                .or_default();
+            // effective_providers validates every connection against the newly selected single protocol.
+            // effective_providers 根据新选择的唯一协议校验每一条连接。
+            let effective_providers = runtime.effective_providers(configuration)?;
             if !updating_existing {
-                let effective_providers = runtime.effective_providers(configuration)?;
+                // connection is guaranteed by new-provider preparation and becomes durable only in this branch.
+                // connection 由新供应商准备流程保证存在，并且仅在此分支转为持久状态。
+                let connection = validation_connection.clone().ok_or_else(|| {
+                    String::from("A new custom provider requires its first credential connection.")
+                })?;
                 configuration
                     .connection_graph
                     .add_connection(&effective_providers, connection.clone())?;
                 configuration
                     .set_connection_pending_validation(connection.id.as_str(), save_as_pending)?;
-            } else if save_as_pending {
-                let connection_ids = configuration
-                    .connection_graph
-                    .connections
-                    .values()
-                    .filter(|existing_connection| existing_connection.provider_id == provider_id)
-                    .map(|existing_connection| existing_connection.id.clone())
-                    .collect::<Vec<_>>();
-                for connection_id in connection_ids {
-                    configuration
-                        .set_connection_pending_validation(connection_id.as_str(), true)?;
+            } else if connection_contract_changed {
+                migrate_custom_provider_connections(
+                    &effective_providers,
+                    configuration,
+                    provider_id.as_str(),
+                    &connection_target,
+                    &edit_validation_outcomes,
+                )?;
+            }
+            if updating_existing && connection_contract_changed {
+                for (connection_id, outcome) in &edit_validation_outcomes {
+                    configuration.set_connection_pending_validation(
+                        connection_id.as_str(),
+                        outcome.pending_validation,
+                    )?;
                 }
+            }
+            if protocol_changed {
+                configuration.remove_inactive_provider_model_overrides(
+                    provider_id.as_str(),
+                    connection_target.selected_protocol.as_str(),
+                );
             }
             Ok(())
         },
     );
-    let configuration = match persist_result {
+    let mut configuration = match persist_result {
         Ok(configuration) => configuration,
         Err(error) => {
             // Existing-provider artifacts were already removed before persistence; new-provider
@@ -1631,7 +2128,7 @@ pub(super) async fn service_save_public_ai_custom_provider(
         }
     };
 
-    if updating_existing {
+    if updating_existing && connection_contract_changed {
         let existing_connection_ids = configuration
             .connection_graph
             .connections
@@ -1647,6 +2144,21 @@ pub(super) async fn service_save_public_ai_custom_provider(
             let _refresh_result = runtime
                 .refresh_connection_catalog(&configuration, existing_connection_id.as_str())
                 .await;
+        }
+        // refreshed_catalogs is authoritative for deciding whether the persisted global model survived the protocol switch.
+        // refreshed_catalogs 是判断持久化全局模型是否在协议切换后仍存在的权威目录。
+        let refreshed_catalogs = runtime.catalog_snapshot()?;
+        if configuration.active.as_ref().is_some_and(|selection| {
+            !model_selection_is_available(&configuration, &refreshed_catalogs, selection)
+        }) {
+            configuration = mutate_public_ai_configuration_in_transaction(
+                &state,
+                "协调供应商协议切换后的默认模型失败",
+                |configuration| {
+                    ensure_active_model_selection(configuration, &refreshed_catalogs);
+                    Ok(())
+                },
+            )?;
         }
     }
 
@@ -1834,27 +2346,52 @@ pub(super) async fn service_remove_public_ai_custom_provider(
 ) -> Result<PublicAiSettingsSnapshot, String> {
     validate_non_empty("providerId", request.provider_id.as_str())?;
     let provider_id = request.provider_id;
-    let configuration =
-        mutate_public_ai_configuration(&state, "移除自定义供应商失败", |configuration| {
-            if configuration
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    validate_custom_provider_identity(&current_configuration, provider_id.as_str())?;
+    if current_configuration.provider_has_model_customizations(provider_id.as_str()) {
+        return Err(format!(
+            "Custom provider `{provider_id}` still has model customizations or route settings and cannot be removed. Clear those settings first."
+        ));
+    }
+    let provider_connections = current_configuration
+        .connection_graph
+        .connections
+        .values()
+        .filter(|connection| connection.provider_id == provider_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !provider_connections.is_empty() && !request.confirm_credential_deletion {
+        return Err(format!(
+            "Custom provider `{provider_id}` still owns {} credential(s). Explicit confirmation is required to delete those credentials together with the provider.",
+            provider_connections.len()
+        ));
+    }
+    let catalogs = runtime.catalog_snapshot()?;
+    let secret_store = runtime.credential_secret_store();
+    let deleted_secrets = if provider_connections.is_empty() {
+        BTreeMap::new()
+    } else {
+        delete_provider_credential_secrets(secret_store.as_ref(), &provider_connections).await?
+    };
+    let remove_result = mutate_public_ai_configuration_in_transaction(
+        &state,
+        "移除自定义供应商失败",
+        |configuration| {
+            // Removing the provider default first lets every provider connection be detached without a fake replacement.
+            // 先移除供应商默认连接，确保后续逐个解绑连接时不需要伪造替代默认连接。
+            configuration
                 .connection_graph
-                .connections
-                .values()
-                .any(|connection| connection.provider_id == provider_id)
-            {
-                return Err(format!(
-                    "Custom provider `{provider_id}` still has credentials and cannot be removed."
-                ));
+                .account_preferences
+                .provider_defaults
+                .remove(provider_id.as_str());
+            for connection in &provider_connections {
+                remove_connection_from_configuration(configuration, connection.id.as_str(), None)?;
             }
-            if configuration
-                .custom_models
-                .get(provider_id.as_str())
-                .is_some_and(|models| !models.is_empty())
-            {
-                return Err(format!(
-                    "Custom provider `{provider_id}` still has model definitions. Remove its models before removing the provider."
-                ));
-            }
+            configuration.custom_models.remove(provider_id.as_str());
+            configuration
+                .custom_provider_model_defaults
+                .remove(provider_id.as_str());
             let removed = configuration
                 .custom_providers
                 .remove(provider_id.as_str())
@@ -1864,11 +2401,23 @@ pub(super) async fn service_remove_public_ai_custom_provider(
                     "Provider `{provider_id}` is not a user-defined provider."
                 ));
             }
-            configuration.remove_provider_owned_model_settings(provider_id.as_str());
+            ensure_active_model_selection(configuration, &catalogs);
             Ok(())
-        })
-        .await?;
-    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
+        },
+    );
+    let configuration = match remove_result {
+        Ok(configuration) => configuration,
+        Err(error) => {
+            let restore =
+                restore_provider_credential_secrets(secret_store.as_ref(), &deleted_secrets).await;
+            return Err(compensated_operation_error(error, restore, Ok(())));
+        }
+    };
+    drop(transaction);
+    for connection in &provider_connections {
+        runtime.remove_connection_catalog(connection.id.as_str())?;
+        runtime.remove_connection_usage(connection.id.as_str())?;
+    }
     publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
     build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
 }
@@ -1973,18 +2522,18 @@ pub(super) async fn service_save_public_ai_custom_models(
         &template_decisions,
     );
     runtime.validate_model_catalog_overlays(&candidate_configuration)?;
-    let mut referenced_removed_models = referenced_custom_model_ids(
+    let referenced_removed_models = referenced_custom_model_ids(
         runtime.as_ref(),
         &candidate_configuration,
         provider_id.as_str(),
         &removed_model_ids,
     )?;
-    // Loaded session selections are runtime-owned and must be checked separately from persisted defaults.
-    // 已加载会话选择由运行时持有，必须与持久化默认值分开检查。
-    // loaded_session_references is copied while holding service state so catalog resolution never
+    // Session locks are runtime-owned and must block deletion even when another account still exposes the same model.
+    // 会话锁定关系由运行时持有，即使其他账号仍暴露同名模型，也必须阻止删除。
+    // locked_session_model_ids is copied while holding service state so catalog resolution never
     // nests runtime locks under the workspace mutex.
-    // loaded_session_references 在持有服务状态锁时完成复制，避免在工作区互斥锁内嵌套目录锁。
-    let loaded_session_references = {
+    // locked_session_model_ids 在持有服务状态锁时完成复制，避免在工作区互斥锁内嵌套目录锁。
+    let locked_session_model_ids = {
         let guard = state
             .lock()
             .map_err(|error| format!("Failed to lock service state: {error}"))?;
@@ -2005,23 +2554,17 @@ pub(super) async fn service_save_public_ai_custom_models(
                         .as_deref()
                         .is_some_and(|model_id| removed_model_ids.contains(model_id))
             })
-            .filter_map(|runtime_state| {
-                runtime_state
-                    .active_model_id
-                    .as_ref()
-                    .map(|model_id| (runtime_state.active_connection_id.clone(), model_id.clone()))
-            })
+            .filter_map(|runtime_state| runtime_state.active_model_id.clone())
             .collect::<BTreeSet<_>>()
     };
-    for (connection_id, model_id) in loaded_session_references {
-        if !model_remains_on_connection(
-            runtime.as_ref(),
-            &candidate_configuration,
-            connection_id.as_deref(),
-            model_id.as_str(),
-        )? {
-            referenced_removed_models.insert(model_id);
-        }
+    if !locked_session_model_ids.is_empty() {
+        return Err(format!(
+            "Custom models are locked by active or archived sessions and cannot be removed: {}. Switch those sessions to another model first.",
+            locked_session_model_ids
+                .into_iter()
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
     if !referenced_removed_models.is_empty() {
         return Err(format!(
@@ -2095,24 +2638,45 @@ pub(super) async fn service_save_public_ai_custom_provider_model_defaults(
     request: PublicAiCustomProviderModelDefaultsSaveRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
     validate_non_empty("providerId", request.provider_id.as_str())?;
-    request.defaults.validate()?;
+    if request
+        .defaults
+        .as_ref()
+        .is_some_and(|defaults| !defaults.output_resources.is_empty())
+    {
+        return Err(String::from(
+            "Custom provider output is fixed to text in the generic provider settings contract.",
+        ));
+    }
+    if let Some(defaults) = request.defaults.as_ref() {
+        defaults.validate()?;
+    }
     let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
     validate_custom_provider_identity(&current_configuration, request.provider_id.as_str())?;
+    // provider_id identifies the exact custom-provider settings layer being replaced.
+    // provider_id 标识要被替换的精确自定义供应商设置层。
     let provider_id = request.provider_id;
-    let defaults = request.defaults;
+    // defaults collapses a value equal to the system baseline into an absent provider layer.
+    // defaults 将与系统基线相同的值折叠为不存在的供应商层。
+    let defaults = request
+        .defaults
+        .filter(|defaults| *defaults != CustomProviderModelDefaults::default());
     let mut candidate_configuration = current_configuration.clone();
-    candidate_configuration
-        .custom_provider_model_defaults
-        .insert(provider_id.clone(), defaults.clone());
+    replace_custom_provider_model_defaults(
+        &mut candidate_configuration,
+        provider_id.as_str(),
+        defaults.as_ref(),
+    );
     runtime.validate_model_catalog_overlays(&candidate_configuration)?;
     let configuration = mutate_public_ai_configuration_in_transaction(
         &state,
         "保存自定义供应商模型默认值失败",
         |configuration| {
-            configuration
-                .custom_provider_model_defaults
-                .insert(provider_id.clone(), defaults.clone());
+            replace_custom_provider_model_defaults(
+                configuration,
+                provider_id.as_str(),
+                defaults.as_ref(),
+            );
             Ok(())
         },
     )?;
@@ -2120,6 +2684,30 @@ pub(super) async fn service_save_public_ai_custom_provider_model_defaults(
     drop(transaction);
     publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
     build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Replaces or removes one explicit custom-provider model-settings layer.
+/// 替换或移除一层显式自定义供应商模型设置。
+///
+/// # Parameters
+/// 参数
+/// `configuration` owns persisted state, `provider_id` identifies the layer, and `defaults`
+/// contains the replacement or is absent for restoration.
+/// `configuration` 持有持久化状态，`provider_id` 标识设置层，`defaults` 包含替换值或在还原时为空。
+fn replace_custom_provider_model_defaults(
+    configuration: &mut PersistedAiConfiguration,
+    provider_id: &str,
+    defaults: Option<&CustomProviderModelDefaults>,
+) {
+    if let Some(defaults) = defaults {
+        configuration
+            .custom_provider_model_defaults
+            .insert(provider_id.to_string(), defaults.clone());
+    } else {
+        configuration
+            .custom_provider_model_defaults
+            .remove(provider_id);
+    }
 }
 
 /// Returns offline template suggestions without network access or persistent mutation.
@@ -2348,6 +2936,12 @@ pub(super) async fn service_save_public_ai_custom_model_connection_availability(
             connection.provider_id, request.model_id
         ));
     }
+    validate_custom_model_connection_availability_choice(
+        &current_configuration,
+        connection.provider_id.as_str(),
+        request.model_id.as_str(),
+        request.enabled,
+    )?;
     let key = PersistedAiConfiguration::connection_model_key(
         request.connection_id.as_str(),
         request.model_id.as_str(),
@@ -2386,6 +2980,33 @@ pub(super) async fn service_save_public_ai_custom_model_connection_availability(
     build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
 }
 
+/// Rejects account membership choices that would reopen a provider-disabled custom model.
+/// 拒绝会重新开启供应商已关闭自定义模型的账号成员关系选择。
+///
+/// # Parameters
+/// 参数
+/// `configuration` owns provider publication state; `provider_id`, `model_id`, and `enabled`
+/// identify the exact requested account membership difference.
+/// `configuration` 持有供应商发布状态；`provider_id`、`model_id` 与 `enabled` 标识精确的账号成员关系差异。
+///
+/// # Returns
+/// 返回值
+/// Success for restoration or disablement, and for enablement only while the provider publishes the model.
+/// 还原或关闭时返回成功；仅当供应商发布该模型时允许开启。
+fn validate_custom_model_connection_availability_choice(
+    configuration: &PersistedAiConfiguration,
+    provider_id: &str,
+    model_id: &str,
+    enabled: Option<bool>,
+) -> Result<(), String> {
+    if enabled == Some(true) && !configuration.model_is_enabled(provider_id, model_id) {
+        return Err(format!(
+            "Provider `{provider_id}` has disabled model `{model_id}`; an account cannot enable it. Enable the model at provider level first."
+        ));
+    }
+    Ok(())
+}
+
 /// Reports whether one model belongs to an account independently from its access switch.
 /// 报告一个模型是否属于某个账号，且不受其访问开关影响。
 ///
@@ -2412,6 +3033,34 @@ fn connection_supports_model(
         .resolved_model_catalog_snapshot(&support_configuration)?
         .get(connection_id)
         .is_some_and(|catalog| catalog.models.iter().any(|model| model.id == model_id)))
+}
+
+/// Applies an account-wide model default without allowing provider-disabled models to re-enter it.
+/// 应用账号范围模型默认值，同时不允许供应商已关闭的模型重新进入账号默认值。
+///
+/// # Parameters
+/// 参数
+/// `configuration` is mutated in place, `connection_id` and `provider_id` identify the exact
+/// account route, `enabled` is the requested account default, and `support_catalog` is the
+/// account's provider-resolved model membership before account access policies.
+/// `configuration` 会被原地修改，`connection_id` 与 `provider_id` 标识精确账号路由，`enabled`
+/// 是请求的账号默认值，`support_catalog` 是应用账号访问策略前解析出的供应商模型成员关系。
+fn set_connection_models_enabled_respecting_provider_access(
+    configuration: &mut PersistedAiConfiguration,
+    connection_id: &str,
+    provider_id: &str,
+    enabled: bool,
+    support_catalog: &ConnectionModelCatalog,
+) {
+    configuration.set_connection_models_enabled(connection_id, enabled);
+    if !enabled {
+        return;
+    }
+    for model in &support_catalog.models {
+        if !configuration.model_is_enabled(provider_id, model.id.as_str()) {
+            configuration.set_connection_model_enabled(connection_id, model.id.as_str(), false);
+        }
+    }
 }
 
 /// Saves one credential-scoped model access decision and repairs affected active sessions.
@@ -2444,6 +3093,15 @@ pub(super) async fn service_save_public_ai_connection_model_enabled(
         return Err(format!(
             "Credential connection `{}` does not support model `{}`.",
             request.connection_id, request.model_id
+        ));
+    }
+    if request.enabled
+        && !current_configuration
+            .model_is_enabled(connection.provider_id.as_str(), request.model_id.as_str())
+    {
+        return Err(format!(
+            "Provider `{}` has disabled model `{}`; enable the provider model before enabling it for a credential connection.",
+            connection.provider_id, request.model_id
         ));
     }
 
@@ -2529,11 +3187,17 @@ pub(super) async fn service_save_public_ai_connection_models_enabled(
         })?;
     let mut support_configuration = current_configuration.clone();
     support_configuration.remove_connection_model_access_policy(request.connection_id.as_str());
-    let supported_model_count = runtime
+    let support_catalog = runtime
         .resolved_model_catalog_snapshot(&support_configuration)?
         .get(request.connection_id.as_str())
-        .map_or(0, |catalog| catalog.models.len());
-    if supported_model_count == 0 {
+        .cloned();
+    let Some(support_catalog) = support_catalog else {
+        return Err(format!(
+            "Credential connection `{}` has no supported models.",
+            request.connection_id
+        ));
+    };
+    if support_catalog.models.is_empty() {
         return Err(format!(
             "Credential connection `{}` has no supported models.",
             request.connection_id
@@ -2541,8 +3205,13 @@ pub(super) async fn service_save_public_ai_connection_models_enabled(
     }
 
     let mut candidate_configuration = current_configuration.clone();
-    candidate_configuration
-        .set_connection_models_enabled(request.connection_id.as_str(), request.enabled);
+    set_connection_models_enabled_respecting_provider_access(
+        &mut candidate_configuration,
+        request.connection_id.as_str(),
+        connection.provider_id.as_str(),
+        request.enabled,
+        &support_catalog,
+    );
     let candidate_catalogs = runtime.resolved_model_catalog_snapshot(&candidate_configuration)?;
     let active_was_disabled = !request.enabled
         && candidate_configuration
@@ -2574,8 +3243,13 @@ pub(super) async fn service_save_public_ai_connection_models_enabled(
         &state,
         "批量保存凭据模型启用状态失败",
         |configuration| {
-            configuration
-                .set_connection_models_enabled(request.connection_id.as_str(), request.enabled);
+            set_connection_models_enabled_respecting_provider_access(
+                configuration,
+                request.connection_id.as_str(),
+                connection.provider_id.as_str(),
+                request.enabled,
+                &support_catalog,
+            );
             if active_was_disabled {
                 configuration.active = active_selection.clone();
             }
@@ -2618,34 +3292,31 @@ pub(super) async fn service_save_public_ai_model_capability_overrides(
 ) -> Result<PublicAiSettingsSnapshot, String> {
     validate_non_empty("providerId", request.provider_id.as_str())?;
     validate_non_empty("modelId", request.model_id.as_str())?;
+    // overrides collapses an empty browser record into restoration semantics.
+    // overrides 将空浏览器记录折叠为还原语义。
+    let overrides = request.overrides.filter(|overrides| !overrides.is_empty());
     let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
-    let catalogs = runtime.catalog_snapshot()?;
-    let model_exists = current_configuration
-        .connection_graph
-        .connections
-        .values()
-        .filter(|connection| connection.provider_id == request.provider_id)
-        .any(|connection| {
-            catalogs.get(connection.id.as_str()).is_some_and(|catalog| {
-                catalog
-                    .models
-                    .iter()
-                    .any(|model| model.id == request.model_id)
-            })
-        });
-    if !model_exists {
+    if overrides.is_some()
+        && !runtime.provider_model_is_supported(
+            &current_configuration,
+            request.provider_id.as_str(),
+            request.model_id.as_str(),
+        )?
+    {
         return Err(format!(
-            "Provider `{}` does not expose synchronized model `{}`.",
+            "Provider `{}` does not support model `{}`.",
             request.provider_id, request.model_id
         ));
     }
-    runtime.validate_model_capability_override_candidate(
-        &current_configuration,
-        request.provider_id.as_str(),
-        request.model_id.as_str(),
-        request.overrides.as_ref(),
-    )?;
+    if overrides.is_some() {
+        runtime.validate_model_capability_override_candidate(
+            &current_configuration,
+            request.provider_id.as_str(),
+            request.model_id.as_str(),
+            overrides.as_ref(),
+        )?;
+    }
     let key = PersistedAiConfiguration::provider_model_key(
         request.provider_id.as_str(),
         request.model_id.as_str(),
@@ -2654,7 +3325,7 @@ pub(super) async fn service_save_public_ai_model_capability_overrides(
         &state,
         "保存模型能力覆盖失败",
         |configuration| {
-            if let Some(overrides) = request.overrides.clone() {
+            if let Some(overrides) = overrides.clone() {
                 configuration
                     .model_capability_overrides
                     .insert(key.clone(), overrides);
@@ -2662,6 +3333,47 @@ pub(super) async fn service_save_public_ai_model_capability_overrides(
                 configuration
                     .model_capability_overrides
                     .remove(key.as_str());
+            }
+            Ok(())
+        },
+    )?;
+    runtime.reapply_model_catalog_overlays(&configuration)?;
+    drop(transaction);
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Saves one provider-wide sparse capability layer or restores inherited defaults.
+/// 保存一层供应商级稀疏能力配置，或恢复继承默认值。
+pub(super) async fn service_save_public_ai_provider_capability_overrides(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiProviderCapabilityOverridesSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    validate_non_empty("providerId", request.provider_id.as_str())?;
+    let overrides = request.overrides.filter(|overrides| !overrides.is_empty());
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    if overrides.is_some() {
+        runtime.validate_provider_capability_override_candidate(
+            &current_configuration,
+            request.provider_id.as_str(),
+            overrides.as_ref(),
+        )?;
+    }
+    let provider_id = request.provider_id.clone();
+    let configuration = mutate_public_ai_configuration_in_transaction(
+        &state,
+        "保存供应商能力覆盖失败",
+        |configuration| {
+            if let Some(overrides) = overrides.clone() {
+                configuration
+                    .provider_capability_overrides
+                    .insert(provider_id.clone(), overrides);
+            } else {
+                configuration
+                    .provider_capability_overrides
+                    .remove(provider_id.as_str());
             }
             Ok(())
         },
@@ -4043,6 +4755,72 @@ fn compensated_operation_error(
     }
 }
 
+/// Deletes every unique credential secret owned by a provider and compensates partial deletion.
+/// 删除供应商持有的全部唯一凭据秘密，并对部分删除执行补偿恢复。
+async fn delete_provider_credential_secrets(
+    secret_store: &dyn CredentialSecretStore,
+    connections: &[CredentialConnection],
+) -> Result<BTreeMap<String, CredentialSecretEnvelope>, String> {
+    let mut references = BTreeSet::new();
+    for connection in connections {
+        references.insert(connection.secret_reference.clone());
+        if let Some(reference) = connection.management_secret_reference.as_ref() {
+            references.insert(reference.clone());
+        }
+    }
+
+    let mut secrets = BTreeMap::new();
+    for reference in references {
+        let secret =
+            CredentialSecretResolver::read_secret(secret_store, reference.as_str()).await?;
+        secrets.insert(reference, secret);
+    }
+
+    let mut deleted = BTreeMap::new();
+    for (reference, secret) in secrets {
+        if let Err(error) =
+            CredentialSecretStore::delete_secret(secret_store, reference.as_str()).await
+        {
+            let restore_current =
+                CredentialSecretStore::restore_secret(secret_store, reference.as_str(), &secret)
+                    .await;
+            let restore_previous =
+                restore_provider_credential_secrets(secret_store, &deleted).await;
+            return Err(compensated_operation_error(
+                format!("Failed to delete provider credential `{reference}`: {error}"),
+                restore_current,
+                restore_previous,
+            ));
+        }
+        deleted.insert(reference, secret);
+    }
+    Ok(deleted)
+}
+
+/// Restores credential secrets deleted during a provider removal attempt.
+/// 恢复供应商移除尝试期间已经删除的凭据秘密。
+async fn restore_provider_credential_secrets(
+    secret_store: &dyn CredentialSecretStore,
+    secrets: &BTreeMap<String, CredentialSecretEnvelope>,
+) -> Result<(), String> {
+    let mut errors = Vec::new();
+    for (reference, secret) in secrets {
+        if let Err(error) =
+            CredentialSecretStore::restore_secret(secret_store, reference.as_str(), secret).await
+        {
+            errors.push(format!("`{reference}`: {error}"));
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Failed to restore provider credentials: {}.",
+            errors.join("; ")
+        ))
+    }
+}
+
 /// Saves one explicit provider default connection.
 /// 保存一个显式供应商默认连接。
 pub(super) async fn service_save_public_ai_default_connection(
@@ -4097,6 +4875,7 @@ pub(super) async fn service_remove_public_ai_connection(
     let connection_id = request.connection_id;
     let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    let catalogs = runtime.catalog_snapshot()?;
     let removed = current_configuration
         .connection_graph
         .connections
@@ -4137,7 +4916,9 @@ pub(super) async fn service_remove_public_ai_connection(
                 configuration,
                 connection_id.as_str(),
                 request.replacement_default_connection_id.as_deref(),
-            )
+            )?;
+            ensure_active_model_selection(configuration, &catalogs);
+            Ok(())
         },
     );
     let configuration = match remove_result {
@@ -4198,8 +4979,8 @@ pub(super) async fn service_sync_public_ai_connection(
     )
     .await;
     drop(transaction);
-    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
     refresh_result?;
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
     build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
 }
 
@@ -4399,65 +5180,45 @@ pub(super) async fn service_save_public_ai_model_overrides(
     state: SharedServiceBridgeState,
     request: PublicAiModelOverridesSaveRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
-    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
-    let catalogs = runtime.catalog_snapshot()?;
+    // overrides collapses an empty browser record into restoration semantics.
+    // overrides 将空浏览器记录折叠为还原语义。
+    let overrides = request.overrides.filter(|overrides| !overrides.is_empty());
+    if overrides.as_ref().is_some_and(|overrides| {
+        overrides.context_limit.is_some() || overrides.output_limit.is_some()
+    }) {
+        return Err(String::from(
+            "Context and output limits must be saved through direct model settings, not protocol execution settings.",
+        ));
+    }
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
     let key = PersistedAiConfiguration::provider_model_protocol_key(
         request.provider_id.as_str(),
         request.model_id.as_str(),
         request.protocol_id.as_str(),
     );
-    let configuration = mutate_public_ai_configuration(
+    if let Some(overrides) = overrides.as_ref() {
+        runtime.validate_model_execution_override_candidate(
+            &current_configuration,
+            request.provider_id.as_str(),
+            request.model_id.as_str(),
+            request.protocol_id.as_str(),
+            overrides,
+        )?;
+    }
+    let configuration = mutate_public_ai_configuration_in_transaction(
         &state,
         "保存公共 AI 模型覆盖失败",
         |configuration| {
-            let matching_connection_ids = configuration
-                .connection_graph
-                .connections
-                .values()
-                .filter(|connection| connection.provider_id == request.provider_id)
-                .filter(|connection| connection.selected_protocol == request.protocol_id)
-                .filter(|connection| {
-                    catalogs.get(connection.id.as_str()).is_some_and(|catalog| {
-                        catalog
-                            .models
-                            .iter()
-                            .any(|model| model.id == request.model_id)
-                    })
-                })
-                .map(|connection| connection.id.clone())
-                .collect::<Vec<_>>();
-            if matching_connection_ids.is_empty() {
-                return Err(format!(
-                    "Provider `{}` model `{}` has no synchronized account using protocol `{}`.",
-                    request.provider_id, request.model_id, request.protocol_id
-                ));
-            }
-            let previous = configuration
-                .model_overrides
-                .insert(key.clone(), request.overrides);
-            for connection_id in matching_connection_ids {
-                let mut validation_configuration = configuration.clone();
-                validation_configuration.active = Some(ActiveAiModelSelection {
-                    provider_id: request.provider_id.clone(),
-                    model_id: request.model_id.clone(),
-                    connection_id,
-                });
-                if let Err(error) = runtime.resolve_active_selection(&validation_configuration) {
-                    match previous {
-                        Some(value) => {
-                            configuration.model_overrides.insert(key.clone(), value);
-                        }
-                        None => {
-                            configuration.model_overrides.remove(key.as_str());
-                        }
-                    }
-                    return Err(error);
-                }
+            if let Some(overrides) = overrides.clone() {
+                configuration.model_overrides.insert(key.clone(), overrides);
+            } else {
+                configuration.model_overrides.remove(key.as_str());
             }
             Ok(())
         },
-    )
-    .await?;
+    )?;
+    drop(transaction);
     publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
     build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
 }
@@ -4471,22 +5232,13 @@ pub(super) async fn service_save_public_ai_model_enabled(
 ) -> Result<PublicAiSettingsSnapshot, String> {
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
     let catalogs = runtime.catalog_snapshot()?;
-    let model_exists = current_configuration
-        .connection_graph
-        .connections
-        .values()
-        .filter(|connection| connection.provider_id == request.provider_id)
-        .any(|connection| {
-            catalogs.get(connection.id.as_str()).is_some_and(|catalog| {
-                catalog
-                    .models
-                    .iter()
-                    .any(|model| model.id == request.model_id)
-            })
-        });
-    if !model_exists {
+    if !runtime.provider_model_is_supported(
+        &current_configuration,
+        request.provider_id.as_str(),
+        request.model_id.as_str(),
+    )? {
         return Err(format!(
-            "Provider `{}` does not expose synchronized model `{}`.",
+            "Provider `{}` does not support model `{}`.",
             request.provider_id, request.model_id
         ));
     }
@@ -4494,12 +5246,18 @@ pub(super) async fn service_save_public_ai_model_enabled(
         &state,
         "保存公共 AI 模型启用状态失败",
         |configuration| {
-            configuration.set_model_enabled(
-                request.provider_id.as_str(),
-                request.model_id.as_str(),
-                request.enabled,
-            );
-            if !request.enabled
+            if request.restore {
+                configuration
+                    .restore_model_enabled(request.provider_id.as_str(), request.model_id.as_str());
+            } else {
+                configuration.set_model_enabled(
+                    request.provider_id.as_str(),
+                    request.model_id.as_str(),
+                    request.enabled,
+                );
+            }
+            if !configuration
+                .model_is_enabled(request.provider_id.as_str(), request.model_id.as_str())
                 && configuration.active.as_ref().is_some_and(|selection| {
                     selection.provider_id == request.provider_id
                         && selection.model_id == request.model_id
@@ -4558,14 +5316,27 @@ pub(super) async fn service_save_public_ai_provider_models_enabled(
 ) -> Result<PublicAiSettingsSnapshot, String> {
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
     let catalogs = runtime.catalog_snapshot()?;
-    let model_ids = current_configuration
+    // support_configuration removes account visibility so provider-wide switches remain reversible.
+    // support_configuration 移除账号可见性，使供应商范围开关始终可逆。
+    let mut support_configuration = current_configuration.clone();
+    support_configuration
+        .connection_model_access_policies
+        .clear();
+    let support_catalogs = runtime.resolved_model_catalog_snapshot(&support_configuration)?;
+    let mut model_ids = support_configuration
         .connection_graph
         .connections
         .values()
         .filter(|connection| connection.provider_id == request.provider_id)
-        .filter_map(|connection| catalogs.get(connection.id.as_str()))
+        .filter_map(|connection| support_catalogs.get(connection.id.as_str()))
         .flat_map(|catalog| catalog.models.iter().map(|model| model.id.clone()))
         .collect::<BTreeSet<_>>();
+    if let Some(manual_models) = support_configuration
+        .custom_models
+        .get(request.provider_id.as_str())
+    {
+        model_ids.extend(manual_models.keys().cloned());
+    }
     if model_ids.is_empty() {
         return Err(format!(
             "Provider `{}` does not expose synchronized models.",
@@ -5975,6 +6746,161 @@ pub(crate) fn public_ai_session_has_image_understanding_bridge(
     }))
 }
 
+/// Reports whether one exact provider-model-account selection is still executable.
+/// 报告一个精确的供应商、模型、账号选择是否仍可执行。
+///
+/// # Parameters
+/// 参数
+/// `configuration` owns model access and connections; `catalogs` owns process-local models; `selection`
+/// identifies the exact persisted choice.
+/// `configuration` 持有模型访问与连接；`catalogs` 持有进程内模型；`selection` 标识精确持久化选择。
+///
+/// # Returns
+/// 返回值
+/// `true` only when the exact connection, provider, enabled state, and text conversation model remain available.
+/// 仅当精确连接、供应商、启用状态及文本会话模型仍可用时返回 `true`。
+fn model_selection_is_available(
+    configuration: &PersistedAiConfiguration,
+    catalogs: &BTreeMap<String, ConnectionModelCatalog>,
+    selection: &ActiveAiModelSelection,
+) -> bool {
+    let Some(connection) = configuration
+        .connection_graph
+        .connections
+        .get(selection.connection_id.as_str())
+    else {
+        return false;
+    };
+    if connection.provider_id != selection.provider_id
+        || configuration.connection_is_pending_validation(selection.connection_id.as_str())
+        || !configuration
+            .model_is_enabled(selection.provider_id.as_str(), selection.model_id.as_str())
+        || !configuration.connection_model_is_enabled(
+            selection.connection_id.as_str(),
+            selection.model_id.as_str(),
+        )
+    {
+        return false;
+    }
+    catalogs
+        .get(selection.connection_id.as_str())
+        .is_some_and(|catalog| {
+            catalog.models.iter().any(|model| {
+                model.id == selection.model_id
+                    && vulcan_provider_adapters::model_supports_text_conversation(
+                        &model.capabilities,
+                    )
+            })
+        })
+}
+
+/// Resolves the persisted active model or the first stable enabled model as a fallback.
+/// 解析持久化当前模型；若其失效，则回退到稳定排序的首个启用模型。
+fn preferred_fallback_model_selection(
+    configuration: &PersistedAiConfiguration,
+    catalogs: &BTreeMap<String, ConnectionModelCatalog>,
+) -> Option<ActiveAiModelSelection> {
+    configuration
+        .active
+        .as_ref()
+        .filter(|selection| model_selection_is_available(configuration, catalogs, selection))
+        .cloned()
+        .or_else(|| first_enabled_model_selection(configuration, catalogs))
+}
+
+/// Replaces an invalid persisted global selection with the default or first available model.
+/// 将失效的持久化全局模型选择替换为默认模型或首个可用模型。
+fn ensure_active_model_selection(
+    configuration: &mut PersistedAiConfiguration,
+    catalogs: &BTreeMap<String, ConnectionModelCatalog>,
+) {
+    if configuration
+        .active
+        .as_ref()
+        .is_some_and(|selection| !model_selection_is_available(configuration, catalogs, selection))
+    {
+        configuration.active = first_enabled_model_selection(configuration, catalogs);
+    }
+}
+
+/// Reconciles every explicitly selected session model with the current connection catalogs.
+/// 将所有显式选择的会话模型与当前连接目录重新协调。
+///
+/// # Parameters
+/// 参数
+/// `workspace` owns active and archived session runtime selections; `configuration` and `catalogs`
+/// define the authoritative fallback candidates.
+/// `workspace` 持有活动及归档会话运行态选择；`configuration` 与 `catalogs` 定义权威回退候选。
+///
+/// # Returns
+/// 返回值
+/// Session identifiers whose runtime controls changed and therefore require persistence.
+/// 返回运行态控制发生变化、因此需要持久化的会话标识集合。
+fn reconcile_missing_session_model_selections(
+    workspace: &mut vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+    configuration: &PersistedAiConfiguration,
+    catalogs: &BTreeMap<String, ConnectionModelCatalog>,
+) -> BTreeSet<crate::SessionId> {
+    let fallback = preferred_fallback_model_selection(configuration, catalogs);
+    let mut changed_session_ids = BTreeSet::new();
+    let mut reconcile_states = |states: &mut BTreeMap<
+        crate::SessionId,
+        vulcan_workbench_model::SessionRuntimeStateEntry,
+    >| {
+        for (session_id, runtime_state) in states.iter_mut() {
+            let has_explicit_selection = runtime_state.active_provider_id.is_some()
+                || runtime_state.active_connection_id.is_some()
+                || runtime_state.active_model_id.is_some();
+            if !has_explicit_selection {
+                continue;
+            }
+            let current_selection = match (
+                runtime_state.active_provider_id.as_ref(),
+                runtime_state.active_connection_id.as_ref(),
+                runtime_state.active_model_id.as_ref(),
+            ) {
+                (Some(provider_id), Some(connection_id), Some(model_id)) => {
+                    Some(ActiveAiModelSelection {
+                        provider_id: provider_id.clone(),
+                        model_id: model_id.clone(),
+                        connection_id: connection_id.clone(),
+                    })
+                }
+                _ => None,
+            };
+            if current_selection.as_ref().is_some_and(|selection| {
+                model_selection_is_available(configuration, catalogs, selection)
+            }) {
+                continue;
+            }
+
+            let next_provider_id = fallback
+                .as_ref()
+                .map(|selection| selection.provider_id.clone());
+            let next_connection_id = fallback
+                .as_ref()
+                .map(|selection| selection.connection_id.clone());
+            let next_model_id = fallback
+                .as_ref()
+                .map(|selection| selection.model_id.clone());
+            if runtime_state.active_provider_id == next_provider_id
+                && runtime_state.active_connection_id == next_connection_id
+                && runtime_state.active_model_id == next_model_id
+            {
+                continue;
+            }
+            runtime_state.active_provider_id = next_provider_id;
+            runtime_state.active_connection_id = next_connection_id;
+            runtime_state.active_model_id = next_model_id;
+            runtime_state.updated_at = crate::current_unix_millis_text();
+            changed_session_ids.insert(session_id.clone());
+        }
+    };
+    reconcile_states(&mut workspace.session_runtime_state);
+    reconcile_states(&mut workspace.archived_session_runtime_state);
+    changed_session_ids
+}
+
 /// Selects the first stable enabled provider-model-account tuple from runtime catalogs.
 /// 从运行时目录选择首个稳定的已启用供应商模型账号组合。
 ///
@@ -6009,6 +6935,9 @@ fn first_enabled_model_selection(
                         .filter(|model| {
                             configuration.model_is_enabled(
                                 connection.provider_id.as_str(),
+                                model.id.as_str(),
+                            ) && configuration.connection_model_is_enabled(
+                                connection.id.as_str(),
                                 model.id.as_str(),
                             ) && vulcan_provider_adapters::model_supports_text_conversation(
                                 &model.capabilities,
@@ -6065,6 +6994,8 @@ fn preferred_replacement_model_selection(
                     catalog.models.iter().any(|model| {
                         model.id == model_id
                             && configuration.model_is_enabled(provider_id, model_id)
+                            && configuration
+                                .connection_model_is_enabled(connection.id.as_str(), model_id)
                             && vulcan_provider_adapters::model_supports_text_conversation(
                                 &model.capabilities,
                             )
@@ -6249,13 +7180,62 @@ fn build_public_ai_settings_snapshot(
     runtime: &PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
 ) -> Result<PublicAiSettingsSnapshot, String> {
-    let catalogs = runtime.catalog_snapshot()?;
+    // Build the browser-facing catalog from immutable discovery data plus persisted overlays.
+    // 从不可变发现数据与持久化覆盖构建面向浏览器的有效目录。
+    // This keeps capability edits visible after reloads and prevents a stale process snapshot
+    // from making the conversation selector report reasoning as unsupported.
+    // 这样可确保刷新后能力编辑仍然生效，避免旧进程快照把思考能力误报为不支持。
+    let catalogs = runtime.resolved_model_catalog_snapshot(configuration)?;
     let providers = runtime.effective_providers(configuration)?;
+    let mut support_configuration = configuration.clone();
+    support_configuration
+        .connection_model_access_policies
+        .clear();
+    let model_support_catalogs = runtime.resolved_model_catalog_snapshot(&support_configuration)?;
     let mut model_override_records_by_key = BTreeMap::new();
     let mut model_access_records_by_key = BTreeMap::new();
-    let mut model_capability_override_records_by_key = BTreeMap::new();
     let mut custom_model_template_decision_records_by_key = BTreeMap::new();
-    for (connection_id, catalog) in &catalogs {
+    // Protocol records are projected directly from persistence so inactive settings remain visible
+    // for protocol-switch warnings instead of becoming inaccessible composite-key state.
+    // 协议记录直接从持久化状态投影，使非活动设置仍可用于协议切换警告，
+    // 而不会变成无法访问的组合键状态。
+    for (key, overrides) in &configuration.model_overrides {
+        let Some((provider_id, model_id, protocol_id)) =
+            PersistedAiConfiguration::provider_model_protocol_key_parts(key.as_str())
+        else {
+            continue;
+        };
+        model_override_records_by_key.insert(
+            key.clone(),
+            PublicAiModelOverrideRecord {
+                provider_id: provider_id.to_string(),
+                model_id: model_id.to_string(),
+                protocol_id: protocol_id.to_string(),
+                overrides: overrides.clone(),
+            },
+        );
+    }
+    // Capability records are projected directly from persistence so provider-disabled, account-hidden,
+    // and credential-free custom models retain an editable and restorable settings surface.
+    // 能力记录直接从持久化状态投影，使供应商关闭、账号隐藏以及无凭据自定义模型
+    // 仍保留可编辑、可还原的设置入口。
+    let model_capability_override_records = configuration
+        .model_capability_overrides
+        .iter()
+        .filter_map(|(key, overrides)| {
+            let (provider_id, model_id) =
+                PersistedAiConfiguration::provider_model_key_parts(key.as_str())?;
+            Some(PublicAiModelCapabilityOverrideRecord {
+                provider_id: provider_id.to_string(),
+                model_id: model_id.to_string(),
+                overrides: overrides.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+    // Provider access records must use support catalogs so an account-wide closure does not erase
+    // the provider-level state needed to reject or hide a disabled model.
+    // 供应商访问记录必须使用支持目录，避免账号范围关闭后丢失拒绝或隐藏供应商关闭模型所需的状态。
+    for (connection_id, catalog) in &model_support_catalogs {
         let Some(connection) = configuration
             .connection_graph
             .connections
@@ -6286,20 +7266,25 @@ fn build_public_ai_settings_snapshot(
                             },
                             |definition| definition.enabled,
                         ),
+                    customized: configuration
+                        .model_enabled_overrides
+                        .contains_key(access_key.as_str()),
                 });
-            if let Some(overrides) = configuration
-                .model_capability_overrides
-                .get(access_key.as_str())
-                .cloned()
-            {
-                model_capability_override_records_by_key
-                    .entry(access_key.clone())
-                    .or_insert_with(|| PublicAiModelCapabilityOverrideRecord {
-                        provider_id: connection.provider_id.clone(),
-                        model_id: model.id.clone(),
-                        overrides,
-                    });
-            }
+        }
+    }
+    for (connection_id, catalog) in &catalogs {
+        let Some(connection) = configuration
+            .connection_graph
+            .connections
+            .get(connection_id.as_str())
+        else {
+            continue;
+        };
+        for model in &catalog.models {
+            let access_key = PersistedAiConfiguration::provider_model_key(
+                connection.provider_id.as_str(),
+                model.id.as_str(),
+            );
             if let Some(decision) = configuration
                 .custom_model_template_decision(connection.provider_id.as_str(), model.id.as_str())
                 .cloned()
@@ -6312,28 +7297,10 @@ fn build_public_ai_settings_snapshot(
                         decision,
                     });
             }
-            let key = PersistedAiConfiguration::provider_model_protocol_key(
-                connection.provider_id.as_str(),
-                model.id.as_str(),
-                connection.selected_protocol.as_str(),
-            );
-            if let Some(overrides) = configuration.model_overrides.get(key.as_str()).cloned() {
-                model_override_records_by_key.entry(key).or_insert_with(|| {
-                    PublicAiModelOverrideRecord {
-                        provider_id: connection.provider_id.clone(),
-                        model_id: model.id.clone(),
-                        protocol_id: connection.selected_protocol.clone(),
-                        overrides,
-                    }
-                });
-            }
         }
     }
     let model_override_records = model_override_records_by_key.into_values().collect();
     let model_access_records = model_access_records_by_key.into_values().collect();
-    let model_capability_override_records = model_capability_override_records_by_key
-        .into_values()
-        .collect();
     for (provider_id, models) in &configuration.custom_models {
         for model_id in models.keys() {
             let key = PersistedAiConfiguration::provider_model_key(provider_id, model_id);
@@ -6391,11 +7358,14 @@ fn build_public_ai_settings_snapshot(
         build_internal_inference_route_diagnostics(runtime, configuration);
     let connection_model_access_policy_records =
         build_connection_model_access_policy_records(&providers, configuration);
-    let mut support_configuration = configuration.clone();
-    support_configuration
-        .connection_model_access_policies
-        .clear();
-    let model_support_catalogs = runtime.resolved_model_catalog_snapshot(&support_configuration)?;
+    // providers_with_model_customizations keeps deletion eligibility identical between backend enforcement and WebUI guidance.
+    // providers_with_model_customizations 使后端强制规则与 WebUI 删除指引保持完全一致。
+    let providers_with_model_customizations = configuration
+        .custom_providers
+        .keys()
+        .filter(|provider_id| configuration.provider_has_model_customizations(provider_id))
+        .cloned()
+        .collect();
     Ok(PublicAiSettingsSnapshot {
         usage_refresh_interval_seconds: configuration.usage_refresh_interval_seconds,
         usage_cache: runtime.usage_cache_snapshot()?,
@@ -6422,10 +7392,13 @@ fn build_public_ai_settings_snapshot(
         model_access_records,
         custom_models: configuration.custom_models.clone(),
         custom_provider_model_defaults: configuration.custom_provider_model_defaults.clone(),
+        custom_provider_system_model_defaults: CustomProviderModelDefaults::default(),
+        providers_with_model_customizations,
         custom_model_template_decision_records,
         custom_model_connection_availability_records,
         connection_model_access_policy_records,
         model_capability_overrides: configuration.model_capability_overrides.clone(),
+        provider_capability_overrides: configuration.provider_capability_overrides.clone(),
         model_capability_override_records,
         provider_tool_targets: available_provider_tool_targets
             .into_iter()
@@ -7120,10 +8093,29 @@ pub(crate) fn publish_public_ai_workbench(
     runtime: &PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
 ) -> Result<WorkbenchSnapshot, String> {
-    let workbench = {
+    let catalogs = runtime.catalog_snapshot()?;
+    let (workbench, persistence_context) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("Failed to lock service state: {error}"))?;
+        let changed_session_ids = guard
+            .workspace_snapshot
+            .as_mut()
+            .map(|workspace| {
+                reconcile_missing_session_model_selections(workspace, configuration, &catalogs)
+            })
+            .unwrap_or_default();
+        // Persist session fallback changes after releasing the service-state mutex.
+        // 释放服务状态互斥锁后再持久化会话回退变更。
+        let persistence_context = if changed_session_ids.is_empty() {
+            None
+        } else {
+            Some((
+                guard.controller_runtime.clone(),
+                guard.workspace_snapshot.clone(),
+                changed_session_ids,
+            ))
+        };
         // effective_selection prefers the selected conversation model, then degrades to the global default.
         // effective_selection 优先使用当前会话模型，失效时再降级到全局默认。
         let effective_selection = guard
@@ -7212,8 +8204,30 @@ pub(crate) fn publish_public_ai_workbench(
         // 已发布的供应商投影是新的权威快照，必须以更高版本覆盖 WebUI 中的旧快照。
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         guard.workbench.revision = guard.workbench_generation;
-        guard.workbench.clone()
+        (guard.workbench.clone(), persistence_context)
     };
+    if let Some((Some(controller_runtime), Some(workspace_snapshot), session_ids)) =
+        persistence_context
+    {
+        for session_id in session_ids {
+            if let Some(addon_state) = crate::session_addon_state_from_workspace_snapshot(
+                &workspace_snapshot,
+                session_id,
+                &[crate::SessionAddonNamespace::RuntimeControls],
+            ) {
+                crate::spawn_workspace_session_addon_state_persist_task(
+                    app.clone(),
+                    state.clone(),
+                    controller_runtime.clone(),
+                    workspace_snapshot.clone(),
+                    session_id,
+                    addon_state,
+                    vec![crate::SessionAddonNamespace::RuntimeControls],
+                    Some(String::from("missing_model_fallback")),
+                );
+            }
+        }
+    }
     emit_workbench_event(app, &workbench);
     Ok(workbench)
 }
@@ -7350,21 +8364,7 @@ fn validate_custom_provider_model_exists(
     provider_id: &str,
     model_id: &str,
 ) -> Result<(), String> {
-    if configuration.custom_model(provider_id, model_id).is_some() {
-        return Ok(());
-    }
-    let catalogs = runtime.catalog_snapshot()?;
-    let exists = configuration
-        .connection_graph
-        .connections
-        .values()
-        .filter(|connection| connection.provider_id == provider_id)
-        .any(|connection| {
-            catalogs
-                .get(connection.id.as_str())
-                .is_some_and(|catalog| catalog.models.iter().any(|model| model.id == model_id))
-        });
-    if exists {
+    if runtime.provider_model_is_supported(configuration, provider_id, model_id)? {
         Ok(())
     } else {
         Err(format!(
@@ -7471,6 +8471,229 @@ mod inference_settings_route_tests {
         .expect("the exact embedding route should resolve");
 
         assert_eq!(actual, expected);
+    }
+
+    /// Verifies persisted direct settings remain visible without an account catalog.
+    /// 验证没有账号目录时持久化直接设置仍保持可见。
+    #[test]
+    fn settings_snapshot_projects_capability_overrides_without_catalogs() {
+        // runtime supplies the built-in provider registry without requiring network state.
+        // runtime 提供内置供应商注册表且不需要网络状态。
+        let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        // configuration represents a credential-free custom provider with one saved model difference.
+        // configuration 表示一个无凭据自定义供应商及一项已保存模型差异。
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.model_capability_overrides.insert(
+            PersistedAiConfiguration::provider_model_key("custom:test", "private/chat"),
+            ModelCapabilityOverrides {
+                context_limit: Some(16_384),
+                output_limit: Some(4_096),
+                ..ModelCapabilityOverrides::default()
+            },
+        );
+
+        // snapshot must expose the record directly instead of depending on a visible connection model.
+        // snapshot 必须直接公开该记录，而不是依赖可见的连接模型。
+        let snapshot = build_public_ai_settings_snapshot(&runtime, &configuration)
+            .expect("settings snapshot should build");
+
+        assert_eq!(snapshot.model_capability_override_records.len(), 1);
+        let record = &snapshot.model_capability_override_records[0];
+        assert_eq!(record.provider_id, "custom:test");
+        assert_eq!(record.model_id, "private/chat");
+        assert_eq!(record.overrides.context_limit, Some(16_384));
+        assert_eq!(record.overrides.output_limit, Some(4_096));
+    }
+
+    /// Verifies missing models in active and archived sessions fall back to the preferred model.
+    /// 验证活动与归档会话中的失效模型都会回退到首选模型。
+    #[test]
+    fn missing_session_models_fall_back_for_active_and_archived_sessions() {
+        // provider_id identifies the deterministic provider shared by both fallback candidates.
+        // provider_id 标识两个回退候选共同使用的确定性供应商。
+        let provider_id = String::from("fallback-provider");
+        // connection_id identifies the only available credential-scoped model catalog.
+        // connection_id 标识唯一可用的凭据作用域模型目录。
+        let connection_id = String::from("fallback-connection");
+        // first_model_id sorts before the preferred model and therefore exercises first-model fallback.
+        // first_model_id 排在首选模型之前，因此可验证首模型回退。
+        let first_model_id = String::from("model-a-first");
+        // preferred_model_id represents the currently selected global default.
+        // preferred_model_id 表示当前选中的全局默认模型。
+        let preferred_model_id = String::from("model-b-preferred");
+        // connection supplies the exact provider and account identity required by availability checks.
+        // connection 提供可用性检查所需的精确供应商与账号身份。
+        let connection = CredentialConnection {
+            id: connection_id.clone(),
+            provider_id: provider_id.clone(),
+            service_entry_id: String::from("fallback-entry"),
+            credential_profile_id: String::from("fallback-profile"),
+            credential_mode: CredentialMode::Token,
+            credential_id: String::from("fallback-credential"),
+            display_name: String::from("Fallback account"),
+            secret_reference: String::from("fallback-secret"),
+            management_secret_reference: None,
+            service_origin_override: None,
+            verified_protocols: BTreeSet::from([String::from("fallback-protocol")]),
+            selected_protocol: String::from("fallback-protocol"),
+            prompt_cache_by_protocol: BTreeMap::new(),
+            usage_scope_override: None,
+        };
+        // conversation_capabilities make both catalog models valid text-conversation candidates.
+        // conversation_capabilities 使两个目录模型都成为有效文本会话候选。
+        let conversation_capabilities = ModelCapabilities {
+            operations: vec![AiOperation::ConversationRespond],
+            ..ModelCapabilities::default()
+        };
+        // catalog exposes two enabled models in deliberately non-preferred lexical order.
+        // catalog 公开两个启用模型，并刻意设置与首选项不同的字典序。
+        let catalog = ConnectionModelCatalog {
+            connection_id: connection_id.clone(),
+            models: vec![
+                vulcan_provider_adapters::ConnectionModel {
+                    id: preferred_model_id.clone(),
+                    display_name: String::from("Preferred model"),
+                    capabilities: conversation_capabilities.clone(),
+                    capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence::default(
+                    ),
+                },
+                vulcan_provider_adapters::ConnectionModel {
+                    id: first_model_id.clone(),
+                    display_name: String::from("First model"),
+                    capabilities: conversation_capabilities,
+                    capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence::default(
+                    ),
+                },
+            ],
+            generation: 1,
+            page_count: 1,
+            discovery_schema_revision: String::from("session-fallback-test-v1"),
+        };
+        // configuration owns one available connection and an explicit preferred global model.
+        // configuration 持有一个可用连接与一个显式首选全局模型。
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .connection_graph
+            .connections
+            .insert(connection_id.clone(), connection);
+        configuration.active = Some(ActiveAiModelSelection {
+            provider_id: provider_id.clone(),
+            model_id: preferred_model_id.clone(),
+            connection_id: connection_id.clone(),
+        });
+        // catalogs contains the authoritative process-local account model catalog.
+        // catalogs 包含权威的进程内账号模型目录。
+        let catalogs = BTreeMap::from([(connection_id.clone(), catalog)]);
+        // active_session_id identifies the visible session with a missing model selection.
+        // active_session_id 标识模型选择已失效的可见会话。
+        let active_session_id = crate::SessionId::from_u128(0x5101);
+        // archived_session_id identifies the archived session with the same invalid selection.
+        // archived_session_id 标识具有相同失效选择的归档会话。
+        let archived_session_id = crate::SessionId::from_u128(0x5102);
+        // missing_selection represents a complete but unavailable session model identity.
+        // missing_selection 表示完整但已不可用的会话模型身份。
+        let missing_selection = vulcan_workbench_model::SessionRuntimeStateEntry {
+            active_provider_id: Some(String::from("removed-provider")),
+            active_connection_id: Some(String::from("removed-connection")),
+            active_model_id: Some(String::from("removed-model")),
+            ..vulcan_workbench_model::SessionRuntimeStateEntry::default()
+        };
+        // workspace contains both runtime-state stores exercised by provider/model removal.
+        // workspace 包含供应商或模型移除时需要处理的两类运行态存储。
+        let mut workspace = vulcan_workspace_store::workspace_store::WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::from([(active_session_id, missing_selection.clone())]),
+            archived_session_runtime_state: BTreeMap::from([(
+                archived_session_id,
+                missing_selection,
+            )]),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: active_session_id,
+            hydrated_session_ids: BTreeSet::from([active_session_id, archived_session_id]),
+        };
+
+        // changed_session_ids must include both visible and archived sessions after reconciliation.
+        // changed_session_ids 必须在协调后同时包含可见与归档会话。
+        let changed_session_ids =
+            reconcile_missing_session_model_selections(&mut workspace, &configuration, &catalogs);
+        assert_eq!(
+            changed_session_ids,
+            BTreeSet::from([active_session_id, archived_session_id])
+        );
+        for runtime_state in workspace
+            .session_runtime_state
+            .values()
+            .chain(workspace.archived_session_runtime_state.values())
+        {
+            assert_eq!(
+                runtime_state.active_provider_id.as_deref(),
+                Some("fallback-provider")
+            );
+            assert_eq!(
+                runtime_state.active_connection_id.as_deref(),
+                Some("fallback-connection")
+            );
+            assert_eq!(
+                runtime_state.active_model_id.as_deref(),
+                Some("model-b-preferred")
+            );
+        }
+
+        configuration.active = None;
+        assert_eq!(
+            preferred_fallback_model_selection(&configuration, &catalogs),
+            Some(ActiveAiModelSelection {
+                provider_id,
+                model_id: first_model_id,
+                connection_id,
+            })
+        );
+    }
+
+    /// Verifies account membership cannot reopen a model disabled by its provider.
+    /// 验证账号成员关系不能重新开启已被供应商关闭的模型。
+    #[test]
+    fn account_membership_cannot_enable_provider_disabled_custom_model() {
+        // configuration stores the exact provider-level disabled decision under test.
+        // configuration 保存本测试所需的精确供应商级关闭决定。
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.set_model_enabled("custom:test", "manual/chat", false);
+
+        assert!(
+            validate_custom_model_connection_availability_choice(
+                &configuration,
+                "custom:test",
+                "manual/chat",
+                Some(true),
+            )
+            .is_err()
+        );
+        assert!(
+            validate_custom_model_connection_availability_choice(
+                &configuration,
+                "custom:test",
+                "manual/chat",
+                Some(false),
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_custom_model_connection_availability_choice(
+                &configuration,
+                "custom:test",
+                "manual/chat",
+                None,
+            )
+            .is_ok()
+        );
     }
 
     /// Verifies VMM LLM route validation rejects models that cannot disable reasoning.
@@ -7585,16 +8808,16 @@ mod inference_settings_route_tests {
         );
     }
 
-    /// Verifies editing a custom provider reuses the selected credential secret without accepting a replacement key.
-    /// 验证编辑自定义供应商会复用所选凭据秘密，并且不接受替换 Key。
+    /// Verifies protocol edits reuse secrets, migrate every credential, and reject partial invalid migrations.
+    /// 验证协议编辑会复用秘密、迁移全部凭据，并拒绝部分无效迁移。
     #[test]
-    fn custom_provider_edit_reuses_selected_existing_credential() {
+    fn custom_provider_edit_atomically_migrates_every_existing_credential() {
         let provider_id = String::from("custom:test-provider");
         let descriptor = CustomProviderDefinition {
             id: provider_id.clone(),
             display_name: String::from("Test Provider"),
             base_url: String::from("https://old.example.test/v1"),
-            protocol: CustomProviderProtocol::OpenAiChat,
+            protocol: CustomProviderProtocol::OpenAiResponses,
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
             model_discovery_path: None,
@@ -7650,19 +8873,239 @@ mod inference_settings_route_tests {
             model_discovery_path: None,
             allow_manual_fallback: false,
             allow_pending_validation: false,
+            confirm_inactive_protocol_override_deletion: false,
         };
 
         let candidate = prepare_custom_provider_candidate(&request, &configuration)
             .expect("editing should reuse the selected account");
         assert!(candidate.updating_existing);
         assert!(candidate.temporary_secret.is_none());
-        assert_ne!(candidate.connection.id, existing.id);
+        // candidate_connection is the selected account's isolated metadata-validation copy.
+        // candidate_connection 是所选账号用于隔离元数据验证的副本。
+        let candidate_connection = candidate
+            .validation_connection
+            .as_ref()
+            .expect("selected credential should create a validation connection");
+        assert_ne!(candidate_connection.id, existing.id);
         assert_eq!(
-            candidate.connection.secret_reference,
+            candidate_connection.secret_reference,
             existing.secret_reference
         );
-        assert_eq!(candidate.connection.credential_id, existing.credential_id);
-        assert_eq!(candidate.connection.display_name, existing.display_name);
+        assert_eq!(candidate_connection.credential_id, existing.credential_id);
+        assert_eq!(candidate_connection.display_name, existing.display_name);
+        assert_ne!(
+            candidate.connection_target.selected_protocol,
+            existing.selected_protocol
+        );
+        assert!(
+            custom_provider_connection_contract_changed(&configuration, &candidate)
+                .expect("protocol edit should compare")
+        );
+        // cosmetic_request changes only the provider-facing display name.
+        // cosmetic_request 仅修改面向用户的供应商展示名称。
+        let cosmetic_request = PublicAiCustomProviderSaveRequest {
+            provider_id: Some(provider_id.clone()),
+            display_name: String::from("Cosmetic Rename"),
+            base_url: String::from("https://old.example.test/v1"),
+            protocol: CustomProviderProtocol::OpenAiResponses,
+            authentication: CustomProviderAuthentication::BearerAuthorization,
+            credential_display_name: None,
+            secret: None,
+            validation_connection_id: Some(existing.id.clone()),
+            model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
+            model_discovery_path: None,
+            allow_manual_fallback: false,
+            allow_pending_validation: false,
+            confirm_inactive_protocol_override_deletion: false,
+        };
+        // cosmetic_candidate proves display-only edits do not disturb credential state.
+        // cosmetic_candidate 验证仅展示信息编辑不会扰动凭据状态。
+        let cosmetic_candidate =
+            prepare_custom_provider_candidate(&cosmetic_request, &configuration)
+                .expect("cosmetic edit should compile");
+        assert!(
+            !custom_provider_connection_contract_changed(&configuration, &cosmetic_candidate)
+                .expect("cosmetic edit should compare")
+        );
+        // credential_free_configuration represents the legal state after the provider's last account is removed.
+        // credential_free_configuration 表示供应商最后一个账号被移除后的合法状态。
+        let mut credential_free_configuration = configuration.clone();
+        credential_free_configuration
+            .connection_graph
+            .connections
+            .clear();
+        let credential_free_request = PublicAiCustomProviderSaveRequest {
+            validation_connection_id: None,
+            ..request.clone()
+        };
+        // credential_free_candidate keeps the target protocol exact without inventing secret-bearing state.
+        // credential_free_candidate 在不虚构秘密状态的前提下保持目标协议精确。
+        let credential_free_candidate = prepare_custom_provider_candidate(
+            &credential_free_request,
+            &credential_free_configuration,
+        )
+        .expect("credential-free provider should remain editable");
+        assert!(credential_free_candidate.validation_connection.is_none());
+        assert!(
+            custom_provider_edit_validation_candidates(
+                &credential_free_configuration,
+                &credential_free_candidate,
+            )
+            .expect("credential-free edit has no account to validate")
+            .is_empty()
+        );
+
+        // sibling proves the provider protocol changes as one provider-wide operation.
+        // sibling 验证供应商协议会作为供应商级操作整体切换。
+        let mut sibling = existing.clone();
+        sibling.id = String::from("connection-sibling");
+        sibling.credential_id = String::from("credential-sibling");
+        sibling.secret_reference = String::from("secret-sibling");
+        configuration
+            .connection_graph
+            .connections
+            .insert(sibling.id.clone(), sibling.clone());
+        // inference_route represents a durable VMM route bound to the provider's old single protocol.
+        // inference_route 表示绑定到供应商旧唯一协议的持久化 VMM 路由。
+        let inference_route = InferenceRouteConfiguration {
+            provider_id: provider_id.clone(),
+            service_entry_id: existing.service_entry_id.clone(),
+            connection_id: existing.id.clone(),
+            model_id: String::from("internal-model"),
+            binding: InferenceRouteBinding::Protocol {
+                protocol_profile_id: existing.selected_protocol.clone(),
+            },
+            operation: AiOperation::ConversationRespond,
+            usage_scope: InferenceUsageScope::ExternalService,
+        };
+        configuration.inference_profiles.insert(
+            String::from("vmm"),
+            InferenceProfile {
+                llm_routes: BTreeMap::from([(String::from("precheck_l1"), inference_route)]),
+                ..InferenceProfile::default()
+            },
+        );
+        // validation_candidates proves provider edits validate every credential without sharing secrets.
+        // validation_candidates 验证供应商编辑会逐份验证凭据且不会共享秘密。
+        let validation_candidates =
+            custom_provider_edit_validation_candidates(&configuration, &candidate)
+                .expect("every credential must receive a validation candidate");
+        assert_eq!(validation_candidates.len(), 2);
+        for (source_connection_id, validation_candidate) in &validation_candidates {
+            // source_connection is the exact durable account mirrored by this temporary candidate.
+            // source_connection 是此临时候选项所镜像的精确持久化账号。
+            let source_connection =
+                &configuration.connection_graph.connections[source_connection_id.as_str()];
+            // validation_connection is the exact isolated copy for this source account.
+            // validation_connection 是此源账号的精确隔离副本。
+            let validation_connection = validation_candidate
+                .validation_connection
+                .as_ref()
+                .expect("existing credential should create a validation connection");
+            assert_ne!(validation_connection.id, source_connection.id);
+            assert_eq!(
+                validation_connection.secret_reference,
+                source_connection.secret_reference
+            );
+            assert_eq!(
+                validation_connection.selected_protocol,
+                candidate.connection_target.selected_protocol
+            );
+        }
+        // providers is the effective registry containing only the newly selected custom protocol.
+        // providers 是仅包含新选自定义协议的有效供应商注册表。
+        let providers = ProviderRegistry::effective(&BTreeMap::from([(
+            provider_id.clone(),
+            candidate.descriptor.clone(),
+        )]))
+        .expect("new custom provider descriptor must register");
+        // validation_outcomes proves each credential carries its own verification result into migration.
+        // validation_outcomes 验证每份凭据都会把自身验证结果带入迁移。
+        let validation_outcomes = BTreeMap::from([
+            (
+                existing.id.clone(),
+                CustomProviderConnectionValidationOutcome {
+                    pending_validation: false,
+                },
+            ),
+            (
+                sibling.id.clone(),
+                CustomProviderConnectionValidationOutcome {
+                    pending_validation: true,
+                },
+            ),
+        ]);
+        migrate_custom_provider_connections(
+            &providers,
+            &mut configuration,
+            provider_id.as_str(),
+            &candidate.connection_target,
+            &validation_outcomes,
+        )
+        .expect("every compatible credential must migrate");
+        for (connection_id, secret_reference) in [
+            (existing.id.as_str(), existing.secret_reference.as_str()),
+            (sibling.id.as_str(), sibling.secret_reference.as_str()),
+        ] {
+            let migrated = configuration
+                .connection_graph
+                .connections
+                .get(connection_id)
+                .expect("migrated connection must remain addressable");
+            assert_eq!(
+                migrated.selected_protocol,
+                candidate.connection_target.selected_protocol
+            );
+            assert_eq!(migrated.secret_reference, secret_reference);
+        }
+        assert_eq!(
+            configuration.connection_graph.connections[existing.id.as_str()].verified_protocols,
+            candidate.connection_target.verified_protocols
+        );
+        assert_eq!(
+            configuration.connection_graph.connections[sibling.id.as_str()].verified_protocols,
+            candidate.connection_target.verified_protocols
+        );
+        // migrated_inference_route proves internal consumers remain executable after the protocol switch.
+        // migrated_inference_route 验证内部消费者在协议切换后仍保持可执行。
+        let migrated_inference_route =
+            &configuration.inference_profiles["vmm"].llm_routes["precheck_l1"];
+        assert_eq!(
+            migrated_inference_route.service_entry_id,
+            candidate.connection_target.service_entry_id
+        );
+        assert_eq!(
+            migrated_inference_route.binding,
+            InferenceRouteBinding::Protocol {
+                protocol_profile_id: candidate.connection_target.selected_protocol.clone(),
+            }
+        );
+
+        // failing_configuration contains one credential mode the new token profile cannot accept.
+        // failing_configuration 包含一个新 Token 配置档无法接受的凭据模式。
+        let mut failing_configuration = PersistedAiConfiguration::default();
+        failing_configuration
+            .connection_graph
+            .connections
+            .insert(existing.id.clone(), existing.clone());
+        let mut incompatible = sibling;
+        incompatible.credential_mode = CredentialMode::Auth;
+        failing_configuration
+            .connection_graph
+            .connections
+            .insert(incompatible.id.clone(), incompatible);
+        let original_graph = failing_configuration.connection_graph.clone();
+        assert!(
+            migrate_custom_provider_connections(
+                &providers,
+                &mut failing_configuration,
+                provider_id.as_str(),
+                &candidate.connection_target,
+                &validation_outcomes,
+            )
+            .is_err()
+        );
+        assert_eq!(failing_configuration.connection_graph, original_graph);
 
         let invalid_request = PublicAiCustomProviderSaveRequest {
             secret: Some(String::from("replacement-secret")),

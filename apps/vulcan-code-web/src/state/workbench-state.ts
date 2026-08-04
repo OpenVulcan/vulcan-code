@@ -395,6 +395,7 @@ function deriveSelectedConversationFields(workbench: WorkbenchSnapshot): Workben
     sessionGoal: sessionAddons?.sessionGoal ?? null,
     sessionTodolist: sessionAddons?.sessionTodolist ?? null,
     sessionPlanMode: sessionAddons?.sessionPlanMode ?? null,
+    sessionOutputStyle: sessionAddons?.sessionOutputStyle ?? null,
     sessionVmmPolicy: sessionVmmPolicyEntry?.sessionVmmPolicy ?? null,
     subagentNavigationByConversation,
     subagentNavigation,
@@ -447,7 +448,7 @@ function upsertSessionAddonsForConversation(
   entry: SessionAddonsChangedDelta,
 ): SessionAddonsChangedDelta[] {
   const next = current.filter((candidate) => candidate.conversationId !== entry.conversationId);
-  const hasAddon = Boolean(entry.sessionGoal || entry.sessionTodolist || entry.sessionPlanMode);
+  const hasAddon = Boolean(entry.sessionGoal || entry.sessionTodolist || entry.sessionPlanMode || entry.sessionOutputStyle);
   return hasAddon ? [...next, entry] : next;
 }
 

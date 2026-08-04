@@ -7,6 +7,7 @@ use serde_json::Value;
 use time::OffsetDateTime;
 use vulcan_core::types::ConversationAttachment;
 use vulcan_hooks::HookRegistrationSnapshot;
+use vulcan_prompt_composer::PromptOutputStyleSnapshot;
 use vulcan_provider_config::config::{ProjectVulcanCodeConfigurationFile, ReasoningEffortLevel};
 use vulcan_session_boundary::{
     SessionBoundaryEvent, SessionBoundaryEventKind, SessionEventScope, SessionEventVisibility,
@@ -52,6 +53,28 @@ mod tests;
 use transcript::{
     append_shared_user_prompt_record_with_attachments, patch_latest_prechecked_user_prompt_record,
 };
+
+/// Reconstructs the last safely applied output-style snapshot for a prompt turn.
+/// 为提示词回合重建最近一次安全应用的输出风格快照。
+fn applied_output_style_snapshot(
+    runtime_state: &SessionRuntimeStateEntry,
+) -> Option<PromptOutputStyleSnapshot> {
+    let output_style = &runtime_state.output_style;
+    let id = output_style.applied_style_id.clone()?;
+    Some(PromptOutputStyleSnapshot {
+        label: output_style
+            .applied_label
+            .clone()
+            .unwrap_or_else(|| id.clone()),
+        text: output_style.applied_prompt_text.clone().unwrap_or_default(),
+        fingerprint: output_style.applied_fingerprint.unwrap_or_default(),
+        source_label: output_style
+            .applied_source_label
+            .clone()
+            .unwrap_or_else(|| String::from("Persisted session output style")),
+        id,
+    })
+}
 pub use transcript::{
     build_shared_user_prompt_transcript_body, build_shared_user_prompt_transcript_metadata,
 };
@@ -971,6 +994,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         session_title: input.start.session_title,
         workspace_path: input.start.workspace_path,
         prompt: request_prompt,
+        output_style_snapshot: applied_output_style_snapshot(runtime_state),
         provider_visible_agent_messages: input.start.provider_visible_agent_messages,
         conversation_state: runtime_state.conversation_state.clone(),
         context_compaction_policy: None,

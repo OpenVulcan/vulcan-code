@@ -89,6 +89,17 @@ function catalogFixture(connectionId: string): PublicAiConnectionCatalog {
   }
 }
 
+// modelAccessFixture projects one authoritative provider-level model access record.
+// modelAccessFixture 投影一条权威供应商级模型访问记录。
+function modelAccessFixture(enabled: boolean) {
+  return [{
+    providerId: providerFixture.id,
+    modelId: "model-1",
+    enabled,
+    defaultEnabled: true,
+  }]
+}
+
 describe("buildProviderModelGroups", () => {
   it("keeps configured service entries separate even when they use the same protocol", () => {
     const defaultConnection = connectionFixture("default-account", "default-api")
@@ -100,6 +111,7 @@ describe("buildProviderModelGroups", () => {
         [defaultConnection.id]: catalogFixture(defaultConnection.id),
         [fastConnection.id]: catalogFixture(fastConnection.id),
       },
+      modelAccessRecords: modelAccessFixture(true),
       modelSupportCatalogs: {
         [defaultConnection.id]: catalogFixture(defaultConnection.id),
         [fastConnection.id]: catalogFixture(fastConnection.id),
@@ -118,6 +130,7 @@ describe("buildProviderModelGroups", () => {
       providers: [providerFixture],
       connections: [defaultConnection],
       catalogs: { [defaultConnection.id]: catalogFixture(defaultConnection.id) },
+      modelAccessRecords: modelAccessFixture(true),
       modelSupportCatalogs: { [defaultConnection.id]: catalogFixture(defaultConnection.id) },
     })
 
@@ -125,7 +138,7 @@ describe("buildProviderModelGroups", () => {
     expect(groups[0]?.models.get("model-1")?.[0]?.serviceEntryId).toBe("default-api")
   })
 
-  it("keeps a supported model visible when every account has disabled it", () => {
+  it("hides a model when every account has disabled it", () => {
     const connection = connectionFixture("disabled-account", "default-api")
     const disabledCatalog = {
       ...catalogFixture(connection.id),
@@ -135,12 +148,24 @@ describe("buildProviderModelGroups", () => {
       providers: [providerFixture],
       connections: [connection],
       catalogs: { [connection.id]: disabledCatalog },
+      modelAccessRecords: modelAccessFixture(true),
       modelSupportCatalogs: { [connection.id]: catalogFixture(connection.id) },
     })
 
-    expect(groups[0]?.models.get("model-1")).toMatchObject([
-      { serviceEntryId: "default-api", accountCount: 0 },
-    ])
+    expect(groups).toHaveLength(0)
+  })
+
+  it("hides a provider-disabled model even when an account catalog still contains it", () => {
+    const connection = connectionFixture("provider-disabled-account", "default-api")
+    const groups = buildProviderModelGroups({
+      providers: [providerFixture],
+      connections: [connection],
+      catalogs: { [connection.id]: catalogFixture(connection.id) },
+      modelAccessRecords: modelAccessFixture(false),
+      modelSupportCatalogs: { [connection.id]: catalogFixture(connection.id) },
+    })
+
+    expect(groups).toHaveLength(0)
   })
 })
 

@@ -13,6 +13,7 @@ import type {
   ContextInjectionChangedDelta,
   PendingPromptsChangedDelta,
   SessionAddonsChangedDelta,
+  SessionOutputStyleSummary,
   SessionVmmPolicyByConversation,
   SessionVmmPolicySummary,
 } from "./conversation";
@@ -48,6 +49,43 @@ import type {
   SettingSectionSummary,
 } from "./settings-providers";
 import type { RuntimeModuleSnapshot } from "./startup";
+
+// OutputStyleCatalogEntry describes one selectable output-style prompt variant.
+// OutputStyleCatalogEntry 描述一个可选择的输出风格提示词变体。
+export interface OutputStyleCatalogEntry {
+  // Stable style identifier.
+  // 稳定风格标识。
+  id: string;
+  // Chinese display label.
+  // 中文显示标签。
+  labelZh: string;
+  // English display label.
+  // 英文显示标签。
+  labelEn: string;
+  // Constraint level used by the selector.
+  // 选择器使用的约束等级。
+  constraintLevel: string;
+  // Prompt body character count used to communicate persistence cost.
+  // 用于说明持久化成本的提示词正文字符数。
+  promptCharCount: number;
+  // Whether this is the built-in catalog default.
+  // 是否为内置目录默认项。
+  isDefault: boolean;
+}
+
+// OutputStyleCatalogSummary carries the global selection and available variants.
+// OutputStyleCatalogSummary 携带全局选择与可用风格变体。
+export interface OutputStyleCatalogSummary {
+  // Built-in default style identifier.
+  // 内置默认风格标识。
+  defaultId: string;
+  // Persisted global style identifier.
+  // 已持久化全局风格标识。
+  selectedId: string;
+  // Stable selectable catalog entries.
+  // 稳定的可选择目录项。
+  entries: OutputStyleCatalogEntry[];
+}
 
 // ProjectSettingsRevision stores independent invalidation revisions for reloadable settings domains.
 // ProjectSettingsRevision 保存可重载设置领域各自独立的失效版本。
@@ -171,6 +209,9 @@ export interface WorkbenchSnapshot {
   // Attachment capability gates for the composer attachment controls.
   // 输入区附件控件使用的附件能力门控。
   composerAttachmentCapabilities?: ComposerAttachmentCapabilitySummary[];
+  // Output-style catalog and the persisted global selection.
+  // 输出风格目录与已持久化全局选择。
+  outputStyleCatalog: OutputStyleCatalogSummary;
   // Composer slash commands projected by the shared service command catalog.
   // 共享服务指令目录投影出的输入区 slash 指令。
   composerSlashCommands?: ComposerSlashCommandSummary[];
@@ -198,6 +239,9 @@ export interface WorkbenchSnapshot {
   // Current session VMM memory policy shown in the composer controls.
   // 当前会话输入区控制项展示的 VMM 记忆策略。
   sessionVmmPolicy?: SessionVmmPolicySummary | null;
+  // Current session output-style state.
+  // 当前会话输出风格状态。
+  sessionOutputStyle?: SessionOutputStyleSummary | null;
   // Session addon projections retained for every conversation that has addon state.
   // 为每个存在附属状态的会话保留的会话附属投影。
   sessionAddonsByConversation?: SessionAddonsChangedDelta[];

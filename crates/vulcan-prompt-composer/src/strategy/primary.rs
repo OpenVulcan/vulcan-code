@@ -23,6 +23,7 @@ impl PromptAssemblyStrategy for PrimaryAgentStrategy {
                 PlannedNode::ProviderBaseSystem,
                 PlannedNode::AgentBaseSystem,
                 PlannedNode::Personality,
+                PlannedNode::OutputStyle,
                 PlannedNode::ToolHelpBundle,
                 PlannedNode::ProjectRules,
                 PlannedNode::EnvironmentContext,

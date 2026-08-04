@@ -297,6 +297,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         execution_mode: request.execution_mode.clone(),
         temperature,
         prompt_configuration: config.prompt.clone(),
+        output_style_snapshot: request.output_style_snapshot.clone(),
         prompt_purpose: request.prompt_purpose,
         prompt_skills,
         prompt_skill_user_root,

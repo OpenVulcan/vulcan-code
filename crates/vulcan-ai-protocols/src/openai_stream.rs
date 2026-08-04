@@ -390,9 +390,9 @@ pub(crate) struct OpenAiResponsesStreamDecoder {
     /// Open text items keyed by output index.
     /// 按输出索引保存的打开文本项。
     text_items: BTreeMap<u32, String>,
-    /// Open reasoning items keyed by summary index.
-    /// 按摘要索引保存的打开推理项。
-    reasoning_items: BTreeMap<u32, String>,
+    /// Open reasoning items keyed by event family, upstream item scope, and local content index.
+    /// 按事件族、上游项目作用域与局部内容索引保存的打开推理项。
+    reasoning_items: BTreeMap<String, String>,
     /// Encrypted reasoning replay content reported by the completed reasoning item.
     /// 已完成推理项报告的加密推理重放内容。
     reasoning_signature: Option<String>,
@@ -862,25 +862,64 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
                     delta: delta.to_string(),
                 });
             }
-            "response.reasoning_summary_text.delta" => {
-                let index_number = value
-                    .get("summary_index")
-                    .and_then(Value::as_u64)
-                    .ok_or_else(|| {
-                        ProtocolConversionError::new(
-                            "OpenAI Responses reasoning summary index is missing.",
-                        )
-                    })?;
+            "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
+                // index_field follows the exact official event schema for summary and full reasoning text.
+                // index_field 遵循摘要与完整思考文本的精确官方事件 Schema。
+                let (index_field, index_label) = if wire_type == "response.reasoning_text.delta" {
+                    ("content_index", "reasoning content index")
+                } else {
+                    ("summary_index", "reasoning summary index")
+                };
+                let index_number =
+                    value
+                        .get(index_field)
+                        .and_then(Value::as_u64)
+                        .ok_or_else(|| {
+                            ProtocolConversionError::new(format!(
+                                "OpenAI Responses {index_label} is missing."
+                            ))
+                        })?;
                 let index = u32::try_from(index_number).map_err(|_| {
-                    ProtocolConversionError::new(
-                        "OpenAI Responses reasoning summary index exceeds u32.",
-                    )
+                    ProtocolConversionError::new(format!(
+                        "OpenAI Responses {index_label} exceeds u32."
+                    ))
                 })?;
-                let is_new = !self.reasoning_items.contains_key(&index);
+                // event_family keeps summary text and full reasoning text in distinct semantic blocks.
+                // event_family 使思考摘要与完整思考文本保持为不同语义块。
+                let event_family = if wire_type == "response.reasoning_text.delta" {
+                    "text"
+                } else {
+                    "summary"
+                };
+                // wire_scope prefers the official item identity, then output index, while retaining legacy compatible streams.
+                // wire_scope 优先使用官方项目身份，其次使用输出索引，同时兼容旧版流。
+                let wire_scope = value
+                    .get("item_id")
+                    .and_then(Value::as_str)
+                    .map(|item_id| format!("item:{item_id}"))
+                    .or_else(|| {
+                        value
+                            .get("output_index")
+                            .and_then(Value::as_u64)
+                            .map(|output_index| format!("output:{output_index}"))
+                    })
+                    .unwrap_or_else(|| String::from("legacy"));
+                // reasoning_key prevents local indexes from colliding across output items or event families.
+                // reasoning_key 防止局部索引在不同输出项或事件族之间碰撞。
+                let reasoning_key = format!("{event_family}:{wire_scope}:{index}");
+                let is_new = !self.reasoning_items.contains_key(reasoning_key.as_str());
+                // next_item_ordinal provides a bounded provider-neutral internal identity.
+                // next_item_ordinal 提供有界且供应商无关的内部身份。
+                let next_item_ordinal = self.reasoning_items.len();
                 let item_id = self
                     .reasoning_items
-                    .entry(index)
-                    .or_insert_with(|| format!("responses:{}:reasoning:{index}", self.execution_id))
+                    .entry(reasoning_key)
+                    .or_insert_with(|| {
+                        format!(
+                            "responses:{}:reasoning:{next_item_ordinal}",
+                            self.execution_id
+                        )
+                    })
                     .clone();
                 if is_new {
                     events.push(AiStreamEvent::ReasoningStarted {
@@ -987,7 +1026,8 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
             | "response.output_text.done"
             | "response.reasoning_summary_part.added"
             | "response.reasoning_summary_part.done"
-            | "response.reasoning_summary_text.done" => {}
+            | "response.reasoning_summary_text.done"
+            | "response.reasoning_text.done" => {}
             other => {
                 return Err(ProtocolConversionError::new(format!(
                     "OpenAI Responses SSE event type `{other}` is not registered."
@@ -1477,6 +1517,99 @@ mod tests {
             )
             .expect_err("missing summary index must fail");
         assert!(error.to_string().contains("summary index is missing"));
+    }
+
+    /// Verifies the official full reasoning-text delta is normalized into provider-neutral reasoning events.
+    /// 验证官方完整思考文本增量会被规范化为供应商无关思考事件。
+    #[test]
+    fn responses_reasoning_text_delta_is_registered() {
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        let events = decoder
+            .push_sse(
+                Some("response.reasoning_text.delta"),
+                r#"{"type":"response.reasoning_text.delta","item_id":"rs_123","output_index":0,"content_index":0,"delta":"The","sequence_number":1}"#,
+            )
+            .expect("reasoning text delta should decode");
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ReasoningStarted { item_id }
+                if item_id == "responses:execution:reasoning:0"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ReasoningDelta { item_id, delta }
+                if item_id == "responses:execution:reasoning:0" && delta == "The"
+        )));
+    }
+
+    /// Verifies repeated local indexes remain isolated across reasoning items and event families.
+    /// 验证重复的局部索引在不同推理项与事件族之间保持隔离。
+    #[test]
+    fn responses_reasoning_local_indexes_do_not_collide() {
+        // decoder owns the complete lifecycle needed to verify stable cross-event identities.
+        // decoder 持有验证跨事件稳定身份所需的完整生命周期。
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        // events aggregates three deltas that intentionally reuse local index zero.
+        // events 汇总三个刻意复用局部零索引的增量。
+        let mut events = Vec::new();
+        events.extend(
+            decoder
+                .push_sse(
+                    Some("response.reasoning_text.delta"),
+                    r#"{"type":"response.reasoning_text.delta","item_id":"rs_1","output_index":0,"content_index":0,"delta":"first"}"#,
+                )
+                .expect("first reasoning item should decode"),
+        );
+        events.extend(
+            decoder
+                .push_sse(
+                    Some("response.reasoning_text.delta"),
+                    r#"{"type":"response.reasoning_text.delta","item_id":"rs_2","output_index":1,"content_index":0,"delta":"second"}"#,
+                )
+                .expect("second reasoning item should decode"),
+        );
+        events.extend(
+            decoder
+                .push_sse(
+                    Some("response.reasoning_summary_text.delta"),
+                    r#"{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":"summary"}"#,
+                )
+                .expect("reasoning summary should decode"),
+        );
+
+        // started_item_ids proves every wire identity created one distinct public semantic block.
+        // started_item_ids 证明每个线上身份都创建了一个不同的公共语义块。
+        let started_item_ids = events
+            .iter()
+            .filter_map(|event| match event {
+                AiStreamEvent::ReasoningStarted { item_id } => Some(item_id.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            started_item_ids,
+            vec![
+                "responses:execution:reasoning:0",
+                "responses:execution:reasoning:1",
+                "responses:execution:reasoning:2",
+            ]
+        );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ReasoningDelta { item_id, delta }
+                if item_id == "responses:execution:reasoning:0" && delta == "first"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ReasoningDelta { item_id, delta }
+                if item_id == "responses:execution:reasoning:1" && delta == "second"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ReasoningDelta { item_id, delta }
+                if item_id == "responses:execution:reasoning:2" && delta == "summary"
+        )));
     }
 
     /// Verifies encrypted Responses reasoning is attached to the completed public reasoning item.

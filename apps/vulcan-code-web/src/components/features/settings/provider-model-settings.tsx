@@ -7,7 +7,6 @@ import {
 import {
   filterProviderModels,
   type FilterableProviderModel,
-  type ModelEnabledFilter,
 } from "@/components/features/settings/provider-model-filter"
 import { ProviderModelModalitySummary } from "@/components/features/settings/provider-model-modality-summary"
 import {
@@ -21,13 +20,6 @@ import { PublicAiModelCapabilityDialog } from "@/components/features/settings/pu
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -37,8 +29,6 @@ import { useI18n } from "@/i18n"
 import {
   loadPublicAiSettings,
   savePublicAiInternalModelEnabled,
-  savePublicAiModelEnabled,
-  savePublicAiProviderModelsEnabled,
 } from "@/service/settings-actions-service"
 import type {
   PublicAiModel,
@@ -66,7 +56,6 @@ export function ModelListSettingsArea() {
   const [pendingMutationKey, setPendingMutationKey] = React.useState<string | null>(null)
   const [menuExpanded, setMenuExpanded] = React.useState(true)
   const [searchQuery, setSearchQuery] = React.useState("")
-  const [enabledFilter, setEnabledFilter] = React.useState<ModelEnabledFilter>("all")
   const mutationInFlightRef = React.useRef(false)
 
   // runSnapshotMutation serializes full-snapshot writes so late responses cannot regress the UI.
@@ -156,32 +145,13 @@ export function ModelListSettingsArea() {
   // visibleModelRows applies page-local filters without changing catalog or persisted access state.
   // visibleModelRows 应用页面内筛选，不改变目录或持久化访问状态。
   const visibleModelRows = React.useMemo(
-    () => filterProviderModels(providerModelRows, searchQuery, enabledFilter),
-    [enabledFilter, providerModelRows, searchQuery],
+    () => filterProviderModels(providerModelRows, searchQuery, "all"),
+    [providerModelRows, searchQuery],
   )
   // selectedProviderLabel supplies the shared collapsed-menu pill label.
   // selectedProviderLabel 为共享收起菜单胶囊提供标签。
   const selectedProviderLabel = selectedGroup?.provider.display_name
     ?? t("settings.models.noProviderSelected")
-  const allProviderModelsEnabled = providerModelRows.length > 0
-    && providerModelRows.every((model) => model.enabled)
-  const allProviderModelsDisabled = providerModelRows.length > 0
-    && providerModelRows.every((model) => !model.enabled)
-
-  // saveAllProviderModelsEnabled persists one atomic enabled state for every synchronized model of the selected provider.
-  // saveAllProviderModelsEnabled 为当前供应商的全部已同步模型原子持久化同一个启用状态。
-  const saveAllProviderModelsEnabled = React.useCallback((enabled: boolean) => {
-    if (!selectedGroup || providerModelRows.length === 0) {
-      return
-    }
-    runSnapshotMutation(`provider/${selectedGroup.provider.id}/${enabled}`, () => (
-      savePublicAiProviderModelsEnabled({
-        providerId: selectedGroup.provider.id,
-        enabled,
-      })
-    ))
-  }, [providerModelRows.length, runSnapshotMutation, selectedGroup])
-
   return (
     <AdaptiveToolPanel
       className="workspace-tool-panel-page workspace-skills-settings credential-management-layout model-list-layout"
@@ -250,43 +220,6 @@ export function ModelListSettingsArea() {
                       value={searchQuery}
                     />
                   </div>
-                  <Select
-                    onValueChange={(value) => {
-                      if (value === "all" || value === "enabled" || value === "disabled") {
-                        setEnabledFilter(value)
-                      }
-                    }}
-                    value={enabledFilter}
-                  >
-                    <SelectTrigger aria-label={t("settings.models.statusFilter")}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">{t("settings.models.filterAll")}</SelectItem>
-                      <SelectItem value="enabled">{t("settings.models.filterEnabled")}</SelectItem>
-                      <SelectItem value="disabled">{t("settings.models.filterDisabled")}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <div className="settings-model-bulk-actions">
-                    <Button
-                      disabled={pendingMutationKey !== null || allProviderModelsEnabled}
-                      onClick={() => saveAllProviderModelsEnabled(true)}
-                      size="sm"
-                      type="button"
-                      variant="outline"
-                    >
-                      {t("settings.models.enableAll")}
-                    </Button>
-                    <Button
-                      disabled={pendingMutationKey !== null || allProviderModelsDisabled}
-                      onClick={() => saveAllProviderModelsEnabled(false)}
-                      size="sm"
-                      type="button"
-                      variant="outline"
-                    >
-                      {t("settings.models.disableAll")}
-                    </Button>
-                  </div>
                 </div>
                 <div className="settings-model-filter-summary">
                   {t("settings.models.filteredSummary")
@@ -298,7 +231,7 @@ export function ModelListSettingsArea() {
                 <p className="settings-muted-line">{t("settings.models.emptyCatalog")}</p>
               ) : visibleModelRows.length === 0 ? (
                 <p className="settings-muted-line">{t("settings.models.emptyFilter")}</p>
-              ) : visibleModelRows.map(({ modelId, routes, enabled }) => {
+              ) : visibleModelRows.map(({ modelId, routes }) => {
                 const representative = routes[0]
                 if (!representative) {
                   return null
@@ -379,23 +312,6 @@ export function ModelListSettingsArea() {
                         <SlidersHorizontal aria-hidden="true" size={14} />
                         {t("settings.modelCapabilities.shortLabel")}
                       </Button>
-                      <label className="settings-model-switch-control">
-                        <span>{t("settings.models.status")}</span>
-                        <Switch
-                          aria-label={`${t("settings.models.toggle")} ${representative.model.display_name}`}
-                          checked={enabled}
-                          disabled={pendingMutationKey !== null}
-                          onCheckedChange={(checked) => {
-                            runSnapshotMutation(modelKey, () => (
-                              savePublicAiModelEnabled({
-                                providerId: selectedGroup.provider.id,
-                                modelId,
-                                enabled: checked,
-                              })
-                            ))
-                          }}
-                        />
-                      </label>
                       {internalOperations.map((operation) => {
                           const internalKey = `internal/${modelKey}/${operation.operation}`
                           return (

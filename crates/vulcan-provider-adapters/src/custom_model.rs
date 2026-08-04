@@ -4,7 +4,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use vulcan_ai_contract::{ModelCapabilities, ModelParameterDefault, ReasoningEffort, ResourceKind};
+use vulcan_ai_contract::{
+    CapabilitySupport, ModelCapabilities, ModelParameterDefault, ReasoningControlMode,
+    ReasoningEffort, ResourceKind,
+};
 
 use crate::{
     ModelCapabilityEvidence, PROVIDER_MODEL_DISPLAY_NAME_MAX_BYTES,
@@ -19,13 +22,25 @@ pub const CUSTOM_PROVIDER_DEFAULT_CONTEXT_LIMIT: u64 = 200_000;
 /// 与二十万 Token 上下文窗口配套使用的默认输出上限。
 pub const CUSTOM_PROVIDER_DEFAULT_OUTPUT_LIMIT: u64 = 32_768;
 
+/// Lists the OpenAI-compatible reasoning levels used by custom providers unless explicitly changed.
+/// 列出自定义供应商在未被显式修改时使用的 OpenAI 兼容思考档位。
+pub const CUSTOM_PROVIDER_OPENAI_REASONING_EFFORTS: &[ReasoningEffort] = &[
+    ReasoningEffort::None,
+    ReasoningEffort::Minimal,
+    ReasoningEffort::Low,
+    ReasoningEffort::Medium,
+    ReasoningEffort::High,
+    ReasoningEffort::XHigh,
+    ReasoningEffort::Max,
+];
+
 /// Identifies the immutable common-capability snapshot understood by this binary.
 /// 标识当前二进制理解的不可变公共能力快照。
 pub const CUSTOM_MODEL_TEMPLATE_REVISION: &str = "common-model-capabilities.v1";
 
 /// Stores provider-wide capability defaults used only when a stronger source is absent.
 /// 保存仅在更强能力来源缺失时使用的供应商级默认能力。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CustomProviderModelDefaults {
     /// Default context window in tokens.
@@ -40,10 +55,30 @@ pub struct CustomProviderModelDefaults {
     /// 默认接受的非文本输入资源。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub input_resources: Vec<ResourceKind>,
-    /// Default emitted non-text output resources.
-    /// 默认输出的非文本资源。
+    /// Legacy non-text output resources retained only for backward-compatible decoding.
+    /// 仅为向后兼容反序列化而保留的旧版非文本输出资源。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub output_resources: Vec<ResourceKind>,
+    /// Provider-wide reasoning support applied above catalog declarations.
+    /// 应用于目录声明之上的供应商级思考支持状态。
+    #[serde(default = "default_custom_provider_reasoning")]
+    pub reasoning: CapabilitySupport,
+    /// Provider-wide reasoning control behavior.
+    /// 供应商级思考控制行为。
+    #[serde(default = "default_custom_provider_reasoning_control")]
+    pub reasoning_control: ReasoningControlMode,
+    /// Provider-wide selectable reasoning levels.
+    /// 供应商级可选思考档位。
+    #[serde(default = "default_custom_provider_reasoning_efforts")]
+    pub reasoning_efforts: Vec<ReasoningEffort>,
+    /// Provider-wide tool-calling support applied above catalog declarations.
+    /// 应用于目录声明之上的供应商级工具调用支持状态。
+    #[serde(default = "default_custom_provider_tool_calling")]
+    pub tool_calling: CapabilitySupport,
+    /// Provider-wide request projection inherited by compatible models.
+    /// 由兼容模型继承的供应商级请求投影。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_projection: Option<CustomModelRequestProjection>,
 }
 
 impl Default for CustomProviderModelDefaults {
@@ -55,6 +90,11 @@ impl Default for CustomProviderModelDefaults {
             output_limit: CUSTOM_PROVIDER_DEFAULT_OUTPUT_LIMIT,
             input_resources: Vec::new(),
             output_resources: Vec::new(),
+            reasoning: default_custom_provider_reasoning(),
+            reasoning_control: default_custom_provider_reasoning_control(),
+            reasoning_efforts: default_custom_provider_reasoning_efforts(),
+            tool_calling: default_custom_provider_tool_calling(),
+            request_projection: None,
         }
     }
 }
@@ -83,6 +123,20 @@ impl CustomProviderModelDefaults {
                 "Custom provider default output limit must not exceed its context limit.",
             ));
         }
+        if !self.output_resources.is_empty() {
+            return Err(String::from(
+                "Non-text output cannot be configured for a custom conversation provider.",
+            ));
+        }
+        validate_custom_provider_reasoning_settings(
+            self.reasoning,
+            self.reasoning_control,
+            self.reasoning_efforts.as_slice(),
+        )?;
+        validate_custom_provider_tool_calling_setting(self.tool_calling)?;
+        if let Some(request_projection) = self.request_projection.as_ref() {
+            request_projection.validate_paths()?;
+        }
         Ok(())
     }
 
@@ -110,10 +164,163 @@ impl CustomProviderModelDefaults {
         if !evidence.input_modalities_declared && capabilities.input_resources.is_empty() {
             capabilities.input_resources = self.input_resources.clone();
         }
-        if !evidence.output_modalities_declared && capabilities.output_resources.is_empty() {
-            capabilities.output_resources = self.output_resources.clone();
+        if capabilities.reasoning == CapabilitySupport::Unknown {
+            capabilities.reasoning = self.reasoning;
+        }
+        if capabilities.reasoning_control == ReasoningControlMode::Unknown {
+            capabilities.reasoning_control = self.reasoning_control;
+        }
+        if capabilities.reasoning_efforts.is_empty() {
+            capabilities.reasoning_efforts = self.reasoning_efforts.clone();
+        }
+        if capabilities.tool_calling == CapabilitySupport::Unknown {
+            capabilities.tool_calling = self.tool_calling;
         }
     }
+
+    /// Applies the system-owned custom-provider reasoning and tool policy above catalog evidence.
+    /// 在目录证据之上应用系统持有的自定义供应商思考与工具策略。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `capabilities` is the credential-scoped capability snapshot being resolved.
+    /// `capabilities` 是正在解析的凭据作用域能力快照。
+    pub fn apply_system_capability_policy(&self, capabilities: &mut ModelCapabilities) {
+        // The compatible-provider system policy is authoritative over conservative catalog flags.
+        // 兼容供应商系统策略对目录中的保守能力标记具有权威性。
+        capabilities.reasoning = self.reasoning;
+        capabilities.reasoning_control = self.reasoning_control;
+        capabilities.reasoning_efforts = self.reasoning_efforts.clone();
+        capabilities.tool_calling = self.tool_calling;
+        capabilities.evidence_revision = format!(
+            "{}+custom-provider-system-policy.v1",
+            capabilities.evidence_revision
+        );
+    }
+
+    /// Applies one explicit provider layer above catalog and template capability declarations.
+    /// 在目录与模板能力声明之上应用一层显式供应商设置。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `capabilities` is the model capability value being resolved for one credential route.
+    /// `capabilities` 是为一条凭据路由解析的模型能力值。
+    pub fn apply_provider_settings(
+        &self,
+        capabilities: &mut ModelCapabilities,
+        _evidence: &ModelCapabilityEvidence,
+    ) {
+        capabilities.context_limit = Some(self.context_limit);
+        capabilities.output_limit = Some(self.output_limit);
+        capabilities.input_resources = self.input_resources.clone();
+        capabilities.reasoning = self.reasoning;
+        capabilities.reasoning_control = self.reasoning_control;
+        capabilities.reasoning_efforts = self.reasoning_efforts.clone();
+        capabilities.tool_calling = self.tool_calling;
+        capabilities.evidence_revision = format!(
+            "{}+custom-provider-settings.v1",
+            capabilities.evidence_revision
+        );
+    }
+}
+
+/// Returns the default native reasoning support for custom compatible providers.
+/// 返回自定义兼容供应商默认使用的原生思考支持状态。
+fn default_custom_provider_reasoning() -> CapabilitySupport {
+    CapabilitySupport::Native
+}
+
+/// Returns the default effort-selection reasoning control for custom compatible providers.
+/// 返回自定义兼容供应商默认使用的档位选择思考控制。
+fn default_custom_provider_reasoning_control() -> ReasoningControlMode {
+    ReasoningControlMode::EffortSelection
+}
+
+/// Returns an owned copy of the default OpenAI-compatible reasoning levels.
+/// 返回默认 OpenAI 兼容思考档位的独立副本。
+fn default_custom_provider_reasoning_efforts() -> Vec<ReasoningEffort> {
+    CUSTOM_PROVIDER_OPENAI_REASONING_EFFORTS.to_vec()
+}
+
+/// Returns the default native tool-calling support for custom compatible providers.
+/// 返回自定义兼容供应商默认使用的原生工具调用支持状态。
+fn default_custom_provider_tool_calling() -> CapabilitySupport {
+    CapabilitySupport::Native
+}
+
+/// Validates the closed simple reasoning policies exposed by provider and model settings.
+/// 校验供应商与模型设置界面暴露的封闭简化思考策略。
+///
+/// # Parameters
+/// 参数
+/// `support`, `control`, and `efforts` form one complete reasoning capability contract.
+/// `support`、`control` 与 `efforts` 共同组成一份完整思考能力契约。
+///
+/// # Returns
+/// 返回值
+/// Success only for an explicit disabled policy or an enabled selectable-level policy with at least one active level.
+/// 仅在显式关闭策略，或至少包含一个启用档位的可选档位策略下返回成功。
+pub fn validate_custom_provider_reasoning_settings(
+    support: CapabilitySupport,
+    control: ReasoningControlMode,
+    efforts: &[ReasoningEffort],
+) -> Result<(), String> {
+    // unique_efforts rejects order-independent duplicate levels that the direct editor cannot represent.
+    // unique_efforts 拒绝直接编辑器无法表达的、与顺序无关的重复档位。
+    let unique_efforts = efforts.iter().copied().collect::<BTreeSet<_>>();
+    if unique_efforts.len() != efforts.len() {
+        return Err(String::from(
+            "Custom provider reasoning levels must not contain duplicates.",
+        ));
+    }
+    if efforts
+        .iter()
+        .any(|effort| !CUSTOM_PROVIDER_OPENAI_REASONING_EFFORTS.contains(effort))
+    {
+        return Err(String::from(
+            "Custom provider reasoning levels are limited to the OpenAI-compatible none, minimal, low, medium, high, xhigh, and max set.",
+        ));
+    }
+    let disabled = support == CapabilitySupport::Unsupported
+        && control == ReasoningControlMode::FixedOff
+        && efforts == [ReasoningEffort::None];
+    let enabled = support == CapabilitySupport::Native
+        && control == ReasoningControlMode::EffortSelection
+        && efforts
+            .iter()
+            .any(|effort| *effort != ReasoningEffort::None);
+    if disabled || enabled {
+        return Ok(());
+    }
+    Err(String::from(
+        "Custom provider reasoning settings must be natively enabled with at least one OpenAI-compatible enabled level, or explicitly disabled.",
+    ))
+}
+
+/// Validates the two-state tool-calling toggle exposed by direct custom-provider settings.
+/// 校验直接自定义供应商设置公开的双态工具调用开关。
+///
+/// # Parameters
+/// 参数
+/// `support` is the complete provider-level or model-level tool-calling choice.
+/// `support` 是完整的供应商级或模型级工具调用选择。
+///
+/// # Returns
+/// 返回值
+/// Success only for native support or explicit disablement.
+/// 仅在原生支持或显式关闭时返回成功。
+pub fn validate_custom_provider_tool_calling_setting(
+    support: CapabilitySupport,
+) -> Result<(), String> {
+    if matches!(
+        support,
+        CapabilitySupport::Native | CapabilitySupport::Unsupported
+    ) {
+        return Ok(());
+    }
+    Err(String::from(
+        "Custom provider tool calling must be natively enabled or explicitly disabled.",
+    ))
 }
 
 /// Stores the confirmed common template snapshot applied to one custom-provider model.
@@ -167,6 +374,11 @@ impl CustomModelTemplateSelection {
                 "Custom model template context limit must be greater than zero.",
             ));
         }
+        if !self.output_resources.is_empty() {
+            return Err(String::from(
+                "Custom model templates cannot configure non-text output for a conversation provider.",
+            ));
+        }
         Ok(())
     }
 
@@ -187,9 +399,6 @@ impl CustomModelTemplateSelection {
         }
         if !evidence.input_modalities_declared && capabilities.input_resources.is_empty() {
             capabilities.input_resources = self.input_resources.clone();
-        }
-        if !evidence.output_modalities_declared && capabilities.output_resources.is_empty() {
-            capabilities.output_resources = self.output_resources.clone();
         }
     }
 }
@@ -380,6 +589,11 @@ impl CustomModelDefinition {
                 "Custom model output limit must not exceed its context limit.",
             ));
         }
+        if !self.capabilities.output_resources.is_empty() {
+            return Err(String::from(
+                "Custom conversation models cannot declare non-text output resources.",
+            ));
+        }
         self.validate_model_parameter_definitions()?;
         for effort in self.request_projection.reasoning.keys() {
             if !self.capabilities.reasoning_efforts.contains(effort) {
@@ -498,6 +712,113 @@ impl CustomModelDefinition {
 }
 
 impl CustomModelRequestProjection {
+    /// Validates only exact request paths and ownership rules independent of a model catalog.
+    /// 仅校验精确请求路径与归属规则，不依赖模型目录。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success when every configured path is safe and no projection section overlaps.
+    /// 当所有配置路径安全且各投影区段不存在重叠时返回成功。
+    pub fn validate_paths(&self) -> Result<(), String> {
+        for path in self.all_paths() {
+            validate_request_path(path)?;
+        }
+        self.validate_path_ownership()
+    }
+
+    /// Validates reasoning projection keys against one resolved model capability contract.
+    /// 根据一份已解析的模型能力契约校验思考投影档位。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `capabilities` supplies the effective declared reasoning levels for the exact model.
+    /// `capabilities` 提供精确模型的有效已声明思考档位。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success when paths are safe and every mapped effort is declared by the model.
+    /// 当路径安全且每个映射档位都由模型声明时返回成功。
+    pub fn validate_for_capabilities(
+        &self,
+        capabilities: &ModelCapabilities,
+    ) -> Result<(), String> {
+        self.validate_paths()?;
+        for effort in self.reasoning.keys() {
+            if !capabilities.reasoning_efforts.contains(effort) {
+                return Err(format!(
+                    "Reasoning projection `{}` is not declared by the model capability.",
+                    effort.as_str()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Overlays one higher-precedence projection without discarding inherited rules.
+    /// 将一层更高优先级投影叠加到当前投影上，同时保留可继承规则。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `overlay` contains only the higher layer's explicit rules.
+    /// `overlay` 仅包含更高层明确声明的规则。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success when the merged projection remains a valid closed request contract.
+    /// 合并后的投影仍是有效封闭请求契约时返回成功。
+    pub fn merge_overlay(&mut self, overlay: &Self) -> Result<(), String> {
+        self.validate_paths()?;
+        overlay.validate_paths()?;
+
+        for (effort, mutation) in &overlay.reasoning {
+            for path in mutation.set.keys().chain(mutation.delete.iter()) {
+                remove_path_from_global_sections(self, path);
+            }
+            let merged = self.reasoning.entry(*effort).or_default();
+            for path in &mutation.delete {
+                remove_overlapping_paths(&mut merged.set, path);
+                merged
+                    .delete
+                    .retain(|existing| !request_paths_overlap(existing, path));
+                if !merged.delete.iter().any(|existing| existing == path) {
+                    merged.delete.push(path.clone());
+                }
+            }
+            for (path, value) in &mutation.set {
+                remove_overlapping_paths(&mut merged.set, path);
+                merged
+                    .delete
+                    .retain(|existing| !request_paths_overlap(existing, path));
+                merged.set.insert(path.clone(), value.clone());
+            }
+        }
+
+        for (parameter_id, path) in &overlay.model_parameter_paths {
+            self.model_parameter_paths
+                .remove(parameter_id)
+                .into_iter()
+                .for_each(|previous_path| remove_path_from_all_sections(self, &previous_path));
+            remove_path_from_all_sections(self, path);
+            self.model_parameter_paths
+                .insert(parameter_id.clone(), path.clone());
+        }
+        for (path, value) in &overlay.defaults {
+            remove_path_from_all_sections(self, path);
+            self.defaults.insert(path.clone(), value.clone());
+        }
+        for (path, value) in &overlay.overrides {
+            remove_path_from_all_sections(self, path);
+            self.overrides.insert(path.clone(), value.clone());
+        }
+        for path in &overlay.delete {
+            remove_path_from_all_sections(self, path);
+            self.delete.push(path.clone());
+        }
+        self.delete.sort();
+        self.delete.dedup();
+        self.validate_paths()
+    }
+
     /// Iterates every request path declared by this projection.
     /// 迭代此投影声明的每一条请求路径。
     fn all_paths(&self) -> impl Iterator<Item = &str> {
@@ -569,6 +890,44 @@ impl CustomModelRequestProjection {
         }
         Ok(())
     }
+}
+
+/// Removes one path from global projection sections before a higher layer claims it.
+/// 在更高层声明一条路径前，从全局投影区段移除该路径。
+fn remove_path_from_global_sections(projection: &mut CustomModelRequestProjection, path: &str) {
+    projection
+        .defaults
+        .retain(|existing, _| !request_paths_overlap(existing, path));
+    projection
+        .overrides
+        .retain(|existing, _| !request_paths_overlap(existing, path));
+    projection
+        .delete
+        .retain(|existing| !request_paths_overlap(existing, path));
+    projection
+        .model_parameter_paths
+        .retain(|_, existing| !request_paths_overlap(existing, path));
+}
+
+/// Removes one path from every inherited projection section before replacement.
+/// 在替换前，从所有继承投影区段移除一条路径。
+fn remove_path_from_all_sections(projection: &mut CustomModelRequestProjection, path: &str) {
+    remove_path_from_global_sections(projection, path);
+    for mutation in projection.reasoning.values_mut() {
+        remove_overlapping_paths(&mut mutation.set, path);
+        mutation
+            .delete
+            .retain(|existing| !request_paths_overlap(existing, path));
+    }
+    projection
+        .reasoning
+        .retain(|_, mutation| !mutation.set.is_empty() || !mutation.delete.is_empty());
+}
+
+/// Removes paths structurally overlapping one higher-precedence path.
+/// 移除与一条更高优先级路径存在结构重叠的路径。
+fn remove_overlapping_paths(values: &mut BTreeMap<String, Value>, path: &str) {
+    values.retain(|existing, _| !request_paths_overlap(existing, path));
 }
 
 /// Registers exact paths for one mutually exclusive projection section.
@@ -663,6 +1022,115 @@ mod tests {
 
         assert_eq!(capabilities.context_limit, Some(8_192));
         assert_eq!(capabilities.output_limit, Some(8_192));
+    }
+
+    /// Verifies provider settings require an explicit enabled or disabled tool-calling state.
+    /// 验证供应商设置要求工具调用必须处于明确开启或关闭状态。
+    #[test]
+    fn provider_settings_reject_unknown_tool_calling() {
+        let settings = CustomProviderModelDefaults {
+            tool_calling: CapabilitySupport::Unknown,
+            ..CustomProviderModelDefaults::default()
+        };
+
+        let error = settings
+            .validate()
+            .expect_err("unknown tool calling must be rejected");
+
+        assert!(error.contains("natively enabled or explicitly disabled"));
+    }
+
+    /// Verifies the boolean direct editor cannot persist an unrepresentable equivalent tool state.
+    /// 验证双态直接编辑器不能持久化无法表达的等价投影工具状态。
+    #[test]
+    fn provider_settings_reject_equivalent_tool_calling() {
+        let settings = CustomProviderModelDefaults {
+            tool_calling: CapabilitySupport::Equivalent,
+            ..CustomProviderModelDefaults::default()
+        };
+
+        let error = settings
+            .validate()
+            .expect_err("equivalent tool calling must be rejected");
+
+        assert!(error.contains("natively enabled or explicitly disabled"));
+    }
+
+    /// Verifies provider settings reject generic non-text output configuration.
+    /// 验证供应商设置会拒绝通用非文本输出配置。
+    #[test]
+    fn provider_settings_reject_non_text_output() {
+        let settings = CustomProviderModelDefaults {
+            output_resources: vec![ResourceKind::Image],
+            ..CustomProviderModelDefaults::default()
+        };
+
+        let error = settings
+            .validate()
+            .expect_err("non-text output must be rejected");
+
+        assert!(error.contains("Non-text output"));
+    }
+
+    /// Verifies direct custom-provider settings cannot persist levels absent from their OpenAI-compatible editor.
+    /// 验证直接自定义供应商设置不能持久化其 OpenAI 兼容编辑器无法呈现的档位。
+    #[test]
+    fn provider_settings_reject_non_openai_reasoning_levels() {
+        let settings = CustomProviderModelDefaults {
+            reasoning_efforts: vec![ReasoningEffort::None, ReasoningEffort::Adaptive],
+            ..CustomProviderModelDefaults::default()
+        };
+
+        let error = settings
+            .validate()
+            .expect_err("non-OpenAI-compatible level must be rejected");
+
+        assert!(error.contains("none, minimal, low, medium, high, xhigh, and max"));
+    }
+
+    /// Verifies the off choice is optional for always-reasoning models while an enabled level remains mandatory.
+    /// 验证始终思考的模型可不提供关闭选项，同时仍必须保留一个启用档位。
+    #[test]
+    fn provider_settings_allow_optional_reasoning_off_choice_but_require_enabled_level() {
+        let settings = CustomProviderModelDefaults {
+            reasoning_efforts: vec![ReasoningEffort::Low, ReasoningEffort::Medium],
+            ..CustomProviderModelDefaults::default()
+        };
+        settings
+            .validate()
+            .expect("enabled reasoning without an off choice must remain valid");
+
+        let invalid = CustomProviderModelDefaults {
+            reasoning_efforts: vec![ReasoningEffort::None],
+            ..CustomProviderModelDefaults::default()
+        };
+        let error = invalid
+            .validate()
+            .expect_err("enabled reasoning without an active level must be rejected");
+
+        assert!(error.contains("at least one OpenAI-compatible enabled level"));
+    }
+
+    /// Verifies advanced manual models cannot reopen non-text output for a custom provider.
+    /// 验证高级手工模型不能为自定义供应商重新开启非文本输出。
+    #[test]
+    fn custom_model_rejects_non_text_output() {
+        let model = CustomModelDefinition {
+            id: String::from("custom-model"),
+            display_name: String::from("Custom Model"),
+            enabled: true,
+            capabilities: ModelCapabilities {
+                output_resources: vec![ResourceKind::Image],
+                ..ModelCapabilities::default()
+            },
+            request_projection: CustomModelRequestProjection::default(),
+        };
+
+        let error = model
+            .validate()
+            .expect_err("non-text output must be rejected");
+
+        assert!(error.contains("non-text output resources"));
     }
 
     /// Verifies a manual model cannot declare an output budget larger than its context.
@@ -870,5 +1338,73 @@ mod tests {
         .expect_err("unknown projection fields must be rejected");
 
         assert!(error.to_string().contains("unknown field"));
+    }
+
+    /// Verifies a model projection overrides one inherited field while retaining another effort.
+    /// 验证模型投影只覆盖一条继承字段，同时保留另一个思考档位。
+    #[test]
+    fn custom_projection_overlay_preserves_inherited_reasoning_levels() {
+        let mut provider_projection = CustomModelRequestProjection {
+            reasoning: BTreeMap::from([
+                (
+                    ReasoningEffort::Low,
+                    CustomRequestMutation {
+                        set: BTreeMap::from([(
+                            String::from("thinking.type"),
+                            Value::String(String::from("enabled")),
+                        )]),
+                        delete: Vec::new(),
+                    },
+                ),
+                (
+                    ReasoningEffort::High,
+                    CustomRequestMutation {
+                        set: BTreeMap::from([(
+                            String::from("reasoning_effort"),
+                            Value::String(String::from("high")),
+                        )]),
+                        delete: Vec::new(),
+                    },
+                ),
+            ]),
+            ..CustomModelRequestProjection::default()
+        };
+        let model_projection = CustomModelRequestProjection {
+            reasoning: BTreeMap::from([(
+                ReasoningEffort::Low,
+                CustomRequestMutation {
+                    set: BTreeMap::from([(
+                        String::from("reasoning_effort"),
+                        Value::String(String::from("low")),
+                    )]),
+                    delete: Vec::new(),
+                },
+            )]),
+            ..CustomModelRequestProjection::default()
+        };
+
+        provider_projection
+            .merge_overlay(&model_projection)
+            .expect("compatible projection layers should merge");
+
+        assert_eq!(
+            provider_projection
+                .reasoning
+                .get(&ReasoningEffort::Low)
+                .and_then(|mutation| mutation.set.get("thinking.type")),
+            Some(&Value::String(String::from("enabled"))),
+        );
+        assert_eq!(
+            provider_projection
+                .reasoning
+                .get(&ReasoningEffort::Low)
+                .and_then(|mutation| mutation.set.get("reasoning_effort")),
+            Some(&Value::String(String::from("low"))),
+        );
+        assert!(
+            provider_projection
+                .reasoning
+                .contains_key(&ReasoningEffort::High)
+        );
     }
 }

@@ -1098,14 +1098,12 @@ textarea {
   height: 220px;
   min-height: 140px;
   overflow: auto;
-  padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--background) 72%, var(--muted));
+  padding: 0;
   user-select: text;
 }
 
 .knowledge-operation-stream .markdown-message {
+  margin: 0;
   min-width: 0;
   font-size: 0.78rem;
 }

@@ -202,7 +202,7 @@ function appliedDecision(suggestion: PublicAiCommonModelTemplateSuggestion): Pub
       supports_text_input: suggestion.supports_text_input,
       supports_text_output: suggestion.supports_text_output,
       input_resources: suggestion.input_resources,
-      output_resources: suggestion.output_resources,
+      output_resources: [],
     },
   }
 }

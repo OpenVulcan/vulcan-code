@@ -2,6 +2,8 @@
 //! 上下文压缩 draft 辅助逻辑。
 
 use super::*;
+use crate::PersistedPromptOutputStyleSelection;
+use crate::{apply_output_style_snapshot, resolve_output_style_snapshot};
 
 /// Candidate compaction state prepared before it is atomically committed.
 /// 原子提交前准备好的候选压缩状态。
@@ -381,6 +383,7 @@ pub(crate) fn build_webui_context_compaction_draft(
     provider_request_count: usize,
     summary_body: &str,
     execution: &PromptCompactionExecution,
+    global_output_style_selection: PersistedPromptOutputStyleSelection,
 ) -> Result<WebuiContextCompactionDraft, String> {
     if summary_body.trim().is_empty() {
         return Err(String::from("压缩摘要为空，已拒绝提交候选状态。"));
@@ -421,6 +424,20 @@ pub(crate) fn build_webui_context_compaction_draft(
         .live_context_assembly_fingerprint
         .clone();
     draft_runtime_state.last_compaction_id = Some(checkpoint.id.clone());
+    let output_style_snapshot = resolve_output_style_snapshot(
+        draft_runtime_state
+            .output_style
+            .override_style_id
+            .as_deref(),
+        global_output_style_selection,
+    )?;
+    apply_output_style_snapshot(
+        &mut draft_runtime_state,
+        &output_style_snapshot,
+        "context-compaction",
+        Some(checkpoint.id.clone()),
+        now.clone(),
+    );
     draft_runtime_state.context_start_message_id = checkpoint.context_start_message_id.clone();
     draft_runtime_state.anchor_context_budget_fingerprint =
         checkpoint.context_budget_fingerprint.clone();

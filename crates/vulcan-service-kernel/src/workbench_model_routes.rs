@@ -266,6 +266,7 @@ pub(super) async fn service_select_workbench_reasoning_effort(
             "保存思考档位失败",
             |configuration| {
                 configuration.workbench_reasoning_effort = Some(selected_effort);
+                configuration.workbench_reasoning_effort_explicit = true;
                 Ok(())
             },
             |guard, configuration| {
@@ -274,6 +275,7 @@ pub(super) async fn service_select_workbench_reasoning_effort(
                     selected_session_runtime_state_mut(workspace).map(
                         |(session_id, runtime_state)| {
                             runtime_state.active_reasoning_effort = Some(selected_effort);
+                            runtime_state.active_reasoning_effort_explicit = true;
                             runtime_state.updated_at = current_unix_millis_text();
                             session_id
                         },

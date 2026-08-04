@@ -4106,4 +4106,37 @@ mod tests {
         assert_eq!(encoded.body["vendor"]["forced"], "yes");
         assert!(encoded.body.get("remove_me").is_none());
     }
+
+    /// Verifies a configured reasoning projection reaches the final encoded request body.
+    /// 验证已配置的思考投影会抵达最终编码请求体，而不是只停留在编辑器状态。
+    #[test]
+    fn encode_request_applies_custom_reasoning_projection_to_final_wire_body() {
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let mut route = pinned_openrouter_route(OPENAI_CHAT_PROFILE_ID);
+        route.custom_model_projection = Some(CustomModelRequestProjection {
+            reasoning: BTreeMap::from([(
+                ReasoningEffort::High,
+                crate::CustomRequestMutation {
+                    set: BTreeMap::from([(
+                        String::from("thinking.type"),
+                        Value::String(String::from("enabled")),
+                    )]),
+                    delete: vec![String::from("reasoning_effort")],
+                },
+            )]),
+            ..Default::default()
+        });
+        let mut request = minimal_request();
+        request.reasoning_effort = Some(ReasoningEffort::High);
+
+        let encoded = client
+            .encode_request(&route, &request)
+            .expect("custom reasoning projection should encode");
+
+        assert_eq!(encoded.body["thinking"]["type"], "enabled");
+        assert!(encoded.body.get("reasoning_effort").is_none());
+    }
 }

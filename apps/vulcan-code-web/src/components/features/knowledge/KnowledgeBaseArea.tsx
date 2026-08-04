@@ -133,6 +133,9 @@ export function KnowledgeBaseArea() {
   // createCurationCandidateKey identifies the selected LLM route.
   // createCurationCandidateKey 标识所选整理 LLM 路由。
   const [createCurationCandidateKey, setCreateCurationCandidateKey] = React.useState("");
+  // createCurationReasoningEffort stores the selected official reasoning level.
+  // createCurationReasoningEffort 保存官方声明的整理推理级别。
+  const [createCurationReasoningEffort, setCreateCurationReasoningEffort] = React.useState("");
   // createEmbeddingCandidateKey identifies the selected embedding route.
   // createEmbeddingCandidateKey 标识所选向量路由。
   const [createEmbeddingCandidateKey, setCreateEmbeddingCandidateKey] = React.useState("");
@@ -574,6 +577,7 @@ export function KnowledgeBaseArea() {
       setCreateInferenceCandidates(snapshot.internalInferenceCandidates);
       setCreateRetrievalMode("raw_bm25");
       setCreateCurationCandidateKey("");
+      setCreateCurationReasoningEffort("");
       setCreateEmbeddingCandidateKey("");
       setCreateConfiguredDimension("");
       setCreateRequestedBatchSize("");
@@ -598,6 +602,7 @@ export function KnowledgeBaseArea() {
       const curationCandidate = routeKeyForSettings(settings.curation.route, "conversation_respond");
       const embeddingCandidate = routeKeyForSettings(settings.embedding.route, "embedding_create");
       setCreateCurationCandidateKey(curationCandidate ? knowledgeCandidateRouteKey(curationCandidate) : "");
+      setCreateCurationReasoningEffort(settings.curation.reasoningEffort ?? "");
       setCreateEmbeddingCandidateKey(embeddingCandidate ? knowledgeCandidateRouteKey(embeddingCandidate) : "");
       setCreateConfiguredDimension(settings.embedding.configuredDimension ? String(settings.embedding.configuredDimension) : "");
       setCreateRequestedBatchSize(settings.embedding.embeddingBatchSize ? String(settings.embedding.embeddingBatchSize) : "");
@@ -635,6 +640,7 @@ export function KnowledgeBaseArea() {
           enabled: model.retrievalMode !== "raw_bm25",
           route: routeFromCandidate(model.curationCandidate),
           promptVersion: "knowledge-display-v1",
+          reasoningEffort: model.reasoningEffort || null,
         },
         embedding: {
           enabled: model.retrievalMode === "display_hybrid",
@@ -670,7 +676,7 @@ export function KnowledgeBaseArea() {
       await updateKnowledgeLibrarySettings(selectedLibrary.id, {
         retrievalMode: model.retrievalMode,
         fallbackPolicy: "explicit_only",
-        curation: { enabled: model.retrievalMode !== "raw_bm25", route: routeFromCandidate(model.curationCandidate), promptVersion: "knowledge-display-v1" },
+        curation: { enabled: model.retrievalMode !== "raw_bm25", route: routeFromCandidate(model.curationCandidate), promptVersion: "knowledge-display-v1", reasoningEffort: model.reasoningEffort || null },
         embedding: { enabled: model.retrievalMode === "display_hybrid", route: routeFromCandidate(model.embeddingCandidate), configuredDimension: model.configuredDimension, modelMaxBatchSize: embeddingCapability?.maximum_inputs ?? null, requestedBatchSize: model.requestedBatchSize, compatibilityOverride: model.compatibilityOverride.trim() || null },
       });
       setSettingsDialogOpen(false);
@@ -875,10 +881,12 @@ export function KnowledgeBaseArea() {
         compatibilityOverride={createCompatibilityOverride}
         curationCandidateKey={createCurationCandidateKey}
         embeddingCandidateKey={createEmbeddingCandidateKey}
+        reasoningEffort={createCurationReasoningEffort}
         name={createName}
         onConfiguredDimensionChange={setCreateConfiguredDimension}
         onCompatibilityOverrideChange={setCreateCompatibilityOverride}
         onCurationCandidateChange={setCreateCurationCandidateKey}
+        onReasoningEffortChange={setCreateCurationReasoningEffort}
         onEmbeddingCandidateChange={setCreateEmbeddingCandidateKey}
         onNameChange={setCreateName}
         onOpenChange={setCreateDialogOpen}
@@ -895,10 +903,12 @@ export function KnowledgeBaseArea() {
         compatibilityOverride={createCompatibilityOverride}
         curationCandidateKey={createCurationCandidateKey}
         embeddingCandidateKey={createEmbeddingCandidateKey}
+        reasoningEffort={createCurationReasoningEffort}
         name={createName}
         onConfiguredDimensionChange={setCreateConfiguredDimension}
         onCompatibilityOverrideChange={setCreateCompatibilityOverride}
         onCurationCandidateChange={setCreateCurationCandidateKey}
+        onReasoningEffortChange={setCreateCurationReasoningEffort}
         onEmbeddingCandidateChange={setCreateEmbeddingCandidateKey}
         onNameChange={setCreateName}
         onOpenChange={setSettingsDialogOpen}

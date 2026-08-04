@@ -207,7 +207,9 @@ impl CommonModelTemplateSuggestion {
             supports_text_input: self.supports_text_input,
             supports_text_output: self.supports_text_output,
             input_resources: self.input_resources.clone(),
-            output_resources: self.output_resources.clone(),
+            // Generic custom providers expose text conversation output only; native providers own resource-producing models.
+            // 通用自定义供应商仅公开文本会话输出；资源生成模型由原生供应商承载。
+            output_resources: Vec::new(),
         }
     }
 }
@@ -222,8 +224,8 @@ impl CommonModelTemplateSuggestion {
 ///
 /// # Returns
 /// 返回值
-/// One exact candidate, or an empty list when no unambiguous match exists.
-/// 返回一个精确候选；不存在无歧义匹配时返回空列表。
+/// One exact text-conversation candidate, or an empty list when no safe match exists.
+/// 返回一个精确的文本会话候选；不存在安全匹配时返回空列表。
 pub fn suggest_common_model_templates(model_id: &str) -> Vec<CommonModelTemplateSuggestion> {
     deterministic_template_match(model_id)
         .and_then(|matched| {
@@ -231,6 +233,11 @@ pub fn suggest_common_model_templates(model_id: &str) -> Vec<CommonModelTemplate
                 .records
                 .get(matched.template_key.as_str())
                 .map(|record| template_suggestion(record, matched.match_kind))
+        })
+        .filter(|suggestion| {
+            suggestion.supports_text_input
+                && suggestion.supports_text_output
+                && suggestion.output_resources.is_empty()
         })
         .into_iter()
         .collect()
@@ -703,6 +710,13 @@ mod tests {
         let suggestions = suggest_common_model_templates("DeepSeek:DeepSeek V3,2");
         assert_eq!(suggestions.len(), 1);
         assert_eq!(suggestions[0].template_key, "deepseek/deepseek-v3.2");
+    }
+
+    /// Verifies resource-producing native models are never suggested to custom conversation providers.
+    /// 验证资源生成型原生模型绝不会推荐给自定义会话供应商。
+    #[test]
+    fn non_text_models_are_not_custom_conversation_templates() {
+        assert!(suggest_common_model_templates("openai/gpt-image-1").is_empty());
     }
 
     /// Verifies the explicit GPT-5.3 Codex Spark record exposes its 128K context window.

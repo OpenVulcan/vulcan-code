@@ -130,6 +130,10 @@ pub struct KnowledgeCurationSettingsRequest {
     /// 用于模型变化警告的期望模型指纹。
     #[serde(default)]
     pub desired_model_fingerprint: Option<String>,
+    /// Optional provider-neutral reasoning effort for curation requests.
+    /// 整理请求可选的供应商无关推理级别。
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
 }
 
 /// Creation-time embedding model and official capability configuration.

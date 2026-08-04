@@ -2,8 +2,8 @@
 //! 宿主持有的托管 VMM 数据备份与正式向量重建编排。
 
 use crate::managed_memory_mesh_runtime::{
-    cleanup_managed_vmm_maintenance_manifest, finalize_managed_vmm_rebuild,
-    ManagedVmmMaintenancePreparation,
+    ManagedVmmMaintenancePreparation, cleanup_managed_vmm_maintenance_manifest,
+    finalize_managed_vmm_rebuild,
 };
 use serde::Deserialize;
 use std::{
@@ -12,8 +12,8 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, OnceLock, RwLock,
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},

@@ -12,6 +12,7 @@ import {
   resumeSessionGoal,
   saveSessionGoal,
   setSessionPlanMode,
+  setSessionOutputStyle,
   setSessionVmmPolicy,
   updateSessionGoalStatus,
 } from "@/service/conversation-actions-service";
@@ -188,6 +189,28 @@ export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptio
     }
   }, [selectedConversation, selectedDraftConversation, t]);
 
+  // handleSetSessionOutputStyle persists a pending style override without replacing the active prompt context.
+  // handleSetSessionOutputStyle 持久化待生效风格覆盖，不替换当前提示词上下文。
+  const handleSetSessionOutputStyle = React.useCallback(async (styleId: string | null): Promise<boolean> => {
+    const activeConversationId = selectedDraftConversation ? null : selectedConversation?.id ?? null;
+    if (!activeConversationId) {
+      return false;
+    }
+    try {
+      const response = await setSessionOutputStyle(activeConversationId, styleId);
+      if (!response) {
+        toast.info("当前预览运行时不支持保存会话输出风格。");
+        return false;
+      }
+      setWorkbenchState((current) => applySessionAddonsChangedResponse(current, response));
+      toast.info("已保存输出风格。为避免打破上下文，风格切换只会在新会话或上下文压缩后的会话更新。");
+      return true;
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      return false;
+    }
+  }, [selectedConversation, selectedDraftConversation, t]);
+
   // handleEditPendingPrompt restores one queued prompt back into the active composer.
   // handleEditPendingPrompt 将单条排队提示词恢复到当前输入区。
   const handleEditPendingPrompt = React.useCallback(async (entryId: string): Promise<PendingPromptSummary | null> => {
@@ -212,6 +235,7 @@ export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptio
     handleUpdateSessionGoalStatus,
     handleSetSessionPlanMode,
     handleSetSessionVmmPolicy,
+    handleSetSessionOutputStyle,
     handleEditPendingPrompt,
   };
 }

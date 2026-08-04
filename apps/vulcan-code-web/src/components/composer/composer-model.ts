@@ -70,6 +70,9 @@ export interface ComposerInitialGoalSnapshot {
 // ComposerSessionSettingsSnapshot contains draft-only session overrides applied during materialization.
 // ComposerSessionSettingsSnapshot 包含在物化期间应用的草稿专属会话覆盖项。
 export interface ComposerSessionSettingsSnapshot {
+  // Optional output-style override captured only when creating a new conversation.
+  // 仅在创建新会话时捕获的可选输出风格覆盖。
+  outputStyleId?: string;
   // Optional explicit VMM policy pair.
   // 可选显式 VMM 策略对。
   vmmPolicy?: ComposerVmmPolicySnapshot;

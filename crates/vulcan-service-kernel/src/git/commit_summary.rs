@@ -558,6 +558,7 @@ async fn run_git_commit_summary_model(
         session_title: String::from("Git commit summary"),
         workspace_path: workspace_path.to_string(),
         prompt,
+        output_style_snapshot: None,
         provider_visible_agent_messages: Vec::new(),
         conversation_state: SessionConversationState::default(),
         context_compaction_policy: None,

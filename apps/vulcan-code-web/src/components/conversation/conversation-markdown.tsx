@@ -69,6 +69,9 @@ export const MarkdownMessage = React.memo(function MarkdownMessage(props: {
   // Whether the content is still growing and should avoid parsing incomplete block syntax.
   // 内容是否仍在增长，需要避免解析未闭合的块级语法。
   streaming?: boolean;
+  // Whether fenced code blocks should start in wrapped mode for this Markdown surface.
+  // 当前 Markdown 区域中的围栏代码块是否默认启用自动换行。
+  defaultCodeWrap?: boolean;
   // Optional media opener used by Markdown images.
   // Markdown 图片使用的可选媒体打开器。
   onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
@@ -85,12 +88,14 @@ export const MarkdownMessage = React.memo(function MarkdownMessage(props: {
       {props.streaming ? (
         <StreamingMarkdownMessage
           content={props.content}
+          defaultCodeWrap={props.defaultCodeWrap}
           onOpenMedia={props.onOpenMedia}
           workspacePath={workspacePath}
         />
       ) : (
         <LazyMarkdownMessage
           content={finalizedContent}
+          defaultCodeWrap={props.defaultCodeWrap}
           eager={props.eager}
           onOpenMedia={props.onOpenMedia}
           workspacePath={workspacePath}
@@ -106,6 +111,9 @@ function StreamingMarkdownMessage(props: {
   // Raw Markdown content for the active streaming block.
   // 活跃流式块的原始 Markdown 内容。
   content: string;
+  // Whether fenced code blocks should start in wrapped mode for this Markdown surface.
+  // 当前 Markdown 区域中的围栏代码块是否默认启用自动换行。
+  defaultCodeWrap?: boolean;
   // Current project workspace path for image source resolution.
   // 当前项目工作区路径，用于解析图片来源。
   workspacePath: string | null;
@@ -120,6 +128,7 @@ function StreamingMarkdownMessage(props: {
   return (
     <MarkdownContentRenderer
       content={normalizedContent}
+      defaultCodeWrap={props.defaultCodeWrap}
       onOpenMedia={props.onOpenMedia}
       renderDiagrams={false}
       workspacePath={props.workspacePath}
@@ -133,6 +142,9 @@ function MarkdownContentRenderer(props: {
   // Markdown fragment to render.
   // 需要渲染的 Markdown 片段。
   content: string;
+  // Whether fenced code blocks should start in wrapped mode for this Markdown surface.
+  // 当前 Markdown 区域中的围栏代码块是否默认启用自动换行。
+  defaultCodeWrap?: boolean;
   // Current project workspace path for image source resolution.
   // 当前项目工作区路径，用于解析图片来源。
   workspacePath: string | null;
@@ -184,10 +196,10 @@ function MarkdownContentRenderer(props: {
       );
     },
     pre: ({ children }: { children?: React.ReactNode }) => (
-      <MarkdownPreBlock renderDiagrams={props.renderDiagrams}>{children}</MarkdownPreBlock>
+      <MarkdownPreBlock defaultCodeWrap={props.defaultCodeWrap} renderDiagrams={props.renderDiagrams}>{children}</MarkdownPreBlock>
     ),
     table: ({ children }: { children?: React.ReactNode }) => <div className="markdown-table-wrap"><table>{children}</table></div>,
-  }), [props.onOpenMedia, props.renderDiagrams, props.workspacePath]);
+  }), [props.defaultCodeWrap, props.onOpenMedia, props.renderDiagrams, props.workspacePath]);
   return (
     <ReactMarkdown
       components={components}
@@ -205,6 +217,9 @@ function LazyMarkdownMessage(props: {
   // Already-normalized Markdown content.
   // 已经规范化的 Markdown 内容。
   content: string;
+  // Whether fenced code blocks should start in wrapped mode for this Markdown surface.
+  // 当前 Markdown 区域中的围栏代码块是否默认启用自动换行。
+  defaultCodeWrap?: boolean;
   // Kept for call-site compatibility after removing chunk-level unmounting.
   // 移除分块卸载后保留该参数以兼容现有调用点。
   eager?: boolean;
@@ -218,6 +233,7 @@ function LazyMarkdownMessage(props: {
   return (
     <MarkdownContentRenderer
       content={props.content}
+      defaultCodeWrap={props.defaultCodeWrap}
       onOpenMedia={props.onOpenMedia}
       renderDiagrams
       workspacePath={props.workspacePath}
@@ -241,6 +257,9 @@ function MarkdownPreBlock(props: {
   // ReactMarkdown code element children wrapped by the pre component.
   // ReactMarkdown 中由 pre 包裹的 code 元素子节点。
   children?: React.ReactNode;
+  // Whether fenced code blocks should start in wrapped mode for this Markdown surface.
+  // 当前 Markdown 区域中的围栏代码块是否默认启用自动换行。
+  defaultCodeWrap?: boolean;
   // Whether diagram rendering is allowed for this stable Markdown document.
   // 当前稳定 Markdown 文档是否允许图表渲染。
   renderDiagrams: boolean;
@@ -257,7 +276,7 @@ function MarkdownPreBlock(props: {
     const source = markdownCodeText(codeElement?.props.children ?? props.children).replace(/\n$/u, "");
     // fallback preserves the ordinary fenced-code presentation when preview rendering fails.
     // fallback 在预览渲染失败时保留普通围栏代码展示。
-    const fallback = <MarkdownCodeBlock>{props.children}</MarkdownCodeBlock>;
+    const fallback = <MarkdownCodeBlock defaultCodeWrap={props.defaultCodeWrap}>{props.children}</MarkdownCodeBlock>;
     return language === "mermaid" ? (
       <MermaidDiagram
         copySource={() => copyMarkdownCode(source)}
@@ -272,7 +291,7 @@ function MarkdownPreBlock(props: {
       />
     );
   }
-  return <MarkdownCodeBlock>{props.children}</MarkdownCodeBlock>;
+  return <MarkdownCodeBlock defaultCodeWrap={props.defaultCodeWrap}>{props.children}</MarkdownCodeBlock>;
 }
 
 // MarkdownCodeBlock renders fenced code with language chrome, copy, wrap, and syntax highlighting.
@@ -281,6 +300,9 @@ function MarkdownCodeBlock(props: {
   // ReactMarkdown code element children wrapped by the pre component.
   // ReactMarkdown 中由 pre 包裹的 code 元素子节点。
   children?: React.ReactNode;
+  // Whether the wrap control starts enabled for this code block.
+  // 该代码块的换行控制是否默认启用。
+  defaultCodeWrap?: boolean;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -305,7 +327,7 @@ function MarkdownCodeBlock(props: {
     [highlightEnabled, highlightRevision, lines, normalizedLanguage, shikiTheme],
   );
   const [copied, setCopied] = React.useState(false);
-  const [wrapped, setWrapped] = React.useState(false);
+  const [wrapped, setWrapped] = React.useState(props.defaultCodeWrap ?? false);
 
   React.useEffect(() => {
     if (!copied) {

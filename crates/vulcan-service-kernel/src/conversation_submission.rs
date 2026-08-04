@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::{apply_output_style_snapshot, resolve_output_style_snapshot};
 use uuid::Uuid;
 use vulcan_agent_runtime::workbench_prompt_turn::{
     SharedPromptTurnBeginInput, begin_shared_prompt_turn,
@@ -153,6 +154,10 @@ struct SubmissionProviderToolSettings {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct SubmissionSessionSettings {
+    /// Optional session output-style identifier captured before the first prompt boundary.
+    /// 在首次提示词边界前捕获的可选会话输出风格标识。
+    #[serde(default)]
+    output_style_id: Option<String>,
     /// Optional explicit VMM policy pair; absence preserves inherited defaults.
     /// 可选显式 VMM 策略对；缺省时保留继承默认值。
     vmm_policy: Option<SubmissionVmmPolicy>,
@@ -190,6 +195,33 @@ fn submission_vmm_policy_value(mode: &str) -> Result<Option<bool>, String> {
     }
 }
 
+/// Resolves output style only when the submission is crossing a materialization boundary.
+/// 仅当提交跨越会话物化边界时解析输出风格。
+fn submission_output_style_snapshot(
+    settings: Option<&SubmissionSessionSettings>,
+    global_output_style_selection: vulcan_agent_runtime::provider_config::PersistedPromptOutputStyleSelection,
+    allow_output_style_activation: bool,
+) -> Result<Option<vulcan_prompt_composer::PromptOutputStyleSnapshot>, String> {
+    if !allow_output_style_activation {
+        return Ok(None);
+    }
+    resolve_output_style_snapshot(
+        submission_output_style_id(settings).as_deref(),
+        global_output_style_selection,
+    )
+    .map(Some)
+}
+
+/// Normalizes the explicit style override captured by a new-session submission.
+/// 规范化新会话提交中捕获的显式输出风格覆盖。
+fn submission_output_style_id(settings: Option<&SubmissionSessionSettings>) -> Option<String> {
+    settings
+        .and_then(|settings| settings.output_style_id.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 /// Validates and applies draft-only settings before the first precheck or provider request.
 /// 在首次预检或 Provider 请求前校验并应用草稿专属设置。
 async fn apply_submission_session_settings(
@@ -200,6 +232,7 @@ async fn apply_submission_session_settings(
     session_id: SessionId,
     execution_mode: Option<&str>,
     settings: Option<&SubmissionSessionSettings>,
+    allow_output_style_activation: bool,
 ) -> Result<(), String> {
     if settings
         .and_then(|settings| settings.initial_goal.as_ref())
@@ -211,6 +244,20 @@ async fn apply_submission_session_settings(
         ));
     }
     let configuration = runtime.configuration_snapshot()?;
+    let global_output_style_selection = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .agent_runtime
+        .as_ref()
+        .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?
+        .provider_configuration
+        .prompt
+        .output_style;
+    let output_style_snapshot = submission_output_style_snapshot(
+        settings,
+        global_output_style_selection,
+        allow_output_style_activation,
+    )?;
     let provider_tool_settings =
         settings.and_then(|settings| settings.provider_tool_settings.as_ref());
     let has_explicit_provider_tool_settings = provider_tool_settings.is_some();
@@ -327,6 +374,20 @@ async fn apply_submission_session_settings(
     if let Some(selection) = knowledge_selection {
         runtime_state.knowledge_library_selection = selection;
     }
+    if allow_output_style_activation {
+        // An explicit draft choice must remain session-owned after creation; null/empty inherits global.
+        // 新会话草稿的显式选择必须在创建后归属会话；空值继续继承全局。
+        runtime_state.output_style.override_style_id = submission_output_style_id(settings);
+    }
+    if let Some(output_style_snapshot) = output_style_snapshot {
+        apply_output_style_snapshot(
+            runtime_state,
+            &output_style_snapshot,
+            "new-session",
+            None,
+            updated_at.clone(),
+        );
+    }
     runtime_state.updated_at = updated_at;
     if let Some(goal) = settings.and_then(|settings| settings.initial_goal.as_ref()) {
         persist_initial_submission_goal(
@@ -392,8 +453,22 @@ fn apply_submission_model_selection(
             selection.provider_id, selection.model_id
         ));
     }
-    let connection_exposes_model = runtime
-        .catalog_snapshot()?
+    // Validate against the same reconstructed catalog used by execution so a just-saved
+    // capability override cannot be hidden by a stale process-local catalog copy.
+    // 使用与执行相同的重建目录校验，避免刚保存的能力覆盖被旧进程内目录副本遮蔽。
+    let resolved_catalogs = runtime.resolved_model_catalog_snapshot(&configuration)?;
+    let source_catalogs = runtime.source_catalog_snapshot()?;
+    let effective_catalogs = if resolved_catalogs.contains_key(selection.connection_id.as_str())
+        || source_catalogs.contains_key(selection.connection_id.as_str())
+    {
+        resolved_catalogs
+    } else {
+        // Manual/legacy catalogs without immutable source tracking still use their process-local
+        // snapshot; this fallback does not bypass overlays for source-backed connections.
+        // 没有不可变源跟踪的手工/旧版目录仍使用进程内快照；源目录连接不会绕过覆盖链路。
+        runtime.catalog_snapshot()?
+    };
+    let connection_exposes_model = effective_catalogs
         .get(selection.connection_id.as_str())
         .is_some_and(|catalog| {
             catalog
@@ -926,6 +1001,7 @@ pub(super) async fn service_submit_conversation_prompt(
         materialized_session.session_id,
         execution_mode.as_deref(),
         session_settings.as_ref(),
+        materialized_session.kind == PromptSessionMaterializationKind::Created,
     )
     .await?;
     // session_id is copied from the authoritative materialization result after activation consumes its classification.
@@ -1400,7 +1476,11 @@ mod submission_hydration_policy_tests {
 
 #[cfg(test)]
 mod submission_session_settings_tests {
-    use super::should_preserve_existing_provider_tool_settings;
+    use super::{
+        SubmissionSessionSettings, should_preserve_existing_provider_tool_settings,
+        submission_output_style_id, submission_output_style_snapshot,
+    };
+    use vulcan_agent_runtime::provider_config::PersistedPromptOutputStyleSelection;
 
     /// Verifies only an explicitly overridden session is preserved when a submission omits settings.
     /// 验证提交缺少设置时仅保留显式覆盖的会话。
@@ -1418,5 +1498,42 @@ mod submission_session_settings_tests {
         assert!(!should_preserve_existing_provider_tool_settings(
             false, false, false
         ));
+    }
+
+    /// Verifies an ordinary existing-session submission cannot activate a newly selected style.
+    /// 验证已有会话的普通提交不能激活新选择的输出风格。
+    #[test]
+    fn ordinary_submission_keeps_output_style_snapshot_unchanged() {
+        let settings = SubmissionSessionSettings {
+            output_style_id: Some(String::from("rigorous")),
+            vmm_policy: None,
+            provider_tool_settings: None,
+            knowledge_selection: None,
+            initial_goal: None,
+        };
+        assert!(
+            submission_output_style_snapshot(
+                Some(&settings),
+                PersistedPromptOutputStyleSelection::Balanced,
+                false,
+            )
+            .expect("ordinary submission should be accepted")
+            .is_none()
+        );
+        assert_eq!(
+            submission_output_style_snapshot(
+                Some(&settings),
+                PersistedPromptOutputStyleSelection::Balanced,
+                true,
+            )
+            .expect("new-session boundary should resolve the style")
+            .expect("new-session boundary should capture a style")
+            .id,
+            "rigorous"
+        );
+        assert_eq!(
+            submission_output_style_id(Some(&settings)).as_deref(),
+            Some("rigorous")
+        );
     }
 }

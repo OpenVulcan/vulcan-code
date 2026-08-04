@@ -8,8 +8,8 @@ import {
   LoaderCircle,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
-  SlidersHorizontal,
   Sparkles,
   Trash2,
   Users,
@@ -17,6 +17,10 @@ import {
 } from "lucide-react"
 
 import { CustomModelTemplateCard } from "@/components/features/settings/custom-model-template-card"
+import {
+  buildCapabilityOverridePatch,
+  ReasoningProjectionEditor,
+} from "@/components/features/settings/public-ai-model-capability-dialog"
 import { CustomProviderChangeSummaryDialog } from "@/components/features/settings/custom-provider-change-summary-dialog"
 import {
   advancedModelTextDraftFromDefinition,
@@ -25,8 +29,15 @@ import {
 } from "@/components/features/settings/custom-provider-model-drafts"
 import { CustomProviderModelDefaultsCard } from "@/components/features/settings/custom-provider-model-defaults-card"
 import {
+  directCustomModelSettingsDraft,
+  directProviderModelSettingsEqual,
+  OPENAI_DIRECT_REASONING_EFFORTS,
+  resolveDirectCustomProviderDefaults,
+} from "@/components/features/settings/direct-provider-model-settings"
+import {
   accountActuallyDiscoveredModel,
   accountExposesModel,
+  accountIncludesModel,
   buildCustomProviderModelRows,
   shouldBlockManualModelSubmission,
   shouldReplaceManualModelDrafts,
@@ -107,10 +118,6 @@ interface CustomProviderModelsDialogProps {
 // CustomModelFilter 是面向用户的启用状态筛选器。
 type CustomModelFilter = "all" | "enabled" | "disabled"
 
-// ReasoningSupport is the exact serialized provider-neutral fidelity option shown by the editor.
-// ReasoningSupport 是编辑器展示的精确供应商无关保真度选项。
-type ReasoningSupport = "unknown" | "native" | "equivalent" | "lossy" | "unsupported"
-
 // EMPTY_PROJECTION is the safe request projection used until the user declares exact mappings.
 // EMPTY_PROJECTION 是用户声明精确映射前使用的安全请求投影。
 const EMPTY_PROJECTION: PublicAiCustomModelRequestProjection = {
@@ -119,15 +126,6 @@ const EMPTY_PROJECTION: PublicAiCustomModelRequestProjection = {
   defaults: {},
   overrides: {},
   delete: [],
-}
-
-// FALLBACK_CUSTOM_PROVIDER_MODEL_DEFAULTS is the documented safe baseline before any user override.
-// FALLBACK_CUSTOM_PROVIDER_MODEL_DEFAULTS 是用户尚未覆盖时使用的文档化安全基线。
-const FALLBACK_CUSTOM_PROVIDER_MODEL_DEFAULTS: PublicAiCustomProviderModelDefaults = {
-  context_limit: 200_000,
-  output_limit: 32_768,
-  input_resources: [],
-  output_resources: [],
 }
 
 // RESOURCE_KINDS is the closed non-text modality set accepted by the public contract.
@@ -158,56 +156,31 @@ const DISCOVERY_STATE_LABEL_KEYS = {
   failed: "settings.customModels.discovery.failed",
 } as const
 
-// SUPPORT_LABEL_KEYS maps serialized support fidelity values to localized labels.
-// SUPPORT_LABEL_KEYS 将序列化支持保真度映射为本地化标签。
-const SUPPORT_LABEL_KEYS = {
-  unknown: "settings.customModels.supportUnknown",
-  native: "settings.customModels.supportNative",
-  equivalent: "settings.customModels.supportEquivalent",
-  lossy: "settings.customModels.supportLossy",
-  unsupported: "settings.customModels.supportUnsupported",
-} as const
-
-// REASONING_CONTROL_LABEL_KEYS maps exact request behaviors to localized labels.
-// REASONING_CONTROL_LABEL_KEYS 将精确请求行为映射为本地化标签。
-const REASONING_CONTROL_LABEL_KEYS = {
-  unknown: "settings.customModels.controlUnknown",
-  fixed_off: "settings.customModels.controlFixedOff",
-  fixed_on: "settings.customModels.controlFixedOn",
-  toggle: "settings.customModels.controlToggle",
-  effort_selection: "settings.customModels.controlEffortSelection",
-  provider_adaptive: "settings.customModels.controlProviderAdaptive",
-} as const
-
-// REASONING_EFFORTS is the closed common effort order accepted by the public contract.
-// REASONING_EFFORTS 是公共契约接受的封闭通用推理档位顺序。
-const REASONING_EFFORTS = ["none", "adaptive", "minimal", "low", "medium", "high", "x_high", "max", "ultra"] as const
-
 // REASONING_EFFORT_LABEL_KEYS maps canonical effort values to localized labels.
 // REASONING_EFFORT_LABEL_KEYS 将规范思考档位映射为本地化标签。
 const REASONING_EFFORT_LABEL_KEYS = {
   none: "settings.customModels.effortNone",
-  adaptive: "settings.customModels.effortAdaptive",
   minimal: "settings.customModels.effortMinimal",
   low: "settings.customModels.effortLow",
-  medium: "settings.customModels.effortMedium",
-  high: "settings.customModels.effortHigh",
-  x_high: "settings.customModels.effortExtraHigh",
-  max: "settings.customModels.effortMax",
-  ultra: "settings.customModels.effortUltra",
-} as const
+    medium: "settings.customModels.effortMedium",
+    high: "settings.customModels.effortHigh",
+    xhigh: "settings.customModels.effortExtraHigh",
+    max: "settings.customModels.effortMax",
+  } as const
 
 // CustomProviderModelsDialog manages one merged model union and credential-scoped evidence.
 // CustomProviderModelsDialog 管理一个合并模型并集与凭据作用域证据。
 export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProps) {
   const { t } = useI18n()
   const [manualModels, setManualModels] = React.useState<PublicAiCustomModelDefinition[]>([])
-  const [manualModelsDirty, setManualModelsDirty] = React.useState(false)
   const [selectedModelId, setSelectedModelId] = React.useState<string | null>(null)
   const [query, setQuery] = React.useState("")
   const [filter, setFilter] = React.useState<CustomModelFilter>("all")
   const [advancedTextDrafts, setAdvancedTextDrafts] = React.useState<Record<string, AdvancedModelTextDraft>>({})
   const [dirtyManualModelIds, setDirtyManualModelIds] = React.useState<Set<string>>(new Set())
+  // manualModelsDirty is derived from the single authoritative dirty-model identity set.
+  // manualModelsDirty 从唯一权威的脏模型身份集合派生。
+  const manualModelsDirty = dirtyManualModelIds.size > 0
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [removeConfirmationOpen, setRemoveConfirmationOpen] = React.useState(false)
@@ -288,17 +261,23 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
   }, [filter, query, rows])
 
   const providerDefaults = props.provider && props.snapshot
-    ? props.snapshot.customProviderModelDefaults?.[props.provider.id]
-      ?? FALLBACK_CUSTOM_PROVIDER_MODEL_DEFAULTS
+    ? resolveDirectCustomProviderDefaults(
+      props.snapshot.customProviderSystemModelDefaults,
+      props.snapshot.customProviderModelDefaults?.[props.provider.id],
+    )
     : null
 
-  const selectedAdvancedDraft = selectedRow?.manualDefinition
-    ? advancedTextDrafts[selectedRow.id]
-      ?? advancedModelTextDraftFromDefinition(selectedRow.manualDefinition)
-    : {
-      projectionText: JSON.stringify(EMPTY_PROJECTION, null, 2),
-      parameterText: "[]",
-    }
+  // selectedAdvancedDefinition exposes an inherited model as an immediately editable advanced draft.
+  // selectedAdvancedDefinition 将继承模型直接呈现为可编辑高级草稿。
+  const selectedAdvancedDefinition = selectedRow
+    ? selectedRow.manualDefinition ?? newManualModel(selectedRow.id, selectedRow.displayName)
+    : null
+  // selectedAdvancedDraft preserves raw JSON edits while deriving untouched text from the visible definition.
+  // selectedAdvancedDraft 保留原始 JSON 编辑，同时从可见定义派生未修改文本。
+  const selectedAdvancedDraft = selectedAdvancedDefinition
+    ? advancedTextDrafts[selectedAdvancedDefinition.id]
+      ?? advancedModelTextDraftFromDefinition(selectedAdvancedDefinition)
+    : { projectionText: JSON.stringify(EMPTY_PROJECTION, null, 2), parameterText: "[]" }
 
   // acceptSnapshot publishes a service result without discarding unrelated local advanced drafts.
   // acceptSnapshot 发布服务结果且不会丢弃无关的本地高级草稿。
@@ -314,7 +293,6 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
       setManualModels(Object.values(snapshot.customModels?.[props.provider.id] ?? {}).map(cloneCustomModel))
       setAdvancedTextDrafts({})
       setDirtyManualModelIds(new Set())
-      setManualModelsDirty(false)
     }
     if (manualCommitSucceeded) {
       setAdvancedSaveConfirmationOpen(false)
@@ -345,15 +323,24 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
     }
   }, [acceptSnapshot, advancedTextDrafts, manualModels, props.provider, t])
 
-  // updateManualDefinition changes one local advanced model declaration before explicit save.
-  // updateManualDefinition 在显式保存前修改一个本地高级模型声明。
+  // updateManualDefinition materializes an inherited definition on its first direct edit.
+  // updateManualDefinition 在首次直接编辑时实体化继承定义。
   const updateManualDefinition = React.useCallback((
-    modelId: string,
+    baseModel: PublicAiCustomModelDefinition,
     update: (model: PublicAiCustomModelDefinition) => PublicAiCustomModelDefinition,
   ) => {
-    setManualModels((current) => current.map((model) => model.id === modelId ? update(model) : model))
-    setDirtyManualModelIds((current) => new Set(current).add(modelId))
-    setManualModelsDirty(true)
+    setManualModels((current) => {
+      // existing is the only persisted or locally materialized definition for this model identity.
+      // existing 是该模型身份唯一的持久化或本地实体化定义。
+      const existing = current.find((model) => model.id === baseModel.id)
+      // updated applies the edit to the exact current definition or its visible inherited draft.
+      // updated 将编辑应用到精确当前定义或其可见继承草稿。
+      const updated = update(existing ?? baseModel)
+      return existing
+        ? current.map((model) => model.id === baseModel.id ? updated : model)
+        : [...current, updated]
+    })
+    setDirtyManualModelIds((current) => new Set(current).add(baseModel.id))
   }, [])
 
   // updateAdvancedTextDraft records raw JSON text without losing sibling-model edits.
@@ -363,12 +350,48 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
     field: keyof AdvancedModelTextDraft,
     value: string,
   ) => {
+    setManualModels((current) => current.some((candidate) => candidate.id === model.id)
+      ? current
+      : [...current, model])
     setAdvancedTextDrafts((current) => {
       const existing = current[model.id] ?? advancedModelTextDraftFromDefinition(model)
       return { ...current, [model.id]: { ...existing, [field]: value } }
     })
     setDirtyManualModelIds((current) => new Set(current).add(model.id))
-    setManualModelsDirty(true)
+  }, [])
+
+  // discardInheritedAdvancedDraft removes one unsaved materialized draft without calling the deletion API.
+  // discardInheritedAdvancedDraft 移除一个尚未保存的实体化草稿，且不调用删除接口。
+  const discardInheritedAdvancedDraft = React.useCallback((modelId: string) => {
+    setManualModels((current) => current.filter((model) => model.id !== modelId))
+    setAdvancedTextDrafts((current) => {
+      // next retains every sibling model draft while removing the exact restored identity.
+      // next 保留全部同级模型草稿，同时移除精确还原的模型身份。
+      const next = { ...current }
+      delete next[modelId]
+      return next
+    })
+    setDirtyManualModelIds((current) => {
+      // next is the complete remaining dirty-model identity set.
+      // next 是完整的剩余脏模型身份集合。
+      const next = new Set(current)
+      next.delete(modelId)
+      return next
+    })
+  }, [])
+
+  // stageDiscoveredAdvancedRestore removes one discovered-model overlay locally until the reviewed batch save.
+  // stageDiscoveredAdvancedRestore 在经审查的批量保存前，本地移除一个已发现模型的高级覆盖。
+  const stageDiscoveredAdvancedRestore = React.useCallback((modelId: string) => {
+    setManualModels((current) => current.filter((model) => model.id !== modelId))
+    setAdvancedTextDrafts((current) => {
+      // next removes stale JSON text that no longer belongs to the restored inherited model.
+      // next 移除不再属于已还原继承模型的陈旧 JSON 文本。
+      const next = { ...current }
+      delete next[modelId]
+      return next
+    })
+    setDirtyManualModelIds((current) => new Set(current).add(modelId))
   }, [])
 
   // synchronizeAll refreshes every exact credential and preserves successful sibling results.
@@ -483,23 +506,15 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
           <DialogTitle>{t("settings.customModels.title").replace("{provider}", props.provider?.display_name ?? "")}</DialogTitle>
           <DialogDescription>{t("settings.customModels.description")}</DialogDescription>
         </DialogHeader>
-        {props.provider && providerDefaults ? (
-          <div className="grid gap-3 border-b p-4 lg:grid-cols-[minmax(0,1fr)_minmax(360px,0.8fr)]">
-            <DiscoverySummary
-              onRefresh={() => void synchronizeAll()}
-              onRefreshConnection={(connectionId) => void synchronizeConnection(connectionId)}
-              onReviewTemplates={() => setTemplateReviewOpen(true)}
-              providerId={props.provider.id}
-              snapshot={props.snapshot}
-            />
-            <CustomProviderModelDefaultsCard
-              defaults={providerDefaults}
-              onSaved={acceptSnapshot}
-              providerId={props.provider.id}
-            />
+        <Tabs className="min-h-0 flex-1 gap-0" defaultValue="models">
+          <div className="shrink-0 border-b px-4 py-2">
+            <TabsList variant="line">
+              <TabsTrigger className="px-4" value="models">{t("settings.customModels.pageModels")}</TabsTrigger>
+              <TabsTrigger className="px-4" value="provider-settings">{t("settings.customModels.pageProviderSettings")}</TabsTrigger>
+            </TabsList>
           </div>
-        ) : null}
-        <div className="grid min-h-0 flex-1 md:grid-cols-[320px_minmax(0,1fr)]">
+          <TabsContent className="m-0 min-h-0 overflow-hidden" value="models">
+            <div className="grid h-full min-h-0 md:grid-cols-[320px_minmax(0,1fr)]">
           <section className={`${mobileDetailOpen ? "max-md:hidden" : ""} flex min-h-0 flex-col border-r`}>
             <div className="space-y-3 border-b p-3">
               <div className="relative">
@@ -554,6 +569,7 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
                       aria-label={`${row.displayName} · ${t("settings.customModels.enabled")}`}
                       checked={row.enabled}
                       className="mt-3"
+                      disabled={saving}
                       onCheckedChange={(enabled) => void setModelEnabled(row, enabled)}
                     />
                   </div>
@@ -567,7 +583,7 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
               <ScrollArea className="h-full">
                 <div className="space-y-4 p-5">
                   <Button className="md:hidden" onClick={() => setMobileDetailOpen(false)} size="sm" type="button" variant="ghost"><ArrowLeft className="mr-2 size-4" />{t("settings.customModels.backToList")}</Button>
-                  <ModelDetailHeader onEnabledChange={(enabled) => void setModelEnabled(selectedRow, enabled)} row={selectedRow} />
+                  <ModelDetailHeader disabled={saving} onEnabledChange={(enabled) => void setModelEnabled(selectedRow, enabled)} row={selectedRow} />
                   <CustomModelTemplateCard decision={selectedRow.templateDecision} modelId={selectedRow.id} onSaved={acceptSnapshot} providerId={props.provider.id} />
                   <Tabs defaultValue="overview">
                     <TabsList className="grid w-full grid-cols-4">
@@ -597,29 +613,29 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
                       <CapabilityOverridesEditor onSaved={acceptSnapshot} providerId={props.provider.id} row={selectedRow} />
                     </TabsContent>
                     <TabsContent className="space-y-4" value="advanced">
-                      <AdvancedModelEditor
-                        manualDefinition={selectedRow.manualDefinition}
-                        onCreateOverlay={async () => {
-                          const model = newManualModel(selectedRow.id, selectedRow.displayName)
-                          await persistManualModels([...manualModels, model])
+                      {selectedAdvancedDefinition ? <AdvancedModelEditor
+                        customized={Boolean(selectedRow.manualDefinition) || dirtyManualModelIds.has(selectedRow.id)}
+                        dirty={dirtyManualModelIds.has(selectedRow.id)}
+                        manualDefinition={selectedAdvancedDefinition}
+                        onRestore={() => {
+                          if (selectedRow.manualDefinition) {
+                            if (selectedRow.accounts.some(accountActuallyDiscoveredModel)) {
+                              stageDiscoveredAdvancedRestore(selectedRow.id)
+                            } else {
+                              setRemoveConfirmationOpen(true)
+                            }
+                          } else {
+                            discardInheritedAdvancedDraft(selectedRow.id)
+                          }
                         }}
-                        onRemove={() => setRemoveConfirmationOpen(true)}
                         onSave={() => setAdvancedSaveConfirmationOpen(true)}
-                        onUpdate={(update) => updateManualDefinition(selectedRow.id, update)}
+                        onUpdate={(update) => updateManualDefinition(selectedAdvancedDefinition, update)}
                         parameterText={selectedAdvancedDraft.parameterText}
                         projectionText={selectedAdvancedDraft.projectionText}
-                        setParameterText={(value) => {
-                          if (selectedRow.manualDefinition) {
-                            updateAdvancedTextDraft(selectedRow.manualDefinition, "parameterText", value)
-                          }
-                        }}
-                        setProjectionText={(value) => {
-                          if (selectedRow.manualDefinition) {
-                            updateAdvancedTextDraft(selectedRow.manualDefinition, "projectionText", value)
-                          }
-                        }}
+                        setParameterText={(value) => updateAdvancedTextDraft(selectedAdvancedDefinition, "parameterText", value)}
+                        setProjectionText={(value) => updateAdvancedTextDraft(selectedAdvancedDefinition, "projectionText", value)}
                         saving={saving}
-                      />
+                      /> : null}
                     </TabsContent>
                   </Tabs>
                 </div>
@@ -628,16 +644,34 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
               <div className="grid h-full place-items-center p-8 text-center text-sm text-muted-foreground">{t("settings.customModels.selectHint")}</div>
             )}
           </section>
-        </div>
+            </div>
+          </TabsContent>
+          <TabsContent className="m-0 min-h-0 overflow-hidden" value="provider-settings">
+            {props.provider && props.snapshot && providerDefaults ? (
+              <ScrollArea className="h-full">
+                <div className="mx-auto grid w-full max-w-[1120px] items-start gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(420px,0.9fr)]">
+                  <DiscoverySummary
+                    onRefresh={() => void synchronizeAll()}
+                    onRefreshConnection={(connectionId) => void synchronizeConnection(connectionId)}
+                    onReviewTemplates={() => setTemplateReviewOpen(true)}
+                    providerId={props.provider.id}
+                    snapshot={props.snapshot}
+                  />
+                  <CustomProviderModelDefaultsCard
+                    customized={Boolean(props.snapshot.customProviderModelDefaults?.[props.provider.id])}
+                    defaults={providerDefaults}
+                    onSaved={acceptSnapshot}
+                    providerId={props.provider.id}
+                  />
+                </div>
+              </ScrollArea>
+            ) : null}
+          </TabsContent>
+        </Tabs>
         {error ? <p className="whitespace-pre-wrap border-t bg-destructive/5 px-5 py-3 text-sm text-destructive">{error}</p> : null}
-        <DialogFooter className="border-t px-5 py-3">
-          {manualModelsDirty ? <span className="mr-auto text-sm text-amber-600">{t("settings.customModels.unsavedAdvanced")}</span> : null}
-          <Button onClick={() => requestDialogOpenChange(false)} type="button" variant="outline">{t("memory.common.close")}</Button>
-          {manualModelsDirty ? <Button disabled={saving} onClick={() => setAdvancedSaveConfirmationOpen(true)} type="button">{saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}{t("settings.customModels.save")}</Button> : null}
-        </DialogFooter>
       </DialogContent>
-      <ManualModelDialog
-        defaults={providerDefaults ?? FALLBACK_CUSTOM_PROVIDER_MODEL_DEFAULTS}
+      {providerDefaults ? <ManualModelDialog
+        defaults={providerDefaults}
         existingIds={new Set(rows.map((row) => row.id))}
         onOpenChange={setManualDialogOpen}
         onSaved={async (model, decision) => {
@@ -666,7 +700,7 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
           setManualDialogOpen(false)
         }}
         open={manualDialogOpen}
-      />
+      /> : null}
       {props.provider ? (
         <TemplateReviewDialog
           onOpenChange={setTemplateReviewOpen}
@@ -698,7 +732,6 @@ export function CustomProviderModelsDialog(props: CustomProviderModelsDialogProp
             <AlertDialogCancel>{t("memory.common.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
-                setManualModelsDirty(false)
                 setAdvancedTextDrafts({})
                 setDirtyManualModelIds(new Set())
                 setDiscardConfirmationOpen(false)
@@ -910,7 +943,7 @@ function appliedTemplateDecision(suggestion: PublicAiCommonModelTemplateSuggesti
       supports_text_input: suggestion.supports_text_input,
       supports_text_output: suggestion.supports_text_output,
       input_resources: suggestion.input_resources,
-      output_resources: suggestion.output_resources,
+      output_resources: [],
     },
   }
 }
@@ -992,7 +1025,7 @@ function DiscoverySummary(props: {
 
 // ModelDetailHeader renders immutable identity and one provider-model access switch.
 // ModelDetailHeader 渲染不可变身份与一个供应商模型访问开关。
-function ModelDetailHeader(props: { onEnabledChange: (enabled: boolean) => void; row: CustomProviderModelRow }) {
+function ModelDetailHeader(props: { disabled: boolean; onEnabledChange: (enabled: boolean) => void; row: CustomProviderModelRow }) {
   const { t } = useI18n()
   return (
     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1000,7 +1033,7 @@ function ModelDetailHeader(props: { onEnabledChange: (enabled: boolean) => void;
         <h3 className="truncate text-lg font-semibold">{props.row.displayName}</h3>
         <p className="truncate font-mono text-xs text-muted-foreground">{props.row.id}</p>
       </div>
-      <label className="flex items-center gap-2 text-sm"><span>{t("settings.customModels.enabled")}</span><Switch checked={props.row.enabled} onCheckedChange={props.onEnabledChange} /></label>
+      <label className="flex items-center gap-2 text-sm"><span>{t("settings.customModels.enabled")}</span><Switch checked={props.row.enabled} disabled={props.disabled} onCheckedChange={props.onEnabledChange} /></label>
     </div>
   )
 }
@@ -1041,17 +1074,19 @@ function ResolvedCapabilitySummary(props: {
   row: CustomProviderModelRow
 }) {
   const { t } = useI18n()
-  const capabilities = props.account?.effectiveModel?.capabilities ?? props.row.effectiveModel?.capabilities
+  const capabilities = props.account?.effectiveModel?.capabilities
+    ?? props.account?.supportModel?.capabilities
+    ?? props.row.capabilityModel?.capabilities
+    ?? props.row.effectiveModel?.capabilities
   const context = capabilities?.context_limit ?? props.defaults?.context_limit
   const output = capabilities?.output_limit ?? props.defaults?.output_limit
-  const inputHasText = resolvedTextSupport(props.row, props.account, "input")
-  const outputHasText = resolvedTextSupport(props.row, props.account, "output")
+  const inputHasText = resolvedInputTextSupport(props.row, props.account)
   return (
     <div className="grid gap-3 sm:grid-cols-2">
       <CapabilityFact label={t("settings.customModels.contextLimit")} source={capabilitySource(props.row, props.account, "context_limit", t)} value={context?.toLocaleString() ?? "—"} />
       <CapabilityFact label={t("settings.customModels.outputLimit")} source={capabilitySource(props.row, props.account, "output_limit", t)} value={output?.toLocaleString() ?? "—"} />
       <CapabilityFact label={t("settings.customModels.input")} source={capabilitySource(props.row, props.account, "input_resources", t)} value={resourceSummary(capabilities?.input_resources ?? [], inputHasText, t)} />
-      <CapabilityFact label={t("settings.customModels.output")} source={capabilitySource(props.row, props.account, "output_resources", t)} value={resourceSummary(capabilities?.output_resources ?? [], outputHasText, t)} />
+      <CapabilityFact label={t("settings.customModels.output")} source={t("settings.customModels.defaultsSystemSource")} value={t("settings.models.modality.text")} />
     </div>
   )
 }
@@ -1076,17 +1111,13 @@ function AccountAvailabilityEditor(props: {
   const [validationTarget, setValidationTarget] = React.useState<CustomProviderModelAccountState | null>(null)
   const [validatingConnectionId, setValidatingConnectionId] = React.useState<string | null>(null)
   const [validationResult, setValidationResult] = React.useState<string | null>(null)
-  const [availabilityConfirmation, setAvailabilityConfirmation] = React.useState<{
-    account: CustomProviderModelAccountState
-    value: "inherit" | "enabled" | "disabled"
-  } | null>(null)
   const [error, setError] = React.useState<string | null>(null)
 
-  // saveAvailability persists one tri-state account-model availability decision.
-  // saveAvailability 持久化一个三态账号模型可用性决定。
+  // saveAvailability immediately persists one direct account-model membership choice or restoration.
+  // saveAvailability 立即持久化一个直接账号模型成员关系选择或还原操作。
   const saveAvailability = React.useCallback(async (
     connectionId: string,
-    value: "inherit" | "enabled" | "disabled",
+    enabled: boolean | undefined,
   ) => {
     setSavingConnectionId(connectionId)
     setError(null)
@@ -1094,9 +1125,8 @@ function AccountAvailabilityEditor(props: {
       props.onSaved(await savePublicAiCustomModelConnectionAvailability({
         connectionId,
         modelId: props.row.id,
-        enabled: value === "inherit" ? undefined : value === "enabled",
+        enabled,
       }))
-      setAvailabilityConfirmation(null)
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
@@ -1170,24 +1200,30 @@ function AccountAvailabilityEditor(props: {
               {t("settings.customModels.validateModel")}
             </Button>
             {props.row.manualDefinition ? (
-              <Select
-                disabled={savingConnectionId === account.connection.id}
-                onValueChange={(value) => {
-                  setError(null)
-                  setAvailabilityConfirmation({
-                    account,
-                    value: value as "inherit" | "enabled" | "disabled",
-                  })
-                }}
-                value={account.availabilityOverride === undefined ? "inherit" : account.availabilityOverride ? "enabled" : "disabled"}
-              >
-                <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="inherit">{t("settings.customModels.accountInherit")}</SelectItem>
-                  <SelectItem value="enabled">{t("settings.customModels.accountForceEnable")}</SelectItem>
-                  <SelectItem value="disabled">{t("settings.customModels.accountForceDisable")}</SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="flex items-center gap-2">
+                {account.availabilityOverride !== undefined ? (
+                  <Button
+                    aria-label={t("settings.modelCapabilities.restore")}
+                    disabled={savingConnectionId === account.connection.id}
+                    onClick={() => void saveAvailability(account.connection.id, undefined)}
+                    size="icon"
+                    title={t("settings.modelCapabilities.restore")}
+                    type="button"
+                    variant="ghost"
+                  >
+                    <RotateCcw className="size-4" />
+                  </Button>
+                ) : null}
+                {savingConnectionId === account.connection.id ? (
+                  <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
+                ) : null}
+                <Switch
+                  aria-label={`${account.connection.display_name} · ${t("settings.customModels.accountAvailable")}`}
+                  checked={props.row.enabled && accountIncludesModel(account)}
+                  disabled={!props.row.enabled || savingConnectionId !== null}
+                  onCheckedChange={(enabled) => void saveAvailability(account.connection.id, enabled)}
+                />
+              </div>
             ) : null}
           </div>
         </div>
@@ -1221,146 +1257,178 @@ function AccountAvailabilityEditor(props: {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <CustomProviderChangeSummaryDialog
-        description={t("settings.customModels.changeSummaryDescription").replace("{model}", props.row.displayName)}
-        error={error}
-        items={availabilityConfirmation ? [
-          { label: t("settings.customModels.summaryModel"), value: props.row.displayName },
-          { label: t("settings.customModels.summaryAccount"), value: availabilityConfirmation.account.connection.display_name },
-          {
-            label: t("settings.customModels.summaryAvailability"),
-            value: t(availabilityConfirmation.value === "inherit"
-              ? "settings.customModels.accountInherit"
-              : availabilityConfirmation.value === "enabled"
-                ? "settings.customModels.accountForceEnable"
-                : "settings.customModels.accountForceDisable"),
-          },
-          ...(availabilityConfirmation.account.connection.pending_validation ? [{
-            label: t("settings.customModels.summaryRoutingState"),
-            value: t("settings.customModels.pendingValidation"),
-            warning: true,
-          }] : []),
-        ] : []}
-        onConfirm={() => {
-          if (availabilityConfirmation) {
-            void saveAvailability(
-              availabilityConfirmation.account.connection.id,
-              availabilityConfirmation.value,
-            )
-          }
-        }}
-        onOpenChange={(open) => {
-          if (!open && savingConnectionId === null) {
-            setAvailabilityConfirmation(null)
-          }
-        }}
-        open={availabilityConfirmation !== null}
-        saving={savingConnectionId !== null}
-      />
     </div>
   )
 }
 
-// CapabilityOverridesEditor stores only explicit differences from discovery, template, and defaults.
-// CapabilityOverridesEditor 仅保存相对于发现、模板与默认值的显式差异。
+// CapabilityOverridesEditor displays effective values while persisting only touched model fields.
+// CapabilityOverridesEditor 显示有效值，但只持久化用户触碰过的模型字段。
 function CapabilityOverridesEditor(props: { onSaved: (snapshot: PublicAiSettingsSnapshot) => void; providerId: string; row: CustomProviderModelRow }) {
   const { t } = useI18n()
-  const [draft, setDraft] = React.useState<PublicAiModelCapabilityOverrides>(props.row.capabilityOverrides ?? {})
+  // draft is the complete visible model-level setting set, never a second enablement gate.
+  // draft 是完整可见的模型级设置集合，不再是二次启用开关。
+  const [draft, setDraft] = React.useState<PublicAiModelCapabilityOverrides>(() => directCustomModelSettingsDraft(props.row))
+  // baselineDraft is the authoritative value against which local semantic changes are measured.
+  // baselineDraft 是衡量本地语义变更所依据的权威值。
+  const [baselineDraft, setBaselineDraft] = React.useState<PublicAiModelCapabilityOverrides>(() => directCustomModelSettingsDraft(props.row))
   const [saving, setSaving] = React.useState(false)
-  const [confirmationOpen, setConfirmationOpen] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
-  React.useEffect(() => setDraft(props.row.capabilityOverrides ?? {}), [props.row.capabilityOverrides, props.row.id])
+  const [edited, setEdited] = React.useState(false)
+  // touchedFields preserves provider inheritance when one visible field is edited.
+  // touchedFields 在只编辑一个可见字段时保留供应商继承关系。
+  const [touchedFields, setTouchedFields] = React.useState<Set<string>>(new Set())
+  // dirty protects a real in-progress edit from unrelated runtime snapshot refreshes.
+  // dirty 保护真实进行中的编辑，避免被无关运行时快照刷新覆盖。
+  const dirty = !directProviderModelSettingsEqual(draft, baselineDraft)
+  // draftModelKey uniquely identifies the provider-model editor identity.
+  // draftModelKey 唯一标识供应商模型编辑器身份。
+  const draftModelKey = `${props.providerId}\u0000${props.row.id}`
+  // initializedModelKey tracks which identity currently owns the local draft.
+  // initializedModelKey 跟踪当前本地草稿所属的身份。
+  const initializedModelKey = React.useRef(draftModelKey)
+  React.useEffect(() => {
+    // modelChanged requires a full reset even when the previous model had unfinished edits.
+    // modelChanged 即使前一模型存在未完成编辑，也要求完整重置。
+    const modelChanged = initializedModelKey.current !== draftModelKey
+    if (!modelChanged && (dirty || edited)) {
+      return
+    }
+    // nextDraft becomes both the visible and comparison state for this authoritative row.
+    // nextDraft 同时成为该权威模型行的可见状态与比较状态。
+    const nextDraft = directCustomModelSettingsDraft(props.row)
+    initializedModelKey.current = draftModelKey
+    setDraft(nextDraft)
+    setBaselineDraft(nextDraft)
+    setError(null)
+    setEdited(false)
+    setTouchedFields(new Set())
+  }, [dirty, draftModelKey, edited, props.row])
 
-  // save writes one strict optional-field difference map.
-  // save 写入一个严格的可选字段差异映射。
-  const save = React.useCallback(async () => {
+  // updateDraft changes visible values; semantic comparison derives whether a real edit exists.
+  // updateDraft 修改可见值；是否存在真实编辑由语义比较推导。
+  const updateDraft = React.useCallback((
+    fields: string | readonly string[],
+    update: (current: PublicAiModelCapabilityOverrides) => PublicAiModelCapabilityOverrides,
+  ) => {
+    setDraft(update)
+    setEdited(true)
+    setTouchedFields((current) => {
+      const next = new Set(current)
+      for (const field of typeof fields === "string" ? [fields] : fields) {
+        next.add(field)
+      }
+      return next
+    })
+    setError(null)
+  }, [])
+
+  // settingsToPersist converts the complete visible draft into the sparse model patch accepted by the service.
+  // settingsToPersist 将完整可见草稿转换为服务端接受的稀疏模型补丁。
+  const settingsToPersist = React.useMemo(
+    () => buildCapabilityOverridePatch(draft, props.row.capabilityOverrides, touchedFields),
+    [draft, props.row.capabilityOverrides, touchedFields],
+  )
+
+  // persist writes the visible model layer or removes it to restore provider inheritance.
+  // persist 写入可见模型层，或移除该层以恢复供应商继承。
+  const persist = React.useCallback(async (restore: boolean) => {
+    if (!restore && (!Number.isSafeInteger(draft.context_limit) || (draft.context_limit ?? 0) <= 0)) {
+      setError(t("settings.modelCapabilities.contextInvalid"))
+      return
+    }
+    if (!restore && (!Number.isSafeInteger(draft.output_limit) || (draft.output_limit ?? 0) <= 0 || (draft.output_limit ?? 0) > (draft.context_limit ?? 0))) {
+      setError(t("settings.customModels.defaultsOutputInvalid"))
+      return
+    }
+    if (!restore && draft.reasoning !== "unsupported" && !(draft.reasoning_efforts ?? []).some((effort) => effort !== "none")) {
+      setError(t("settings.customModels.defaultsReasoningInvalid"))
+      return
+    }
     setSaving(true)
     setError(null)
     try {
-      const empty = Object.keys(draft).length === 0
       props.onSaved(await savePublicAiModelCapabilityOverrides({
         providerId: props.providerId,
         modelId: props.row.id,
-        overrides: empty ? undefined : draft,
+        overrides: restore ? undefined : settingsToPersist,
       }))
-      setConfirmationOpen(false)
+      setBaselineDraft(draft)
+      setEdited(false)
+      setTouchedFields(new Set())
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
       setSaving(false)
     }
-  }, [draft, props])
+  }, [draft, props, settingsToPersist, t])
 
-  // summaryValue explains every explicit capability difference before persistence.
-  // summaryValue 在持久化前说明每一项显式能力差异。
-  const summaryValue = [
-    draft.context_limit !== undefined
-      ? `${t("settings.customModels.contextLimit")}: ${draft.context_limit.toLocaleString()}`
-      : null,
-    draft.output_limit !== undefined
-      ? `${t("settings.customModels.outputLimit")}: ${draft.output_limit.toLocaleString()}`
-      : null,
-    draft.input_resources !== undefined
-      ? `${t("settings.customModels.input")}: ${draft.input_resources.length > 0 ? draft.input_resources.map((resource) => t(RESOURCE_LABEL_KEYS[resource])).join(", ") : t("settings.customModels.textOnly")}`
-      : null,
-    draft.output_resources !== undefined
-      ? `${t("settings.customModels.output")}: ${draft.output_resources.length > 0 ? draft.output_resources.map((resource) => t(RESOURCE_LABEL_KEYS[resource])).join(", ") : t("settings.customModels.textOnly")}`
-      : null,
-  ].filter((value): value is string => value !== null).join(" · ") || t("settings.customModels.summaryRemoveOverrides")
+  // restore discards an unsaved draft locally or removes an existing persisted model layer.
+  // restore 在本地丢弃未保存草稿，或移除已持久化模型层。
+  const restore = React.useCallback(() => {
+    if (props.row.capabilityOverrides) {
+      void persist(true)
+      return
+    }
+    // nextDraft discards only the unsaved local delta when no persisted model layer exists.
+    // nextDraft 在不存在已持久化模型层时，仅丢弃未保存的本地差异。
+    const nextDraft = directCustomModelSettingsDraft(props.row)
+    setDraft(nextDraft)
+    setBaselineDraft(nextDraft)
+    setEdited(false)
+    setTouchedFields(new Set())
+    setError(null)
+  }, [persist, props.row])
+
+  // reasoningEnabled projects the paired support and control contract into one clear switch.
+  // reasoningEnabled 将配对的支持与控制契约投影为一个清晰开关。
+  const reasoningEnabled = draft.reasoning !== "unsupported" && draft.reasoning_control !== "fixed_off"
+  // toolCallingEnabled projects tool support into one direct switch.
+  // toolCallingEnabled 将工具支持投影为一个直接开关。
+  const toolCallingEnabled = draft.tool_calling !== "unsupported"
 
   return (
     <div className="space-y-4 rounded-lg border p-4">
-      <p className="text-sm text-muted-foreground">{t("settings.modelCapabilities.overlayHint")}</p>
-      <OptionalNumberOverride label={t("settings.customModels.contextLimit")} onChange={(value) => setDraft((current) => ({ ...current, context_limit: value }))} onEnabledChange={(enabled) => setDraft((current) => withoutOptionalField(current, "context_limit", enabled ? props.row.effectiveModel?.capabilities.context_limit ?? 200_000 : undefined))} value={draft.context_limit} />
-      <OptionalNumberOverride label={t("settings.customModels.outputLimit")} onChange={(value) => setDraft((current) => ({ ...current, output_limit: value }))} onEnabledChange={(enabled) => setDraft((current) => withoutOptionalField(current, "output_limit", enabled ? props.row.effectiveModel?.capabilities.output_limit ?? 32_768 : undefined))} value={draft.output_limit} />
-      <OptionalResourceOverride field="input_resources" label={t("settings.customModels.input")} onChange={setDraft} value={draft.input_resources} />
-      <OptionalResourceOverride field="output_resources" label={t("settings.customModels.output")} onChange={setDraft} value={draft.output_resources} />
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      <div className="flex justify-end gap-2"><Button onClick={() => setDraft({})} type="button" variant="outline">{t("settings.modelCapabilities.restore")}</Button><Button disabled={saving} onClick={() => setConfirmationOpen(true)} type="button">{saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}{t("settings.customModels.saveCapabilityOverrides")}</Button></div>
-      <CustomProviderChangeSummaryDialog
-        description={t("settings.customModels.changeSummaryDescription").replace("{model}", props.row.displayName)}
-        error={error}
-        items={[
-          { label: t("settings.customModels.summaryModel"), value: props.row.displayName },
-          { label: t("settings.customModels.summaryCapabilityOverrides"), value: summaryValue },
-        ]}
-        onConfirm={() => void save()}
-        onOpenChange={(open) => {
-          if (!saving) setConfirmationOpen(open)
-        }}
-        open={confirmationOpen}
-        saving={saving}
-      />
-    </div>
-  )
-}
-
-// OptionalNumberOverride edits one optional positive integer difference.
-// OptionalNumberOverride 编辑一个可选的正整数差异。
-function OptionalNumberOverride(props: { label: string; onChange: (value: number) => void; onEnabledChange: (enabled: boolean) => void; value?: number }) {
-  return <div className="grid gap-2 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center"><label className="flex items-center gap-2 text-sm"><Checkbox checked={props.value !== undefined} onCheckedChange={(checked) => props.onEnabledChange(Boolean(checked))} />{props.label}</label><Input disabled={props.value === undefined} inputMode="numeric" onChange={(event) => props.onChange(Number.parseInt(event.target.value.replace(/\D/g, "") || "0", 10))} value={props.value ?? ""} /></div>
-}
-
-// OptionalResourceOverride edits one optional complete resource-set replacement.
-// OptionalResourceOverride 编辑一个可选的完整资源集合替换。
-function OptionalResourceOverride(props: { field: "input_resources" | "output_resources"; label: string; onChange: React.Dispatch<React.SetStateAction<PublicAiModelCapabilityOverrides>>; value?: PublicAiResourceKind[] }) {
-  const { t } = useI18n()
-  return (
-    <fieldset className="rounded-lg border p-3">
-      <legend className="px-1 text-sm font-medium"><label className="flex items-center gap-2"><Checkbox checked={props.value !== undefined} onCheckedChange={(checked) => props.onChange((current) => withoutOptionalField(current, props.field, checked ? [] : undefined))} />{props.label}</label></legend>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        {RESOURCE_KINDS.map((resource) => <label className="flex items-center gap-2 text-sm" key={resource}><Checkbox checked={props.value?.includes(resource) ?? false} disabled={props.value === undefined} onCheckedChange={(checked) => props.onChange((current) => ({ ...current, [props.field]: checked ? [...(props.value ?? []), resource] : (props.value ?? []).filter((item) => item !== resource) }))} />{t(RESOURCE_LABEL_KEYS[resource])}</label>)}
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">{t("settings.modelCapabilities.overlayHint")}</p>
+        <Badge variant={props.row.capabilityOverrides ? "default" : "outline"}>{t(props.row.capabilityOverrides ? "settings.modelCapabilities.modelSource" : "settings.modelCapabilities.inheritedSource")}</Badge>
       </div>
-    </fieldset>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="grid gap-2 text-sm font-medium">{t("settings.customModels.contextLimit")}<Input inputMode="numeric" onChange={(event) => updateDraft("context_limit", (current) => ({ ...current, context_limit: Number.parseInt(event.target.value.replace(/\D/g, "") || "0", 10) }))} value={draft.context_limit ?? ""} /></label>
+        <label className="grid gap-2 text-sm font-medium">{t("settings.customModels.outputLimit")}<Input inputMode="numeric" onChange={(event) => updateDraft("output_limit", (current) => ({ ...current, output_limit: Number.parseInt(event.target.value.replace(/\D/g, "") || "0", 10) }))} value={draft.output_limit ?? ""} /></label>
+      </div>
+      <fieldset className="rounded-lg border p-3">
+        <legend className="px-1 text-sm font-medium">{t("settings.customModels.input")}</legend>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {RESOURCE_KINDS.map((resource) => <label className="flex items-center gap-2 text-sm" key={resource}><Checkbox checked={(draft.input_resources ?? []).includes(resource)} onCheckedChange={(checked) => updateDraft("input_resources", (current) => ({ ...current, input_resources: checked ? [...(current.input_resources ?? []), resource] : (current.input_resources ?? []).filter((item) => item !== resource) }))} />{t(RESOURCE_LABEL_KEYS[resource])}</label>)}
+        </div>
+      </fieldset>
+      <div className="rounded-lg border bg-muted/30 p-3">
+        <p className="text-sm font-medium">{t("settings.customModels.output")}: {t("settings.models.modality.text")}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{t("settings.customModels.fixedTextOutputDescription")}</p>
+      </div>
+      <div className="space-y-3 rounded-lg border p-3">
+        <label className="flex items-center justify-between gap-3 text-sm font-medium"><span>{t("settings.customModels.reasoning")}</span><Switch checked={reasoningEnabled} onCheckedChange={(checked) => updateDraft(["reasoning", "reasoning_control", "reasoning_efforts"], (current) => ({ ...current, reasoning: checked ? "native" : "unsupported", reasoning_control: checked ? "effort_selection" : "fixed_off", reasoning_efforts: checked ? [...OPENAI_DIRECT_REASONING_EFFORTS] : ["none"] }))} /></label>
+        {reasoningEnabled ? <div className="flex flex-wrap gap-2">{OPENAI_DIRECT_REASONING_EFFORTS.map((effort) => <label className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm" key={effort}><Checkbox checked={(draft.reasoning_efforts ?? []).includes(effort)} disabled={effort !== "none" && (draft.reasoning_efforts ?? []).includes(effort) && (draft.reasoning_efforts ?? []).filter((item) => item !== "none").length === 1} onCheckedChange={(checked) => updateDraft("reasoning_efforts", (current) => ({ ...current, reasoning_efforts: checked ? [...(current.reasoning_efforts ?? []), effort] : (current.reasoning_efforts ?? []).filter((item) => item !== effort) }))} />{t(REASONING_EFFORT_LABEL_KEYS[effort])}</label>)}</div> : null}
+      </div>
+      <label className="flex items-center justify-between gap-3 rounded-lg border p-3 text-sm font-medium"><span>{t("settings.customModels.toolCalling")}</span><Switch checked={toolCallingEnabled} onCheckedChange={(checked) => updateDraft("tool_calling", (current) => ({ ...current, tool_calling: checked ? "native" : "unsupported" }))} /></label>
+      <ReasoningProjectionEditor
+        efforts={draft.reasoning_efforts?.length ? draft.reasoning_efforts : ["none"]}
+        onChange={(request_projection) => updateDraft("request_projection", (current) => ({ ...current, request_projection }))}
+        projection={draft.request_projection ?? EMPTY_PROJECTION}
+      />
+      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      <div className="flex justify-end gap-2"><Button disabled={saving || (!props.row.capabilityOverrides && !dirty && !edited)} onClick={restore} type="button" variant="outline">{t("settings.modelCapabilities.restore")}</Button><Button disabled={saving || (!dirty && !edited)} onClick={() => void persist(false)} type="button">{saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}{t("settings.customModels.saveCapabilityOverrides")}</Button></div>
+    </div>
   )
 }
 
 // AdvancedModelEditor edits manual identity metadata and protocol-specific exact declarations.
 // AdvancedModelEditor 编辑手工身份元数据与协议专属精确声明。
 function AdvancedModelEditor(props: {
-  manualDefinition?: PublicAiCustomModelDefinition
-  onCreateOverlay: () => Promise<void>
-  onRemove: () => void
+  customized: boolean
+  dirty: boolean
+  manualDefinition: PublicAiCustomModelDefinition
+  onRestore: () => void
   onSave: () => void
   onUpdate: (update: (model: PublicAiCustomModelDefinition) => PublicAiCustomModelDefinition) => void
   parameterText: string
@@ -1370,38 +1438,16 @@ function AdvancedModelEditor(props: {
   saving: boolean
 }) {
   const { t } = useI18n()
-  if (!props.manualDefinition) {
-    return <Alert><SlidersHorizontal className="size-4" /><AlertTitle>{t("settings.customModels.advancedUnavailable")}</AlertTitle><AlertDescription className="space-y-3"><p>{t("settings.customModels.advancedCreateHint")}</p><Button onClick={() => void props.onCreateOverlay()} size="sm" type="button">{t("settings.customModels.advancedCreate")}</Button></AlertDescription></Alert>
-  }
+  // model is always the visible inherited or explicit definition and is editable immediately.
+  // model 始终是可见的继承或显式定义，并且可以立即编辑。
   const model = props.manualDefinition
   return (
     <div className="space-y-4">
       <label className="grid gap-2 text-sm font-medium">{t("settings.customModels.displayName")}<Input onChange={(event) => props.onUpdate((current) => ({ ...current, display_name: event.target.value }))} value={model.display_name} /></label>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <CapabilitySelect label={t("settings.customModels.toolCalling")} onChange={(value) => props.onUpdate((current) => ({ ...current, capabilities: { ...current.capabilities, tool_calling: value } }))} value={model.capabilities.tool_calling as ReasoningSupport} />
-        <CapabilitySelect label={t("settings.customModels.reasoning")} onChange={(value) => props.onUpdate((current) => ({ ...current, capabilities: { ...current.capabilities, reasoning: value } }))} value={model.capabilities.reasoning as ReasoningSupport} />
-      </div>
-      <ReasoningControlEditor model={model} onUpdate={props.onUpdate} />
       <Accordion collapsible type="single"><AccordionItem value="json"><AccordionTrigger>{t("settings.customModels.advanced")}</AccordionTrigger><AccordionContent className="space-y-4"><label className="grid gap-2 text-sm font-medium">{t("settings.customModels.parameters")}<Textarea className="min-h-32 font-mono text-xs" onChange={(event) => props.setParameterText(event.target.value)} spellCheck={false} value={props.parameterText} /></label><label className="grid gap-2 text-sm font-medium">{t("settings.customModels.projection")}<Textarea className="min-h-52 font-mono text-xs" onChange={(event) => props.setProjectionText(event.target.value)} spellCheck={false} value={props.projectionText} /></label></AccordionContent></AccordionItem></Accordion>
-      <div className="flex flex-wrap justify-between gap-2"><Button className="text-destructive hover:text-destructive" onClick={props.onRemove} type="button" variant="outline"><Trash2 className="mr-2 size-4" />{t("settings.customModels.remove")}</Button><Button disabled={props.saving} onClick={props.onSave} type="button">{t("settings.customModels.saveAdvanced")}</Button></div>
+      <div className="flex flex-wrap justify-end gap-2">{props.customized ? <Button disabled={props.saving} onClick={props.onRestore} type="button" variant="outline"><Trash2 className="mr-2 size-4" />{t("settings.modelCapabilities.restore")}</Button> : null}<Button disabled={props.saving || !props.dirty} onClick={props.onSave} type="button">{t("settings.customModels.saveAdvanced")}</Button></div>
     </div>
   )
-}
-
-// ReasoningControlEditor edits the exact manual-model reasoning behavior and levels.
-// ReasoningControlEditor 编辑精确的手工模型思考行为与档位。
-function ReasoningControlEditor(props: { model: PublicAiCustomModelDefinition; onUpdate: (update: (model: PublicAiCustomModelDefinition) => PublicAiCustomModelDefinition) => void }) {
-  const { t } = useI18n()
-  const controls = Object.keys(REASONING_CONTROL_LABEL_KEYS) as Array<keyof typeof REASONING_CONTROL_LABEL_KEYS>
-  return <div className="space-y-3"><label className="grid gap-2 text-sm font-medium">{t("settings.customModels.reasoningControl")}<Select onValueChange={(value) => props.onUpdate((model) => ({ ...model, capabilities: { ...model.capabilities, reasoning_control: value } }))} value={props.model.capabilities.reasoning_control ?? "unknown"}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{controls.map((value) => <SelectItem key={value} value={value}>{t(REASONING_CONTROL_LABEL_KEYS[value])}</SelectItem>)}</SelectContent></Select></label><div className="flex flex-wrap gap-2">{REASONING_EFFORTS.map((effort) => <label className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm" key={effort}><Checkbox checked={(props.model.capabilities.reasoning_efforts ?? []).includes(effort)} onCheckedChange={(checked) => props.onUpdate((model) => ({ ...model, capabilities: { ...model.capabilities, reasoning_efforts: checked ? [...(model.capabilities.reasoning_efforts ?? []), effort] : (model.capabilities.reasoning_efforts ?? []).filter((item) => item !== effort) } }))} />{t(REASONING_EFFORT_LABEL_KEYS[effort])}</label>)}</div></div>
-}
-
-// CapabilitySelect renders the closed provider-neutral support fidelity values.
-// CapabilitySelect 渲染封闭的供应商无关支持保真度值。
-function CapabilitySelect(props: { label: string; onChange: (value: ReasoningSupport) => void; value: ReasoningSupport }) {
-  const { t } = useI18n()
-  const values = Object.keys(SUPPORT_LABEL_KEYS) as ReasoningSupport[]
-  return <label className="grid gap-2 text-sm font-medium">{props.label}<Select onValueChange={(value) => props.onChange(value as ReasoningSupport)} value={props.value}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{values.map((value) => <SelectItem key={value} value={value}>{t(SUPPORT_LABEL_KEYS[value])}</SelectItem>)}</SelectContent></Select></label>
 }
 
 // ManualModelDialog asks for a real model ID before any model object is created.
@@ -1466,7 +1512,7 @@ function ManualModelDialog(props: {
     if (props.existingIds.has(id)) { setError(t("settings.customModels.duplicateId").replace("{model}", id)); return }
     const selected = suggestions.find((suggestion) => suggestion.template_key === choice)
     const firstSuggestion = suggestions[0]
-    const decision = selected ? { decision: "applied" as const, selection: { template_key: selected.template_key, template_revision: selected.template_revision, context_limit: selected.context_limit, supports_text_input: selected.supports_text_input, supports_text_output: selected.supports_text_output, input_resources: selected.input_resources, output_resources: selected.output_resources } } : firstSuggestion ? { decision: "rejected" as const, template_key: firstSuggestion.template_key, template_revision: firstSuggestion.template_revision } : undefined
+    const decision = selected ? { decision: "applied" as const, selection: { template_key: selected.template_key, template_revision: selected.template_revision, context_limit: selected.context_limit, supports_text_input: selected.supports_text_input, supports_text_output: selected.supports_text_output, input_resources: selected.input_resources, output_resources: [] } } : firstSuggestion ? { decision: "rejected" as const, template_key: firstSuggestion.template_key, template_revision: firstSuggestion.template_revision } : undefined
     setSaving(true)
     setError(null)
     try { await props.onSaved(newManualModel(id, displayName.trim() || id), decision) } catch (reason) { setError(errorMessage(reason)) } finally { setSaving(false) }
@@ -1567,39 +1613,31 @@ function capabilitySource(
 ): string {
   if (row.capabilityOverrides && field in row.capabilityOverrides) return t("settings.customModels.sourceUserOverride")
   const evidence = account?.discoveredModel?.capability_evidence
+    ?? account?.supportModel?.capability_evidence
     ?? account?.effectiveModel?.capability_evidence
   if (evidence) {
     if (field === "context_limit" && evidence.context_limit_declared) return t("settings.customModels.sourceAccount")
     if (field === "output_limit" && evidence.output_limit_declared) return t("settings.customModels.sourceAccount")
     if (field === "input_resources" && evidence.input_modalities_declared) return t("settings.customModels.sourceAccount")
-    if (field === "output_resources" && evidence.output_modalities_declared) return t("settings.customModels.sourceAccount")
   }
   if (row.templateDecision?.decision === "applied" && field !== "output_limit") return t("settings.customModels.sourceTemplate")
   return t("settings.customModels.sourceProviderDefault")
 }
 
-// resolvedTextSupport resolves text modality without treating an explicit false value as missing.
-// resolvedTextSupport 解析文本模态且不会把显式 false 当作缺失值。
-function resolvedTextSupport(
+// resolvedInputTextSupport resolves input text support without treating explicit false as missing.
+// resolvedInputTextSupport 解析输入文本支持且不会把显式 false 当作缺失值。
+function resolvedInputTextSupport(
   row: CustomProviderModelRow,
   account: CustomProviderModelAccountState | undefined,
-  direction: "input" | "output",
 ): boolean {
   const evidence = account?.discoveredModel?.capability_evidence
+    ?? account?.supportModel?.capability_evidence
     ?? account?.effectiveModel?.capability_evidence
-  const declared = direction === "input"
-    ? evidence?.input_modalities_declared
-    : evidence?.output_modalities_declared
-  const supported = direction === "input"
-    ? evidence?.supports_text_input
-    : evidence?.supports_text_output
-  if (declared) {
-    return supported === true
+  if (evidence?.input_modalities_declared) {
+    return evidence.supports_text_input === true
   }
   if (row.templateDecision?.decision === "applied") {
-    return direction === "input"
-      ? row.templateDecision.selection.supports_text_input
-      : row.templateDecision.selection.supports_text_output
+    return row.templateDecision.selection.supports_text_input
   }
   return true
 }
@@ -1622,15 +1660,6 @@ function resourceSummary(
 // formatObservationTime 渲染进程内发现时间且不会虚构时间戳。
 function formatObservationTime(observedAtMs: number, fallback: string): string {
   return observedAtMs > 0 ? new Date(observedAtMs).toLocaleString() : fallback
-}
-
-// withoutOptionalField sets or removes one exact optional field without multi-source guessing.
-// withoutOptionalField 设置或移除一个精确可选字段且不进行多来源猜测。
-function withoutOptionalField<Field extends keyof PublicAiModelCapabilityOverrides>(current: PublicAiModelCapabilityOverrides, field: Field, value: PublicAiModelCapabilityOverrides[Field]): PublicAiModelCapabilityOverrides {
-  const next = { ...current }
-  if (value === undefined) delete next[field]
-  else next[field] = value
-  return next
 }
 
 // cloneCustomModel creates an isolated editable copy of one persisted model definition.

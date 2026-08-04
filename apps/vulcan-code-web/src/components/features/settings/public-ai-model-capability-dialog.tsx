@@ -1,6 +1,12 @@
 import * as React from "react"
 import { LoaderCircle, RotateCcw } from "lucide-react"
 
+import {
+  directProviderModelSettingsEqual,
+  OPENAI_DIRECT_REASONING_EFFORTS,
+  projectOpenAiReasoningEfforts,
+} from "@/components/features/settings/direct-provider-model-settings"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -12,17 +18,23 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
 import { useI18n } from "@/i18n"
-import { savePublicAiModelCapabilityOverrides } from "@/service/settings-actions-service"
+import {
+  savePublicAiModelCapabilityOverrides,
+  savePublicAiProviderCapabilityOverrides,
+} from "@/service/settings-actions-service"
 import type {
+  PublicAiCustomModelRequestProjection,
+  PublicAiCustomRequestMutation,
   PublicAiModel,
   PublicAiModelCapabilityOverrides,
   PublicAiResourceKind,
   PublicAiSettingsSnapshot,
 } from "@/types"
 
-// ModelCapabilityDialogProps identifies one immutable model and its optional user difference.
-// ModelCapabilityDialogProps 标识一个不可变模型及其可选用户差异。
+// ModelCapabilityDialogProps identifies one model and its optional direct model-settings layer.
+// ModelCapabilityDialogProps 标识一个模型及其可选直接模型设置层。
 interface ModelCapabilityDialogProps {
   model: PublicAiModel | null
   onOpenChange: (open: boolean) => void
@@ -31,34 +43,117 @@ interface ModelCapabilityDialogProps {
   overrides?: PublicAiModelCapabilityOverrides
   providerDisplayName: string | null
   providerId: string | null
+  // scope selects whether the editor persists a model layer or a provider layer.
+  // scope 选择编辑器保存模型层还是供应商层。
+  scope?: "model" | "provider"
 }
 
-// RESOURCE_KINDS is the complete non-text resource set owned by the common contract.
-// RESOURCE_KINDS 是公共契约拥有的完整非文本资源集合。
-const RESOURCE_KINDS: PublicAiResourceKind[] = ["image", "audio", "video", "file"]
+// INPUT_RESOURCE_KINDS is the complete non-text input set editable by this generic dialog.
+// INPUT_RESOURCE_KINDS 是此通用对话框可编辑的完整非文本输入集合。
+const INPUT_RESOURCE_KINDS: PublicAiResourceKind[] = ["image", "audio", "video", "file"]
 
-// RESOURCE_LABEL_KEYS maps closed resource values to localized model-modality labels.
-// RESOURCE_LABEL_KEYS 将封闭资源值映射到本地化模型模态标签。
-const RESOURCE_LABEL_KEYS = {
-  image: "settings.models.modality.image",
-  audio: "settings.models.modality.audio",
-  video: "settings.models.modality.video",
-  file: "settings.models.modality.file",
+// REASONING_EFFORT_LABEL_KEYS maps each editable effort to one localized label.
+// REASONING_EFFORT_LABEL_KEYS 将每个可编辑档位映射到本地化标签。
+const REASONING_EFFORT_LABEL_KEYS = {
+  none: "settings.customModels.effortNone",
+  minimal: "settings.customModels.effortMinimal",
+  low: "settings.customModels.effortLow",
+  medium: "settings.customModels.effortMedium",
+  high: "settings.customModels.effortHigh",
+  xhigh: "settings.customModels.effortExtraHigh",
+  max: "settings.customModels.effortMax",
 } as const
 
-// PublicAiModelCapabilityDialog edits only user differences from immutable capability sources.
-// PublicAiModelCapabilityDialog 仅编辑用户相对于不可变能力来源的差异。
+// PublicAiModelCapabilityDialog displays effective values and saves only explicitly touched fields.
+// PublicAiModelCapabilityDialog 显示有效值，并且只保存用户明确触碰过的字段。
 export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps) {
   const { t } = useI18n()
+  // initializedModelKey prevents snapshot refreshes from overwriting an open editor draft.
+  // initializedModelKey 防止快照刷新覆盖已打开编辑器中的草稿。
   const initializedModelKey = React.useRef<string | null>(null)
-  const [contextLimit, setContextLimit] = React.useState(200000)
-  const [overrideContext, setOverrideContext] = React.useState(false)
+  // contextLimit is the current direct model context value.
+  // contextLimit 是当前直接模型上下文值。
+  const [contextLimit, setContextLimit] = React.useState(200_000)
+  // outputLimit is the current direct model output-token ceiling.
+  // outputLimit 是当前直接模型输出 Token 上限。
+  const [outputLimit, setOutputLimit] = React.useState(32_768)
+  // inputResources is the complete model-level non-text input set.
+  // inputResources 是完整的模型级非文本输入集合。
   const [inputResources, setInputResources] = React.useState<PublicAiResourceKind[]>([])
-  const [outputResources, setOutputResources] = React.useState<PublicAiResourceKind[]>([])
-  const [overrideInput, setOverrideInput] = React.useState(false)
-  const [overrideOutput, setOverrideOutput] = React.useState(false)
+  // reasoningEnabled is the simple user-defined model reasoning policy.
+  // reasoningEnabled 是简化的自定义模型思考策略。
+  const [reasoningEnabled, setReasoningEnabled] = React.useState(true)
+  // reasoningEfforts is the complete OpenAI-compatible model level set.
+  // reasoningEfforts 是完整的 OpenAI 兼容模型档位集合。
+  const [reasoningEfforts, setReasoningEfforts] = React.useState<string[]>([])
+  // toolCallingEnabled is the direct user-defined model tool policy.
+  // toolCallingEnabled 是直接自定义模型工具策略。
+  const [toolCallingEnabled, setToolCallingEnabled] = React.useState(true)
+  const [requestProjection, setRequestProjection] = React.useState<PublicAiCustomModelRequestProjection>(emptyRequestProjection())
+  // touchedFields preserves sparse provider edits instead of copying one model's full effective values.
+  // touchedFields 保留供应商级稀疏编辑，避免把某一个模型的完整有效值复制给整个供应商。
+  const [touchedFields, setTouchedFields] = React.useState<Set<string>>(new Set())
+  // edited stays true after a user touches a control even when values return to the baseline.
+  // edited 即使值恢复到基线，也会在用户触碰控件后保持为真。
+  const [edited, setEdited] = React.useState(false)
+  // saving serializes model-settings writes.
+  // saving 串行化模型设置写入。
   const [saving, setSaving] = React.useState(false)
+  // error contains one current validation or service failure.
+  // error 保存当前校验或服务失败。
   const [error, setError] = React.useState<string | null>(null)
+  // baselineSettings is the authoritative complete value used for semantic dirty tracking.
+  // baselineSettings 是用于语义脏状态跟踪的权威完整值。
+  const [baselineSettings, setBaselineSettings] = React.useState<PublicAiModelCapabilityOverrides>({})
+  // isCustomProvider gates controls that may override compatible-provider runtime declarations.
+  // isCustomProvider 限定可覆盖兼容供应商运行时声明的控件。
+  // currentSettings is the complete model layer represented by the visible direct controls.
+  // currentSettings 是可见直接控件所表示的完整模型层。
+  const currentSettings = React.useMemo<PublicAiModelCapabilityOverrides>(() => ({
+    context_limit: contextLimit,
+    output_limit: outputLimit,
+    input_resources: inputResources,
+    reasoning: reasoningEnabled ? "native" : "unsupported",
+    reasoning_control: reasoningEnabled ? "effort_selection" : "fixed_off",
+    reasoning_efforts: reasoningEnabled ? reasoningEfforts : ["none"],
+    tool_calling: toolCallingEnabled ? "native" : "unsupported",
+    request_projection: requestProjection,
+  }), [contextLimit, inputResources, outputLimit, reasoningEfforts, reasoningEnabled, requestProjection, toolCallingEnabled])
+  // dirty is true only when the visible model layer differs semantically from its authoritative baseline.
+  // dirty 仅在可见模型层与权威基线存在语义差异时为真。
+  const dirty = !directProviderModelSettingsEqual(currentSettings, baselineSettings)
+
+  // markField records explicit user ownership for one sparse provider field.
+  // markField 记录一个供应商稀疏字段已由用户明确持有。
+  const markField = React.useCallback((field: string) => {
+    setEdited(true)
+    setTouchedFields((current) => new Set(current).add(field))
+  }, [])
+
+  // settingsToPersist preserves inheritance by sending a sparse patch for either scope.
+  // settingsToPersist 为两个作用域都发送稀疏补丁，从而保留未修改字段的继承关系。
+  const settingsToPersist = React.useMemo<PublicAiModelCapabilityOverrides>(() => {
+    return buildCapabilityOverridePatch(currentSettings, props.overrides, touchedFields)
+  }, [currentSettings, props.overrides, touchedFields])
+
+  // resetDraft projects one complete model layer into the simplified direct controls.
+  // resetDraft 将一层完整模型设置投影到简化直接控件。
+  const resetDraft = React.useCallback((settings: PublicAiModelCapabilityOverrides) => {
+    setContextLimit(settings.context_limit ?? 200_000)
+    setOutputLimit(settings.output_limit ?? 32_768)
+    setInputResources(settings.input_resources ?? [])
+    // reasoningEnabled requires both support and control to remain active.
+    // reasoningEnabled 要求支持与控制同时保持启用。
+    const nextReasoningEnabled = settings.reasoning !== "unsupported"
+      && settings.reasoning_control !== "fixed_off"
+    setReasoningEnabled(nextReasoningEnabled)
+    setReasoningEfforts(projectOpenAiReasoningEfforts(settings.reasoning_efforts ?? []))
+    setToolCallingEnabled(settings.tool_calling !== "unsupported")
+    setRequestProjection(normalizeRequestProjection(settings.request_projection))
+    setTouchedFields(new Set())
+    setEdited(false)
+    setError(null)
+  }, [])
 
   React.useEffect(() => {
     if (!props.open) {
@@ -68,42 +163,57 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
     if (!props.providerId || !props.model) {
       return
     }
-    const modelKey = `${props.providerId}\u0000${props.model.id}`
-    if (initializedModelKey.current === modelKey) {
+    // modelKey uniquely identifies the draft across provider and model switches.
+    // modelKey 在供应商与模型切换之间唯一标识草稿。
+    const modelKey = `${props.scope ?? "model"}\u0000${props.providerId}\u0000${props.model.id}`
+    // modelChanged forces a complete reset even when the previous model had an unfinished edit.
+    // modelChanged 即使前一模型存在未完成编辑，也会强制完整重置。
+    const modelChanged = initializedModelKey.current !== modelKey
+    if (!modelChanged && (dirty || edited)) {
       return
     }
-    setContextLimit(props.overrides?.context_limit ?? props.model.capabilities.context_limit ?? 200000)
-    setOverrideContext(props.overrides?.context_limit !== undefined)
-    setInputResources(props.overrides?.input_resources ?? props.model.capabilities.input_resources ?? [])
-    setOutputResources(props.overrides?.output_resources ?? props.model.capabilities.output_resources ?? [])
-    setOverrideInput(props.overrides?.input_resources !== undefined)
-    setOverrideOutput(props.overrides?.output_resources !== undefined)
-    setError(null)
+    // nextSettings resolves explicit values first and then the effective backend model.
+    // nextSettings 先解析显式值，再回退到后端有效模型。
+    const nextSettings = modelCapabilitySettingsDraft(
+      props.model,
+      props.overrides,
+    )
+    resetDraft(nextSettings)
+    setBaselineSettings(nextSettings)
     initializedModelKey.current = modelKey
-  }, [props.model, props.open, props.overrides, props.providerId])
+  }, [dirty, edited, props.model, props.open, props.overrides, props.providerId, props.scope, resetDraft])
 
-  // persist sends one exact difference object or null to restore source defaults.
-  // persist 发送一个精确差异对象，或发送 null 以恢复来源默认值。
+  // persist saves the complete visible model layer or removes it to restore provider inheritance.
+  // persist 保存完整可见模型层，或移除该层以恢复供应商继承。
   const persist = React.useCallback(async (restore: boolean) => {
     if (!props.providerId || !props.model) {
       return
     }
-    if (!restore && overrideContext && (!Number.isSafeInteger(contextLimit) || contextLimit <= 0)) {
+    if (!restore && (!Number.isSafeInteger(contextLimit) || contextLimit <= 0)) {
       setError(t("settings.modelCapabilities.contextInvalid"))
+      return
+    }
+    if (!restore && (!Number.isSafeInteger(outputLimit) || outputLimit <= 0 || outputLimit > contextLimit)) {
+      setError(t("settings.customModels.defaultsOutputInvalid"))
+      return
+    }
+    if (!restore && reasoningEnabled && !reasoningEfforts.some((effort) => effort !== "none")) {
+      setError(t("settings.customModels.defaultsReasoningInvalid"))
       return
     }
     setSaving(true)
     setError(null)
     try {
-      const nextSnapshot = await savePublicAiModelCapabilityOverrides({
-        providerId: props.providerId,
-        modelId: props.model.id,
-        overrides: restore ? undefined : {
-          context_limit: overrideContext ? contextLimit : undefined,
-          input_resources: overrideInput ? inputResources : undefined,
-          output_resources: overrideOutput ? outputResources : undefined,
-        },
-      })
+      const nextSnapshot = props.scope === "provider"
+        ? await savePublicAiProviderCapabilityOverrides({
+            providerId: props.providerId,
+            overrides: restore ? undefined : settingsToPersist,
+          })
+        : await savePublicAiModelCapabilityOverrides({
+            providerId: props.providerId,
+            modelId: props.model.id,
+            overrides: restore ? undefined : settingsToPersist,
+          })
       props.onSaved(nextSnapshot)
       props.onOpenChange(false)
     } catch (reason) {
@@ -111,54 +221,137 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
     } finally {
       setSaving(false)
     }
-  }, [contextLimit, inputResources, outputResources, overrideContext, overrideInput, overrideOutput, props, t])
+  }, [contextLimit, outputLimit, props, reasoningEfforts, reasoningEnabled, settingsToPersist, t])
+
+  // restore removes a persisted model layer or discards an unsaved local draft.
+  // restore 移除已持久化模型层，或丢弃未保存的本地草稿。
+  const restore = React.useCallback(() => {
+    if (props.overrides) {
+      void persist(true)
+      return
+    }
+    resetDraft(baselineSettings)
+  }, [baselineSettings, persist, props.overrides, resetDraft])
 
   return (
-    <Dialog onOpenChange={props.onOpenChange} open={props.open}>
-      <DialogContent className="sm:max-w-[620px]">
+    <Dialog
+      onOpenChange={(open) => {
+        if (!open && saving) {
+          return
+        }
+        props.onOpenChange(open)
+      }}
+      open={props.open}
+    >
+      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-[680px]">
         <DialogHeader>
-          <DialogTitle>{t("settings.modelCapabilities.title")}</DialogTitle>
-          <DialogDescription>
-            {props.providerDisplayName} · {props.model?.display_name} · {t("settings.modelCapabilities.overlayHint")}
+          <DialogTitle>
+            {props.scope === "provider" ? "供应商默认能力" : t("settings.modelCapabilities.title")}
+          </DialogTitle>
+          <DialogDescription className="flex flex-wrap items-center gap-2">
+            <span>
+              {props.providerDisplayName} · {props.scope === "provider" ? "全部模型" : props.model?.display_name}
+            </span>
+            <Badge variant={props.overrides ? "secondary" : "outline"}>
+              {props.scope === "provider"
+                ? (props.overrides ? "供应商自定义" : "继承目录")
+                : t(props.overrides
+                  ? "settings.modelCapabilities.modelSource"
+                  : "settings.modelCapabilities.inheritedSource")}
+            </Badge>
           </DialogDescription>
         </DialogHeader>
-        <fieldset className="rounded-lg border p-4">
-          <legend className="px-1 text-sm font-medium">{t("settings.modelCapabilities.contextLimit")}</legend>
-          <label className="mb-4 flex items-center gap-2 text-sm">
-            <Checkbox checked={overrideContext} onCheckedChange={(checked) => setOverrideContext(checked === true)} />
-            {t("settings.modelCapabilities.overrideContext")}
-          </label>
-          <Input
-            disabled={!overrideContext}
-            inputMode="numeric"
-            onChange={(event) => setContextLimit(Number.parseInt(event.target.value.replace(/\D/g, "") || "0", 10))}
-            value={contextLimit || ""}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <DirectModelNumberInput
+            label={t("settings.modelCapabilities.contextLimit")}
+            onChange={(value) => { markField("context_limit"); setContextLimit(value) }}
+            value={contextLimit}
           />
-          <span className="mt-2 block text-xs font-normal text-muted-foreground">{t("settings.modelCapabilities.contextHint")}</span>
-        </fieldset>
-        <CapabilityResourceOverride
-          enabled={overrideInput}
-          label={t("settings.modelCapabilities.inputResources")}
-          onEnabledChange={setOverrideInput}
-          onValueChange={setInputResources}
-          value={inputResources}
-        />
-        <CapabilityResourceOverride
-          enabled={overrideOutput}
-          label={t("settings.modelCapabilities.outputResources")}
-          onEnabledChange={setOverrideOutput}
-          onValueChange={setOutputResources}
-          value={outputResources}
+          <DirectModelNumberInput
+            label={t("settings.customModels.outputLimit")}
+            onChange={(value) => { markField("output_limit"); setOutputLimit(value) }}
+            value={outputLimit}
+          />
+        </div>
+        <InputResourceEditor onChange={(value) => { markField("input_resources"); setInputResources(value) }} value={inputResources} />
+        {props.providerId?.startsWith("custom:") ? (
+          <fieldset className="rounded-lg border p-4">
+            <legend className="px-1 text-sm font-medium">{t("settings.customModels.output")}</legend>
+            <p className="text-sm font-medium">{t("settings.customModels.fixedTextOutput")}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t("settings.customModels.fixedTextOutputDescription")}
+            </p>
+          </fieldset>
+        ) : null}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <fieldset className="space-y-3 rounded-lg border p-4">
+              <legend className="px-1 text-sm font-medium">{t("settings.customModels.reasoning")}</legend>
+              <label className="flex items-center justify-between gap-3 text-sm">
+                <span>{t(reasoningEnabled ? "settings.customModels.enabled" : "settings.customModels.disabled")}</span>
+                <Switch
+                  checked={reasoningEnabled}
+                  onCheckedChange={(enabled) => {
+                    markField("reasoning")
+                    markField("reasoning_control")
+                    markField("reasoning_efforts")
+                    setReasoningEnabled(enabled)
+                    if (enabled && !reasoningEfforts.some((effort) => effort !== "none")) {
+                      setReasoningEfforts([...OPENAI_DIRECT_REASONING_EFFORTS])
+                    }
+                  }}
+                />
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {OPENAI_DIRECT_REASONING_EFFORTS.map((effort) => (
+                  <label className="flex items-center gap-2 text-xs" key={effort}>
+                    <Checkbox
+                      checked={reasoningEfforts.includes(effort)}
+                      disabled={!reasoningEnabled || (
+                        effort !== "none"
+                        && reasoningEfforts.includes(effort)
+                        && reasoningEfforts.filter((candidate) => candidate !== "none").length === 1
+                      )}
+                      onCheckedChange={(checked) => {
+                        markField("reasoning_efforts")
+                        setReasoningEfforts((current) => checked
+                          ? [...current, effort]
+                          : current.filter((candidate) => candidate !== effort))
+                      }}
+                    />
+                    {t(REASONING_EFFORT_LABEL_KEYS[effort])}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            <fieldset className="rounded-lg border p-4">
+              <legend className="px-1 text-sm font-medium">{t("settings.customModels.toolCalling")}</legend>
+              <label className="flex items-center justify-between gap-3 text-sm">
+                <span>{t(toolCallingEnabled ? "settings.customModels.enabled" : "settings.customModels.disabled")}</span>
+                <Switch checked={toolCallingEnabled} onCheckedChange={(enabled) => { markField("tool_calling"); setToolCallingEnabled(enabled) }} />
+              </label>
+              <p className="mt-2 text-xs text-muted-foreground">
+                {t("settings.customModels.toolCallingDefaultDescription")}
+              </p>
+            </fieldset>
+          </div>
+        </div>
+        <ReasoningProjectionEditor
+          efforts={reasoningEfforts.length > 0 ? reasoningEfforts : ["none"]}
+          onChange={(projection) => { markField("request_projection"); setRequestProjection(projection) }}
+          projection={requestProjection}
         />
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
         <DialogFooter className="sm:justify-between">
-          <Button disabled={saving || !props.overrides} onClick={() => void persist(true)} type="button" variant="ghost">
+          <Button disabled={saving || (!props.overrides && !dirty && !edited)} onClick={restore} type="button" variant="ghost">
             <RotateCcw className="mr-2 size-4" />
             {t("settings.modelCapabilities.restore")}
           </Button>
           <div className="flex justify-end gap-2">
-            <Button onClick={() => props.onOpenChange(false)} type="button" variant="outline">{t("memory.common.cancel")}</Button>
-            <Button disabled={saving} onClick={() => void persist(false)} type="button">
+            <Button disabled={saving} onClick={() => props.onOpenChange(false)} type="button" variant="outline">
+              {t("memory.common.cancel")}
+            </Button>
+            <Button disabled={saving || (!dirty && !edited)} onClick={() => void persist(false)} type="button">
               {saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
               {t("memory.common.save")}
             </Button>
@@ -169,32 +362,294 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
   )
 }
 
-// CapabilityResourceOverride distinguishes inheritance from an explicit empty modality set.
-// CapabilityResourceOverride 区分继承来源与显式空模态集合。
-function CapabilityResourceOverride(props: {
-  enabled: boolean
-  label: string
-  onEnabledChange: (enabled: boolean) => void
-  onValueChange: (value: PublicAiResourceKind[]) => void
+// buildCapabilityOverridePatch keeps untouched fields out of the persisted layer.
+// buildCapabilityOverridePatch 将未触碰字段排除在持久化层之外。
+export function buildCapabilityOverridePatch(
+  current: PublicAiModelCapabilityOverrides,
+  existing: PublicAiModelCapabilityOverrides | undefined,
+  touchedFields: ReadonlySet<string>,
+): PublicAiModelCapabilityOverrides {
+  const patch: PublicAiModelCapabilityOverrides = { ...(existing ?? {}) }
+  const reasoningTouched = ["reasoning", "reasoning_control", "reasoning_efforts"]
+    .some((field) => touchedFields.has(field))
+
+  // Reasoning support, control, and levels form one atomic backend contract.
+  // 思考支持、控制和档位在后端组成一个原子契约。
+  if (reasoningTouched) {
+    patch.reasoning = current.reasoning
+    patch.reasoning_control = current.reasoning_control
+    patch.reasoning_efforts = [...(current.reasoning_efforts ?? [])]
+  }
+  if (touchedFields.has("context_limit")) {
+    patch.context_limit = current.context_limit
+  }
+  if (touchedFields.has("output_limit")) {
+    patch.output_limit = current.output_limit
+  }
+  if (touchedFields.has("input_resources")) {
+    patch.input_resources = [...(current.input_resources ?? [])]
+  }
+  if (touchedFields.has("tool_calling")) {
+    patch.tool_calling = current.tool_calling
+  }
+  if (touchedFields.has("request_projection")) {
+    patch.request_projection = current.request_projection
+  }
+  return patch
+}
+
+// modelCapabilitySettingsDraft resolves one complete direct layer from explicit or effective values.
+// modelCapabilitySettingsDraft 从显式值或有效值解析一层完整直接设置。
+function modelCapabilitySettingsDraft(
+  model: PublicAiModel,
+  overrides: PublicAiModelCapabilityOverrides | undefined,
+): PublicAiModelCapabilityOverrides {
+  // capabilities is the authoritative runtime model after lower-precedence layers resolve.
+  // capabilities 是低优先级层解析后的权威运行时模型。
+  const capabilities = model.capabilities
+  // reasoningSupport preserves explicit model intent before using the effective catalog.
+  // reasoningSupport 在使用有效目录前保留显式模型意图。
+  const reasoningSupport = overrides?.reasoning ?? capabilities.reasoning
+  // reasoningControl preserves the paired control state for explicit disablement.
+  // reasoningControl 为显式关闭保留配对控制状态。
+  const reasoningControl = overrides?.reasoning_control ?? capabilities.reasoning_control
+  // reasoningEnabled requires both support and control to be active.
+  // reasoningEnabled 要求支持与控制均处于启用状态。
+  const reasoningEnabled = reasoningSupport !== "unsupported" && reasoningControl !== "fixed_off"
+  return {
+    context_limit: overrides?.context_limit ?? capabilities.context_limit ?? 200_000,
+    output_limit: overrides?.output_limit ?? capabilities.output_limit ?? 32_768,
+    input_resources: overrides?.input_resources ?? capabilities.input_resources ?? [],
+    reasoning: reasoningEnabled ? "native" : "unsupported",
+    reasoning_control: reasoningEnabled ? "effort_selection" : "fixed_off",
+    reasoning_efforts: reasoningEnabled
+      ? projectOpenAiReasoningEfforts(
+          overrides?.reasoning_efforts ?? capabilities.reasoning_efforts ?? [],
+        )
+      : ["none"],
+    tool_calling: (overrides?.tool_calling ?? capabilities.tool_calling) === "unsupported"
+      ? "unsupported"
+      : "native",
+    request_projection: normalizeRequestProjection(overrides?.request_projection),
+  }
+}
+
+// emptyRequestProjection returns the stable empty shape used by every model editor.
+// emptyRequestProjection 返回所有模型编辑器共用的稳定空投影结构。
+export function emptyRequestProjection(): PublicAiCustomModelRequestProjection {
+  return {
+    reasoning: {},
+    model_parameter_paths: {},
+    defaults: {},
+    overrides: {},
+    delete: [],
+  }
+}
+
+// normalizeRequestProjection clones a persisted projection so local edits never mutate a snapshot.
+// normalizeRequestProjection 克隆持久化投影，避免本地编辑直接修改快照。
+export function normalizeRequestProjection(
+  projection: PublicAiCustomModelRequestProjection | undefined,
+): PublicAiCustomModelRequestProjection {
+  return {
+    reasoning: Object.fromEntries(Object.entries(projection?.reasoning ?? {}).map(([effort, mutation]) => [
+      effort,
+      {
+        // Older persisted projections may omit either mutation collection; normalize both at the UI boundary.
+        // 旧版持久化投影可能缺少任一变更集合，因此在 UI 边界统一补齐两者。
+        set: { ...(mutation?.set ?? {}) },
+        delete: [...(mutation?.delete ?? [])],
+      },
+    ])),
+    model_parameter_paths: { ...(projection?.model_parameter_paths ?? {}) },
+    defaults: { ...(projection?.defaults ?? {}) },
+    overrides: { ...(projection?.overrides ?? {}) },
+    delete: [...(projection?.delete ?? [])],
+  }
+}
+
+// projectionValueText renders a JSON value into an editable single-line representation.
+// projectionValueText 将 JSON 值渲染为可编辑的单行表示。
+function projectionValueText(value: unknown): string {
+  return typeof value === "string" ? value : JSON.stringify(value)
+}
+
+// projectionValue parses common JSON literals while retaining ordinary provider strings.
+// projectionValue 解析常见 JSON 字面量，同时保留普通供应商字符串。
+function projectionValue(value: string): unknown {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return ""
+  }
+  try {
+    return JSON.parse(trimmed) as unknown
+  } catch {
+    return value
+  }
+}
+
+// ReasoningProjectionEditor edits one exact path/value mutation per reasoning effort.
+// ReasoningProjectionEditor 编辑每个思考档位的一组精确路径和值变更。
+export function ReasoningProjectionEditor(props: {
+  efforts: string[]
+  onChange: (projection: PublicAiCustomModelRequestProjection) => void
+  projection: PublicAiCustomModelRequestProjection
+}) {
+  const normalizedProjection = normalizeRequestProjection(props.projection)
+  const updateMutation = React.useCallback((effort: string, mutation: PublicAiCustomRequestMutation) => {
+    const currentProjection = normalizeRequestProjection(props.projection)
+    props.onChange({
+      ...currentProjection,
+      reasoning: {
+        ...currentProjection.reasoning,
+        [effort]: mutation,
+      },
+    })
+  }, [props])
+  return (
+    <fieldset className="space-y-3 rounded-lg border p-4">
+      <legend className="px-1 text-sm font-medium">请求投影（详细模式）</legend>
+      <p className="text-xs text-muted-foreground">
+        每个思考档位可配置供应商字段，例如 thinking.type=disabled 或 reasoning_effort=low。
+      </p>
+      {props.efforts.map((effort) => {
+        const mutation = normalizedProjection.reasoning[effort] ?? { set: {}, delete: [] }
+        const entries = Object.entries(mutation.set)
+        return (
+          <div className="space-y-2 rounded-md border p-3" key={effort}>
+            <strong className="text-sm">{effort}</strong>
+            {entries.map(([path, value], index) => (
+              // The row index keeps the input DOM node stable while its editable path changes.
+              // 使用行索引保持输入节点稳定，避免编辑字段路径时每个字符都重建输入框并丢失焦点。
+              <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]" key={`${effort}:set:${index}`}>
+                <Input
+                  aria-label={`${effort} 字段名`}
+                  onChange={(event) => {
+                    // Rebuild in the original row order so the stable index key remains stable during typing.
+                    // 按原始行顺序重建对象，确保输入过程中稳定的索引 key 不会因字段名变化而改变。
+                    const nextSet = Object.fromEntries(entries.map(([candidatePath, candidateValue], candidateIndex) => [
+                      candidateIndex === index ? event.target.value : candidatePath,
+                      candidateValue,
+                    ]))
+                    updateMutation(effort, { ...mutation, set: nextSet })
+                  }}
+                  placeholder="字段名，例如 thinking.type"
+                  value={path}
+                />
+                <Input
+                  aria-label={`${effort} 字段值`}
+                  onChange={(event) => updateMutation(effort, {
+                    ...mutation,
+                    set: { ...mutation.set, [path]: projectionValue(event.target.value) },
+                  })}
+                  placeholder="值，例如 disabled"
+                  value={projectionValueText(value)}
+                />
+                <Button
+                  onClick={() => {
+                    const nextSet = { ...mutation.set }
+                    delete nextSet[path]
+                    updateMutation(effort, { ...mutation, set: nextSet })
+                  }}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                >
+                  删除
+                </Button>
+              </div>
+            ))}
+            {mutation.delete.map((path, index) => (
+              // Keep deletion rows stable while the field path is being typed.
+              // 编辑删除路径时保持删除行稳定，避免输入焦点随字符变化而丢失。
+              <div className="grid gap-2 sm:grid-cols-[1fr_auto]" key={`${effort}:delete:${index}`}>
+                <Input
+                  aria-label={`${effort} 删除字段名`}
+                  onChange={(event) => {
+                    const nextDelete = [...mutation.delete]
+                    nextDelete[index] = event.target.value
+                    updateMutation(effort, { ...mutation, delete: nextDelete })
+                  }}
+                  placeholder="删除字段，例如 thinking.type"
+                  value={path}
+                />
+                <Button
+                  onClick={() => updateMutation(effort, {
+                    ...mutation,
+                    delete: mutation.delete.filter((_, candidate) => candidate !== index),
+                  })}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                >
+                  删除
+                </Button>
+              </div>
+            ))}
+            <Button
+              onClick={() => updateMutation(effort, {
+                ...mutation,
+                set: { ...mutation.set, "": "" },
+              })}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              添加字段
+            </Button>
+            <Button
+              onClick={() => updateMutation(effort, {
+                ...mutation,
+                delete: [...mutation.delete, ""],
+              })}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              添加删除字段
+            </Button>
+          </div>
+        )
+      })}
+    </fieldset>
+  )
+}
+
+// DirectModelNumberInput renders one directly editable positive-integer model setting.
+// DirectModelNumberInput 渲染一个可直接编辑的正整数模型设置。
+function DirectModelNumberInput(props: { label: string; onChange: (value: number) => void; value: number }) {
+  return (
+    <label className="grid gap-2 text-sm font-medium">
+      {props.label}
+      <Input
+        inputMode="numeric"
+        onChange={(event) => props.onChange(Number.parseInt(event.target.value.replace(/\D/g, "") || "0", 10))}
+        value={props.value || ""}
+      />
+    </label>
+  )
+}
+
+// InputResourceEditor edits one complete model-level non-text input set without an enable-overrides checkbox.
+// InputResourceEditor 在没有“启用覆盖”勾选框的情况下编辑完整模型级非文本输入集合。
+function InputResourceEditor(props: {
+  onChange: (value: PublicAiResourceKind[]) => void
   value: PublicAiResourceKind[]
 }) {
   const { t } = useI18n()
   return (
     <fieldset className="rounded-lg border p-4">
-      <legend className="px-1 text-sm font-medium">{props.label}</legend>
-      <label className="mb-4 flex items-center gap-2 text-sm">
-        <Checkbox checked={props.enabled} onCheckedChange={(checked) => props.onEnabledChange(checked === true)} />
-        {t("settings.modelCapabilities.overrideResources")}
-      </label>
+      <legend className="px-1 text-sm font-medium">{t("settings.modelCapabilities.inputResources")}</legend>
       <div className="grid grid-cols-4 gap-2 max-sm:grid-cols-2">
-        {RESOURCE_KINDS.map((resource) => (
-          <label className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${props.enabled ? "" : "opacity-50"}`} key={resource}>
+        {INPUT_RESOURCE_KINDS.map((resource) => (
+          <label className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm" key={resource}>
             <Checkbox
               checked={props.value.includes(resource)}
-              disabled={!props.enabled}
-              onCheckedChange={(checked) => props.onValueChange(checked ? [...props.value, resource] : props.value.filter((item) => item !== resource))}
+              onCheckedChange={(checked) => props.onChange(checked
+                ? [...props.value, resource]
+                : props.value.filter((candidate) => candidate !== resource))}
             />
-            {t(RESOURCE_LABEL_KEYS[resource])}
+            {t(`settings.models.modality.${resource}`)}
           </label>
         ))}
       </div>

@@ -1850,6 +1850,8 @@ export type TranslationKey =
   | "settings.modelOverrides.enabled"
   | "settings.customModels.title"
   | "settings.customModels.description"
+  | "settings.customModels.pageModels"
+  | "settings.customModels.pageProviderSettings"
   | "settings.customModels.search"
   | "settings.customModels.filterAll"
   | "settings.customModels.filterEnabled"
@@ -1892,6 +1894,10 @@ export type TranslationKey =
   | "settings.customModels.removeConfirm"
   | "settings.customProviders.removeTitle"
   | "settings.customProviders.removeDescription"
+  | "settings.customProviders.removeModelsBlocked"
+  | "settings.customProviders.removeModelsBlockedGeneric"
+  | "settings.customProviders.removeCredentialsWarning"
+  | "settings.customProviders.removeSessionsWarning"
   | "settings.customProviders.modelCount"
   | "settings.customProviders.manageModels"
   | "settings.customProviders.manageModelsFor"
@@ -1919,6 +1925,8 @@ export type TranslationKey =
   | "settings.customProviders.validationCreateDescription"
   | "settings.customProviders.validationCredentialName"
   | "settings.customProviders.validationCredentialRequired"
+  | "settings.customProviders.credentialFreeEditTitle"
+  | "settings.customProviders.credentialFreeEditDescription"
   | "settings.customProviders.firstCredentialName"
   | "settings.customProviders.apiKey"
   | "settings.customProviders.apiKeyEditPlaceholder"
@@ -1945,6 +1953,12 @@ export type TranslationKey =
   | "settings.customProviders.pendingConfirmTitle"
   | "settings.customProviders.pendingConfirmDescription"
   | "settings.customProviders.confirmPending"
+  | "settings.customProviders.protocolOverridesConfirmTitle"
+  | "settings.customProviders.protocolOverridesConfirmDescription"
+  | "settings.customProviders.protocolOverridesConfirmAction"
+  | "settings.providerModels.description"
+  | "settings.providerModels.count"
+  | "settings.providerModels.empty"
   | "settings.customProviders.displayNameRequired"
   | "settings.customProviders.baseUrlInvalid"
   | "settings.customProviders.discoveryPathInvalid"
@@ -2008,7 +2022,13 @@ export type TranslationKey =
   | "settings.customModels.outputRecommendation"
   | "settings.customModels.defaultsContextInvalid"
   | "settings.customModels.defaultsOutputInvalid"
+  | "settings.customModels.defaultsReasoningInvalid"
+  | "settings.customModels.defaultsCustomSource"
+  | "settings.customModels.defaultsSystemSource"
   | "settings.customModels.defaultsSave"
+  | "settings.customModels.fixedTextOutput"
+  | "settings.customModels.fixedTextOutputDescription"
+  | "settings.customModels.toolCallingDefaultDescription"
   | "settings.customModels.templateSearching"
   | "settings.customModels.templateUpdateAvailable"
   | "settings.customModels.templateUpdateDescription"
@@ -2122,9 +2142,11 @@ export type TranslationKey =
   | "settings.modelCapabilities.contextHint"
   | "settings.modelCapabilities.contextInvalid"
   | "settings.modelCapabilities.inputResources"
-  | "settings.modelCapabilities.outputResources"
-  | "settings.modelCapabilities.overrideResources"
-  | "settings.modelCapabilities.restore"
+| "settings.modelCapabilities.outputResources"
+| "settings.modelCapabilities.overrideResources"
+| "settings.modelCapabilities.restore"
+| "settings.modelCapabilities.modelSource"
+| "settings.modelCapabilities.inheritedSource"
   | "settings.models.enabled"
   | "settings.models.disabled"
   | "settings.models.toggle"
@@ -4368,6 +4390,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.modelOverrides.enabled": "启用",
     "settings.customModels.title": "{provider} · 模型管理",
     "settings.customModels.description": "模型定义独立于凭据保存；目录导入和手动修改只写用户覆盖，不会改写同步来源。",
+    "settings.customModels.pageModels": "模型",
+    "settings.customModels.pageProviderSettings": "供应商配置",
     "settings.customModels.search": "搜索模型名称或 ID",
     "settings.customModels.filterAll": "全部模型",
     "settings.customModels.filterEnabled": "仅已启用",
@@ -4407,9 +4431,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.credentialModels.futureDisabled": "后续同步发现的新模型保持关闭，直到你手动启用。",
     "settings.customModels.empty": "当前筛选条件下没有模型。",
     "settings.customModels.noModelsToImport": "当前目录没有可追加的新模型。",
-    "settings.customModels.removeConfirm": "确定从自定义供应商中移除模型“{name}”吗？仍被会话或内部推理引用时后端会拒绝保存。",
+    "settings.customModels.removeConfirm": "确定从自定义供应商中移除模型“{name}”吗？如果模型被会话锁定或被内部推理路由引用，后端会禁止删除，请先切换相关会话或路由。",
     "settings.customProviders.removeTitle": "移除供应商",
     "settings.customProviders.removeDescription": "确定移除自定义供应商“{name}”吗？系统会先检查凭据、模型和运行中引用，存在引用时不会删除。",
+    "settings.customProviders.removeModelsBlocked": "存在 {count} 项模型自定义信息或路由设置，必须先清理后才能移除供应商。",
+    "settings.customProviders.removeModelsBlockedGeneric": "该供应商仍有模型自定义信息、账号模型策略或内部路由设置，必须先清理后才能移除。",
+    "settings.customProviders.removeCredentialsWarning": "确认后将同时删除该供应商的 {count} 个凭据。",
+    "settings.customProviders.removeSessionsWarning": "如果已有会话使用该供应商，移除后会话模型将失效，并自动切换到默认模型或第一个可用模型。",
     "settings.customProviders.modelCount": "{count} 个模型",
     "settings.customProviders.manageModels": "管理模型",
     "settings.customProviders.manageModelsFor": "管理 {provider} 的模型",
@@ -4433,10 +4461,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customProviders.modelsEndpoint": "目录端点：",
     "settings.customProviders.manualOnly": "不访问远程目录",
     "settings.customProviders.validationTitle": "使用真实凭据验证",
-    "settings.customProviders.validationEditDescription": "选择一个已有账号验证这次入口修改；不会创建新账号、要求重新输入密钥或替换现有凭据。",
+    "settings.customProviders.validationEditDescription": "先选择一个已有账号预检。保存协议、地址、鉴权或发现方式变更时，系统会使用各账号自身凭据逐一验证并原子迁移；不会创建账号、要求重新输入密钥或替换凭据。仅修改名称不会触发重验。",
     "settings.customProviders.validationCreateDescription": "验证成功后，该凭据会作为此供应商的首个账号保存。",
     "settings.customProviders.validationCredentialName": "验证凭据名称",
     "settings.customProviders.validationCredentialRequired": "选择一个已有账号",
+    "settings.customProviders.credentialFreeEditTitle": "当前没有账号，可直接保存",
+    "settings.customProviders.credentialFreeEditDescription": "该供应商暂无凭据，无法执行远程验证。你仍可保存协议、地址、鉴权和模型目录配置；后续添加账号时将按这份配置验证。",
     "settings.customProviders.firstCredentialName": "首个凭据名称",
     "settings.customProviders.apiKey": "API Key",
     "settings.customProviders.apiKeyEditPlaceholder": "仅用于验证本次配置",
@@ -4463,6 +4493,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customProviders.pendingConfirmTitle": "暂存尚未验证的连接？",
     "settings.customProviders.pendingConfirmDescription": "该凭据尚未完成模型目录验证。保存后它会保持隔离，不能成为默认账号或进入会话路由；必须稍后同步目录并成功执行一次明确的模型测试。",
     "settings.customProviders.confirmPending": "确认暂存",
+    "settings.customProviders.protocolOverridesConfirmTitle": "删除旧协议的模型设置？",
+    "settings.customProviders.protocolOverridesConfirmDescription": "切换到 {protocol} 后，另一个协议下的 {count} 项模型设置无法继续应用。确认后会删除这些不兼容设置；目标协议已有设置不会受影响。",
+    "settings.customProviders.protocolOverridesConfirmAction": "删除并切换协议",
+    "settings.providerModels.description": "这里决定供应商向账号和模型列表发布哪些模型。开关修改会立即保存；已关闭模型只保留在此管理窗口中。",
+    "settings.providerModels.count": "已发布 {enabled} / {total}",
+    "settings.providerModels.empty": "当前凭据尚未同步出可管理的模型。",
     "settings.customProviders.displayNameRequired": "请输入供应商显示名称。",
     "settings.customProviders.baseUrlInvalid": "请输入有效的 HTTP 或 HTTPS 基础 URL。",
     "settings.customProviders.discoveryPathInvalid": "自定义目录路径必须以 / 开头，且不能包含域名或上级目录。",
@@ -4500,15 +4536,15 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.controlEffortSelection": "思考档位",
     "settings.customModels.controlProviderAdaptive": "供应商自适应",
     "settings.customModels.reasoningEfforts": "可选思考档位",
-    "settings.customModels.effortNone": "关闭",
-    "settings.customModels.effortAdaptive": "自适应",
-    "settings.customModels.effortMinimal": "最小",
-    "settings.customModels.effortLow": "低",
-    "settings.customModels.effortMedium": "中",
-    "settings.customModels.effortHigh": "高",
-    "settings.customModels.effortExtraHigh": "超高",
-    "settings.customModels.effortMax": "最大",
-    "settings.customModels.effortUltra": "极致",
+    "settings.customModels.effortNone": "关闭（none）",
+    "settings.customModels.effortAdaptive": "自适应（adaptive）",
+    "settings.customModels.effortMinimal": "最小（minimal）",
+    "settings.customModels.effortLow": "低（low）",
+    "settings.customModels.effortMedium": "中（medium）",
+    "settings.customModels.effortHigh": "高（high）",
+    "settings.customModels.effortExtraHigh": "超高（xhigh）",
+    "settings.customModels.effortMax": "最大（max）",
+    "settings.customModels.effortUltra": "极致（ultra）",
     "settings.customModels.advanced": "高级协议映射",
     "settings.customModels.advancedHint": "仅在确认供应商请求字段后填写。宿主持有字段会由后端拒绝，避免覆盖模型、消息和工具。",
     "settings.customModels.parameters": "模型参数定义（JSON 数组）",
@@ -4517,8 +4553,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.remove": "移除当前模型",
     "settings.customModels.selectHint": "从左侧选择模型，或从目录导入、手动添加一个模型。",
     "settings.customModels.save": "保存模型",
-    "settings.customModels.defaultsTitle": "供应商默认能力",
-    "settings.customModels.defaultsDescription": "仅用于目录未声明且未接受公共模板的模型；每个模型仍可单独覆盖。",
+    "settings.customModels.defaultsTitle": "供应商模型设置",
+    "settings.customModels.defaultsDescription": "直接调整此供应商所有对话模型的默认值；模型设置仍可覆盖这些值。",
     "settings.customModels.defaultsEdit": "编辑默认值",
     "settings.customModels.contextSummary": "上下文 {count}",
     "settings.customModels.outputSummary": "输出 {count}",
@@ -4526,7 +4562,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.outputRecommendation": "按当前上下文建议输出上限为 {count} Token（最多 32,768）。",
     "settings.customModels.defaultsContextInvalid": "上下文限制必须是大于 0 的整数。",
     "settings.customModels.defaultsOutputInvalid": "输出限制必须是大于 0 且不超过上下文限制的整数。",
-    "settings.customModels.defaultsSave": "保存供应商默认值",
+    "settings.customModels.defaultsReasoningInvalid": "思考开启时至少需要保留一个思考档位。",
+    "settings.customModels.defaultsCustomSource": "供应商设置",
+    "settings.customModels.defaultsSystemSource": "系统默认",
+    "settings.customModels.defaultsSave": "保存供应商设置",
+    "settings.customModels.fixedTextOutput": "固定文本输出",
+    "settings.customModels.fixedTextOutputDescription": "通用对话供应商只支持文本输出；图片等专用输出由原生系统供应商声明。",
+    "settings.customModels.toolCallingDefaultDescription": "工具调用默认开启；仅在供应商或模型明确不支持时关闭。",
     "settings.customModels.templateSearching": "正在本地能力库中检查精确模型匹配…",
     "settings.customModels.templateUpdateAvailable": "公共能力模板已有新版本",
     "settings.customModels.templateUpdateDescription": "当前模型继续使用已确认的旧快照；只有点击应用更新后才会切换到新版本。",
@@ -4632,9 +4674,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.discardTitle": "放弃未保存的修改？",
     "settings.customModels.discardDescription": "高级模型定义仍有未保存修改。关闭后这些修改将丢失。",
     "settings.customModels.discard": "放弃修改",
-    "settings.modelCapabilities.title": "默认能力覆盖",
+"settings.modelCapabilities.title": "模型设置",
     "settings.modelCapabilities.shortLabel": "能力",
-    "settings.modelCapabilities.overlayHint": "只保存差异，不修改供应商目录和公共能力库。",
+"settings.modelCapabilities.overlayHint": "当前显示有效值；保存后由此模型直接覆盖供应商设置。",
   "settings.modelCapabilities.contextLimit": "上下文限制",
   "settings.modelCapabilities.overrideContext": "覆盖公共库或供应商声明的上下文限制",
     "settings.modelCapabilities.contextHint": "没有独立声明时公共库回退为 200,000；此处可以按实际套餐向下或向上覆盖。",
@@ -4642,7 +4684,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.modelCapabilities.inputResources": "输入资源覆盖",
     "settings.modelCapabilities.outputResources": "输出资源覆盖",
     "settings.modelCapabilities.overrideResources": "启用完整集合覆盖（可显式选择空集合）",
-    "settings.modelCapabilities.restore": "恢复来源默认值",
+"settings.modelCapabilities.restore": "恢复来源默认值",
+"settings.modelCapabilities.modelSource": "模型设置",
+"settings.modelCapabilities.inheritedSource": "继承供应商",
     "settings.models.enabled": "已启用",
     "settings.models.disabled": "已关闭",
     "settings.models.toggle": "切换模型启用状态",
@@ -6883,6 +6927,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.modelOverrides.enabled": "Enabled",
     "settings.customModels.title": "{provider} · Model management",
     "settings.customModels.description": "Model definitions are stored independently from credentials. Imports and manual edits write user overlays only and never modify synchronized sources.",
+    "settings.customModels.pageModels": "Models",
+    "settings.customModels.pageProviderSettings": "Provider settings",
     "settings.customModels.search": "Search model name or ID",
     "settings.customModels.filterAll": "All models",
     "settings.customModels.filterEnabled": "Enabled only",
@@ -6922,9 +6968,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.credentialModels.futureDisabled": "New models discovered by later syncs stay disabled until you enable them.",
     "settings.customModels.empty": "No models match the current filter.",
     "settings.customModels.noModelsToImport": "The live catalog has no new models to append.",
-    "settings.customModels.removeConfirm": "Remove model “{name}” from this custom provider? The service will reject the save if a session or internal route still references it.",
+    "settings.customModels.removeConfirm": "Remove model “{name}” from this custom provider? The service will block deletion while a session locks the model or an internal route references it; switch those sessions or routes first.",
     "settings.customProviders.removeTitle": "Remove provider",
     "settings.customProviders.removeDescription": "Remove custom provider “{name}”? Credentials, models, and active runtime references are checked first; referenced providers are not deleted.",
+    "settings.customProviders.removeModelsBlocked": "{count} model customizations or route settings remain; clear them before removing the provider.",
+    "settings.customProviders.removeModelsBlockedGeneric": "This provider still owns model customizations, account model policies, or internal routes. Clear them before removing the provider.",
+    "settings.customProviders.removeCredentialsWarning": "After confirmation, the provider's {count} credentials will be deleted together with it.",
+    "settings.customProviders.removeSessionsWarning": "If any sessions use this provider, their session model will become unavailable and automatically switch to the default or first available model.",
     "settings.customProviders.modelCount": "{count} models",
     "settings.customProviders.manageModels": "Manage models",
     "settings.customProviders.manageModelsFor": "Manage models for {provider}",
@@ -6948,10 +6998,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customProviders.modelsEndpoint": "Catalog endpoint:",
     "settings.customProviders.manualOnly": "No remote catalog request",
     "settings.customProviders.validationTitle": "Validate with a real credential",
-    "settings.customProviders.validationEditDescription": "Choose an existing account to validate this endpoint change. No account is created, no key is re-entered, and no credential is replaced.",
+    "settings.customProviders.validationEditDescription": "Choose one existing account for the initial probe. When protocol, endpoint, authentication, or discovery changes are saved, every account is validated with its own credential and migrated atomically. No account or secret is replaced, and display-name-only edits skip revalidation.",
     "settings.customProviders.validationCreateDescription": "After validation, this credential is securely saved as the provider's first account.",
     "settings.customProviders.validationCredentialName": "Validation credential name",
     "settings.customProviders.validationCredentialRequired": "Choose an existing account",
+    "settings.customProviders.credentialFreeEditTitle": "No account; direct save is available",
+    "settings.customProviders.credentialFreeEditDescription": "This provider has no credential, so remote validation is unavailable. You can still save its protocol, endpoint, authentication, and model-catalog settings; future accounts will be validated against this contract.",
     "settings.customProviders.firstCredentialName": "First credential name",
     "settings.customProviders.apiKey": "API Key",
     "settings.customProviders.apiKeyEditPlaceholder": "Used only for this validation",
@@ -6978,6 +7030,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customProviders.pendingConfirmTitle": "Save an unvalidated connection?",
     "settings.customProviders.pendingConfirmDescription": "The credential has not completed model-catalog validation. It will remain isolated after saving and cannot become the default account or enter conversation routing until the catalog is synchronized and one explicit model test succeeds.",
     "settings.customProviders.confirmPending": "Confirm pending save",
+    "settings.customProviders.protocolOverridesConfirmTitle": "Delete old protocol model settings?",
+    "settings.customProviders.protocolOverridesConfirmDescription": "After switching to {protocol}, {count} model setting(s) from another protocol cannot apply. Confirming deletes those incompatible settings while preserving existing target-protocol settings.",
+    "settings.customProviders.protocolOverridesConfirmAction": "Delete and switch protocol",
+    "settings.providerModels.description": "Choose which models this provider publishes to accounts and model lists. Switches save immediately; disabled models remain visible only in this management dialog.",
+    "settings.providerModels.count": "Published {enabled} / {total}",
+    "settings.providerModels.empty": "The current credentials have not synchronized any manageable models yet.",
     "settings.customProviders.displayNameRequired": "Enter a provider display name.",
     "settings.customProviders.baseUrlInvalid": "Enter a valid HTTP or HTTPS base URL.",
     "settings.customProviders.discoveryPathInvalid": "A custom catalog path must start with / and contain neither an origin nor parent traversal.",
@@ -7032,8 +7090,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.remove": "Remove current model",
     "settings.customModels.selectHint": "Select a model on the left, import from the catalog, or add one manually.",
     "settings.customModels.save": "Save models",
-    "settings.customModels.defaultsTitle": "Provider capability defaults",
-    "settings.customModels.defaultsDescription": "Used only when the catalog is silent and no common template is accepted; each model can still override them.",
+    "settings.customModels.defaultsTitle": "Provider model settings",
+    "settings.customModels.defaultsDescription": "Adjust the defaults for every conversation model from this provider; model settings can still override them.",
     "settings.customModels.defaultsEdit": "Edit defaults",
     "settings.customModels.contextSummary": "Context {count}",
     "settings.customModels.outputSummary": "Output {count}",
@@ -7041,7 +7099,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.outputRecommendation": "Recommended output limit for this context: {count} tokens (capped at 32,768).",
     "settings.customModels.defaultsContextInvalid": "Context limit must be a positive integer.",
     "settings.customModels.defaultsOutputInvalid": "Output limit must be a positive integer no greater than the context limit.",
-    "settings.customModels.defaultsSave": "Save provider defaults",
+    "settings.customModels.defaultsReasoningInvalid": "Keep at least one reasoning level while reasoning is enabled.",
+    "settings.customModels.defaultsCustomSource": "Provider settings",
+    "settings.customModels.defaultsSystemSource": "System default",
+    "settings.customModels.defaultsSave": "Save provider settings",
+    "settings.customModels.fixedTextOutput": "Fixed text output",
+    "settings.customModels.fixedTextOutputDescription": "Generic conversation providers support text output only; native system providers declare dedicated image and other output capabilities.",
+    "settings.customModels.toolCallingDefaultDescription": "Tool calling is enabled by default and should be disabled only when the provider or model explicitly does not support it.",
     "settings.customModels.templateSearching": "Checking the local capability library for an exact model match…",
     "settings.customModels.templateUpdateAvailable": "A newer common capability template is available",
     "settings.customModels.templateUpdateDescription": "This model keeps its reviewed snapshot until you explicitly apply the newer revision.",
@@ -7147,9 +7211,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.discardTitle": "Discard unsaved changes?",
     "settings.customModels.discardDescription": "The advanced model definition still has unsaved changes. Closing now will discard them.",
     "settings.customModels.discard": "Discard changes",
-    "settings.modelCapabilities.title": "Default capability override",
+    "settings.modelCapabilities.title": "Model settings",
     "settings.modelCapabilities.shortLabel": "Capabilities",
-    "settings.modelCapabilities.overlayHint": "Stores differences only; provider catalogs and the common capability library remain unchanged.",
+    "settings.modelCapabilities.overlayHint": "The current effective values are shown; saving makes this model override the provider settings directly.",
   "settings.modelCapabilities.contextLimit": "Context limit",
   "settings.modelCapabilities.overrideContext": "Override the context limit declared by the common library or provider",
     "settings.modelCapabilities.contextHint": "When no exact declaration exists the common library falls back to 200,000. Override it here for the actual plan.",
@@ -7158,6 +7222,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.modelCapabilities.outputResources": "Output resource override",
     "settings.modelCapabilities.overrideResources": "Override the complete set (an explicit empty set is allowed)",
     "settings.modelCapabilities.restore": "Restore source defaults",
+    "settings.modelCapabilities.modelSource": "Model settings",
+    "settings.modelCapabilities.inheritedSource": "Inherited provider",
     "settings.models.enabled": "Enabled",
     "settings.models.disabled": "Disabled",
     "settings.models.toggle": "Toggle model availability",

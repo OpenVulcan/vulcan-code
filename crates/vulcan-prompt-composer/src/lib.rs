@@ -16,6 +16,9 @@ pub mod ids;
 /// Prompt node rendering helpers.
 /// 提示词节点渲染辅助。
 pub mod node;
+/// Output-style catalog and immutable prompt-boundary snapshots.
+/// 输出风格目录与不可变提示词边界快照。
+pub mod output_style;
 /// Personality catalog and defaults.
 /// 人格目录与默认值。
 pub mod personality;
@@ -44,6 +47,11 @@ pub use composer::request::PromptAssemblyInput;
 pub use composer::resources::PromptComposerResourceConfig;
 pub use composer::response::PromptAssemblyOutput;
 pub use error::PromptComposerError;
+pub use output_style::{
+    OUTPUT_STYLE_BALANCED_ID, OUTPUT_STYLE_RIGOROUS_ID, OUTPUT_STYLE_STRUCTURED_ID,
+    OUTPUT_STYLE_UNRESTRICTED_ID, OutputStyleCatalog, OutputStyleDefinition,
+    PromptOutputStyleSnapshot,
+};
 pub use personality::catalog::{PersonalityCatalog, PersonalityDefinition};
 pub use session::baseline::PromptSessionBaseline;
 pub use session::compaction::{

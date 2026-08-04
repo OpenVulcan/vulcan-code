@@ -700,6 +700,18 @@ struct DisplayCountRow {
     count: i64,
 }
 
+/// One source-document hash stored in a resumable display generation.
+/// 可恢复显示代次中保存的一份来源文档哈希。
+#[derive(Debug, Deserialize)]
+struct DisplaySourceHashRow {
+    /// Stable source document identifier.
+    /// 稳定的原始文档标识符。
+    source_document_id: String,
+    /// SHA-256 hash captured when the display document was generated.
+    /// 生成显示文档时记录的 SHA-256 哈希。
+    source_sha256: String,
+}
+
 /// Active-generation display metadata returned by one aggregate query.
 /// 一次聚合查询返回的活动显示代次元数据。
 #[derive(Debug, Deserialize)]
@@ -1646,6 +1658,10 @@ impl KnowledgeBaseRuntime {
             next.display_index.last_error = Some(String::from(
                 "显示库整理模型或固定提示词发生变化，必须重新生成显示库",
             ));
+            next.display_index.pending_generation = None;
+            next.display_index.pending_source_content_revision = None;
+            next.display_index.pending_prompt_version = None;
+            next.display_index.pending_model_fingerprint = None;
         }
 
         if !embedding_model_changed && !embedding_dimension_changed && next.embedding.enabled {
@@ -2820,6 +2836,153 @@ impl KnowledgeBaseRuntime {
         Ok(fts_index)
     }
 
+    /// Reopens one pending display generation without deleting its completed rows.
+    /// 重新打开一个待完成显示代次，但不删除其中已经完成的记录。
+    pub async fn resume_display_generation(
+        &self,
+        library_id: &str,
+        generation: &str,
+    ) -> Result<String, String> {
+        validate_generation_id(generation)?;
+        self.ensure_display_storage(library_id).await?;
+        let (space_id, binding_id) = self.ensure_display_binding(library_id).await?;
+        let fts_index = display_fts_index_name(generation)?;
+        self.controller
+            .client
+            .ensure_sqlite_fts_index(
+                &space_id,
+                &binding_id,
+                &fts_index,
+                ControllerSqliteTokenizerMode::Jieba,
+            )
+            .await
+            .map_err(|error| format!("恢复显示库 Jieba FTS 索引失败：{error}"))?;
+        Ok(fts_index)
+    }
+
+    /// Persists the pending generation identity and curation provenance before work starts.
+    /// 在开始工作前持久化待完成代次身份与整理配置来源。
+    pub async fn begin_display_generation(
+        &self,
+        library_id: &str,
+        generation: &str,
+        source_content_revision: u64,
+    ) -> Result<KnowledgeLibrarySummary, String> {
+        validate_generation_id(generation)?;
+        let _guard = self.library_mutation_guard(library_id).await?;
+        let current = self.require_active_library(library_id).await?;
+        if !current.settings.curation.enabled {
+            return Err(String::from("当前资料库未启用显示库整理"));
+        }
+        let mut settings = current.settings.clone();
+        settings.display_index.status = KnowledgeDisplayIndexStatus::Building;
+        settings.display_index.pending_generation = Some(generation.to_string());
+        settings.display_index.pending_source_content_revision = Some(source_content_revision);
+        settings.display_index.pending_prompt_version =
+            Some(settings.curation.prompt_version.clone());
+        settings.display_index.pending_model_fingerprint =
+            settings.curation.desired_model_fingerprint.clone();
+        settings.display_index.last_error = None;
+        settings.validate()?;
+        let settings_json = serde_json::to_string(&settings)
+            .map_err(|error| format!("序列化显示库待完成状态失败：{error}"))?;
+        self.controller
+            .client
+            .execute_sqlite_script_typed(
+                APP_SPACE_ID,
+                self.controller.sqlite_binding_id.as_str(),
+                "UPDATE knowledge_libraries SET settings_json = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
+                vec![
+                    text(&settings_json),
+                    int(unix_epoch_millis()?),
+                    text(library_id),
+                ],
+            )
+            .await
+            .map_err(|error| format!("保存显示库待完成状态失败：{error}"))?;
+        self.get_library(library_id).await
+    }
+
+    /// Lists source hashes already written to one pending display generation.
+    /// 列出待完成显示代次中已经写入的原始文档哈希。
+    pub async fn list_display_generation_source_hashes(
+            &self,
+            library_id: &str,
+            generation: &str,
+            fts_index: &str,
+        ) -> Result<BTreeMap<String, String>, String> {
+            validate_generation_id(generation)?;
+            validate_display_fts_index(fts_index)?;
+            let (space_id, binding_id) = self.ensure_display_binding(library_id).await?;
+            let sql = format!(
+                "SELECT d.source_document_id, d.source_sha256 \
+                 FROM display_documents AS d \
+                 WHERE d.generation = ? \
+                   AND EXISTS (SELECT 1 FROM display_chunks AS c \
+                               WHERE c.display_document_id = d.id AND c.generation = d.generation) \
+                   AND (SELECT COUNT(*) FROM display_chunks AS c \
+                        JOIN {fts_index} AS f ON f.id = c.id \
+                        WHERE c.display_document_id = d.id AND c.generation = d.generation) \
+                       = (SELECT COUNT(*) FROM display_chunks AS c \
+                          WHERE c.display_document_id = d.id AND c.generation = d.generation);"
+            );
+            let rows: Vec<DisplaySourceHashRow> = self
+                .query_library_rows(&space_id, &binding_id, &sql, vec![text(generation)])
+                .await?;
+            Ok(rows
+                .into_iter()
+                .map(|row| (row.source_document_id, row.source_sha256))
+                .collect())
+        }
+
+    /// Removes one incomplete or stale source document from a pending generation before retrying it.
+    /// 在重试来源文档前，从待完成代次中移除不完整或过期的记录。
+    pub async fn discard_display_generation_source(
+        &self,
+        library_id: &str,
+        generation: &str,
+        fts_index: &str,
+        source_document_id: &str,
+    ) -> Result<(), String> {
+        validate_generation_id(generation)?;
+        validate_display_fts_index(fts_index)?;
+        let (space_id, binding_id) = self.ensure_display_binding(library_id).await?;
+        let delete_fts_sql = format!(
+            "DELETE FROM {fts_index} WHERE id IN (SELECT c.id FROM display_chunks AS c JOIN display_documents AS d ON d.id = c.display_document_id WHERE d.source_document_id = ? AND d.generation = ? AND c.generation = ?);"
+        );
+        self.controller
+            .client
+            .execute_sqlite_script_typed(
+                &space_id,
+                &binding_id,
+                &delete_fts_sql,
+                vec![text(source_document_id), text(generation), text(generation)],
+            )
+            .await
+            .map_err(|error| format!("清理显示库旧 FTS 切片失败：{error}"))?;
+        self.controller
+            .client
+            .execute_sqlite_script_typed(
+                &space_id,
+                &binding_id,
+                "DELETE FROM display_chunks WHERE display_document_id IN (SELECT id FROM display_documents WHERE source_document_id = ? AND generation = ?);",
+                vec![text(source_document_id), text(generation)],
+            )
+            .await
+            .map_err(|error| format!("清理显示库旧切片失败：{error}"))?;
+        self.controller
+            .client
+            .execute_sqlite_script_typed(
+                &space_id,
+                &binding_id,
+                "DELETE FROM display_documents WHERE source_document_id = ? AND generation = ?;",
+                vec![text(source_document_id), text(generation)],
+            )
+            .await
+            .map_err(|error| format!("清理显示库旧文档失败：{error}"))?;
+        Ok(())
+    }
+
     /// Writes one validated display document and its searchable chunks into a pending generation.
     /// 将一份已校验显示文档及其可检索切片写入待发布代次。
     pub async fn write_display_document(
@@ -3008,6 +3171,10 @@ impl KnowledgeBaseRuntime {
         let mut settings = current.settings.clone();
         settings.display_index.status = KnowledgeDisplayIndexStatus::Ready;
         settings.display_index.active_generation = Some(generation.to_string());
+        settings.display_index.pending_generation = None;
+        settings.display_index.pending_source_content_revision = None;
+        settings.display_index.pending_prompt_version = None;
+        settings.display_index.pending_model_fingerprint = None;
         settings.display_index.source_content_revision = Some(source_content_revision);
         settings.display_index.indexed_prompt_version =
             Some(settings.curation.prompt_version.clone());

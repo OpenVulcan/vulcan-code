@@ -90,6 +90,7 @@ mod tests {
             execution_mode: String::from("Build"),
             temperature: Some(0.2),
             prompt_configuration: crate::provider_config::PersistedPromptConfiguration::default(),
+            output_style_snapshot: None,
             prompt_purpose: crate::agent_runtime::ExecutionPromptPurpose::UserTurn,
             prompt_skills: Vec::new(),
             prompt_skill_user_root: None,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::SessionOutputStyleState;
 #[test]
 fn session_addon_revision_changes_only_when_namespace_value_changes() {
     let session_id = SessionId::new_v4();
@@ -30,6 +31,8 @@ fn session_addon_extracts_runtime_controls_and_work_mode() {
     let runtime_state = SessionRuntimeStateEntry {
         active_provider_id: Some(String::from("minimax")),
         active_model_id: Some(String::from("minimax-text")),
+        active_reasoning_effort: Some(ReasoningEffortLevel::None),
+        active_reasoning_effort_explicit: true,
         active_work_mode: Some(String::from("plan")),
         ..SessionRuntimeStateEntry::default()
     };
@@ -49,6 +52,14 @@ fn session_addon_extracts_runtime_controls_and_work_mode() {
             .map(|work_mode| work_mode.execution_mode),
         Some(String::from("plan"))
     );
+    let controls = addon_state
+        .runtime_controls()
+        .expect("runtime controls should preserve explicit reasoning provenance");
+    assert_eq!(
+        controls.active_reasoning_effort,
+        Some(ReasoningEffortLevel::None)
+    );
+    assert!(controls.active_reasoning_effort_explicit);
 }
 
 #[test]
@@ -88,4 +99,27 @@ fn session_addon_drops_unknown_legacy_namespaces() {
     let serialized = serde_json::to_string(&state).expect("serialize cleaned addon state");
     assert!(!serialized.contains("todo_plan"));
     assert!(serialized.contains("todolist"));
+}
+
+#[test]
+fn session_addon_roundtrips_output_style_boundary_state() {
+    let session_id = SessionId::new_v4();
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    runtime_state.output_style = SessionOutputStyleState {
+        override_style_id: Some(String::from("rigorous")),
+        applied_style_id: Some(String::from("balanced")),
+        applied_prompt_text: Some(String::from("exact prompt")),
+        applied_label: Some(String::from("Balanced")),
+        applied_fingerprint: Some(42),
+        applied_source_label: Some(String::from("test")),
+        applied_boundary: Some(String::from("new-session")),
+        applied_compaction_id: None,
+        applied_at: Some(String::from("1000")),
+    };
+
+    let addon =
+        SessionAddonState::from_runtime_state(session_id, &runtime_state, String::from("1000"));
+    let mut restored = SessionRuntimeStateEntry::default();
+    addon.apply_to_runtime_state(&mut restored);
+    assert_eq!(restored.output_style, runtime_state.output_style);
 }

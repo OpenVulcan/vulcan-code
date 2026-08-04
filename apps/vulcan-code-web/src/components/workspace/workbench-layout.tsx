@@ -122,6 +122,7 @@ import {
   saveGitCommitSettings,
   saveProviderRetrySettings,
   saveMcpServerConfiguration,
+  savePromptOutputStyle,
   selectWebuiLocale,
 } from "@/service/settings-actions-service";
 import {
@@ -150,6 +151,7 @@ import {
   loadWorkspaceFileDirectory,
   loadWorkspaceFilePreview,
   runWorkspaceGitFileAction,
+  loadWorkbenchSnapshot,
 } from "@/service/workbench-snapshot-service";
 import { localMediaSourceUrl } from "@/resources/localMedia";
 import {
@@ -1000,6 +1002,7 @@ export function WorkbenchLayout(props: {
     handleUpdateSessionGoalStatus,
     handleSetSessionPlanMode,
     handleSetSessionVmmPolicy,
+    handleSetSessionOutputStyle,
     handleEditPendingPrompt,
   } = useWorkbenchSessionActions({
     selectedConversation,
@@ -1816,6 +1819,7 @@ export function WorkbenchLayout(props: {
             onUpdateSessionGoalStatus={handleUpdateSessionGoalStatus}
             onSetSessionPlanMode={handleSetSessionPlanMode}
             onSetSessionVmmPolicy={handleSetSessionVmmPolicy}
+            onSetSessionOutputStyle={handleSetSessionOutputStyle}
             onStopConversationRun={handleStopConversationRun}
             onOpenSubagentPanel={handleOpenSubagentPanel}
             onStopSubagentTask={handleStopSubagentTask}
@@ -1870,6 +1874,15 @@ export function WorkbenchLayout(props: {
               onSaveVmmConfig: (request) => applySkillWorkbenchAction(() => saveVmmMemoryConfig(request)),
             }}
             settingsActions={{
+              onSavePromptOutputStyle: (styleId) => applySkillWorkbenchAction(async () => {
+                const saved = await savePromptOutputStyle(styleId);
+                if (saved) {
+                  toast.info("已保存输出风格。为避免打破上下文，风格切换只会在新会话或上下文压缩后的会话更新。", {
+                    id: "output-style-safe-boundary",
+                  });
+                }
+                return (await loadWorkbenchSnapshot()) ?? workbenchStateRef.current;
+              }),
               onSaveGitCommitSettings: (request) => applySkillWorkbenchAction(async () => (await saveGitCommitSettings(request)) ?? workbenchStateRef.current),
               onSaveProviderRetrySettings: (request) => applySkillWorkbenchAction(async () => (await saveProviderRetrySettings(request)) ?? workbenchStateRef.current),
               onSaveMcpServer: (request) => applySkillWorkbenchAction(async () => (await saveMcpServerConfiguration(request as unknown as Record<string, unknown>)) ?? workbenchStateRef.current),

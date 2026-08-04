@@ -41,6 +41,7 @@ export interface KnowledgeCurationSettings {
   route?: KnowledgeRouteReference | null;
   promptVersion: string;
   desiredModelFingerprint?: string | null;
+  reasoningEffort?: string | null;
   createdModelSnapshot?: KnowledgeModelSnapshot | null;
   lastSuccessfulSyncSnapshot?: KnowledgeModelSnapshot | null;
 }
@@ -77,6 +78,10 @@ export interface KnowledgeVectorIndexState {
 export interface KnowledgeDisplayIndexState {
   status: "not_created" | "pending" | "building" | "ready" | "stale" | "failed";
   activeGeneration?: string | null;
+  pendingGeneration?: string | null;
+  pendingSourceContentRevision?: number | null;
+  pendingPromptVersion?: string | null;
+  pendingModelFingerprint?: string | null;
   sourceContentRevision?: number | null;
   indexedPromptVersion?: string | null;
   indexedModelFingerprint?: string | null;
@@ -105,6 +110,7 @@ export interface KnowledgeLibrarySettingsRequest {
     route?: KnowledgeRouteReference | null;
     promptVersion?: string;
     desiredModelFingerprint?: string | null;
+    reasoningEffort?: string | null;
   };
   embedding?: {
     enabled?: boolean;

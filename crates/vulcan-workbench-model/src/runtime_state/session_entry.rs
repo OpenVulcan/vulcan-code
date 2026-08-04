@@ -2,6 +2,104 @@ use super::*;
 
 /// Session-scoped runtime state required for context reconstruction and agent tracing.
 /// 上下文重建与代理追踪所需的按会话归属运行时状态。
+/// Session-scoped output-style selection and the last safely applied prompt snapshot.
+/// 会话级输出风格选择与最近一次安全应用的提示词快照。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOutputStyleState {
+    /// Explicit session override; `None` inherits the global style.
+    /// 会话显式覆盖；为 `None` 时继承全局风格。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_style_id: Option<String>,
+    /// Style identifier captured in the last accepted prompt boundary.
+    /// 最近一个已接受提示词边界捕获的风格标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_style_id: Option<String>,
+    /// Exact prompt text captured for continuity across catalog changes.
+    /// 为保持连续性保存边界捕获时的精确提示词正文。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_prompt_text: Option<String>,
+    /// Human-readable label captured with the applied snapshot.
+    /// 与应用快照一起保存的人类可读标签。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_label: Option<String>,
+    /// Stable prompt fingerprint captured with the applied snapshot.
+    /// 与应用快照一起保存的稳定提示词指纹。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_fingerprint: Option<u64>,
+    /// Resource source captured with the applied snapshot.
+    /// 与应用快照一起保存的资源来源标签。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_source_label: Option<String>,
+    /// Activation boundary label, such as `new-session` or `context-compaction`.
+    /// 激活边界标签，例如 `new-session` 或 `context-compaction`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_boundary: Option<String>,
+    /// Compaction identifier that produced the current applied snapshot.
+    /// 生成当前应用快照的压缩标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_compaction_id: Option<String>,
+    /// Unix-millis text recording when the snapshot became effective.
+    /// 记录快照生效时间的 Unix 毫秒文本。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_at: Option<String>,
+}
+
+impl SessionOutputStyleState {
+    /// Returns whether no output-style state has been materialized.
+    /// 返回是否尚未物化任何输出风格状态。
+    pub fn is_empty(&self) -> bool {
+        self.override_style_id.is_none()
+            && self.applied_style_id.is_none()
+            && self.applied_prompt_text.is_none()
+            && self.applied_label.is_none()
+            && self.applied_fingerprint.is_none()
+            && self.applied_source_label.is_none()
+            && self.applied_boundary.is_none()
+            && self.applied_compaction_id.is_none()
+            && self.applied_at.is_none()
+    }
+
+    /// Resolves the desired style identifier against the global selection.
+    /// 按“会话覆盖优先、全局选择回退”规则解析目标风格标识。
+    pub fn desired_style_id(&self, global_style_id: &str) -> String {
+        self.override_style_id
+            .clone()
+            .unwrap_or_else(|| global_style_id.to_string())
+    }
+
+    /// Returns whether the desired style still waits for a safe boundary.
+    /// 返回目标风格是否仍等待安全边界才能生效。
+    pub fn has_pending_activation(&self, global_style_id: &str) -> bool {
+        let desired = self.desired_style_id(global_style_id);
+        self.applied_style_id.as_deref() != Some(desired.as_str())
+    }
+
+    /// Captures an immutable snapshot at a new-session or compaction boundary.
+    /// 在新会话或压缩边界捕获并保存不可变风格快照。
+    pub fn set_applied_snapshot(
+        &mut self,
+        style_id: String,
+        label: String,
+        prompt_text: String,
+        fingerprint: u64,
+        source_label: String,
+        boundary: String,
+        compaction_id: Option<String>,
+        applied_at: String,
+    ) {
+        self.applied_style_id = Some(style_id);
+        self.applied_label = Some(label);
+        self.applied_prompt_text = (!prompt_text.trim().is_empty()).then_some(prompt_text);
+        self.applied_fingerprint = Some(fingerprint);
+        self.applied_source_label = Some(source_label);
+        self.applied_boundary = Some(boundary);
+        self.applied_compaction_id = compaction_id;
+        self.applied_at = Some(applied_at);
+    }
+}
+
+/// Session-scoped runtime state required for context reconstruction and agent tracing.
+/// 上下文重建与代理追踪所需的按会话归属运行时状态。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionRuntimeStateEntry {
     /// Last active agent identifier used by the session.
@@ -21,6 +119,10 @@ pub struct SessionRuntimeStateEntry {
     /// 最近一次该会话激活时选择的推理档位预设。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_reasoning_effort: Option<ReasoningEffortLevel>,
+    /// Records whether the session reasoning preference was explicitly chosen by the user.
+    /// 记录会话思考偏好是否由用户明确选择，用于区分旧版默认值与显式关闭。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub active_reasoning_effort_explicit: bool,
     /// Last optional temperature override selected while this session was active.
     /// 最近一次该会话激活时选择的可选温度覆盖。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -69,6 +171,10 @@ pub struct SessionRuntimeStateEntry {
     /// 会话级计划模式标记与最近生成的计划产物。
     #[serde(default, skip_serializing_if = "SessionPlanModeState::is_empty")]
     pub plan_mode: SessionPlanModeState,
+    /// Session output-style override and the last boundary-applied snapshot.
+    /// 会话输出风格覆盖与最近一次边界应用的快照。
+    #[serde(default, skip_serializing_if = "SessionOutputStyleState::is_empty")]
+    pub output_style: SessionOutputStyleState,
     /// Pending VMM PostAction writebacks retained for FIFO replay.
     /// 为 FIFO 重放保留的待处理 VMM PostAction 写回队列。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

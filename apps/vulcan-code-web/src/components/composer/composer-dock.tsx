@@ -34,8 +34,10 @@ import type {
   SessionGoalSummary,
   SessionGoalUserStatusUpdate,
   SessionPlanModeSummary,
+  SessionOutputStyleSummary,
   SessionTodolistSummary,
   SessionVmmPolicySummary,
+  OutputStyleCatalogSummary,
 } from "@/types";
 
 export { composerAttachmentMedia } from "@/components/composer/composer-attachment-media";
@@ -138,6 +140,9 @@ export function ComposerDock(props: {
   // onSetSessionVmmPolicy persists one current session VMM memory policy mode.
   // onSetSessionVmmPolicy 持久化当前会话的单个 VMM 记忆策略模式。
   onSetSessionVmmPolicy: (policy: string, mode: string) => Promise<boolean>;
+  // Persists one selected conversation output-style override.
+  // 持久化当前会话的输出风格覆盖。
+  onSetSessionOutputStyle: (styleId: string | null) => Promise<boolean>;
   // onStopConversationRun stops the selected backend conversation stream.
   // onStopConversationRun 停止当前选中的后端会话流。
   onStopConversationRun: () => Promise<boolean>;
@@ -178,6 +183,12 @@ export function ComposerDock(props: {
   // Current session VMM memory policy state.
   // 当前会话 VMM 记忆策略状态。
   sessionVmmPolicy: SessionVmmPolicySummary | null;
+  // Output-style catalog and persisted global selection.
+  // 输出风格目录与已持久化全局选择。
+  outputStyleCatalog: OutputStyleCatalogSummary;
+  // Current persisted output-style state for the selected conversation.
+  // 当前选中会话的持久化输出风格状态。
+  sessionOutputStyle: SessionOutputStyleSummary | null;
   // Whether the effective project configuration makes VMM available to this composer.
   // 当前项目最终生效配置是否允许输入区使用 VMM。
   vmmAvailable: boolean;
@@ -267,6 +278,7 @@ export function ComposerDock(props: {
         onUpdateSessionGoalStatus={props.onUpdateSessionGoalStatus}
         onSetSessionPlanMode={props.onSetSessionPlanMode}
         onSetSessionVmmPolicy={props.onSetSessionVmmPolicy}
+        onSetSessionOutputStyle={props.onSetSessionOutputStyle}
         onStopConversationRun={props.onStopConversationRun}
         onStageAttachmentBytes={props.onStageAttachmentBytes}
         resolveMediaSourceUrl={props.resolveMediaSourceUrl}
@@ -279,6 +291,8 @@ export function ComposerDock(props: {
         reasoningSelection={props.reasoningSelection}
         sessionPlanMode={props.sessionPlanMode}
         sessionVmmPolicy={props.sessionVmmPolicy}
+        outputStyleCatalog={props.outputStyleCatalog}
+        sessionOutputStyle={props.sessionOutputStyle}
         vmmAvailable={props.vmmAvailable}
       />
       {props.todolistStatusHost && visibleSessionTodolist

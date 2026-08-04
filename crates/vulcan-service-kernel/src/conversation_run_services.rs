@@ -651,6 +651,107 @@ pub(crate) async fn service_set_session_vmm_policy(
     emit_session_addons_changed_delta(&app, &state, session_id)
 }
 
+/// Persists a session output-style override without changing the active prompt prefix.
+/// 持久化会话输出风格覆盖，但不直接改写当前提示词前缀。
+pub(crate) async fn service_set_session_output_style(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: SessionOutputStyleUpdateRequest,
+) -> Result<SessionAddonsChangedResponse, String> {
+    let session_id = parse_session_id(&request.conversation_id)
+        .ok_or_else(|| String::from("当前草稿会话尚未创建，暂时不能切换输出风格。"))?;
+    let (controller_runtime, global_selection) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
+            String::from("service is still starting; controller runtime is not ready")
+        })?;
+        let workspace_snapshot = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+        if !workspace_snapshot_contains_regular_session(workspace_snapshot, session_id) {
+            return Err(format!("未找到要切换输出风格的会话：{session_id}"));
+        }
+        let global_selection = guard
+            .agent_runtime
+            .as_ref()
+            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?
+            .provider_configuration
+            .prompt
+            .output_style;
+        (controller_runtime, global_selection)
+    };
+    let normalized_style_id = request
+        .style_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    resolve_output_style_snapshot(normalized_style_id.as_deref(), global_selection)?;
+    let updated_at = current_unix_millis_text();
+    invalidate_webui_session_addon_persist_version(
+        &state,
+        session_id,
+        SessionAddonNamespace::OutputStyle,
+    )?;
+    let addon_persist_lock = webui_workspace_persist_lock();
+    let _addon_persist_guard = addon_persist_lock.lock().await;
+    let (workspace_snapshot, addon_state) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace_snapshot = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+        let mut next_output_style = workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .map(|runtime_state| runtime_state.output_style.clone())
+            .unwrap_or_default();
+        next_output_style.override_style_id = normalized_style_id.clone();
+        let mut addon_state = SessionAddonState::new(session_id);
+        let _ = addon_state.set_typed_namespace(
+            SessionAddonNamespace::OutputStyle,
+            &next_output_style,
+            updated_at.clone(),
+        );
+        (workspace_snapshot.clone(), addon_state)
+    };
+    let persisted_addon_state = persist_workspace_session_addon_state_update(
+        controller_runtime,
+        workspace_snapshot,
+        session_id,
+        addon_state,
+    )
+    .await?;
+    {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+        let runtime_state = workspace
+            .session_runtime_state
+            .entry(session_id)
+            .or_insert_with(|| SessionRuntimeStateEntry {
+                updated_at: updated_at.clone(),
+                ..SessionRuntimeStateEntry::default()
+            });
+        runtime_state.output_style.override_style_id = normalized_style_id.clone();
+        runtime_state.updated_at = updated_at.clone();
+    }
+    emit_session_addon_changed_event(
+        &app,
+        session_id,
+        &[SessionAddonNamespace::OutputStyle],
+        persisted_addon_state.revision,
+        latest_session_addon_updated_at(&persisted_addon_state),
+    );
+    emit_session_addons_changed_delta(&app, &state, session_id)
+}
+
 /// Parses one WebUI VMM policy mode into an optional layer value.
 /// 将单个 WebUI VMM 策略模式解析为可选配置层值。
 ///

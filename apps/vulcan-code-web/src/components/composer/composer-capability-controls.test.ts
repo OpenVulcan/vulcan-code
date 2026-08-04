@@ -25,6 +25,15 @@ function settingsFixture(): PublicAiSettingsSnapshot {
     modelAccessRecords: [],
     connectionModelAccessPolicyRecords: [],
     customModels: {},
+    customProviderSystemModelDefaults: {
+      context_limit: 200_000,
+      output_limit: 32_768,
+      input_resources: [],
+      reasoning: "native",
+      reasoning_control: "effort_selection",
+      reasoning_efforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+      tool_calling: "native",
+    },
     modelCapabilityOverrides: {},
     modelCapabilityOverrideRecords: [],
     providerToolTargets: [{

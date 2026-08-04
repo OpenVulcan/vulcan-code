@@ -2,6 +2,7 @@
 //! 上下文压缩 auto compaction 辅助逻辑。
 
 use super::*;
+use crate::applied_output_style_snapshot;
 
 /// Runs budget-triggered context compaction before one exact active Provider stream continues.
 /// 在一个精确活动 Provider 流继续前执行预算触发的上下文压缩。
@@ -384,6 +385,7 @@ pub(crate) fn refreshed_execution_request_after_context_compaction(
         .ok_or_else(|| String::from("自动上下文压缩完成后未找到会话运行时状态。"))?;
     let mut refreshed = request.clone();
     refreshed.conversation_state = runtime_state.conversation_state.clone();
+    refreshed.output_style_snapshot = applied_output_style_snapshot(runtime_state);
     let turn_marker = refreshed
         .boundary_events
         .first()

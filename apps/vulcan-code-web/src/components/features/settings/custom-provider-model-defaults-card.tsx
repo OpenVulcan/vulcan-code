@@ -1,97 +1,182 @@
 import * as React from "react"
-import { LoaderCircle, Settings2 } from "lucide-react"
+import { LoaderCircle, RotateCcw, Save } from "lucide-react"
+
+import {
+  emptyRequestProjection,
+  normalizeRequestProjection,
+  ReasoningProjectionEditor,
+} from "@/components/features/settings/public-ai-model-capability-dialog"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
+import {
+  directProviderModelSettingsEqual,
+  OPENAI_DIRECT_REASONING_EFFORTS,
+  projectOpenAiReasoningEfforts,
+  resolveDirectCustomProviderDefaults,
+} from "@/components/features/settings/direct-provider-model-settings"
 import { useI18n } from "@/i18n"
 import { savePublicAiCustomProviderModelDefaults } from "@/service/settings-actions-service"
 import type {
   PublicAiCustomProviderModelDefaults,
+  PublicAiCustomModelRequestProjection,
   PublicAiResourceKind,
   PublicAiSettingsSnapshot,
 } from "@/types"
 
-// CustomProviderModelDefaultsCardProps binds the provider fallback editor to one snapshot update.
-// CustomProviderModelDefaultsCardProps 将供应商回退编辑器绑定到一次快照更新。
+// CustomProviderModelDefaultsCardProps binds one direct provider-settings layer to snapshot updates.
+// CustomProviderModelDefaultsCardProps 将一层直接供应商设置绑定到快照更新。
 interface CustomProviderModelDefaultsCardProps {
+  customized: boolean
   defaults: PublicAiCustomProviderModelDefaults
   onSaved: (snapshot: PublicAiSettingsSnapshot) => void
   providerId: string
 }
 
-// CUSTOM_DEFAULT_RESOURCES is the closed non-text resource set supported by the common contract.
-// CUSTOM_DEFAULT_RESOURCES 是公共契约支持的封闭非文本资源集合。
-const CUSTOM_DEFAULT_RESOURCES: PublicAiResourceKind[] = ["image", "audio", "video", "file"]
+// CUSTOM_INPUT_RESOURCES is the complete non-text input set editable by compatible providers.
+// CUSTOM_INPUT_RESOURCES 是兼容供应商可编辑的完整非文本输入集合。
+const CUSTOM_INPUT_RESOURCES: PublicAiResourceKind[] = ["image", "audio", "video", "file"]
 
-// CustomProviderModelDefaultsCard edits the safe fallback used only for undeclared model fields.
-// CustomProviderModelDefaultsCard 编辑仅用于未声明模型字段的安全回退值。
+// REASONING_EFFORT_LABEL_KEYS maps each OpenAI level to one stable translation key.
+// REASONING_EFFORT_LABEL_KEYS 将每个 OpenAI 档位映射到稳定翻译键。
+const REASONING_EFFORT_LABEL_KEYS = {
+  none: "settings.customModels.effortNone",
+  minimal: "settings.customModels.effortMinimal",
+  low: "settings.customModels.effortLow",
+  medium: "settings.customModels.effortMedium",
+  high: "settings.customModels.effortHigh",
+  xhigh: "settings.customModels.effortExtraHigh",
+  max: "settings.customModels.effortMax",
+} as const
+
+// CustomProviderModelDefaultsCard shows current values directly and persists edits without enable-overrides switches.
+// CustomProviderModelDefaultsCard 直接显示当前值，并在没有“启用覆盖”开关的情况下持久化修改。
 export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaultsCardProps) {
   const { t } = useI18n()
+  // contextLimit is the directly editable provider-wide context value.
+  // contextLimit 是可直接编辑的供应商级上下文值。
   const [contextLimit, setContextLimit] = React.useState(props.defaults.context_limit)
+  // outputLimit is the directly editable provider-wide output-token ceiling.
+  // outputLimit 是可直接编辑的供应商级输出 Token 上限。
   const [outputLimit, setOutputLimit] = React.useState(props.defaults.output_limit)
+  // inputResources is the complete provider-wide non-text input set.
+  // inputResources 是完整的供应商级非文本输入集合。
   const [inputResources, setInputResources] = React.useState(props.defaults.input_resources ?? [])
-  const [outputResources, setOutputResources] = React.useState(props.defaults.output_resources ?? [])
-  const [editing, setEditing] = React.useState(false)
+  // reasoningEnabled is the simple explicit on/off policy shown to users.
+  // reasoningEnabled 是向用户展示的简化显式思考启停策略。
+  const [reasoningEnabled, setReasoningEnabled] = React.useState(reasoningIsEnabled(props.defaults))
+  // reasoningEfforts is the complete OpenAI-compatible selectable level set.
+  // reasoningEfforts 是完整的 OpenAI 兼容可选档位集合。
+  const [reasoningEfforts, setReasoningEfforts] = React.useState<string[]>(
+    visibleReasoningEfforts(props.defaults),
+  )
+  // toolCallingEnabled is the explicit provider-wide tool-calling policy.
+  // toolCallingEnabled 是显式供应商级工具调用策略。
+  const [toolCallingEnabled, setToolCallingEnabled] = React.useState(
+    props.defaults.tool_calling !== "unsupported",
+  )
+  const [requestProjection, setRequestProjection] = React.useState<PublicAiCustomModelRequestProjection>(
+    normalizeRequestProjection(props.defaults.request_projection) ?? emptyRequestProjection(),
+  )
+  // saving serializes provider-settings writes from this card.
+  // saving 串行化本卡片发起的供应商设置写入。
   const [saving, setSaving] = React.useState(false)
+  // error contains the current actionable validation or service failure.
+  // error 保存当前可操作的校验或服务错误。
   const [error, setError] = React.useState<string | null>(null)
 
+  // resetDraft replaces every field with one authoritative defaults snapshot.
+  // resetDraft 使用一份权威默认值快照替换全部字段。
+  const resetDraft = React.useCallback((defaults: PublicAiCustomProviderModelDefaults) => {
+    setContextLimit(defaults.context_limit)
+    setOutputLimit(defaults.output_limit)
+    setInputResources(defaults.input_resources ?? [])
+    setReasoningEnabled(reasoningIsEnabled(defaults))
+    setReasoningEfforts(visibleReasoningEfforts(defaults))
+    setToolCallingEnabled(defaults.tool_calling !== "unsupported")
+    setRequestProjection(normalizeRequestProjection(defaults.request_projection))
+    setError(null)
+  }, [])
+
+  // currentSettings is the complete semantic provider layer currently visible in the editor.
+  // currentSettings 是编辑器当前显示的完整语义供应商层。
+  const currentSettings = React.useMemo<PublicAiCustomProviderModelDefaults>(() => ({
+    context_limit: contextLimit,
+    output_limit: outputLimit,
+    input_resources: inputResources,
+    reasoning: reasoningEnabled ? "native" : "unsupported",
+    reasoning_control: reasoningEnabled ? "effort_selection" : "fixed_off",
+    reasoning_efforts: reasoningEnabled ? reasoningEfforts : ["none"],
+    tool_calling: toolCallingEnabled ? "native" : "unsupported",
+    request_projection: requestProjection,
+  }), [contextLimit, inputResources, outputLimit, reasoningEfforts, reasoningEnabled, requestProjection, toolCallingEnabled])
+  // dirty is true only while visible values differ semantically from the authoritative snapshot.
+  // dirty 仅在可见值与权威快照存在语义差异时为真。
+  const dirty = !directProviderModelSettingsEqual(currentSettings, props.defaults)
+
   React.useEffect(() => {
-    if (editing) {
-      return
+    if (!dirty) {
+      resetDraft(props.defaults)
     }
-    setContextLimit(props.defaults.context_limit)
-    setOutputLimit(props.defaults.output_limit)
-    setInputResources(props.defaults.input_resources ?? [])
-    setOutputResources(props.defaults.output_resources ?? [])
-  }, [editing, props.defaults])
+  }, [dirty, props.defaults, resetDraft])
 
-  // toggleEditing restores the published snapshot when the user cancels local edits.
-  // toggleEditing 在用户取消本地编辑时恢复已发布快照。
-  const toggleEditing = React.useCallback(() => {
-    if (editing) {
-      setContextLimit(props.defaults.context_limit)
-      setOutputLimit(props.defaults.output_limit)
-      setInputResources(props.defaults.input_resources ?? [])
-      setOutputResources(props.defaults.output_resources ?? [])
-      setError(null)
-    }
-    setEditing((current) => !current)
-  }, [editing, props.defaults])
-
-  // save validates the direct numeric contract before writing provider-wide fallback differences.
-  // save 在写入供应商级回退差异前校验直接数值契约。
+  // save validates and replaces the complete visible provider layer in one request.
+  // save 校验并通过一次请求替换完整可见供应商层。
   const save = React.useCallback(async () => {
-    if (!Number.isInteger(contextLimit) || contextLimit <= 0) {
+    if (!Number.isSafeInteger(contextLimit) || contextLimit <= 0) {
       setError(t("settings.customModels.defaultsContextInvalid"))
       return
     }
-    if (!Number.isInteger(outputLimit) || outputLimit <= 0 || outputLimit > contextLimit) {
+    if (!Number.isSafeInteger(outputLimit) || outputLimit <= 0 || outputLimit > contextLimit) {
       setError(t("settings.customModels.defaultsOutputInvalid"))
+      return
+    }
+    if (reasoningEnabled && !reasoningEfforts.some((effort) => effort !== "none")) {
+      setError(t("settings.customModels.defaultsReasoningInvalid"))
       return
     }
     setSaving(true)
     setError(null)
     try {
-      const snapshot = await savePublicAiCustomProviderModelDefaults({
+      props.onSaved(await savePublicAiCustomProviderModelDefaults({
         providerId: props.providerId,
-        defaults: {
-          context_limit: contextLimit,
-          output_limit: outputLimit,
-          input_resources: inputResources,
-          output_resources: outputResources,
-        },
-      })
-      props.onSaved(snapshot)
-      setEditing(false)
+        defaults: currentSettings,
+      }))
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
       setSaving(false)
     }
-  }, [contextLimit, inputResources, outputLimit, outputResources, props, t])
+  }, [contextLimit, currentSettings, outputLimit, props, reasoningEfforts, reasoningEnabled, t])
+
+  // restore removes the provider layer or discards an unsaved local draft.
+  // restore 移除供应商层，或丢弃尚未保存的本地草稿。
+  const restore = React.useCallback(async () => {
+    if (!props.customized) {
+      resetDraft(props.defaults)
+      return
+    }
+    setSaving(true)
+    setError(null)
+    try {
+      // snapshot is the authoritative post-removal state used to replace the stale customized draft immediately.
+      // snapshot 是移除后的权威状态，用于立即替换过时的自定义草稿。
+      const snapshot = await savePublicAiCustomProviderModelDefaults({ providerId: props.providerId })
+      props.onSaved(snapshot)
+      resetDraft(resolveDirectCustomProviderDefaults(
+        snapshot.customProviderSystemModelDefaults,
+        snapshot.customProviderModelDefaults?.[props.providerId],
+      ))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setSaving(false)
+    }
+  }, [props, resetDraft])
 
   return (
     <Card>
@@ -101,44 +186,118 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
             <CardTitle className="text-sm">{t("settings.customModels.defaultsTitle")}</CardTitle>
             <CardDescription>{t("settings.customModels.defaultsDescription")}</CardDescription>
           </div>
-          <Button onClick={toggleEditing} size="sm" type="button" variant="outline">
-            <Settings2 className="mr-2 size-4" />
-            {editing ? t("memory.common.cancel") : t("settings.customModels.defaultsEdit")}
+          <Badge variant={props.customized ? "secondary" : "outline"}>
+            {t(props.customized
+              ? "settings.customModels.defaultsCustomSource"
+              : "settings.customModels.defaultsSystemSource")}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4 border-t p-4">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <DirectNumberInput
+            label={t("settings.customModels.contextLimit")}
+            onChange={setContextLimit}
+            value={contextLimit}
+          />
+          <DirectNumberInput
+            label={t("settings.customModels.outputLimit")}
+            onChange={setOutputLimit}
+            value={outputLimit}
+          />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {t("settings.customModels.outputRecommendation").replace(
+            "{count}",
+            Math.min(32_768, Math.floor(contextLimit / 4)).toLocaleString(),
+          )}
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <InputResourceEditor
+            label={t("settings.customModels.input")}
+            onChange={setInputResources}
+            value={inputResources}
+          />
+          <fieldset className="rounded-lg border p-3">
+            <legend className="px-1 text-xs font-medium">{t("settings.customModels.output")}</legend>
+            <p className="text-sm font-medium">{t("settings.customModels.fixedTextOutput")}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t("settings.customModels.fixedTextOutputDescription")}
+            </p>
+          </fieldset>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <fieldset className="space-y-3 rounded-lg border p-3">
+            <legend className="px-1 text-xs font-medium">{t("settings.customModels.reasoning")}</legend>
+            <label className="flex items-center justify-between gap-3 text-sm">
+              <span>{t(reasoningEnabled ? "settings.customModels.enabled" : "settings.customModels.disabled")}</span>
+              <Switch
+                checked={reasoningEnabled}
+                onCheckedChange={(enabled) => {
+                  setReasoningEnabled(enabled)
+                  if (enabled && !reasoningEfforts.some((effort) => effort !== "none")) {
+                    setReasoningEfforts([...OPENAI_DIRECT_REASONING_EFFORTS])
+                  }
+                }}
+              />
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              {OPENAI_DIRECT_REASONING_EFFORTS.map((effort) => (
+                <label className="flex items-center gap-2 text-xs" key={effort}>
+                  <Checkbox
+                    checked={reasoningEfforts.includes(effort)}
+                    disabled={!reasoningEnabled || (
+                      effort !== "none"
+                      && reasoningEfforts.includes(effort)
+                      && reasoningEfforts.filter((candidate) => candidate !== "none").length === 1
+                    )}
+                    onCheckedChange={(checked) => {
+                      setReasoningEfforts((current) => checked
+                        ? [...current, effort]
+                        : current.filter((candidate) => candidate !== effort))
+                    }}
+                  />
+                  {t(REASONING_EFFORT_LABEL_KEYS[effort])}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <fieldset className="rounded-lg border p-3">
+            <legend className="px-1 text-xs font-medium">{t("settings.customModels.toolCalling")}</legend>
+            <label className="flex items-center justify-between gap-3 text-sm">
+              <span>{t(toolCallingEnabled ? "settings.customModels.enabled" : "settings.customModels.disabled")}</span>
+              <Switch
+                checked={toolCallingEnabled}
+                onCheckedChange={setToolCallingEnabled}
+              />
+            </label>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {t("settings.customModels.toolCallingDefaultDescription")}
+            </p>
+          </fieldset>
+        </div>
+        <ReasoningProjectionEditor
+          efforts={reasoningEfforts.length > 0 ? reasoningEfforts : ["none"]}
+          onChange={setRequestProjection}
+          projection={requestProjection}
+        />
+        {error ? <p className="text-sm text-destructive">{error}</p> : null}
+        <div className="flex flex-wrap justify-between gap-2">
+          <Button
+            disabled={saving || (!props.customized && !dirty)}
+            onClick={() => void restore()}
+            type="button"
+            variant="outline"
+          >
+            <RotateCcw className="mr-2 size-4" />
+            {t("settings.modelCapabilities.restore")}
+          </Button>
+          <Button disabled={saving || !dirty} onClick={() => void save()} type="button">
+            {saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : <Save className="mr-2 size-4" />}
+            {t("settings.customModels.defaultsSave")}
           </Button>
         </div>
-        {!editing ? (
-          <div className="flex flex-wrap gap-2">
-            <Badge variant="secondary">{t("settings.customModels.contextSummary").replace("{count}", contextLimit.toLocaleString())}</Badge>
-            <Badge variant="secondary">{t("settings.customModels.outputSummary").replace("{count}", outputLimit.toLocaleString())}</Badge>
-            <Badge variant="outline">{t("settings.customModels.textInputOutput")}</Badge>
-          </div>
-        ) : null}
-      </CardHeader>
-      {editing ? (
-        <CardContent className="space-y-4 border-t p-4">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <DirectNumberInput label={t("settings.customModels.contextLimit")} onChange={setContextLimit} value={contextLimit} />
-            <DirectNumberInput label={t("settings.customModels.outputLimit")} onChange={setOutputLimit} value={outputLimit} />
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {t("settings.customModels.outputRecommendation").replace(
-              "{count}",
-              Math.min(32_768, Math.floor(contextLimit / 4)).toLocaleString(),
-            )}
-          </p>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <DefaultResourceEditor label={t("settings.customModels.input")} onChange={setInputResources} value={inputResources} />
-            <DefaultResourceEditor label={t("settings.customModels.output")} onChange={setOutputResources} value={outputResources} />
-          </div>
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
-          <div className="flex justify-end">
-            <Button disabled={saving} onClick={() => void save()} type="button">
-              {saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
-              {t("settings.customModels.defaultsSave")}
-            </Button>
-          </div>
-        </CardContent>
-      ) : null}
+      </CardContent>
     </Card>
   )
 }
@@ -158,9 +317,9 @@ function DirectNumberInput(props: { label: string; onChange: (value: number) => 
   )
 }
 
-// DefaultResourceEditor edits one complete provider-default resource set.
-// DefaultResourceEditor 编辑一个完整的供应商默认资源集合。
-function DefaultResourceEditor(props: {
+// InputResourceEditor edits one complete provider-level non-text input set.
+// InputResourceEditor 编辑一份完整的供应商级非文本输入集合。
+function InputResourceEditor(props: {
   label: string
   onChange: (resources: PublicAiResourceKind[]) => void
   value: PublicAiResourceKind[]
@@ -170,7 +329,7 @@ function DefaultResourceEditor(props: {
     <fieldset className="rounded-lg border p-3">
       <legend className="px-1 text-xs font-medium">{props.label}</legend>
       <div className="grid grid-cols-2 gap-2">
-        {CUSTOM_DEFAULT_RESOURCES.map((resource) => (
+        {CUSTOM_INPUT_RESOURCES.map((resource) => (
           <label className="flex items-center gap-2 text-xs" key={resource}>
             <Checkbox
               checked={props.value.includes(resource)}
@@ -186,4 +345,16 @@ function DefaultResourceEditor(props: {
       </div>
     </fieldset>
   )
+}
+
+// reasoningIsEnabled converts the complete backend contract into the simple UI policy.
+// reasoningIsEnabled 将完整后端契约转换为简化界面策略。
+function reasoningIsEnabled(defaults: PublicAiCustomProviderModelDefaults): boolean {
+  return defaults.reasoning !== "unsupported" && defaults.reasoning_control !== "fixed_off"
+}
+
+// visibleReasoningEfforts projects backend levels onto the OpenAI-compatible editor set.
+// visibleReasoningEfforts 将后端档位投影到 OpenAI 兼容编辑器集合。
+function visibleReasoningEfforts(defaults: PublicAiCustomProviderModelDefaults): string[] {
+  return projectOpenAiReasoningEfforts(defaults.reasoning_efforts)
 }

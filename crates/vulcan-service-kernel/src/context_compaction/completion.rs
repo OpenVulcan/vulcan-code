@@ -452,6 +452,7 @@ pub(crate) fn finish_webui_context_compaction_execution(
                                 provider_request_count,
                                 &summary_body,
                                 &execution,
+                                agent_runtime.provider_configuration.prompt.output_style,
                             )?;
                             if !draft.baseline.matches(runtime_state) {
                                 return Err(String::from(
@@ -499,6 +500,7 @@ pub(crate) fn finish_webui_context_compaction_execution(
                                 provider_request_count,
                                 &summary_body,
                                 &execution,
+                                agent_runtime.provider_configuration.prompt.output_style,
                             )?;
                             if replay_candidate != vmm_commit.state {
                                 return Err(format!(

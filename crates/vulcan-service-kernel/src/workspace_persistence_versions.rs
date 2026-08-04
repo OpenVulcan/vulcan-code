@@ -450,7 +450,10 @@ pub(crate) fn workbench_thinking_display_mode(
 pub(crate) fn active_reasoning_selection_effort(
     provider_configuration: &ProviderConfigurationFile,
 ) -> Option<ReasoningEffortLevel> {
-    provider_configuration.workbench_reasoning_effort
+    provider_configuration
+        .workbench_reasoning_effort_explicit
+        .then_some(provider_configuration.workbench_reasoning_effort)
+        .flatten()
 }
 
 /// Builds the WebUI reasoning selector snapshot from the shared provider configuration.
@@ -460,6 +463,25 @@ pub(crate) fn reasoning_selection(
     capabilities: Option<&vulcan_ai_contract::ModelCapabilities>,
 ) -> Option<ReasoningSelectionSummary> {
     let capabilities = capabilities?;
+    // Resolve the same host default used by the provider runtime before publishing selector state.
+    // 在发布选择器状态前解析与供应商运行时相同的宿主默认策略。
+    let mut effective_capabilities = capabilities.clone();
+    vulcan_provider_adapters::apply_host_default_reasoning_policy(&mut effective_capabilities);
+    let capabilities = &effective_capabilities;
+    // Explicit unsupported/fixed-off metadata is authoritative even when a stale catalog leaves effort entries behind.
+    // 明确的不支持/固定关闭元数据具有最高优先级，即使旧目录残留了推理档位也必须保持关闭。
+    if capabilities.reasoning == vulcan_ai_contract::CapabilitySupport::Unsupported
+        || capabilities.reasoning_control == vulcan_ai_contract::ReasoningControlMode::FixedOff
+    {
+        return Some(ReasoningSelectionSummary {
+            options: vec![ReasoningSelectionOptionSummary {
+                value: String::from("fixed-off"),
+                label: String::from("关闭"),
+            }],
+            selected_effort: String::from("fixed-off"),
+            note: None,
+        });
+    }
     if capabilities.reasoning_efforts.is_empty() {
         let enabled = capabilities.reasoning.is_supported();
         return Some(ReasoningSelectionSummary {
@@ -499,18 +521,18 @@ pub(crate) fn reasoning_selection(
             }
         })
         .collect::<Vec<_>>();
-    let configured = provider_configuration.workbench_reasoning_effort;
-    let default_effort = default_enabled_reasoning_effort(&capabilities.reasoning_efforts)?;
-    let selected_effort = configured
-        .filter(|effort| {
-            let configured_value = reasoning_effort_wire_value(*effort);
-            options
-                .iter()
-                .any(|option| option.value == configured_value)
-        })
-        .map(reasoning_effort_wire_value)
-        .unwrap_or_else(|| reasoning_effort_wire_value(default_effort))
-        .to_string();
+    let configured = provider_configuration
+        .workbench_reasoning_effort_explicit
+        .then_some(provider_configuration.workbench_reasoning_effort)
+        .flatten();
+    // effectiveEffort shares the exact execution-time resolver so the displayed default cannot diverge from dispatch.
+    // effectiveEffort 复用精确的执行期解析器，确保展示默认值不会与分发行为分叉。
+    let effective_effort =
+        vulcan_agent_runtime::agent_runtime::provider_reasoning::resolve_effective_reasoning_effort(
+            capabilities,
+            configured,
+        );
+    let selected_effort = reasoning_effort_wire_value(effective_effort).to_string();
     let note = configured
         .filter(|effort| reasoning_effort_wire_value(*effort) != selected_effort)
         .map(|effort| {
@@ -525,27 +547,6 @@ pub(crate) fn reasoning_selection(
         selected_effort,
         note,
     })
-}
-
-/// Selects one concrete enabled default from the active model's exact effort contract.
-/// 从当前模型的精确档位契约中选择一个具体的默认启用档位。
-fn default_enabled_reasoning_effort(
-    efforts: &[vulcan_ai_contract::ReasoningEffort],
-) -> Option<ReasoningEffortLevel> {
-    let preferred = [
-        vulcan_ai_contract::ReasoningEffort::Adaptive,
-        vulcan_ai_contract::ReasoningEffort::Medium,
-    ];
-    preferred
-        .into_iter()
-        .find(|candidate| efforts.contains(candidate))
-        .or_else(|| {
-            efforts
-                .iter()
-                .copied()
-                .find(|effort| *effort != vulcan_ai_contract::ReasoningEffort::None)
-        })
-        .map(reasoning_effort_level_from_public)
 }
 
 /// Converts one public reasoning level into the shared workbench preference.
@@ -934,6 +935,7 @@ mod tests {
     fn reasoning_selector_uses_active_model_capabilities() {
         let configuration = ProviderConfigurationFile {
             workbench_reasoning_effort: Some(ReasoningEffortLevel::Ultra),
+            workbench_reasoning_effort_explicit: true,
             ..ProviderConfigurationFile::default()
         };
         let capabilities = vulcan_ai_contract::ModelCapabilities {
@@ -955,6 +957,51 @@ mod tests {
         );
         assert_eq!(selection.selected_effort, "minimal");
         assert!(selection.note.is_some());
+    }
+
+    /// Verifies legacy persisted `none` values are treated as stale defaults and re-enable reasoning.
+    /// 验证旧版持久化的 `none` 会被视为过期默认值并重新启用思考。
+    #[test]
+    fn reasoning_selector_ignores_legacy_none_without_explicit_provenance() {
+        let configuration = ProviderConfigurationFile {
+            workbench_reasoning_effort: Some(ReasoningEffortLevel::None),
+            ..ProviderConfigurationFile::default()
+        };
+        let capabilities = vulcan_ai_contract::ModelCapabilities {
+            reasoning_efforts: vec![
+                vulcan_ai_contract::ReasoningEffort::None,
+                vulcan_ai_contract::ReasoningEffort::Medium,
+            ],
+            ..vulcan_ai_contract::ModelCapabilities::default()
+        };
+
+        let selection = reasoning_selection(&configuration, Some(&capabilities))
+            .expect("legacy reasoning preference should still expose a selector");
+
+        assert_eq!(selection.selected_effort, "medium");
+    }
+
+    /// Verifies an explicitly selected `none` value still disables reasoning.
+    /// 验证用户明确选择的 `none` 仍然能够关闭思考。
+    #[test]
+    fn reasoning_selector_preserves_explicit_none() {
+        let configuration = ProviderConfigurationFile {
+            workbench_reasoning_effort: Some(ReasoningEffortLevel::None),
+            workbench_reasoning_effort_explicit: true,
+            ..ProviderConfigurationFile::default()
+        };
+        let capabilities = vulcan_ai_contract::ModelCapabilities {
+            reasoning_efforts: vec![
+                vulcan_ai_contract::ReasoningEffort::None,
+                vulcan_ai_contract::ReasoningEffort::Medium,
+            ],
+            ..vulcan_ai_contract::ModelCapabilities::default()
+        };
+
+        let selection = reasoning_selection(&configuration, Some(&capabilities))
+            .expect("explicit reasoning preference should still expose a selector");
+
+        assert_eq!(selection.selected_effort, "none");
     }
 
     /// Verifies MiniMax exposes only its exact switch values and defaults to enabled adaptive thinking.
@@ -1050,6 +1097,52 @@ mod tests {
         assert_eq!(selection.options[0].value, "fixed-off");
         assert_eq!(selection.options[0].label, "关闭");
         assert_eq!(selection.selected_effort, "fixed-off");
+    }
+
+    /// Verifies fixed-off metadata remains authoritative when stale levels are present.
+    /// 验证存在旧档位时固定关闭元数据仍保持最高优先级。
+    #[test]
+    fn reasoning_selector_keeps_stale_fixed_off_disabled() {
+        let capabilities = vulcan_ai_contract::ModelCapabilities {
+            reasoning: vulcan_ai_contract::CapabilitySupport::Unsupported,
+            reasoning_control: vulcan_ai_contract::ReasoningControlMode::FixedOff,
+            reasoning_efforts: vec![
+                vulcan_ai_contract::ReasoningEffort::None,
+                vulcan_ai_contract::ReasoningEffort::High,
+            ],
+            ..vulcan_ai_contract::ModelCapabilities::default()
+        };
+
+        let selection =
+            reasoning_selection(&ProviderConfigurationFile::default(), Some(&capabilities))
+                .expect("fixed-off reasoning should remain visible");
+
+        assert_eq!(selection.options.len(), 1);
+        assert_eq!(selection.selected_effort, "fixed-off");
+    }
+
+    /// Verifies an unknown text model receives the host default selectable reasoning levels.
+    /// 验证未知文本模型会获得宿主默认可选思考档位。
+    #[test]
+    fn reasoning_selector_defaults_unknown_text_model_to_enabled_medium() {
+        let capabilities = vulcan_ai_contract::ModelCapabilities {
+            operations: vec![vulcan_ai_contract::AiOperation::ConversationRespond],
+            ..vulcan_ai_contract::ModelCapabilities::default()
+        };
+
+        let selection =
+            reasoning_selection(&ProviderConfigurationFile::default(), Some(&capabilities))
+                .expect("unknown text model should expose host reasoning defaults");
+
+        assert_eq!(
+            selection
+                .options
+                .iter()
+                .map(|option| option.value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["none", "minimal", "low", "medium", "high", "x-high", "max"]
+        );
+        assert_eq!(selection.selected_effort, "medium");
     }
 
     /// No-op shell host used to construct isolated persistence-version state.

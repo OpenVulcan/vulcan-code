@@ -22,6 +22,7 @@ use vulcan_core::types::{
 };
 use vulcan_hooks::SystemPromptHookBlock;
 use vulcan_luaskills_prompt::LuaSkillPromptEntry;
+use vulcan_prompt_composer::PromptOutputStyleSnapshot;
 use vulcan_prompt_skills::ResolvedPromptSkill;
 use vulcan_session_boundary::{
     SessionBoundaryEvent, SessionBoundaryEventKind, SessionEventScope, SessionEventVisibility,
@@ -312,6 +313,9 @@ pub struct ExecutionPreparationRequest {
     /// Current composer prompt.
     /// 当前提示词输入区内容。
     pub prompt: String,
+    /// Output-style snapshot captured at a safe prompt boundary.
+    /// 在安全提示词边界捕获的输出风格快照。
+    pub output_style_snapshot: Option<PromptOutputStyleSnapshot>,
     /// Provider-visible typed agent messages seeded before this request reaches the controller.
     /// 本请求到达控制器前预先播种的 Provider 可见类型化智能体消息。
     pub provider_visible_agent_messages: Vec<ExecutionProviderVisibleAgentMessage>,
@@ -522,6 +526,9 @@ pub struct ExecutionPreparation {
     /// Prompt-composer configuration captured for this run.
     /// 为本次运行捕获的提示词组合配置。
     pub prompt_configuration: PersistedPromptConfiguration,
+    /// Output-style snapshot captured for this prepared prompt boundary.
+    /// 为本次已准备提示词边界捕获的输出风格快照。
+    pub output_style_snapshot: Option<PromptOutputStyleSnapshot>,
     /// Prompt purpose captured for this run.
     /// 为本次运行捕获的提示词用途。
     pub prompt_purpose: ExecutionPromptPurpose,

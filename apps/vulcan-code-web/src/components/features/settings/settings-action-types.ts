@@ -136,6 +136,9 @@ export interface McpServerSaveRequest {
 // SettingsActionProps groups service-backed actions used by the settings page.
 // SettingsActionProps 分组设置页面使用的服务端动作。
 export interface SettingsActionProps {
+  // Saves the global default output style for new sessions and compaction boundaries.
+  // 保存供新会话与压缩边界使用的全局默认输出风格。
+  onSavePromptOutputStyle: (styleId: string) => Promise<void>
   // Saves Git commit dialog settings.
   // 保存 Git 提交弹窗设置。
   onSaveGitCommitSettings: (request: GitCommitSettingsSaveRequest) => Promise<void>

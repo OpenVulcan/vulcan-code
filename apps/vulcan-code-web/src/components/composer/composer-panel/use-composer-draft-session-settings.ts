@@ -12,6 +12,9 @@ import type { SessionGoalSummary } from "@/types";
 // DraftSessionSettingsEntry contains only overrides explicitly authored for one new-conversation slot.
 // DraftSessionSettingsEntry 仅包含为一个新会话草稿槽显式编写的覆盖项。
 interface DraftSessionSettingsEntry {
+  // Explicit output-style override for the new conversation slot.
+  // 新会话草稿槽的显式输出风格覆盖。
+  outputStyleId?: string;
   // Explicit VMM override pair.
   // 显式 VMM 覆盖对。
   vmmPolicy?: ComposerVmmPolicySnapshot;
@@ -62,6 +65,9 @@ export function clearDraftSessionSettingsEntry(
 // ComposerDraftSessionSettingsController exposes draft-local state and an atomic submission capture.
 // ComposerDraftSessionSettingsController 暴露草稿本地状态与原子提交捕获。
 export interface ComposerDraftSessionSettingsController {
+  // Output-style override shown for the current draft, or null when inheriting global settings.
+  // 当前草稿显示的输出风格覆盖；继承全局设置时为空。
+  outputStyleId: string | null;
   // VMM policy shown for the current draft.
   // 当前草稿展示的 VMM 策略。
   vmmPolicy: ComposerVmmPolicySnapshot | null;
@@ -77,6 +83,12 @@ export interface ComposerDraftSessionSettingsController {
   // Updates one VMM policy without losing the other tri-state value.
   // 更新单项 VMM 策略且不丢失另一项三态值。
   setVmmPolicy: (policy: string, mode: string) => void;
+  // Sets one explicit output-style override for the new conversation slot.
+  // 为新会话草稿槽设置一个显式输出风格覆盖。
+  setOutputStyle: (styleId: string) => void;
+  // Clears the draft output-style override so the new conversation inherits the global choice.
+  // 清除草稿输出风格覆盖，使新会话继承全局选择。
+  clearOutputStyle: () => void;
   // Replaces the complete provider-tool override.
   // 替换完整供应商工具覆盖。
   setProviderToolSettings: (
@@ -161,6 +173,19 @@ export function useComposerDraftSessionSettings(
   ) => {
     updateCurrent((entry) => ({ ...entry, providerToolSettings: settings }));
   }, [updateCurrent]);
+  const setOutputStyle = React.useCallback((styleId: string) => {
+    const normalizedStyleId = styleId.trim();
+    if (!normalizedStyleId) return;
+    updateCurrent((entry) => ({ ...entry, outputStyleId: normalizedStyleId }));
+  }, [updateCurrent]);
+  const clearOutputStyle = React.useCallback(() => {
+    updateCurrent((entry) => {
+      if (!entry.outputStyleId) return entry;
+      const next = { ...entry };
+      delete next.outputStyleId;
+      return next;
+    });
+  }, [updateCurrent]);
   const setKnowledgeSelection = React.useCallback((selection: ComposerKnowledgeSelectionSnapshot) => {
     updateCurrent((entry) => ({ ...entry, knowledgeSelection: selection }));
   }, [updateCurrent]);
@@ -200,11 +225,14 @@ export function useComposerDraftSessionSettings(
     ? syntheticDraftGoal(scopeKey, current.initialGoal)
     : null;
   return {
+    outputStyleId: current.outputStyleId ?? null,
     vmmPolicy: current.vmmPolicy ?? null,
     providerToolSettings: current.providerToolSettings,
     knowledgeSelection: current.knowledgeSelection ?? null,
     initialGoalSummary,
     setVmmPolicy,
+    setOutputStyle,
+    clearOutputStyle,
     setProviderToolSettings,
     setKnowledgeSelection,
     setInitialGoal,

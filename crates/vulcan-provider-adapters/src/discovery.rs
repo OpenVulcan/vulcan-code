@@ -2386,6 +2386,18 @@ fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabi
             evidence_revision: String::from("openrouter-reasoning-metadata-2026-07"),
         });
     }
+    // An omitted OpenRouter reasoning object is absence of evidence, not an explicit disablement.
+    // OpenRouter 未返回 reasoning 对象表示缺少证据，而不是明确关闭思考能力。
+    let (reasoning, reasoning_control) = if model.reasoning.is_some() {
+        (
+            CapabilitySupport::Native,
+            reasoning_control_mode(CapabilitySupport::Native, reasoning_efforts.as_slice()),
+        )
+    } else if supports("reasoning") {
+        (CapabilitySupport::Native, ReasoningControlMode::FixedOn)
+    } else {
+        (CapabilitySupport::Unknown, ReasoningControlMode::Unknown)
+    };
     ModelCapabilities {
         operations: supports_text_conversation
             .then_some(AiOperation::ConversationRespond)
@@ -2405,19 +2417,8 @@ fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabi
         } else {
             CapabilitySupport::Unsupported
         },
-        reasoning: if model.reasoning.is_some() || supports("reasoning") {
-            CapabilitySupport::Native
-        } else {
-            CapabilitySupport::Unsupported
-        },
-        reasoning_control: reasoning_control_mode(
-            if model.reasoning.is_some() || supports("reasoning") {
-                CapabilitySupport::Native
-            } else {
-                CapabilitySupport::Unsupported
-            },
-            reasoning_efforts.as_slice(),
-        ),
+        reasoning,
+        reasoning_control,
         reasoning_efforts,
         provider_native_tools: Vec::new(),
         context_limit,
@@ -3364,6 +3365,26 @@ mod tests {
         );
         assert!(operations["example/embed"].is_empty());
         assert!(operations["example/image-only"].is_empty());
+    }
+
+    /// Verifies omitted OpenRouter reasoning metadata remains unknown instead of becoming an explicit disablement.
+    /// 验证 OpenRouter 省略思考元数据时保持未知，而不是被错误解释为明确关闭。
+    #[test]
+    fn openrouter_omitted_reasoning_metadata_remains_unknown() {
+        let catalog = parse_openrouter_model_catalog(
+            "connection",
+            1,
+            r#"{"data":[{"id":"example/chat","name":"Chat","context_length":8192,"supported_parameters":[],"architecture":{"input_modalities":["text"],"output_modalities":["text"]}}]}"#,
+        )
+        .expect("OpenRouter record without reasoning metadata should parse");
+        let capabilities = &catalog.models[0].capabilities;
+
+        assert_eq!(capabilities.reasoning, CapabilitySupport::Unknown);
+        assert_eq!(
+            capabilities.reasoning_control,
+            ReasoningControlMode::Unknown
+        );
+        assert!(capabilities.reasoning_efforts.is_empty());
     }
 
     /// Verifies atomic OpenRouter discovery separates conversation, embedding, and rerank evidence.

@@ -729,6 +729,56 @@ pub struct SessionAddonsChangedDelta {
     /// 当前会话 VMM 记忆策略覆盖。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_vmm_policy: Option<SessionVmmPolicySummary>,
+    /// Current output-style override and the last safely applied snapshot.
+    /// 当前输出风格覆盖与最近一次安全应用的快照。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_output_style: Option<SessionOutputStyleSummary>,
+}
+
+/// Describes one session's output-style selection and safe-boundary activation state.
+/// 描述单个会话的输出风格选择与安全边界激活状态。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionOutputStyleSummary {
+    /// Explicit session override; null means inherit the global style.
+    /// 会话显式覆盖；为空表示继承全局风格。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_style_id: Option<String>,
+    /// Desired style after applying session-over-global precedence.
+    /// 按会话优先于全局规则解析出的目标风格。
+    pub desired_style_id: String,
+    /// Style identifier in the last prompt snapshot admitted at a safe boundary.
+    /// 最近一次在安全边界接纳的提示词快照中的风格标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_style_id: Option<String>,
+    /// Whether the desired style waits for a new session or compaction boundary.
+    /// 目标风格是否等待新会话或上下文压缩边界。
+    pub pending_activation: bool,
+    /// Stable fingerprint of the applied prompt text.
+    /// 已应用提示词正文的稳定指纹。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_fingerprint: Option<u64>,
+    /// Unix-millis text recording when the applied snapshot became effective.
+    /// 已应用快照生效时间的 Unix 毫秒文本。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_at: Option<String>,
+    /// User-facing explanation of when a pending selection will activate.
+    /// 面向用户说明待激活选择何时生效。
+    pub next_activation_boundary: String,
+}
+
+/// Requests a session-scoped output-style override change.
+/// 请求修改会话级输出风格覆盖。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionOutputStyleUpdateRequest {
+    /// Target conversation identifier.
+    /// 目标会话标识。
+    pub conversation_id: String,
+    /// Style identifier; null or empty clears the override and inherits global settings.
+    /// 风格标识；为空或空字符串清除覆盖并继承全局设置。
+    #[serde(default)]
+    pub style_id: Option<String>,
 }
 
 /// Describes the selected session's VMM memory policy override and effective state.
@@ -787,6 +837,10 @@ pub struct SessionAddonsChangedResponse {
     /// 当前会话 VMM 记忆策略覆盖。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_vmm_policy: Option<SessionVmmPolicySummary>,
+    /// Current output-style override and the last safely applied snapshot.
+    /// 当前输出风格覆盖与最近一次安全应用的快照。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_output_style: Option<SessionOutputStyleSummary>,
     /// Latest workbench revision after applying this addon update.
     /// 应用该附属状态更新后的最新工作台版本。
     pub revision: u64,

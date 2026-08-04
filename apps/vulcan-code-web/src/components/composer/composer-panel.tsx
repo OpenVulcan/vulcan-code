@@ -38,8 +38,10 @@ import type {
   SessionGoalSummary,
   SessionGoalUserStatusUpdate,
   SessionPlanModeSummary,
+  SessionOutputStyleSummary,
   SessionTodolistSummary,
   SessionVmmPolicySummary,
+  OutputStyleCatalogSummary,
 } from "@/types";
 import type { ComposerTraceCallback } from "@/components/composer/composer-control-types";
 
@@ -94,6 +96,12 @@ export function ComposerPanel(props: {
   // Current persisted VMM memory policy for the selected conversation.
   // 当前选中会话的持久化 VMM 记忆策略。
   sessionVmmPolicy: SessionVmmPolicySummary | null;
+  // Output-style catalog and persisted global selection.
+  // 输出风格目录与已持久化全局选择。
+  outputStyleCatalog: OutputStyleCatalogSummary;
+  // Current persisted output-style state for the selected conversation.
+  // 当前选中会话的持久化输出风格状态。
+  sessionOutputStyle: SessionOutputStyleSummary | null;
   // Whether the effective project configuration makes VMM available to this composer.
   // 当前项目最终生效配置是否允许输入区使用 VMM。
   vmmAvailable: boolean;
@@ -153,6 +161,9 @@ export function ComposerPanel(props: {
   // Persists one current session VMM memory policy mode.
   // 持久化当前会话的单个 VMM 记忆策略模式。
   onSetSessionVmmPolicy: (policy: string, mode: string) => Promise<boolean>;
+  // Persists one selected conversation output-style override.
+  // 持久化当前会话的输出风格覆盖。
+  onSetSessionOutputStyle: (styleId: string | null) => Promise<boolean>;
   // Stops the selected backend conversation stream.
   // 停止当前选中的后端会话流。
   onStopConversationRun: () => Promise<boolean>;
@@ -354,6 +365,20 @@ export function ComposerPanel(props: {
     await sendDraft();
   }, [props.isConversationRunning, providerToolSettingsBlocked, sendDraft]);
 
+  // handleOutputStyleChange keeps draft changes local and routes persisted-session changes through the safe boundary API.
+  // handleOutputStyleChange 将草稿修改保留在本地，并通过安全边界 API 路由已持久化会话修改。
+  const handleOutputStyleChange = React.useCallback((styleId: string | null) => {
+    if (props.conversationId) {
+      void props.onSetSessionOutputStyle(styleId);
+      return;
+    }
+    if (styleId) {
+      draftSessionSettings.setOutputStyle(styleId);
+    } else {
+      draftSessionSettings.clearOutputStyle();
+    }
+  }, [draftSessionSettings, props.conversationId, props.onSetSessionOutputStyle]);
+
   // handlePendingPromptEdit restores one queued prompt into the composer draft.
   // handlePendingPromptEdit 将单条排队提示词恢复到输入区草稿。
   const handlePendingPromptEdit = React.useCallback(async (entryId: string) => {
@@ -525,6 +550,9 @@ export function ComposerPanel(props: {
             <ComposerAttachmentMenu
               capabilities={enabledAttachmentCapabilities}
               conversationId={props.conversationId}
+              draftOutputStyleId={draftSessionSettings.outputStyleId}
+              onOutputStyleChange={handleOutputStyleChange}
+              outputStyleCatalog={props.outputStyleCatalog}
               projectId={props.projectId}
               thinkingDisplayMode={props.thinkingDisplayMode}
               planModeEnabled={planModeEnabled}
@@ -533,6 +561,7 @@ export function ComposerPanel(props: {
                   ? props.sessionVmmPolicy
                   : draftSessionSettings.vmmPolicy
               }
+              sessionOutputStyle={props.sessionOutputStyle}
               vmmAvailable={props.vmmAvailable}
               draftKnowledgeSelection={draftSessionSettings.knowledgeSelection}
               onDraftKnowledgeSelectionChange={draftSessionSettings.setKnowledgeSelection}

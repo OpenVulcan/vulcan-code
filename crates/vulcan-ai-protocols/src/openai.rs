@@ -1284,6 +1284,28 @@ mod tests {
         assert_eq!(encoded.body["stream_options"]["include_usage"], true);
     }
 
+    /// Verifies every OpenAI request profile emits extra-high reasoning only as `xhigh`.
+    /// 验证所有 OpenAI 请求 Profile 仅以 `xhigh` 发出超高推理档位。
+    #[test]
+    fn openai_profiles_encode_xhigh_with_the_canonical_wire_label() {
+        let mut request = codex_request();
+        request.reasoning_effort = Some(vulcan_ai_contract::ReasoningEffort::XHigh);
+
+        let chat = OpenAiChatProfile
+            .encode(&request)
+            .expect("Chat request should encode xhigh");
+        let responses = OpenAiResponsesProfile
+            .encode(&request)
+            .expect("Responses request should encode xhigh");
+        let codex = OpenAiCodexResponsesProfile
+            .encode(&request)
+            .expect("Codex request should encode xhigh");
+
+        assert_eq!(chat.body["reasoning_effort"], "xhigh");
+        assert_eq!(responses.body["reasoning"]["effort"], "xhigh");
+        assert_eq!(codex.body["reasoning"]["effort"], "xhigh");
+    }
+
     /// Verifies provider-default requests omit empty tools and automatic tool choice controls.
     /// 验证供应商默认请求会省略空工具与自动工具选择控制。
     #[test]

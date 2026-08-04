@@ -1,7 +1,9 @@
 //! Provider/model runtime blueprint resolution used by the compose execution layer.
 //! compose 执行层使用的 Provider/Model 运行时蓝图解析逻辑。
 
-use crate::agent_runtime::provider_reasoning::ProviderRuntimeReasoningResolution;
+use crate::agent_runtime::provider_reasoning::{
+    ProviderRuntimeReasoningResolution, resolve_effective_reasoning_effort,
+};
 use crate::provider_config::ReasoningEffortLevel;
 
 /// Resolved provider/model runtime blueprint used by execution preparation.
@@ -158,12 +160,31 @@ pub fn resolve_public_ai_provider_blueprint(
     // transport dispatch observe the same limits.
     // 将已校验的本地收窄应用到不可变请求蓝图，确保预算与传输分派观察到相同限制。
     let mut capabilities = selection.model.capabilities.clone();
+    // Apply the shared host default before exposing the blueprint to budgeting and transport.
+    // 在将运行时蓝图交给预算与传输层前应用共享宿主默认策略。
+    vulcan_provider_adapters::apply_host_default_reasoning_policy(&mut capabilities);
     if let Some(context_limit) = selection.overrides.context_limit {
         capabilities.context_limit = Some(context_limit);
     }
     if let Some(output_limit) = selection.overrides.output_limit {
         capabilities.output_limit = Some(output_limit);
     }
+    // effectiveReasoningEffort resolves the same concrete default shown by the workbench after the exact model is known.
+    // effectiveReasoningEffort 在精确模型确定后解析工作台展示的同一具体默认档位。
+    let effective_reasoning_effort =
+        resolve_effective_reasoning_effort(&capabilities, Some(requested_reasoning_effort));
+    // reasoningNote explains only an incompatible explicit non-sentinel preference; an absent Off sentinel is a normal default path.
+    // reasoningNote 仅解释不兼容的显式非哨兵偏好；缺省 Off 哨兵属于正常默认路径。
+    let reasoning_note = (requested_reasoning_effort != ReasoningEffortLevel::Off
+        && requested_reasoning_effort != effective_reasoning_effort)
+        .then(|| {
+            format!(
+                "Requested reasoning effort `{}` is unsupported by model `{}`; using `{}`.",
+                requested_reasoning_effort.compact_label(),
+                selection.model.id,
+                effective_reasoning_effort.compact_label()
+            )
+        });
     Ok(ProviderRuntimeBlueprint {
         provider_id: selection.route.provider.id.clone(),
         service_entry_id: selection.route.entry.id.clone(),
@@ -179,9 +200,9 @@ pub fn resolve_public_ai_provider_blueprint(
         supports_remote_model_refresh: true,
         credential_source: selection.route.connection.display_name.clone(),
         reasoning: ProviderRuntimeReasoningResolution {
-            requested_effort: requested_reasoning_effort,
+            requested_effort: effective_reasoning_effort,
             source_label: String::from("公共契约"),
-            note: None,
+            note: reasoning_note,
         },
     })
 }

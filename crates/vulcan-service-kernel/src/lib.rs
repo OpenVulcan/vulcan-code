@@ -81,9 +81,9 @@ use vulcan_context::{
 use vulcan_context_injection::{ContextInjectionState, InjectionKind, InjectionPanelCard};
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::types::{ConversationAttachment, ProviderRequestSnapshot, ProviderUsageSnapshot};
-use vulcan_provider_config::config::{
+pub(crate) use vulcan_provider_config::config::{
     PersistedLuaSkillToolRegistrationState, PersistedMcpOAuthConfig, PersistedMcpServerEntry,
-    PersistedMcpTransportKind, PersistedPromptSkillState,
+    PersistedMcpTransportKind, PersistedPromptOutputStyleSelection, PersistedPromptSkillState,
 };
 #[cfg(test)]
 use vulcan_service_api::SessionGoalStatus;
@@ -109,18 +109,19 @@ use vulcan_service_api::{
     ProjectSummary, ProviderModelSummary, ProviderSummary, ReasoningSelectionOptionSummary,
     ReasoningSelectionSummary, RuntimeModuleSnapshot, ServiceEvent, ServiceEventEmitter,
     SessionAddonChangedEvent, SessionAddonsChangedDelta, SessionAddonsChangedResponse,
-    SessionGoalSummary, SessionPlanArtifactSummary, SessionPlanModeSummary,
-    SessionTodolistItemSummary, SessionTodolistSummary, SessionVmmPolicyByConversation,
-    SessionVmmPolicySummary, SettingSectionSummary, StartupSnapshot, StartupStepStatus,
-    SubagentCatalogIssueSummary, SubagentCatalogSummary, SubagentCatalogUpdate,
-    SubagentCategorySummary, SubagentDefinitionLocaleSummary, SubagentDefinitionSaveRequest,
-    SubagentDefinitionSummary, SubagentNavigationChangedDelta, SubagentNavigationSnapshot,
-    SubagentPanelRouteResponse, ToolCallSummary, UpdateConversationRunPhaseDelta,
-    UserPromptEditDraftSummary, VmmMemorySnapshot, WEBUI_SERVICE_DISCOVERY_STATUS_FAILED,
-    WEBUI_SERVICE_DISCOVERY_STATUS_READY, WEBUI_SERVICE_DISCOVERY_STATUS_STARTING,
-    WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV, WorkbenchDelta, WorkbenchDeltaEnvelope,
-    WorkbenchSnapshot, WorkspaceGitChangedEvent, webui_service_discovery_snapshot_with_status,
-    webui_service_starting_discovery_snapshot, webui_static_root_from_candidates,
+    SessionGoalSummary, SessionOutputStyleSummary, SessionOutputStyleUpdateRequest,
+    SessionPlanArtifactSummary, SessionPlanModeSummary, SessionTodolistItemSummary,
+    SessionTodolistSummary, SessionVmmPolicyByConversation, SessionVmmPolicySummary,
+    SettingSectionSummary, StartupSnapshot, StartupStepStatus, SubagentCatalogIssueSummary,
+    SubagentCatalogSummary, SubagentCatalogUpdate, SubagentCategorySummary,
+    SubagentDefinitionLocaleSummary, SubagentDefinitionSaveRequest, SubagentDefinitionSummary,
+    SubagentNavigationChangedDelta, SubagentNavigationSnapshot, SubagentPanelRouteResponse,
+    ToolCallSummary, UpdateConversationRunPhaseDelta, UserPromptEditDraftSummary,
+    VmmMemorySnapshot, WEBUI_SERVICE_DISCOVERY_STATUS_FAILED, WEBUI_SERVICE_DISCOVERY_STATUS_READY,
+    WEBUI_SERVICE_DISCOVERY_STATUS_STARTING, WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV,
+    WorkbenchDelta, WorkbenchDeltaEnvelope, WorkbenchSnapshot, WorkspaceGitChangedEvent,
+    webui_service_discovery_snapshot_with_status, webui_service_starting_discovery_snapshot,
+    webui_static_root_from_candidates,
 };
 use vulcan_service_host::{
     SharedWebuiServiceDiscoverySnapshot, WebuiServiceHttpConfig, WebuiServiceRpcDispatcher,
@@ -203,6 +204,7 @@ mod managed_memory_mesh_maintenance;
 mod managed_memory_mesh_runtime;
 mod mcp_settings;
 mod media_upload;
+mod output_style;
 mod pending_prompt_services;
 mod pending_prompts;
 mod plugin_mcp_secret_store;
@@ -306,6 +308,11 @@ use host_tools_settings::{host_tools_settings, host_tools_settings_with_native_t
 use knowledge_base_services::*;
 use mcp_settings::*;
 use media_upload::*;
+pub(crate) use output_style::{
+    applied_output_style_snapshot, apply_output_style_snapshot, default_output_style_id,
+    output_style_catalog_summary, resolve_output_style_snapshot, service_output_style_catalog,
+    service_save_prompt_output_style,
+};
 use pending_prompt_services::{
     service_edit_pending_prompt, service_remove_pending_prompt, service_reorder_pending_prompts,
 };

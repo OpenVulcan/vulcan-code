@@ -107,8 +107,21 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
       (record) => record.connectionId === connection.id,
     )
     : undefined
+  // providerEnabledModelIds is the closed provider-level allow-set from the authoritative snapshot.
+  // providerEnabledModelIds 是权威快照提供的封闭供应商级允许集合。
+  const providerEnabledModelIds = React.useMemo(
+    () => new Set(
+      props.snapshot?.modelAccessRecords
+        .filter((record) => (
+          connection?.provider_id === record.providerId && record.enabled
+        ))
+        .map((record) => record.modelId) ?? [],
+    ),
+    [connection?.provider_id, props.snapshot?.modelAccessRecords],
+  )
   const supportModels = connection
-    ? props.snapshot?.modelSupportCatalogs[connection.id]?.models ?? []
+    ? (props.snapshot?.modelSupportCatalogs[connection.id]?.models ?? [])
+      .filter((model) => providerEnabledModelIds.has(model.id))
     : []
   const effectiveModelIds = React.useMemo(
     () => new Set(
@@ -122,8 +135,9 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
   // modelIsEnabled resolves immediate optimistic feedback before the authoritative snapshot arrives.
   // modelIsEnabled 在权威快照返回前解析即时乐观反馈。
   const modelIsEnabled = React.useCallback((modelId: string) => (
-    optimisticEnabled[modelId] ?? effectiveModelIds.has(modelId)
-  ), [effectiveModelIds, optimisticEnabled])
+    providerEnabledModelIds.has(modelId)
+    && (optimisticEnabled[modelId] ?? effectiveModelIds.has(modelId))
+  ), [effectiveModelIds, optimisticEnabled, providerEnabledModelIds])
 
   const normalizedQuery = query.trim().toLocaleLowerCase()
   const visibleModels = supportModels.filter((model) => {

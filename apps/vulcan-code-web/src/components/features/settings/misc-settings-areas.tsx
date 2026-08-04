@@ -192,9 +192,15 @@ function modelPickerChoiceExists(providers: WorkbenchSnapshot["providers"], valu
 // PromptComposerSettingsArea renders composer command and capability settings status.
 // PromptComposerSettingsArea 渲染输入区指令与能力设置状态。
 export function PromptComposerSettingsArea(props: {
+  // Service-backed settings actions.
+  // 服务端设置动作。
+  actions: SettingsActionProps
   // Composer attachment capability gates.
   // 输入区附件能力门控。
   attachmentCapabilities: ComposerAttachmentCapabilitySummary[]
+  // Global output-style catalog and persisted selection.
+  // 全局输出风格目录与已持久化选择。
+  outputStyleCatalog: WorkbenchSnapshot["outputStyleCatalog"]
   // Backend-resolved reasoning selector view.
   // 后端解析出的推理选择器视图。
   reasoningSelection: WorkbenchSnapshot["reasoningSelection"] | null
@@ -204,6 +210,19 @@ export function PromptComposerSettingsArea(props: {
 }) {
   const { locale } = useI18n()
   const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
+  const [outputStyleId, setOutputStyleId] = React.useState(props.outputStyleCatalog.selectedId)
+  const [outputStyleSaving, setOutputStyleSaving] = React.useState(false)
+  React.useEffect(() => {
+    setOutputStyleId(props.outputStyleCatalog.selectedId)
+  }, [props.outputStyleCatalog.selectedId])
+  const saveOutputStyle = React.useCallback(async () => {
+    setOutputStyleSaving(true)
+    try {
+      await props.actions.onSavePromptOutputStyle(outputStyleId)
+    } finally {
+      setOutputStyleSaving(false)
+    }
+  }, [outputStyleId, props.actions])
   return (
     <div className="area-grid two-columns">
       <section className="panel settings-detail-panel">
@@ -218,6 +237,27 @@ export function PromptComposerSettingsArea(props: {
               <Badge variant="outline">{command.id}</Badge>
             </article>
           ))}
+        </div>
+      </section>
+      <section className="panel settings-detail-panel">
+        <PanelTitle icon={<SlidersHorizontal size={17} />} title={text("输出风格", "Output style")} />
+        <div className="settings-form-grid">
+          <label className="settings-field">
+            <span>{text("新会话默认风格", "Default for new sessions")}</span>
+            <select className="settings-input" onChange={(event) => setOutputStyleId(event.target.value)} value={outputStyleId}>
+              {props.outputStyleCatalog.entries.map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {`${locale === "zh-CN" ? entry.labelZh : entry.labelEn} · ${entry.promptCharCount} chars`}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="settings-muted-line">
+            {text("全局设置仅在新会话或上下文压缩后的会话应用，避免替换当前系统提示词。", "The global setting applies only at a new session or compaction boundary, so the active system prompt is never replaced mid-context.")}
+          </p>
+          <button className="button button-primary" disabled={outputStyleSaving} onClick={() => void saveOutputStyle()} type="button">
+            {outputStyleSaving ? text("保存中…", "Saving…") : text("保存输出风格", "Save output style")}
+          </button>
         </div>
       </section>
       <section className="panel settings-detail-panel">

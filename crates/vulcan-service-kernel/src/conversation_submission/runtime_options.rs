@@ -115,6 +115,7 @@ fn apply_submission_reasoning_effort(
             ..SessionRuntimeStateEntry::default()
         });
     runtime_state.active_reasoning_effort = Some(reasoning_effort);
+    runtime_state.active_reasoning_effort_explicit = true;
     runtime_state.updated_at = updated_at;
 }
 

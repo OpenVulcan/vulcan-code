@@ -52,12 +52,28 @@ export function compactServiceEntryName(displayName: string): string {
 export function buildProviderModelGroups(
   snapshot: Pick<
     PublicAiSettingsSnapshot,
-    "providers" | "connections" | "catalogs" | "modelSupportCatalogs"
+    "providers" | "connections" | "catalogs" | "modelAccessRecords" | "modelSupportCatalogs"
   >,
 ): PublicProviderModels[] {
+  // providerEnabledModelIds is the authoritative provider-level allow-set projected by the backend.
+  // providerEnabledModelIds 是后端投影的权威供应商级允许集合。
+  const providerEnabledModelIds = new Map<string, Set<string>>()
+  for (const record of snapshot.modelAccessRecords) {
+    if (!record.enabled) {
+      continue
+    }
+    // enabledModelIds is the exact allow-set for one provider.
+    // enabledModelIds 是一个供应商的精确允许集合。
+    const enabledModelIds = providerEnabledModelIds.get(record.providerId) ?? new Set<string>()
+    enabledModelIds.add(record.modelId)
+    providerEnabledModelIds.set(record.providerId, enabledModelIds)
+  }
   return snapshot.providers
     .map((provider) => {
       const models = new Map<string, PublicModelProtocolRoute[]>()
+      // enabledModelIds closes this user-facing list to provider-enabled models only.
+      // enabledModelIds 将此用户列表封闭为仅包含供应商已启用模型。
+      const enabledModelIds = providerEnabledModelIds.get(provider.id) ?? new Set<string>()
       for (const connection of snapshot.connections) {
         if (connection.provider_id !== provider.id) {
           continue
@@ -67,23 +83,27 @@ export function buildProviderModelGroups(
         const serviceEntry = provider.service_entries.find(
           (entry) => entry.id === connection.service_entry_id,
         )
-        if (!supportCatalog || !serviceEntry) {
+        if (!effectiveCatalog || !supportCatalog || !serviceEntry) {
           continue
         }
-        const enabledModelIds = new Set(effectiveCatalog?.models.map((model) => model.id) ?? [])
-        for (const model of supportCatalog.models) {
+        const supportModelsById = new Map(
+          supportCatalog.models.map((model) => [model.id, model]),
+        )
+        for (const effectiveModel of effectiveCatalog.models) {
+          if (!enabledModelIds.has(effectiveModel.id)) {
+            continue
+          }
+          const model = supportModelsById.get(effectiveModel.id) ?? effectiveModel
           const routes = models.get(model.id) ?? []
           const existing = routes.find((route) => (
             route.serviceEntryId === connection.service_entry_id
             && route.protocolId === connection.selected_protocol
           ))
           if (existing) {
-            if (enabledModelIds.has(model.id)) {
-              existing.accountCount += 1
-            }
+            existing.accountCount += 1
           } else {
             routes.push({
-              accountCount: enabledModelIds.has(model.id) ? 1 : 0,
+              accountCount: 1,
               model,
               protocolId: connection.selected_protocol,
               serviceEntryId: serviceEntry.id,

@@ -11,9 +11,15 @@ use crate::{
     SessionTodolistState,
 };
 
+/// Returns whether a persisted boolean is false so default addon values stay omitted.
+/// 判断持久化布尔值是否为 false，以便默认附属状态值继续省略。
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// Current schema version for the durable session addon document.
 /// 当前持久化会话附属状态文档的结构版本。
-pub const SESSION_ADDON_SCHEMA_VERSION: u32 = 2;
+pub const SESSION_ADDON_SCHEMA_VERSION: u32 = 3;
 
 /// One stable namespace inside the session addon document.
 /// 会话附属状态文档中的一个稳定命名空间。
@@ -30,6 +36,9 @@ pub enum SessionAddonNamespace {
     /// Session-scoped user work mode such as planning or building.
     /// 会话级用户工作模式，例如计划或构建。
     WorkMode,
+    /// Session-level output-style override and applied prompt snapshot.
+    /// 会话级输出风格覆盖与已应用提示词快照。
+    OutputStyle,
     /// Session-level prompt skill overrides.
     /// 会话级提示词技能覆盖。
     PromptSkills,
@@ -77,6 +86,7 @@ impl SessionAddonNamespace {
             "metadata" => Some(Self::Metadata),
             "runtime_controls" => Some(Self::RuntimeControls),
             "work_mode" => Some(Self::WorkMode),
+            "output_style" => Some(Self::OutputStyle),
             "prompt_skills" => Some(Self::PromptSkills),
             "context_injection" => Some(Self::ContextInjection),
             "vmm" => Some(Self::Vmm),
@@ -101,6 +111,7 @@ impl SessionAddonNamespace {
             Self::Metadata => "metadata",
             Self::RuntimeControls => "runtime_controls",
             Self::WorkMode => "work_mode",
+            Self::OutputStyle => "output_style",
             Self::PromptSkills => "prompt_skills",
             Self::ContextInjection => "context_injection",
             Self::Vmm => "vmm",
@@ -362,6 +373,14 @@ impl SessionAddonState {
             );
         }
 
+        if !runtime_state.output_style.is_empty() {
+            let _ = state.set_typed_namespace(
+                SessionAddonNamespace::OutputStyle,
+                &runtime_state.output_style,
+                updated_at.clone(),
+            );
+        }
+
         if !runtime_state.prompt_skill_overrides.is_empty() {
             let _ = state.set_typed_namespace(
                 SessionAddonNamespace::PromptSkills,
@@ -437,6 +456,11 @@ impl SessionAddonState {
         }
         if let Some(work_mode) = self.work_mode() {
             work_mode.apply_to_runtime_state(runtime_state);
+        }
+        if let Some(output_style) = self
+            .typed_namespace::<crate::SessionOutputStyleState>(SessionAddonNamespace::OutputStyle)
+        {
+            runtime_state.output_style = output_style;
         }
         if let Some(prompt_skill_overrides) =
             self.typed_namespace(SessionAddonNamespace::PromptSkills)
@@ -816,6 +840,10 @@ pub struct SessionRuntimeControls {
     /// 最近一次该会话激活时选择的推理档位预设。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_reasoning_effort: Option<ReasoningEffortLevel>,
+    /// Records whether the session reasoning preference was explicitly chosen by the user.
+    /// 记录会话思考偏好是否由用户明确选择，用于区分旧版默认值与显式关闭。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub active_reasoning_effort_explicit: bool,
     /// Last optional temperature override selected while this session was active.
     /// 最近一次该会话激活时选择的可选温度覆盖。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -858,6 +886,7 @@ impl SessionRuntimeControls {
             active_connection_id: runtime_state.active_connection_id.clone(),
             active_model_id: runtime_state.active_model_id.clone(),
             active_reasoning_effort: runtime_state.active_reasoning_effort,
+            active_reasoning_effort_explicit: runtime_state.active_reasoning_effort_explicit,
             active_temperature: runtime_state.active_temperature,
             provider_tool_selections: runtime_state.provider_tool_selections.clone(),
             provider_tool_enabled_capabilities: runtime_state
@@ -882,6 +911,7 @@ impl SessionRuntimeControls {
         runtime_state.active_connection_id = self.active_connection_id.clone();
         runtime_state.active_model_id = self.active_model_id.clone();
         runtime_state.active_reasoning_effort = self.active_reasoning_effort;
+        runtime_state.active_reasoning_effort_explicit = self.active_reasoning_effort_explicit;
         runtime_state.active_temperature = self.active_temperature;
         runtime_state.provider_tool_selections = self.provider_tool_selections.clone();
         runtime_state.provider_tool_enabled_capabilities =
@@ -904,6 +934,7 @@ impl SessionRuntimeControls {
             || self.active_connection_id.is_some()
             || self.active_model_id.is_some()
             || self.active_reasoning_effort.is_some()
+            || self.active_reasoning_effort_explicit
             || self.active_temperature.is_some()
             || !self.provider_tool_selections.is_empty()
             || !self.provider_tool_enabled_capabilities.is_empty()

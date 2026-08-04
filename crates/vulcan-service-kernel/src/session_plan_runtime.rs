@@ -302,12 +302,20 @@ pub(crate) fn emit_session_addons_changed_delta(
         let session_vmm_policy_for_list = runtime_state
             .filter(|runtime_state| !runtime_state.vmm.is_empty())
             .and(session_vmm_policy.clone());
+        let global_output_style_id = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.provider_configuration.prompt.output_style.id())
+            .unwrap_or(default_output_style_id());
+        let session_output_style =
+            session_output_style_summary_from_runtime_state(runtime_state, global_output_style_id);
         let session_addons_list_entry = session_addons_changed_delta_for_retained_list(
             conversation_id.clone(),
             session_goal.clone(),
             session_todolist.clone(),
             session_plan_mode.clone(),
             session_vmm_policy_for_list.clone(),
+            session_output_style.clone(),
         );
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         let generation = guard.workbench_generation;
@@ -317,6 +325,7 @@ pub(crate) fn emit_session_addons_changed_delta(
             guard.workbench.session_todolist = session_todolist.clone();
             guard.workbench.session_plan_mode = session_plan_mode.clone();
             guard.workbench.session_vmm_policy = session_vmm_policy.clone();
+            guard.workbench.session_output_style = session_output_style.clone();
         }
         let pending_questions =
             pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref())?;
@@ -365,6 +374,7 @@ pub(crate) fn emit_session_addons_changed_delta(
             session_todolist: session_todolist.clone(),
             session_plan_mode: session_plan_mode.clone(),
             session_vmm_policy: session_vmm_policy.clone(),
+            session_output_style: session_output_style.clone(),
         };
         (
             WorkbenchDeltaEnvelope {
@@ -377,6 +387,7 @@ pub(crate) fn emit_session_addons_changed_delta(
                 session_todolist,
                 session_plan_mode,
                 session_vmm_policy,
+                session_output_style,
                 revision: generation,
             },
         )

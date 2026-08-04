@@ -437,6 +437,23 @@ export async function setSessionVmmPolicy(
   });
 }
 
+// setSessionOutputStyle persists a per-session style override for the next safe prompt boundary.
+// setSessionOutputStyle 持久化会话级风格覆盖，并仅在下一个安全提示词边界生效。
+export async function setSessionOutputStyle(
+  conversationId: string | null,
+  styleId: string | null,
+): Promise<SessionAddonsChangedResponse | null> {
+  if (!hasServiceRuntime() || !conversationId) {
+    return null;
+  }
+  return serviceClient.request<SessionAddonsChangedResponse>("service_set_session_output_style", {
+    request: {
+      conversationId,
+      styleId,
+    },
+  });
+}
+
 // compactSelectedConversationContext starts backend context compaction for the selected conversation.
 // compactSelectedConversationContext 为当前选中会话启动后端上下文压缩。
 export async function compactSelectedConversationContext(): Promise<WorkbenchSnapshot | null> {

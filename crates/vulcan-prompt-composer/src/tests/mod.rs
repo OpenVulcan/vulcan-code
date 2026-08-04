@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::composer::engine::PromptComposerEngine;
 use crate::composer::request::PromptAssemblyInput;
 use crate::composer::resources::PromptComposerResourceConfig;
+use crate::output_style::OutputStyleCatalog;
 use crate::session::compaction::{
     ContextCompactionRequestPromptMode, build_context_compaction_developer_segment,
     build_context_compaction_request_prompt, build_context_compaction_request_prompt_for_mode,
@@ -42,6 +43,7 @@ fn built_in_catalog_defaults_to_friendly() {
         provider_prompt: None,
         agent_prompt: None,
         personality: PersonalitySelection::Default,
+        output_style: None,
         project_rules: None,
         environment_context: None,
         task_goal: None,
@@ -60,6 +62,30 @@ fn built_in_catalog_defaults_to_friendly() {
         output
             .render_developer_text()
             .contains("supportive teammate")
+    );
+}
+
+/// Verifies a selected output style is emitted as an exact system-layer segment.
+/// 验证选中的输出风格以精确正文进入系统层，而不会落入用户层。
+#[test]
+fn selected_output_style_is_attached_to_system_layer() {
+    let engine = PromptComposerEngine::with_builtins();
+    let mut input = prompt_input_with_tool_ids(&[]);
+    let snapshot = OutputStyleCatalog::built_in()
+        .resolve("structured")
+        .expect("structured style should resolve");
+    let expected_text = snapshot.text.clone();
+    input.output_style = Some(snapshot);
+
+    let output = engine.compose(&input).expect("compose should succeed");
+
+    assert!(output.render_system_text().contains(&expected_text));
+    assert!(!output.render_user_text().contains(&expected_text));
+    assert!(
+        output
+            .system_segments
+            .iter()
+            .any(|segment| segment.node_id == "output_style")
     );
 }
 
@@ -169,6 +195,7 @@ fn resource_directories_override_personality_and_tool_help() {
         provider_prompt: None,
         agent_prompt: None,
         personality: PersonalitySelection::Named(String::from("custom")),
+        output_style: None,
         project_rules: None,
         environment_context: None,
         task_goal: None,
@@ -240,6 +267,7 @@ fn per_tool_help_segments_hit_bundle_cache_on_second_run() {
                 .with_source_label("Agent prompt resource `agent-test.txt`"),
         ),
         personality: PersonalitySelection::Disabled,
+        output_style: None,
         project_rules: Some(ProjectRulesSnapshot::new("AGENTS.md", "Rule body")),
         environment_context: Some(EnvironmentContextSnapshot::new("cwd=D:/repo")),
         task_goal: Some(TaskGoalSnapshot::new("Inspect prompt system")),
@@ -420,6 +448,7 @@ fn context_compaction_minimal_mode_excludes_tool_help_nodes() {
         provider_prompt: Some(ProviderPromptSnapshot::new("Provider base")),
         agent_prompt: None,
         personality: PersonalitySelection::Disabled,
+        output_style: None,
         project_rules: None,
         environment_context: Some(EnvironmentContextSnapshot::new("cwd=D:/repo")),
         task_goal: None,
@@ -638,6 +667,7 @@ fn prompt_input_with_tool_ids(tool_ids: &[&str]) -> PromptAssemblyInput {
         provider_prompt: None,
         agent_prompt: None,
         personality: PersonalitySelection::Disabled,
+        output_style: None,
         project_rules: None,
         environment_context: None,
         task_goal: None,
@@ -675,6 +705,7 @@ fn subagent_prompt_input(
         provider_prompt: Some(ProviderPromptSnapshot::new("Provider base")),
         agent_prompt: Some(AgentPromptSnapshot::new("Agent base")),
         personality: PersonalitySelection::Disabled,
+        output_style: None,
         project_rules: None,
         environment_context: Some(EnvironmentContextSnapshot::new("cwd=D:/repo")),
         task_goal: Some(TaskGoalSnapshot::new("Inspect delegated code")),

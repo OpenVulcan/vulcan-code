@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Database, Gauge, SlidersHorizontal } from "lucide-react"
+import { Database, RotateCcw, SlidersHorizontal } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -30,6 +30,14 @@ import type {
   PublicAiSettingsSnapshot,
 } from "@/types"
 
+// ProtocolModelOverrideDraft is the complete directly editable protocol-settings view.
+// ProtocolModelOverrideDraft 是完整的可直接编辑协议设置视图。
+interface ProtocolModelOverrideDraft {
+  cacheMode: string
+  cacheTtl: string
+  parameterValues: Record<string, string>
+}
+
 // PublicAiModelOverridesDialog edits adapter-declared controls for one provider, model, and protocol.
 // PublicAiModelOverridesDialog 编辑一个供应商、模型与协议由适配器声明的控制项。
 export function PublicAiModelOverridesDialog(props: {
@@ -59,50 +67,77 @@ export function PublicAiModelOverridesDialog(props: {
   onSaved: (snapshot: PublicAiSettingsSnapshot) => void
 }) {
   const { t } = useI18n()
-  const [contextLimit, setContextLimit] = React.useState("")
-  const [outputLimit, setOutputLimit] = React.useState("")
   const [cacheMode, setCacheMode] = React.useState("provider_default")
   const [cacheTtl, setCacheTtl] = React.useState("")
   const [parameterValues, setParameterValues] = React.useState<Record<string, string>>({})
   const [error, setError] = React.useState<string | null>(null)
   const [saving, setSaving] = React.useState(false)
+  // baselineDraft is the authoritative route value used for semantic dirty tracking.
+  // baselineDraft 是用于语义脏状态跟踪的权威路由值。
+  const [baselineDraft, setBaselineDraft] = React.useState<ProtocolModelOverrideDraft>({
+    cacheMode: "provider_default",
+    cacheTtl: "",
+    parameterValues: {},
+  })
+  // initializedRouteKey prevents unrelated snapshots from erasing an in-progress route edit.
+  // initializedRouteKey 防止无关快照清除正在进行的路由编辑。
+  const initializedRouteKey = React.useRef<string | null>(null)
   const modelParameters = React.useMemo(
     () => applicableModelParameters(props.model, props.protocolId),
     [props.model, props.protocolId],
   )
+  // currentDraft is the complete protocol-settings state represented by visible controls.
+  // currentDraft 是可见控件所表示的完整协议设置状态。
+  const currentDraft = React.useMemo<ProtocolModelOverrideDraft>(() => ({
+    cacheMode,
+    cacheTtl,
+    parameterValues,
+  }), [cacheMode, cacheTtl, parameterValues])
+  // dirty is true only when visible route settings differ semantically from the authoritative baseline.
+  // dirty 仅在可见路由设置与权威基线存在语义差异时为真。
+  const dirty = !protocolModelOverrideDraftEqual(currentDraft, baselineDraft)
+
+  // resetDraft replaces every visible control with one authoritative route value.
+  // resetDraft 使用一个权威路由值替换全部可见控件。
+  const resetDraft = React.useCallback((draft: ProtocolModelOverrideDraft) => {
+    setCacheMode(draft.cacheMode)
+    setCacheTtl(draft.cacheTtl)
+    setParameterValues(draft.parameterValues)
+    setError(null)
+  }, [])
 
   React.useEffect(() => {
-    if (!props.open || !props.model) {
+    if (!props.open) {
+      initializedRouteKey.current = null
       return
     }
-    const overrides = props.overrides
-    setContextLimit(overrides?.context_limit?.toString() ?? "")
-    setOutputLimit(overrides?.output_limit?.toString() ?? "")
-    const promptCache = overrides?.prompt_cache as {
-      mode?: string
-      ttl?: { option_id?: string }
-    } | undefined
-    setCacheMode(promptCache?.mode ?? "provider_default")
-    setCacheTtl(
-      promptCache?.ttl?.option_id
-      ?? props.model.capabilities.prompt_cache.profile_default_ttl_option_id
-      ?? props.model.capabilities.prompt_cache.supported_ttl_options[0]?.id
-      ?? "",
+    if (!props.providerId || !props.model || !props.protocolId) {
+      return
+    }
+    // routeKey uniquely identifies one provider-model-protocol editor.
+    // routeKey 唯一标识一个供应商-模型-协议编辑器。
+    const routeKey = `${props.providerId}\u0000${props.model.id}\u0000${props.protocolId}`
+    // routeChanged forces a full reset even when the previous route had unfinished edits.
+    // routeChanged 即使前一路由存在未完成编辑，也会强制完整重置。
+    const routeChanged = initializedRouteKey.current !== routeKey
+    if (!routeChanged && dirty) {
+      return
+    }
+    // nextDraft resolves the exact persisted route layer into direct controls.
+    // nextDraft 将精确持久化路由层解析为直接控件。
+    const nextDraft = protocolModelOverrideDraft(
+      props.model,
+      props.overrides,
+      modelParameters,
     )
-    setParameterValues(
-      Object.fromEntries(
-        modelParameters.map((definition) => {
-          const current = overrides?.model_parameters?.[definition.id] as { value?: unknown } | undefined
-          return [definition.id, current?.value === undefined ? "" : String(current.value)]
-        }),
-      ),
-    )
-    setError(null)
-  }, [modelParameters, props.model, props.open, props.overrides])
+    resetDraft(nextDraft)
+    setBaselineDraft(nextDraft)
+    initializedRouteKey.current = routeKey
+  }, [dirty, modelParameters, props.model, props.open, props.overrides, props.protocolId, props.providerId, resetDraft])
 
-  // save validates browser scalar input and lets the backend enforce the authoritative contract.
-  // save 校验浏览器标量输入，并由后端执行权威契约校验。
-  const save = React.useCallback(async () => {
+  // persist validates browser scalar input and replaces or restores the exact route layer.
+  // persist 校验浏览器标量输入，并替换或还原精确路由层。
+  const persist = React.useCallback(async (restore: boolean) => {
     if (!props.providerId || !props.model || !props.protocolId) {
       return
     }
@@ -110,7 +145,7 @@ export function PublicAiModelOverridesDialog(props: {
     setError(null)
     try {
       const modelParameters: Record<string, unknown> = {}
-      for (const definition of applicableModelParameters(props.model, props.protocolId)) {
+      for (const definition of restore ? [] : applicableModelParameters(props.model, props.protocolId)) {
         const raw = parameterValues[definition.id]?.trim() ?? ""
         if (!raw) {
           continue
@@ -138,33 +173,23 @@ export function PublicAiModelOverridesDialog(props: {
             throw new Error(`${definition.display_name} 的复杂参数编辑器尚未注册。`)
         }
       }
-      const parseLimit = (value: string, label: string): number | undefined => {
-        const trimmed = value.trim()
-        if (!trimmed) {
-          return undefined
-        }
-        const parsed = Number(trimmed)
-        if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-          throw new Error(`${label}: ${t("settings.modelOverrides.validation.positiveInteger")}`)
-        }
-        return parsed
+      // overrides omits provider-default fields so an empty record restores inheritance.
+      // overrides 省略供应商默认字段，使空记录恢复继承。
+      const overrides: PublicAiModelOverrides | undefined = restore ? undefined : {
+        ...(cacheMode === "managed_explicit" ? { prompt_cache: {
+          mode: "managed_explicit",
+          ttl: { type: "capability_option", option_id: cacheTtl },
+        } } : {}),
+        ...(Object.keys(modelParameters).length > 0 ? { model_parameters: modelParameters } : {}),
       }
-      const overrides: PublicAiModelOverrides = {
-        context_limit: parseLimit(contextLimit, t("settings.modelOverrides.contextLimit")),
-        output_limit: parseLimit(outputLimit, t("settings.modelOverrides.outputLimit")),
-        prompt_cache: cacheMode === "managed_explicit"
-          ? {
-              mode: "managed_explicit",
-              ttl: { type: "capability_option", option_id: cacheTtl },
-            }
-          : { mode: "provider_default" },
-        model_parameters: modelParameters,
-      }
+      const normalizedOverrides = overrides && Object.keys(overrides).length > 0
+        ? overrides
+        : undefined
       props.onSaved(await savePublicAiModelOverrides({
         providerId: props.providerId,
         modelId: props.model.id,
         protocolId: props.protocolId,
-        overrides,
+        overrides: normalizedOverrides,
       }))
       props.onOpenChange(false)
     } catch (reason) {
@@ -175,12 +200,20 @@ export function PublicAiModelOverridesDialog(props: {
   }, [
     cacheMode,
     cacheTtl,
-    contextLimit,
-    outputLimit,
     parameterValues,
     props,
     t,
   ])
+
+  // restore removes a persisted route layer or discards an unsaved local draft.
+  // restore 移除已持久化路由层，或丢弃未保存的本地草稿。
+  const restore = React.useCallback(() => {
+    if (props.overrides) {
+      void persist(true)
+      return
+    }
+    resetDraft(baselineDraft)
+  }, [baselineDraft, persist, props.overrides, resetDraft])
 
   const promptCache = props.model?.capabilities.prompt_cache
   return (
@@ -214,34 +247,6 @@ export function PublicAiModelOverridesDialog(props: {
         </DialogHeader>
         <ScrollArea className="max-h-[calc(100vh-12rem)]">
           <div className="space-y-4 p-5">
-            <section className="space-y-4 rounded-xl border bg-card/40 p-4">
-              <div className="flex items-start gap-2.5">
-                <Gauge className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-                <div className="space-y-1">
-                  <h3 className="text-sm font-semibold">{t("settings.modelOverrides.limits")}</h3>
-                  <p className="text-xs leading-relaxed text-muted-foreground">
-                    {t("settings.modelOverrides.limitsDescription")}
-                  </p>
-                </div>
-              </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <ModelLimitField
-                  capabilityLimit={props.model?.capabilities.context_limit}
-                  id="model-override-context-limit"
-                  label={t("settings.modelOverrides.contextLimit")}
-                  onChange={setContextLimit}
-                  value={contextLimit}
-                />
-                <ModelLimitField
-                  capabilityLimit={props.model?.capabilities.output_limit}
-                  id="model-override-output-limit"
-                  label={t("settings.modelOverrides.outputLimit")}
-                  onChange={setOutputLimit}
-                  value={outputLimit}
-                />
-              </div>
-            </section>
-
             <section className="space-y-4 rounded-xl border bg-card/40 p-4">
               <div className="flex items-start gap-2.5">
                 <Database className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
@@ -326,64 +331,78 @@ export function PublicAiModelOverridesDialog(props: {
             ) : null}
           </div>
         </ScrollArea>
-        <DialogFooter className="m-0 rounded-none px-5 py-3">
-          <Button variant="outline" onClick={() => props.onOpenChange(false)} type="button">
-            {t("settings.modelOverrides.cancel")}
+        <DialogFooter className="m-0 rounded-none px-5 py-3 sm:justify-between">
+          <Button disabled={saving || (!props.overrides && !dirty)} onClick={restore} type="button" variant="ghost">
+            <RotateCcw className="mr-2 size-4" />
+            {t("settings.modelCapabilities.restore")}
           </Button>
-          <Button disabled={saving} onClick={() => void save()} type="button">
-            {saving ? t("settings.modelOverrides.saving") : t("settings.modelOverrides.save")}
-          </Button>
+          <div className="flex justify-end gap-2">
+            <Button disabled={saving} variant="outline" onClick={() => props.onOpenChange(false)} type="button">
+              {t("settings.modelOverrides.cancel")}
+            </Button>
+            <Button disabled={saving || !dirty} onClick={() => void persist(false)} type="button">
+              {saving ? t("settings.modelOverrides.saving") : t("settings.modelOverrides.save")}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   )
 }
 
-// ModelLimitField renders one direct-entry token limit without browser stepper controls.
-// ModelLimitField 渲染一个不带浏览器步进器的直接输入 Token 限制。
-function ModelLimitField(props: {
-  // Provider-advertised maximum value.
-  // 供应商声明的最大值。
-  capabilityLimit?: number
-  // Stable browser field identifier.
-  // 稳定浏览器字段标识。
-  id: string
-  // User-visible field label.
-  // 用户可见字段标签。
-  label: string
-  // Updates the direct-entry textual value.
-  // 更新直接输入的文本值。
-  onChange: (value: string) => void
-  // Current direct-entry textual value.
-  // 当前直接输入的文本值。
-  value: string
-}) {
-  const { t } = useI18n()
-  const declared = props.capabilityLimit !== undefined
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <Label htmlFor={props.id}>{props.label}</Label>
-        {declared ? (
-          <Badge className="font-mono font-normal" variant="outline">
-            {t("settings.modelOverrides.providerMaximum")} {props.capabilityLimit}
-          </Badge>
-        ) : null}
-      </div>
-      <Input
-        id={props.id}
-        inputMode="numeric"
-        onChange={(event) => props.onChange(event.currentTarget.value)}
-        pattern="[0-9]*"
-        placeholder={t("settings.modelOverrides.leaveBlank")}
-        type="text"
-        value={props.value}
-      />
-      {!declared ? (
-        <p className="text-xs text-muted-foreground">{t("settings.modelOverrides.providerNotDeclared")}</p>
-      ) : null}
-    </div>
-  )
+// protocolModelOverrideDraft resolves one persisted route layer into direct-control values.
+// protocolModelOverrideDraft 将一层持久化路由设置解析为直接控件值。
+function protocolModelOverrideDraft(
+  model: PublicAiModel,
+  overrides: PublicAiModelOverrides | undefined,
+  modelParameters: PublicAiModel["capabilities"]["model_parameters"],
+): ProtocolModelOverrideDraft {
+  // promptCache is the only protocol cache shape exposed by the direct editor.
+  // promptCache 是直接编辑器公开的唯一协议缓存结构。
+  const promptCache = overrides?.prompt_cache as {
+    mode?: string
+    ttl?: { option_id?: string }
+  } | undefined
+  return {
+    cacheMode: promptCache?.mode === "managed_explicit" ? "managed_explicit" : "provider_default",
+    cacheTtl: promptCache?.ttl?.option_id
+      ?? model.capabilities.prompt_cache.profile_default_ttl_option_id
+      ?? model.capabilities.prompt_cache.supported_ttl_options[0]?.id
+      ?? "",
+    parameterValues: Object.fromEntries(
+      modelParameters.map((definition) => {
+        // current is the exact typed persisted parameter value for this adapter declaration.
+        // current 是此适配器声明对应的精确已持久化参数值。
+        const current = overrides?.model_parameters?.[definition.id] as { value?: unknown } | undefined
+        return [definition.id, current?.value === undefined ? "" : String(current.value)]
+      }),
+    ),
+  }
+}
+
+// protocolModelOverrideDraftEqual compares the semantic values owned by the protocol editor.
+// protocolModelOverrideDraftEqual 比较协议编辑器持有的语义值。
+function protocolModelOverrideDraftEqual(
+  left: ProtocolModelOverrideDraft,
+  right: ProtocolModelOverrideDraft,
+): boolean {
+  return JSON.stringify(normalizeProtocolModelOverrideDraft(left))
+    === JSON.stringify(normalizeProtocolModelOverrideDraft(right))
+}
+
+// normalizeProtocolModelOverrideDraft removes ignored TTL and blank-parameter noise.
+// normalizeProtocolModelOverrideDraft 移除被忽略的 TTL 与空参数噪声。
+function normalizeProtocolModelOverrideDraft(draft: ProtocolModelOverrideDraft) {
+  return {
+    cacheMode: draft.cacheMode,
+    cacheTtl: draft.cacheMode === "managed_explicit" ? draft.cacheTtl : null,
+    parameterValues: Object.fromEntries(
+      Object.entries(draft.parameterValues)
+        .map(([key, value]) => [key, value.trim()] as const)
+        .filter(([, value]) => value.length > 0)
+        .sort(([left], [right]) => left.localeCompare(right)),
+    ),
+  }
 }
 
 // applicableModelParameters returns only controls registered for the exact model protocol.

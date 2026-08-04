@@ -15,6 +15,9 @@ export interface CustomProviderModelAccountState {
   status?: PublicAiCatalogDiscoveryStatus
   discoveredModel?: PublicAiModel
   effectiveModel?: PublicAiModel
+  // Provider-resolved model before this account's access policy is applied.
+  // 应用此账号访问策略前由供应商解析出的模型。
+  supportModel?: PublicAiModel
   availabilityOverride?: boolean
 }
 
@@ -27,6 +30,9 @@ export interface CustomProviderModelRow {
   defaultEnabled: boolean
   manualDefinition?: PublicAiCustomModelDefinition
   effectiveModel?: PublicAiModel
+  // Strongest resolved capability baseline available even when every account hides the model.
+  // 即使全部账号隐藏模型仍可使用的最强已解析能力基线。
+  capabilityModel?: PublicAiModel
   capabilityOverrides?: PublicAiModelCapabilityOverrides
   templateDecision?: PublicAiCustomModelTemplateDecision
   accounts: CustomProviderModelAccountState[]
@@ -81,6 +87,9 @@ export function buildCustomProviderModelRows(
     for (const model of snapshot.catalogs[connection.id]?.models ?? []) {
       modelIds.add(model.id)
     }
+    for (const model of snapshot.modelSupportCatalogs[connection.id]?.models ?? []) {
+      modelIds.add(model.id)
+    }
   }
 
   return [...modelIds]
@@ -92,11 +101,17 @@ export function buildCustomProviderModelRows(
         const effectiveModel = snapshot.catalogs[connection.id]?.models.find(
           (model) => model.id === modelId,
         )
+        // supportModel retains resolved inherited capabilities when account access hides the model.
+        // supportModel 在账号访问隐藏模型时保留已解析的继承能力。
+        const supportModel = snapshot.modelSupportCatalogs[connection.id]?.models.find(
+          (model) => model.id === modelId,
+        )
         return {
           connection,
           status: snapshot.catalogStatuses[connection.id],
           discoveredModel: sourceModel,
           effectiveModel,
+          supportModel,
           availabilityOverride: availabilityByConnectionModel.get(
             connectionModelKey(connection.id, modelId),
           )?.enabled,
@@ -104,6 +119,7 @@ export function buildCustomProviderModelRows(
       })
       const firstDiscovered = accounts.find((account) => account.discoveredModel)?.discoveredModel
       const firstEffective = accounts.find((account) => account.effectiveModel)?.effectiveModel
+      const firstSupport = accounts.find((account) => account.supportModel)?.supportModel
       const manualDefinition = manualDefinitions[modelId]
       const access = accessByModel.get(modelId)
       return {
@@ -111,12 +127,14 @@ export function buildCustomProviderModelRows(
         displayName:
           manualDefinition?.display_name
           ?? firstDiscovered?.display_name
+          ?? firstSupport?.display_name
           ?? firstEffective?.display_name
           ?? modelId,
         enabled: access?.enabled ?? manualDefinition?.enabled ?? false,
         defaultEnabled: access?.defaultEnabled ?? manualDefinition?.enabled ?? false,
         manualDefinition,
         effectiveModel: firstEffective,
+        capabilityModel: firstEffective ?? firstSupport,
         capabilityOverrides: capabilityOverridesByModel.get(modelId),
         templateDecision: templateDecisionByModel.get(modelId),
         accounts,
@@ -135,6 +153,12 @@ export function accountActuallyDiscoveredModel(account: CustomProviderModelAccou
 // accountExposesModel 报告运行时解析后的最终账号模型可用性。
 export function accountExposesModel(account: CustomProviderModelAccountState): boolean {
   return account.effectiveModel !== undefined
+}
+
+// accountIncludesModel reports provider-resolved account membership before the account access switch.
+// accountIncludesModel 报告应用账号访问开关前由供应商解析出的账号成员关系。
+export function accountIncludesModel(account: CustomProviderModelAccountState): boolean {
+  return account.supportModel !== undefined || account.effectiveModel !== undefined
 }
 
 // shouldReplaceManualModelDrafts protects local advanced edits from unrelated service snapshots.

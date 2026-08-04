@@ -196,6 +196,16 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     { id: "settings", label: "Settings", description: "Project, model, tool, diagnostics, and system settings", status: "Preview" },
   ],
   composerSlashCommands: browserFallbackSlashCommands,
+  outputStyleCatalog: {
+    defaultId: "balanced",
+    selectedId: "balanced",
+    entries: [
+      { id: "unrestricted", labelZh: "不限定", labelEn: "Unrestricted", constraintLevel: "none", promptCharCount: 0, isDefault: false },
+      { id: "balanced", labelZh: "平衡结构", labelEn: "Balanced structure", constraintLevel: "balanced", promptCharCount: 804, isDefault: true },
+      { id: "structured", labelZh: "严格结构", labelEn: "Strict structure", constraintLevel: "strong", promptCharCount: 2464, isDefault: false },
+      { id: "rigorous", labelZh: "审计严谨", labelEn: "Audit rigorous", constraintLevel: "very strong", promptCharCount: 4957, isDefault: false },
+    ],
+  },
   pendingPrompts: [],
   sessionVmmPoliciesByConversation: [{
     conversationId: "preview",

@@ -83,6 +83,7 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
       onUpdateSessionGoalStatus={chatAreaProps.onUpdateSessionGoalStatus}
       onSetSessionPlanMode={chatAreaProps.onSetSessionPlanMode}
       onSetSessionVmmPolicy={chatAreaProps.onSetSessionVmmPolicy}
+      onSetSessionOutputStyle={chatAreaProps.onSetSessionOutputStyle}
       onStopConversationRun={chatAreaProps.onStopConversationRun}
       onStageAttachmentBytes={chatAreaProps.onStageAttachmentBytes}
       resolveMediaSourceUrl={chatAreaProps.resolveMediaSourceUrl}
@@ -97,6 +98,8 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
       sessionReviewSummary={props.isEmptyConversation ? null : props.sessionReviewSummary}
       sessionPlanMode={props.isEmptyConversation ? null : workbench.sessionPlanMode ?? null}
       sessionVmmPolicy={props.isEmptyConversation ? null : workbench.sessionVmmPolicy ?? null}
+      outputStyleCatalog={workbench.outputStyleCatalog}
+      sessionOutputStyle={props.conversationId ? workbench.sessionOutputStyle ?? null : null}
         vmmAvailable={
           workbench.vmmMemory.effective.enabled
           && workbench.vmmMemory.runtime.processReady

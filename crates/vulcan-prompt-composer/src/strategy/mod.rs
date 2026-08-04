@@ -36,6 +36,9 @@ pub enum PlannedNode {
     /// Personality node.
     /// 人格节点。
     Personality,
+    /// Stable output-style system prompt node.
+    /// 稳定的输出风格系统提示词节点。
+    OutputStyle,
     /// Tool-help bundle node.
     /// 工具帮助组合节点。
     ToolHelpBundle,

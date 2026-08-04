@@ -182,6 +182,7 @@ fn build_runtime_prompt_assembly_input(
         personality: persisted_personality_to_prompt_selection(
             &preparation.prompt_configuration.personality,
         ),
+        output_style: preparation.output_style_snapshot.clone(),
         project_rules: load_workspace_project_rules_snapshot(&preparation.workspace_path)?,
         environment_context: Some(environment_context),
         // Session goals are delivered through append-only user turns so goal creation never rewrites the provider prefix.
@@ -973,6 +974,7 @@ mod tests {
             prompt_skills: Default::default(),
             prompt: Some(PersistedPromptConfiguration {
                 personality: PersistedPromptPersonalitySelection::Default,
+                output_style: Default::default(),
                 project_prompt_enabled: true,
                 project_prompt_path: String::from(".vulcan/code/prompt.md"),
             }),
@@ -1269,6 +1271,7 @@ mod tests {
             execution_mode: String::from("Build"),
             temperature: None,
             prompt_configuration,
+            output_style_snapshot: None,
             prompt_purpose: ExecutionPromptPurpose::UserTurn,
             prompt_skills: Vec::new(),
             prompt_skill_user_root: None,

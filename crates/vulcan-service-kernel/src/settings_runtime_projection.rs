@@ -426,6 +426,13 @@ pub(crate) fn session_addon_state_from_workspace_snapshot(
             SessionAddonNamespace::Todolist if !runtime_state.todolist.is_empty() => {
                 let _ = addon_state.set_todolist(&runtime_state.todolist, updated_at.clone());
             }
+            SessionAddonNamespace::OutputStyle if !runtime_state.output_style.is_empty() => {
+                let _ = addon_state.set_typed_namespace(
+                    SessionAddonNamespace::OutputStyle,
+                    &runtime_state.output_style,
+                    updated_at.clone(),
+                );
+            }
             _ => {}
         }
     }
@@ -526,6 +533,7 @@ pub(crate) fn refresh_settings_projection_locked(
     guard.workbench.git_commit = git_commit_settings(provider_configuration);
     guard.workbench.provider_retry = provider_retry_settings(provider_configuration);
     guard.workbench.host_tools = host_tools_settings(provider_configuration);
+    guard.workbench.output_style_catalog = output_style_catalog_summary(provider_configuration);
     guard.workbench.composer_attachment_capabilities = composer_attachment_capabilities(
         public_model_capabilities.as_ref(),
         bridged_image_understanding,
@@ -730,8 +738,12 @@ pub(crate) fn restore_webui_runtime_controls_for_session(
     let Some(runtime_state) = runtime_state else {
         return;
     };
-    if let Some(reasoning_effort) = runtime_state.active_reasoning_effort {
+    if runtime_state.active_reasoning_effort_explicit {
+        let Some(reasoning_effort) = runtime_state.active_reasoning_effort else {
+            return;
+        };
         provider_configuration.workbench_reasoning_effort = Some(reasoning_effort);
+        provider_configuration.workbench_reasoning_effort_explicit = true;
     }
 }
 

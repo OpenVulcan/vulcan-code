@@ -42,6 +42,7 @@ vulcan-luaskills-config.workspace = true
 vulcan-provider-config.workspace = true
 vulcan-plugin-runtime.workspace = true
 vulcan-prompt-skills.workspace = true
+vulcan-prompt-composer.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-service-api.workspace = true
 vulcan-service-host.workspace = true

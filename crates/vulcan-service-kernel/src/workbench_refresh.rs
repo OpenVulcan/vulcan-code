@@ -930,12 +930,17 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                         Some(runtime_state),
                     )
                 });
+            let session_output_style = session_output_style_summary_from_runtime_state(
+                runtime_state,
+                provider_configuration.prompt.output_style.id(),
+            );
             session_addons_changed_delta_for_retained_list(
                 session.id.to_string(),
                 session_goal,
                 session_todolist,
                 session_plan_mode,
                 session_vmm_policy,
+                session_output_style,
             )
         })
         .collect::<Vec<_>>();
@@ -1109,6 +1114,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 .map(|selection| &selection.model.capabilities),
             bridged_image_understanding,
         ),
+        output_style_catalog: output_style_catalog_summary(provider_configuration),
         composer_slash_commands: vulcan_service_api::composer_slash_command_catalog(),
         pending_prompts: selected_runtime_state
             .map(pending_prompt_summaries_from_runtime_state)
@@ -1126,6 +1132,10 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
             selected_session_vmm_project_layer.as_ref(),
             selected_runtime_state,
         )),
+        session_output_style: session_output_style_summary_from_runtime_state(
+            selected_runtime_state,
+            provider_configuration.prompt.output_style.id(),
+        ),
         session_addons_by_conversation,
         session_vmm_policies_by_conversation,
         memories: memories(workspace),
