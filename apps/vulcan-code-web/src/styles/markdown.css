@@ -24,12 +24,66 @@
   margin: 0 0 11px;
 }
 
+/* Restore semantic Markdown list markers removed by Tailwind preflight. */
+/* 恢复被 Tailwind preflight 重置掉的 Markdown 语义列表标记。 */
+.markdown-message ul,
+.markdown-message ol {
+  padding-left: 1.5em;
+}
+
+.markdown-message ul {
+  list-style: disc;
+}
+
+.markdown-message ol {
+  list-style: decimal;
+}
+
+.markdown-message ul ul {
+  list-style: circle;
+}
+
+.markdown-message ul ul ul {
+  list-style: square;
+}
+
+.markdown-message ol ol {
+  list-style: lower-alpha;
+}
+
+.markdown-message ol ol ol {
+  list-style: lower-roman;
+}
+
+.markdown-message li + li {
+  margin-top: 4px;
+}
+
+.markdown-message ul.contains-task-list {
+  padding-left: 0;
+  list-style: none;
+}
+
+.markdown-message li.task-list-item {
+  list-style: none;
+}
+
+.markdown-message li.task-list-item > input[type="checkbox"] {
+  margin: 0 6px 0 0;
+  accent-color: var(--primary);
+  vertical-align: middle;
+}
+
 .markdown-message h1,
 .markdown-message h2,
 .markdown-message h3,
-.markdown-message h4 {
+.markdown-message h4,
+.markdown-message h5,
+.markdown-message h6 {
   margin: 14px 0 8px;
   color: var(--foreground);
+  font-weight: 700;
+  line-height: 1.35;
   letter-spacing: 0;
 }
 
@@ -44,6 +98,11 @@
 .markdown-message h3,
 .markdown-message h4 {
   font-size: 14px;
+}
+
+.markdown-message h5,
+.markdown-message h6 {
+  font-size: 13px;
 }
 
 .markdown-message a {
