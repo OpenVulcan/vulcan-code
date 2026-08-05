@@ -179,6 +179,7 @@ pub fn protocol_profile_supports_attachment_kind(
     match protocol_profile_id {
         vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID => true,
         vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID
+        | vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID
         | vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID => {
             matches!(kind, ConversationAttachmentKind::Image)
         }
@@ -275,6 +276,31 @@ mod tests {
         assert_eq!(normalized.attachments.len(), 1);
         assert_eq!(normalized.downgraded_attachments.len(), 1);
         assert!(normalized.text.contains("selected protocol profile"));
+    }
+
+    /// Keeps image input for the Codex Responses profile while rejecting unregistered media kinds.
+    /// 为 Codex Responses 协议保留图片输入，同时拒绝未注册的媒体类型。
+    #[test]
+    fn codex_responses_keeps_images_and_rejects_non_image_resources() {
+        let normalized = normalize_provider_user_input(
+            vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID,
+            "inspect",
+            &[
+                test_attachment(ConversationAttachmentKind::Image, "a.png", "image/png"),
+                test_attachment(ConversationAttachmentKind::Audio, "a.mp3", "audio/mpeg"),
+            ],
+        );
+
+        assert_eq!(normalized.attachments.len(), 1);
+        assert_eq!(
+            normalized.attachments[0].kind,
+            ConversationAttachmentKind::Image
+        );
+        assert_eq!(normalized.downgraded_attachments.len(), 1);
+        assert_eq!(
+            normalized.downgraded_attachments[0].kind,
+            ConversationAttachmentKind::Audio
+        );
     }
 
     /// Rejects non-image resources from the currently implemented Anthropic wire profile.

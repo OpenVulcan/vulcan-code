@@ -40,8 +40,15 @@ pub fn append_runtime_event_projection_to_state(
             now,
             event,
         )?,
-        RuntimeEventKind::Retrying => {
-            append_retrying_projection_to_state(&mut draft_runtime_state, session_id, now, event)?
+        RuntimeEventKind::Retrying
+        | RuntimeEventKind::ProviderWaiting
+        | RuntimeEventKind::TransportFallback => {
+            append_provider_transport_note_projection_to_state(
+                &mut draft_runtime_state,
+                session_id,
+                now,
+                event,
+            )?
         }
         _ => false,
     };
@@ -51,8 +58,8 @@ pub fn append_runtime_event_projection_to_state(
     Ok(projected)
 }
 
-/// Appends one durable display-only note before a Provider retry wait begins.
-/// 在 Provider 重试等待开始前追加一条持久化的纯显示备注。
+/// Appends one durable display-only note for Provider waiting, retry, or transport fallback.
+/// 为 Provider 等待、重试或传输回退追加一条持久化的纯显示备注。
 ///
 /// `runtime_state` owns the durable session conversation state.
 /// `runtime_state` 持有持久化会话对话状态。
@@ -60,18 +67,18 @@ pub fn append_runtime_event_projection_to_state(
 /// `session_id` 标识接收备注的会话。
 /// `now` is the persistence timestamp used by the new record.
 /// `now` 是新记录使用的持久化时间戳。
-/// `event` contains the exact retry title, detail, and scheduling metadata.
-/// `event` 包含精确的重试标题、详情与调度元数据。
-/// Returns `true` after the retry note is appended successfully.
-/// 成功追加重试备注后返回 `true`。
-fn append_retrying_projection_to_state(
+/// `event` contains the exact transport title, detail, and diagnostic metadata.
+/// `event` 包含精确的传输标题、详情与诊断元数据。
+/// Returns `true` after the transport note is appended successfully.
+/// 成功追加传输备注后返回 `true`。
+fn append_provider_transport_note_projection_to_state(
     runtime_state: &mut SessionRuntimeStateEntry,
     session_id: SessionId,
     now: &str,
     event: &RuntimeEvent,
 ) -> Result<bool, String> {
-    // recordId gives every failed physical request its own stable visible history row.
-    // recordId 为每次失败的真实请求提供独立、稳定的可见历史行。
+    // recordId gives every waiting, retry, or fallback transition its own stable visible history row.
+    // recordId 为每次等待、重试或回退转换提供独立、稳定的可见历史行。
     let record_id = build_session_record_message_id(
         session_id,
         now,
@@ -90,7 +97,7 @@ fn append_retrying_projection_to_state(
             created_at: now.to_string(),
         },
     )
-    .map_err(|error| format!("Invalid Provider retry display-note identity: {error}"))?;
+    .map_err(|error| format!("Invalid Provider transport display-note identity: {error}"))?;
     runtime_state.updated_at = now.to_string();
     Ok(true)
 }

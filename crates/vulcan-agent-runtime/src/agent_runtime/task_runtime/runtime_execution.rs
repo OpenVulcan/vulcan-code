@@ -1038,9 +1038,32 @@ pub(crate) async fn run_task_session_context_compaction(
         .load_events(task_node_id)
         .map(|events| events.len() as u64)
         .unwrap_or(0);
-    let (provider_configuration, _) =
+    // compactionPreparationRequest carries the exact provider overrides already resolved for this task execution.
+    // compactionPreparationRequest 携带已为本次任务执行解析的精确供应商覆盖。
+    let (provider_configuration, compaction_preparation_request) =
         build_task_runtime_preparation_request(&context, &request, &resolved_config)?;
-    let model_label = None;
+    // modelTarget freezes the same public route for remote and local task compaction when available.
+    // modelTarget 在公共运行时可用时为远端与本地任务压缩冻结同一路由。
+    let model_target = match context.foundation.public_ai_runtime() {
+        Some(runtime) => resolve_prompt_compaction_model_target(
+            runtime.as_ref(),
+            compaction_preparation_request
+                .provider_id_override
+                .as_deref(),
+            compaction_preparation_request
+                .connection_id_override
+                .as_deref(),
+            compaction_preparation_request.model_id_override.as_deref(),
+        )?,
+        None => None,
+    };
+    // modelLabel retains the resolved provider/model identity for terminal diagnostics.
+    // modelLabel 为终态诊断保留解析后的供应商/模型身份。
+    let model_label = model_target.as_ref().map(|target| target.label());
+    // launchContext freezes the task's exact agent prompt, tool policy, mode, and prompt-skill controls.
+    // launchContext 冻结子任务的精确代理提示词、工具策略、模式与提示词技能控制。
+    let launch_context =
+        PromptCompactionLaunchContext::from_execution_request(&compaction_preparation_request);
     let stream = stream_prompt_compaction_foundation_job(PromptCompactionFoundationJobRequest {
         session_id: request.task_id,
         session_title: request.display_title.clone(),
@@ -1051,6 +1074,9 @@ pub(crate) async fn run_task_session_context_compaction(
         observed_input_tokens: None,
         estimated_input_tokens: None,
         provider_configuration,
+        model_target,
+        execution_agent_id: compaction_preparation_request.execution_agent_id.clone(),
+        launch_context,
         model_label,
         reasoning_effort: context.request_template.reasoning_effort,
         foundation: Arc::clone(&context.foundation),

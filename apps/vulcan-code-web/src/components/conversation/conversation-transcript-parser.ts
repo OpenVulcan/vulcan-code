@@ -9,6 +9,7 @@ import type {
   ConversationBlock,
   ConversationBlockKind,
 } from "@/components/conversation/conversation-model";
+import { parseSystemProviderError } from "@/components/conversation/conversation-system-error-card";
 import {
   conversationBlockHasToolEvidence,
   metadataToolFailureStatus,
@@ -47,6 +48,26 @@ export function parseConversationBlocks(
 ): ConversationBlock[] {
   if (message.role === "user") {
     return [conversationMarkdownBlock(message.id, 0, message.body)];
+  }
+
+  // systemProviderError turns the terminal transcript error into a structured notice card instead of raw Markdown.
+  // systemProviderError 将终态转录错误转换为结构化提示卡，而不是原始 Markdown。
+  const systemProviderError = message.role === "system" && message.recordKind === "transcript"
+    ? parseSystemProviderError(message.body)
+    : null;
+  if (systemProviderError) {
+    return [conversationSpecialBlock(
+      message.id,
+      0,
+      "notice",
+      message.body,
+      {
+        title: t?.("conversation.systemError.title") ?? "System error",
+        summary: systemProviderError.message,
+        status: "failed",
+      },
+      message.metadata,
+    )];
   }
 
   const structuredKind = structuredMessageBlockKind(message);

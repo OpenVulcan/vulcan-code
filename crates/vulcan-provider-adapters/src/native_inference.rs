@@ -5,8 +5,8 @@ use crate::{
     ConnectionModel, CredentialExecutionSecret, ProviderExecutionClient, ProviderExecutionFailure,
     ProviderExecutionRoute,
     execution::{
-        execution_headers, http_failure, parse_retry_after_headers, pre_dispatch_failure,
-        read_bounded_response_text, response_headers_protocol_failure, transport_failure,
+        execution_headers, http_failure, http_send_transport_failure, parse_retry_after_headers,
+        pre_dispatch_failure, read_bounded_response_text, response_headers_protocol_failure,
     },
 };
 use reqwest::header::CONTENT_TYPE;
@@ -632,9 +632,10 @@ impl ProviderExecutionClient {
             .send()
             .await
             .map_err(|error| {
-                transport_failure(format!(
-                    "Native inference request to `{url}` failed: {error}"
-                ))
+                http_send_transport_failure(
+                    &error,
+                    format!("Native inference request to `{url}` failed: {error}"),
+                )
             })?;
         let status = response.status().as_u16();
         let retry_after = parse_retry_after_headers(response.headers(), SystemTime::now());

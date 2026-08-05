@@ -1324,6 +1324,7 @@ mod tests {
                 content: vec![ContentItem::Text {
                     text: String::from("hello"),
                 }],
+                provider_context_items: Vec::new(),
             }],
             tools: Vec::new(),
             native_tools: Vec::new(),
@@ -1471,6 +1472,7 @@ mod tests {
                         },
                     },
                 ],
+                provider_context_items: Vec::new(),
             },
             vulcan_ai_contract::AiMessage {
                 role: MessageRole::Tool,
@@ -1481,6 +1483,7 @@ mod tests {
                         is_error: false,
                     },
                 }],
+                provider_context_items: Vec::new(),
             },
             vulcan_ai_contract::AiMessage {
                 role: MessageRole::Tool,
@@ -1491,6 +1494,7 @@ mod tests {
                         is_error: false,
                     },
                 }],
+                provider_context_items: Vec::new(),
             },
         ]);
 

@@ -1,7 +1,123 @@
 use super::*;
 use crate::conversation_submission::{
-    commit_materialized_submission_activation, prepare_materialized_submission_session,
+    commit_created_submission_workspace_slice, commit_materialized_submission_activation,
+    prepare_materialized_submission_session,
 };
+use vulcan_service_api::ServiceEventSink;
+
+/// Captures activation events emitted to one simulated WebUI client.
+/// 捕获发送给单个模拟 WebUI 客户端的激活事件。
+struct CapturingActivationEventSink {
+    /// Shared ordered event buffer used by activation assertions.
+    /// 激活断言使用的共享有序事件缓冲区。
+    events: Arc<Mutex<Vec<ServiceEvent>>>,
+}
+
+impl ServiceEventSink for CapturingActivationEventSink {
+    /// Stores one activation event in delivery order.
+    /// 按投递顺序保存单个激活事件。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `event` is the service event delivered by the production emitter.
+    /// `event` 是生产事件发送器投递的服务事件。
+    fn emit_service_event(&self, event: ServiceEvent) {
+        self.events
+            .lock()
+            .expect("activation event buffer should lock")
+            .push(event);
+    }
+}
+
+/// Verifies a created conversation publishes navigation and model-sensitive controls atomically.
+/// 验证新建会话会原子发布导航状态与模型敏感控制项。
+///
+/// # Parameters
+/// 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// 返回值
+/// This test returns no value and fails when draft materialization emits only a partial summary delta.
+/// 此测试无返回值；当草稿物化只发送局部摘要增量时失败。
+#[test]
+fn created_session_activation_emits_one_full_workbench_snapshot() {
+    // historical_session_id keeps one unrelated retained conversation in the live workspace.
+    // historical_session_id 在实时工作区中保留一个无关的既有会话。
+    let historical_session_id = SessionId::new_v4();
+    // service_state is the live workspace that will receive the bounded created-session slice.
+    // service_state 是接收有界新建会话切片的实时工作区。
+    let mut service_state = test_service_state_with_parent_session(historical_session_id);
+    service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("test workspace snapshot")
+        .task_projects
+        .push(TaskProjectSummary::new(
+            "project-a",
+            "Project A",
+            "D:/project-a",
+            false,
+            0,
+            None,
+            None,
+            Vec::new(),
+        ));
+    // workspace_snapshot is the detached submission slice used to materialize the new conversation.
+    // workspace_snapshot 是用于物化新会话的分离提交切片。
+    let mut workspace_snapshot = service_state
+        .workspace_snapshot
+        .as_ref()
+        .expect("test workspace snapshot")
+        .clone();
+    // materialized_session is the exact draft-to-session transition under test.
+    // materialized_session 是本测试关注的精确草稿到会话转换。
+    let materialized_session = materialize_prompt_session(
+        &mut workspace_snapshot,
+        Some("project-a"),
+        PromptSessionTarget::Create,
+        "Model A conversation",
+    )
+    .expect("created conversation should materialize");
+    prepare_materialized_submission_session(&mut workspace_snapshot, &materialized_session)
+        .expect("created conversation runtime state should initialize");
+    // state exposes the live workbench to the production commit and activation path.
+    // state 向生产提交与激活路径暴露实时工作台。
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
+    commit_created_submission_workspace_slice(&state, &workspace_snapshot, &materialized_session)
+        .expect("created conversation slice should commit");
+    // events records whether activation used an atomic full snapshot or a stale partial delta.
+    // events 记录激活阶段使用了原子完整快照还是过期的局部增量。
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let app = ServiceEventEmitter::new(vec![Arc::new(CapturingActivationEventSink {
+        events: Arc::clone(&events),
+    })]);
+
+    commit_materialized_submission_activation(
+        &app,
+        &state,
+        &workspace_snapshot,
+        &materialized_session,
+    )
+    .expect("created conversation activation should succeed");
+
+    let captured = events.lock().expect("activation event buffer should lock");
+    assert_eq!(captured.len(), 1);
+    let ServiceEvent::Workbench(workbench) = &captured[0] else {
+        panic!("created conversation activation must emit a full workbench snapshot");
+    };
+    assert_eq!(
+        workbench.selected_conversation_id.as_deref(),
+        Some(materialized_session.session_id.to_string().as_str())
+    );
+    assert!(
+        workbench
+            .conversations
+            .iter()
+            .any(|conversation| conversation.id == materialized_session.session_id.to_string())
+    );
+}
 
 /// Verifies existing-session activation initializes runtime state and clears its own navigation round.
 /// 验证已有会话激活会初始化运行态并清理自身导航轮次。

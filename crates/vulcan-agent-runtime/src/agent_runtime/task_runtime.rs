@@ -8,7 +8,8 @@ use crate::agent_runtime::execution_models::{
 };
 use crate::agent_runtime::execution_preparation::prepare_execution_with_tool_snapshot;
 use crate::agent_runtime::prompt_compaction::{
-    PromptCompactionFoundationJobRequest, PromptCompactionStreamEvent,
+    PromptCompactionFoundationJobRequest, PromptCompactionLaunchContext,
+    PromptCompactionStreamEvent, resolve_prompt_compaction_model_target,
     stream_prompt_compaction_foundation_job,
 };
 use crate::agent_runtime::provider_request_bridge_conversation::{

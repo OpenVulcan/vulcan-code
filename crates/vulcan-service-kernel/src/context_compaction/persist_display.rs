@@ -186,20 +186,18 @@ pub(crate) fn spawn_context_compaction_persist_task(
             .unwrap_or(true);
         if let Some(addon_state) = output_style_addon_state
             && output_style_persist_is_current
-        {
-            if let Err(error) = persist_workspace_session_addon_state_update(
+            && let Err(error) = persist_workspace_session_addon_state_update(
                 addon_controller_runtime,
                 addon_workspace_snapshot,
                 session_id,
                 addon_state,
             )
             .await
-            {
-                let reason_label = reason.as_deref().unwrap_or("context_compaction");
-                eprintln!(
-                    "[webui-service] background context-compaction output-style addon persist failed ({reason_label}): {error}"
-                );
-            }
+        {
+            let reason_label = reason.as_deref().unwrap_or("context_compaction");
+            eprintln!(
+                "[webui-service] background context-compaction output-style addon persist failed ({reason_label}): {error}"
+            );
         }
     });
 }

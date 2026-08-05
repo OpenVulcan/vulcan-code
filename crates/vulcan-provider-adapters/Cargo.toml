@@ -12,11 +12,13 @@ async-stream = "0.3.6"
 base64.workspace = true
 futures-util = "0.3.31"
 reqwest = { workspace = true, features = ["stream", "multipart", "gzip", "brotli", "deflate", "zstd"] }
+rustls.workspace = true
 httpdate.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tokio.workspace = true
+tokio-tungstenite.workspace = true
 tokio-util.workspace = true
 uuid.workspace = true
 vulcan-ai-contract.workspace = true

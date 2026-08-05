@@ -3484,13 +3484,13 @@ fn first_unique_embedded_json_value(text: &str) -> Option<serde_json::Value> {
     let bytes = text.as_bytes();
     let mut start = 0_usize;
     while start < bytes.len() {
-        if bytes[start] == b'{' || bytes[start] == b'[' {
-            if let Some((value, end)) = complete_json_value_at(text, start) {
-                if first_complete_json_value(text.get(end.saturating_add(1)..)?).is_some() {
-                    return None;
-                }
-                return Some(value);
+        if (bytes[start] == b'{' || bytes[start] == b'[')
+            && let Some((value, end)) = complete_json_value_at(text, start)
+        {
+            if first_complete_json_value(text.get(end.saturating_add(1)..)?).is_some() {
+                return None;
             }
+            return Some(value);
         }
         start = start.saturating_add(1);
     }
@@ -3544,10 +3544,10 @@ fn first_complete_json_value(text: &str) -> Option<serde_json::Value> {
     let bytes = text.as_bytes();
     let mut start = 0_usize;
     while start < bytes.len() {
-        if bytes[start] == b'{' || bytes[start] == b'[' {
-            if let Some((value, _)) = complete_json_value_at(text, start) {
-                return Some(value);
-            }
+        if (bytes[start] == b'{' || bytes[start] == b'[')
+            && let Some((value, _)) = complete_json_value_at(text, start)
+        {
+            return Some(value);
         }
         start = start.saturating_add(1);
     }
@@ -3639,6 +3639,7 @@ fn restricted_provider_request(
                     }
                 })
                 .collect(),
+            provider_context_items: Vec::new(),
         })
         .collect();
     let structured_output = structured_output_policy_for_protocol(

@@ -1445,8 +1445,8 @@ impl PersistedAiConfiguration {
     ///
     /// # Returns
     /// 返回值
-    /// `true` when deletion would silently discard user-owned model or route information.
-    /// 如果删除会静默丢弃用户持有的模型或路由信息，则返回 `true`。
+    /// `true` when the removal warning must disclose user-owned model or route information.
+    /// 如果移除提示必须披露用户持有的模型或路由信息，则返回 `true`。
     pub fn provider_has_model_customizations(&self, provider_id: &str) -> bool {
         if self
             .custom_models
@@ -1580,8 +1580,8 @@ impl PersistedAiConfiguration {
         });
     }
 
-    /// Removes every persisted model setting owned by one provider after its routes are detached.
-    /// 在供应商路由全部解除后移除该供应商持有的全部持久化模型设置。
+    /// Removes every persisted model setting and inference route owned by one provider.
+    /// 移除一个供应商持有的全部持久化模型设置与推理路由。
     ///
     /// # Parameters
     /// 参数
@@ -1589,6 +1589,7 @@ impl PersistedAiConfiguration {
     /// `provider_id` 标识将被永久移除的精确供应商。
     pub fn remove_provider_owned_model_settings(&mut self, provider_id: &str) {
         let provider_model_prefix = format!("{}:{provider_id}:", provider_id.len());
+        self.custom_models.remove(provider_id);
         self.custom_provider_model_defaults.remove(provider_id);
         self.provider_capability_overrides.remove(provider_id);
         self.custom_model_template_decisions
@@ -1601,6 +1602,27 @@ impl PersistedAiConfiguration {
             .retain(|key, _| !key.starts_with(provider_model_prefix.as_str()));
         self.internal_model_enabled_overrides
             .retain(|key, _| !key.starts_with(provider_model_prefix.as_str()));
+        self.internal_model_overrides
+            .retain(|key, _| !key.starts_with(provider_model_prefix.as_str()));
+        for profile in self.inference_profiles.values_mut() {
+            profile
+                .llm_routes
+                .retain(|_, route| route.provider_id != provider_id);
+            if profile
+                .embedding
+                .as_ref()
+                .is_some_and(|route| route.provider_id == provider_id)
+            {
+                profile.embedding = None;
+            }
+            if profile
+                .rerank
+                .as_ref()
+                .is_some_and(|route| route.provider_id == provider_id)
+            {
+                profile.rerank = None;
+            }
+        }
         self.connection_graph
             .account_preferences
             .model_last_connections
@@ -1944,8 +1966,10 @@ mod tests {
     fn schema_seven_migration_repairs_missing_vmm_profile() {
         // historical represents a valid schema-seven file whose required profile was lost before persistence.
         // historical 表示一份持久化前丢失必需配置档的有效 Schema 7 文件。
-        let mut historical = PersistedAiConfiguration::default();
-        historical.schema_version = 7;
+        let mut historical = PersistedAiConfiguration {
+            schema_version: 7,
+            ..PersistedAiConfiguration::default()
+        };
         historical.inference_profiles.remove("vmm");
 
         assert!(
@@ -1965,8 +1989,10 @@ mod tests {
     /// 验证 Schema 7 协议限制会转化为一份保守的直接模型设置。
     #[test]
     fn schema_seven_migrates_protocol_limits_to_direct_model_settings() {
-        let mut historical = PersistedAiConfiguration::default();
-        historical.schema_version = 7;
+        let mut historical = PersistedAiConfiguration {
+            schema_version: 7,
+            ..PersistedAiConfiguration::default()
+        };
         let first_key = PersistedAiConfiguration::provider_model_protocol_key(
             "custom:迁移",
             "model:alpha",
@@ -2027,8 +2053,10 @@ mod tests {
     fn schema_seven_removes_custom_non_text_output_declarations() {
         let provider_id = "custom:legacy-output";
         let model_id = "legacy-image-model";
-        let mut historical = PersistedAiConfiguration::default();
-        historical.schema_version = 7;
+        let mut historical = PersistedAiConfiguration {
+            schema_version: 7,
+            ..PersistedAiConfiguration::default()
+        };
         historical.custom_provider_model_defaults.insert(
             String::from(provider_id),
             CustomProviderModelDefaults {
@@ -2262,10 +2290,10 @@ mod tests {
         );
     }
 
-    /// Verifies provider removal detects user-owned model information before any cascade cleanup.
-    /// 验证移除供应商前会检测用户自有模型信息，而不会直接执行级联清理。
+    /// Verifies provider removal warnings detect user-owned model information before cascade cleanup.
+    /// 验证供应商移除提示会在级联清理前检测用户自有模型信息。
     #[test]
-    fn provider_model_customization_detection_blocks_silent_cleanup() {
+    fn provider_model_customization_detection_reports_owned_state() {
         let provider_id = "custom-provider";
         let model_id = "private-model";
         let mut configuration = PersistedAiConfiguration::default();
@@ -2298,6 +2326,44 @@ mod tests {
             PersistedAiConfiguration::provider_model_key(removed_provider, "private-model");
         let retained_key =
             PersistedAiConfiguration::provider_model_key(retained_provider, "public-model");
+        // removed_internal_key and retained_internal_key cover operation-scoped model defaults.
+        // removed_internal_key 与 retained_internal_key 覆盖操作作用域模型默认值。
+        let removed_internal_key = PersistedAiConfiguration::internal_model_operation_key(
+            removed_provider,
+            "private-model",
+            AiOperation::EmbeddingCreate,
+        );
+        let retained_internal_key = PersistedAiConfiguration::internal_model_operation_key(
+            retained_provider,
+            "public-model",
+            AiOperation::EmbeddingCreate,
+        );
+        configuration.custom_models.insert(
+            String::from(removed_provider),
+            BTreeMap::from([(
+                String::from("private-model"),
+                CustomModelDefinition {
+                    id: String::from("private-model"),
+                    display_name: String::from("Private Model"),
+                    enabled: true,
+                    capabilities: ModelCapabilities::default(),
+                    request_projection: Default::default(),
+                },
+            )]),
+        );
+        configuration.custom_models.insert(
+            String::from(retained_provider),
+            BTreeMap::from([(
+                String::from("public-model"),
+                CustomModelDefinition {
+                    id: String::from("public-model"),
+                    display_name: String::from("Public Model"),
+                    enabled: true,
+                    capabilities: ModelCapabilities::default(),
+                    request_projection: Default::default(),
+                },
+            )]),
+        );
         configuration
             .model_enabled_overrides
             .insert(removed_key.clone(), true);
@@ -2326,13 +2392,15 @@ mod tests {
             ),
             ModelExecutionOverrides::default(),
         );
-        configuration.internal_model_enabled_overrides.insert(
-            PersistedAiConfiguration::internal_model_operation_key(
-                removed_provider,
-                "private-model",
-                AiOperation::EmbeddingCreate,
-            ),
-            true,
+        configuration
+            .internal_model_enabled_overrides
+            .insert(removed_internal_key.clone(), true);
+        configuration
+            .internal_model_overrides
+            .insert(removed_internal_key, InternalModelOverrides::default());
+        configuration.internal_model_overrides.insert(
+            retained_internal_key.clone(),
+            InternalModelOverrides::default(),
         );
         configuration
             .connection_graph
@@ -2344,9 +2412,76 @@ mod tests {
             model_id: String::from("private-model"),
             connection_id: String::from("removed-connection"),
         });
+        // removed_llm_route and retained_llm_route prove provider filtering preserves peer routes.
+        // removed_llm_route 与 retained_llm_route 验证供应商过滤会保留其他供应商路由。
+        let removed_llm_route = InferenceRouteConfiguration {
+            provider_id: String::from(removed_provider),
+            service_entry_id: String::from("removed-entry"),
+            connection_id: String::from("removed-connection"),
+            model_id: String::from("private-model"),
+            binding: InferenceRouteBinding::Protocol {
+                protocol_profile_id: String::from("removed-protocol"),
+            },
+            operation: AiOperation::ConversationRespond,
+            usage_scope: InferenceUsageScope::InternalBackground,
+        };
+        let retained_llm_route = InferenceRouteConfiguration {
+            provider_id: String::from(retained_provider),
+            service_entry_id: String::from("retained-entry"),
+            connection_id: String::from("retained-connection"),
+            model_id: String::from("public-model"),
+            binding: InferenceRouteBinding::Protocol {
+                protocol_profile_id: String::from("retained-protocol"),
+            },
+            operation: AiOperation::ConversationRespond,
+            usage_scope: InferenceUsageScope::InternalBackground,
+        };
+        // removed_embedding_route and retained_rerank_route cover the two optional route slots.
+        // removed_embedding_route 与 retained_rerank_route 覆盖两个可选路由槽位。
+        let removed_embedding_route = InferenceRouteConfiguration {
+            provider_id: String::from(removed_provider),
+            service_entry_id: String::from("removed-entry"),
+            connection_id: String::from("removed-connection"),
+            model_id: String::from("private-model"),
+            binding: InferenceRouteBinding::Action {
+                action_binding_id: String::from("removed-embedding-action"),
+            },
+            operation: AiOperation::EmbeddingCreate,
+            usage_scope: InferenceUsageScope::InternalBackground,
+        };
+        let retained_rerank_route = InferenceRouteConfiguration {
+            provider_id: String::from(retained_provider),
+            service_entry_id: String::from("retained-entry"),
+            connection_id: String::from("retained-connection"),
+            model_id: String::from("public-model"),
+            binding: InferenceRouteBinding::Action {
+                action_binding_id: String::from("retained-rerank-action"),
+            },
+            operation: AiOperation::RerankDocuments,
+            usage_scope: InferenceUsageScope::InternalBackground,
+        };
+        configuration.inference_profiles.insert(
+            String::from("mixed-profile"),
+            InferenceProfile {
+                llm_routes: BTreeMap::from([
+                    (String::from("removed-purpose"), removed_llm_route),
+                    (String::from("retained-purpose"), retained_llm_route),
+                ]),
+                embedding: Some(removed_embedding_route),
+                rerank: Some(retained_rerank_route),
+            },
+        );
 
         configuration.remove_provider_owned_model_settings(removed_provider);
 
+        assert_eq!(
+            configuration
+                .custom_models
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec![String::from(retained_provider)]
+        );
         assert_eq!(
             configuration.model_enabled_overrides,
             BTreeMap::from([(retained_key, true)])
@@ -2356,6 +2491,28 @@ mod tests {
         assert!(configuration.custom_model_template_decisions.is_empty());
         assert!(configuration.model_overrides.is_empty());
         assert!(configuration.internal_model_enabled_overrides.is_empty());
+        assert_eq!(
+            configuration.internal_model_overrides,
+            BTreeMap::from([(retained_internal_key, InternalModelOverrides::default())])
+        );
+        // profile is the surviving mixed profile after provider-scoped route cleanup.
+        // profile 是按供应商清理路由后保留下来的混合配置档。
+        let profile = configuration
+            .inference_profiles
+            .get("mixed-profile")
+            .expect("mixed inference profile");
+        assert_eq!(
+            profile.llm_routes.keys().cloned().collect::<Vec<_>>(),
+            vec![String::from("retained-purpose")]
+        );
+        assert!(profile.embedding.is_none());
+        assert_eq!(
+            profile
+                .rerank
+                .as_ref()
+                .map(|route| route.provider_id.as_str()),
+            Some(retained_provider)
+        );
         assert!(
             configuration
                 .connection_graph
@@ -2364,6 +2521,8 @@ mod tests {
                 .is_empty()
         );
         assert!(configuration.active.is_none());
+        assert!(!configuration.provider_has_model_customizations(removed_provider));
+        assert!(configuration.provider_has_model_customizations(retained_provider));
     }
 
     /// Verifies schema two upgrades without inventing model overlays and new fields round-trip exactly.

@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 serde_json = { workspace = true }
+vulcan-ai-contract.workspace = true
 vulcan-context.workspace = true
 vulcan-core.workspace = true
 vulcan-prompt-composer.workspace = true

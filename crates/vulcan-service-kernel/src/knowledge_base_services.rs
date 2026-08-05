@@ -1694,7 +1694,7 @@ async fn run_knowledge_display_index(
                                 &item.source.content,
                             )
                             .map_err(|error| format!("{}：构建整理请求失败：{}", item_label, error))
-                            .and_then(|request| Ok((request, item_label.to_string())));
+                            .map(|request| (request, item_label.to_string()));
                             match single_result {
                                 Ok((request, stable_label)) => {
                                     match execute_knowledge_display_draft(
@@ -2453,10 +2453,10 @@ fn knowledge_settings_from_request(
                     operation,
                     usage_scope,
                 )?;
-            if operation == AiOperation::ConversationRespond {
-                if let Some(effort) = curation_reasoning_effort {
-                    validate_knowledge_reasoning_effort(&candidate.capabilities, effort)?;
-                }
+            if operation == AiOperation::ConversationRespond
+                && let Some(effort) = curation_reasoning_effort
+            {
+                validate_knowledge_reasoning_effort(&candidate.capabilities, effort)?;
             }
             let official_maximum_inputs = candidate
                 .capabilities

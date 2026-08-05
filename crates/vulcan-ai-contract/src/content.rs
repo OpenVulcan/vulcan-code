@@ -34,6 +34,10 @@ pub struct AiMessage {
     /// Ordered content items in the message.
     /// 消息中的有序内容项。
     pub content: Vec<ContentItem>,
+    /// Provider-native context items that must be replayed only on the exact owning route.
+    /// 仅应在精确归属路由上重放的供应商原生上下文项。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provider_context_items: Vec<Value>,
 }
 
 /// Represents one provider-neutral message content item.

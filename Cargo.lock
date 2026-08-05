@@ -5961,7 +5961,11 @@ checksum = "8f72a05e828585856dacd553fba484c242c46e391fb0e58917c942ee9202915c"
 dependencies = [
  "futures-util",
  "log",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
  "tokio",
+ "tokio-rustls",
  "tungstenite",
 ]
 
@@ -6356,6 +6360,8 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.9.4",
+ "rustls",
+ "rustls-pki-types",
  "sha1",
  "thiserror 2.0.18",
 ]
@@ -6679,6 +6685,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tokio",
  "vulcan-host-tools",
+ "vulcan-provider-adapters",
  "vulcan-runtime-assets",
  "vulcan-service-api",
  "vulcan-service-host",
@@ -6699,6 +6706,7 @@ name = "vulcan-context-compaction"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "vulcan-ai-contract",
  "vulcan-context",
  "vulcan-core",
  "vulcan-prompt-composer",
@@ -6860,10 +6868,12 @@ dependencies = [
  "futures-util",
  "httpdate",
  "reqwest 0.12.28",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
  "tokio",
+ "tokio-tungstenite",
  "tokio-util",
  "uuid",
  "vulcan-ai-contract",

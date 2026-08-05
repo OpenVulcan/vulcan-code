@@ -155,7 +155,9 @@ fn reasoning_effort_from_level(effort: ReasoningEffortLevel) -> Option<Reasoning
 ///
 /// The matching public effort, or `None` for the provider-default `Off` sentinel.
 /// 返回匹配的公共档位；供应商默认 `Off` 哨兵则返回 `None`。
-fn public_reasoning_effort_from_level(effort: ReasoningEffortLevel) -> Option<ReasoningEffort> {
+pub(crate) fn public_reasoning_effort_from_level(
+    effort: ReasoningEffortLevel,
+) -> Option<ReasoningEffort> {
     match effort {
         ReasoningEffortLevel::Off => None,
         ReasoningEffortLevel::None => Some(ReasoningEffort::None),

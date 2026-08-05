@@ -20,6 +20,9 @@ struct OpenAiToolState {
     /// Stable public stream item identifier.
     /// 稳定公共流项目标识。
     item_id: String,
+    /// Exact optional upstream output-item identifier.
+    /// 精确可选上游输出项标识。
+    provider_item_id: Option<String>,
     /// Upstream call identifier.
     /// 上游调用标识。
     call_id: String,
@@ -340,7 +343,7 @@ impl ProtocolStreamDecoder for OpenAiChatStreamDecoder {
         if let Some(error) = value.get("error") {
             self.terminal = true;
             events.push(AiStreamEvent::ResponseFailed {
-                error: normalize_openai_error(error, value.get("error_type")),
+                error: normalize_openai_error(error, value.get("error_type"), None),
             });
             return Ok(events);
         }
@@ -390,12 +393,33 @@ pub(crate) struct OpenAiResponsesStreamDecoder {
     /// Open text items keyed by output index.
     /// 按输出索引保存的打开文本项。
     text_items: BTreeMap<u32, String>,
+    /// Exact upstream message identifiers keyed by output index.
+    /// 按输出索引保存的精确上游消息标识。
+    text_provider_ids: BTreeMap<u32, String>,
+    /// Accumulated visible text keyed by output index.
+    /// 按输出索引保存的已累积可见文本。
+    text_content: BTreeMap<u32, String>,
+    /// Text output indices already completed by output-item completion.
+    /// 已由输出项完成事件结束的文本输出索引。
+    completed_text_items: BTreeSet<u32>,
     /// Open reasoning items keyed by event family, upstream item scope, and local content index.
     /// 按事件族、上游项目作用域与局部内容索引保存的打开推理项。
     reasoning_items: BTreeMap<String, String>,
-    /// Encrypted reasoning replay content reported by the completed reasoning item.
-    /// 已完成推理项报告的加密推理重放内容。
-    reasoning_signature: Option<String>,
+    /// Reasoning keys in their first-observed provider stream order.
+    /// 按供应商流首次出现顺序保存的推理键。
+    reasoning_order: Vec<String>,
+    /// Exact upstream item scope owned by every public reasoning key.
+    /// 每个公共推理键所属的精确上游项目作用域。
+    reasoning_scopes: BTreeMap<String, String>,
+    /// Accumulated reasoning text keyed by the exact semantic block.
+    /// 按精确语义块保存的已累积推理文本。
+    reasoning_text: BTreeMap<String, String>,
+    /// Reasoning keys that already received their dedicated text completion event.
+    /// 已收到专用文本完成事件的推理键。
+    completed_reasoning_items: BTreeSet<String>,
+    /// Encrypted replay content keyed by the exact upstream reasoning item scope.
+    /// 按精确上游推理项目作用域保存的加密重放内容。
+    reasoning_signatures: BTreeMap<String, String>,
     /// Tool calls keyed by output index.
     /// 按输出索引保存的工具调用。
     tools: BTreeMap<u32, OpenAiToolState>,
@@ -427,8 +451,15 @@ impl OpenAiResponsesStreamDecoder {
             terminal: false,
             response_id: None,
             text_items: BTreeMap::new(),
+            text_provider_ids: BTreeMap::new(),
+            text_content: BTreeMap::new(),
+            completed_text_items: BTreeSet::new(),
             reasoning_items: BTreeMap::new(),
-            reasoning_signature: None,
+            reasoning_order: Vec::new(),
+            reasoning_scopes: BTreeMap::new(),
+            reasoning_text: BTreeMap::new(),
+            completed_reasoning_items: BTreeSet::new(),
+            reasoning_signatures: BTreeMap::new(),
             tools: BTreeMap::new(),
             image_items: BTreeMap::new(),
             completed_images: BTreeSet::new(),
@@ -523,6 +554,11 @@ impl OpenAiResponsesStreamDecoder {
         if item.get("type").and_then(Value::as_str) != Some("function_call") {
             return Ok(Vec::new());
         }
+        if self.tools.contains_key(&index) {
+            return Err(ProtocolConversionError::new(format!(
+                "OpenAI Responses added duplicate tool output index `{index}`."
+            )));
+        }
         let call_id = item
             .get("call_id")
             .and_then(Value::as_str)
@@ -533,15 +569,19 @@ impl OpenAiResponsesStreamDecoder {
             .and_then(Value::as_str)
             .ok_or_else(|| ProtocolConversionError::new("OpenAI Responses tool name is missing."))?
             .to_string();
-        let item_id = item
+        let provider_item_id = item
             .get("id")
             .and_then(Value::as_str)
-            .map(str::to_string)
+            .filter(|item_id| !item_id.is_empty())
+            .map(str::to_string);
+        let item_id = provider_item_id
+            .clone()
             .unwrap_or_else(|| format!("responses:{}:tool:{index}", self.execution_id));
         self.tools.insert(
             index,
             OpenAiToolState {
                 item_id: item_id.clone(),
+                provider_item_id,
                 call_id: call_id.clone(),
                 tool_name: tool_name.clone(),
                 arguments: item
@@ -561,6 +601,65 @@ impl OpenAiResponsesStreamDecoder {
         }])
     }
 
+    /// Validates immutable tool identity fields across added, delta, and completion events.
+    /// 在添加、增量与完成事件之间校验不可变工具身份字段。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `state` is the opened tool state and `value` is the next exact provider event.
+    /// `state` 是已打开工具状态，`value` 是下一项精确供应商事件。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success for matching identity, or a protocol error when the provider mutates it.
+    /// 身份匹配时成功，供应商修改身份时返回协议错误。
+    fn validate_tool_identity(
+        state: &mut OpenAiToolState,
+        value: &Value,
+    ) -> Result<(), ProtocolConversionError> {
+        // reportedItemId supports both incremental top-level and completed nested item shapes.
+        // reportedItemId 同时支持增量顶层结构与完成事件嵌套项目结构。
+        let reported_item_id = value
+            .get("item_id")
+            .and_then(Value::as_str)
+            .or_else(|| value.pointer("/item/id").and_then(Value::as_str))
+            .filter(|item_id| !item_id.is_empty());
+        if let Some(reported_item_id) = reported_item_id {
+            if let Some(existing) = state.provider_item_id.as_deref() {
+                if existing != reported_item_id {
+                    return Err(ProtocolConversionError::new(
+                        "OpenAI Responses changed tool output-item identity.",
+                    ));
+                }
+            } else {
+                state.provider_item_id = Some(reported_item_id.to_string());
+            }
+        }
+        // reportedCallId prevents one output slot from being rebound to another tool invocation.
+        // reportedCallId 防止一个输出槽位被重新绑定到另一项工具调用。
+        let reported_call_id = value
+            .get("call_id")
+            .and_then(Value::as_str)
+            .or_else(|| value.pointer("/item/call_id").and_then(Value::as_str));
+        if reported_call_id.is_some_and(|reported| reported != state.call_id) {
+            return Err(ProtocolConversionError::new(
+                "OpenAI Responses changed tool call identity.",
+            ));
+        }
+        // reportedToolName prevents completion from changing the registered tool target.
+        // reportedToolName 防止完成事件修改已注册工具目标。
+        let reported_tool_name = value
+            .get("name")
+            .and_then(Value::as_str)
+            .or_else(|| value.pointer("/item/name").and_then(Value::as_str));
+        if reported_tool_name.is_some_and(|reported| reported != state.tool_name) {
+            return Err(ProtocolConversionError::new(
+                "OpenAI Responses changed tool name during one output item.",
+            ));
+        }
+        Ok(())
+    }
+
     /// Decodes a response function-call argument delta.
     /// 解码响应函数调用参数增量。
     fn tool_argument_delta(
@@ -576,6 +675,12 @@ impl OpenAiResponsesStreamDecoder {
                 "OpenAI Responses argument delta references unopened index `{index}`."
             ))
         })?;
+        if state.terminal {
+            return Err(ProtocolConversionError::new(format!(
+                "OpenAI Responses tool output index `{index}` emitted arguments after completion."
+            )));
+        }
+        Self::validate_tool_identity(state, value)?;
         append_bounded_tool_arguments(&mut state.arguments, delta, "OpenAI Responses")?;
         Ok(vec![tool_argument_delta(state, delta)?])
     }
@@ -592,10 +697,15 @@ impl OpenAiResponsesStreamDecoder {
                 "OpenAI Responses tool completion references unopened index `{index}`."
             ))
         })?;
+        Self::validate_tool_identity(state, value)?;
         if state.terminal {
             return Ok(Vec::new());
         }
-        if let Some(arguments) = value.get("arguments").and_then(Value::as_str) {
+        if let Some(arguments) = value
+            .get("arguments")
+            .or_else(|| value.pointer("/item/arguments"))
+            .and_then(Value::as_str)
+        {
             state.arguments.clear();
             append_bounded_tool_arguments(&mut state.arguments, arguments, "OpenAI Responses")?;
         }
@@ -619,37 +729,529 @@ impl OpenAiResponsesStreamDecoder {
         }
     }
 
+    /// Registers one stable public text identity and validates immutable upstream identity.
+    /// 注册一个稳定公共文本身份，并校验不可变上游身份。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `index` is the provider output slot and `reported_item_id` is its optional upstream id.
+    /// `index` 是供应商输出槽位，`reported_item_id` 是其可选上游标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The stable public item id and whether this call opened the text block.
+    /// 返回稳定公共项标识，以及本次调用是否新建文本块。
+    fn register_text_item(
+        &mut self,
+        index: u32,
+        reported_item_id: Option<&str>,
+    ) -> Result<(String, bool), ProtocolConversionError> {
+        // reportedItemId excludes empty provider identifiers before immutable identity checks.
+        // reportedItemId 在不可变身份校验前排除空供应商标识。
+        let reported_item_id = reported_item_id.filter(|item_id| !item_id.is_empty());
+        if let Some(reported_item_id) = reported_item_id {
+            if let Some(existing) = self.text_provider_ids.get(&index) {
+                if existing != reported_item_id {
+                    return Err(ProtocolConversionError::new(format!(
+                        "OpenAI Responses changed text item identity at output index `{index}`."
+                    )));
+                }
+            } else {
+                self.text_provider_ids
+                    .insert(index, reported_item_id.to_string());
+            }
+        }
+        // isNew records whether the public stream needs a matching start event.
+        // isNew 记录公共流是否需要匹配的开始事件。
+        let is_new = !self.text_items.contains_key(&index);
+        if is_new {
+            // itemId keeps the provider id when known before falling back to a stable local id.
+            // itemId 在已知时保留供应商标识，否则回退到稳定本地标识。
+            let item_id = reported_item_id
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("responses:{}:text:{index}", self.execution_id));
+            self.text_items.insert(index, item_id);
+            self.text_content.insert(index, String::new());
+        }
+        // itemId exists because the new-item branch inserted it.
+        // itemId 由新项目分支保证已经插入。
+        let item_id = self
+            .text_items
+            .get(&index)
+            .cloned()
+            .expect("registered text index must own a public item id");
+        Ok((item_id, is_new))
+    }
+
+    /// Decodes one complete assistant message delivered by output_item.done.
+    /// 解码一条由 output_item.done 交付的完整助手消息。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `value` is the exact output-item completion event.
+    /// `value` 是精确的输出项完成事件。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A complete buffered item or only the suffix missing from preceding deltas.
+    /// 返回完整缓冲项，或仅返回前序增量中缺失的后缀。
+    fn completed_message_item(
+        &mut self,
+        value: &Value,
+    ) -> Result<Vec<AiStreamEvent>, ProtocolConversionError> {
+        // index is the provider-owned message slot shared by buffered and incremental delivery.
+        // index 是缓冲与增量交付共享的供应商消息槽位。
+        let index = Self::output_index(value)?;
+        // item is the exact completed message object carried by the lifecycle event.
+        // item 是生命周期事件携带的精确已完成消息对象。
+        let item = value
+            .get("item")
+            .ok_or_else(|| ProtocolConversionError::new("OpenAI Responses item is missing."))?;
+        // text preserves provider content order and mirrors the concatenation produced by deltas.
+        // text 保留供应商内容顺序，并镜像增量交付产生的拼接结果。
+        let text = item
+            .get("content")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(
+                |content| match content.get("type").and_then(Value::as_str) {
+                    Some("output_text") => content.get("text").and_then(Value::as_str),
+                    Some("refusal") => content
+                        .get("refusal")
+                        .or_else(|| content.get("text"))
+                        .and_then(Value::as_str),
+                    _ => None,
+                },
+            )
+            .collect::<String>();
+        if text.is_empty() && !self.text_items.contains_key(&index) {
+            return Ok(Vec::new());
+        }
+        // reportedItemId is validated against any identity observed by preceding delta events.
+        // reportedItemId 会与前序增量事件观察到的身份进行校验。
+        let reported_item_id = item.get("id").and_then(Value::as_str);
+        let (item_id, is_new) = self.register_text_item(index, reported_item_id)?;
+        // accumulatedText is the exact visible prefix already sent to the public stream.
+        // accumulatedText 是已经发送到公共流的精确可见前缀。
+        let accumulated_text = self
+            .text_content
+            .get_mut(&index)
+            .expect("registered text index must own accumulated content");
+        if self.completed_text_items.contains(&index) {
+            if accumulated_text == &text {
+                return Ok(Vec::new());
+            }
+            return Err(ProtocolConversionError::new(format!(
+                "OpenAI Responses text output index `{index}` changed after completion."
+            )));
+        }
+        if !text.starts_with(accumulated_text.as_str()) {
+            return Err(ProtocolConversionError::new(format!(
+                "OpenAI Responses completed text at output index `{index}` does not extend its streamed prefix."
+            )));
+        }
+        // events opens a buffered item only when no preceding delta already opened it.
+        // events 仅在没有前序增量打开该项时才打开缓冲项。
+        let mut events = Vec::new();
+        if is_new {
+            events.push(AiStreamEvent::ResponseItemStarted {
+                item_id: item_id.clone(),
+                item: ContentItem::Text {
+                    text: String::new(),
+                },
+            });
+        }
+        // suffix is the authoritative portion not delivered by earlier deltas.
+        // suffix 是前序增量尚未交付的权威部分。
+        let suffix = &text[accumulated_text.len()..];
+        if !suffix.is_empty() {
+            events.push(AiStreamEvent::ResponseTextDelta {
+                item_id: item_id.clone(),
+                delta: suffix.to_string(),
+            });
+            accumulated_text.push_str(suffix);
+        }
+        self.completed_text_items.insert(index);
+        events.push(AiStreamEvent::ResponseItemCompleted { item_id });
+        Ok(events)
+    }
+
+    /// Resolves the exact upstream scope shared by reasoning deltas and output-item completion.
+    /// 解析推理增量与输出项完成事件共享的精确上游作用域。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `value` is one reasoning lifecycle event or one completed reasoning output item.
+    /// `value` 是一项推理生命周期事件或一项已完成推理输出项。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A stable scope preferring the official item id, then output index, then legacy scope.
+    /// 返回优先采用官方项目标识、其次输出索引、最后旧版作用域的稳定值。
+    fn reasoning_wire_scope(value: &Value) -> String {
+        value
+            .get("item_id")
+            .and_then(Value::as_str)
+            .or_else(|| value.pointer("/item/id").and_then(Value::as_str))
+            .map(|item_id| format!("item:{item_id}"))
+            .or_else(|| {
+                value
+                    .get("output_index")
+                    .and_then(Value::as_u64)
+                    .map(|output_index| format!("output:{output_index}"))
+            })
+            .unwrap_or_else(|| String::from("legacy"))
+    }
+
+    /// Registers one provider-owned reasoning block without losing first-observed stream order.
+    /// 注册一个供应商持有的推理块，同时保留首次出现的流顺序。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `wire_scope` owns the upstream item, `event_family` distinguishes summary from raw text,
+    /// and `index` is the provider-owned local part index.
+    /// `wire_scope` 标识上游项目，`event_family` 区分摘要与原始文本，`index` 是供应商持有的局部部分索引。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The stable reasoning key, public item id, and whether this call opened the block.
+    /// 返回稳定推理键、公共项标识，以及本次调用是否新建该块。
+    fn register_reasoning_item(
+        &mut self,
+        wire_scope: &str,
+        event_family: &str,
+        index: u32,
+    ) -> (String, String, bool) {
+        // reasoningKey prevents local indexes from colliding across output items or event families.
+        // reasoningKey 防止局部索引在不同输出项或事件族之间碰撞。
+        let reasoning_key = format!("{event_family}:{wire_scope}:{index}");
+        // isNew records whether the public semantic block must be opened by this event.
+        // isNew 记录本事件是否需要打开公共语义块。
+        let is_new = !self.reasoning_items.contains_key(reasoning_key.as_str());
+        if is_new {
+            // nextItemOrdinal provides a bounded provider-neutral internal identity.
+            // nextItemOrdinal 提供有界且供应商无关的内部身份。
+            let next_item_ordinal = self.reasoning_order.len();
+            // itemId remains stable across every event for the same wire coordinates.
+            // itemId 在同一线上坐标的所有事件之间保持稳定。
+            let item_id = format!(
+                "responses:{}:reasoning:{next_item_ordinal}",
+                self.execution_id
+            );
+            self.reasoning_items.insert(reasoning_key.clone(), item_id);
+            self.reasoning_order.push(reasoning_key.clone());
+            self.reasoning_scopes
+                .insert(reasoning_key.clone(), wire_scope.to_string());
+            self.reasoning_text
+                .insert(reasoning_key.clone(), String::new());
+        }
+        // itemId is guaranteed by the insertion branch for a new key.
+        // itemId 对新键由插入分支保证存在。
+        let item_id = self
+            .reasoning_items
+            .get(reasoning_key.as_str())
+            .cloned()
+            .expect("registered reasoning key must own a public item id");
+        (reasoning_key, item_id, is_new)
+    }
+
+    /// Resolves one stable public reasoning identity from an exact reasoning text event.
+    /// 从一项精确的推理文本事件解析稳定的公共推理身份。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `value` is the exact provider event and `wire_type` selects summary or full reasoning text.
+    /// `value` 是精确的供应商事件，`wire_type` 选择摘要或完整推理文本。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The stable reasoning key, public item id, and whether this event opened the item.
+    /// 返回稳定推理键、公共项标识，以及本事件是否新建了该项。
+    fn reasoning_item_identity(
+        &mut self,
+        value: &Value,
+        wire_type: &str,
+    ) -> Result<(String, String, bool), ProtocolConversionError> {
+        // eventShape fixes the exact local index field and family for the registered wire event.
+        // eventShape 为已注册线事件固定精确的局部索引字段与事件族。
+        let (index_field, index_label, event_family) = match wire_type {
+            "response.reasoning_text.delta" | "response.reasoning_text.done" => {
+                ("content_index", "reasoning content index", "text")
+            }
+            "response.reasoning_summary_text.delta" | "response.reasoning_summary_text.done" => {
+                ("summary_index", "reasoning summary index", "summary")
+            }
+            _ => {
+                return Err(ProtocolConversionError::new(format!(
+                    "OpenAI Responses reasoning event type `{wire_type}` is not registered."
+                )));
+            }
+        };
+        // indexNumber is the exact provider-owned local reasoning slot.
+        // indexNumber 是供应商持有的精确局部推理槽位。
+        let index_number = value
+            .get(index_field)
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                ProtocolConversionError::new(format!("OpenAI Responses {index_label} is missing."))
+            })?;
+        // index is the bounded public representation of the provider slot.
+        // index 是供应商槽位的有界公共表示。
+        let index = u32::try_from(index_number).map_err(|_| {
+            ProtocolConversionError::new(format!("OpenAI Responses {index_label} exceeds u32."))
+        })?;
+        // wireScope binds all reasoning parts to their exact upstream output item.
+        // wireScope 将全部推理部分绑定到精确的上游输出项。
+        let wire_scope = Self::reasoning_wire_scope(value);
+        Ok(self.register_reasoning_item(wire_scope.as_str(), event_family, index))
+    }
+
+    /// Completes one reasoning block from an authoritative full-text event.
+    /// 使用权威完整文本事件完成一个推理块。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `reasoning_key` and `item_id` identify the block, `full_text` is the provider's complete
+    /// value, `is_new` controls start emission, and `events` receives any missing suffix.
+    /// `reasoning_key` 与 `item_id` 标识该块，`full_text` 是供应商完整值，`is_new` 控制开始事件，
+    /// `events` 接收尚未交付的后缀。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success when the full value extends the streamed prefix, otherwise a protocol error.
+    /// 完整值延续已流式交付前缀时成功，否则返回协议错误。
+    fn complete_reasoning_text(
+        &mut self,
+        reasoning_key: &str,
+        item_id: &str,
+        full_text: &str,
+        is_new: bool,
+        events: &mut Vec<AiStreamEvent>,
+    ) -> Result<(), ProtocolConversionError> {
+        // currentText is the exact prefix already emitted for this semantic block.
+        // currentText 是该语义块已经发送的精确前缀。
+        let current_text = self.reasoning_text.get_mut(reasoning_key).ok_or_else(|| {
+            ProtocolConversionError::new(format!(
+                "OpenAI Responses reasoning item `{reasoning_key}` is not registered."
+            ))
+        })?;
+        if self.completed_reasoning_items.contains(reasoning_key) {
+            if current_text == full_text {
+                return Ok(());
+            }
+            return Err(ProtocolConversionError::new(format!(
+                "OpenAI Responses reasoning item `{reasoning_key}` changed after completion."
+            )));
+        }
+        if !full_text.starts_with(current_text.as_str()) {
+            return Err(ProtocolConversionError::new(format!(
+                "OpenAI Responses reasoning completion for `{reasoning_key}` does not extend its streamed prefix."
+            )));
+        }
+        if is_new {
+            events.push(AiStreamEvent::ReasoningStarted {
+                item_id: item_id.to_string(),
+            });
+        }
+        // suffix is the part not already emitted by earlier delta events.
+        // suffix 是前序增量事件尚未发送的部分。
+        let suffix = &full_text[current_text.len()..];
+        if !suffix.is_empty() {
+            events.push(AiStreamEvent::ReasoningDelta {
+                item_id: item_id.to_string(),
+                delta: suffix.to_string(),
+            });
+            current_text.push_str(suffix);
+        }
+        self.completed_reasoning_items
+            .insert(reasoning_key.to_string());
+        Ok(())
+    }
+
+    /// Captures one immutable encrypted reasoning value for its exact upstream item.
+    /// 为精确上游项目捕获一个不可变加密推理值。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `wire_scope` identifies the upstream reasoning item and `signature` is opaque provider data.
+    /// `wire_scope` 标识上游推理项目，`signature` 是不透明供应商数据。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success for the first or identical value, otherwise a protocol error for mutation.
+    /// 首次值或相同值返回成功，值发生变化时返回协议错误。
+    fn capture_reasoning_signature(
+        &mut self,
+        wire_scope: &str,
+        signature: &str,
+    ) -> Result<(), ProtocolConversionError> {
+        if let Some(existing) = self.reasoning_signatures.get(wire_scope) {
+            if existing == signature {
+                return Ok(());
+            }
+            return Err(ProtocolConversionError::new(format!(
+                "OpenAI Responses changed encrypted reasoning content for `{wire_scope}`."
+            )));
+        }
+        self.reasoning_signatures
+            .insert(wire_scope.to_string(), signature.to_string());
+        Ok(())
+    }
+
+    /// Decodes a complete reasoning item when a provider buffers part or all of its stream.
+    /// 解码供应商缓冲部分或全部流时交付的完整推理项。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `value` is the exact `response.output_item.done` event.
+    /// `value` 是精确的 `response.output_item.done` 事件。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Missing reasoning suffix events plus an item-scoped replay signature, or a protocol error.
+    /// 返回缺失推理后缀事件与项目作用域重放签名，或返回协议错误。
+    fn completed_reasoning_item(
+        &mut self,
+        value: &Value,
+    ) -> Result<Vec<AiStreamEvent>, ProtocolConversionError> {
+        // item is the authoritative complete Responses reasoning object.
+        // item 是权威的完整 Responses 推理对象。
+        let item = value
+            .get("item")
+            .ok_or_else(|| ProtocolConversionError::new("OpenAI Responses item is missing."))?;
+        // wireScope binds full-item fallback to the same identities used by deltas.
+        // wireScope 将完整项回退绑定到增量使用的相同身份。
+        let wire_scope = Self::reasoning_wire_scope(value);
+        // signature remains opaque and is never displayed as reasoning text.
+        // signature 保持不透明，绝不会作为推理文本显示。
+        let signature = item
+            .get("encrypted_content")
+            .and_then(Value::as_str)
+            .filter(|signature| !signature.is_empty());
+        if let Some(signature) = signature {
+            self.capture_reasoning_signature(wire_scope.as_str(), signature)?;
+        }
+        // events preserves the provider's summary-before-content item order.
+        // events 保留供应商摘要先于正文的项目顺序。
+        let mut events = Vec::new();
+        // sawPart distinguishes an encrypted-only reasoning item from a malformed empty item.
+        // sawPart 区分仅含加密内容的推理项与格式错误的空项。
+        let mut saw_part = false;
+        for (event_family, field_name, content_type) in [
+            ("summary", "summary", "summary_text"),
+            ("text", "content", "reasoning_text"),
+        ] {
+            for (index, part) in item
+                .get(field_name)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                if part.get("type").and_then(Value::as_str) != Some(content_type) {
+                    continue;
+                }
+                // publicIndex bounds the provider-owned JSON array index.
+                // publicIndex 对供应商持有的 JSON 数组索引进行有界转换。
+                let public_index = u32::try_from(index).map_err(|_| {
+                    ProtocolConversionError::new(
+                        "OpenAI Responses reasoning part index exceeds u32.",
+                    )
+                })?;
+                // text is authoritative full content for this reasoning part.
+                // text 是该推理部分的权威完整内容。
+                let text = part.get("text").and_then(Value::as_str).ok_or_else(|| {
+                    ProtocolConversionError::new(
+                        "OpenAI Responses completed reasoning part text is missing.",
+                    )
+                })?;
+                let (reasoning_key, item_id, is_new) =
+                    self.register_reasoning_item(wire_scope.as_str(), event_family, public_index);
+                self.complete_reasoning_text(
+                    reasoning_key.as_str(),
+                    item_id.as_str(),
+                    text,
+                    is_new,
+                    &mut events,
+                )?;
+                saw_part = true;
+            }
+        }
+        if !saw_part
+            && signature.is_some()
+            && !self
+                .reasoning_scopes
+                .values()
+                .any(|scope| scope == &wire_scope)
+        {
+            // encryptedOnlyKey creates a non-visible replay carrier for hidden reasoning.
+            // encryptedOnlyKey 为隐藏推理创建不可见的重放载体。
+            let (reasoning_key, item_id, is_new) =
+                self.register_reasoning_item(wire_scope.as_str(), "summary", 0);
+            self.complete_reasoning_text(
+                reasoning_key.as_str(),
+                item_id.as_str(),
+                "",
+                is_new,
+                &mut events,
+            )?;
+        }
+        Ok(events)
+    }
+
     /// Closes any remaining semantic items before terminal response events.
     /// 在响应终态事件前关闭所有剩余语义项。
     fn close_semantic_items(&mut self) -> Vec<AiStreamEvent> {
-        let reasoning_count = self.reasoning_items.len();
+        // lastReasoningKeyByScope ensures each opaque signature is attached exactly once to its owner.
+        // lastReasoningKeyByScope 确保每个不透明签名只附加一次且归属于正确项目。
+        let mut last_reasoning_key_by_scope = BTreeMap::new();
+        for reasoning_key in &self.reasoning_order {
+            if let Some(wire_scope) = self.reasoning_scopes.get(reasoning_key) {
+                last_reasoning_key_by_scope.insert(wire_scope.clone(), reasoning_key.clone());
+            }
+        }
+        // events follows first-observed provider order instead of map lexical order.
+        // events 遵循供应商首次出现顺序，而不是映射字典序。
         let mut events = self
-            .reasoning_items
-            .values()
-            .cloned()
-            .enumerate()
-            .map(|(index, item_id)| AiStreamEvent::ReasoningCompleted {
-                item_id,
-                signature: (index + 1 == reasoning_count)
-                    .then(|| self.reasoning_signature.clone())
-                    .flatten()
+            .reasoning_order
+            .iter()
+            .filter_map(|reasoning_key| {
+                let item_id = self.reasoning_items.get(reasoning_key)?.clone();
+                let signature = self
+                    .reasoning_scopes
+                    .get(reasoning_key)
+                    .filter(|wire_scope| {
+                        last_reasoning_key_by_scope.get(*wire_scope) == Some(reasoning_key)
+                    })
+                    .and_then(|wire_scope| self.reasoning_signatures.get(wire_scope))
                     .and_then(|signature| {
                         crate::wrap_provider_signature(
                             crate::SIGNATURE_PROVIDER_OPENAI,
                             signature.as_str(),
                         )
-                    }),
+                    });
+                Some(AiStreamEvent::ReasoningCompleted { item_id, signature })
             })
             .collect::<Vec<_>>();
         events.extend(
             self.text_items
-                .values()
-                .cloned()
-                .map(|item_id| AiStreamEvent::ResponseItemCompleted { item_id }),
+                .iter()
+                .filter(|(index, _)| !self.completed_text_items.contains(index))
+                .map(|(_, item_id)| AiStreamEvent::ResponseItemCompleted {
+                    item_id: item_id.clone(),
+                }),
         );
         self.reasoning_items.clear();
-        self.reasoning_signature = None;
+        self.reasoning_order.clear();
+        self.reasoning_scopes.clear();
+        self.reasoning_text.clear();
+        self.completed_reasoning_items.clear();
+        self.reasoning_signatures.clear();
         self.text_items.clear();
+        self.text_provider_ids.clear();
+        self.text_content.clear();
+        self.completed_text_items.clear();
         events
     }
 
@@ -814,13 +1416,18 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
         event_name: Option<&str>,
         data: &str,
     ) -> Result<Vec<AiStreamEvent>, ProtocolConversionError> {
+        // A few Codex-compatible proxies append the generic OpenAI sentinel after the real
+        // Responses terminal event. It is framing-only here and must not become a substitute
+        // for response.completed, response.failed, response.incomplete, or error.
+        // 少数 Codex 兼容代理会在真实 Responses 终态事件后追加通用 OpenAI 哨兵；该记录在此仅属于
+        // 帧边界，不能替代 response.completed、response.failed、response.incomplete 或 error。
+        if data.trim() == "[DONE]" {
+            return Ok(Vec::new());
+        }
         if self.terminal {
             return Err(ProtocolConversionError::new(
                 "OpenAI Responses emitted data after a terminal event.",
             ));
-        }
-        if data.trim() == "[DONE]" {
-            return Ok(Vec::new());
         }
         let value: Value = serde_json::from_str(data).map_err(|error| {
             ProtocolConversionError::new(format!("OpenAI Responses SSE JSON is invalid: {error}"))
@@ -840,12 +1447,15 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
             "response.output_item.added" => events.extend(self.output_item_added(&value)?),
             "response.output_text.delta" => {
                 let index = Self::output_index(&value)?;
-                let is_new = !self.text_items.contains_key(&index);
-                let item_id = self
-                    .text_items
-                    .entry(index)
-                    .or_insert_with(|| format!("responses:{}:text:{index}", self.execution_id))
-                    .clone();
+                if self.completed_text_items.contains(&index) {
+                    return Err(ProtocolConversionError::new(format!(
+                        "OpenAI Responses text output index `{index}` emitted a delta after completion."
+                    )));
+                }
+                // reportedItemId preserves the official identity when the delta carries one.
+                // reportedItemId 在增量携带官方身份时予以保留。
+                let reported_item_id = value.get("item_id").and_then(Value::as_str);
+                let (item_id, is_new) = self.register_text_item(index, reported_item_id)?;
                 if is_new {
                     events.push(AiStreamEvent::ResponseItemStarted {
                         item_id: item_id.clone(),
@@ -857,70 +1467,28 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
                 let delta = value.get("delta").and_then(Value::as_str).ok_or_else(|| {
                     ProtocolConversionError::new("OpenAI Responses output text delta is missing.")
                 })?;
+                self.text_content
+                    .get_mut(&index)
+                    .expect("registered text index must own accumulated content")
+                    .push_str(delta);
                 events.push(AiStreamEvent::ResponseTextDelta {
                     item_id,
                     delta: delta.to_string(),
                 });
             }
             "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
-                // index_field follows the exact official event schema for summary and full reasoning text.
-                // index_field 遵循摘要与完整思考文本的精确官方事件 Schema。
-                let (index_field, index_label) = if wire_type == "response.reasoning_text.delta" {
-                    ("content_index", "reasoning content index")
-                } else {
-                    ("summary_index", "reasoning summary index")
-                };
-                let index_number =
-                    value
-                        .get(index_field)
-                        .and_then(Value::as_u64)
-                        .ok_or_else(|| {
-                            ProtocolConversionError::new(format!(
-                                "OpenAI Responses {index_label} is missing."
-                            ))
-                        })?;
-                let index = u32::try_from(index_number).map_err(|_| {
-                    ProtocolConversionError::new(format!(
-                        "OpenAI Responses {index_label} exceeds u32."
-                    ))
-                })?;
-                // event_family keeps summary text and full reasoning text in distinct semantic blocks.
-                // event_family 使思考摘要与完整思考文本保持为不同语义块。
-                let event_family = if wire_type == "response.reasoning_text.delta" {
-                    "text"
-                } else {
-                    "summary"
-                };
-                // wire_scope prefers the official item identity, then output index, while retaining legacy compatible streams.
-                // wire_scope 优先使用官方项目身份，其次使用输出索引，同时兼容旧版流。
-                let wire_scope = value
-                    .get("item_id")
-                    .and_then(Value::as_str)
-                    .map(|item_id| format!("item:{item_id}"))
-                    .or_else(|| {
-                        value
-                            .get("output_index")
-                            .and_then(Value::as_u64)
-                            .map(|output_index| format!("output:{output_index}"))
-                    })
-                    .unwrap_or_else(|| String::from("legacy"));
-                // reasoning_key prevents local indexes from colliding across output items or event families.
-                // reasoning_key 防止局部索引在不同输出项或事件族之间碰撞。
-                let reasoning_key = format!("{event_family}:{wire_scope}:{index}");
-                let is_new = !self.reasoning_items.contains_key(reasoning_key.as_str());
-                // next_item_ordinal provides a bounded provider-neutral internal identity.
-                // next_item_ordinal 提供有界且供应商无关的内部身份。
-                let next_item_ordinal = self.reasoning_items.len();
-                let item_id = self
-                    .reasoning_items
-                    .entry(reasoning_key)
-                    .or_insert_with(|| {
-                        format!(
-                            "responses:{}:reasoning:{next_item_ordinal}",
-                            self.execution_id
-                        )
-                    })
-                    .clone();
+                // identity binds the delta to its exact upstream item, family, and local index.
+                // identity 将增量绑定到精确的上游项、事件族与局部索引。
+                let (reasoning_key, item_id, is_new) =
+                    self.reasoning_item_identity(&value, wire_type)?;
+                if self
+                    .completed_reasoning_items
+                    .contains(reasoning_key.as_str())
+                {
+                    return Err(ProtocolConversionError::new(format!(
+                        "OpenAI Responses reasoning item `{reasoning_key}` emitted a delta after completion."
+                    )));
+                }
                 if is_new {
                     events.push(AiStreamEvent::ReasoningStarted {
                         item_id: item_id.clone(),
@@ -929,10 +1497,36 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
                 let delta = value.get("delta").and_then(Value::as_str).ok_or_else(|| {
                     ProtocolConversionError::new("OpenAI Responses reasoning delta is missing.")
                 })?;
+                // accumulatedText makes the later full-text completion authoritative without duplication.
+                // accumulatedText 让后续完整文本完成事件可作为权威值且不会重复输出。
+                self.reasoning_text
+                    .get_mut(reasoning_key.as_str())
+                    .expect("registered reasoning key must own accumulated text")
+                    .push_str(delta);
                 events.push(AiStreamEvent::ReasoningDelta {
                     item_id,
                     delta: delta.to_string(),
                 });
+            }
+            "response.reasoning_summary_text.done" | "response.reasoning_text.done" => {
+                // identity binds the completion to the same semantic block used by preceding deltas.
+                // identity 将完成事件绑定到前序增量使用的同一语义块。
+                let (reasoning_key, item_id, is_new) =
+                    self.reasoning_item_identity(&value, wire_type)?;
+                // text is the authoritative complete value and may supply a missing streamed suffix.
+                // text 是权威完整值，并可补充流式交付中缺失的后缀。
+                let text = value.get("text").and_then(Value::as_str).ok_or_else(|| {
+                    ProtocolConversionError::new(
+                        "OpenAI Responses reasoning completion text is missing.",
+                    )
+                })?;
+                self.complete_reasoning_text(
+                    reasoning_key.as_str(),
+                    item_id.as_str(),
+                    text,
+                    is_new,
+                    &mut events,
+                )?;
             }
             "response.function_call_arguments.delta" => {
                 events.extend(self.tool_argument_delta(&value)?);
@@ -956,6 +1550,27 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
                 self.terminal = true;
                 events.push(AiStreamEvent::ResponseCompleted);
             }
+            "error" => {
+                // error_event is a terminal public Responses event, not an unknown protocol record.
+                // error_event 是 Responses 公共协议的终止错误事件，不是未知协议记录。
+                events.extend(self.capture_response_id(&value)?);
+                events.extend(self.close_semantic_items());
+                events.extend(self.abort_incomplete_tools("error"));
+                events.extend(self.fail_incomplete_images("error"));
+                self.terminal = true;
+                // error_payload supports both the flat public event and proxy-wrapped error objects.
+                // error_payload 同时支持扁平公共事件与代理嵌套错误对象。
+                let error_payload = value.get("error").unwrap_or(&value);
+                events.push(AiStreamEvent::ResponseFailed {
+                    error: normalize_openai_error(
+                        error_payload,
+                        value
+                            .get("error_type")
+                            .or_else(|| value.pointer("/response/error_type")),
+                        value.get("status"),
+                    ),
+                });
+            }
             "response.failed" | "response.incomplete" => {
                 events.extend(self.capture_response_id(&value)?);
                 events.extend(self.close_semantic_items());
@@ -972,17 +1587,29 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
                         value
                             .get("error_type")
                             .or_else(|| value.pointer("/response/error_type")),
+                        value.get("status"),
                     ),
                 });
             }
             "response.output_item.done" => {
-                if value.pointer("/item/type").and_then(Value::as_str) == Some("reasoning") {
-                    self.reasoning_signature = value
-                        .pointer("/item/encrypted_content")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                } else {
-                    events.extend(self.completed_image_item(&value)?);
+                match value.pointer("/item/type").and_then(Value::as_str) {
+                    Some("reasoning") => {
+                        events.extend(self.completed_reasoning_item(&value)?);
+                    }
+                    Some("function_call") => {
+                        // index identifies whether a preceding added event already opened the tool.
+                        // index 标识前序 added 事件是否已经打开该工具。
+                        let index = Self::output_index(&value)?;
+                        if !self.tools.contains_key(&index) {
+                            events.extend(self.output_item_added(&value)?);
+                        }
+                        events.extend(self.complete_tool(&value)?);
+                    }
+                    Some("message") => events.extend(self.completed_message_item(&value)?),
+                    Some("image_generation_call") => {
+                        events.extend(self.completed_image_item(&value)?);
+                    }
+                    _ => {}
                 }
             }
             "response.image_generation_call.partial_image" => {
@@ -1025,14 +1652,10 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
             | "response.content_part.done"
             | "response.output_text.done"
             | "response.reasoning_summary_part.added"
-            | "response.reasoning_summary_part.done"
-            | "response.reasoning_summary_text.done"
-            | "response.reasoning_text.done" => {}
-            other => {
-                return Err(ProtocolConversionError::new(format!(
-                    "OpenAI Responses SSE event type `{other}` is not registered."
-                )));
-            }
+            | "response.reasoning_summary_part.done" => {}
+            // Official Codex ignores unknown non-terminal lifecycle events for forward compatibility.
+            // 官方 Codex 会忽略未知的非终态生命周期事件，以保持前向兼容。
+            _ => {}
         }
         Ok(events)
     }
@@ -1041,7 +1664,7 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
         if self.terminal {
             return Ok(Vec::new());
         }
-        Err(ProtocolConversionError::new(
+        Err(ProtocolConversionError::truncated_stream(
             "OpenAI Responses stream ended before a terminal response event.",
         ))
     }
@@ -1095,7 +1718,7 @@ fn tool_argument_delta(
 
 /// Converts OpenAI usage while preserving unknown fields.
 /// 转换 OpenAI 用量并保留未知字段。
-fn openai_usage(value: &Value) -> RequestUsage {
+pub(crate) fn openai_usage(value: &Value) -> RequestUsage {
     let input_tokens = reported_usage(value, &["input_tokens", "prompt_tokens"]);
     let cache_read_tokens = reported_pointer_usage(
         value,
@@ -1161,7 +1784,11 @@ fn reported(value: u64) -> UsageValue {
 
 /// Normalizes OpenAI and OpenRouter error payloads.
 /// 归一化 OpenAI 与 OpenRouter 错误载荷。
-fn normalize_openai_error(error: &Value, outer_error_type: Option<&Value>) -> AiExecutionError {
+fn normalize_openai_error(
+    error: &Value,
+    outer_error_type: Option<&Value>,
+    outer_http_status: Option<&Value>,
+) -> AiExecutionError {
     let code = error
         .get("code")
         .and_then(Value::as_str)
@@ -1169,20 +1796,29 @@ fn normalize_openai_error(error: &Value, outer_error_type: Option<&Value>) -> Ai
     let error_type = outer_error_type
         .and_then(Value::as_str)
         .or_else(|| error.get("type").and_then(Value::as_str))
+        .filter(|value| *value != "error")
         .map(str::to_string);
-    let discriminator = error_type.as_deref().or(code.as_deref());
+    // Official Codex overload codes take precedence over generic proxy error types.
+    // 官方 Codex 过载代码优先于代理返回的通用错误类型。
+    let discriminator = code
+        .as_deref()
+        .filter(|value| matches!(*value, "server_is_overloaded" | "slow_down"))
+        .or(error_type.as_deref())
+        .or(code.as_deref());
     let category = match discriminator {
         Some("authentication") | Some("authentication_error") | Some("invalid_api_key") => {
             AiErrorCategory::Authentication
         }
         Some("permission_denied") | Some("permission_error") => AiErrorCategory::PermissionDenied,
         Some("rate_limit_exceeded") | Some("rate_limit_error") => AiErrorCategory::RateLimited,
-        Some("provider_overloaded") | Some("overloaded_error") => {
+        Some("server_is_overloaded" | "slow_down" | "provider_overloaded" | "overloaded_error") => {
             AiErrorCategory::ProviderOverloaded
         }
         Some("provider_unavailable") => AiErrorCategory::ProviderUnavailable,
         Some("timeout") => AiErrorCategory::Timeout,
-        Some("invalid_request") | Some("invalid_prompt") => AiErrorCategory::InvalidRequest,
+        Some("invalid_request") | Some("invalid_request_error") | Some("invalid_prompt") => {
+            AiErrorCategory::InvalidRequest
+        }
         Some("content_policy_violation") | Some("image_content_policy_violation") => {
             AiErrorCategory::ContentPolicy
         }
@@ -1196,7 +1832,15 @@ fn normalize_openai_error(error: &Value, outer_error_type: Option<&Value>) -> Ai
         category,
         subcategory: error_type.clone(),
         stage: String::from("stream"),
-        http_status: None,
+        http_status: outer_http_status
+            .and_then(Value::as_u64)
+            .and_then(|status| u16::try_from(status).ok())
+            .or_else(|| {
+                error
+                    .get("status")
+                    .and_then(Value::as_u64)
+                    .and_then(|status| u16::try_from(status).ok())
+            }),
         upstream_code: code,
         upstream_type: error_type,
         upstream_parameter: error
@@ -1236,6 +1880,7 @@ fn normalize_openai_error(error: &Value, outer_error_type: Option<&Value>) -> Ai
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::ProtocolStreamDecoder;
     use serde_json::json;
 
     /// Verifies Chat tool arguments remain streaming until the finish signal.
@@ -1505,6 +2150,340 @@ mod tests {
         );
     }
 
+    /// Verifies a buffered function call can complete from the official output_item.done fallback.
+    /// 验证缓冲函数调用可通过官方 output_item.done 回退完成。
+    #[test]
+    fn responses_output_item_done_completes_buffered_function_call() {
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        let events = decoder
+            .push_sse(
+                Some("response.output_item.done"),
+                r#"{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"item","call_id":"call","name":"lookup","arguments":"{\"path\":\"src\"}"}}"#,
+            )
+            .expect("buffered function call should decode");
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ToolCallStarted { call_id, tool_name, .. }
+                if call_id == "call" && tool_name == "lookup"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ToolCallCompleted { call, .. }
+                if call.id == "call" && call.arguments == json!({"path": "src"})
+        )));
+    }
+
+    /// Verifies a buffered assistant message can complete without output_text.delta events.
+    /// 验证缓冲助手消息可在没有 output_text.delta 事件时完成。
+    #[test]
+    fn responses_output_item_done_emits_buffered_assistant_text() {
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        let events = decoder
+            .push_sse(
+                Some("response.output_item.done"),
+                r#"{"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"message","role":"assistant","content":[{"type":"output_text","text":"buffered answer"}]}}"#,
+            )
+            .expect("buffered assistant message should decode");
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ResponseTextDelta { item_id, delta }
+                if item_id == "message" && delta == "buffered answer"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ResponseItemCompleted { item_id } if item_id == "message"
+        )));
+    }
+
+    /// Verifies output-item completion emits only text missing from preceding deltas.
+    /// 验证输出项完成事件只发送前序增量中缺失的文本。
+    #[test]
+    fn responses_output_item_done_completes_partial_text() {
+        // decoder owns one partial message prefix with an official upstream item id.
+        // decoder 持有一个带官方上游项目标识的部分消息前缀。
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        decoder
+            .push_sse(
+                Some("response.output_text.delta"),
+                r#"{"type":"response.output_text.delta","item_id":"message","output_index":0,"content_index":0,"delta":"buffer"}"#,
+            )
+            .expect("partial assistant text should decode");
+        // completed contains the missing suffix and one exact item completion event.
+        // completed 包含缺失后缀和一个精确项目完成事件。
+        let completed = decoder
+            .push_sse(
+                Some("response.output_item.done"),
+                r#"{"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"message","role":"assistant","content":[{"type":"output_text","text":"buffered answer"}]}}"#,
+            )
+            .expect("completed assistant text should extend the prefix");
+        assert!(completed.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ResponseTextDelta { item_id, delta }
+                if item_id == "message" && delta == "ed answer"
+        )));
+        assert_eq!(
+            completed
+                .iter()
+                .filter(|event| matches!(event, AiStreamEvent::ResponseItemCompleted { .. }))
+                .count(),
+            1
+        );
+
+        // terminal must not repeat the item completion already emitted by output_item.done.
+        // terminal 不得重复 output_item.done 已发送的项目完成事件。
+        let terminal = decoder
+            .push_sse(
+                Some("response.completed"),
+                r#"{"type":"response.completed","response":{"usage":{}}}"#,
+            )
+            .expect("partial text response should complete");
+        assert!(
+            terminal
+                .iter()
+                .all(|event| !matches!(event, AiStreamEvent::ResponseItemCompleted { .. }))
+        );
+    }
+
+    /// Verifies a completed tool rejects later argument deltas.
+    /// 验证已完成工具会拒绝后续参数增量。
+    #[test]
+    fn responses_tool_delta_after_completion_is_rejected() {
+        // decoder opens and completes one official function-call output item.
+        // decoder 打开并完成一个官方函数调用输出项。
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        decoder
+            .push_sse(
+                Some("response.output_item.added"),
+                r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"tool_item","call_id":"call","name":"lookup","arguments":""}}"#,
+            )
+            .expect("tool item should open");
+        decoder
+            .push_sse(
+                Some("response.function_call_arguments.done"),
+                r#"{"type":"response.function_call_arguments.done","item_id":"tool_item","output_index":0,"call_id":"call","arguments":"{}"}"#,
+            )
+            .expect("tool item should complete");
+        // error proves malformed late deltas cannot mutate a terminal tool call.
+        // error 证明格式错误的迟到增量无法修改终态工具调用。
+        let error = decoder
+            .push_sse(
+                Some("response.function_call_arguments.delta"),
+                r#"{"type":"response.function_call_arguments.delta","item_id":"tool_item","output_index":0,"call_id":"call","delta":"{}"}"#,
+            )
+            .expect_err("late tool delta must fail");
+        assert!(error.to_string().contains("arguments after completion"));
+    }
+
+    /// Verifies tool completion cannot rebind one output index to a different call id.
+    /// 验证工具完成事件不能把同一输出索引重新绑定到不同调用标识。
+    #[test]
+    fn responses_tool_completion_rejects_identity_mutation() {
+        // decoder owns the immutable identity established by output_item.added.
+        // decoder 持有由 output_item.added 建立的不可变身份。
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        decoder
+            .push_sse(
+                Some("response.output_item.added"),
+                r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"tool_item","call_id":"call_one","name":"lookup","arguments":""}}"#,
+            )
+            .expect("tool item should open");
+        // error proves a mismatched completion cannot execute under the earlier tool identity.
+        // error 证明不匹配的完成事件无法使用先前工具身份执行。
+        let error = decoder
+            .push_sse(
+                Some("response.function_call_arguments.done"),
+                r#"{"type":"response.function_call_arguments.done","item_id":"tool_item","output_index":0,"call_id":"call_two","arguments":"{}"}"#,
+            )
+            .expect_err("mutated tool call id must fail");
+        assert!(error.to_string().contains("changed tool call identity"));
+    }
+
+    /// Verifies the public top-level Responses error event is normalized instead of rejected as unknown.
+    /// 验证 Responses 公共顶层错误事件会被归一化，而不会被拒绝为未知事件。
+    #[test]
+    fn responses_top_level_error_event_is_registered() {
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        let events = decoder
+            .push_sse(
+                Some("error"),
+                r#"{"type":"error","code":"invalid_request_error","message":"bad input","param":"input"}"#,
+            )
+            .expect("top-level Responses error should decode");
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ResponseFailed { error }
+                if error.category == AiErrorCategory::InvalidRequest
+                    && error.upstream_code.as_deref() == Some("invalid_request_error")
+                    && error.upstream_message.as_deref() == Some("bad input")
+                    && error.upstream_parameter.as_deref() == Some("input")
+                    && error.upstream_type.is_none()
+        )));
+        assert!(
+            decoder
+                .finish()
+                .expect("terminal error should finish")
+                .is_empty()
+        );
+    }
+
+    /// Verifies the official Codex server overload code becomes a retryable provider overload.
+    /// 验证官方 Codex 服务过载代码会被归类为可重试的供应商过载错误。
+    #[test]
+    fn responses_server_overloaded_error_is_retryable() {
+        // decoder exercises the complete public Responses SSE error path.
+        // decoder 覆盖完整的 Responses 公共 SSE 错误链路。
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        // events contain the normalized structured failure consumed by the retry runtime.
+        // events 包含供重试运行时消费的归一化结构化失败。
+        let events = decoder
+            .push_sse(
+                Some("error"),
+                r#"{"type":"error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}"#,
+            )
+            .expect("server overload Responses error should decode");
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ResponseFailed { error }
+                if error.category == AiErrorCategory::ProviderOverloaded
+                    && error.retryable
+                    && error.upstream_code.as_deref() == Some("server_is_overloaded")
+                    && error.upstream_message.as_deref()
+                        == Some("Our servers are currently overloaded. Please try again later.")
+        )));
+        assert!(
+            decoder
+                .finish()
+                .expect("terminal overload error should finish")
+                .is_empty()
+        );
+    }
+
+    /// Verifies unknown lifecycle metadata follows official Codex forward-compatible handling.
+    /// 验证未知生命周期元数据遵循官方 Codex 的前向兼容处理。
+    #[test]
+    fn responses_unknown_lifecycle_event_is_ignored_until_registered_terminal() {
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        let metadata = decoder
+            .push_sse(
+                Some("response.proxy_metadata.updated"),
+                r#"{"type":"response.proxy_metadata.updated","sequence_number":1}"#,
+            )
+            .expect("unknown non-terminal metadata should be ignored");
+        assert!(
+            metadata
+                .iter()
+                .all(|event| !matches!(event, AiStreamEvent::ResponseCompleted))
+        );
+
+        let terminal = decoder
+            .push_sse(
+                Some("response.completed"),
+                r#"{"type":"response.completed","response":{"usage":{}}}"#,
+            )
+            .expect("registered terminal should still complete the response");
+        assert!(
+            terminal
+                .iter()
+                .any(|event| matches!(event, AiStreamEvent::ResponseCompleted))
+        );
+        assert!(
+            decoder
+                .finish()
+                .expect("registered terminal should finish")
+                .is_empty()
+        );
+    }
+
+    /// Verifies a compatibility proxy may append `[DONE]` after the registered Responses terminal event.
+    /// 验证兼容代理可在已注册的 Responses 终态事件后追加 `[DONE]`。
+    #[test]
+    fn responses_trailing_done_sentinel_is_framing_only() {
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        decoder
+            .push_sse(
+                Some("response.completed"),
+                r#"{"type":"response.completed","response":{"usage":{}}}"#,
+            )
+            .expect("registered terminal should decode");
+
+        let trailing = decoder
+            .push_sse(Some("done"), "[DONE]")
+            .expect("trailing compatibility sentinel should be ignored");
+        assert!(trailing.is_empty());
+        assert!(
+            decoder
+                .finish()
+                .expect("registered terminal should remain valid")
+                .is_empty()
+        );
+    }
+
+    /// Verifies `[DONE]` alone never fabricates a successful Responses terminal event.
+    /// 验证单独的 `[DONE]` 绝不会伪造成功的 Responses 终态事件。
+    #[test]
+    fn responses_done_sentinel_without_terminal_is_rejected_at_finish() {
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        let events = decoder
+            .push_sse(Some("done"), "[DONE]")
+            .expect("compatibility sentinel should remain framing-only");
+        assert!(events.is_empty());
+
+        let error = decoder
+            .finish()
+            .expect_err("missing Responses terminal event must still fail");
+        assert!(
+            error
+                .to_string()
+                .contains("ended before a terminal response event")
+        );
+    }
+
+    /// Verifies a JSON WebSocket Responses event reuses the registered decoder semantics.
+    /// 验证 JSON WebSocket Responses 事件复用已注册解码器语义。
+    #[test]
+    fn responses_json_websocket_event_reuses_decoder() {
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        let events = decoder
+            .push_json(&json!({
+                "type": "error",
+                "code": "invalid_request_error",
+                "message": "bad websocket input"
+            }))
+            .expect("JSON WebSocket error should decode");
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ResponseFailed { error }
+                if error.upstream_code.as_deref() == Some("invalid_request_error")
+                    && error.upstream_message.as_deref() == Some("bad websocket input")
+        )));
+    }
+
+    /// Verifies a proxy-wrapped Responses error preserves its HTTP status and nested payload.
+    /// 验证代理嵌套 Responses 错误会保留 HTTP 状态码与内部载荷。
+    #[test]
+    fn responses_nested_error_preserves_status() {
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        let events = decoder
+            .push_sse(
+                Some("error"),
+                r#"{"type":"error","status":429,"error":{"code":"rate_limit_error","message":"slow down","param":null}}"#,
+            )
+            .expect("wrapped Responses error should decode");
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ResponseFailed { error }
+                if error.category == AiErrorCategory::RateLimited
+                    && error.http_status == Some(429)
+                    && error.upstream_code.as_deref() == Some("rate_limit_error")
+                    && error.upstream_message.as_deref() == Some("slow down")
+        )));
+    }
+
     /// Verifies a Responses reasoning summary delta cannot collapse a missing index into slot zero.
     /// 验证 Responses 推理摘要增量不会把缺失索引折叠为第零槽位。
     #[test]
@@ -1541,6 +2520,86 @@ mod tests {
             AiStreamEvent::ReasoningDelta { item_id, delta }
                 if item_id == "responses:execution:reasoning:0" && delta == "The"
         )));
+    }
+
+    /// Verifies a buffered official reasoning-summary completion supplies text when no delta arrived.
+    /// 验证在没有增量到达时，官方缓冲推理摘要完成事件会补充文本。
+    #[test]
+    fn responses_reasoning_summary_done_emits_buffered_text() {
+        // decoder owns the exact buffered-only reasoning lifecycle.
+        // decoder 持有精确的仅缓冲推理生命周期。
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        // events contains the semantic fallback synthesized from the complete done payload.
+        // events 包含从完整 done 载荷合成的语义回退。
+        let events = decoder
+            .push_sse(
+                Some("response.reasoning_summary_text.done"),
+                r#"{"type":"response.reasoning_summary_text.done","item_id":"rs_123","output_index":0,"summary_index":0,"text":"buffered reasoning"}"#,
+            )
+            .expect("buffered reasoning summary should decode");
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ReasoningStarted { item_id }
+                if item_id == "responses:execution:reasoning:0"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ReasoningDelta { item_id, delta }
+                if item_id == "responses:execution:reasoning:0" && delta == "buffered reasoning"
+        )));
+    }
+
+    /// Verifies a reasoning done event never duplicates text already delivered by deltas.
+    /// 验证推理 done 事件绝不会重复已经由增量交付的文本。
+    #[test]
+    fn responses_reasoning_done_does_not_duplicate_deltas() {
+        // decoder owns one incremental reasoning item followed by its complete text event.
+        // decoder 持有一项增量推理及其后续完整文本事件。
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        decoder
+            .push_sse(
+                Some("response.reasoning_text.delta"),
+                r#"{"type":"response.reasoning_text.delta","item_id":"rs_123","output_index":0,"content_index":0,"delta":"incremental"}"#,
+            )
+            .expect("reasoning delta should decode");
+        // done contains the cumulative provider text but must not replay it to the public stream.
+        // done 包含供应商累计文本，但不得将其重新播放到公共流。
+        let done = decoder
+            .push_sse(
+                Some("response.reasoning_text.done"),
+                r#"{"type":"response.reasoning_text.done","item_id":"rs_123","output_index":0,"content_index":0,"text":"incremental"}"#,
+            )
+            .expect("reasoning completion should decode");
+
+        assert!(
+            done.iter()
+                .all(|event| !matches!(event, AiStreamEvent::ReasoningDelta { .. }))
+        );
+    }
+
+    /// Verifies provider deltas arriving after the dedicated reasoning completion are rejected.
+    /// 验证在专用推理完成事件之后到达的供应商增量会被拒绝。
+    #[test]
+    fn responses_reasoning_delta_after_done_is_rejected() {
+        // decoder owns one completed buffered reasoning item.
+        // decoder 持有一项已完成的缓冲推理项。
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        decoder
+            .push_sse(
+                Some("response.reasoning_summary_text.done"),
+                r#"{"type":"response.reasoning_summary_text.done","item_id":"rs_123","output_index":0,"summary_index":0,"text":"complete"}"#,
+            )
+            .expect("reasoning completion should decode");
+        // error proves out-of-order replay cannot silently duplicate visible reasoning.
+        // error 证明乱序重放无法静默复制可见推理内容。
+        let error = decoder
+            .push_sse(
+                Some("response.reasoning_summary_text.delta"),
+                r#"{"type":"response.reasoning_summary_text.delta","item_id":"rs_123","output_index":0,"summary_index":0,"delta":"late"}"#,
+            )
+            .expect_err("reasoning delta after completion must fail");
+        assert!(error.to_string().contains("delta after completion"));
     }
 
     /// Verifies repeated local indexes remain isolated across reasoning items and event families.
@@ -1642,6 +2701,149 @@ mod tests {
                 ..
             } if signature == "openai#encrypted-replay"
         )));
+    }
+
+    /// Verifies output-item completion supplies buffered reasoning text and its replay signature.
+    /// 验证输出项完成事件会补充缓冲推理文本及其重放签名。
+    #[test]
+    fn responses_output_item_done_emits_buffered_reasoning() {
+        // decoder owns one reasoning item delivered without any preceding delta event.
+        // decoder 持有一项没有任何前序增量事件的推理项。
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        // buffered contains the complete summary and raw reasoning parts from the official item shape.
+        // buffered 包含官方项目结构中的完整摘要与原始推理部分。
+        let buffered = decoder
+            .push_sse(
+                Some("response.output_item.done"),
+                r#"{"type":"response.output_item.done","output_index":0,"item":{"id":"rs_buffered","type":"reasoning","summary":[{"type":"summary_text","text":"summary"}],"content":[{"type":"reasoning_text","text":"raw"}],"encrypted_content":"opaque-buffered"}}"#,
+            )
+            .expect("buffered reasoning item should decode");
+        assert!(buffered.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ReasoningDelta { item_id, delta }
+                if item_id == "responses:execution:reasoning:0" && delta == "summary"
+        )));
+        assert!(buffered.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ReasoningDelta { item_id, delta }
+                if item_id == "responses:execution:reasoning:1" && delta == "raw"
+        )));
+
+        // terminal carries the encrypted value only on the final public block owned by this item.
+        // terminal 仅在该项目持有的最后一个公共块上携带加密值。
+        let terminal = decoder
+            .push_sse(
+                Some("response.completed"),
+                r#"{"type":"response.completed","response":{"usage":{}}}"#,
+            )
+            .expect("buffered reasoning response should complete");
+        let signatures = terminal
+            .iter()
+            .filter_map(|event| match event {
+                AiStreamEvent::ReasoningCompleted { item_id, signature } => {
+                    Some((item_id.as_str(), signature.as_deref()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            signatures,
+            vec![
+                ("responses:execution:reasoning:0", None),
+                (
+                    "responses:execution:reasoning:1",
+                    Some("openai#opaque-buffered")
+                ),
+            ]
+        );
+    }
+
+    /// Verifies a full reasoning completion emits only the suffix missing from streamed deltas.
+    /// 验证完整推理完成事件只发送流式增量中缺失的后缀。
+    #[test]
+    fn responses_reasoning_done_completes_partial_delta() {
+        // decoder owns one partial prefix followed by the provider's authoritative full value.
+        // decoder 持有一个部分前缀及其后供应商提供的权威完整值。
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        decoder
+            .push_sse(
+                Some("response.reasoning_summary_text.delta"),
+                r#"{"type":"response.reasoning_summary_text.delta","item_id":"rs_partial","summary_index":0,"delta":"part"}"#,
+            )
+            .expect("partial reasoning delta should decode");
+        // completed contains only the missing suffix in its public delta projection.
+        // completed 的公共增量投影只包含缺失后缀。
+        let completed = decoder
+            .push_sse(
+                Some("response.reasoning_summary_text.done"),
+                r#"{"type":"response.reasoning_summary_text.done","item_id":"rs_partial","summary_index":0,"text":"partial"}"#,
+            )
+            .expect("full reasoning value should extend the prefix");
+        assert!(completed.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ReasoningDelta { delta, .. } if delta == "ial"
+        )));
+    }
+
+    /// Verifies encrypted reasoning remains bound to each exact upstream reasoning item.
+    /// 验证加密推理内容始终绑定到各自精确的上游推理项目。
+    #[test]
+    fn responses_reasoning_signatures_are_item_scoped() {
+        // decoder owns two upstream reasoning items whose local indexes intentionally collide.
+        // decoder 持有两个局部索引刻意冲突的上游推理项目。
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        for (item_id, output_index, delta, signature) in [
+            ("rs_one", 0, "one", "opaque-one"),
+            ("rs_two", 1, "two", "opaque-two"),
+        ] {
+            decoder
+                .push_sse(
+                    Some("response.reasoning_summary_text.delta"),
+                    format!(
+                        r#"{{"type":"response.reasoning_summary_text.delta","item_id":"{item_id}","output_index":{output_index},"summary_index":0,"delta":"{delta}"}}"#
+                    )
+                    .as_str(),
+                )
+                .expect("scoped reasoning delta should decode");
+            decoder
+                .push_sse(
+                    Some("response.output_item.done"),
+                    format!(
+                        r#"{{"type":"response.output_item.done","output_index":{output_index},"item":{{"id":"{item_id}","type":"reasoning","summary":[{{"type":"summary_text","text":"{delta}"}}],"encrypted_content":"{signature}"}}}}"#
+                    )
+                    .as_str(),
+                )
+                .expect("scoped reasoning completion should decode");
+        }
+        // completedByItem proves neither signature was overwritten by the later output item.
+        // completedByItem 证明两个签名都没有被后续输出项覆盖。
+        let completed_by_item = decoder
+            .push_sse(
+                Some("response.completed"),
+                r#"{"type":"response.completed","response":{"usage":{}}}"#,
+            )
+            .expect("multi-reasoning response should complete")
+            .into_iter()
+            .filter_map(|event| match event {
+                AiStreamEvent::ReasoningCompleted { item_id, signature } => {
+                    Some((item_id, signature))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            completed_by_item,
+            vec![
+                (
+                    String::from("responses:execution:reasoning:0"),
+                    Some(String::from("openai#opaque-one"))
+                ),
+                (
+                    String::from("responses:execution:reasoning:1"),
+                    Some(String::from("openai#opaque-two"))
+                ),
+            ]
+        );
     }
 
     /// Verifies Responses image output becomes a resource and never a visible Base64 text delta.

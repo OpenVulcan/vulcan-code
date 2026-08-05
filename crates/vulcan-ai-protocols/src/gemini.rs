@@ -968,6 +968,7 @@ mod tests {
                     content: vec![ContentItem::Text {
                         text: String::from("hello"),
                     }],
+                    provider_context_items: Vec::new(),
                 }],
                 tools: vec![ToolDefinition {
                     name: String::from("lookup"),
@@ -1017,6 +1018,7 @@ mod tests {
                 content: vec![ContentItem::Text {
                     text: String::from("research and calculate"),
                 }],
+                provider_context_items: Vec::new(),
             }],
             tools: Vec::new(),
             native_tools: vec![NativeToolKind::WebSearch, NativeToolKind::CodeInterpreter],
@@ -1059,12 +1061,14 @@ mod tests {
                     content: vec![ContentItem::Text {
                         text: String::from("Follow instructions."),
                     }],
+                    provider_context_items: Vec::new(),
                 },
                 AiMessage {
                     role: MessageRole::User,
                     content: vec![ContentItem::Text {
                         text: String::from("hello"),
                     }],
+                    provider_context_items: Vec::new(),
                 },
             ],
             tools: vec![ToolDefinition {
@@ -1178,6 +1182,7 @@ mod tests {
             messages: vec![AiMessage {
                 role: MessageRole::Assistant,
                 content: vec![ContentItem::ToolCall { call }],
+                provider_context_items: Vec::new(),
             }],
             tools: Vec::new(),
             native_tools: Vec::new(),
@@ -1245,6 +1250,7 @@ mod tests {
                 content: vec![ContentItem::Text {
                     text: String::from("hello"),
                 }],
+                provider_context_items: Vec::new(),
             }],
             tools: Vec::new(),
             native_tools: Vec::new(),

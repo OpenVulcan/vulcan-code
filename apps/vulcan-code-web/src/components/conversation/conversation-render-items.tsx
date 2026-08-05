@@ -531,6 +531,9 @@ export function ConversationProcessGroup(props: {
   // Copies transcript text using the shell-provided clipboard path.
   // 使用外壳提供的剪贴板路径复制转录文本。
   onCopyText: (text: string) => Promise<void> | void;
+  // Retries the owning conversation from the retained service execution state.
+  // 从服务端保留的执行状态重试所属会话。
+  onRetryConversationRequest?: (conversationId: string) => Promise<boolean>;
   // Opens one backend-backed user prompt edit flow.
   // 打开单个后端支持的用户提示词编辑流程。
   onEditUserPrompt?: (conversationId: string, messageId: string) => Promise<void> | void;
@@ -643,6 +646,7 @@ export function ConversationProcessGroup(props: {
       sessionRunning={props.sessionRunning}
       expandedUserPromptIds={props.expandedUserPromptIds}
       onCopyText={props.onCopyText}
+      onRetryConversationRequest={props.onRetryConversationRequest}
       onEditUserPrompt={props.onEditUserPrompt}
       userPromptEditDisabled={props.userPromptEditDisabled}
       onOpenDetail={props.onOpenDetail}
@@ -700,6 +704,7 @@ export function ConversationProcessGroup(props: {
             sessionRunning={props.sessionRunning}
             expandedUserPromptIds={props.expandedUserPromptIds}
             onCopyText={props.onCopyText}
+            onRetryConversationRequest={props.onRetryConversationRequest}
             onEditUserPrompt={props.onEditUserPrompt}
             userPromptEditDisabled={props.userPromptEditDisabled}
             onOpenDetail={props.onOpenDetail}
@@ -733,6 +738,7 @@ export function ConversationProcessGroup(props: {
             sessionRunning={props.sessionRunning}
             expandedUserPromptIds={props.expandedUserPromptIds}
             onCopyText={props.onCopyText}
+            onRetryConversationRequest={props.onRetryConversationRequest}
             onEditUserPrompt={props.onEditUserPrompt}
             userPromptEditDisabled={props.userPromptEditDisabled}
             onOpenDetail={props.onOpenDetail}
@@ -833,6 +839,9 @@ export function ConversationRenderItemView(props: {
   // Copies transcript text using the shell-provided clipboard path.
   // 使用外壳提供的剪贴板路径复制转录文本。
   onCopyText: (text: string) => Promise<void> | void;
+  // Retries the owning conversation from the retained service execution state.
+  // 从服务端保留的执行状态重试所属会话。
+  onRetryConversationRequest?: (conversationId: string) => Promise<boolean>;
   // Opens one backend-backed user prompt edit flow.
   // 打开单个后端支持的用户提示词编辑流程。
   onEditUserPrompt?: (conversationId: string, messageId: string) => Promise<void> | void;
@@ -1063,6 +1072,7 @@ export function ConversationRenderItemView(props: {
           pendingPlanArtifact={props.pendingPlanArtifact}
           onCopyText={props.onCopyText}
           onToolPresentationExpandedChange={props.onToolPresentationExpandedChange}
+          onRetryConversationRequest={props.onRetryConversationRequest}
           onPlanArtifactExecute={props.onPlanArtifactExecute}
           onPlanArtifactSuggest={props.onPlanArtifactSuggest}
           onPlanArtifactCancel={props.onPlanArtifactCancel}

@@ -319,6 +319,9 @@ pub struct ExecutionPreparationRequest {
     /// Provider-visible typed agent messages seeded before this request reaches the controller.
     /// 本请求到达控制器前预先播种的 Provider 可见类型化智能体消息。
     pub provider_visible_agent_messages: Vec<ExecutionProviderVisibleAgentMessage>,
+    /// Optional explicit controller turn-start mode; absence preserves the existing inference rule.
+    /// 可选的控制器回合启动模式；缺省时保留现有的自动推断规则。
+    pub turn_start_mode: Option<ExecutionTurnStartMode>,
     /// Canonical conversation state reconstructed from the session protocol state.
     /// 从会话协议状态重建出的规范会话状态。
     pub conversation_state: SessionConversationState,
@@ -401,6 +404,18 @@ pub struct ExecutionPreparationRequest {
     /// Usage segments already consumed by internal work before this request continues.
     /// 本次请求继续执行前已经由内部工作消耗的用量分段。
     pub embedded_turn_usage_segments: Vec<SessionTurnUsageSegment>,
+}
+
+/// Explicit controller turn-start mode requested by the host for one execution.
+/// 宿主为单次执行请求指定的显式控制器回合启动模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionTurnStartMode {
+    /// Append or reuse the current request as a user-authored prompt.
+    /// 追加或复用当前请求作为用户编写的提示词。
+    UserPrompt,
+    /// Start from the canonical provider-visible snapshot without appending a new prompt.
+    /// 从规范 Provider 可见快照直接启动，不追加新的提示词。
+    SeededProviderInput,
 }
 
 /// Runtime purpose attached to one provider-facing prompt execution.

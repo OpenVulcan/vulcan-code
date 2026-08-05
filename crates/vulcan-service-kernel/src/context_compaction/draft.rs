@@ -482,6 +482,11 @@ pub(crate) fn build_webui_context_compaction_draft(
         execution.compaction_result.policy,
     )
     .map_err(|error| format!("Invalid compacted conversation message identity: {error}"))?;
+    append_remote_responses_compaction_context(
+        &mut draft_runtime_state.conversation_state,
+        &summary_message_id,
+        &execution.compaction_result,
+    )?;
     let continuation_message_id = if trigger == AUTO_CONTEXT_COMPACTION_TRIGGER {
         append_auto_context_compaction_continuation_message(
             &mut draft_runtime_state,

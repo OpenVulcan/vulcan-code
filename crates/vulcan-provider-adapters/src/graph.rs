@@ -321,6 +321,48 @@ pub enum AccountUsageQueryKind {
     KimiCodingPlan,
 }
 
+/// Selects whether one Responses route may use its WebSocket transport.
+/// 选择一条 Responses 路由是否可以使用 WebSocket 传输。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponsesWebSocketPolicy {
+    /// Keeps the existing HTTP streaming transport only.
+    /// 仅保留现有 HTTP 流式传输。
+    #[default]
+    Disabled,
+    /// Prefers WebSocket and falls back to HTTP before semantic output is observed.
+    /// 优先使用 WebSocket，并在观察到语义输出前回退到 HTTP。
+    PreferredWithHttpFallback,
+}
+
+/// Selects whether one Responses route may use the standalone remote compact endpoint.
+/// 选择一条 Responses 路由是否可以使用独立远端压缩端点。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponsesRemoteCompactionPolicy {
+    /// Keeps local prompt-based compaction as the only compaction path.
+    /// 仅使用本地提示词压缩路径。
+    #[default]
+    Disabled,
+    /// Uses remote compaction and falls back to local compaction when safe.
+    /// 使用远端压缩，并在安全时回退到本地压缩。
+    EnabledWithLocalFallback,
+}
+
+/// Carries explicit optional capabilities for one OpenAI Responses route.
+/// 承载一条 OpenAI Responses 路由的显式可选能力。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ResponsesRouteFeatures {
+    /// WebSocket transport selection.
+    /// WebSocket 传输选择。
+    #[serde(default)]
+    pub websocket: ResponsesWebSocketPolicy,
+    /// Standalone remote compaction selection.
+    /// 独立远端压缩选择。
+    #[serde(default)]
+    pub remote_compaction: ResponsesRemoteCompactionPolicy,
+}
+
 /// Describes one verified protocol route.
 /// 描述一条已验证协议路由。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -356,12 +398,29 @@ pub struct ProtocolRoute {
     /// 当元数据发现与执行使用不同协议根地址时采用的可选模型发现基础 URL。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_discovery_base_url_override: Option<String>,
+    /// Optional user-declared Responses transport and compaction capabilities.
+    /// 可选的用户声明 Responses 传输与压缩能力。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub responses_features: Option<ResponsesRouteFeatures>,
     /// Whether this route has completed real verification.
     /// 此路由是否已完成真实验证。
     pub verified: bool,
 }
 
 impl ProtocolRoute {
+    /// Reports whether this exact route explicitly enables standalone remote Responses compaction.
+    /// 报告当前精确路由是否显式启用独立远端 Responses 压缩。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` only for an explicit enabled-with-safe-local-fallback policy.
+    /// 仅在显式选择启用并允许安全本地回退策略时返回 `true`。
+    pub fn remote_compaction_enabled(&self) -> bool {
+        self.responses_features.as_ref().is_some_and(|features| {
+            features.remote_compaction == ResponsesRemoteCompactionPolicy::EnabledWithLocalFallback
+        })
+    }
+
     /// Resolves the protocol-specific base URL or the service-entry default.
     /// 解析协议专属基础 URL，缺失时返回服务入口默认值。
     ///

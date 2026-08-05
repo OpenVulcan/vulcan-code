@@ -725,6 +725,7 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         prompt: String::from("请规划当前任务"),
         output_style_snapshot: None,
         provider_visible_agent_messages: Vec::new(),
+        turn_start_mode: None,
         conversation_state: SessionConversationState::default(),
         context_compaction_policy: None,
         context_budget_override: None,

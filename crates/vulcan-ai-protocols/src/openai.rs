@@ -5,7 +5,8 @@ use crate::{EncodedWireRequest, ProtocolConversionError, ProtocolProfile, Protoc
 use serde_json::{Value, json};
 use vulcan_ai_contract::{
     AiExecutionRequest, ContentItem, MessageRole, NativeToolKind, ParallelToolCallPolicy,
-    PromptCachePolicy, ReasoningOutputPolicy, StructuredOutputPolicy, ToolChoicePolicy,
+    PromptCachePolicy, ReasoningOutputPolicy, RequestUsage, StructuredOutputPolicy,
+    ToolChoicePolicy, is_replayable_codex_responses_item,
 };
 
 /// Stable OpenAI Chat Completions profile identifier.
@@ -17,6 +18,22 @@ pub const OPENAI_RESPONSES_PROFILE_ID: &str = "openai-responses.v1";
 /// Stable OpenAI Codex subscription Responses profile identifier.
 /// 稳定的 OpenAI Codex 订阅 Responses Profile 标识。
 pub const OPENAI_CODEX_RESPONSES_PROFILE_ID: &str = "openai-codex-responses.v1";
+
+/// Normalizes an OpenAI-compatible usage object through the same projector used by streaming responses.
+/// 通过与流式响应相同的投影器规范化 OpenAI 兼容用量对象。
+///
+/// # Parameters
+/// 参数
+/// `value` is the provider-reported `usage` JSON object.
+/// `value` 是供应商报告的 `usage` JSON 对象。
+///
+/// # Returns
+/// 返回值
+/// A normalized usage snapshot that preserves unknown fields as unknown values.
+/// 返回一份规范化用量快照，并将未报告字段保留为未知值。
+pub fn normalize_openai_usage(value: &Value) -> RequestUsage {
+    crate::openai_stream::openai_usage(value)
+}
 
 /// Encodes public requests as OpenAI Chat Completions requests.
 /// 将公共请求编码为 OpenAI Chat Completions 请求。
@@ -185,9 +202,20 @@ impl ProtocolProfile for OpenAiCodexResponsesProfile {
             "model": request.model_id,
             "instructions": instructions,
             "input": input,
+            "tool_choice": "auto",
+            "parallel_tool_calls": !matches!(
+                request.parallel_tool_calls,
+                ParallelToolCallPolicy::Disabled
+            ),
             "stream": true,
             "store": false,
+            "include": ["reasoning.encrypted_content"],
         });
+        if body["instructions"].as_str().is_some_and(str::is_empty) {
+            body.as_object_mut()
+                .expect("Codex Responses request body is an object")
+                .remove("instructions");
+        }
         if !tools.is_empty() {
             body["tools"] = Value::Array(tools);
         }
@@ -199,13 +227,19 @@ impl ProtocolProfile for OpenAiCodexResponsesProfile {
                 "effort": effort.as_str(),
             });
             project_responses_reasoning_output(request.reasoning_output, &mut body["reasoning"])?;
-            body["include"] = json!(["reasoning.encrypted_content"]);
         }
         project_responses_request_controls(request, &mut body)?;
         let mut headers = std::collections::BTreeMap::new();
         if let Some(cache_scope_id) = request.cache_scope_id.as_deref() {
             body["prompt_cache_key"] = Value::String(cache_scope_id.to_string());
-            headers.insert(String::from("session_id"), cache_scope_id.to_string());
+            body["client_metadata"] = json!({
+                "session_id": cache_scope_id,
+                "thread_id": cache_scope_id,
+            });
+            headers.insert(String::from("session-id"), cache_scope_id.to_string());
+            // Root Vulcan task sessions map to both official Codex session and thread identities.
+            // Vulcan 根任务会话同时映射为官方 Codex 的会话身份与线程身份。
+            headers.insert(String::from("thread-id"), cache_scope_id.to_string());
         }
         Ok(EncodedWireRequest {
             path: String::from("/responses"),
@@ -617,6 +651,14 @@ fn encode_responses_input(
                 }
             }
             MessageRole::Assistant => {
+                for provider_context_item in &message.provider_context_items {
+                    if !is_replayable_codex_responses_item(provider_context_item) {
+                        return Err(ProtocolConversionError::new(
+                            "OpenAI Responses provider context items must be replayable Codex Responses items.",
+                        ));
+                    }
+                    input.push(provider_context_item.clone());
+                }
                 let mut text = String::new();
                 for item in &message.content {
                     match item {
@@ -1065,7 +1107,9 @@ fn encode_codex_responses_tools(request: &AiExecutionRequest) -> Vec<Value> {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
-    use vulcan_ai_contract::{AiMessage, AiOperation, ToolDefinition};
+    use vulcan_ai_contract::{
+        AiMessage, AiOperation, ResourceKind, ResourceReference, ToolDefinition,
+    };
 
     /// Builds one request containing system, user, and signed reasoning content.
     /// 构建一个包含系统、用户与已签名推理内容的请求。
@@ -1081,12 +1125,14 @@ mod tests {
                     content: vec![ContentItem::Text {
                         text: String::from("Follow the repository rules."),
                     }],
+                    provider_context_items: Vec::new(),
                 },
                 AiMessage {
                     role: MessageRole::User,
                     content: vec![ContentItem::Text {
                         text: String::from("Inspect the project."),
                     }],
+                    provider_context_items: Vec::new(),
                 },
                 AiMessage {
                     role: MessageRole::Assistant,
@@ -1094,6 +1140,7 @@ mod tests {
                         text: String::from("Prior reasoning summary"),
                         signature: Some(String::from("openai#encrypted-replay")),
                     }],
+                    provider_context_items: Vec::new(),
                 },
             ],
             tools: vec![ToolDefinition {
@@ -1127,8 +1174,25 @@ mod tests {
         assert_eq!(encoded.path, "/responses");
         assert_eq!(encoded.body["instructions"], "Follow the repository rules.");
         assert_eq!(encoded.body["prompt_cache_key"], "session-stable");
+        assert_eq!(encoded.body["tool_choice"], "auto");
+        assert_eq!(encoded.body["parallel_tool_calls"], true);
         assert_eq!(
-            encoded.headers.get("session_id").map(String::as_str),
+            encoded.body["include"],
+            json!(["reasoning.encrypted_content"])
+        );
+        assert_eq!(
+            encoded.body["client_metadata"],
+            json!({
+                "session_id": "session-stable",
+                "thread_id": "session-stable",
+            })
+        );
+        assert_eq!(
+            encoded.headers.get("session-id").map(String::as_str),
+            Some("session-stable")
+        );
+        assert_eq!(
+            encoded.headers.get("thread-id").map(String::as_str),
             Some("session-stable")
         );
         assert!(
@@ -1143,7 +1207,7 @@ mod tests {
             encoded.body["input"][1]["encrypted_content"],
             "encrypted-replay"
         );
-        assert!(encoded.body.get("parallel_tool_calls").is_none());
+        assert_eq!(encoded.body["parallel_tool_calls"], true);
         assert!(encoded.body.get("max_output_tokens").is_none());
         assert_eq!(encoded.body["tools"][0]["name"], "lookup");
         assert!(encoded.body["tools"][0].get("function").is_none());
@@ -1153,6 +1217,79 @@ mod tests {
             encoded.body["include"],
             json!(["reasoning.encrypted_content"])
         );
+    }
+
+    /// Encodes one Codex Responses image as the official input_image content shape.
+    /// 将一张 Codex Responses 图片编码为官方 input_image 内容结构。
+    #[test]
+    fn codex_responses_encodes_user_image_input() {
+        let mut request = codex_request();
+        request.messages[1].content.push(ContentItem::Resource {
+            resource: ResourceReference {
+                id: String::from("image-1"),
+                kind: ResourceKind::Image,
+                media_type: Some(String::from("image/png")),
+                local_path: None,
+                url: Some(String::from("data:image/png;base64,AA==")),
+            },
+        });
+
+        let encoded = OpenAiCodexResponsesProfile
+            .encode(&request)
+            .expect("Codex Responses image input should encode");
+
+        assert_eq!(
+            encoded.body["input"][0]["content"][1],
+            json!({
+                "type": "input_image",
+                "image_url": "data:image/png;base64,AA==",
+            })
+        );
+    }
+
+    /// Verifies a route-bound opaque compaction item is replayed before later assistant text.
+    /// 验证绑定路由的不透明压缩项会在后续助手文本前重放。
+    #[test]
+    fn codex_replays_route_bound_compaction_context() {
+        let mut request = codex_request();
+        request.messages.push(AiMessage {
+            role: MessageRole::Assistant,
+            content: vec![ContentItem::Text {
+                text: String::from("Continue from the checkpoint."),
+            }],
+            provider_context_items: vec![
+                json!({
+                    "type": "compaction",
+                    "encrypted_content": "opaque-checkpoint",
+                }),
+                json!({
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "remote summary"}],
+                }),
+            ],
+        });
+
+        let encoded = OpenAiCodexResponsesProfile
+            .encode(&request)
+            .expect("route-bound compaction context should encode");
+        let input = encoded.body["input"]
+            .as_array()
+            .expect("input should be an array");
+        let checkpoint_index = input
+            .iter()
+            .position(|item| item["type"] == "compaction")
+            .expect("compaction item should be present");
+        let text_index = input
+            .iter()
+            .position(|item| item["role"] == "assistant")
+            .expect("assistant text should be present");
+        assert!(checkpoint_index < text_index);
+        assert_eq!(
+            input[checkpoint_index]["encrypted_content"],
+            "opaque-checkpoint"
+        );
+        assert_eq!(input[checkpoint_index + 1]["type"], "message");
     }
 
     /// Verifies a proven Responses cursor emits `previous_response_id` and only the uncovered suffix.
@@ -1365,7 +1502,8 @@ mod tests {
             .encode(&request)
             .expect("standard Responses request should encode");
         assert!(encoded.body.get("prompt_cache_key").is_none());
-        assert!(!encoded.headers.contains_key("session_id"));
+        assert!(!encoded.headers.contains_key("session-id"));
+        assert!(!encoded.headers.contains_key("thread-id"));
         assert_eq!(encoded.body["input"][0]["role"], "system");
         assert_eq!(encoded.body["store"], false);
         assert!(encoded.body.get("previous_response_id").is_none());

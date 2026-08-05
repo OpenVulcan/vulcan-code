@@ -240,6 +240,9 @@ export interface WorkspaceShellProps {
   // Stops the selected conversation run.
   // 停止当前选中会话运行。
   onStopConversationRun: () => Promise<boolean>;
+  // Retries a failed conversation from the retained service execution state.
+  // 从服务端保留的执行状态重试失败会话。
+  onRetryConversationRequest?: (conversationId: string) => Promise<boolean>;
   // Opens a subagent transcript in the right context panel.
   // 在右侧上下文面板中打开子代理转录。
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;

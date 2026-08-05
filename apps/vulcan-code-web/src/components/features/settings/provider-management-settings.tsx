@@ -71,6 +71,8 @@ import type {
   PublicAiCustomProviderProbeResult,
   PublicAiCustomProviderProtocol,
   PublicAiCustomProviderSaveRequest,
+  PublicAiResponsesRemoteCompactionPolicy,
+  PublicAiResponsesWebSocketPolicy,
   PublicAiConnection,
   PublicAiModelCapabilityEvidence,
   PublicAiModelOverrideRecord,
@@ -146,16 +148,13 @@ export function ProviderManagementArea() {
     }
   }, [snapshot])
 
-  // removeProvider performs the explicit provider-removal confirmation, including credential deletion.
-  // removeProvider 执行明确的供应商移除确认，包括凭据删除确认。
-  const removeProvider = React.useCallback(async (
-    provider: PublicAiProviderDescriptor,
-    confirmCredentialDeletion: boolean,
-  ) => {
+  // removeProvider accepts one exact descriptor, cascades confirmed cleanup, and refreshes the local snapshot.
+  // removeProvider 接收一个精确描述，级联执行已确认清理，并刷新本地快照。
+  const removeProvider = React.useCallback(async (provider: PublicAiProviderDescriptor) => {
     setBusyProviderId(provider.id)
     setError(null)
     try {
-      setSnapshot(await removePublicAiCustomProvider(provider.id, confirmCredentialDeletion))
+      setSnapshot(await removePublicAiCustomProvider(provider.id))
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
@@ -185,8 +184,8 @@ export function ProviderManagementArea() {
           .map((connection) => connection.id)
       : [],
   )
-  // providerToRemoveModelCustomizationCount detects model-owned settings that must be cleared first.
-  // providerToRemoveModelCustomizationCount 检测必须先清理的模型自定义信息。
+  // providerToRemoveModelCustomizationCount counts model-owned settings disclosed by cascade cleanup.
+  // providerToRemoveModelCustomizationCount 统计级联清理提示需要披露的模型专属设置。
   const providerToRemoveModelCustomizationCount = snapshot && providerToRemove
     ? [
         Object.keys(snapshot.customModels?.[providerToRemove.id] ?? {}).length,
@@ -212,9 +211,9 @@ export function ProviderManagementArea() {
         ), 0),
       ].reduce((total, count) => total + count, 0)
     : 0
-  // providerRemovalBlocked is the backend-authoritative deletion guard, including settings not expanded in the browser snapshot.
-  // providerRemovalBlocked 是后端权威删除护栏，包含浏览器快照未展开的设置。
-  const providerRemovalBlocked = Boolean(
+  // providerHasModelCustomizations includes backend-owned settings that the removal warning cannot count locally.
+  // providerHasModelCustomizations 包含移除提示无法在本地计数的后端专属设置。
+  const providerHasModelCustomizations = Boolean(
     providerToRemove
     && snapshot?.providersWithModelCustomizations?.includes(providerToRemove.id),
   )
@@ -223,10 +222,10 @@ export function ProviderManagementArea() {
   const providerRemovalDescription = providerToRemove
     ? [
         t("settings.customProviders.removeDescription").replace("{name}", providerToRemove.display_name),
-        providerRemovalBlocked
+        providerHasModelCustomizations
           ? providerToRemoveModelCustomizationCount > 0
-            ? t("settings.customProviders.removeModelsBlocked").replace("{count}", String(providerToRemoveModelCustomizationCount))
-            : t("settings.customProviders.removeModelsBlockedGeneric")
+            ? t("settings.customProviders.removeModelsWarning").replace("{count}", String(providerToRemoveModelCustomizationCount))
+            : t("settings.customProviders.removeModelsWarningGeneric")
           : null,
         providerToRemoveConnectionCount > 0
           ? t("settings.customProviders.removeCredentialsWarning").replace("{count}", String(providerToRemoveConnectionCount))
@@ -308,12 +307,12 @@ export function ProviderManagementArea() {
             <AlertDialogCancel>{t("memory.common.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               disabled={providerToRemove
-                ? busyProviderId === providerToRemove.id || providerRemovalBlocked
+                ? busyProviderId === providerToRemove.id
                 : true}
               onClick={(event) => {
                 event.preventDefault()
-                if (providerToRemove && !providerRemovalBlocked) {
-                  void removeProvider(providerToRemove, providerToRemoveConnectionCount > 0)
+                if (providerToRemove) {
+                  void removeProvider(providerToRemove)
                 }
               }}
               variant="destructive"
@@ -610,6 +609,8 @@ function CustomProviderDialog(props: {
   const [displayName, setDisplayName] = React.useState("")
   const [baseUrl, setBaseUrl] = React.useState("")
   const [protocol, setProtocol] = React.useState<PublicAiCustomProviderProtocol>("open_ai_responses")
+  const [websocketPolicy, setWebsocketPolicy] = React.useState<PublicAiResponsesWebSocketPolicy>("disabled")
+  const [remoteCompactionPolicy, setRemoteCompactionPolicy] = React.useState<PublicAiResponsesRemoteCompactionPolicy>("disabled")
   const [authentication, setAuthentication] = React.useState<"bearer_authorization" | "x_api_key">("bearer_authorization")
   const [modelDiscoveryMode, setModelDiscoveryMode] = React.useState<PublicAiCustomProviderModelDiscoveryMode>("standard")
   const [modelDiscoveryPath, setModelDiscoveryPath] = React.useState("")
@@ -650,7 +651,11 @@ function CustomProviderDialog(props: {
     setDisplayName(props.provider?.display_name ?? "")
     setBaseUrl(entry?.base_url ?? "")
     setAuthentication(entry?.authentication === "x_api_key" ? "x_api_key" : "bearer_authorization")
-    setProtocol(customProtocolFromProfile(entry?.protocol_routes[0]?.protocol_profile_id ?? "") ?? "open_ai_responses")
+    const nextProtocol = customProtocolFromProfile(entry?.protocol_routes[0]?.protocol_profile_id ?? "") ?? "open_ai_responses"
+    const routeFeatures = entry?.protocol_routes[0]?.responses_features
+    setProtocol(nextProtocol)
+    setWebsocketPolicy(routeFeatures?.websocket ?? "disabled")
+    setRemoteCompactionPolicy(routeFeatures?.remote_compaction ?? "disabled")
     setModelDiscoveryMode(customProviderDiscoveryMode(entry))
     setModelDiscoveryPath(entry?.protocol_routes[0]?.model_discovery_path ?? "")
     setCredentialDisplayName(props.provider?.display_name ?? "")
@@ -711,6 +716,8 @@ function CustomProviderDialog(props: {
     displayName: displayName.trim(),
     baseUrl: baseUrl.trim(),
     protocol,
+    websocketPolicy,
+    remoteCompactionPolicy,
     authentication,
     ...(props.provider
       ? (validationConnectionId ? { validationConnectionId } : {})
@@ -723,7 +730,7 @@ function CustomProviderDialog(props: {
     allowManualFallback: acceptance === "manual",
     allowPendingValidation: acceptance === "pending",
     confirmInactiveProtocolOverrideDeletion,
-  }), [authentication, baseUrl, credentialDisplayName, displayName, modelDiscoveryMode, modelDiscoveryPath, props.provider, protocol, secret, validationConnectionId])
+  }), [authentication, baseUrl, credentialDisplayName, displayName, modelDiscoveryMode, modelDiscoveryPath, props.provider, protocol, remoteCompactionPolicy, secret, validationConnectionId, websocketPolicy])
 
   // probe verifies authentication and model discovery without persisting the provider or secret.
   // probe 在不持久化供应商或秘密的情况下验证鉴权与模型发现。
@@ -821,14 +828,15 @@ function CustomProviderDialog(props: {
     || (modelDiscoveryMode === "custom_path"
       && modelDiscoveryPath.trim() !== (originalEntry.protocol_routes[0]?.model_discovery_path ?? ""))
   )
-  // cosmeticEditOnly permits a direct save when only the provider display name changed.
-  // cosmeticEditOnly 仅在供应商展示名称变化时允许直接保存。
-  const cosmeticEditOnly = Boolean(
-    props.provider
-    && displayName.trim()
-    && displayName.trim() !== props.provider.display_name
-    && !connectionContractChanged,
-  )
+  // responsesFeaturesChanged tracks explicit Codex capability switches without forcing credential revalidation.
+  // responsesFeaturesChanged 跟踪显式 Codex 能力开关，但不会强制重新验证凭据。
+  const originalResponsesFeatures = originalEntry?.protocol_routes[0]?.responses_features
+  const responsesFeaturesChanged = Boolean(props.provider)
+    && protocol === "open_ai_codex_responses"
+    && (
+      websocketPolicy !== (originalResponsesFeatures?.websocket ?? "disabled")
+      || remoteCompactionPolicy !== (originalResponsesFeatures?.remote_compaction ?? "disabled")
+    )
   // credentialFreeEdit identifies an existing provider whose contract cannot be remotely probed yet.
   // credentialFreeEdit 标识当前尚无法远程探测契约的无账号现有供应商。
   const credentialFreeEdit = Boolean(props.provider) && providerConnections.length === 0
@@ -837,7 +845,11 @@ function CustomProviderDialog(props: {
   const providerChanged = Boolean(props.provider) && (
     displayName.trim() !== props.provider?.display_name
     || connectionContractChanged
+    || responsesFeaturesChanged
   )
+  // directSaveOnly covers display and capability changes that do not change the credential route contract.
+  // directSaveOnly 覆盖不改变凭据路由契约的展示信息与能力开关变更。
+  const directSaveOnly = Boolean(props.provider) && providerChanged && !connectionContractChanged
 
   return (
     <Dialog
@@ -877,7 +889,14 @@ function CustomProviderDialog(props: {
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="settings-form-field">
                 <span>{t("settings.customProviders.protocol")}</span>
-                  <Select onValueChange={(value) => setProtocol(value as PublicAiCustomProviderProtocol)} value={protocol}>
+                  <Select onValueChange={(value) => {
+                    const nextProtocol = value as PublicAiCustomProviderProtocol
+                    setProtocol(nextProtocol)
+                    if (nextProtocol !== "open_ai_codex_responses") {
+                      setWebsocketPolicy("disabled")
+                      setRemoteCompactionPolicy("disabled")
+                    }
+                  }} value={protocol}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {customProtocolOptions.map((option) => (
@@ -913,6 +932,35 @@ function CustomProviderDialog(props: {
                 <span>{t("settings.customProviders.discoveryPath")}</span>
                 <Input onChange={(event) => setModelDiscoveryPath(event.target.value)} placeholder="/models" value={modelDiscoveryPath} />
               </label>
+            ) : null}
+            {protocol === "open_ai_codex_responses" ? (
+              <div className="grid gap-3 rounded-xl border bg-muted/30 p-3 text-sm">
+                <p className="font-medium text-foreground">{t("settings.customProviders.codexCapabilities")}</p>
+                <label className="flex items-start gap-2">
+                  <input
+                    checked={websocketPolicy === "preferred_with_http_fallback"}
+                    className="mt-1"
+                    onChange={(event) => setWebsocketPolicy(event.target.checked ? "preferred_with_http_fallback" : "disabled")}
+                    type="checkbox"
+                  />
+                  <span>
+                    <span className="block font-medium">{t("settings.customProviders.codexWebsocket")}</span>
+                    <span className="block text-xs text-muted-foreground">{t("settings.customProviders.codexWebsocketHint")}</span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-2">
+                  <input
+                    checked={remoteCompactionPolicy === "enabled_with_local_fallback"}
+                    className="mt-1"
+                    onChange={(event) => setRemoteCompactionPolicy(event.target.checked ? "enabled_with_local_fallback" : "disabled")}
+                    type="checkbox"
+                  />
+                  <span>
+                    <span className="block font-medium">{t("settings.customProviders.codexRemoteCompaction")}</span>
+                    <span className="block text-xs text-muted-foreground">{t("settings.customProviders.codexRemoteCompactionHint")}</span>
+                  </span>
+                </label>
+              </div>
             ) : null}
             <div className="rounded-xl border bg-muted/30 p-3 text-xs text-muted-foreground">
               <p><span className="font-medium text-foreground">{t("settings.customProviders.protocolEndpoint")}</span> {protocolEndpoint || "—"}</p>
@@ -989,8 +1037,8 @@ function CustomProviderDialog(props: {
         <DialogFooter>
           {step === "connection" ? <Button disabled={probing || saving} onClick={() => props.onOpenChange(false)} type="button" variant="outline">{t("memory.common.cancel")}</Button> : <Button disabled={probing || saving} onClick={() => setStep(step === "result" ? "credential" : "connection")} type="button" variant="outline">{t("settings.customProviders.back")}</Button>}
           {step === "connection" && props.provider && !providerChanged ? <Button disabled type="button">{t("memory.common.save")}</Button> : null}
-          {step === "connection" && providerChanged && (cosmeticEditOnly || credentialFreeEdit) ? <Button disabled={saving} onClick={credentialFreeEdit ? saveCredentialFreeEdit : () => void save()} type="button">{saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}{t("memory.common.save")}</Button> : null}
-          {step === "connection" && (!props.provider || (providerChanged && !cosmeticEditOnly && !credentialFreeEdit)) ? <Button onClick={continueToCredential} type="button">{t("settings.customProviders.next")}</Button> : null}
+          {step === "connection" && providerChanged && (directSaveOnly || credentialFreeEdit) ? <Button disabled={saving} onClick={credentialFreeEdit ? saveCredentialFreeEdit : () => void save()} type="button">{saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}{t("memory.common.save")}</Button> : null}
+          {step === "connection" && (!props.provider || (providerChanged && !directSaveOnly && !credentialFreeEdit)) ? <Button onClick={continueToCredential} type="button">{t("settings.customProviders.next")}</Button> : null}
           {step === "credential" ? <Button disabled={probing} onClick={() => void probe()} type="button">{probing ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}{t(probing ? "settings.customProviders.probing" : "settings.customProviders.probe")}</Button> : null}
           {step === "result" && acceptedWithoutOverride ? <Button disabled={saving} onClick={() => void save()} type="button">{t(saving ? "settings.customProviders.saving" : "settings.customProviders.saveVerified")}</Button> : null}
           {step === "result" && probeResult?.manualFallbackAvailable ? <Button disabled={saving} onClick={() => setPendingConfirmation("manual")} type="button">{t(saving ? "settings.customProviders.saving" : "settings.customProviders.saveManual")}</Button> : null}
@@ -1328,6 +1376,9 @@ function customProtocolFromProfile(profileId: string): PublicAiCustomProviderPro
   if (profileId === "openai-responses.v1") {
     return "open_ai_responses"
   }
+  if (profileId === "openai-codex-responses.v1") {
+    return "open_ai_codex_responses"
+  }
   return null
 }
 
@@ -1339,6 +1390,9 @@ function customProtocolProfileId(protocol: PublicAiCustomProviderProtocol): stri
   }
   if (protocol === "open_ai_chat") {
     return "openai-chat-completions.v1"
+  }
+  if (protocol === "open_ai_codex_responses") {
+    return "openai-codex-responses.v1"
   }
   return "openai-responses.v1"
 }
@@ -1361,6 +1415,7 @@ const customProtocolOptions: Array<{ id: PublicAiCustomProviderProtocol; label: 
   { id: "anthropic_messages", label: "Anthropic Messages" },
   { id: "open_ai_chat", label: "OpenAI Chat Completions" },
   { id: "open_ai_responses", label: "OpenAI Responses" },
+  { id: "open_ai_codex_responses", label: "Codex Responses (full compatibility)" },
 ]
 
 // customProviderStepLabelKeys keeps step labels inside the closed translation-key contract.

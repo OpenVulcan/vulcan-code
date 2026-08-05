@@ -84,6 +84,12 @@ pub fn apply_task_session_compaction_result(
         compaction_result.policy,
     )
     .map_err(to_store_error)?;
+    vulcan_context_compaction::append_remote_responses_compaction_context(
+        &mut conversation_state,
+        &summary_message_id,
+        compaction_result,
+    )
+    .map_err(to_store_error)?;
     vulcan_context_compaction::compact_conversation_records_after_summary(
         &mut conversation_state,
         &summary_message_id,

@@ -116,6 +116,7 @@ fn session_addon_state_write_does_not_rewrite_segmented_state_document() {
             active_connection_id: Some(String::from("new-connection")),
             active_model_id: Some(String::from("new-model")),
             active_reasoning_effort: None,
+            active_reasoning_effort_explicit: false,
             active_temperature: None,
             provider_tool_selections: Default::default(),
             provider_tool_enabled_capabilities: Default::default(),

@@ -43,6 +43,10 @@ export interface PublicAiProtocolRoute {
   endpoint_path?: string;
   model_discovery?: PublicAiModelDiscoveryKind;
   model_discovery_path?: string;
+  responses_features?: {
+    websocket: PublicAiResponsesWebSocketPolicy;
+    remote_compaction: PublicAiResponsesRemoteCompactionPolicy;
+  };
   verified: boolean;
 }
 
@@ -123,7 +127,18 @@ export interface PublicAiProviderDescriptor {
 export type PublicAiCustomProviderProtocol =
   | "anthropic_messages"
   | "open_ai_chat"
-  | "open_ai_responses";
+  | "open_ai_responses"
+  | "open_ai_codex_responses";
+// PublicAiResponsesWebSocketPolicy selects the explicit Codex Responses transport preference.
+// PublicAiResponsesWebSocketPolicy 选择显式的 Codex Responses 传输偏好。
+export type PublicAiResponsesWebSocketPolicy =
+  | "disabled"
+  | "preferred_with_http_fallback";
+// PublicAiResponsesRemoteCompactionPolicy selects the explicit standalone compact behavior.
+// PublicAiResponsesRemoteCompactionPolicy 选择显式的独立远端压缩行为。
+export type PublicAiResponsesRemoteCompactionPolicy =
+  | "disabled"
+  | "enabled_with_local_fallback";
 
 // PublicAiCustomProviderModelDiscoveryMode selects automatic, custom-path, or manual discovery.
 // PublicAiCustomProviderModelDiscoveryMode 选择自动、自定义路径或手工发现。
@@ -136,6 +151,8 @@ export interface PublicAiCustomProviderSaveRequest {
   displayName: string;
   baseUrl: string;
   protocol: PublicAiCustomProviderProtocol;
+  websocketPolicy: PublicAiResponsesWebSocketPolicy;
+  remoteCompactionPolicy: PublicAiResponsesRemoteCompactionPolicy;
   authentication: "bearer_authorization" | "x_api_key";
   credentialDisplayName?: string;
   secret?: string;
@@ -789,8 +806,8 @@ export interface PublicAiSettingsSnapshot {
   // customProviderSystemModelDefaults is the backend-owned baseline shown before any provider override.
   // customProviderSystemModelDefaults 是尚无供应商覆盖时展示的后端持有基线。
   customProviderSystemModelDefaults: PublicAiCustomProviderModelDefaults;
-  // providersWithModelCustomizations is the backend-authoritative provider deletion blocklist.
-  // providersWithModelCustomizations 是后端权威的供应商删除阻止列表。
+  // providersWithModelCustomizations identifies providers whose removal warning must include owned settings.
+  // providersWithModelCustomizations 标识移除提示必须包含专属设置的供应商。
   providersWithModelCustomizations?: string[];
   customModelTemplateDecisionRecords?: PublicAiCustomModelTemplateDecisionRecord[];
   customModelConnectionAvailabilityRecords?: PublicAiCustomModelConnectionAvailabilityRecord[];

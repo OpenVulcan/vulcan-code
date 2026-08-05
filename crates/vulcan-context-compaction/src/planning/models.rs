@@ -1,3 +1,4 @@
+use serde_json::Value;
 use vulcan_context::{
     ContextCompactionPolicy, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,
 };
@@ -221,4 +222,37 @@ pub struct CompactionResult {
     /// Policy that must be used when applying this compaction result to the canonical conversation.
     /// 将该压缩结果应用到规范会话时必须使用的策略。
     pub policy: ContextCompactionPolicy,
+    /// Ordered opaque Responses compaction items that must be replayed on the exact route.
+    /// 必须在精确路由上重放的有序不透明 Responses 压缩项。
+    pub provider_context_items: Vec<Value>,
+    /// Exact route identity that owns the opaque provider context items.
+    /// 持有不透明供应商上下文项的精确路由身份。
+    pub provider_context_route: Option<ProviderContextRoute>,
+    /// Optional provider-reported usage metadata retained for checkpoint diagnostics.
+    /// 为检查点诊断保留的可选供应商用量元数据。
+    pub provider_context_usage: Option<Value>,
+    /// Optional upstream response identifier retained for checkpoint diagnostics.
+    /// 为检查点诊断保留的可选上游响应标识。
+    pub provider_context_response_id: Option<String>,
+}
+
+/// Identifies the provider route allowed to replay opaque compaction context.
+/// 标识允许重放不透明压缩上下文的供应商路由。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderContextRoute {
+    /// Exact provider identifier.
+    /// 精确供应商标识。
+    pub provider_id: String,
+    /// Exact credential connection identifier.
+    /// 精确凭据连接标识。
+    pub connection_id: String,
+    /// Non-secret resolved Responses route fingerprint.
+    /// 不含秘密的已解析 Responses 路由指纹。
+    pub route_fingerprint: String,
+    /// Exact protocol profile identifier.
+    /// 精确协议配置标识。
+    pub protocol_profile_id: String,
+    /// Exact model identifier.
+    /// 精确模型标识。
+    pub model_id: String,
 }

@@ -267,8 +267,12 @@ mod tests {
     /// 验证原生工具声明在能力快照往返序列化后保持不变。
     #[test]
     fn provider_native_tools_round_trip_without_loss() {
-        let mut capabilities = ModelCapabilities::default();
-        capabilities.provider_native_tools = vec![NativeToolKind::WebSearch];
+        // capabilities differs from the default only by its explicit provider-native tool contract.
+        // capabilities 仅通过显式供应商原生工具契约区别于默认值。
+        let capabilities = ModelCapabilities {
+            provider_native_tools: vec![NativeToolKind::WebSearch],
+            ..ModelCapabilities::default()
+        };
 
         let value = serde_json::to_value(&capabilities).expect("capabilities should serialize");
         let restored: ModelCapabilities =

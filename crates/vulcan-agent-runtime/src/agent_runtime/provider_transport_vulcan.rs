@@ -1,7 +1,9 @@
 //! Vulcan public-contract adapter for the existing host tool controller.
 //! 面向现有宿主工具控制器的 Vulcan 公共契约适配器。
 
+use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
+use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
 use crate::agent_runtime::provider_stream::ProviderDeltaStream;
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_transport_entry_inputs::{
@@ -17,14 +19,16 @@ use async_trait::async_trait;
 use base64::Engine;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::{
     AiContinuation, AiExecutionRequest, AiMessage, AiOperation, AiStreamEvent, ContentItem,
     MessageRole, ModelParameterValue, NativeToolKind, ParallelToolCallPolicy, PromptCachePolicy,
     ProviderReplayEnvelope, ReasoningEffort, ReasoningOutputPolicy, RequestUsage, ResourceKind,
     ResourceReference, StructuredOutputPolicy, ToolCall as PublicToolCall, ToolChoicePolicy,
-    ToolDefinition, ToolResult, UsageValue,
+    ToolDefinition, ToolResult, UsageValue, canonicalize_codex_responses_replay_items,
+    is_replayable_codex_responses_item,
 };
+use vulcan_context::{SessionConversationState, SessionMessageEntry};
 use vulcan_core::provider::{
     VulcanProviderAdapter, VulcanProviderDeltaSink, VulcanStreamingProviderAdapter,
 };
@@ -38,8 +42,8 @@ use vulcan_core::types::{
     ProviderTurnResponse as CoreProviderTurnResponse, ProviderUsageSnapshot,
 };
 use vulcan_provider_adapters::{
-    CredentialExecutionSecret, ProviderExecutionClient, ProviderExecutionRoute,
-    ResolvedPublicAiExecution,
+    CredentialExecutionSecret, ProviderExecutionClient, ProviderExecutionFailure,
+    ProviderExecutionRoute, ProviderExecutionStream, ResolvedPublicAiExecution,
 };
 use vulcan_tools_manager::{
     VulcanToolSchemaProjectionContext, project_tool_parameters_schema,
@@ -49,6 +53,43 @@ use vulcan_tools_manager::{
 /// Vulcan-owned default output budget used when the provider reports no independent output limit.
 /// 当供应商未报告独立输出上限时使用的 Vulcan 本地默认输出预算。
 const DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT: u64 = 32_000;
+
+/// Stable prefix assigned to user-defined public AI providers.
+/// 分配给用户自定义公共 AI 供应商的稳定前缀。
+const CUSTOM_PUBLIC_AI_PROVIDER_ID_PREFIX: &str = "custom:";
+
+/// Delay before a dispatched Provider request receives one visible first-event waiting status.
+/// 已发出的 Provider 请求在显示首事件等待状态前的延迟。
+const PROVIDER_FIRST_EVENT_WAIT_STATUS_DELAY: std::time::Duration =
+    std::time::Duration::from_secs(5);
+
+/// Poll interval used only while an initially selected Responses WebSocket may switch to HTTPS.
+/// 仅在最初选择的 Responses WebSocket 可能切换到 HTTPS 时使用的轮询间隔。
+const RESPONSES_WEBSOCKET_FALLBACK_STATUS_POLL_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(50);
+
+/// Resolves how many WebSocket-only retries may delay an available HTTP fallback.
+/// 解析可用 HTTP 回退前允许由 WebSocket 专属重试造成的延迟次数。
+///
+/// # Parameters
+/// 参数
+/// `provider_id` identifies the immutable provider route and `configured_budget` is the ordinary
+/// host retry budget used by the official-provider path.
+/// `provider_id` 标识不可变供应商路由，`configured_budget` 是官方供应商路径使用的普通宿主重试预算。
+///
+/// # Returns
+/// 返回值
+/// Zero for opt-in custom providers so their first replay-safe WebSocket failure immediately uses
+/// HTTP, or the configured budget for registered providers that follow the official Codex policy.
+/// 对已选择启用的自定义供应商返回零，使首次可安全重放的 WebSocket 失败立即改用 HTTP；
+/// 对遵循官方 Codex 策略的注册供应商返回配置预算。
+fn responses_websocket_retry_budget(provider_id: &str, configured_budget: u32) -> u32 {
+    if provider_id.starts_with(CUSTOM_PUBLIC_AI_PROVIDER_ID_PREFIX) {
+        0
+    } else {
+        configured_budget
+    }
+}
 
 /// Resolves the requested output budget while treating catalog output limits as upper bounds.
 /// 在将目录输出限制视为上限的前提下解析请求输出预算。
@@ -99,6 +140,10 @@ pub(crate) fn execute_vulcan_public_stream(
 ) -> ProviderDeltaStream {
     let cache_scope_id = request.session_id.to_string();
     let workspace_path = request.workspace_path.clone();
+    let websocket_retry_budget = responses_websocket_retry_budget(
+        resolved.route.provider.id.as_str(),
+        request.retry_policy.ordinary_retry_budget(),
+    );
     let output_token_limit = resolved_public_output_token_limit(
         resolved.overrides.output_limit,
         resolved.model.capabilities.output_limit,
@@ -129,6 +174,7 @@ pub(crate) fn execute_vulcan_public_stream(
                 resolved.model.capabilities.output_resources.clone(),
                 workspace_path.clone(),
                 live_sender,
+                websocket_retry_budget,
             )
         },
         "Vulcan 公共契约",
@@ -184,6 +230,7 @@ pub(crate) fn capture_vulcan_public_stream(
             resolved.model.capabilities.output_resources,
             workspace_path,
             live_sender,
+            0,
         );
         let public_request = adapter
             .build_request(&prepared.core_snapshot, &controller_config)
@@ -191,7 +238,7 @@ pub(crate) fn capture_vulcan_public_stream(
             .map_err(|error| error.to_string())?;
         let encoded = resolved
             .client
-            .encode_request_with_credential(
+            .encode_request_for_selected_transport_with_credential(
                 &resolved.route,
                 &public_request.public,
                 &adapter.secret,
@@ -250,6 +297,9 @@ pub(crate) struct VulcanPublicContractAdapter {
     /// Live host sender for tool request construction.
     /// 工具请求构造使用的宿主实时发送器。
     live_sender: ProviderLiveDeltaSender,
+    /// Host-controlled retry count allowed before a safe WebSocket failure falls back to HTTP.
+    /// 安全 WebSocket 失败回退 HTTP 前允许的宿主控制重试次数。
+    websocket_retry_budget: u32,
 }
 
 /// Carries the public request together with the controller budget snapshot.
@@ -275,7 +325,7 @@ impl VulcanPublicContractAdapter {
     /// before dispatch; `live_sender` projects tool construction to the WebUI.
     /// `route`、`secret` 与 `client` 标识精确执行路径；`tools` 是宿主工具定义；
     /// `output_token_limit`、`prompt_cache` 与 `model_parameters` 在分派前解析；
-    /// `live_sender` 将工具构造投影到 WebUI。
+    /// `live_sender` 将工具构造投影到 WebUI；`websocket_retry_budget` 保持供应商重试配置。
     ///
     /// # Returns
     /// 返回值
@@ -297,38 +347,18 @@ impl VulcanPublicContractAdapter {
         output_resources: Vec<ResourceKind>,
         workspace_path: String,
         live_sender: ProviderLiveDeltaSender,
+        websocket_retry_budget: u32,
     ) -> Self {
-        // schema_projection_context freezes the exact provider, protocol family, and model before any tool definition enters the public request.
-        // schema_projection_context 在任何工具定义进入公共请求前冻结精确供应商、协议族与模型。
-        let schema_projection_context = VulcanToolSchemaProjectionContext {
-            provider_id: route.provider.id.as_str(),
-            api_family_key: tool_schema_api_family_key(
-                route.protocol_route.protocol_profile_id.as_str(),
-            ),
-            model_id: model_id.as_str(),
-            additional_params: None,
-        };
-        // schema_projection_profile reuses the host-owned compatibility policy instead of duplicating provider schema rewrites in each protocol encoder.
-        // schema_projection_profile 复用宿主自有兼容策略，避免在每个协议编码器中重复供应商 Schema 改写。
-        let schema_projection_profile =
-            resolve_tool_schema_projection_profile(&schema_projection_context);
+        // publicTools applies the same route-bound schema projection used by standalone remote compaction.
+        // publicTools 应用与独立远端压缩相同的路由绑定 Schema 投影。
+        let public_tools = project_public_tool_definitions(&route, model_id.as_str(), tools);
         Self {
             route,
             model_id,
             cache_scope_id,
             secret,
             client,
-            tools: tools
-                .into_iter()
-                .map(|tool| ToolDefinition {
-                    name: tool.name,
-                    description: tool.description,
-                    input_schema: project_tool_parameters_schema(
-                        &tool.parameters,
-                        schema_projection_profile,
-                    ),
-                })
-                .collect(),
+            tools: public_tools,
             provider_native_tools,
             output_token_limit,
             prompt_cache,
@@ -338,6 +368,173 @@ impl VulcanPublicContractAdapter {
             output_resources,
             workspace_path,
             live_sender,
+            websocket_retry_budget,
+        }
+    }
+}
+
+/// Emits one user-visible status when an initially selected WebSocket request switches to HTTP.
+/// 当最初选择 WebSocket 的请求切换到 HTTP 时发出一次用户可见状态。
+///
+/// # Parameters
+/// 参数
+/// `provider_id` identifies the visible provider; `fallback_active` is read from the exact
+/// session transport state; `websocket_selected_at_start` and `announced` enforce one event for
+/// this physical request; `live_sender` forwards the event to the existing workbench stream.
+/// `provider_id` 标识可见供应商；`fallback_active` 从精确会话传输状态读取；
+/// `websocket_selected_at_start` 与 `announced` 保证单个物理请求只发出一次；
+/// `live_sender` 把事件转发到现有工作台流。
+///
+/// # Returns
+/// 返回值
+/// Success when no announcement is needed or the status was forwarded, otherwise a closed-stream error.
+/// 无需通知或状态已转发时返回成功，否则返回流已关闭错误。
+fn emit_responses_websocket_http_fallback_status(
+    provider_id: &str,
+    websocket_selected_at_start: bool,
+    fallback_active: bool,
+    announced: &mut bool,
+    live_sender: &ProviderLiveDeltaSender,
+) -> Result<(), VulcanCoreError> {
+    if !websocket_selected_at_start || *announced || !fallback_active {
+        return Ok(());
+    }
+    *announced = true;
+    live_sender
+        .send(Ok(ProviderStreamDelta::RuntimeEvent(
+            RuntimeEvent::new(
+                RuntimeEventKind::TransportFallback,
+                "Provider 传输回退",
+                "Responses WebSocket 重试预算已耗尽，当前会话已安全切换到 HTTPS。",
+            )
+            .with_metadata(Some(json!({
+                "from_transport": "responses_websocket",
+                "to_transport": "https",
+                "scope": "session_route_model",
+            }))),
+        )))
+        .map_err(|_| {
+            provider_failure(
+                provider_id,
+                "The provider runtime stream closed before the transport fallback status could be published.",
+            )
+        })
+}
+
+/// Emits one visible status when a dispatched Provider request has not produced its first event promptly.
+/// 当已发出的 Provider 请求未及时产生首个事件时，发出一次可见状态。
+///
+/// # Parameters
+/// 参数
+/// `provider_id` identifies the visible provider; `announced` enforces one event for the physical
+/// request; `live_sender` forwards the event to the existing workbench stream.
+/// `provider_id` 标识可见供应商；`announced` 保证单个真实请求只发出一次；
+/// `live_sender` 把事件转发到现有工作台流。
+///
+/// # Returns
+/// 返回值
+/// Success when the status was already announced or forwarded, otherwise a closed-stream error.
+/// 状态已发送过或成功转发时返回成功，否则返回流已关闭错误。
+fn emit_provider_first_event_waiting_status(
+    provider_id: &str,
+    announced: &mut bool,
+    live_sender: &ProviderLiveDeltaSender,
+) -> Result<(), VulcanCoreError> {
+    if *announced {
+        return Ok(());
+    }
+    *announced = true;
+    live_sender
+        .send(Ok(ProviderStreamDelta::RuntimeEvent(
+            RuntimeEvent::new(
+                RuntimeEventKind::ProviderWaiting,
+                "等待 Provider 响应",
+                "请求已发送，正在等待 Provider 返回首个响应事件。",
+            )
+            .with_metadata(Some(json!({
+                "stage": "awaiting_first_provider_event",
+                "elapsed_ms": PROVIDER_FIRST_EVENT_WAIT_STATUS_DELAY.as_millis(),
+            }))),
+        )))
+        .map_err(|_| {
+            provider_failure(
+                provider_id,
+                "The provider runtime stream closed before the first-event waiting status could be published.",
+            )
+        })
+}
+
+/// Waits for the next public Provider stream item while publishing transport progress independently.
+/// 在等待下一项公共 Provider 流事件时，独立发布传输进度。
+///
+/// # Parameters
+/// 参数
+/// `stream` is the active normalized Provider stream; `provider_id` identifies its visible route;
+/// `websocket_selected_at_start` freezes the initial transport choice; `fallback_active` reads the
+/// exact session-route fallback state; the announcement flags enforce one event of each kind;
+/// `live_sender` forwards visible status records.
+/// `stream` 是活动的规范化 Provider 流；`provider_id` 标识其可见路由；
+/// `websocket_selected_at_start` 固定初始传输选择；`fallback_active` 读取精确会话路由的回退状态；
+/// 两个通知标志保证每类事件只发送一次；`live_sender` 转发可见状态记录。
+///
+/// # Returns
+/// 返回值
+/// The next stream item, end-of-stream, or a visible-status publication failure.
+/// 返回下一项流事件、流结束，或可见状态发布失败。
+async fn next_public_execution_item_with_transport_progress<F>(
+    stream: &mut ProviderExecutionStream,
+    provider_id: &str,
+    websocket_selected_at_start: bool,
+    fallback_active: F,
+    websocket_fallback_announced: &mut bool,
+    first_event_waiting_announced: &mut bool,
+    live_sender: &ProviderLiveDeltaSender,
+) -> Result<Option<Result<AiStreamEvent, ProviderExecutionFailure>>, VulcanCoreError>
+where
+    F: Fn() -> bool,
+{
+    // nextItem stays pinned across timer ticks so polling never cancels an in-flight stream receive.
+    // nextItem 在定时器触发期间保持固定，确保轮询不会取消正在进行的流接收。
+    let next_item = stream.next();
+    tokio::pin!(next_item);
+    // fallbackPoll checks the exact transport state without waiting for the HTTP fallback to finish.
+    // fallbackPoll 检查精确传输状态，无需等待 HTTP 回退执行结束。
+    let mut fallback_poll =
+        tokio::time::interval(RESPONSES_WEBSOCKET_FALLBACK_STATUS_POLL_INTERVAL);
+    fallback_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // firstEventWait delays the generic waiting note so healthy low-latency requests remain quiet.
+    // firstEventWait 延迟通用等待备注，使健康的低延迟请求保持简洁。
+    let first_event_wait = tokio::time::sleep(PROVIDER_FIRST_EVENT_WAIT_STATUS_DELAY);
+    tokio::pin!(first_event_wait);
+
+    loop {
+        tokio::select! {
+            item = &mut next_item => {
+                emit_responses_websocket_http_fallback_status(
+                    provider_id,
+                    websocket_selected_at_start,
+                    fallback_active(),
+                    websocket_fallback_announced,
+                    live_sender,
+                )?;
+                return Ok(item);
+            }
+            _ = fallback_poll.tick(), if websocket_selected_at_start && !*websocket_fallback_announced => {
+                emit_responses_websocket_http_fallback_status(
+                    provider_id,
+                    websocket_selected_at_start,
+                    fallback_active(),
+                    websocket_fallback_announced,
+                    live_sender,
+                )?;
+            }
+            _ = &mut first_event_wait, if !*first_event_waiting_announced => {
+                emit_provider_first_event_waiting_status(
+                    provider_id,
+                    first_event_waiting_announced,
+                    live_sender,
+                )?;
+            }
         }
     }
 }
@@ -370,6 +567,78 @@ fn tool_schema_api_family_key(protocol_profile_id: &str) -> &'static str {
     }
 }
 
+/// Projects host-owned provider tools through the exact route/model compatibility profile.
+/// 通过精确路由与模型兼容配置投影宿主持有的 Provider 工具。
+///
+/// # Parameters
+/// 参数
+/// `route` and `model_id` freeze the public protocol target; `tools` contains the already resolved
+/// provider-visible definitions.
+/// `route` 与 `model_id` 冻结公共协议目标；`tools` 包含已经解析的 Provider 可见定义。
+///
+/// # Returns
+/// 返回值
+/// Route-normalized public tool definitions suitable for ordinary responses and remote compaction.
+/// 返回适用于普通 Responses 与远端压缩的路由正规化公共工具定义。
+pub(crate) fn project_public_tool_definitions(
+    route: &ProviderExecutionRoute,
+    model_id: &str,
+    tools: Vec<ProviderToolDefinition>,
+) -> Vec<ToolDefinition> {
+    // schemaProjectionContext freezes the exact provider, protocol family, and model before projection.
+    // schemaProjectionContext 在投影前冻结精确供应商、协议族与模型。
+    let schema_projection_context = VulcanToolSchemaProjectionContext {
+        provider_id: route.provider.id.as_str(),
+        api_family_key: tool_schema_api_family_key(
+            route.protocol_route.protocol_profile_id.as_str(),
+        ),
+        model_id,
+        additional_params: None,
+    };
+    // schemaProjectionProfile reuses the host-owned compatibility policy for every request path.
+    // schemaProjectionProfile 为每条请求路径复用宿主自有兼容策略。
+    let schema_projection_profile =
+        resolve_tool_schema_projection_profile(&schema_projection_context);
+    tools
+        .into_iter()
+        .map(|tool| ToolDefinition {
+            name: tool.name,
+            description: tool.description,
+            input_schema: project_tool_parameters_schema(
+                &tool.parameters,
+                schema_projection_profile,
+            ),
+        })
+        .collect()
+}
+
+/// Resolves provider-native tools exactly as the ordinary public Responses request path does.
+/// 按普通公共 Responses 请求路径的相同规则解析 Provider 原生工具。
+///
+/// # Parameters
+/// 参数
+/// `protocol_profile_id`, `output_resources`, and `native_tools` are frozen from one resolved
+/// provider execution.
+/// `protocol_profile_id`、`output_resources` 与 `native_tools` 来自同一份已解析 Provider 执行。
+///
+/// # Returns
+/// 返回值
+/// The deduplicated native-tool list, including Codex image generation when the route supports image output.
+/// 返回去重后的原生工具列表；当路由支持图片输出时包含 Codex 图片生成。
+pub(crate) fn resolve_public_native_tools(
+    protocol_profile_id: &str,
+    output_resources: &[ResourceKind],
+    mut native_tools: Vec<NativeToolKind>,
+) -> Vec<NativeToolKind> {
+    if protocol_profile_id == vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID
+        && output_resources.contains(&ResourceKind::Image)
+        && !native_tools.contains(&NativeToolKind::ImageGeneration)
+    {
+        native_tools.push(NativeToolKind::ImageGeneration);
+    }
+    native_tools
+}
+
 #[async_trait]
 impl VulcanProviderAdapter for VulcanPublicContractAdapter {
     type Request = VulcanPublicContractRequest;
@@ -398,12 +667,15 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
                 content: vec![ContentItem::Text {
                     text: system_prompt.clone(),
                 }],
+                provider_context_items: Vec::new(),
             });
         }
         for message in &snapshot.messages {
             let mut public_message = core_message_to_public(
                 message,
                 self.provider_id(),
+                self.route.connection.id.as_str(),
+                self.route.request_url("/responses").as_str(),
                 self.route.protocol_route.protocol_profile_id.as_str(),
                 self.model_id(),
             )?;
@@ -427,16 +699,13 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
             self.model_id.as_str(),
             usize::from(!system_prompt.is_empty()),
         );
-        let mut native_tools = self.provider_native_tools.clone();
-        if self.route.protocol_route.protocol_profile_id
-            == vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID
-            && self.output_resources.contains(&ResourceKind::Image)
-            && !native_tools.contains(&NativeToolKind::ImageGeneration)
-        {
-            // Preserve the existing Codex image-generation capability while merging route metadata.
-            // 合并路由元数据时保留现有 Codex 图片生成能力。
-            native_tools.push(NativeToolKind::ImageGeneration);
-        }
+        // nativeTools follows the shared ordinary/remote Codex capability projection.
+        // nativeTools 遵循普通与远端 Codex 共享的能力投影。
+        let native_tools = resolve_public_native_tools(
+            self.route.protocol_route.protocol_profile_id.as_str(),
+            self.output_resources.as_slice(),
+            self.provider_native_tools.clone(),
+        );
         let public = AiExecutionRequest {
             operation: AiOperation::ConversationRespond,
             model_id: config.model_id.clone(),
@@ -585,18 +854,44 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                 )
             })?;
         let execution_id = uuid::Uuid::new_v4().to_string();
-        let mut stream = self.client.execute(
+        let websocket_selected_at_start = self
+            .client
+            .responses_websocket_selected_for_request(&self.route, &public);
+        let mut websocket_fallback_announced = false;
+        // firstEventWaitingAnnounced prevents repeated visible notes during one slow physical request.
+        // firstEventWaitingAnnounced 防止单个缓慢真实请求重复产生可见备注。
+        let mut first_event_waiting_announced = false;
+        let mut stream = self.client.execute_with_websocket_retry_budget(
             self.route.clone(),
-            public,
+            public.clone(),
             self.secret.clone(),
             execution_id,
+            self.websocket_retry_budget,
         );
+        // routeFingerprint binds replay signatures to the exact resolved endpoint used by this request.
+        // routeFingerprint 将重放签名绑定到本次请求使用的精确已解析端点。
+        let route_fingerprint = self.route.request_url("/responses");
         let mut response = PublicTurnAccumulator::new(
             self.provider_id(),
+            self.route.connection.id.as_str(),
+            route_fingerprint.as_str(),
             self.route.protocol_route.protocol_profile_id.as_str(),
             self.model_id(),
         );
-        while let Some(item) = stream.next().await {
+        while let Some(item) = next_public_execution_item_with_transport_progress(
+            &mut stream,
+            self.provider_id(),
+            websocket_selected_at_start,
+            || {
+                self.client
+                    .responses_websocket_http_fallback_active(&self.route, &public)
+            },
+            &mut websocket_fallback_announced,
+            &mut first_event_waiting_announced,
+            &self.live_sender,
+        )
+        .await?
+        {
             let event = item.map_err(|mut failure| {
                 attach_execution_route_context(
                     &mut failure.error,
@@ -667,32 +962,12 @@ fn public_execution_failure(
     }
 }
 
-/// Formats one public execution error for user-facing diagnostics only.
-/// 仅为面向用户的诊断格式化一个公共执行错误。
+/// Serializes one public execution error as JSON for lossless user-facing diagnostics.
+/// 将一个公共执行错误序列化为 JSON，以便面向用户的诊断信息无损传递。
 fn public_execution_failure_message(error: &vulcan_ai_contract::AiExecutionError) -> String {
-    let mut fields = vec![
-        format!("category={:?}", error.category),
-        format!("stage={}", error.stage),
-        format!("dispatch_outcome={:?}", error.dispatch_outcome),
-        format!(
-            "semantic_output_observed={}",
-            error.semantic_output_observed
-        ),
-        format!("retryable={}", error.retryable),
-    ];
-    if let Some(status) = error.http_status {
-        fields.push(format!("HTTP {status}"));
-    }
-    if let Some(subcategory) = &error.subcategory {
-        fields.push(format!("subcategory={subcategory}"));
-    }
-    if let Some(code) = &error.upstream_code {
-        fields.push(format!("upstream_code={code}"));
-    }
-    if let Some(retry_after) = &error.retry_after {
-        fields.push(format!("retry_after_ms={}", retry_after.delay_milliseconds));
-    }
-    format!("{} | {}", fields.join(" | "), error.message)
+    // AiExecutionError contains only serde-supported scalar, option, enum, and nested struct fields.
+    // AiExecutionError 仅包含 serde 支持的标量、可选值、枚举与嵌套结构字段。
+    serde_json::to_string(error).expect("AiExecutionError serialization is infallible")
 }
 
 /// Accumulates public stream events into the controller's completed-turn shape.
@@ -702,6 +977,12 @@ struct PublicTurnAccumulator {
     /// Exact provider definition scope for durable replay.
     /// 可持久化重放使用的精确供应商定义作用域。
     provider_id: String,
+    /// Exact credential connection scope for durable replay.
+    /// 可持久化重放使用的精确凭据连接作用域。
+    connection_id: String,
+    /// Exact non-secret resolved request URL for durable replay.
+    /// 可持久化重放使用的精确不含秘密的已解析请求 URL。
+    route_fingerprint: String,
     /// Exact protocol profile scope for provider-specific replay signatures.
     /// 供应商专属重放签名使用的精确协议 Profile 作用域。
     protocol_profile_id: String,
@@ -777,17 +1058,25 @@ impl PublicTurnAccumulator {
     ///
     /// # Parameters
     /// 参数
-    /// The identifiers are the provider definition, protocol profile, and model selected for
-    /// this physical request.
-    /// 三个标识分别是本次物理请求选定的供应商定义、协议 Profile 与模型。
+    /// The identifiers are the provider definition, credential connection, resolved request URL,
+    /// protocol profile, and model selected for this physical request.
+    /// 各标识分别是本次物理请求选定的供应商定义、凭据连接、已解析请求 URL、协议 Profile 与模型。
     ///
     /// # Returns
     /// 返回值
     /// A new empty turn accumulator.
     /// 返回一个新的空回合累积器。
-    fn new(provider_id: &str, protocol_profile_id: &str, model_id: &str) -> Self {
+    fn new(
+        provider_id: &str,
+        connection_id: &str,
+        route_fingerprint: &str,
+        protocol_profile_id: &str,
+        model_id: &str,
+    ) -> Self {
         Self {
             provider_id: provider_id.to_string(),
+            connection_id: connection_id.to_string(),
+            route_fingerprint: route_fingerprint.to_string(),
             protocol_profile_id: protocol_profile_id.to_string(),
             model_id: model_id.to_string(),
             text: String::new(),
@@ -1121,6 +1410,8 @@ impl PublicTurnAccumulator {
             "vulcan_ai": {
                 "replay": ProviderReplayEnvelope::new(
                     self.provider_id.clone(),
+                    self.connection_id.clone(),
+                    self.route_fingerprint.clone(),
                     self.protocol_profile_id.clone(),
                     self.model_id.clone(),
                     replay_content,
@@ -1596,9 +1887,92 @@ fn minimax_local_resource_byte_limit(
 
 /// Converts one canonical controller message into the public contract.
 /// 将一条规范控制器消息转换为公共契约。
+/// Projects the exact planned canonical source through the same route used for compact dispatch.
+/// 通过压缩分派使用的同一路由投影精确规划的规范来源。
+///
+/// # Parameters
+/// 参数
+/// `conversation_state` owns lossless canonical messages, `source` selects the exact planner window,
+/// and `resolved` freezes route, model capabilities, media projection, and opaque replay identity.
+/// `conversation_state` 持有无损规范消息，`source` 选择精确规划窗口，`resolved` 冻结路由、
+/// 模型能力、媒体投影与不透明重放身份。
+///
+/// # Returns
+/// 返回值
+/// Ordered provider-neutral messages with tools, results, images, and prior compact items preserved,
+/// or a pre-dispatch projection error without sending a provider request.
+/// 返回保留工具、结果、图片与既有压缩项的有序供应商无关消息；投影失败时在发送前返回错误。
+pub(crate) async fn build_responses_compaction_messages(
+    conversation_state: &SessionConversationState,
+    source: &[SessionMessageEntry],
+    resolved: &ResolvedPublicAiExecution,
+) -> Result<Vec<AiMessage>, String> {
+    // sourceIds is the exact planner-selected canonical window and rejects ambiguous duplicates.
+    // sourceIds 是规划器精确选中的规范窗口，并拒绝有歧义的重复标识。
+    let source_ids = source
+        .iter()
+        .map(|message| message.id.as_str())
+        .collect::<BTreeSet<_>>();
+    if source_ids.len() != source.len() {
+        return Err(String::from(
+            "Remote Responses compaction source contains duplicate message identities.",
+        ));
+    }
+    // snapshot validates canonical identities before any route-specific projection runs.
+    // snapshot 在执行任何路由专属投影前校验规范身份。
+    let snapshot = build_core_conversation_snapshot(conversation_state)?;
+    // routeFingerprint must match both existing opaque checkpoints and the immutable dispatch route.
+    // routeFingerprint 必须同时匹配既有不透明检查点与不可变分派路由。
+    let route_fingerprint = resolved.route.request_url("/responses");
+    // projectedIds proves every planner-selected source row was found in the canonical snapshot.
+    // projectedIds 证明规划器选择的每条来源记录都存在于规范快照中。
+    let mut projected_ids = BTreeSet::new();
+    // messages retains canonical order after exact-window filtering.
+    // messages 在精确窗口过滤后保留规范顺序。
+    let mut messages = Vec::new();
+    for message in &snapshot.messages {
+        if !source_ids.contains(message.id.as_str()) {
+            continue;
+        }
+        projected_ids.insert(message.id.as_str());
+        // publicMessage uses the normal request bridge so tool and provider item shapes cannot diverge.
+        // publicMessage 使用普通请求桥接，避免工具与供应商项形态发生分歧。
+        let mut public_message = core_message_to_public(
+            message,
+            resolved.route.provider.id.as_str(),
+            resolved.route.connection.id.as_str(),
+            route_fingerprint.as_str(),
+            resolved.route.protocol_route.protocol_profile_id.as_str(),
+            resolved.model.id.as_str(),
+        )
+        .map_err(|error| error.to_string())?;
+        resolve_public_message_resources(
+            &mut public_message,
+            &resolved.route,
+            resolved.model.id.as_str(),
+            resolved.model.capabilities.input_resources.as_slice(),
+            &resolved.client,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        if public_message.content.is_empty() && public_message.provider_context_items.is_empty() {
+            continue;
+        }
+        messages.push(public_message);
+    }
+    if projected_ids != source_ids {
+        return Err(String::from(
+            "Remote Responses compaction source no longer matches the canonical conversation.",
+        ));
+    }
+    Ok(messages)
+}
+
 fn core_message_to_public(
     message: &vulcan_core::types::ConversationMessage,
     provider_id: &str,
+    connection_id: &str,
+    route_fingerprint: &str,
     protocol_profile_id: &str,
     model_id: &str,
 ) -> Result<AiMessage, VulcanCoreError> {
@@ -1630,6 +2004,7 @@ fn core_message_to_public(
             Ok(AiMessage {
                 role: MessageRole::User,
                 content,
+                provider_context_items: Vec::new(),
             })
         }
         CoreConversationPayload::Assistant {
@@ -1639,38 +2014,54 @@ fn core_message_to_public(
             tool_calls,
             ..
         } => {
+            let provider_context_items = responses_compaction_items_for_route(
+                provider_message_state.as_ref(),
+                provider_id,
+                connection_id,
+                route_fingerprint,
+                protocol_profile_id,
+                model_id,
+            )?;
             if let Some(content) = replay_content_for_route(
                 provider_message_state.as_ref(),
                 provider_id,
+                connection_id,
+                route_fingerprint,
                 protocol_profile_id,
                 model_id,
             )? {
                 return Ok(AiMessage {
                     role: MessageRole::Assistant,
                     content,
+                    provider_context_items,
                 });
             }
             let mut content = Vec::new();
-            if !reasoning.is_empty() {
-                content.push(ContentItem::Reasoning {
-                    text: reasoning.clone(),
-                    signature: None,
-                });
+            // Opaque compaction items replace the anchor's local diagnostic text on their exact route.
+            // 不透明压缩项在精确路由上替代锚点的本地诊断文本。
+            if provider_context_items.is_empty() {
+                if !reasoning.is_empty() {
+                    content.push(ContentItem::Reasoning {
+                        text: reasoning.clone(),
+                        signature: None,
+                    });
+                }
+                if !text.is_empty() {
+                    content.push(ContentItem::Text { text: text.clone() });
+                }
+                content.extend(tool_calls.iter().map(|call| ContentItem::ToolCall {
+                    call: PublicToolCall {
+                        id: call.tool_call_id.clone().unwrap_or_else(|| call.id.clone()),
+                        name: call.tool_name.clone(),
+                        arguments: call.arguments.clone(),
+                        signature: None,
+                    },
+                }));
             }
-            if !text.is_empty() {
-                content.push(ContentItem::Text { text: text.clone() });
-            }
-            content.extend(tool_calls.iter().map(|call| ContentItem::ToolCall {
-                call: PublicToolCall {
-                    id: call.tool_call_id.clone().unwrap_or_else(|| call.id.clone()),
-                    name: call.tool_name.clone(),
-                    arguments: call.arguments.clone(),
-                    signature: None,
-                },
-            }));
             Ok(AiMessage {
                 role: MessageRole::Assistant,
                 content,
+                provider_context_items,
             })
         }
         CoreConversationPayload::ToolResult {
@@ -1693,6 +2084,7 @@ fn core_message_to_public(
                         content: Value::String(text.clone()),
                     },
                 }],
+                provider_context_items: Vec::new(),
             })
         }
         CoreConversationPayload::AgentMessage { .. } => Ok(AiMessage {
@@ -1703,6 +2095,7 @@ fn core_message_to_public(
                     .agent_message_model_text()
                     .ok_or_else(|| provider_failure("vulcan", "Agent message rendering failed."))?,
             }],
+            provider_context_items: Vec::new(),
         }),
     }
 }
@@ -1724,6 +2117,8 @@ fn core_message_to_public(
 fn replay_content_for_route(
     provider_message_state: Option<&Value>,
     provider_id: &str,
+    connection_id: &str,
+    route_fingerprint: &str,
     protocol_profile_id: &str,
     model_id: &str,
 ) -> Result<Option<Vec<ContentItem>>, VulcanCoreError> {
@@ -1739,10 +2134,89 @@ fn replay_content_for_route(
                 format!("Persisted public replay envelope is invalid: {error}").as_str(),
             )
         })?;
-    if !envelope.matches_route(provider_id, protocol_profile_id, model_id) {
+    if !envelope.matches_route(
+        provider_id,
+        connection_id,
+        route_fingerprint,
+        protocol_profile_id,
+        model_id,
+    ) {
         return Ok(None);
     }
     Ok(Some(envelope.content))
+}
+
+/// Reads route-bound remote Responses compaction items from one canonical assistant state.
+/// 从一条规范助手状态读取绑定路由的远端 Responses 压缩项。
+///
+/// # Parameters
+/// 参数
+/// `provider_message_state` is the persisted assistant extension; the remaining identifiers freeze
+/// the only route allowed to replay the ordered opaque Responses item list.
+/// `provider_message_state` 是持久化助手扩展；其余标识冻结唯一允许重放有序不透明 Responses 项列表的路由。
+///
+/// # Returns
+/// 返回值
+/// A validated ordered Responses-item list, or an empty list when no exact route-bound state exists.
+/// 返回已验证的有序 Responses 项列表；不存在精确路由绑定状态时返回空列表。
+fn responses_compaction_items_for_route(
+    provider_message_state: Option<&Value>,
+    provider_id: &str,
+    connection_id: &str,
+    route_fingerprint: &str,
+    protocol_profile_id: &str,
+    model_id: &str,
+) -> Result<Vec<Value>, VulcanCoreError> {
+    let Some(value) =
+        provider_message_state.and_then(|state| state.pointer("/vulcan_ai/responses_compaction"))
+    else {
+        return Ok(Vec::new());
+    };
+    let envelope = value.as_object().ok_or_else(|| {
+        provider_failure(
+            provider_id,
+            "Persisted Responses compaction envelope must be an object.",
+        )
+    })?;
+    if envelope.get("provider_id").and_then(Value::as_str) != Some(provider_id)
+        || envelope.get("connection_id").and_then(Value::as_str) != Some(connection_id)
+        || envelope.get("route_fingerprint").and_then(Value::as_str) != Some(route_fingerprint)
+        || envelope.get("protocol_profile_id").and_then(Value::as_str) != Some(protocol_profile_id)
+        || envelope.get("model_id").and_then(Value::as_str) != Some(model_id)
+    {
+        return Err(provider_failure(
+            provider_id,
+            "Persisted Responses compaction context belongs to a different provider route and cannot be discarded safely.",
+        ));
+    }
+    let items = envelope
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            provider_failure(
+                provider_id,
+                "Persisted Responses compaction envelope is missing its item list.",
+            )
+        })?;
+    // canonicalItems mirrors the official Codex deserializer alias before replay validation.
+    // canonicalItems 在重放校验前镜像官方 Codex 反序列化器别名。
+    let mut canonical_items = items.clone();
+    canonicalize_codex_responses_replay_items(&mut canonical_items);
+    let contains_compaction = canonical_items
+        .iter()
+        .any(|item| item.get("type").and_then(Value::as_str) == Some("compaction"));
+    if canonical_items.is_empty()
+        || !canonical_items
+            .iter()
+            .all(is_replayable_codex_responses_item)
+        || !contains_compaction
+    {
+        return Err(provider_failure(
+            provider_id,
+            "Persisted Responses compaction envelope contains an invalid ordered replayable item.",
+        ));
+    }
+    Ok(canonical_items)
 }
 
 /// Returns the model-visible text of one canonical controller message.
@@ -1763,7 +2237,7 @@ fn core_message_text(
 
 /// Converts public usage into the controller's temporary accounting shape.
 /// 将公共用量转换为控制器的临时统计结构。
-fn public_usage_to_core(usage: &RequestUsage) -> ProviderUsageSnapshot {
+pub(super) fn public_usage_to_core(usage: &RequestUsage) -> ProviderUsageSnapshot {
     ProviderUsageSnapshot {
         input_tokens: known_usage(&usage.input_tokens),
         uncached_input_tokens: known_usage(&usage.uncached_input_tokens),
@@ -1797,7 +2271,10 @@ fn provider_failure(provider_id: &str, message: &str) -> VulcanCoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     /// RecordingProviderDeltaSink retains canonical Core deltas for adapter projection tests.
     /// RecordingProviderDeltaSink 为适配器投影测试保留规范 Core 增量。
@@ -1849,14 +2326,301 @@ mod tests {
         assert_eq!(usage.total_tokens, reported(1_075));
     }
 
+    /// Verifies an exhausted WebSocket budget publishes exactly one visible HTTPS fallback status.
+    /// 验证 WebSocket 预算耗尽后只发布一次可见的 HTTPS 回退状态。
+    #[test]
+    fn websocket_http_fallback_status_is_published_once() {
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let mut announced = false;
+
+        emit_responses_websocket_http_fallback_status(
+            "custom:test",
+            true,
+            true,
+            &mut announced,
+            &sender,
+        )
+        .expect("fallback status should publish");
+        emit_responses_websocket_http_fallback_status(
+            "custom:test",
+            true,
+            true,
+            &mut announced,
+            &sender,
+        )
+        .expect("duplicate fallback status should be ignored");
+
+        let event = receiver
+            .try_recv()
+            .expect("one fallback runtime event should be visible")
+            .expect("fallback runtime event should not be an error");
+        let ProviderStreamDelta::RuntimeEvent(event) = event else {
+            panic!("fallback status should use the runtime-event projection");
+        };
+        assert_eq!(event.kind, RuntimeEventKind::TransportFallback);
+        assert_eq!(
+            event
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("to_transport"))
+                .and_then(Value::as_str),
+            Some("https")
+        );
+        assert!(receiver.try_recv().is_err());
+    }
+
+    /// Verifies the slow-first-event status is visible once and carries its exact wait stage.
+    /// 验证首事件缓慢状态只显示一次，并携带精确等待阶段。
+    #[test]
+    fn provider_first_event_waiting_status_is_published_once() {
+        // channel captures the exact workbench deltas emitted by the waiting-status helper.
+        // channel 捕获等待状态辅助函数发出的精确工作台增量。
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        // announced models the per-physical-request deduplication fence.
+        // announced 模拟单个真实请求的去重门禁。
+        let mut announced = false;
+
+        emit_provider_first_event_waiting_status("custom:test", &mut announced, &sender)
+            .expect("waiting status should publish");
+        emit_provider_first_event_waiting_status("custom:test", &mut announced, &sender)
+            .expect("duplicate waiting status should be ignored");
+
+        // event is the one visible runtime record emitted for the delayed first event.
+        // event 是针对首事件延迟发出的唯一可见运行记录。
+        let event = receiver
+            .try_recv()
+            .expect("one waiting runtime event should be visible")
+            .expect("waiting runtime event should not be an error");
+        let ProviderStreamDelta::RuntimeEvent(event) = event else {
+            panic!("waiting status should use the runtime-event projection");
+        };
+        assert_eq!(event.kind, RuntimeEventKind::ProviderWaiting);
+        assert_eq!(
+            event
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("stage"))
+                .and_then(Value::as_str),
+            Some("awaiting_first_provider_event")
+        );
+        assert!(receiver.try_recv().is_err());
+    }
+
+    /// Verifies a fallback transition is published while the replacement HTTP stream remains pending.
+    /// 验证替代 HTTP 流仍在等待时，回退转换已经发布。
+    #[tokio::test]
+    async fn websocket_fallback_status_does_not_wait_for_next_stream_item() {
+        // channel captures the runtime status independently from the deliberately pending stream.
+        // channel 独立捕获运行状态，而被测流会刻意保持等待。
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        // fallbackActive becomes true after the transport has switched internally.
+        // fallbackActive 在传输内部完成切换后变为真。
+        let fallback_active = Arc::new(AtomicBool::new(false));
+        // stream never yields, reproducing an HTTP response-header wait after WebSocket fallback.
+        // stream 永不产出，复现 WebSocket 回退后的 HTTP 响应头等待。
+        let mut stream: ProviderExecutionStream = Box::pin(futures_util::stream::pending());
+        // websocketFallbackAnnounced and firstEventWaitingAnnounced are the physical-request fences.
+        // websocketFallbackAnnounced 与 firstEventWaitingAnnounced 是真实请求门禁。
+        let mut websocket_fallback_announced = false;
+        let mut first_event_waiting_announced = false;
+        // activation flips the exact fallback state before the next polling interval.
+        // activation 在下一次轮询间隔前翻转精确回退状态。
+        let activation_state = fallback_active.clone();
+        let activation = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            activation_state.store(true, Ordering::SeqCst);
+        });
+
+        // pendingResult must time out because only the status, not a fake stream item, may be emitted.
+        // pendingResult 必须超时，因为只能发出状态，不能伪造流事件。
+        let pending_result = tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            next_public_execution_item_with_transport_progress(
+                &mut stream,
+                "custom:test",
+                true,
+                || fallback_active.load(Ordering::SeqCst),
+                &mut websocket_fallback_announced,
+                &mut first_event_waiting_announced,
+                &sender,
+            ),
+        )
+        .await;
+        activation
+            .await
+            .expect("fallback-state activation should complete");
+        assert!(
+            pending_result.is_err(),
+            "pending stream must not be synthesized"
+        );
+        assert!(websocket_fallback_announced);
+        assert!(!first_event_waiting_announced);
+
+        // event proves the visible fallback was published before any replacement stream item existed.
+        // event 证明替代流尚无事件时，可见回退已经发布。
+        let event = receiver
+            .try_recv()
+            .expect("fallback status should arrive while stream is pending")
+            .expect("fallback status should not be an error");
+        let ProviderStreamDelta::RuntimeEvent(event) = event else {
+            panic!("fallback status should use the runtime-event projection");
+        };
+        assert_eq!(event.kind, RuntimeEventKind::TransportFallback);
+        assert!(receiver.try_recv().is_err());
+    }
+
+    /// Verifies opaque compaction context requires the exact connection and resolved route.
+    /// 验证不透明压缩上下文必须匹配精确连接与已解析路由。
+    #[test]
+    fn responses_compaction_context_requires_exact_route_identity() {
+        let state = json!({
+            "vulcan_ai": {
+                "responses_compaction": {
+                    "provider_id": "custom:proxy",
+                    "connection_id": "connection-a",
+                    "route_fingerprint": "https://proxy.example/v1/responses",
+                    "protocol_profile_id": "openai-codex-responses.v1",
+                    "model_id": "gpt-5-codex",
+                    "items": [
+                        {"type": "compaction_summary", "encrypted_content": "opaque"},
+                        {"type": "message", "role": "assistant", "content": []}
+                    ]
+                }
+            }
+        });
+        // matchingItems must normalize the official alias before replaying it to the provider.
+        // matchingItems 必须在重放给供应商前规范化官方别名。
+        let matching_items = responses_compaction_items_for_route(
+            Some(&state),
+            "custom:proxy",
+            "connection-a",
+            "https://proxy.example/v1/responses",
+            "openai-codex-responses.v1",
+            "gpt-5-codex",
+        )
+        .expect("matching route should replay context");
+        assert_eq!(matching_items.len(), 2);
+        assert_eq!(matching_items[0]["type"], "compaction");
+        // publicMessage proves local checkpoint diagnostics are not emitted before the opaque item.
+        // publicMessage 证明本地检查点诊断不会先于不透明项发出。
+        let public_message = core_message_to_public(
+            &vulcan_core::types::ConversationMessage {
+                id: String::from("summary-1"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::from("local checkpoint diagnostics"),
+                    reasoning: String::new(),
+                    provider_message_id: None,
+                    provider_message_state: Some(state.clone()),
+                    usage: None,
+                    tool_calls: Vec::new(),
+                },
+            },
+            "custom:proxy",
+            "connection-a",
+            "https://proxy.example/v1/responses",
+            "openai-codex-responses.v1",
+            "gpt-5-codex",
+        )
+        .expect("matching compact anchor should project");
+        assert!(public_message.content.is_empty());
+        assert_eq!(public_message.provider_context_items.len(), 2);
+        assert!(
+            responses_compaction_items_for_route(
+                Some(&state),
+                "custom:proxy",
+                "connection-b",
+                "https://proxy.example/v1/responses",
+                "openai-codex-responses.v1",
+                "gpt-5-codex",
+            )
+            .is_err()
+        );
+        assert!(
+            responses_compaction_items_for_route(
+                Some(&state),
+                "custom:proxy",
+                "connection-a",
+                "https://proxy.example/changed/responses",
+                "openai-codex-responses.v1",
+                "gpt-5-codex",
+            )
+            .is_err()
+        );
+    }
+
+    /// Verifies ordinary replay content falls back locally when the credential or endpoint changes.
+    /// 验证凭据或端点变化时，普通重放内容会安全回退到本地规范内容。
+    #[test]
+    fn ordinary_replay_content_requires_exact_connection_route() {
+        // state contains one signed reasoning item produced by the original physical route.
+        // state 包含由原始物理路由生成的一项带签名推理内容。
+        let state = json!({
+            "vulcan_ai": {
+                "replay": ProviderReplayEnvelope::new(
+                    "custom:proxy",
+                    "connection-a",
+                    "https://proxy.example/v1/responses",
+                    "openai-codex-responses.v1",
+                    "gpt-5-codex",
+                    vec![ContentItem::Reasoning {
+                        text: String::from("reasoning"),
+                        signature: Some(String::from("opaque-signature")),
+                    }],
+                )
+            }
+        });
+
+        assert!(
+            replay_content_for_route(
+                Some(&state),
+                "custom:proxy",
+                "connection-a",
+                "https://proxy.example/v1/responses",
+                "openai-codex-responses.v1",
+                "gpt-5-codex",
+            )
+            .expect("matching route should decode")
+            .is_some()
+        );
+        assert!(
+            replay_content_for_route(
+                Some(&state),
+                "custom:proxy",
+                "connection-b",
+                "https://proxy.example/v1/responses",
+                "openai-codex-responses.v1",
+                "gpt-5-codex",
+            )
+            .expect("credential mismatch should be a safe local fallback")
+            .is_none()
+        );
+        assert!(
+            replay_content_for_route(
+                Some(&state),
+                "custom:proxy",
+                "connection-a",
+                "https://proxy.example/changed/responses",
+                "openai-codex-responses.v1",
+                "gpt-5-codex",
+            )
+            .expect("endpoint mismatch should be a safe local fallback")
+            .is_none()
+        );
+    }
+
     /// Verifies public text and reasoning deltas reach both Core and the live workbench stream.
     /// 验证公共文本与推理增量同时到达 Core 和实时工作台流。
     #[test]
     fn public_turn_deltas_are_forwarded_to_live_workbench_stream() {
         let (live_sender, mut live_receiver) = tokio::sync::mpsc::unbounded_channel();
         let mut sink = RecordingProviderDeltaSink::default();
-        let mut accumulator =
-            PublicTurnAccumulator::new("minimax", "anthropic-messages", "MiniMax-M3");
+        let mut accumulator = PublicTurnAccumulator::new(
+            "minimax",
+            "connection-minimax",
+            "https://api.minimax.io/v1/messages",
+            "anthropic-messages",
+            "MiniMax-M3",
+        );
 
         accumulator
             .apply_event(
@@ -2041,6 +2805,17 @@ mod tests {
         );
     }
 
+    /// Verifies custom-provider WebSocket failures fall back immediately while registered providers retain policy.
+    /// 验证自定义供应商 WebSocket 失败会立即回退，而注册供应商保留既有策略。
+    #[test]
+    fn custom_provider_websocket_fallback_does_not_consume_ordinary_retry_budget() {
+        assert_eq!(
+            responses_websocket_retry_budget("custom:provider-one", 5),
+            0
+        );
+        assert_eq!(responses_websocket_retry_budget("openai", 5), 5);
+    }
+
     /// Verifies a cursor produced by another protocol profile is never relabeled and reused.
     /// 验证由其他协议配置产生的游标绝不会被重新标记并复用。
     #[test]
@@ -2086,5 +2861,39 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    /// Verifies public failures preserve every serialized execution field instead of delimiter-splitting text.
+    /// 验证公共失败会保留全部序列化执行字段，而不是通过分隔符拆分文本。
+    #[test]
+    fn public_execution_failure_message_is_json() {
+        let error = vulcan_ai_contract::AiExecutionError {
+            category: vulcan_ai_contract::AiErrorCategory::Unclassified,
+            subcategory: Some(String::from("upstream")),
+            stage: String::from("stream"),
+            http_status: Some(503),
+            upstream_code: Some(String::from("server_is_overloaded")),
+            upstream_type: Some(String::from("server_error")),
+            upstream_parameter: Some(String::from("model")),
+            upstream_message: Some(String::from("upstream detail | key=value")),
+            request_id: Some(String::from("req-123")),
+            provider_id: Some(String::from("custom:provider")),
+            entry_id: Some(String::from("entry-1")),
+            model_id: Some(String::from("model-1")),
+            message: String::from("Our servers are currently overloaded. Please try again later."),
+            dispatch_outcome: vulcan_ai_contract::DispatchOutcome::Dispatched,
+            semantic_output_observed: false,
+            side_effect_observed: false,
+            terminal: true,
+            retryable: false,
+            retry_after: None,
+        };
+
+        let serialized = public_execution_failure_message(&error);
+        let value: Value = serde_json::from_str(&serialized).expect("public failure must be JSON");
+        assert_eq!(value["upstream_code"], "server_is_overloaded");
+        assert_eq!(value["upstream_message"], "upstream detail | key=value");
+        assert_eq!(value["request_id"], "req-123");
+        assert_eq!(value["message"], error.message);
     }
 }

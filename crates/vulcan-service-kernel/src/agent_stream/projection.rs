@@ -2131,6 +2131,8 @@ fn runtime_event_projects_conversation_transcript(event_kind: RuntimeEventKind) 
             | RuntimeEventKind::ToolStarted
             | RuntimeEventKind::ToolFinished
             | RuntimeEventKind::Retrying
+            | RuntimeEventKind::ProviderWaiting
+            | RuntimeEventKind::TransportFallback
     )
 }
 
@@ -2660,8 +2662,8 @@ mod tests {
     /// 此测试无返回值，并通过断言报告失败。
     #[test]
     fn visible_runtime_events_project_conversation_transcript() {
-        // visibleRuntimeEvents enumerates tool-card lifecycle events and independent retry notes.
-        // visibleRuntimeEvents 枚举工具卡片生命周期事件与独立重试备注。
+        // visibleRuntimeEvents enumerates tool-card lifecycle events and independent transport notes.
+        // visibleRuntimeEvents 枚举工具卡片生命周期事件与独立传输备注。
         let visible_runtime_events = [
             RuntimeEventKind::ToolRequestStarted,
             RuntimeEventKind::ToolRequestProgress,
@@ -2672,6 +2674,8 @@ mod tests {
             RuntimeEventKind::ToolStarted,
             RuntimeEventKind::ToolFinished,
             RuntimeEventKind::Retrying,
+            RuntimeEventKind::ProviderWaiting,
+            RuntimeEventKind::TransportFallback,
         ];
 
         // eventKind must pass the projection gate so its exact visible record can be persisted.

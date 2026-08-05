@@ -342,12 +342,33 @@ fn service_workbench_paths_stay_on_mcp_runtime_access() {
         .join("crates")
         .join("vulcan-service-kernel")
         .join("src");
+    // compaction_builder_path owns the standalone service compaction request boundary.
+    // compaction_builder_path 持有独立服务压缩请求边界。
+    let compaction_builder_path = service_kernel_root
+        .join("context_compaction")
+        .join("auto_compaction.rs");
+    // prompt_compaction_path owns the matching agent-runtime launch boundary.
+    // prompt_compaction_path 持有对应的智能体运行时启动边界。
+    let prompt_compaction_path = workspace_root
+        .join("crates")
+        .join("vulcan-agent-runtime")
+        .join("src")
+        .join("agent_runtime")
+        .join("prompt_compaction.rs");
 
     let service_kernel_source = collect_rust_source_files(&service_kernel_root)
         .into_iter()
         .filter_map(|path| fs::read_to_string(path).ok())
         .collect::<Vec<_>>()
         .join("\n");
+    // compaction_builder_source verifies the service forwards its process-local public AI runtime.
+    // compaction_builder_source 验证服务会转发其进程内公共 AI 运行时。
+    let compaction_builder_source = fs::read_to_string(&compaction_builder_path)
+        .expect("context compaction builder should remain readable");
+    // prompt_compaction_source verifies the launch pipeline consumes that exact shared runtime.
+    // prompt_compaction_source 验证启动链路会消费同一个共享运行时。
+    let prompt_compaction_source = fs::read_to_string(&prompt_compaction_path)
+        .expect("prompt compaction runtime should remain readable");
 
     assert!(
         service_kernel_source.contains("extension_generation: Arc<ExtensionGeneration>"),
@@ -369,6 +390,17 @@ fn service_workbench_paths_stay_on_mcp_runtime_access() {
             .contains("stream_runtime_run_with_intervention_plugins_and_public_ai("),
         "service kernel should pass stable MCP, plugin, and public AI runtime surfaces into the agent stream entrypoint under: {}",
         service_kernel_root.display()
+    );
+    assert!(
+        compaction_builder_source
+            .contains("public_ai_runtime: Arc::clone(&agent_runtime.public_ai_runtime)"),
+        "standalone context compaction should carry the service-owned public AI runtime: {}",
+        compaction_builder_path.display()
+    );
+    assert!(
+        prompt_compaction_source.contains("Arc::clone(&request.public_ai_runtime)"),
+        "prompt compaction launch should install the request-owned public AI runtime: {}",
+        prompt_compaction_path.display()
     );
     assert!(
         !service_kernel_source.contains("McpRuntimeAccess::from_configuration"),

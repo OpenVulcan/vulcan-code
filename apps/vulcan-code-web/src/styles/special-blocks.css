@@ -14,6 +14,227 @@
   text-align: left;
 }
 
+/* system-error-card keeps the default failure view as compact as the existing message block. */
+/* system-error-card 让默认失败视图保持与现有消息块一致的紧凑程度。 */
+.system-error-card {
+  width: min(100%, 760px);
+  min-width: 0;
+  border: 1px solid color-mix(in oklch, var(--destructive) 48%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--card) 92%, var(--destructive) 8%);
+  color: var(--foreground);
+  font-size: 13px;
+}
+
+.system-error-summary {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.system-error-summary::-webkit-details-marker {
+  display: none;
+}
+
+.system-error-summary::marker {
+  content: "";
+}
+
+.system-error-chevron {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+  transition: transform 160ms ease, color 160ms ease;
+}
+
+.system-error-card[open] .system-error-chevron {
+  transform: rotate(90deg);
+  color: var(--foreground);
+}
+
+.system-error-summary:hover .system-error-chevron,
+.system-error-summary:focus-visible .system-error-chevron {
+  color: var(--foreground);
+}
+
+.system-error-details {
+  display: grid;
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+
+.system-error-header {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
+}
+
+.system-error-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.system-error-icon {
+  color: var(--destructive);
+}
+
+.system-error-title strong {
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.system-error-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.system-error-message {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--destructive);
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in oklch, var(--destructive) 8%, transparent);
+}
+
+.system-error-message > span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.system-error-message p {
+  margin: 0;
+  color: var(--foreground);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.system-error-fields {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+}
+
+.system-error-field {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in oklch, var(--border) 80%, transparent);
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--muted) 24%, transparent);
+}
+
+.system-error-field dt {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.system-error-field dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.system-error-raw {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  padding-top: 2px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.system-error-raw pre {
+  max-height: 220px;
+  margin: 0;
+  overflow: auto;
+  padding: 8px 9px;
+  border: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--card) 86%, transparent);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.system-error-raw code {
+  font: inherit;
+}
+
+.system-error-retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in oklch, var(--destructive) 45%, var(--border));
+  border-radius: 5px;
+  background: transparent;
+  color: var(--destructive);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.system-error-retry:not(:disabled):hover,
+.system-error-retry:not(:disabled):focus-visible {
+  background: color-mix(in oklch, var(--destructive) 10%, transparent);
+}
+
+.system-error-retry:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.is-spinning {
+  animation: system-error-spin 800ms linear infinite;
+}
+
+@keyframes system-error-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 560px) {
+  .system-error-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .system-error-header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .system-error-actions {
+    justify-content: space-between;
+  }
+}
+
 .special-block:hover {
   border-color: var(--ring);
   background: var(--accent);

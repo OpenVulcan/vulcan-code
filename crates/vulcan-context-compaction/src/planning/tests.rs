@@ -96,6 +96,91 @@ fn compaction_result_carries_compact_preview() {
     );
 }
 
+/// Verifies remote compaction preserves opaque output and diagnostic metadata under one route.
+/// 验证远端压缩会在单一路由下保留不透明输出与诊断元数据。
+#[test]
+fn remote_compaction_result_preserves_checkpoint_metadata() {
+    let plan = CompactionPlan {
+        source_messages: Vec::new(),
+        source_until_message_id: Some(String::from("m-1")),
+        source_until_turn_index: Some(1),
+        retained_tail_start_turn_index: None,
+        compaction_id: String::from("cp-remote"),
+        created_at: String::from("30"),
+        policy: ContextCompactionPolicy::default(),
+    };
+    let result = CompactionResult::from_remote_responses_with_metadata(
+        &plan,
+        ProviderContextRoute {
+            provider_id: String::from("custom:proxy"),
+            connection_id: String::from("connection-a"),
+            route_fingerprint: String::from("https://proxy.example/v1/responses"),
+            protocol_profile_id: String::from("openai-codex-responses.v1"),
+            model_id: String::from("gpt-5-codex"),
+        },
+        vec![
+            serde_json::json!({
+                "type": "compaction_summary",
+                "encrypted_content": "opaque"
+            }),
+            serde_json::json!({
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "remote summary"}]
+            }),
+        ],
+        Some(serde_json::json!({"input_tokens": 12})),
+        Some(String::from("resp-compact")),
+    )
+    .expect("valid remote compaction should build a checkpoint");
+
+    assert_eq!(result.provider_context_items.len(), 2);
+    assert_eq!(result.provider_context_items[0]["type"], "compaction");
+    assert_eq!(result.summary_record.kind, SessionMessageKind::Assistant);
+    assert_eq!(result.summary_record.title, "Remote Responses Checkpoint");
+    assert_eq!(
+        result.summary_record.body,
+        "Remote Responses compaction checkpoint installed (2 provider items)."
+    );
+    assert_eq!(
+        result.provider_context_usage,
+        Some(serde_json::json!({"input_tokens": 12}))
+    );
+    assert_eq!(
+        result.provider_context_response_id.as_deref(),
+        Some("resp-compact")
+    );
+    assert_eq!(
+        result
+            .provider_context_route
+            .as_ref()
+            .expect("route identity should be present")
+            .connection_id,
+        "connection-a"
+    );
+
+    // empty_checkpoint proves the planning layer cannot materialize an unusable opaque continuation.
+    // empty_checkpoint 证明规划层不能物化不可用的不透明续写状态。
+    let empty_checkpoint = CompactionResult::from_remote_responses_with_metadata(
+        &plan,
+        ProviderContextRoute {
+            provider_id: String::from("custom:proxy"),
+            connection_id: String::from("connection-a"),
+            route_fingerprint: String::from("https://proxy.example/v1/responses"),
+            protocol_profile_id: String::from("openai-codex-responses.v1"),
+            model_id: String::from("gpt-5-codex"),
+        },
+        vec![serde_json::json!({
+            "type": "compaction",
+            "encrypted_content": ""
+        })],
+        None,
+        None,
+    )
+    .expect_err("empty opaque checkpoint must be rejected before materialization");
+    assert!(empty_checkpoint.contains("invalid ordered replayable item list"));
+}
+
 /// Verifies continuation prompts only mention preserved recent messages when that fact is explicit.
 /// 验证续写提示词只在明确存在最近消息保留事实时才提及该事实。
 #[test]

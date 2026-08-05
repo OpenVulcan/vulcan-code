@@ -29,7 +29,8 @@ use vulcan_provider_adapters::{
     OAuthAuthorizationChallenge, OAuthClientConfiguration, OAuthTransactionPhase,
     OAuthTransactionSnapshot, PersistedAiConfiguration, ProviderDescriptor, ProviderKind,
     ProviderRegistry, ProviderToolCapabilityKind, ProviderToolExecutionResult, ProviderToolTarget,
-    ProviderToolTargetSelection, PublicAiRuntime, ServiceEntryKind,
+    ProviderToolTargetSelection, PublicAiRuntime, ResponsesRemoteCompactionPolicy,
+    ResponsesRouteFeatures, ResponsesWebSocketPolicy, ServiceEntryKind,
     registered_native_action_binding_id,
 };
 use vulcan_service_api::{ServiceEventEmitter, WorkbenchSnapshot};
@@ -102,8 +103,8 @@ pub(super) struct PublicAiSettingsSnapshot {
     /// Code-owned baseline rendered when a custom provider has no saved provider-level layer.
     /// 自定义供应商没有已保存供应商层时展示的代码持有基线。
     custom_provider_system_model_defaults: CustomProviderModelDefaults,
-    /// Custom providers blocked from deletion by any backend-owned model or route customization.
-    /// 因任意后端模型或路由自定义而禁止删除的自定义供应商。
+    /// Custom providers whose removal warning must include backend-owned model or route customizations.
+    /// 移除提示必须包含后端模型或路由自定义项的自定义供应商。
     providers_with_model_customizations: BTreeSet<String>,
     /// Explicit template decisions without browser-side composite-key parsing.
     /// 不需要浏览器解析组合键的显式模板决策记录。
@@ -850,6 +851,14 @@ pub(super) struct PublicAiCustomProviderSaveRequest {
     /// The single compatible protocol served by this base URL.
     /// 此基础 URL 提供的唯一兼容协议。
     protocol: CustomProviderProtocol,
+    /// Explicit WebSocket transport policy for Codex Responses.
+    /// Codex Responses 的显式 WebSocket 传输策略。
+    #[serde(default)]
+    websocket_policy: ResponsesWebSocketPolicy,
+    /// Explicit remote-compaction policy for Codex Responses.
+    /// Codex Responses 的显式远端压缩策略。
+    #[serde(default)]
+    remote_compaction_policy: ResponsesRemoteCompactionPolicy,
     /// Exact API-key header projection.
     /// 精确 API Key 请求头投影。
     authentication: CustomProviderAuthentication,
@@ -1227,7 +1236,7 @@ fn prepare_custom_provider_candidate(
         .provider_id
         .clone()
         .unwrap_or_else(|| format!("custom:{}", uuid::Uuid::new_v4().simple()));
-    let descriptor = CustomProviderDefinition {
+    let mut descriptor = CustomProviderDefinition {
         id: provider_id.clone(),
         display_name: request.display_name.clone(),
         base_url: request.base_url.clone(),
@@ -1237,6 +1246,25 @@ fn prepare_custom_provider_candidate(
         model_discovery_path: request.model_discovery_path.clone(),
     }
     .into_descriptor()?;
+    if request.protocol != CustomProviderProtocol::OpenAiCodexResponses
+        && (request.websocket_policy != ResponsesWebSocketPolicy::Disabled
+            || request.remote_compaction_policy != ResponsesRemoteCompactionPolicy::Disabled)
+    {
+        return Err(String::from(
+            "Responses capability policies require the Codex Responses protocol.",
+        ));
+    }
+    let route_features = (request.protocol == CustomProviderProtocol::OpenAiCodexResponses)
+        .then_some(ResponsesRouteFeatures {
+            websocket: request.websocket_policy,
+            remote_compaction: request.remote_compaction_policy,
+        });
+    let descriptor_route = descriptor
+        .service_entries
+        .first_mut()
+        .and_then(|entry| entry.protocol_routes.first_mut())
+        .ok_or_else(|| String::from("Custom provider must declare one protocol route."))?;
+    descriptor_route.responses_features = route_features;
     let entry = descriptor
         .service_entries
         .first()
@@ -1417,8 +1445,9 @@ fn custom_provider_validation_configuration(
 ///
 /// # Returns
 /// 返回值
-/// `true` for protocol, endpoint, authentication, or discovery changes; cosmetic names return `false`.
-/// 协议、端点、鉴权或发现方式变化时返回 `true`；仅名称变化时返回 `false`。
+/// `true` for protocol, endpoint, authentication, or discovery changes; cosmetic names and
+/// execution-only Responses capability switches return `false`.
+/// 协议、端点、鉴权或发现方式变化时返回 `true`；仅名称变化与只影响执行的 Responses 能力开关返回 `false`。
 fn custom_provider_connection_contract_changed(
     current: &PersistedAiConfiguration,
     candidate: &PreparedCustomProviderCandidate,
@@ -1443,7 +1472,32 @@ fn custom_provider_connection_contract_changed(
             candidate.provider_id
         ));
     }
-    Ok(existing.service_entries != candidate.descriptor.service_entries)
+    // existing_entries and candidate_entries retain every credential-facing field while allowing
+    // the explicit execution-only Responses capabilities to be normalized out of this comparison.
+    // existing_entries 与 candidate_entries 保留全部面向凭据的字段，同时允许从本次比较中
+    // 规范化移除显式且只影响执行的 Responses 能力。
+    let existing_entries = existing.service_entries.clone();
+    let mut candidate_entries = candidate.descriptor.service_entries.clone();
+    // existing_responses_features is the sole field proven by ProtocolRoute to control request
+    // execution rather than endpoint discovery or credential projection.
+    // existing_responses_features 是 ProtocolRoute 已证明只控制请求执行、而不控制端点发现或
+    // 凭据投影的唯一字段。
+    let existing_responses_features = existing_entries
+        .first()
+        .and_then(|entry| entry.protocol_routes.first())
+        .map(|route| route.responses_features)
+        .ok_or_else(|| {
+            format!(
+                "Custom provider `{}` has no persisted protocol route.",
+                candidate.provider_id
+            )
+        })?;
+    let candidate_route = candidate_entries
+        .first_mut()
+        .and_then(|entry| entry.protocol_routes.first_mut())
+        .ok_or_else(|| String::from("Custom provider candidate has no protocol route."))?;
+    candidate_route.responses_features = existing_responses_features;
+    Ok(existing_entries != candidate_entries)
 }
 
 /// Reports whether an edited custom provider selects a different single protocol.
@@ -2245,6 +2299,7 @@ pub(super) async fn service_validate_public_ai_custom_model(
             content: vec![ContentItem::Text {
                 text: String::from("Reply with exactly OK."),
             }],
+            provider_context_items: Vec::new(),
         }],
         tools: Vec::new(),
         native_tools: Vec::new(),
@@ -2337,8 +2392,18 @@ pub(super) async fn service_validate_public_ai_custom_model(
     })
 }
 
-/// Removes one unreferenced custom provider.
-/// 移除一个未被引用的自定义供应商。
+/// Removes one custom provider together with every provider-owned setting after confirmation.
+/// 确认后移除一个自定义供应商及其持有的全部设置。
+///
+/// # Parameters
+/// 参数
+/// `app` publishes the refreshed workbench, `state` owns persisted configuration, and `request` identifies the confirmed provider removal.
+/// `app` 发布刷新后的工作台，`state` 持有持久化配置，`request` 标识已确认的供应商移除请求。
+///
+/// # Returns
+/// 返回值
+/// Returns the refreshed settings snapshot, or an atomic cleanup error with credential compensation.
+/// 返回刷新后的设置快照，或包含凭据补偿结果的原子清理错误。
 pub(super) async fn service_remove_public_ai_custom_provider(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
@@ -2349,11 +2414,6 @@ pub(super) async fn service_remove_public_ai_custom_provider(
     let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
     validate_custom_provider_identity(&current_configuration, provider_id.as_str())?;
-    if current_configuration.provider_has_model_customizations(provider_id.as_str()) {
-        return Err(format!(
-            "Custom provider `{provider_id}` still has model customizations or route settings and cannot be removed. Clear those settings first."
-        ));
-    }
     let provider_connections = current_configuration
         .connection_graph
         .connections
@@ -2388,10 +2448,9 @@ pub(super) async fn service_remove_public_ai_custom_provider(
             for connection in &provider_connections {
                 remove_connection_from_configuration(configuration, connection.id.as_str(), None)?;
             }
-            configuration.custom_models.remove(provider_id.as_str());
-            configuration
-                .custom_provider_model_defaults
-                .remove(provider_id.as_str());
+            // Confirmed provider removal owns the complete cleanup of model settings and internal routes.
+            // 已确认的供应商移除负责完整清理模型设置与内部路由。
+            configuration.remove_provider_owned_model_settings(provider_id.as_str());
             let removed = configuration
                 .custom_providers
                 .remove(provider_id.as_str())
@@ -6893,7 +6952,7 @@ fn reconcile_missing_session_model_selections(
             runtime_state.active_connection_id = next_connection_id;
             runtime_state.active_model_id = next_model_id;
             runtime_state.updated_at = crate::current_unix_millis_text();
-            changed_session_ids.insert(session_id.clone());
+            changed_session_ids.insert(*session_id);
         }
     };
     reconcile_states(&mut workspace.session_runtime_state);
@@ -7358,8 +7417,8 @@ fn build_public_ai_settings_snapshot(
         build_internal_inference_route_diagnostics(runtime, configuration);
     let connection_model_access_policy_records =
         build_connection_model_access_policy_records(&providers, configuration);
-    // providers_with_model_customizations keeps deletion eligibility identical between backend enforcement and WebUI guidance.
-    // providers_with_model_customizations 使后端强制规则与 WebUI 删除指引保持完全一致。
+    // providers_with_model_customizations lets WebUI disclose cascade cleanup that is not fully countable in the browser snapshot.
+    // providers_with_model_customizations 让 WebUI 提示浏览器快照无法完整计数的级联清理内容。
     let providers_with_model_customizations = configuration
         .custom_providers
         .keys()
@@ -8808,6 +8867,110 @@ mod inference_settings_route_tests {
         );
     }
 
+    /// Verifies explicit Codex capability switches survive the custom-provider candidate projection.
+    /// 验证显式 Codex 能力开关可完整通过自定义供应商候选投影。
+    #[test]
+    fn custom_codex_provider_candidate_preserves_explicit_responses_capabilities() {
+        // request represents a user explicitly enabling both opt-in Codex capabilities.
+        // request 表示用户明确启用两项可选 Codex 能力。
+        let request = PublicAiCustomProviderSaveRequest {
+            provider_id: None,
+            display_name: String::from("Codex Proxy"),
+            base_url: String::from("https://proxy.example.test/v1"),
+            protocol: CustomProviderProtocol::OpenAiCodexResponses,
+            websocket_policy: ResponsesWebSocketPolicy::PreferredWithHttpFallback,
+            remote_compaction_policy: ResponsesRemoteCompactionPolicy::EnabledWithLocalFallback,
+            authentication: CustomProviderAuthentication::BearerAuthorization,
+            credential_display_name: Some(String::from("Test Account")),
+            secret: Some(String::from("test-secret")),
+            validation_connection_id: None,
+            model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
+            model_discovery_path: None,
+            allow_manual_fallback: false,
+            allow_pending_validation: false,
+            confirm_inactive_protocol_override_deletion: false,
+        };
+        // candidate is the exact non-persisted descriptor produced by the save boundary.
+        // candidate 是保存边界生成的精确未持久化描述符。
+        let candidate =
+            prepare_custom_provider_candidate(&request, &PersistedAiConfiguration::default())
+                .expect("explicit Codex capability candidate should compile");
+        // features is the route-scoped persisted capability projection under audit.
+        // features 是本轮审核的路由级持久化能力投影。
+        let features = candidate.descriptor.service_entries[0].protocol_routes[0]
+            .responses_features
+            .expect("Codex route should preserve explicit capability switches");
+
+        assert_eq!(
+            features.websocket,
+            ResponsesWebSocketPolicy::PreferredWithHttpFallback
+        );
+        assert_eq!(
+            features.remote_compaction,
+            ResponsesRemoteCompactionPolicy::EnabledWithLocalFallback
+        );
+    }
+
+    /// Verifies execution-only Codex capability switches do not trigger credential revalidation.
+    /// 验证只影响执行的 Codex 能力开关不会触发凭据重新验证。
+    #[test]
+    fn custom_codex_capability_switch_is_not_a_connection_contract_change() {
+        // providerId identifies the exact credential-free custom provider being edited.
+        // providerId 标识正在编辑的精确无凭据自定义供应商。
+        let provider_id = String::from("custom:codex-capability-switch");
+        // descriptor is the persisted Codex route with both optional capabilities disabled by default.
+        // descriptor 是两项可选能力默认关闭的持久化 Codex 路由。
+        let descriptor = CustomProviderDefinition {
+            id: provider_id.clone(),
+            display_name: String::from("Codex Proxy"),
+            base_url: String::from("https://proxy.example.test/v1"),
+            protocol: CustomProviderProtocol::OpenAiCodexResponses,
+            authentication: CustomProviderAuthentication::BearerAuthorization,
+            model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
+            model_discovery_path: None,
+        }
+        .into_descriptor()
+        .expect("default Codex provider should compile");
+        // configuration owns the exact persisted descriptor used as the comparison baseline.
+        // configuration 持有作为比较基线的精确持久化描述符。
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .custom_providers
+            .insert(provider_id.clone(), descriptor.clone());
+        // request changes only the two explicit execution capabilities.
+        // request 仅修改两项显式执行能力。
+        let request = PublicAiCustomProviderSaveRequest {
+            provider_id: Some(provider_id),
+            display_name: String::from("Codex Proxy"),
+            base_url: String::from("https://proxy.example.test/v1"),
+            protocol: CustomProviderProtocol::OpenAiCodexResponses,
+            websocket_policy: ResponsesWebSocketPolicy::PreferredWithHttpFallback,
+            remote_compaction_policy: ResponsesRemoteCompactionPolicy::EnabledWithLocalFallback,
+            authentication: CustomProviderAuthentication::BearerAuthorization,
+            credential_display_name: None,
+            secret: None,
+            validation_connection_id: None,
+            model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
+            model_discovery_path: None,
+            allow_manual_fallback: false,
+            allow_pending_validation: false,
+            confirm_inactive_protocol_override_deletion: false,
+        };
+        // candidate preserves the changed feature values while retaining the same connection contract.
+        // candidate 保留已变更能力值，同时维持相同连接契约。
+        let candidate = prepare_custom_provider_candidate(&request, &configuration)
+            .expect("capability-only edit should compile");
+
+        assert_ne!(
+            descriptor.service_entries,
+            candidate.descriptor.service_entries
+        );
+        assert!(
+            !custom_provider_connection_contract_changed(&configuration, &candidate)
+                .expect("capability-only edit should compare")
+        );
+    }
+
     /// Verifies protocol edits reuse secrets, migrate every credential, and reject partial invalid migrations.
     /// 验证协议编辑会复用秘密、迁移全部凭据，并拒绝部分无效迁移。
     #[test]
@@ -8865,6 +9028,8 @@ mod inference_settings_route_tests {
             display_name: String::from("Renamed Provider"),
             base_url: String::from("https://new.example.test/v1"),
             protocol: CustomProviderProtocol::OpenAiChat,
+            websocket_policy: ResponsesWebSocketPolicy::Disabled,
+            remote_compaction_policy: ResponsesRemoteCompactionPolicy::Disabled,
             authentication: CustomProviderAuthentication::BearerAuthorization,
             credential_display_name: None,
             secret: None,
@@ -8908,6 +9073,8 @@ mod inference_settings_route_tests {
             display_name: String::from("Cosmetic Rename"),
             base_url: String::from("https://old.example.test/v1"),
             protocol: CustomProviderProtocol::OpenAiResponses,
+            websocket_policy: ResponsesWebSocketPolicy::Disabled,
+            remote_compaction_policy: ResponsesRemoteCompactionPolicy::Disabled,
             authentication: CustomProviderAuthentication::BearerAuthorization,
             credential_display_name: None,
             secret: None,

@@ -14,6 +14,7 @@ import {
   openSubagentPanel,
   removePendingPrompt,
   reorderPendingPrompts,
+  retryConversationRequest,
   stopCommandSession,
   stopConversationRun,
   stopSubagentTask,
@@ -320,6 +321,22 @@ const handleStopConversationRun = React.useCallback(async (): Promise<boolean> =
     return false;
   }
 }, [mergeWorkbenchWithLocalCaches, requestStopConversationRunChoice, selectedConversation?.id, setWorkbenchState]);
+
+// handleRetryConversationRequest retries a failed conversation through the retained service execution state.
+// handleRetryConversationRequest 通过服务端保留的执行状态重试失败会话。
+const handleRetryConversationRequest = React.useCallback(async (conversationId: string): Promise<boolean> => {
+  try {
+    const response = await retryConversationRequest(conversationId);
+    if (!response) {
+      toast.info(translate("conversationActions.previewCannotRetry"));
+      return false;
+    }
+    return true;
+  } catch (nextError) {
+    toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    return false;
+  }
+}, [translate]);
 
 // handleCancelConversationSubmission aborts a pending upload before the backend materializes the prompt.
 // handleCancelConversationSubmission 在后端物化提示词前中止待处理上传。
@@ -693,6 +710,7 @@ const handleSelectWorkbenchThinkingDisplayMode = React.useCallback(async (mode: 
     handleSubmitConversationPrompt,
     handleInsertPendingPrompt,
     handleStopConversationRun,
+    handleRetryConversationRequest,
     handleCancelConversationSubmission,
     handleCompactSelectedConversationContext,
     handleOpenSubagentPanel,

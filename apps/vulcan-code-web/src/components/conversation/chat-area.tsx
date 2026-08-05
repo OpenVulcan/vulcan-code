@@ -890,6 +890,7 @@ export function ChatArea(props: ChatAreaProps) {
         hasMoreHistory={props.conversationHasMoreHistory}
         historyLoading={props.conversationHistoryLoading}
         onLoadMoreHistory={props.onLoadConversationHistory}
+        onRetryConversationRequest={props.onRetryConversationRequest}
         parentConversationId={props.selectedConversationId ?? null}
         workspacePath={selectedProject?.path ?? null}
         commandSessions={visibleCommandSessions}

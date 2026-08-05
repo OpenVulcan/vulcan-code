@@ -4,13 +4,15 @@
 use crate::{
     AccountUsageQueryKind, AuthenticationProjection, CredentialBillingKind,
     CredentialDirectoryVisibility, CredentialMode, CredentialProfile, ModelDiscoveryKind,
-    ProtocolRoute, ProviderCategory, ProviderDescriptor, ProviderKind, ServiceEntry,
+    ProtocolRoute, ProviderCategory, ProviderDescriptor, ProviderKind, ResponsesRouteFeatures,
+    ServiceEntry,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::InferenceUsageScope;
 use vulcan_ai_protocols::{
-    ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
+    ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_CODEX_RESPONSES_PROFILE_ID,
+    OPENAI_RESPONSES_PROFILE_ID,
 };
 
 /// Identifies one protocol exposed by a user-defined compatible provider.
@@ -27,6 +29,9 @@ pub enum CustomProviderProtocol {
     /// OpenAI Responses protocol.
     /// OpenAI Responses 协议。
     OpenAiResponses,
+    /// OpenAI Codex Responses protocol with explicit Codex request identity.
+    /// 带显式 Codex 请求身份的 OpenAI Codex Responses 协议。
+    OpenAiCodexResponses,
 }
 
 /// Identifies the API-key projection selected for one custom provider.
@@ -78,6 +83,7 @@ impl CustomProviderProtocol {
             Self::AnthropicMessages => ANTHROPIC_MESSAGES_PROFILE_ID,
             Self::OpenAiChat => OPENAI_CHAT_PROFILE_ID,
             Self::OpenAiResponses => OPENAI_RESPONSES_PROFILE_ID,
+            Self::OpenAiCodexResponses => OPENAI_CODEX_RESPONSES_PROFILE_ID,
         }
     }
 
@@ -88,6 +94,7 @@ impl CustomProviderProtocol {
             Self::AnthropicMessages => "/messages",
             Self::OpenAiChat => "/chat/completions",
             Self::OpenAiResponses => "/responses",
+            Self::OpenAiCodexResponses => "/responses",
         }
     }
 }
@@ -143,9 +150,9 @@ impl CustomProviderDefinition {
         let base_url = validate_custom_provider_base_url(self.base_url.as_str())?;
         let protocol_discovery = match self.protocol {
             CustomProviderProtocol::AnthropicMessages => ModelDiscoveryKind::AnthropicCompatible,
-            CustomProviderProtocol::OpenAiChat | CustomProviderProtocol::OpenAiResponses => {
-                ModelDiscoveryKind::OpenAi
-            }
+            CustomProviderProtocol::OpenAiChat
+            | CustomProviderProtocol::OpenAiResponses
+            | CustomProviderProtocol::OpenAiCodexResponses => ModelDiscoveryKind::OpenAi,
         };
         let model_discovery = match self.model_discovery_mode {
             CustomProviderModelDiscoveryMode::Standard
@@ -174,6 +181,8 @@ impl CustomProviderDefinition {
             model_discovery: Some(model_discovery),
             model_discovery_path,
             model_discovery_base_url_override: None,
+            responses_features: (self.protocol == CustomProviderProtocol::OpenAiCodexResponses)
+                .then_some(ResponsesRouteFeatures::default()),
             verified: true,
         }];
         Ok(ProviderDescriptor {
@@ -331,6 +340,7 @@ pub(crate) fn validate_persisted_custom_provider_descriptor(
         ANTHROPIC_MESSAGES_PROFILE_ID => CustomProviderProtocol::AnthropicMessages,
         OPENAI_CHAT_PROFILE_ID => CustomProviderProtocol::OpenAiChat,
         OPENAI_RESPONSES_PROFILE_ID => CustomProviderProtocol::OpenAiResponses,
+        OPENAI_CODEX_RESPONSES_PROFILE_ID => CustomProviderProtocol::OpenAiCodexResponses,
         _ => {
             return Err(String::from(
                 "Persisted custom provider uses an unsupported protocol route.",
@@ -348,11 +358,18 @@ pub(crate) fn validate_persisted_custom_provider_descriptor(
             "Persisted custom provider protocol route is outside the verified single-route contract.",
         ));
     }
+    if !matches!(protocol, CustomProviderProtocol::OpenAiCodexResponses)
+        && route.responses_features.is_some()
+    {
+        return Err(String::from(
+            "Persisted non-Codex custom provider must not declare Responses capabilities.",
+        ));
+    }
     let expected_discovery = match protocol {
         CustomProviderProtocol::AnthropicMessages => ModelDiscoveryKind::AnthropicCompatible,
-        CustomProviderProtocol::OpenAiChat | CustomProviderProtocol::OpenAiResponses => {
-            ModelDiscoveryKind::OpenAi
-        }
+        CustomProviderProtocol::OpenAiChat
+        | CustomProviderProtocol::OpenAiResponses
+        | CustomProviderProtocol::OpenAiCodexResponses => ModelDiscoveryKind::OpenAi,
     };
     let route_discovery = route.model_discovery.ok_or_else(|| {
         String::from("Persisted custom provider protocol route must declare model discovery.")
@@ -499,6 +516,42 @@ mod tests {
         assert_eq!(entry.base_url, "https://example.com/v1");
         assert_eq!(entry.protocol_routes.len(), 1);
         assert_eq!(descriptor.kind, ProviderKind::Custom);
+    }
+
+    /// Verifies Codex custom providers carry explicit optional capabilities with safe defaults.
+    /// 验证 Codex 自定义供应商携带显式可选能力，并使用安全默认值。
+    #[test]
+    fn custom_codex_provider_projects_disabled_optional_capabilities() {
+        let descriptor = CustomProviderDefinition {
+            id: String::from("custom:codex-example"),
+            display_name: String::from("Codex example"),
+            base_url: String::from("https://example.com/v1"),
+            protocol: CustomProviderProtocol::OpenAiCodexResponses,
+            authentication: CustomProviderAuthentication::BearerAuthorization,
+            model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
+            model_discovery_path: None,
+        }
+        .into_descriptor()
+        .expect("Codex custom provider should be valid");
+        let route = &descriptor.service_entries[0].protocol_routes[0];
+        let features = route
+            .responses_features
+            .expect("Codex route should declare optional capabilities");
+        assert_eq!(
+            features.websocket,
+            crate::ResponsesWebSocketPolicy::Disabled
+        );
+        assert_eq!(
+            features.remote_compaction,
+            crate::ResponsesRemoteCompactionPolicy::Disabled
+        );
+        validate_persisted_custom_provider_descriptor(&descriptor)
+            .expect("Codex descriptor with disabled capabilities should persist");
+
+        let mut legacy_descriptor = descriptor;
+        legacy_descriptor.service_entries[0].protocol_routes[0].responses_features = None;
+        validate_persisted_custom_provider_descriptor(&legacy_descriptor)
+            .expect("legacy Codex descriptor without capability fields should default disabled");
     }
 
     /// Verifies an invalid transport URL is rejected before persistence.

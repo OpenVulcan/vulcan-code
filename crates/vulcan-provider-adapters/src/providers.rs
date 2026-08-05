@@ -6,7 +6,8 @@ use crate::{
     CredentialDirectoryVisibility, CredentialMode, CredentialProfile, ModelDiscoveryKind,
     OAuthProviderKind, ProtocolRoute, ProviderCategory, ProviderDescriptor, ProviderKind,
     ProviderPartnershipKind, ProviderPromotion, ProviderPromotionDisclosureKey,
-    RequestProjectorKind, ServiceEntry, ServiceEntryKind,
+    RequestProjectorKind, ResponsesRemoteCompactionPolicy, ResponsesRouteFeatures,
+    ResponsesWebSocketPolicy, ServiceEntry, ServiceEntryKind,
 };
 use std::collections::BTreeMap;
 use vulcan_ai_contract::InferenceUsageScope;
@@ -669,10 +670,7 @@ pub fn openai_descriptor() -> ProviderDescriptor {
                     ),
                 ],
                 model_discovery: ModelDiscoveryKind::OpenAiCodex,
-                protocol_routes: [protocol_route(
-                    OPENAI_CODEX_RESPONSES_PROFILE_ID,
-                    "/responses",
-                )],
+                protocol_routes: [official_codex_responses_protocol_route()],
             }),
         ],
     }
@@ -1237,8 +1235,27 @@ fn protocol_route(protocol_profile_id: &str, endpoint_path: &str) -> ProtocolRou
         model_discovery: None,
         model_discovery_path: None,
         model_discovery_base_url_override: None,
+        responses_features: None,
         verified: true,
     }
+}
+
+/// Creates the verified official Codex Responses route with capabilities proven by the official client.
+/// 创建经官方客户端证明能力的已验证官方 Codex Responses 路由。
+///
+/// # Returns
+/// 返回值
+/// The official Responses route with WebSocket v2 and standalone remote compaction enabled.
+/// 返回启用 WebSocket v2 与独立远端压缩的官方 Responses 路由。
+fn official_codex_responses_protocol_route() -> ProtocolRoute {
+    // route starts from the shared verified route contract before enabling only proven Codex features.
+    // route 从共享已验证路由契约开始，仅启用已获证明的 Codex 能力。
+    let mut route = protocol_route(OPENAI_CODEX_RESPONSES_PROFILE_ID, "/responses");
+    route.responses_features = Some(ResponsesRouteFeatures {
+        websocket: ResponsesWebSocketPolicy::PreferredWithHttpFallback,
+        remote_compaction: ResponsesRemoteCompactionPolicy::EnabledWithLocalFallback,
+    });
+    route
 }
 
 /// Creates one verified protocol route with exact per-protocol overrides.
@@ -1272,6 +1289,7 @@ fn protocol_route_with_overrides<const H: usize>(
         model_discovery: None,
         model_discovery_path: None,
         model_discovery_base_url_override: model_discovery_base_url_override.map(str::to_string),
+        responses_features: None,
         verified: true,
     }
 }
@@ -1298,6 +1316,7 @@ fn protocol_profile_route(protocol_profile_id: &str) -> ProtocolRoute {
         model_discovery: None,
         model_discovery_path: None,
         model_discovery_base_url_override: None,
+        responses_features: None,
         verified: true,
     }
 }
@@ -1321,6 +1340,7 @@ fn minimax_protocol_routes() -> [ProtocolRoute; 2] {
             model_discovery: Some(ModelDiscoveryKind::MiniMaxOpenAi),
             model_discovery_path: None,
             model_discovery_base_url_override: None,
+            responses_features: None,
             verified: true,
         },
     ]
@@ -1330,13 +1350,43 @@ fn minimax_protocol_routes() -> [ProtocolRoute; 2] {
 mod tests {
     use super::{
         ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID, alibaba_descriptor,
-        kimi_descriptor, minimax_descriptor,
+        kimi_descriptor, minimax_descriptor, openai_descriptor,
     };
     use crate::{
         AccountUsageQueryKind, AuthenticationProjection, CredentialMode, ModelDiscoveryKind,
-        OAuthProviderKind,
+        OAuthProviderKind, ResponsesRemoteCompactionPolicy, ResponsesWebSocketPolicy,
     };
     use vulcan_ai_contract::InferenceUsageScope;
+
+    /// Verifies the known official Codex route enables capabilities implemented by the official client.
+    /// 验证已知官方 Codex 路由会启用官方客户端已经实现的能力。
+    #[test]
+    fn official_codex_route_enables_proven_responses_capabilities() {
+        // descriptor is the immutable built-in OpenAI provider graph.
+        // descriptor 是不可变的内置 OpenAI 供应商图。
+        let descriptor = openai_descriptor();
+        // route selects the exact Codex subscription service rather than the public API service.
+        // route 选择精确 Codex 订阅服务，而不是公共 API 服务。
+        let route = &descriptor
+            .service_entries
+            .iter()
+            .find(|entry| entry.id == "codex-subscription")
+            .expect("official Codex service entry should exist")
+            .protocol_routes[0];
+        // features must exist because built-in providers have no custom capability editor.
+        // features 必须存在，因为内置供应商没有自定义能力编辑器。
+        let features = route
+            .responses_features
+            .expect("official Codex route should declare proven capabilities");
+        assert_eq!(
+            features.websocket,
+            ResponsesWebSocketPolicy::PreferredWithHttpFallback
+        );
+        assert_eq!(
+            features.remote_compaction,
+            ResponsesRemoteCompactionPolicy::EnabledWithLocalFallback
+        );
+    }
 
     /// Verifies MiniMax regions own shared credential profiles instead of duplicated product entries.
     /// 验证 MiniMax 区域持有共享凭据配置档而不是重复产品入口。

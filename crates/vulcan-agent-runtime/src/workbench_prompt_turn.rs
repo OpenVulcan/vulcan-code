@@ -34,6 +34,7 @@ use crate::{
             vmm_session_status_effect_from_report,
         },
         events::{RuntimeEvent, RuntimeEventKind},
+        execution_models::ExecutionTurnStartMode,
         vmm_hooks::{
             VMM_PRECHECK_HOOK_ID, stabilize_vmm_profile_system_prompt_blocks,
             vmm_profile_placement_phase,
@@ -996,6 +997,8 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         prompt: request_prompt,
         output_style_snapshot: applied_output_style_snapshot(runtime_state),
         provider_visible_agent_messages: input.start.provider_visible_agent_messages,
+        turn_start_mode: (input.start.source == PendingSessionPromptSource::ProviderRetry)
+            .then_some(ExecutionTurnStartMode::SeededProviderInput),
         conversation_state: runtime_state.conversation_state.clone(),
         context_compaction_policy: None,
         context_budget_override: None,

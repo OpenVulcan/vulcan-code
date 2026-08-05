@@ -67,6 +67,111 @@ fn provider_retry_projects_visible_display_note() {
     assert!(!record.record_kind.contributes_to_context());
 }
 
+/// Verifies a WebSocket-to-HTTPS fallback remains visible without entering later model context.
+/// 验证 WebSocket 到 HTTPS 的回退保持可见，同时不会进入后续模型上下文。
+#[test]
+fn provider_transport_fallback_projects_visible_display_note() {
+    // runtimeState owns the durable transcript projection under test.
+    // runtimeState 持有被测的持久转录投影。
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    // sessionId provides the stable namespace for the fallback record.
+    // sessionId 为回退记录提供稳定命名空间。
+    let session_id = test_session_id();
+    // fallbackEvent models the exact transition emitted after the WS retry budget is exhausted.
+    // fallbackEvent 模拟 WS 重试预算耗尽后发出的精确转换事件。
+    let fallback_event = RuntimeEvent::new(
+        RuntimeEventKind::TransportFallback,
+        "Provider 传输回退",
+        "Responses WebSocket 重试预算已耗尽，当前会话已安全切换到 HTTPS。",
+    )
+    .with_metadata(Some(json!({
+        "from_transport": "responses_websocket",
+        "to_transport": "https_sse",
+        "scope": "session",
+    })));
+
+    assert!(
+        append_runtime_event_projection_to_state(
+            &mut runtime_state,
+            session_id,
+            "3501",
+            &fallback_event,
+        )
+        .expect("transport fallback projection should succeed")
+    );
+    // record is the exact display-only row retained for the transport transition.
+    // record 是为本次传输转换保留的精确纯显示行。
+    let record = runtime_state
+        .conversation_state
+        .records
+        .last()
+        .expect("transport fallback should append one record");
+    assert_eq!(record.record_kind, SessionMessageRecordKind::DisplayNote);
+    assert!(record.visible);
+    assert_eq!(record.title, "Provider 传输回退");
+    assert!(record.body.contains("HTTPS"));
+    assert_eq!(
+        record
+            .metadata
+            .as_ref()
+            .and_then(|value| value["to_transport"].as_str()),
+        Some("https_sse")
+    );
+    assert!(!record.record_kind.contributes_to_context());
+}
+
+/// Verifies a slow Provider first event remains visible without entering later model context.
+/// 验证 Provider 首事件缓慢状态保持可见，同时不会进入后续模型上下文。
+#[test]
+fn provider_first_event_waiting_projects_visible_display_note() {
+    // runtimeState owns the durable transcript projection under test.
+    // runtimeState 持有被测的持久转录投影。
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    // sessionId provides the stable namespace for the waiting record.
+    // sessionId 为等待记录提供稳定命名空间。
+    let session_id = test_session_id();
+    // waitingEvent models one request that produced no stream event within the visible threshold.
+    // waitingEvent 模拟请求在可见阈值内没有产生流事件的情况。
+    let waiting_event = RuntimeEvent::new(
+        RuntimeEventKind::ProviderWaiting,
+        "等待 Provider 响应",
+        "请求已发送，正在等待 Provider 返回首个响应事件。",
+    )
+    .with_metadata(Some(json!({
+        "stage": "awaiting_first_provider_event",
+        "elapsed_ms": 5_000,
+    })));
+
+    assert!(
+        append_runtime_event_projection_to_state(
+            &mut runtime_state,
+            session_id,
+            "3502",
+            &waiting_event,
+        )
+        .expect("provider waiting projection should succeed")
+    );
+    // record is the exact display-only row retained for the slow first event.
+    // record 是为首事件缓慢保留的精确纯显示行。
+    let record = runtime_state
+        .conversation_state
+        .records
+        .last()
+        .expect("provider waiting should append one record");
+    assert_eq!(record.record_kind, SessionMessageRecordKind::DisplayNote);
+    assert!(record.visible);
+    assert_eq!(record.title, "等待 Provider 响应");
+    assert!(record.body.contains("首个响应事件"));
+    assert_eq!(
+        record
+            .metadata
+            .as_ref()
+            .and_then(|value| value["stage"].as_str()),
+        Some("awaiting_first_provider_event")
+    );
+    assert!(!record.record_kind.contributes_to_context());
+}
+
 /// Builds one successful terminal report with deterministic provider usage.
 /// 构建一份带确定性 Provider 用量的成功终态报告。
 #[allow(clippy::too_many_arguments)]

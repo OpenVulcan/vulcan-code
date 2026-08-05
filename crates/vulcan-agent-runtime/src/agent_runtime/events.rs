@@ -55,6 +55,12 @@ pub enum RuntimeEventKind {
     /// Provider execution is waiting before an automatic retry.
     /// Provider 执行正在等待一次自动重试。
     Retrying,
+    /// Provider request was dispatched but has not produced its first stream event yet.
+    /// Provider 请求已经发出，但尚未产生首个流事件。
+    ProviderWaiting,
+    /// Provider execution switched from its preferred transport to a safe fallback.
+    /// Provider 执行已经从首选传输切换到安全回退传输。
+    TransportFallback,
 }
 
 /// Structured runtime event record reserved for future telemetry surfaces.

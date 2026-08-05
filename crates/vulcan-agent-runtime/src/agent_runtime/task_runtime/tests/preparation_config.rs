@@ -41,6 +41,7 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         prompt: String::from("parent prompt"),
         output_style_snapshot: None,
         provider_visible_agent_messages: Vec::new(),
+        turn_start_mode: None,
         conversation_state: SessionConversationState::default(),
         context_compaction_policy: None,
         context_budget_override: None,

@@ -6,18 +6,24 @@ use std::collections::BTreeMap;
 use crate::{apply_output_style_snapshot, resolve_output_style_snapshot};
 use uuid::Uuid;
 use vulcan_agent_runtime::workbench_prompt_turn::{
-    SharedPromptTurnBeginInput, begin_shared_prompt_turn,
+    SharedPromptPrecheckPlan, SharedPromptTurnBeginInput, begin_shared_prompt_turn,
 };
+use vulcan_context::SessionConversationPayload;
 use vulcan_service_api::{
     ComposerAttachmentSummary, ServiceEvent, ServiceEventEmitter, SubmitConversationPromptAck,
     UpdateConversationRunPhaseDelta, WorkbenchDelta, WorkbenchDeltaEnvelope,
 };
+use vulcan_session_boundary::SessionBoundaryStateStore;
+use vulcan_session_core::SessionNodeId;
 use vulcan_workbench_model::{
     PendingSessionPromptSource, SessionId, SessionKnowledgeLibrarySelection,
-    SessionKnowledgeLibrarySelectionMode, SessionProviderToolTargetSelection, SessionRunPhase,
-    SessionState,
+    SessionKnowledgeLibrarySelectionMode, SessionMessageKind, SessionMessageRecordKind,
+    SessionProviderToolTargetSelection, SessionRunPhase, SessionState,
 };
-use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
+use vulcan_workspace_store::{
+    data_plane::ControllerRuntimeHandle,
+    workspace_store::{WorkspaceSegmentedSessionBoundaryStore, WorkspaceSnapshot},
+};
 
 use super::{
     ExistingSubmissionAdmissionAuthorization, PromptSessionMaterializationKind,
@@ -31,18 +37,18 @@ use super::{
     current_workspace_snapshot_from_shared_state, emit_materialized_session_message_delta,
     emit_pending_prompts_changed_delta, emit_service_event_with_trace,
     enqueue_webui_pending_prompt_from_submission, hydrate_retained_submission_session_if_needed,
-    load_workspace_for_submission, mark_webui_prompt_preparation_failed,
-    mark_webui_prompt_snapshot_preparing, materialize_prompt_session,
-    owning_project_id_for_session, parse_prompt_session_target, parse_session_id,
-    persist_initial_submission_goal, prepare_submission_media, preserve_active_session_run_state,
-    provider_tool_capability_key, replace_conversation_messages_in_workbench_window,
-    retain_slow_submission_diagnostic, retained_submission_snapshot_has_session_context,
-    retained_submission_snapshot_is_usable, rollback_persisted_session_before_user_prompt,
-    runtime_parts_from_state, session_has_blocking_system_prompt_work,
-    snapshot_webui_context_before_user_prompt, spawn_service_task,
-    spawn_workspace_session_persist_task, start_reserved_webui_session_kernel_user_turn,
-    start_webui_precheck_or_continue, start_webui_session_kernel_user_turn,
-    store_workspace_snapshot_without_workbench_rebuild,
+    is_active_session_run_phase, load_workspace_for_submission,
+    mark_webui_prompt_preparation_failed, mark_webui_prompt_snapshot_preparing,
+    materialize_prompt_session, owning_project_id_for_session, parse_prompt_session_target,
+    parse_session_id, persist_initial_submission_goal, prepare_submission_media,
+    preserve_active_session_run_state, provider_tool_capability_key,
+    replace_conversation_messages_in_workbench_window, retain_slow_submission_diagnostic,
+    retained_submission_snapshot_has_session_context, retained_submission_snapshot_is_usable,
+    rollback_persisted_session_before_user_prompt, runtime_parts_from_state,
+    session_has_blocking_system_prompt_work, snapshot_webui_context_before_user_prompt,
+    spawn_service_task, spawn_workspace_session_persist_task,
+    start_reserved_webui_session_kernel_user_turn, start_webui_precheck_or_continue,
+    start_webui_session_kernel_user_turn, store_workspace_snapshot_without_workbench_rebuild,
     sync_hydrated_session_dialogue_ready_marker, validate_composer_attachment_summary,
     webui_session_allows_user_prompt_editing, webui_session_kernel_has_active_turn,
     webui_shared_prompt_precheck_plan, webui_submit_trace, webui_trace_if_slow,
@@ -71,6 +77,35 @@ pub(super) enum ExistingSessionHydrationPolicy {
     /// Trusts the retained snapshot even when a destructive edit intentionally made it empty.
     /// 即使破坏性编辑有意将其清空，也信任保留快照。
     TrustRetainedSnapshot,
+}
+
+/// Selects whether a submission creates visible user input or replays retained provider state.
+/// 选择本次提交是创建可见用户输入还是重放保留的 Provider 状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ConversationSubmissionMode {
+    /// Normal composer submission authored by the user.
+    /// 用户通过输入区发起的普通提交。
+    UserPrompt,
+    /// Host-owned retry that must not append another canonical or visible user message.
+    /// 宿主拥有的重试，不追加新的规范用户消息或可见用户记录。
+    ProviderRetry,
+}
+
+impl ConversationSubmissionMode {
+    /// Returns the prompt source recorded in the shared turn state.
+    /// 返回共享回合状态中记录的提示词来源。
+    fn prompt_source(self) -> PendingSessionPromptSource {
+        match self {
+            Self::UserPrompt => PendingSessionPromptSource::UserFollowup,
+            Self::ProviderRetry => PendingSessionPromptSource::ProviderRetry,
+        }
+    }
+
+    /// Returns whether this mode should append user-authored conversation records.
+    /// 返回本模式是否应追加用户编写的会话记录。
+    fn appends_user_records(self) -> bool {
+        matches!(self, Self::UserPrompt)
+    }
 }
 
 /// Freezes the exact provider, model, and credential selected when a prompt is submitted.
@@ -764,6 +799,206 @@ pub(crate) fn attach_client_submission_id_to_visible_user_record(
 /// `attachments` 包含要加入本回合的输入区附件摘要。
 /// `preauthorized_turn_admission` carries exact ownership from an outer destructive-edit transaction.
 /// `preauthorized_turn_admission` 携带外层破坏性编辑事务的精确所有权。
+/// Loads whether the durable session-boundary status is failed after a restart.
+/// 读取进程重启后持久化会话边界状态是否为失败。
+///
+/// # Parameters
+/// 参数
+/// `controller_runtime` owns the segmented session data root.
+/// `controller_runtime` 持有分段会话数据根目录。
+/// `project_id` identifies the owning workspace project.
+/// `project_id` 标识所属工作区项目。
+/// `session_id` identifies the session boundary thread.
+/// `session_id` 标识会话边界线程。
+/// `session_title` supplies the store adapter's stable display title.
+/// `session_title` 提供存储适配器使用的稳定显示标题。
+///
+/// # Returns
+/// 返回值
+/// Whether the persisted thread status is failed when a boundary state exists, or `None` when absent.
+/// 存在边界状态时返回其是否为失败；没有边界状态的会话返回 `None`。
+fn load_persisted_session_boundary_failed(
+    controller_runtime: &ControllerRuntimeHandle,
+    project_id: &str,
+    session_id: SessionId,
+    session_title: &str,
+) -> Result<Option<bool>, String> {
+    let store = WorkspaceSegmentedSessionBoundaryStore::new(
+        controller_runtime.data_root.clone(),
+        project_id.to_string(),
+        session_id,
+        session_title.to_string(),
+    );
+    let Some(value) = store.load_state(SessionNodeId::from(session_id))? else {
+        return Ok(None);
+    };
+    let status = value
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| String::from("ERR_CONVERSATION_RETRY_BOUNDARY_STATE_INVALID"))?;
+    match status {
+        "idle" | "running" | "interrupted" => Ok(Some(false)),
+        "failed" => Ok(Some(true)),
+        _ => Err(String::from(
+            "ERR_CONVERSATION_RETRY_BOUNDARY_STATE_INVALID",
+        )),
+    }
+}
+
+/// Retries the latest failed provider turn from the retained canonical session state.
+/// 从保留的规范会话状态重试最近一次失败的 Provider 回合。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the accepted retry state and subsequent runtime deltas.
+/// `app` 发出已接受的重试状态与后续运行时增量。
+/// `state` owns the retained workspace and canonical conversation state.
+/// `state` 持有保留的工作区与规范会话状态。
+/// `conversation_id` identifies the failed WebUI conversation.
+/// `conversation_id` 标识失败的 WebUI 会话。
+///
+/// # Returns
+/// 返回值
+/// A lightweight acknowledgement after the retained provider state is admitted for retry.
+/// 保留的 Provider 状态获准重试后的轻量确认信息。
+pub(super) async fn service_retry_conversation_request(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    conversation_id: String,
+) -> Result<SubmitConversationPromptAck, String> {
+    let session_id = parse_session_id(&conversation_id)
+        .ok_or_else(|| String::from("ERR_CONVERSATION_RETRY_INVALID_CONVERSATION"))?;
+    let (prompt, run_phase, latest_visible_transcript_is_error, boundary_context) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace = guard
+            .workspace_snapshot
+            .as_ref()
+            .ok_or_else(|| String::from("ERR_WORKSPACE_SNAPSHOT_NOT_READY"))?;
+        let runtime_state = workspace
+            .session_runtime_state
+            .get(&session_id)
+            .ok_or_else(|| String::from("ERR_CONVERSATION_RETRY_RUNTIME_STATE_MISSING"))?;
+        // The last visible transcript record is the durable failure fact after a process restart.
+        // 进程重启后，最后一条可见转录记录是可持久化的失败事实。
+        let latest_visible_transcript_is_error = runtime_state
+            .conversation_state
+            .records
+            .iter()
+            .rev()
+            .find(|record| {
+                record.visible && record.record_kind == SessionMessageRecordKind::Transcript
+            })
+            .is_some_and(|record| record.kind == SessionMessageKind::Error);
+        let run_phase = workspace
+            .session_run_phases
+            .get(&session_id)
+            .copied()
+            .unwrap_or(SessionRunPhase::Idle);
+        let boundary_context = if !is_active_session_run_phase(run_phase)
+            && !matches!(
+                run_phase,
+                SessionRunPhase::Failed | SessionRunPhase::Stopped
+            ) {
+            let controller_runtime = guard
+                .controller_runtime
+                .clone()
+                .ok_or_else(|| String::from("ERR_CONVERSATION_RETRY_CONTROLLER_NOT_READY"))?;
+            let project_id = owning_project_id_for_session(workspace, session_id)
+                .ok_or_else(|| String::from("ERR_CONVERSATION_RETRY_PROJECT_NOT_FOUND"))?;
+            let session_title = workspace
+                .sessions
+                .iter()
+                .find(|session| session.id == session_id)
+                .map(|session| session.title.clone())
+                .ok_or_else(|| String::from("ERR_CONVERSATION_RETRY_SESSION_NOT_FOUND"))?;
+            Some((controller_runtime, project_id, session_title))
+        } else {
+            None
+        };
+        let prompt = runtime_state
+            .conversation_state
+            .messages
+            .iter()
+            .rev()
+            .find_map(|message| match &message.payload {
+                SessionConversationPayload::UserText { text, .. } => {
+                    let trimmed = text.trim();
+                    (!trimmed.is_empty()).then(|| trimmed.to_string())
+                }
+                _ => None,
+            })
+            .ok_or_else(|| String::from("ERR_CONVERSATION_RETRY_PROMPT_NOT_FOUND"))?;
+        (
+            prompt,
+            run_phase,
+            latest_visible_transcript_is_error,
+            boundary_context,
+        )
+    };
+    let persisted_boundary_status = boundary_context
+        .as_ref()
+        .map(|(controller_runtime, project_id, session_title)| {
+            load_persisted_session_boundary_failed(
+                controller_runtime,
+                project_id,
+                session_id,
+                session_title,
+            )
+        })
+        .transpose()?;
+    let durable_failure_observed =
+        latest_visible_transcript_is_error || persisted_boundary_status == Some(Some(true));
+    // Active phases always reject retry; after restart, Idle or Ready may use the durable boundary failure.
+    // 活跃阶段始终拒绝重试；进程重启后，Idle 或 Ready 可依据持久化会话边界失败状态重试。
+    let phase_allows_retry = matches!(
+        run_phase,
+        SessionRunPhase::Failed | SessionRunPhase::Stopped
+    ) || (!is_active_session_run_phase(run_phase)
+        && durable_failure_observed);
+    if !phase_allows_retry {
+        return Err(String::from("ERR_CONVERSATION_RETRY_SESSION_NOT_FAILED"));
+    }
+    if !durable_failure_observed {
+        return Err(String::from("ERR_CONVERSATION_RETRY_FAILURE_NOT_FOUND"));
+    }
+
+    service_submit_conversation_prompt(
+        app,
+        state,
+        Uuid::new_v4().to_string(),
+        None,
+        Some(conversation_id),
+        prompt,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        ExistingSessionHydrationPolicy::TrustRetainedSnapshot,
+        ConversationSubmissionMode::ProviderRetry,
+    )
+    .await
+}
+
+/// Submits one ordinary user prompt or one host-owned retry through the shared conversation pipeline.
+/// 通过共享会话流水线提交普通用户提示词或宿主拥有的重试请求。
+///
+/// # Parameters
+/// `app` emits accepted workbench updates and runtime events.
+/// `app` 发出已接受的工作台更新与运行时事件。
+/// `state` owns service handles and the retained workspace snapshot.
+/// `state` 持有服务句柄与保留的工作区快照。
+/// The remaining arguments preserve the existing prompt, session, model, attachment, admission, hydration, and submission-mode contracts.
+/// 其余参数继续承载现有的提示词、会话、模型、附件、准入、恢复策略与提交模式契约。
+///
+/// # Returns
+/// A lightweight acknowledgement after the request is queued or started.
+/// 请求排队或启动后的轻量确认信息。
+///
 /// `existing_session_hydration_policy` controls whether an empty retained session is rehydrated.
 /// `existing_session_hydration_policy` 控制是否重新水合空的保留会话。
 ///
@@ -771,6 +1006,9 @@ pub(crate) fn attach_client_submission_id_to_visible_user_record(
 /// 返回值
 /// Returns a lightweight acknowledgement after queuing or starting the submitted prompt.
 /// 返回排队或启动提交提示词后的轻量确认信息。
+///
+/// `submission_mode` selects ordinary user input or a host-owned provider-state retry.
+/// `submission_mode` 选择普通用户输入或宿主拥有的 Provider 状态重试。
 pub(super) async fn service_submit_conversation_prompt(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
@@ -786,6 +1024,7 @@ pub(super) async fn service_submit_conversation_prompt(
     attachments: Option<Vec<ComposerAttachmentSummary>>,
     preauthorized_turn_admission: Option<ExistingSubmissionAdmissionAuthorization>,
     existing_session_hydration_policy: ExistingSessionHydrationPolicy,
+    submission_mode: ConversationSubmissionMode,
 ) -> Result<SubmitConversationPromptAck, String> {
     // Measures the whole submit RPC body from service entry to final response.
     // 衡量提交 RPC 主体从服务入口到最终返回的整体耗时。
@@ -795,6 +1034,8 @@ pub(super) async fn service_submit_conversation_prompt(
         return Err(String::from("clientSubmissionId must not be empty."));
     }
     let prompt = prompt.trim().to_string();
+    let prompt_source = submission_mode.prompt_source();
+    let append_user_records = submission_mode.appends_user_records();
     webui_submit_trace(
         "submit_prompt_received",
         format!(
@@ -917,6 +1158,9 @@ pub(super) async fn service_submit_conversation_prompt(
     if let ExistingSubmissionQueueDecision::Queue { session_id } =
         evaluate_existing_submission_queue(&state, &workspace_snapshot, submission_session_id)?
     {
+        if submission_mode == ConversationSubmissionMode::ProviderRetry {
+            return Err(String::from("ERR_CONVERSATION_RETRY_SESSION_BUSY"));
+        }
         return queue_existing_submission(
             &app,
             &state,
@@ -1059,9 +1303,9 @@ pub(super) async fn service_submit_conversation_prompt(
                 hidden_model_guidance: hidden_model_guidance.as_deref(),
                 provider_visible_agent_messages: Vec::new(),
                 attachments,
-                append_canonical_user_message: true,
-                append_visible_user_prompt_record: true,
-                source: PendingSessionPromptSource::UserFollowup,
+                append_canonical_user_message: append_user_records,
+                append_visible_user_prompt_record: append_user_records,
+                source: prompt_source,
                 execution_mode: runtime_options.execution_mode,
                 reasoning_effort: runtime_options.reasoning_effort,
             },
@@ -1242,7 +1486,7 @@ pub(super) async fn service_submit_conversation_prompt(
                 &controller_runtime_for_preparation,
                 &workspace_snapshot,
                 session_id,
-                PendingSessionPromptSource::UserFollowup,
+                prompt_source,
             )?;
             webui_submit_trace(
                 "submit_prompt_context_snapshot_ready",
@@ -1252,12 +1496,20 @@ pub(super) async fn service_submit_conversation_prompt(
                 ),
             );
             let precheck_plan_started_at = current_unix_millis_value();
-            let precheck_plan = webui_shared_prompt_precheck_plan(
-                &agent_runtime_for_preparation,
-                &workspace_snapshot,
-                session_id,
-                &workspace_path,
-            )?;
+            let precheck_plan = if prompt_source.runs_user_prompt_precheck() {
+                webui_shared_prompt_precheck_plan(
+                    &agent_runtime_for_preparation,
+                    &workspace_snapshot,
+                    session_id,
+                    &workspace_path,
+                )?
+            } else {
+                SharedPromptPrecheckPlan {
+                    has_precheck_hooks: false,
+                    should_skip_precheck: true,
+                    progress_labels: Vec::new(),
+                }
+            };
             webui_submit_trace(
                 "submit_prompt_precheck_plan_ready",
                 format!(

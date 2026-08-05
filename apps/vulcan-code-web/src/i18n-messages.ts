@@ -349,6 +349,24 @@ export type TranslationKey =
   | "conversation.block.plan"
   | "conversation.block.notice"
   | "conversation.block.detail"
+  | "conversation.systemError.title"
+  | "conversation.systemError.status"
+  | "conversation.systemError.message"
+  | "conversation.systemError.provider"
+  | "conversation.systemError.category"
+  | "conversation.systemError.stage"
+  | "conversation.systemError.dispatchOutcome"
+  | "conversation.systemError.semanticOutput"
+  | "conversation.systemError.retryable"
+  | "conversation.systemError.httpStatus"
+  | "conversation.systemError.subcategory"
+  | "conversation.systemError.upstreamCode"
+  | "conversation.systemError.retryAfter"
+  | "conversation.systemError.true"
+  | "conversation.systemError.false"
+  | "conversation.systemError.raw"
+  | "conversation.systemError.retry"
+  | "conversation.systemError.retrying"
   | "conversation.metadata.type"
   | "conversation.metadata.status"
   | "conversation.metadata.tool"
@@ -396,6 +414,10 @@ export type TranslationKey =
   | "contextCompaction.trigger.manual"
   | "contextCompaction.trigger.auto"
   | "contextCompaction.progress.prepareInput"
+  | "contextCompaction.progress.prepareRemoteTooling"
+  | "contextCompaction.progress.remoteCompactionCheck"
+  | "contextCompaction.progress.remoteCompactionComplete"
+  | "contextCompaction.progress.remoteCompactionLocalFallback"
   | "contextCompaction.progress.buildRequest"
   | "contextCompaction.progress.prepareRuntime"
   | "contextCompaction.progress.runtimeReady"
@@ -616,6 +638,7 @@ export type TranslationKey =
   | "conversationActions.noProjectForSend"
   | "conversationActions.previewCannotSend"
   | "conversationActions.previewCannotCompact"
+  | "conversationActions.previewCannotRetry"
   | "conversationActions.modelSwitched"
   | "projectActions.vmmSaved"
   | "projectActions.openRequested"
@@ -1894,8 +1917,8 @@ export type TranslationKey =
   | "settings.customModels.removeConfirm"
   | "settings.customProviders.removeTitle"
   | "settings.customProviders.removeDescription"
-  | "settings.customProviders.removeModelsBlocked"
-  | "settings.customProviders.removeModelsBlockedGeneric"
+  | "settings.customProviders.removeModelsWarning"
+  | "settings.customProviders.removeModelsWarningGeneric"
   | "settings.customProviders.removeCredentialsWarning"
   | "settings.customProviders.removeSessionsWarning"
   | "settings.customProviders.modelCount"
@@ -1911,6 +1934,11 @@ export type TranslationKey =
   | "settings.customProviders.displayName"
   | "settings.customProviders.baseUrl"
   | "settings.customProviders.protocol"
+  | "settings.customProviders.codexCapabilities"
+  | "settings.customProviders.codexWebsocket"
+  | "settings.customProviders.codexWebsocketHint"
+  | "settings.customProviders.codexRemoteCompaction"
+  | "settings.customProviders.codexRemoteCompactionHint"
   | "settings.customProviders.authentication"
   | "settings.customProviders.discoveryMode"
   | "settings.customProviders.discoveryStandard"
@@ -2889,6 +2917,24 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.block.plan": "计划",
     "conversation.block.notice": "运行提示",
     "conversation.block.detail": "详情",
+    "conversation.systemError.title": "系统错误",
+    "conversation.systemError.status": "失败",
+    "conversation.systemError.message": "错误消息",
+    "conversation.systemError.provider": "Provider",
+    "conversation.systemError.category": "错误类别",
+    "conversation.systemError.stage": "执行阶段",
+    "conversation.systemError.dispatchOutcome": "请求派发",
+    "conversation.systemError.semanticOutput": "已观察到语义输出",
+    "conversation.systemError.retryable": "允许重试",
+    "conversation.systemError.httpStatus": "HTTP 状态",
+    "conversation.systemError.subcategory": "错误子类别",
+    "conversation.systemError.upstreamCode": "上游错误码",
+    "conversation.systemError.retryAfter": "重试等待",
+    "conversation.systemError.true": "是",
+    "conversation.systemError.false": "否",
+    "conversation.systemError.raw": "查看原始错误",
+    "conversation.systemError.retry": "重试",
+    "conversation.systemError.retrying": "重试中",
     "conversation.metadata.type": "类型",
     "conversation.metadata.status": "状态",
     "conversation.metadata.tool": "工具",
@@ -2936,6 +2982,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "contextCompaction.trigger.manual": "手动",
     "contextCompaction.trigger.auto": "自动",
     "contextCompaction.progress.prepareInput": "正在准备压缩输入。",
+    "contextCompaction.progress.prepareRemoteTooling": "正在按当前会话重建远端压缩所需的工具、插件与 MCP 快照。",
+    "contextCompaction.progress.remoteCompactionCheck": "正在准备远端压缩请求并等待供应商响应；耗时取决于上游，但当前任务仍在运行。",
+    "contextCompaction.progress.remoteCompactionComplete": "供应商远端压缩已完成，正在应用新的上下文检查点。",
+    "contextCompaction.progress.remoteCompactionLocalFallback": "远端压缩未执行或未安全完成，正在改用本地压缩；当前任务仍在运行。",
     "contextCompaction.progress.buildRequest": "已准备压缩输入，正在构建模型总结请求。",
     "contextCompaction.progress.prepareRuntime": "正在准备独立压缩运行时与工具快照。",
     "contextCompaction.progress.runtimeReady": "压缩运行时已准备完成，正在启动 Provider 请求。",
@@ -3156,6 +3206,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversationActions.noProjectForSend": "当前会话没有明确关联项目，无法发送。",
     "conversationActions.previewCannotSend": "浏览器预览模式下无法发送真实会话。",
     "conversationActions.previewCannotCompact": "浏览器预览模式下无法执行真实上下文压缩。",
+    "conversationActions.previewCannotRetry": "浏览器预览模式下无法重试真实会话。",
     "conversationActions.modelSwitched": "当前模型已切换为 {model}（{provider}）。",
     "projectActions.vmmSaved": "已保存项目 VMM 设置。",
     "projectActions.openRequested": "已请求打开项目目录：{project}",
@@ -4433,9 +4484,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.noModelsToImport": "当前目录没有可追加的新模型。",
     "settings.customModels.removeConfirm": "确定从自定义供应商中移除模型“{name}”吗？如果模型被会话锁定或被内部推理路由引用，后端会禁止删除，请先切换相关会话或路由。",
     "settings.customProviders.removeTitle": "移除供应商",
-    "settings.customProviders.removeDescription": "确定移除自定义供应商“{name}”吗？系统会先检查凭据、模型和运行中引用，存在引用时不会删除。",
-    "settings.customProviders.removeModelsBlocked": "存在 {count} 项模型自定义信息或路由设置，必须先清理后才能移除供应商。",
-    "settings.customProviders.removeModelsBlockedGeneric": "该供应商仍有模型自定义信息、账号模型策略或内部路由设置，必须先清理后才能移除。",
+    "settings.customProviders.removeDescription": "确定移除自定义供应商“{name}”吗？确认后将直接删除该供应商及其全部专属配置。",
+    "settings.customProviders.removeModelsWarning": "将同时删除 {count} 项模型自定义信息或路由设置。",
+    "settings.customProviders.removeModelsWarningGeneric": "将同时删除该供应商的模型自定义信息、账号模型策略和内部路由设置。",
     "settings.customProviders.removeCredentialsWarning": "确认后将同时删除该供应商的 {count} 个凭据。",
     "settings.customProviders.removeSessionsWarning": "如果已有会话使用该供应商，移除后会话模型将失效，并自动切换到默认模型或第一个可用模型。",
     "settings.customProviders.modelCount": "{count} 个模型",
@@ -4451,6 +4502,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customProviders.displayName": "显示名称",
     "settings.customProviders.baseUrl": "基础 URL",
     "settings.customProviders.protocol": "调用协议",
+    "settings.customProviders.codexCapabilities": "Codex Responses 能力",
+    "settings.customProviders.codexWebsocket": "优先使用 WebSocket",
+    "settings.customProviders.codexWebsocketHint": "对端不支持时，在产生语义输出前回退到 HTTP。",
+    "settings.customProviders.codexRemoteCompaction": "启用远端上下文压缩",
+    "settings.customProviders.codexRemoteCompactionHint": "调用 /responses/compact；仅在未产生语义输出或副作用且可安全重试时回退到本地压缩。",
     "settings.customProviders.authentication": "鉴权请求头",
     "settings.customProviders.discoveryMode": "模型目录",
     "settings.customProviders.discoveryStandard": "标准 /models",
@@ -5426,6 +5482,24 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.block.plan": "Plan",
     "conversation.block.notice": "Run notice",
     "conversation.block.detail": "Detail",
+    "conversation.systemError.title": "System error",
+    "conversation.systemError.status": "Failed",
+    "conversation.systemError.message": "Error message",
+    "conversation.systemError.provider": "Provider",
+    "conversation.systemError.category": "Category",
+    "conversation.systemError.stage": "Stage",
+    "conversation.systemError.dispatchOutcome": "Dispatch outcome",
+    "conversation.systemError.semanticOutput": "Semantic output observed",
+    "conversation.systemError.retryable": "Retryable",
+    "conversation.systemError.httpStatus": "HTTP status",
+    "conversation.systemError.subcategory": "Subcategory",
+    "conversation.systemError.upstreamCode": "Upstream code",
+    "conversation.systemError.retryAfter": "Retry after",
+    "conversation.systemError.true": "Yes",
+    "conversation.systemError.false": "No",
+    "conversation.systemError.raw": "View raw error",
+    "conversation.systemError.retry": "Retry",
+    "conversation.systemError.retrying": "Retrying",
     "conversation.metadata.type": "Type",
     "conversation.metadata.status": "Status",
     "conversation.metadata.tool": "Tool",
@@ -5473,6 +5547,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "contextCompaction.trigger.manual": "Manual",
     "contextCompaction.trigger.auto": "Automatic",
     "contextCompaction.progress.prepareInput": "Preparing compaction input.",
+    "contextCompaction.progress.prepareRemoteTooling": "Rebuilding the current session's tool, plugin, and MCP snapshot for remote compaction.",
+    "contextCompaction.progress.remoteCompactionCheck": "Preparing remote compaction and waiting for the provider; upstream latency may vary, and the task is still running.",
+    "contextCompaction.progress.remoteCompactionComplete": "Remote provider compaction completed; applying the new context checkpoint.",
+    "contextCompaction.progress.remoteCompactionLocalFallback": "Remote compaction was unavailable or did not complete safely; switching to local compaction while the task continues.",
     "contextCompaction.progress.buildRequest": "Compaction input is ready; building the model summary request.",
     "contextCompaction.progress.prepareRuntime": "Preparing the isolated compaction runtime and tool snapshot.",
     "contextCompaction.progress.runtimeReady": "The compaction runtime is ready; starting the provider request.",
@@ -5693,6 +5771,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversationActions.noProjectForSend": "The current conversation is not linked to a project, so it cannot be sent.",
     "conversationActions.previewCannotSend": "Real conversations cannot be sent in browser preview mode.",
     "conversationActions.previewCannotCompact": "Real context compaction cannot run in browser preview mode.",
+    "conversationActions.previewCannotRetry": "Real conversations cannot be retried in browser preview mode.",
     "conversationActions.modelSwitched": "Current model switched to {model} ({provider}).",
     "projectActions.vmmSaved": "Project VMM settings saved.",
     "projectActions.openRequested": "Requested to open project directory: {project}",
@@ -6970,9 +7049,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.noModelsToImport": "The live catalog has no new models to append.",
     "settings.customModels.removeConfirm": "Remove model “{name}” from this custom provider? The service will block deletion while a session locks the model or an internal route references it; switch those sessions or routes first.",
     "settings.customProviders.removeTitle": "Remove provider",
-    "settings.customProviders.removeDescription": "Remove custom provider “{name}”? Credentials, models, and active runtime references are checked first; referenced providers are not deleted.",
-    "settings.customProviders.removeModelsBlocked": "{count} model customizations or route settings remain; clear them before removing the provider.",
-    "settings.customProviders.removeModelsBlockedGeneric": "This provider still owns model customizations, account model policies, or internal routes. Clear them before removing the provider.",
+    "settings.customProviders.removeDescription": "Remove custom provider “{name}”? Confirmation permanently deletes the provider and all provider-owned configuration.",
+    "settings.customProviders.removeModelsWarning": "{count} model customizations or route settings will also be deleted.",
+    "settings.customProviders.removeModelsWarningGeneric": "The provider's model customizations, account model policies, and internal routes will also be deleted.",
     "settings.customProviders.removeCredentialsWarning": "After confirmation, the provider's {count} credentials will be deleted together with it.",
     "settings.customProviders.removeSessionsWarning": "If any sessions use this provider, their session model will become unavailable and automatically switch to the default or first available model.",
     "settings.customProviders.modelCount": "{count} models",
@@ -6988,6 +7067,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customProviders.displayName": "Display name",
     "settings.customProviders.baseUrl": "Base URL",
     "settings.customProviders.protocol": "Calling protocol",
+    "settings.customProviders.codexCapabilities": "Codex Responses capabilities",
+    "settings.customProviders.codexWebsocket": "Prefer WebSocket",
+    "settings.customProviders.codexWebsocketHint": "Falls back to HTTP before semantic output when unsupported.",
+    "settings.customProviders.codexRemoteCompaction": "Enable remote context compaction",
+    "settings.customProviders.codexRemoteCompactionHint": "Uses /responses/compact and falls back to local compaction on safe failures.",
     "settings.customProviders.authentication": "Authentication header",
     "settings.customProviders.discoveryMode": "Model catalog",
     "settings.customProviders.discoveryStandard": "Standard /models",

@@ -543,12 +543,11 @@ fn publish_official_vector_rebuild_progress(
     // stage_changed distinguishes a new ordered sub-stage from an in-stage batch update.
     // stage_changed 区分有序新子阶段与同阶段批次更新。
     let stage_changed = current.progress_stage.as_deref() != Some(stage);
-    if let Some(current_stage) = current.progress_stage.as_deref() {
-        if vector_rebuild_progress_stage_rank(stage)
+    if let Some(current_stage) = current.progress_stage.as_deref()
+        && vector_rebuild_progress_stage_rank(stage)
             < vector_rebuild_progress_stage_rank(current_stage)
-        {
-            return;
-        }
+    {
+        return;
     }
     if !stage_changed {
         if current

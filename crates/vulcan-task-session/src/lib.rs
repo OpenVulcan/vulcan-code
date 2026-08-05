@@ -74,7 +74,9 @@ mod tests {
         ContextCompactionPolicy, SessionConversationMessage, SessionConversationPayload,
         SessionConversationState, SessionMessageKind, SessionMessageRecordKind,
     };
-    use vulcan_context_compaction::{CompactionResult, CompactionSummaryRecord};
+    use vulcan_context_compaction::{
+        CompactionResult, CompactionSummaryRecord, ProviderContextRoute,
+    };
     use vulcan_session_core::{
         ExecutionRuntimePolicyRequest, ParentSessionRef, ProviderModelSnapshot,
         SessionContextDocument, SessionEffectiveConfig, SessionEventKind, SessionEventRecord,
@@ -643,6 +645,10 @@ mod tests {
             compaction_id: "task-compaction-1".to_string(),
             created_at: "456".to_string(),
             policy: ContextCompactionPolicy::default(),
+            provider_context_items: Vec::new(),
+            provider_context_route: None,
+            provider_context_usage: None,
+            provider_context_response_id: None,
         };
 
         let application = apply_task_session_compaction_result(context, &compaction_result, 7)
@@ -666,6 +672,105 @@ mod tests {
         assert_eq!(compacted_state.messages.len(), 2);
         assert!(compacted_state.messages[0].id.starts_with("task-summary-"));
         assert_eq!(compacted_state.messages[1].id, "message-3");
+    }
+
+    /// Verifies TaskSession compaction retains route-bound opaque Responses state for continuation.
+    /// 验证 TaskSession 压缩会为后续连续执行保留绑定路由的不透明 Responses 状态。
+    #[test]
+    fn task_session_remote_compaction_preserves_provider_context() {
+        // taskSessionId identifies the context document receiving the remote checkpoint.
+        // taskSessionId 标识接收远端检查点的上下文文档。
+        let task_session_id = SessionNodeId::new_v4();
+        // conversationState supplies one covered message and one retained continuation message.
+        // conversationState 提供一条被覆盖消息和一条保留的续写消息。
+        let conversation_state = SessionConversationState {
+            messages: vec![
+                task_user_message("message-1", "covered"),
+                task_user_message("message-2", "retained"),
+            ],
+            records: Vec::new(),
+            continuation: Default::default(),
+        };
+        // context is the exact persisted TaskSession source document.
+        // context 是精确持久化的 TaskSession 源文档。
+        let context = SessionContextDocument {
+            schema_version: 1,
+            node_id: task_session_id,
+            provider_id: Some(String::from("custom:test")),
+            model_id: Some(String::from("gpt-test")),
+            reasoning_effort: None,
+            system_prompt_layers: vec![String::from("system")],
+            conversation_state: serde_json::to_value(conversation_state)
+                .expect("conversation state should serialize"),
+            compaction_anchor: None,
+            context_budget_fingerprint: None,
+            tool_catalog_snapshot: json!({ "tools": [] }),
+            provider_request_preview: None,
+        };
+        // compactionResult carries the opaque checkpoint and its complete replay identity.
+        // compactionResult 携带不透明检查点及其完整重放身份。
+        let compaction_result = CompactionResult {
+            summary_record: CompactionSummaryRecord {
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::CompactionSummary,
+                title: String::from("Context compaction"),
+                body: String::from("Remote checkpoint installed."),
+                preview: String::from("Remote checkpoint installed."),
+            },
+            source_until_message_id: Some(String::from("message-1")),
+            source_until_turn_index: Some(0),
+            retained_tail_start_turn_index: Some(1),
+            compaction_id: String::from("remote-task-compaction"),
+            created_at: String::from("789"),
+            policy: ContextCompactionPolicy::default(),
+            provider_context_items: vec![json!({
+                "type": "compaction_summary",
+                "encrypted_content": "opaque-task-checkpoint"
+            })],
+            provider_context_route: Some(ProviderContextRoute {
+                provider_id: String::from("custom:test"),
+                connection_id: String::from("connection-test"),
+                route_fingerprint: String::from("https://proxy.example/v1/responses"),
+                protocol_profile_id: String::from("openai-codex-responses"),
+                model_id: String::from("gpt-test"),
+            }),
+            provider_context_usage: Some(json!({ "input_tokens": 20 })),
+            provider_context_response_id: Some(String::from("response-task")),
+        };
+
+        let application = apply_task_session_compaction_result(context, &compaction_result, 9)
+            .expect("remote task compaction should apply");
+        let compacted_state: SessionConversationState =
+            serde_json::from_value(application.context.conversation_state)
+                .expect("compacted state should deserialize");
+
+        assert_eq!(compacted_state.messages.len(), 2);
+        assert_eq!(
+            compacted_state.messages[0].id,
+            "task-summary-remote-task-compaction"
+        );
+        let SessionConversationPayload::Assistant {
+            text,
+            provider_message_state: Some(provider_state),
+            ..
+        } = &compacted_state.messages[0].payload
+        else {
+            panic!("remote task summary anchor must be an assistant message");
+        };
+        assert_eq!(text, "Remote checkpoint installed.");
+        assert_eq!(compacted_state.messages[1].id, "message-2");
+        assert_eq!(
+            provider_state
+                .pointer("/vulcan_ai/responses_compaction/items/0/type")
+                .and_then(serde_json::Value::as_str),
+            Some("compaction")
+        );
+        assert_eq!(
+            provider_state
+                .pointer("/vulcan_ai/responses_compaction/connection_id")
+                .and_then(serde_json::Value::as_str),
+            Some("connection-test")
+        );
     }
 
     /// Builds one simple task-session user message for compaction tests.

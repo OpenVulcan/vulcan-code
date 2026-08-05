@@ -687,6 +687,7 @@ fn fail_webui_context_compaction_execution_records_auto_failure_metadata() {
     let session_id = SessionId::new_v4();
     let mut runtime_state = SessionRuntimeStateEntry {
         auto_compaction_consecutive_failures: 2,
+        context_start_message_id: Some(String::from("existing-anchor")),
         ..SessionRuntimeStateEntry::default()
     };
     let mut workspace_snapshot = WorkspaceSnapshot {
@@ -745,6 +746,10 @@ fn fail_webui_context_compaction_execution_records_auto_failure_metadata() {
         .get(&session_id)
         .expect("runtime state should remain present");
     assert_eq!(runtime_state.auto_compaction_consecutive_failures, 3);
+    assert_eq!(
+        runtime_state.context_start_message_id.as_deref(),
+        Some("existing-anchor")
+    );
     assert_eq!(
         workspace_snapshot.session_run_phases.get(&session_id),
         Some(&SessionRunPhase::Ready)

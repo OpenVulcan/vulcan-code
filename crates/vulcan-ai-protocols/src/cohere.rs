@@ -719,6 +719,7 @@ mod tests {
                     content: vec![ContentItem::Text {
                         text: String::from("hello"),
                     }],
+                    provider_context_items: Vec::new(),
                 }],
                 tools: vec![ToolDefinition {
                     name: String::from("lookup"),

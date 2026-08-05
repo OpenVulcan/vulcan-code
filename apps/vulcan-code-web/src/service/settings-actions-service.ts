@@ -158,15 +158,12 @@ export async function validatePublicAiCustomModel(request: {
   );
 }
 
-// removePublicAiCustomProvider removes one unreferenced user-defined provider.
-// removePublicAiCustomProvider 移除一个未被引用的用户自定义供应商。
-export async function removePublicAiCustomProvider(
-  providerId: string,
-  confirmCredentialDeletion = false,
-): Promise<PublicAiSettingsSnapshot> {
+// removePublicAiCustomProvider confirms cleanup for providerId and returns the refreshed settings snapshot.
+// removePublicAiCustomProvider 确认清理 providerId，并返回刷新后的设置快照。
+export async function removePublicAiCustomProvider(providerId: string): Promise<PublicAiSettingsSnapshot> {
   return serviceClient.request<PublicAiSettingsSnapshot>(
     "service_remove_public_ai_custom_provider",
-    { request: { providerId, confirmCredentialDeletion } },
+    { request: { providerId, confirmCredentialDeletion: true } },
   );
 }
 

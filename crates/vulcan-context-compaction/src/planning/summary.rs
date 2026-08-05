@@ -1,3 +1,7 @@
+use serde_json::Value;
+use vulcan_ai_contract::{
+    canonicalize_codex_responses_replay_items, is_replayable_codex_responses_item,
+};
 use vulcan_context::{
     SessionCompactionEntry, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,
 };
@@ -41,6 +45,73 @@ impl CompactionResult {
         let summary_text =
             build_legacy_compaction_summary_text(&plan.source_messages, plan.policy.prune);
         build_compaction_result_from_summary_text(plan, summary_text)
+    }
+
+    /// Builds a route-bound compaction result from the standalone Responses compact endpoint.
+    /// 根据独立 Responses compact 端点构建绑定路由的压缩结果。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `plan` supplies the local checkpoint identity and retained-tail policy; `route` freezes
+    /// the provider identity; `output_items`
+    /// contains the provider-returned opaque items that must be replayed verbatim.
+    /// `plan` 提供本地检查点身份与尾部保留策略；`output_items` 包含必须原样重放的供应商不透明项。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A compaction result with a safe diagnostic summary and validated opaque item list.
+    /// 返回带安全诊断摘要且已验证不透明项列表的压缩结果。
+    pub fn from_remote_responses(
+        plan: &CompactionPlan,
+        route: super::ProviderContextRoute,
+        output_items: Vec<Value>,
+    ) -> Result<Self, String> {
+        Self::from_remote_responses_with_metadata(plan, route, output_items, None, None)
+    }
+
+    /// Builds a route-bound remote compaction result while retaining optional upstream metadata.
+    /// 构建绑定路由的远端压缩结果，并保留可选上游元数据。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `usage` and `response_id` are diagnostic metadata and are never used to replay opaque items.
+    /// `usage` 与 `response_id` 仅用于诊断，绝不用于重放不透明项。
+    pub fn from_remote_responses_with_metadata(
+        plan: &CompactionPlan,
+        route: super::ProviderContextRoute,
+        mut output_items: Vec<Value>,
+        usage: Option<Value>,
+        response_id: Option<String>,
+    ) -> Result<Self, String> {
+        canonicalize_codex_responses_replay_items(&mut output_items);
+        let contains_compaction = output_items
+            .iter()
+            .any(|item| item.get("type").and_then(Value::as_str) == Some("compaction"));
+        if output_items.is_empty()
+            || !output_items.iter().all(is_replayable_codex_responses_item)
+            || !contains_compaction
+        {
+            return Err(String::from(
+                "Remote Responses compaction returned an invalid ordered replayable item list.",
+            ));
+        }
+        let summary_text = format!(
+            "Remote Responses compaction checkpoint installed ({} provider item{}).",
+            output_items.len(),
+            if output_items.len() == 1 { "" } else { "s" },
+        );
+        let mut result = build_compaction_result_from_summary_text(plan, summary_text.clone());
+        // remoteSummary is host diagnostics only; opaque provider items own continuation semantics.
+        // remoteSummary 仅用于宿主诊断；续写语义由不透明供应商项持有。
+        result.summary_record.kind = SessionMessageKind::Assistant;
+        result.summary_record.title = String::from("Remote Responses Checkpoint");
+        result.summary_record.body = summary_text.clone();
+        result.summary_record.preview = summary_text;
+        result.provider_context_items = output_items;
+        result.provider_context_route = Some(route);
+        result.provider_context_usage = usage;
+        result.provider_context_response_id = response_id;
+        Ok(result)
     }
 }
 
@@ -264,6 +335,10 @@ fn build_compaction_result_from_summary_text(
         compaction_id: plan.compaction_id.clone(),
         created_at: plan.created_at.clone(),
         policy: plan.policy,
+        provider_context_items: Vec::new(),
+        provider_context_route: None,
+        provider_context_usage: None,
+        provider_context_response_id: None,
     }
 }
 

@@ -3,7 +3,9 @@
 
 use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::events::RuntimeEvent;
-use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPreparationRequest};
+use crate::agent_runtime::execution_models::{
+    ExecutionPreparation, ExecutionPreparationRequest, ExecutionTurnStartMode,
+};
 use crate::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryContext;
 use crate::agent_runtime::runtime_stream_bootstrap::RuntimeStreamBootstrap;
 use crate::agent_runtime::runtime_stream_delta::RuntimeStreamDeltaState;
@@ -156,6 +158,14 @@ pub(crate) fn build_runtime_stream_launch_payload(
 fn runtime_stream_turn_start_mode_for_request(
     request: &ExecutionPreparationRequest,
 ) -> RuntimeStreamTurnStartMode {
+    if let Some(mode) = request.turn_start_mode {
+        return match mode {
+            ExecutionTurnStartMode::UserPrompt => RuntimeStreamTurnStartMode::UserPrompt,
+            ExecutionTurnStartMode::SeededProviderInput => {
+                RuntimeStreamTurnStartMode::SeededProviderInput
+            }
+        };
+    }
     if request.provider_visible_agent_messages.is_empty() {
         RuntimeStreamTurnStartMode::UserPrompt
     } else {
@@ -351,6 +361,7 @@ mod tests {
             prompt: String::from("  请分析主入口文件  "),
             output_style_snapshot: None,
             provider_visible_agent_messages: Vec::new(),
+            turn_start_mode: None,
             conversation_state: SessionConversationState::default(),
             context_compaction_policy: None,
             context_budget_override: None,

@@ -283,6 +283,7 @@ use conversation_history::{
 use conversation_message_projection::*;
 use conversation_run_services::*;
 use conversation_submission::{
+    ConversationSubmissionMode, service_retry_conversation_request,
     service_submit_conversation_prompt, service_submit_user_prompt_edit,
 };
 #[cfg(test)]

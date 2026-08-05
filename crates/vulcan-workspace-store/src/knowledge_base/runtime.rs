@@ -2906,16 +2906,16 @@ impl KnowledgeBaseRuntime {
     /// Lists source hashes already written to one pending display generation.
     /// 列出待完成显示代次中已经写入的原始文档哈希。
     pub async fn list_display_generation_source_hashes(
-            &self,
-            library_id: &str,
-            generation: &str,
-            fts_index: &str,
-        ) -> Result<BTreeMap<String, String>, String> {
-            validate_generation_id(generation)?;
-            validate_display_fts_index(fts_index)?;
-            let (space_id, binding_id) = self.ensure_display_binding(library_id).await?;
-            let sql = format!(
-                "SELECT d.source_document_id, d.source_sha256 \
+        &self,
+        library_id: &str,
+        generation: &str,
+        fts_index: &str,
+    ) -> Result<BTreeMap<String, String>, String> {
+        validate_generation_id(generation)?;
+        validate_display_fts_index(fts_index)?;
+        let (space_id, binding_id) = self.ensure_display_binding(library_id).await?;
+        let sql = format!(
+            "SELECT d.source_document_id, d.source_sha256 \
                  FROM display_documents AS d \
                  WHERE d.generation = ? \
                    AND EXISTS (SELECT 1 FROM display_chunks AS c \
@@ -2925,15 +2925,15 @@ impl KnowledgeBaseRuntime {
                         WHERE c.display_document_id = d.id AND c.generation = d.generation) \
                        = (SELECT COUNT(*) FROM display_chunks AS c \
                           WHERE c.display_document_id = d.id AND c.generation = d.generation);"
-            );
-            let rows: Vec<DisplaySourceHashRow> = self
-                .query_library_rows(&space_id, &binding_id, &sql, vec![text(generation)])
-                .await?;
-            Ok(rows
-                .into_iter()
-                .map(|row| (row.source_document_id, row.source_sha256))
-                .collect())
-        }
+        );
+        let rows: Vec<DisplaySourceHashRow> = self
+            .query_library_rows(&space_id, &binding_id, &sql, vec![text(generation)])
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.source_document_id, row.source_sha256))
+            .collect())
+    }
 
     /// Removes one incomplete or stale source document from a pending generation before retrying it.
     /// 在重试来源文档前，从待完成代次中移除不完整或过期的记录。

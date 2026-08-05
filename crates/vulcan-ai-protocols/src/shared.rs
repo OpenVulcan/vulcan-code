@@ -102,6 +102,27 @@ pub trait ProtocolStreamDecoder: Send {
         data: &str,
     ) -> Result<Vec<AiStreamEvent>, ProtocolConversionError>;
 
+    /// Pushes one complete JSON WebSocket event through the protocol's existing event decoder.
+    /// 将一条完整 JSON WebSocket 事件交给协议现有事件解码器处理。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `value` is the already parsed provider event object.
+    /// `value` 是已经解析完成的供应商事件对象。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Zero or more normalized events, or a deterministic JSON serialization/conversion failure.
+    /// 返回零个或多个归一化事件，或确定性的 JSON 序列化/转换失败。
+    fn push_json(&mut self, value: &Value) -> Result<Vec<AiStreamEvent>, ProtocolConversionError> {
+        let data = serde_json::to_string(value).map_err(|error| {
+            ProtocolConversionError::new(format!(
+                "Protocol WebSocket event could not be serialized: {error}"
+            ))
+        })?;
+        self.push_sse(None, data.as_str())
+    }
+
     /// Finishes the wire stream and rejects incomplete protocol state.
     /// 结束 Wire 流并拒绝不完整协议状态。
     ///
@@ -119,6 +140,21 @@ pub struct ProtocolConversionError {
     /// Controlled English error message.
     /// 受控英文错误消息。
     pub message: String,
+    /// Stable failure kind used by the transport layer without parsing diagnostics.
+    /// 传输层无需解析诊断文本即可使用的稳定失败类型。
+    kind: ProtocolConversionErrorKind,
+}
+
+/// Classifies protocol conversion failures by replay safety.
+/// 按重放安全性分类协议转换失败。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProtocolConversionErrorKind {
+    /// Provider bytes violate the registered protocol contract.
+    /// 供应商字节违反已注册协议契约。
+    InvalidPayload,
+    /// The transport ended before the protocol emitted its required terminal event.
+    /// 传输在协议发出必需终态事件前结束。
+    TruncatedStream,
 }
 
 impl ProtocolConversionError {
@@ -137,7 +173,38 @@ impl ProtocolConversionError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            kind: ProtocolConversionErrorKind::InvalidPayload,
         }
+    }
+
+    /// Creates one stream-truncation error after a required terminal event was not observed.
+    /// 在未观察到必需终态事件后创建一个流截断错误。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `message` is the controlled English diagnostic describing the missing terminal state.
+    /// `message` 是描述缺失终态的受控英文诊断信息。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A typed truncation error that a transport may retry only while replay remains safe.
+    /// 返回强类型截断错误；仅在重放仍安全时传输层才可重试。
+    pub fn truncated_stream(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            kind: ProtocolConversionErrorKind::TruncatedStream,
+        }
+    }
+
+    /// Returns whether the transport ended before a required protocol terminal event.
+    /// 返回传输是否在必需协议终态事件前结束。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` only for typed stream truncation; malformed payloads always return `false`.
+    /// 仅强类型流截断返回 `true`；畸形载荷始终返回 `false`。
+    pub fn is_truncated_stream(&self) -> bool {
+        self.kind == ProtocolConversionErrorKind::TruncatedStream
     }
 }
 

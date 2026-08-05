@@ -14,8 +14,9 @@ use vulcan_agent_runtime::{
     agent_runtime::{
         context_injection_runtime::core_provider_context_injection_from_state_for_turn,
         prompt_compaction::{
-            PromptCompactionExecution, PromptCompactionJobRequest, PromptCompactionProgressEvent,
-            PromptCompactionStreamEvent, stream_prompt_compaction_job,
+            PromptCompactionExecution, PromptCompactionJobRequest, PromptCompactionLaunchContext,
+            PromptCompactionProgressEvent, PromptCompactionStreamEvent,
+            resolve_prompt_compaction_model_target, stream_prompt_compaction_job,
         },
     },
     conversation_protocol::{
@@ -30,7 +31,7 @@ use vulcan_context::SessionConversationMessage;
 use vulcan_context::{ContextBudgetSnapshot, SessionConversationPayload, append_record_body_delta};
 use vulcan_context_compaction::{
     CompactionInputBudget, CompactionInputPruneMode, CompactionInputPruneReport, CompactionPlan,
-    CompactionPlanInput, plan_context_compaction,
+    CompactionPlanInput, append_remote_responses_compaction_context, plan_context_compaction,
 };
 use vulcan_context_injection::InjectionPruneReport;
 use vulcan_service_api::{

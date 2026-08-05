@@ -203,6 +203,32 @@ pub(crate) fn execute_provider_prompt_capture_stream(
     )
 }
 
+/// Resolves the credential-bearing execution for the exact route frozen during preparation.
+/// 为准备阶段冻结的精确路由解析携带凭据的执行对象。
+///
+/// # Parameters
+/// 参数
+/// `runtime` owns current provider state, `configuration` is the matching immutable snapshot,
+/// and the three identifiers are copied from the prepared provider blueprint.
+/// `runtime` 持有当前供应商状态，`configuration` 是匹配的不可变快照，三个标识均复制自
+/// 已准备的供应商蓝图。
+///
+/// # Returns
+/// 返回值
+/// The exact prepared account execution, or an explicit stale-route error without account fallback.
+/// 返回精确的已准备账号执行对象；若路由失效则显式报错且不切换账号。
+async fn resolve_frozen_provider_execution(
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
+    connection_id: &str,
+    provider_id: &str,
+    model_id: &str,
+) -> Result<ResolvedPublicAiExecution, String> {
+    runtime
+        .resolve_connection_model_execution(configuration, connection_id, provider_id, model_id)
+        .await
+}
+
 /// Executes one provider prompt with an explicit request-capture switch shared by real and simulated paths.
 /// 使用真实路径与模拟路径共享的显式请求捕获开关执行一次 Provider 提示词调用。
 fn execute_provider_prompt_stream_with_capture_mode(
@@ -293,13 +319,19 @@ fn execute_provider_prompt_stream_with_capture_mode(
         preparation.tool_request_rejection_tool_ids.clone(),
     );
     let provider_id = preparation.model_blueprint.provider_id.clone();
+    // connectionId preserves the exact session account selected during preparation.
+    // connectionId 保留准备阶段选定的精确会话账号。
+    let connection_id = preparation.model_blueprint.connection_id.clone();
     let model_id = preparation.model_blueprint.model_id.clone();
     let reasoning_effort = preparation.model_blueprint.reasoning.requested_effort;
     Box::pin(stream! {
-        let mut public_execution = match public_ai_runtime
-            .resolve_model_execution(&configuration, provider_id.as_str(), model_id.as_str())
-            .await
-        {
+        let mut public_execution = match resolve_frozen_provider_execution(
+            public_ai_runtime.as_ref(),
+            &configuration,
+            connection_id.as_str(),
+            provider_id.as_str(),
+            model_id.as_str(),
+        ).await {
             Ok(execution) => execution,
             Err(error) => {
                 yield Err(error);
@@ -341,11 +373,45 @@ fn execute_provider_prompt_stream_with_capture_mode(
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_runtime_reasoning_effort_for_capabilities;
+    use super::{
+        resolve_frozen_provider_execution, resolve_runtime_reasoning_effort_for_capabilities,
+    };
     use crate::provider_config::ReasoningEffortLevel;
     use vulcan_ai_contract::{
         CapabilitySupport, ModelCapabilities, ReasoningControlMode, ReasoningEffort,
     };
+
+    /// Verifies dispatch rejects a removed prepared account instead of selecting another account.
+    /// 验证分发阶段会拒绝已移除的准备账号，而不会改选其他账号。
+    #[test]
+    fn frozen_provider_execution_does_not_fall_back_to_another_account() {
+        // runtime supplies the real selection implementation without requiring a credential read.
+        // runtime 提供真实选择实现，且本用例无需读取凭据。
+        let runtime = vulcan_provider_adapters::PublicAiRuntime::unavailable()
+            .expect("test public AI runtime should initialize");
+        // configuration intentionally lacks the route frozen by the prepared turn.
+        // configuration 刻意不包含已准备回合冻结的路由。
+        let configuration = vulcan_provider_adapters::PersistedAiConfiguration::default();
+        // asyncRuntime executes the async resolver on one deterministic current-thread runtime.
+        // asyncRuntime 在确定性的当前线程运行时中执行异步解析器。
+        let async_runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("test async runtime should initialize");
+        // result must fail at the exact connection boundary before any credential resolution.
+        // result 必须在精确连接边界失败，且早于任何凭据解析。
+        let result = async_runtime.block_on(resolve_frozen_provider_execution(
+            &runtime,
+            &configuration,
+            "removed-connection",
+            "openrouter",
+            "vendor/model",
+        ));
+        let Err(error) = result else {
+            panic!("removed prepared connection must not fall back");
+        };
+
+        assert_eq!(error, "Connection `removed-connection` is not configured.");
+    }
 
     /// Verifies the legacy `Off` sentinel now selects an enabled default for a text model.
     /// 验证旧版 `Off` 哨兵现在会为文本模型选择启用的默认档位。

@@ -115,6 +115,17 @@ impl ProviderRetryPolicy {
         }
     }
 
+    /// Returns the configured bounded retry budget for ordinary transient failures.
+    /// 返回普通瞬态失败所使用的已配置有界重试预算。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Zero when automatic retry is disabled, otherwise the validated maximum retry count.
+    /// 自动重试关闭时返回零，否则返回已校验的最大重试次数。
+    pub(crate) fn ordinary_retry_budget(&self) -> u32 {
+        if self.enabled { self.max_retries } else { 0 }
+    }
+
     /// Classifies one failed attempt and returns the next retry decision when retry is still allowed.
     /// 对一次失败尝试进行分类，并在仍允许重试时返回下一次重试决策。
     pub(crate) fn next_retry(
@@ -789,6 +800,32 @@ mod tests {
         assert_eq!(decision.reason, "Provider unavailable");
     }
 
+    /// Verifies a normalized provider overload enters the configured transient retry budget.
+    /// 验证归一化后的供应商过载错误会进入已配置的瞬态重试预算。
+    #[test]
+    fn structured_retry_entrypoint_retries_provider_overload() {
+        // error mirrors the safe structured facts produced by the Responses decoder.
+        // error 对应 Responses 解码器产出的安全结构化事实。
+        let error = structured_provider_error(AiErrorCategory::ProviderOverloaded, true);
+        let VulcanCoreError::ProviderFailure {
+            details: Some(details),
+            ..
+        } = error
+        else {
+            panic!("structured error expected");
+        };
+
+        // decision must use the ordinary configured retry schedule for overload failures.
+        // decision 必须对过载失败使用普通配置重试调度。
+        let decision = policy()
+            .next_structured_retry(details.as_ref(), 0)
+            .expect("typed provider overload should retry");
+
+        assert_eq!(decision.retry_number, 1);
+        assert_eq!(decision.max_retries, 3);
+        assert_eq!(decision.reason, "Provider overloaded");
+    }
+
     /// Verifies unknown provider dispatch never triggers transparent replay.
     /// 验证未知供应商分派结果绝不会触发透明重放。
     #[test]
@@ -877,6 +914,8 @@ mod tests {
     /// 验证普通瞬态失败仍会在配置的重试次数后停止。
     #[test]
     fn ordinary_transient_retries_remain_bounded() {
+        assert_eq!(policy().ordinary_retry_budget(), 3);
+        assert_eq!(ProviderRetryPolicy::disabled().ordinary_retry_budget(), 0);
         assert!(
             policy()
                 .next_retry(&provider_error("HTTP 503 Service Unavailable"), 3, false)

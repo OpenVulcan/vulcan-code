@@ -190,6 +190,7 @@ pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
         session_id,
         plan,
         full_context_state,
+        Some((request, preparation)),
     ) {
         Ok(request) => request,
         Err(error) => {
@@ -453,15 +454,103 @@ pub(crate) fn build_webui_context_compaction_job_request(
     session_id: SessionId,
     plan: CompactionPlan,
     full_context_state: SessionConversationState,
+    source_execution: Option<(&ExecutionPreparationRequest, &ExecutionPreparation)>,
 ) -> Result<PromptCompactionJobRequest, String> {
-    let mcp_runtime_access = agent_runtime.extension_generation.mcp_runtime();
+    // workspaceSnapshot owns the authoritative session-scoped provider, connection, model, and reasoning selections.
+    // workspaceSnapshot 持有权威会话级供应商、连接、模型与推理档位选择。
     let workspace_snapshot = current_workspace_snapshot_from_shared_state(state)
         .ok()
         .flatten();
+    // sessionRuntimeState is the unique persisted source for the owning session's execution target.
+    // sessionRuntimeState 是所属会话执行目标的唯一持久化来源。
+    let session_runtime_state = workspace_snapshot
+        .as_ref()
+        .and_then(|workspace| workspace.session_runtime_state.get(&session_id));
+    // modelTarget preserves the exact session account and rejects stale routes without switching credentials.
+    // modelTarget 保留精确会话账号，并在路由失效时拒绝执行而不切换凭据。
+    let model_target = match source_execution {
+        Some((_, preparation)) => resolve_prompt_compaction_model_target(
+            agent_runtime.public_ai_runtime.as_ref(),
+            Some(preparation.model_blueprint.provider_id.as_str()),
+            Some(preparation.model_blueprint.connection_id.as_str()),
+            Some(preparation.model_blueprint.model_id.as_str()),
+        )?,
+        None => resolve_prompt_compaction_model_target(
+            agent_runtime.public_ai_runtime.as_ref(),
+            session_runtime_state
+                .and_then(|runtime_state| runtime_state.active_provider_id.as_deref()),
+            session_runtime_state
+                .and_then(|runtime_state| runtime_state.active_connection_id.as_deref()),
+            session_runtime_state
+                .and_then(|runtime_state| runtime_state.active_model_id.as_deref()),
+        )?,
+    };
+    // modelLabel retains the resolved provider/model selector for terminal diagnostics.
+    // modelLabel 为终态诊断保留解析后的供应商/模型选择器。
+    let model_label = model_target.as_ref().map(|target| target.label());
+    // reasoningEffort follows the session selection before falling back to the runtime default.
+    // reasoningEffort 优先采用会话选择，其次回退到运行时默认值。
+    let reasoning_effort = source_execution
+        .map(|(request, _)| request.reasoning_effort)
+        .or_else(|| {
+            session_runtime_state.and_then(|runtime_state| runtime_state.active_reasoning_effort)
+        })
+        .unwrap_or_else(|| {
+            active_reasoning_selection_effort(&agent_runtime.provider_configuration)
+                .unwrap_or(ReasoningEffortLevel::Off)
+        });
     let workspace_path = workspace_snapshot
         .as_ref()
         .map(|workspace| workspace_path_for_session(workspace, session_id))
         .unwrap_or_else(|| normalized_workspace_path_text_from_path(&workspace_root()));
+    // launchContext reuses an already materialized ordinary turn when available; manual compaction derives only persisted session controls.
+    // launchContext 优先复用已经物化的普通回合；手动压缩仅从持久化会话控制派生。
+    let launch_context = match source_execution {
+        Some((source_request, _)) => {
+            PromptCompactionLaunchContext::from_execution_request(source_request)
+        }
+        None => {
+            let mut context = PromptCompactionLaunchContext::default();
+            if let Some(runtime_state) = session_runtime_state {
+                if runtime_state.provider_tool_settings_initialized {
+                    for capability in &runtime_state.provider_tool_enabled_capabilities {
+                        if !runtime_state
+                            .provider_tool_selections
+                            .contains_key(capability)
+                        {
+                            return Err(format!(
+                                "Provider tool capability `{capability}` is enabled but has no selected model and account; confirm the session capability settings before compacting."
+                            ));
+                        }
+                    }
+                    context.provider_tool_selections_override = Some(
+                        runtime_state
+                            .provider_tool_selections
+                            .iter()
+                            .filter(|(capability, _)| {
+                                runtime_state
+                                    .provider_tool_enabled_capabilities
+                                    .contains(*capability)
+                            })
+                            .map(|(capability, selection)| (capability.clone(), selection.clone()))
+                            .collect(),
+                    );
+                }
+                context.execution_mode = runtime_state
+                    .active_work_mode
+                    .clone()
+                    .unwrap_or_else(|| String::from("build"));
+                context.output_style_snapshot = applied_output_style_snapshot(runtime_state);
+                context.session_prompt_skill_overrides =
+                    runtime_state.prompt_skill_overrides.clone();
+            }
+            // projectConfiguration mirrors ordinary WebUI prompt preparation for project-scoped prompt skills.
+            // projectConfiguration 镜像普通 WebUI 提示准备使用的项目级提示词技能配置。
+            context.project_prompt_skills =
+                crate::load_project_configuration(&workspace_path).prompt_skills;
+            context
+        }
+    };
     let budget_snapshot = context_compaction_budget_snapshot_from_state(state, session_id);
     Ok(PromptCompactionJobRequest {
         session_id,
@@ -477,12 +566,21 @@ pub(crate) fn build_webui_context_compaction_job_request(
             budget_snapshot.as_ref(),
         ),
         provider_configuration: agent_runtime.provider_configuration.clone(),
-        model_label: None,
-        reasoning_effort: active_reasoning_selection_effort(&agent_runtime.provider_configuration)
-            .unwrap_or(ReasoningEffortLevel::Off),
+        model_target,
+        execution_agent_id: source_execution
+            .map(|(_, preparation)| preparation.agent_id.clone())
+            .or_else(|| {
+                session_runtime_state
+                    .and_then(|runtime_state| runtime_state.active_agent_id.clone())
+            }),
+        launch_context,
+        public_ai_runtime: Arc::clone(&agent_runtime.public_ai_runtime),
+        model_label,
+        reasoning_effort,
         agent_profile_catalog: agent_runtime.agent_profile_catalog.clone(),
         luaskills_runtime: agent_runtime.luaskills_runtime.clone(),
-        mcp_runtime_access,
+        vulcan_plugin_runtime: agent_runtime.vulcan_plugin_runtime.clone(),
+        extension_generation: Arc::clone(&agent_runtime.extension_generation),
         task_runtime: Arc::clone(&agent_runtime.task_runtime),
         question_runtime: Arc::clone(&agent_runtime.question_runtime),
         command_session_runtime: Arc::clone(&agent_runtime.command_session_runtime),
@@ -554,5 +652,35 @@ mod tests {
             &stale_budget,
             pressure
         ));
+    }
+
+    /// Verifies standalone compaction diagnostics retain the exact session provider/model selector.
+    /// 验证独立压缩诊断会保留精确的会话供应商/模型选择器。
+    ///
+    /// # Parameters
+    /// 参数
+    /// This test has no parameters.
+    /// 此测试没有参数。
+    ///
+    /// # Returns
+    /// 返回值
+    /// This test returns no value and fails when the resolved target label is rewritten.
+    /// 此测试无返回值；解析后的目标标签被改写时测试失败。
+    #[test]
+    fn context_compaction_model_label_uses_exact_session_selector() {
+        // modelTarget contains the authoritative resolved session selection under test.
+        // modelTarget 包含本测试使用的权威已解析会话选择。
+        let model_target =
+            vulcan_agent_runtime::agent_runtime::prompt_compaction::PromptCompactionModelTarget {
+                provider_id: String::from("custom-response"),
+                model_id: String::from("response-model"),
+                connection_id: String::from("response-connection"),
+                remote_compaction_enabled: false,
+            };
+
+        assert_eq!(
+            model_target.label().as_str(),
+            "custom-response/response-model"
+        );
     }
 }

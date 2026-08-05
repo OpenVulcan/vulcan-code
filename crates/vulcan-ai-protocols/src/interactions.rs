@@ -956,12 +956,14 @@ mod tests {
                     content: vec![ContentItem::Text {
                         text: String::from("Be concise."),
                     }],
+                    provider_context_items: Vec::new(),
                 },
                 AiMessage {
                     role: MessageRole::User,
                     content: vec![ContentItem::Text {
                         text: String::from("Look up x."),
                     }],
+                    provider_context_items: Vec::new(),
                 },
                 AiMessage {
                     role: MessageRole::Assistant,
@@ -973,6 +975,7 @@ mod tests {
                             signature: None,
                         },
                     }],
+                    provider_context_items: Vec::new(),
                 },
                 AiMessage {
                     role: MessageRole::Tool,
@@ -983,6 +986,7 @@ mod tests {
                             content: json!({"value": 1}),
                         },
                     }],
+                    provider_context_items: Vec::new(),
                 },
             ],
             tools: vec![ToolDefinition {

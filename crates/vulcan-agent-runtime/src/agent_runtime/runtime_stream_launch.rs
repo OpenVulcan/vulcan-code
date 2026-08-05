@@ -22,6 +22,21 @@ use std::sync::Arc;
 
 /// Builds one fully prepared runtime-stream launch payload or one terminal preparation-failure report.
 /// 构建一份完全就绪的运行时流启动载荷，或者生成一份终态准备失败报告。
+///
+/// # Parameters
+/// 参数
+/// `config`, `agent_profile_catalog`, and `luaskills_runtime` provide the frozen execution configuration and skill surfaces.
+/// `config`、`agent_profile_catalog` 与 `luaskills_runtime` 提供冻结的执行配置与技能表面。
+/// `mcp_runtime_access` and the shared runtime handles preserve the service-owned execution boundary.
+/// `mcp_runtime_access` 与共享运行时句柄保留服务持有的执行边界。
+/// `public_ai_runtime` resolves the exact provider, connection, model, and custom protocol route for `request`.
+/// `public_ai_runtime` 为 `request` 解析精确供应商、连接、模型与自定义协议路由。
+///
+/// # Returns
+/// 返回值
+/// Returns a fully bootstrapped launch payload, or a terminal report retaining preparation diagnostics.
+/// 返回完全引导的启动载荷，或保留准备阶段诊断信息的终态报告。
+#[allow(clippy::too_many_arguments)]
 pub async fn prepare_runtime_stream_launch(
     config: &ProviderConfigurationFile,
     agent_profile_catalog: &AgentProfileCatalog,
@@ -31,9 +46,10 @@ pub async fn prepare_runtime_stream_launch(
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
     token_budget_runtime: Arc<TokenBudgetRuntime>,
+    public_ai_runtime: Arc<vulcan_provider_adapters::PublicAiRuntime>,
     request: ExecutionPreparationRequest,
 ) -> Result<RuntimeStreamLaunch, ExecutionRunReport> {
-    prepare_runtime_stream_launch_with_plugins(
+    prepare_runtime_stream_launch_with_plugins_and_public_ai(
         config,
         agent_profile_catalog,
         luaskills_runtime,
@@ -43,6 +59,7 @@ pub async fn prepare_runtime_stream_launch(
         question_runtime,
         command_session_runtime,
         token_budget_runtime,
+        Some(public_ai_runtime),
         request,
     )
     .await

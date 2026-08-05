@@ -56,11 +56,15 @@ mod tests {
     /// 验证模型原生图片与视频声明会直接控制输入区附件门控。
     #[test]
     fn native_resource_capabilities_enable_only_declared_media() {
-        let mut capabilities = vulcan_ai_contract::ModelCapabilities::default();
-        capabilities.input_resources = vec![
-            vulcan_ai_contract::ResourceKind::Image,
-            vulcan_ai_contract::ResourceKind::Video,
-        ];
+        // capabilities differs from the default only by its declared native input resources.
+        // capabilities 仅通过已声明的原生输入资源区别于默认值。
+        let capabilities = vulcan_ai_contract::ModelCapabilities {
+            input_resources: vec![
+                vulcan_ai_contract::ResourceKind::Image,
+                vulcan_ai_contract::ResourceKind::Video,
+            ],
+            ..vulcan_ai_contract::ModelCapabilities::default()
+        };
 
         let summaries = composer_attachment_capabilities(Some(&capabilities), false);
         let image = summaries

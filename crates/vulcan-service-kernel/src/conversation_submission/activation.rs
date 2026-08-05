@@ -3,7 +3,7 @@
 
 use vulcan_service_api::{
     ConversationSummary, ConversationSummaryChangedDelta, ServiceEvent, ServiceEventEmitter,
-    WorkbenchDelta, WorkbenchDeltaEnvelope,
+    WorkbenchDelta, WorkbenchDeltaEnvelope, WorkbenchSnapshot,
 };
 use vulcan_workbench_model::{SessionRunPhase, SessionState};
 use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
@@ -11,9 +11,10 @@ use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 use crate::{
     MaterializedPromptSession, PromptSessionMaterializationKind, SharedServiceBridgeState,
     conversation_fork_source_summary_from_session, emit_service_event_with_trace,
-    ensure_webui_session_runtime_state, is_active_session_run_phase,
+    emit_workbench_event, ensure_webui_session_runtime_state, is_active_session_run_phase,
     pending_question_snapshots_from_agent_runtime, refresh_conversation_attention_summary,
-    session_plan_mode_summary_from_runtime_state, session_summary_project_id_owned,
+    restore_webui_runtime_controls_for_session, session_plan_mode_summary_from_runtime_state,
+    session_summary_project_id_owned, sync_workbench_runtime_control_fields_locked,
     workspace_session_summary_for_session,
 };
 
@@ -228,9 +229,9 @@ pub(crate) fn commit_materialized_submission_activation(
         project_id: session_summary_project_id_owned(session),
         fork_source: conversation_fork_source_summary_from_session(session),
     };
-    // revision and event are produced from the same exclusive shared-state transaction.
-    // revision 与 event 由同一个独占共享状态事务产生。
-    let (revision, event) = {
+    // revision and event payloads are produced from the same exclusive shared-state transaction.
+    // revision 与事件载荷由同一个独占共享状态事务产生。
+    let (revision, delta_event, full_workbench_event) = {
         // guard serializes navigation ownership, attention refresh, and workbench generation.
         // guard 串行化导航所有权、注意状态刷新与工作台代际。
         let mut guard = state
@@ -276,21 +277,54 @@ pub(crate) fn commit_materialized_submission_activation(
                 .conversations
                 .insert(0, conversation.clone());
         }
-        // event mirrors the already-committed conversation summary and selection.
-        // event 镜像已经提交的会话摘要与选择状态。
-        let event = WorkbenchDeltaEnvelope {
-            generation: revision,
-            delta: WorkbenchDelta::ConversationSummaryChanged(ConversationSummaryChangedDelta {
-                conversation,
-                selected_conversation_id: Some(session_id.to_string()),
-            }),
-        };
-        (revision, event)
+        if materialized_session.kind == PromptSessionMaterializationKind::Created {
+            // A draft-to-session handoff changes both navigation identity and session-scoped model controls.
+            // 草稿到会话的交接会同时改变导航身份与会话级模型控制项。
+            let selected_runtime_state = guard
+                .workspace_snapshot
+                .as_ref()
+                .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+                .cloned();
+            if let Some(agent_runtime) = guard.agent_runtime.as_mut() {
+                restore_webui_runtime_controls_for_session(
+                    &mut agent_runtime.provider_configuration,
+                    selected_runtime_state.as_ref(),
+                );
+            }
+            let provider_configuration = guard
+                .agent_runtime
+                .as_ref()
+                .map(|agent_runtime| agent_runtime.provider_configuration.clone());
+            if let Some(provider_configuration) = provider_configuration.as_ref() {
+                sync_workbench_runtime_control_fields_locked(&mut guard, provider_configuration);
+            }
+            // The full snapshot makes conversation selection and model projection atomic for the WebUI.
+            // 完整快照让会话选中与模型投影在 WebUI 中原子生效。
+            (revision, None, Some(guard.workbench.clone()))
+        } else {
+            // Existing-session activation changes only the conversation summary and remains a compact delta.
+            // 已有会话激活只改变会话摘要，继续使用紧凑增量。
+            let event = WorkbenchDeltaEnvelope {
+                generation: revision,
+                delta: WorkbenchDelta::ConversationSummaryChanged(
+                    ConversationSummaryChangedDelta {
+                        conversation,
+                        selected_conversation_id: Some(session_id.to_string()),
+                    },
+                ),
+            };
+            (revision, Some(event), None::<WorkbenchSnapshot>)
+        }
     };
-    emit_service_event_with_trace(
-        app,
-        "workbench_conversation_summary_delta_emit",
-        ServiceEvent::WorkbenchDelta(Box::new(event)),
-    );
+    if let Some(workbench) = full_workbench_event {
+        emit_workbench_event(app, &workbench);
+    }
+    if let Some(event) = delta_event {
+        emit_service_event_with_trace(
+            app,
+            "workbench_conversation_summary_delta_emit",
+            ServiceEvent::WorkbenchDelta(Box::new(event)),
+        );
+    }
     Ok(revision)
 }

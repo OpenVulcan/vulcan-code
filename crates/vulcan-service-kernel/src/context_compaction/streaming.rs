@@ -124,6 +124,7 @@ pub(crate) fn spawn_webui_context_compaction_task(
         session_id,
         plan.clone(),
         full_context_state,
+        None,
     );
     let task_state = state.clone();
     let task_app = app.clone();

@@ -50,6 +50,19 @@ export async function submitConversationPrompt(
   });
 }
 
+// retryConversationRequest resumes one failed conversation from the service-owned execution snapshot.
+// retryConversationRequest 从服务端持有的执行快照恢复并重试单个失败会话。
+export async function retryConversationRequest(
+  conversationId: string,
+): Promise<SubmitConversationPromptAck | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<SubmitConversationPromptAck>("service_retry_conversation_request", {
+    conversationId,
+  });
+}
+
 // cancelConversationSubmission cancels pre-dispatch media preparation by client submission id.
 // cancelConversationSubmission 按客户端提交标识取消分派前媒体准备。
 export async function cancelConversationSubmission(clientSubmissionId: string): Promise<boolean> {

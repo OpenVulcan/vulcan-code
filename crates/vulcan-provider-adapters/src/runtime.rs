@@ -56,6 +56,26 @@ const PROVIDER_ASYNC_TASK_OBSERVATION_TIMEOUT: Duration = Duration::from_secs(60
 /// 标识应用于未知文本模型的宿主默认思考策略。
 const HOST_DEFAULT_REASONING_EVIDENCE_REVISION: &str = "host-default-reasoning.v1";
 
+/// Installs the host-selected process-wide Rustls provider before any TLS client is constructed.
+/// 在构造任何 TLS 客户端之前安装宿主选择的进程级 Rustls 加密提供程序。
+///
+/// # Returns
+/// 返回值
+/// Success when Ring is installed or another caller already completed the same process-wide installation.
+/// 当 Ring 安装成功，或其他调用方已经完成同一进程级安装时返回成功。
+pub fn install_process_rustls_crypto_provider() -> Result<(), String> {
+    if rustls::crypto::CryptoProvider::get_default().is_some() {
+        return Ok(());
+    }
+    match rustls::crypto::ring::default_provider().install_default() {
+        Ok(()) => Ok(()),
+        Err(_) if rustls::crypto::CryptoProvider::get_default().is_some() => Ok(()),
+        Err(_) => Err(String::from(
+            "Failed to install the process-wide Ring Rustls CryptoProvider.",
+        )),
+    }
+}
+
 /// Identifies the closed outcome of one credential-scoped model discovery attempt.
 /// 标识一次凭据作用域模型发现尝试的封闭结果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -461,6 +481,63 @@ pub struct PublicAiRuntime {
     provider_tasks: ProviderTaskRecoveryStore,
 }
 
+/// Carries one successful remote Responses compaction result with its owning route identity.
+/// 携带一份成功的远端 Responses 压缩结果及其归属路由身份。
+#[derive(Debug, Clone)]
+pub struct ResponsesCompactExecution {
+    /// Ordered opaque compaction output returned by the provider.
+    /// 供应商返回的有序不透明压缩输出。
+    pub result: crate::ResponsesCompactResult,
+    /// Exact provider identifier.
+    /// 精确供应商标识。
+    pub provider_id: String,
+    /// Exact credential connection identifier.
+    /// 精确凭据连接标识。
+    pub connection_id: String,
+    /// Non-secret resolved Responses route fingerprint.
+    /// 不含秘密的已解析 Responses 路由指纹。
+    pub route_fingerprint: String,
+    /// Exact protocol profile identifier.
+    /// 精确协议配置标识。
+    pub protocol_profile_id: String,
+    /// Exact model identifier.
+    /// 精确模型标识。
+    pub model_id: String,
+}
+
+/// Validates one immutable execution route for the standalone Codex compaction endpoint.
+/// 校验一条用于独立 Codex 压缩端点的不可变执行路由。
+///
+/// # Parameters
+/// 参数
+/// `execution` is the exact credential-bearing route prepared for one compact request.
+/// `execution` 是为单次压缩请求准备的精确携带凭据路由。
+///
+/// # Returns
+/// 返回值
+/// Success only for an explicitly enabled Codex Responses route, otherwise a pre-dispatch failure.
+/// 仅对显式启用的 Codex Responses 路由返回成功，否则返回分派前失败。
+fn validate_responses_compact_execution_route(
+    execution: &ResolvedPublicAiExecution,
+) -> Result<(), ProviderExecutionFailure> {
+    if execution.route.protocol_route.protocol_profile_id
+        != vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID
+    {
+        return Err(crate::execution::pre_dispatch_failure(
+            "Remote Responses compaction requires the Codex Responses protocol.",
+        ));
+    }
+    // enabled requires an explicit per-route opt-in because compatibility providers vary.
+    // enabled 要求逐路由显式开启，因为兼容供应商的能力并不一致。
+    let enabled = execution.route.protocol_route.remote_compaction_enabled();
+    if !enabled {
+        return Err(crate::execution::pre_dispatch_failure(
+            "Remote Responses compaction is disabled for the selected provider route.",
+        ));
+    }
+    Ok(())
+}
+
 impl PublicAiRuntime {
     /// Builds one first-batch runtime with the exact host credential boundary.
     /// 使用精确的宿主凭据边界构建首批运行时。
@@ -475,6 +552,7 @@ impl PublicAiRuntime {
     /// A runtime containing MiniMax and OpenRouter registrations.
     /// 返回包含 MiniMax 与 OpenRouter 注册项的运行时。
     pub fn first_batch(secrets: Arc<dyn CredentialSecretStore>) -> Result<Self, String> {
+        install_process_rustls_crypto_provider()?;
         let protocols = ProtocolRegistry::first_batch().map_err(|error| error.to_string())?;
         let protocols = Arc::new(protocols);
         let http = build_public_ai_http_client()?;
@@ -3107,6 +3185,131 @@ impl PublicAiRuntime {
             .execute(selection.route.clone(), request, secret, execution_id))
     }
 
+    /// Executes remote Responses compaction only when the exact session route explicitly enables it.
+    /// 仅当精确会话路由显式开启远端压缩时执行 Responses 远端压缩。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` and `connection_id` identify the exact session-scoped route; `request` is the
+    /// provider-neutral compaction input assembled from the canonical state.
+    /// `provider_id` 与 `connection_id` 标识精确会话级路由；`request` 是从规范状态组装出的供应商无关压缩输入。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A route-bound opaque compaction result, or a controlled failure that the caller may safely
+    /// downgrade to local compaction only before dispatch.
+    /// 返回绑定路由的不透明压缩结果；或调用方可仅在分派前安全降级本地压缩的受控失败。
+    pub async fn execute_responses_compact(
+        &self,
+        provider_id: &str,
+        connection_id: &str,
+        request: AiExecutionRequest,
+    ) -> Result<ResponsesCompactExecution, ProviderExecutionFailure> {
+        // modelId is retained before the request moves into the prepared dispatch.
+        // modelId 在请求移入已准备分派前完成保留。
+        let model_id = request.model_id.clone();
+        let execution = self
+            .prepare_responses_compact_execution(provider_id, connection_id, model_id.as_str())
+            .await?;
+        self.execute_prepared_responses_compact(execution, request)
+            .await
+    }
+
+    /// Resolves and validates the exact immutable execution used to project a compact request.
+    /// 解析并校验用于投影压缩请求的精确不可变执行对象。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id`, `connection_id`, and `model_id` are the route frozen by the owning session.
+    /// `provider_id`、`connection_id` 与 `model_id` 是所属会话冻结的路由。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A credential-bearing immutable execution safe to use for both projection and immediate dispatch.
+    /// 返回可同时用于投影与立即分派、且携带凭据的不可变执行对象。
+    pub async fn prepare_responses_compact_execution(
+        &self,
+        provider_id: &str,
+        connection_id: &str,
+        model_id: &str,
+    ) -> Result<ResolvedPublicAiExecution, ProviderExecutionFailure> {
+        // configuration freezes the authoritative graph for the complete prepared execution.
+        // configuration 为完整的已准备执行冻结权威连接图。
+        let configuration = self
+            .configuration_snapshot()
+            .map_err(crate::execution::pre_dispatch_failure)?;
+        // execution resolves the exact credential once so request projection and dispatch cannot diverge.
+        // execution 只解析一次精确凭据，避免请求投影与分派发生分歧。
+        let execution = self
+            .resolve_connection_model_execution(
+                &configuration,
+                connection_id,
+                provider_id,
+                model_id,
+            )
+            .await
+            .map_err(crate::execution::pre_dispatch_failure)?;
+        validate_responses_compact_execution_route(&execution)?;
+        Ok(execution)
+    }
+
+    /// Dispatches one compact request through the same immutable execution used for projection.
+    /// 通过用于投影的同一不可变执行对象分派一次压缩请求。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `execution` is prepared by `prepare_responses_compact_execution`; `request` is projected
+    /// against that exact route and may retain the current model-visible tool catalog.
+    /// `execution` 由 `prepare_responses_compact_execution` 准备；`request` 基于该精确路由投影，
+    /// 并可保留当前模型可见工具目录。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A route-bound opaque result, or a controlled failure before or after dispatch.
+    /// 返回绑定路由的不透明结果，或分派前后产生的受控失败。
+    pub async fn execute_prepared_responses_compact(
+        &self,
+        execution: ResolvedPublicAiExecution,
+        request: AiExecutionRequest,
+    ) -> Result<ResponsesCompactExecution, ProviderExecutionFailure> {
+        if request.operation != AiOperation::ConversationRespond
+            || !request.resources.is_empty()
+            || request.continuation.is_some()
+        {
+            return Err(crate::execution::pre_dispatch_failure(
+                "Remote Responses compaction rejects resources, continuation, and non-conversation operations.",
+            ));
+        }
+        validate_responses_compact_execution_route(&execution)?;
+        if request.model_id != execution.model.id {
+            return Err(crate::execution::pre_dispatch_failure(format!(
+                "Remote Responses compaction request model `{}` does not match resolved model `{}`.",
+                request.model_id, execution.model.id
+            )));
+        }
+        // routeFingerprint is captured before credential consumption for the returned checkpoint identity.
+        // routeFingerprint 在消耗凭据前捕获，用于返回的检查点身份。
+        let route_fingerprint = execution.route.request_url("/responses");
+        // providerId and connectionId retain the exact prepared route after dispatch consumes the secret.
+        // providerId 与 connectionId 在分派消耗凭据后仍保留精确准备路由。
+        let provider_id = execution.route.provider.id.clone();
+        let connection_id = execution.route.connection.id.clone();
+        let protocol_profile_id = execution.route.protocol_route.protocol_profile_id.clone();
+        let model_id = execution.model.id.clone();
+        let result = execution
+            .client
+            .execute_responses_compact(execution.route.clone(), request, execution.secret)
+            .await?;
+        Ok(ResponsesCompactExecution {
+            result,
+            provider_id,
+            connection_id,
+            route_fingerprint,
+            protocol_profile_id,
+            model_id,
+        })
+    }
+
     /// Resolves one exact connection and model into an immutable public selection.
     /// 将一个精确连接与模型解析为不可变公共选择。
     ///
@@ -3340,8 +3543,9 @@ fn resolve_request_projection(
 ///
 /// # Returns
 /// 返回值
-/// An empty credential-scoped baseline when manual definitions exist; otherwise `None`.
-/// 存在手工定义时返回空的凭据作用域基线，否则返回 `None`。
+/// A credential-scoped baseline when manual definitions or confirmed template snapshots exist;
+/// otherwise `None`.
+/// 存在手工定义或已确认模板快照时返回凭据作用域基线，否则返回 `None`。
 fn manual_custom_catalog(
     configuration: &PersistedAiConfiguration,
     connection: &CredentialConnection,
@@ -3355,8 +3559,8 @@ fn manual_custom_catalog(
     )
 }
 
-/// Builds an empty manual baseline for an exact provider and catalog scope.
-/// 为精确供应商与目录作用域构建空手工基线。
+/// Builds a persisted-evidence manual baseline for an exact provider and catalog scope.
+/// 为精确供应商与目录作用域构建基于持久化证据的手工基线。
 ///
 /// # Parameters
 /// 参数
@@ -3367,25 +3571,57 @@ fn manual_custom_catalog(
 ///
 /// # Returns
 /// 返回值
-/// An empty catalog baseline when the provider owns manual definitions, otherwise `None`.
-/// 当供应商持有手工定义时返回空目录基线，否则返回 `None`。
+/// A baseline containing confirmed custom-provider template identities when available, an empty
+/// baseline for explicit manual definitions, or `None` without either source of persisted evidence.
+/// 存在已确认自定义供应商模板身份时返回包含这些身份的基线；仅有显式手工定义时返回空基线；
+/// 两类持久化证据均不存在时返回 `None`。
 fn manual_custom_catalog_for_provider(
     configuration: &PersistedAiConfiguration,
     provider_id: &str,
     connection_id: &str,
     generation: u64,
 ) -> Option<ConnectionModelCatalog> {
-    configuration
+    // ownsManualDefinitions records explicit user-authored model declarations that overlays add below.
+    // ownsManualDefinitions 记录后续由覆盖层加入的显式用户模型声明。
+    let owns_manual_definitions = configuration
         .custom_models
         .get(provider_id)
-        .filter(|definitions| !definitions.is_empty())
-        .map(|_| ConnectionModelCatalog {
-            connection_id: connection_id.to_string(),
-            models: Vec::new(),
-            generation,
-            page_count: 0,
-            discovery_schema_revision: String::from("manual.models.v1"),
-        })
+        .is_some_and(|definitions| !definitions.is_empty());
+    // templateModels retains only user-confirmed immutable template snapshots for this exact custom provider.
+    // templateModels 仅保留属于该精确自定义供应商、且由用户确认的不可变模板快照。
+    let template_models = if provider_id.starts_with("custom:") {
+        configuration
+            .custom_model_template_decisions
+            .iter()
+            .filter_map(|(key, decision)| {
+                let (decision_provider_id, model_id) =
+                    PersistedAiConfiguration::provider_model_key_parts(key.as_str())?;
+                if decision_provider_id != provider_id
+                    || !matches!(decision, crate::CustomModelTemplateDecision::Applied { .. })
+                {
+                    return None;
+                }
+                Some(ConnectionModel {
+                    id: model_id.to_string(),
+                    display_name: model_id.to_string(),
+                    capabilities: ModelCapabilities::default(),
+                    capability_evidence: crate::ModelCapabilityEvidence::default(),
+                })
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    if !owns_manual_definitions && template_models.is_empty() {
+        return None;
+    }
+    Some(ConnectionModelCatalog {
+        connection_id: connection_id.to_string(),
+        models: template_models,
+        generation,
+        page_count: 0,
+        discovery_schema_revision: String::from("manual.models.v1"),
+    })
 }
 
 /// Applies immutable common defaults, custom definitions, and user differences to one catalog.
@@ -4216,7 +4452,85 @@ mod tests {
         parse_minimax_openai_model_catalog, parse_openrouter_model_catalog,
     };
     use std::collections::BTreeSet;
+
     use vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID;
+
+    /// Verifies runtime construction installs a process-level Rustls provider.
+    /// 验证运行时构造会安装进程级 Rustls 加密提供程序。
+    #[test]
+    fn first_batch_installs_process_rustls_provider() {
+        let _runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+    }
+
+    /// Verifies an accepted custom-model template remains executable when discovery is unavailable after restart.
+    /// 验证重启后模型发现不可用时，已接受的自定义模型模板仍可执行。
+    #[test]
+    fn confirmed_template_builds_manual_catalog_fallback_without_discovery() {
+        let provider_id = "custom:test";
+        let model_id = "gpt-5.6-luna";
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.custom_model_template_decisions.insert(
+            PersistedAiConfiguration::provider_model_key(provider_id, model_id),
+            crate::CustomModelTemplateDecision::Applied {
+                selection: crate::CustomModelTemplateSelection {
+                    template_key: String::from("openai/gpt-5.6-luna"),
+                    template_revision: String::from("common-model-capabilities.v1"),
+                    context_limit: 200_000,
+                    supports_text_input: true,
+                    supports_text_output: true,
+                    input_resources: vec![vulcan_ai_contract::ResourceKind::Image],
+                    output_resources: Vec::new(),
+                },
+            },
+        );
+
+        let mut catalog =
+            manual_custom_catalog_for_provider(&configuration, provider_id, "connection-test", 7)
+                .expect("confirmed template should provide a restart-safe manual baseline");
+        apply_model_catalog_overlays(&configuration, provider_id, &mut catalog)
+            .expect("confirmed template baseline should resolve through normal overlays");
+
+        assert_eq!(catalog.discovery_schema_revision, "manual.models.v1");
+        assert_eq!(catalog.generation, 7);
+        assert_eq!(catalog.models.len(), 1);
+        let model = &catalog.models[0];
+        assert_eq!(model.id, model_id);
+        assert_eq!(model.display_name, model_id);
+        assert_eq!(model.capabilities.context_limit, Some(200_000));
+        assert!(
+            model
+                .capabilities
+                .input_resources
+                .contains(&vulcan_ai_contract::ResourceKind::Image)
+        );
+        assert!(
+            model
+                .capabilities
+                .operations
+                .contains(&AiOperation::ConversationRespond)
+        );
+    }
+
+    /// Verifies rejected templates do not invent a fallback model identity.
+    /// 验证被拒绝的模板不会虚构回退模型身份。
+    #[test]
+    fn rejected_template_does_not_build_manual_catalog_fallback() {
+        let provider_id = "custom:test";
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.custom_model_template_decisions.insert(
+            PersistedAiConfiguration::provider_model_key(provider_id, "model-rejected"),
+            crate::CustomModelTemplateDecision::Rejected {
+                template_key: String::from("openai/model-rejected"),
+                template_revision: String::from("common-model-capabilities.v1"),
+            },
+        );
+
+        assert!(
+            manual_custom_catalog_for_provider(&configuration, provider_id, "connection-test", 1,)
+                .is_none()
+        );
+    }
 
     /// Builds one verified OpenRouter token connection.
     /// 构建一个已验证的 OpenRouter Token 连接。
