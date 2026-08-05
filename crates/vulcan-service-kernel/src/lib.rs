@@ -45,7 +45,9 @@ use vulcan_agent_runtime::{
         events::{RuntimeEvent, RuntimeEventKind},
         extension_generation::ExtensionGeneration,
         prompt_composer_runtime::invalidate_runtime_prompt_luaskill_catalog_cache,
-        provider_request_telemetry::ProviderRequestTelemetryEventKind,
+        provider_request_telemetry::{
+            ProviderRequestTelemetryEvent, ProviderRequestTelemetryEventKind,
+        },
         question_runtime::{PendingQuestionChangeCallback, QuestionRuntime},
         task_runtime::{DetachedTaskRuntimeEvent, TaskRuntime},
         token_budget_runtime::TokenBudgetRuntime,
@@ -146,12 +148,12 @@ use vulcan_workbench_model::{
     PendingSessionPromptEntry, PendingSessionPromptSource, SUBAGENT_TASK_STOPPED_SUMMARY_TEXT,
     SelectedSubagentTaskPanel, SessionAddonNamespace, SessionAddonState, SessionId,
     SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionPlanArtifactState,
-    SessionPlanModeState, SessionRunPhase, SessionRuntimeControls, SessionRuntimeStateEntry,
-    SessionState, SessionSummary, SessionTitleSource, SessionTodolistItem,
-    SessionTodolistItemStatus, SessionTodolistState, SessionTurnStatsKind, SessionTurnStatsStatus,
-    SessionTurnUsageSegment, SessionWorkMode, SubagentSendMessageProjection,
-    SubagentTaskPanelState, SubagentTaskRunState, TaskProjectSummary,
-    attach_tool_display_state_to_metadata, build_session_record_message_id,
+    SessionPlanModeState, SessionProviderUsageSegmentStatus, SessionRunPhase,
+    SessionRuntimeControls, SessionRuntimeStateEntry, SessionState, SessionSummary,
+    SessionTitleSource, SessionTodolistItem, SessionTodolistItemStatus, SessionTodolistState,
+    SessionTurnStatsKind, SessionTurnStatsStatus, SessionTurnUsageSegment, SessionWorkMode,
+    SubagentSendMessageProjection, SubagentTaskPanelState, SubagentTaskRunState,
+    TaskProjectSummary, attach_tool_display_state_to_metadata, build_session_record_message_id,
     build_stopped_task_session_metadata, find_task_session_tool_message_id_for_payload,
     merge_task_mirror_tool_display_metadata, parse_subagent_task_panel_metadata,
     parse_subagent_task_prompt_metadata, session_message_is_subagent_send_message_display_note,
@@ -214,6 +216,7 @@ mod plugin_ui_events;
 mod project_conversation_services;
 mod project_directories;
 mod provider_settings;
+mod provider_usage_runtime;
 mod public_ai_settings;
 mod rpc_dispatch;
 mod runtime_summary_projection;
@@ -330,6 +333,7 @@ use project_conversation_services::*;
 pub use project_directories::service_add_project_from_path;
 use project_directories::service_browse_project_directories;
 use provider_settings::{provider_retry_settings, service_save_provider_retry_settings};
+use provider_usage_runtime::*;
 use public_ai_settings::*;
 use rpc_dispatch::dispatch_service_rpc;
 use runtime_summary_projection::*;

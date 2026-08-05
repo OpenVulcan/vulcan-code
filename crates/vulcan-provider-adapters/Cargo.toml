@@ -23,6 +23,7 @@ tokio-util.workspace = true
 uuid.workspace = true
 vulcan-ai-contract.workspace = true
 vulcan-ai-protocols.workspace = true
+vulcan-context.workspace = true
 
 [lints]
 workspace = true

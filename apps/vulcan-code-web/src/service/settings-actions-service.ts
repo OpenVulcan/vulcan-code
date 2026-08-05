@@ -12,6 +12,7 @@ import type {
   PublicAiCustomModelDefinition,
   PublicAiCustomModelValidationResult,
   PublicAiModelCapabilityOverrides,
+  PublicAiContextWindowPolicyOverrides,
   PublicAiModelOverrides,
   PublicAiInferenceRoute,
   PublicAiInferenceTestResult,
@@ -327,6 +328,17 @@ export async function savePublicAiUsageRefreshSettings(intervalSeconds: number):
   return serviceClient.request<PublicAiSettingsSnapshot>(
     "service_save_public_ai_usage_refresh_settings",
     { request: { intervalSeconds } },
+  );
+}
+
+// savePublicAiContextWindowPolicyOverrides persists the system-level Codex window defaults.
+// savePublicAiContextWindowPolicyOverrides 持久化系统级 Codex 窗口默认值。
+export async function savePublicAiContextWindowPolicyOverrides(
+  overrides: PublicAiContextWindowPolicyOverrides,
+): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_context_window_policy_overrides",
+    { request: { overrides } },
   );
 }
 

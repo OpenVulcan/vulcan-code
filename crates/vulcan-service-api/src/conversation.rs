@@ -705,6 +705,108 @@ pub struct ConversationMessagesPatchedDelta {
     pub run_phase: Option<String>,
 }
 
+/// One token-usage snapshot projected for the live Provider request panel.
+/// 实时 Provider 请求面板使用的一份 Token 用量快照。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionProviderUsageTokenSummary {
+    /// Provider-reported input tokens when known.
+    /// Provider 报告的输入 Token，未知时为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<usize>,
+    /// Normalized uncached input tokens when known.
+    /// 规范化的非缓存输入 Token，未知时为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncached_input_tokens: Option<usize>,
+    /// Provider-reported cached input tokens when known.
+    /// Provider 报告的缓存命中输入 Token，未知时为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_input_tokens: Option<usize>,
+    /// Provider-reported cache-creation input tokens when known.
+    /// Provider 报告的缓存写入输入 Token，未知时为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_input_tokens: Option<usize>,
+    /// Provider-reported output tokens when known.
+    /// Provider 报告的输出 Token，未知时为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<usize>,
+    /// Provider-reported reasoning tokens when known.
+    /// Provider 报告的推理 Token，未知时为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<usize>,
+    /// Provider-reported total tokens when known.
+    /// Provider 报告的总 Token，未知时为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<usize>,
+}
+
+/// Describes the latest physical Provider request retained for live diagnostics.
+/// 描述实时诊断保留的最近一次物理 Provider 请求。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionProviderUsageCallSummary {
+    /// Stable physical Provider request identifier.
+    /// 稳定的物理 Provider 请求标识。
+    pub provider_call_id: String,
+    /// Stable execution owner category.
+    /// 稳定的执行归属类别。
+    pub owner_kind: String,
+    /// Request lifecycle status: in_flight, succeeded, or failed.
+    /// 请求生命周期状态：进行中、成功或失败。
+    pub status: String,
+    /// Usage facts for this request when any were known.
+    /// 此请求已知的用量事实。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<SessionProviderUsageTokenSummary>,
+    /// Provider dispatch timestamp in Unix milliseconds.
+    /// Provider 分发时间的 Unix 毫秒时间戳。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_ms: Option<i64>,
+    /// Provider terminal timestamp in Unix milliseconds.
+    /// Provider 终态时间的 Unix 毫秒时间戳。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at_ms: Option<i64>,
+    /// Stable redacted error category for failed requests.
+    /// 失败请求的稳定脱敏错误类别。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_category: Option<String>,
+    /// Stable redacted error code for failed requests.
+    /// 失败请求的稳定脱敏错误代码。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+}
+
+/// Projects per-session Provider request counts and token usage at every physical request boundary.
+/// 在每个物理请求边界投影会话级 Provider 请求计数与 Token 用量。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionProviderUsageSummary {
+    /// Number of physical Provider requests dispatched for this session.
+    /// 此会话已分发的物理 Provider 请求数量。
+    pub provider_call_count: usize,
+    /// Number of dispatched requests still awaiting terminal events.
+    /// 仍在等待终态事件的已分发请求数量。
+    pub in_flight_call_count: usize,
+    /// Number of terminal requests without usable usage facts.
+    /// 未提供可用用量事实的终态请求数量。
+    pub unknown_usage_call_count: usize,
+    /// Latest usable usage snapshot.
+    /// 最近一份可用用量快照。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_usage: Option<SessionProviderUsageTokenSummary>,
+    /// Cumulative usable usage across terminal requests.
+    /// 全部终态请求的可用用量累计值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cumulative_usage: Option<SessionProviderUsageTokenSummary>,
+    /// Latest physical request lifecycle projection.
+    /// 最近一次物理请求的生命周期投影。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_call: Option<SessionProviderUsageCallSummary>,
+    /// Monotonic usage revision used to reject stale UI projections.
+    /// 用于拒绝过期 UI 投影的单调用量版本号。
+    pub usage_revision: u64,
+}
+
 /// Replaces selected-session addon panels without rebuilding the full workbench.
 /// 在不重建完整工作台的情况下替换当前会话附属面板状态。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -733,6 +835,10 @@ pub struct SessionAddonsChangedDelta {
     /// 当前输出风格覆盖与最近一次安全应用的快照。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_output_style: Option<SessionOutputStyleSummary>,
+    /// Live physical Provider request counts and token usage for this session.
+    /// 当前会话实时物理 Provider 请求计数与 Token 用量。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_provider_usage: Option<Box<SessionProviderUsageSummary>>,
 }
 
 /// Describes one session's output-style selection and safe-boundary activation state.
@@ -841,6 +947,10 @@ pub struct SessionAddonsChangedResponse {
     /// 当前输出风格覆盖与最近一次安全应用的快照。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_output_style: Option<SessionOutputStyleSummary>,
+    /// Live physical Provider request counts and token usage for this session.
+    /// 当前会话实时物理 Provider 请求计数与 Token 用量。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_provider_usage: Option<SessionProviderUsageSummary>,
     /// Latest workbench revision after applying this addon update.
     /// 应用该附属状态更新后的最新工作台版本。
     pub revision: u64,

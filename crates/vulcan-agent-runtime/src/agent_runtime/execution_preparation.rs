@@ -93,6 +93,15 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         request.model_id_override.as_deref(),
         request.connection_id_override.as_deref(),
     )?;
+    // contextWindowPolicySnapshot freezes system/provider/model defaults at the safe turn boundary.
+    // contextWindowPolicySnapshot 在安全回合边界冻结系统、供应商与模型默认值。
+    let public_ai_configuration = public_ai_runtime.configuration_snapshot()?;
+    let resolved_context_compaction_policy = public_ai_configuration
+        .resolve_context_compaction_policy(
+            model_blueprint.provider_id.as_str(),
+            model_blueprint.model_id.as_str(),
+            request.context_compaction_policy,
+        );
     let mut warnings = Vec::new();
     let workspace_path = normalize_workspace_path_text(&request.workspace_path);
     let conversation_attachments = collect_host_visible_attachments(&request.conversation_state);
@@ -174,7 +183,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     }
     let provider_tool_candidates = build_provider_tool_candidates(
         Arc::clone(&public_ai_runtime),
-        public_ai_runtime.configuration_snapshot()?,
+        public_ai_configuration,
         workspace_root.clone(),
         &request.provider_tool_selections_override,
         suppress_external_web_search,
@@ -323,7 +332,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         provider_request_snapshot_json: None,
         provider_wire_request_json: None,
         context_budget: None,
-        context_compaction_policy: request.context_compaction_policy,
+        context_compaction_policy: Some(resolved_context_compaction_policy),
         context_budget_override: request.context_budget_override,
         context_assembly: None,
         context_baseline: None,

@@ -331,6 +331,9 @@ pub struct ExecutionPreparationRequest {
     /// Optional request-level input-token budget limit resolved for this execution request.
     /// 为本次执行请求解析出的可选输入 Token 预算上限。
     pub context_budget_override: Option<usize>,
+    /// Absolute input-token baseline for the active BodyAfterPrefix compaction window.
+    /// 当前 BodyAfterPrefix 压缩窗口使用的绝对输入 Token 基线。
+    pub context_window_prefill_input_tokens: Option<usize>,
     /// Current execution-mode label.
     /// 当前执行模式标签。
     pub execution_mode: String,

@@ -729,6 +729,7 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         conversation_state: SessionConversationState::default(),
         context_compaction_policy: None,
         context_budget_override: None,
+        context_window_prefill_input_tokens: None,
         execution_mode: String::from("Build"),
         temperature: None,
         reasoning_effort: ReasoningEffortLevel::Off,

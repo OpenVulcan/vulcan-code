@@ -764,6 +764,9 @@ impl ProviderExecutionClient {
     /// A provider-native reference when the provider has an upload contract, otherwise `None`
     /// after the local inline payload has been completely pre-read.
     /// 供应商存在上传契约时返回原生引用；否则在完整预读取本地内联载荷后返回 `None`。
+    // Keep route, model, credential, media, progress, and cancellation boundaries explicit for callers.
+    // 保持路由、模型、凭据、媒体、进度和取消边界显式，便于调用方准确控制生命周期。
+    #[allow(clippy::too_many_arguments)]
     pub async fn prepare_local_media(
         &self,
         route: &ProviderExecutionRoute,
@@ -903,6 +906,9 @@ impl ProviderExecutionClient {
 
     /// Streams one provider multipart upload while reporting bytes and honoring cancellation.
     /// 流式执行一次供应商 Multipart 上传，同时报告字节数并响应取消。
+    // Keep multipart transport inputs explicit because each field maps to an independent provider contract value.
+    // 保持 Multipart 传输输入显式，因为每个字段都对应供应商契约中的独立值。
+    #[allow(clippy::too_many_arguments)]
     async fn upload_multipart_media(
         &self,
         route: &ProviderExecutionRoute,
@@ -1586,7 +1592,12 @@ impl ProviderExecutionClient {
                         websocket_failure_observed = true;
                         let safe_http_fallback =
                             websocket_failure_allows_http_fallback(&failure);
-                        let retry_budget_exhausted = safe_http_fallback
+                        // Unsupported handshake statuses are a route capability fact, not a transient outage.
+                        // 不支持的握手状态表示路由能力事实，而不是瞬时故障。
+                        let immediate_http_fallback = safe_http_fallback
+                            && websocket_failure_requires_immediate_http_fallback(&failure);
+                        let retry_budget_exhausted = immediate_http_fallback
+                            || safe_http_fallback
                             && client.record_responses_websocket_safe_failure(
                                 &route,
                                 &request,
@@ -2126,10 +2137,21 @@ impl ProviderExecutionClient {
                 let close_detail = close_detail
                     .as_deref()
                     .unwrap_or("the transport ended without a close frame");
-                Err(stream_transport_failure(
+                let mut failure = stream_transport_failure(
                     format!("Provider WebSocket stream from `{websocket_url}` closed before a terminal Responses event: {close_detail}."),
                     semantic_output_observed,
-                ))?;
+                );
+                // The upstream account-pool signal is safe to replay over HTTPS and should not consume five host retries.
+                // 上游账号池信号可以安全通过 HTTPS 重放，不应消耗五次宿主重试。
+                if close_detail
+                    .to_ascii_lowercase()
+                    .contains("no available account")
+                {
+                    failure.error.subcategory = Some(String::from(
+                        "websocket_no_available_account",
+                    ));
+                }
+                Err(failure)?;
             }
             for mut event in decoder
                 .finish()
@@ -2284,6 +2306,26 @@ fn websocket_failure_allows_http_fallback(failure: &ProviderExecutionFailure) ->
     failure.error.retryable
         && !failure.error.semantic_output_observed
         && !failure.error.side_effect_observed
+}
+
+/// Returns whether a WebSocket failure proves the exact route does not support the transport.
+/// 返回一次 WebSocket 失败是否已经证明精确路由不支持该传输。
+///
+/// # Parameters
+/// 参数
+/// `failure` is the typed handshake or stream failure produced by the Responses WebSocket path.
+/// `failure` 是 Responses WebSocket 路径产生的类型化握手或流失败。
+///
+/// # Returns
+/// 返回值
+/// `true` only for the registered unsupported-handshake classification, which must bypass
+/// transient retry delays and switch to HTTPS immediately.
+/// 仅当失败属于已注册的不支持握手分类时返回 `true`，此时必须跳过瞬时重试延迟并立即切换 HTTPS。
+fn websocket_failure_requires_immediate_http_fallback(failure: &ProviderExecutionFailure) -> bool {
+    matches!(
+        failure.error.subcategory.as_deref(),
+        Some("websocket_unsupported" | "websocket_no_available_account")
+    )
 }
 
 /// Converts official wrapped Responses WebSocket errors before the generic stream decoder runs.
@@ -4845,6 +4887,14 @@ fn parse_decimal_seconds_milliseconds(value: &str) -> Option<u64> {
     whole_milliseconds.checked_add(rounded_fraction)
 }
 
+/// Recognizes the official Codex overload message in either JSON or plain-text responses.
+/// 识别 JSON 或纯文本响应中的官方 Codex 过载消息。
+fn is_known_overload_message(message: &str) -> bool {
+    message
+        .to_ascii_lowercase()
+        .contains("our servers are currently overloaded. please try again later")
+}
+
 /// Converts one non-success HTTP response.
 /// 转换一个非成功 HTTP 响应。
 pub(crate) fn http_failure(
@@ -4880,12 +4930,21 @@ pub(crate) fn http_failure(
     let error_type = error
         .and_then(|value| value.get("error_type").and_then(Value::as_str))
         .or_else(|| error.and_then(|value| value.get("type").and_then(Value::as_str)));
+    // upstream_message keeps plain-text provider bodies available to the shared retry classifier.
+    // upstream_message 保留纯文本供应商响应，供共享重试分类器继续识别。
+    let upstream_message = error
+        .and_then(|value| value.get("message").and_then(Value::as_str))
+        .map(str::to_string)
+        .or_else(|| (!body.trim().is_empty()).then(|| body.trim().to_string()));
     // Official Codex overload codes remain authoritative when a proxy reports a generic error type.
     // 当代理返回通用错误类型时，官方 Codex 过载代码仍作为权威分类依据。
-    let category = if matches!(
+    let known_overload = matches!(
         upstream_code.as_deref(),
         Some("server_is_overloaded" | "slow_down")
-    ) {
+    ) || upstream_message
+        .as_deref()
+        .is_some_and(is_known_overload_message);
+    let category = if known_overload {
         AiErrorCategory::ProviderOverloaded
     } else {
         match error_type {
@@ -4931,9 +4990,7 @@ pub(crate) fn http_failure(
             upstream_parameter: error
                 .and_then(|value| value.get("param").and_then(Value::as_str))
                 .map(str::to_string),
-            upstream_message: error
-                .and_then(|value| value.get("message").and_then(Value::as_str))
-                .map(str::to_string),
+            upstream_message: upstream_message.clone(),
             request_id: parsed.as_ref().and_then(|value| {
                 value
                     .get("request_id")
@@ -4949,16 +5006,13 @@ pub(crate) fn http_failure(
                     .and_then(Value::as_str)
                     .map(str::to_string)
             }),
-            message: error
-                .and_then(|value| value.get("message").and_then(Value::as_str))
-                .map(str::to_string)
-                .unwrap_or_else(|| {
-                    if body.is_empty() {
-                        format!("Provider returned HTTP {status} with an empty error response.")
-                    } else {
-                        body.chars().take(2_000).collect()
-                    }
-                }),
+            message: upstream_message.unwrap_or_else(|| {
+                if body.is_empty() {
+                    format!("Provider returned HTTP {status} with an empty error response.")
+                } else {
+                    body.chars().take(2_000).collect()
+                }
+            }),
             dispatch_outcome: DispatchOutcome::Dispatched,
             semantic_output_observed: false,
             side_effect_observed: false,
@@ -5075,6 +5129,24 @@ mod tests {
         assert_eq!(
             failure.error.upstream_code.as_deref(),
             Some("server_is_overloaded")
+        );
+    }
+
+    /// Verifies the official overload message remains retryable when a proxy returns plain text.
+    /// 验证代理返回纯文本时，官方过载消息仍会被归入可重试类别。
+    #[test]
+    fn http_server_overloaded_plain_text_is_retryable() {
+        let failure = http_failure(
+            400,
+            None,
+            "Our servers are currently overloaded. Please try again later.",
+        );
+
+        assert_eq!(failure.error.category, AiErrorCategory::ProviderOverloaded);
+        assert!(failure.error.retryable);
+        assert_eq!(
+            failure.error.upstream_message.as_deref(),
+            Some("Our servers are currently overloaded. Please try again later.")
         );
     }
 
@@ -5485,6 +5557,40 @@ mod tests {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .is_empty()
         );
+    }
+
+    /// Verifies an unsupported WebSocket handshake switches to HTTP without consuming transient retries.
+    /// 验证不支持的 WebSocket 握手会直接切换 HTTP，而不会消耗瞬时重试次数。
+    #[test]
+    fn codex_websocket_unsupported_handshake_falls_back_immediately() {
+        let unsupported = websocket_handshake_http_failure(
+            426,
+            "provider does not support the Responses WebSocket upgrade",
+        );
+        assert_eq!(
+            unsupported.error.subcategory.as_deref(),
+            Some("websocket_unsupported")
+        );
+        assert!(websocket_failure_allows_http_fallback(&unsupported));
+        assert!(websocket_failure_requires_immediate_http_fallback(
+            &unsupported
+        ));
+
+        let account_pool = stream_transport_failure(
+            "Provider WebSocket stream closed with reason `no available account`",
+            false,
+        );
+        let mut account_pool = account_pool;
+        account_pool.error.subcategory = Some(String::from("websocket_no_available_account"));
+        assert!(websocket_failure_requires_immediate_http_fallback(
+            &account_pool
+        ));
+
+        let transient = websocket_handshake_failure("temporary handshake failure");
+        assert!(websocket_failure_allows_http_fallback(&transient));
+        assert!(!websocket_failure_requires_immediate_http_fallback(
+            &transient
+        ));
     }
 
     /// Verifies every Responses WebSocket v2 handshake carries the official beta capability value.

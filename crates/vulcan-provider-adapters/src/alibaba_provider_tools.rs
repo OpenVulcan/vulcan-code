@@ -169,6 +169,9 @@ async fn upload_provider_object(
 /// 返回值
 /// The temporary `oss://` reference consumed by Alibaba model requests.
 /// 阿里云模型请求消费的临时 `oss://` 引用。
+// Keep the provider contract fields explicit so upload diagnostics map one-to-one to the wire request.
+// 保持供应商契约字段显式展开，使上传诊断能够与线请求逐项对应。
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn upload_user_media(
     http: &reqwest::Client,
     entry: &ServiceEntry,

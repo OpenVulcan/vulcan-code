@@ -48,6 +48,10 @@ pub(crate) fn apply_latest_request_snapshot(
             compaction_policy: preparation.context_compaction_policy,
             context_budget_override: preparation.context_budget_override,
             observed_usage,
+            prefill_input_tokens: preparation
+                .context_budget
+                .as_ref()
+                .and_then(|budget| budget.auto_compact_prefill_input_tokens),
             estimator: token_estimator,
         },
     ));

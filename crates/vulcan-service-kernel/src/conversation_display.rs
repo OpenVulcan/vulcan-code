@@ -30,18 +30,6 @@ pub(crate) fn stable_display_session_messages_from_workspace(
         .map(|messages| filter_display_session_messages(messages.clone()))
 }
 
-/// Returns the retained loaded transcript rows that must survive refresh and persistence.
-/// 返回必须在刷新与持久化后继续存在的已载入转录行。
-pub(crate) fn loaded_session_messages_from_workspace(
-    workspace_snapshot: &WorkspaceSnapshot,
-    session_id: SessionId,
-) -> Option<Vec<SessionMessageEntry>> {
-    workspace_snapshot
-        .session_messages
-        .get(&session_id)
-        .map(|messages| retain_loaded_session_messages(messages.clone()))
-}
-
 /// Returns display-record messages for fallback rendering without deriving from runtime-only messages.
 /// 返回用于显示回退的记录流消息，不从仅运行态消息派生。
 pub(crate) fn display_record_messages_from_workspace(

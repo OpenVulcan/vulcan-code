@@ -241,8 +241,8 @@ pub(crate) fn evaluate_existing_submission_queue(
     // active_state_started_at isolates the shared-state lookup portion of the gate.
     // active_state_started_at 隔离闸门中的共享状态查询部分。
     let active_state_started_at = current_unix_millis_value();
-    // activity reads the diagnostic stream handle and authoritative active kernel turn from one revision.
-    // activity 从同一版本读取诊断用流句柄与权威活动内核回合。
+    // activity reads the stream owner and authoritative kernel turn from one revision.
+    // activity 从同一版本读取活动流所有者与权威内核回合。
     let (has_active_stream_task, has_active_kernel_turn) = {
         // guard keeps both activity diagnostics on one authoritative service-state revision.
         // guard 使两个活动诊断保持在同一个权威服务状态版本上。
@@ -275,13 +275,15 @@ pub(crate) fn evaluate_existing_submission_queue(
     let should_queue = session_has_blocking_system_prompt_work(
         workspace_snapshot,
         session_id,
+        has_active_stream_task,
         has_active_kernel_turn,
         has_precheck_progress,
     );
     webui_submit_trace(
         "submit_prompt_blocking_check",
         format!(
-            "session={session_id} has_active_stream_task={has_active_stream_task} has_active_kernel_turn={has_active_kernel_turn} has_active_session_run={has_active_kernel_turn} has_running_subagents=false elapsed_ms={}",
+            "session={session_id} has_active_stream_task={has_active_stream_task} has_active_kernel_turn={has_active_kernel_turn} has_active_session_run={} has_running_subagents=false elapsed_ms={}",
+            has_active_stream_task || has_active_kernel_turn,
             current_unix_millis_value().saturating_sub(blocking_check_started_at)
         ),
     );

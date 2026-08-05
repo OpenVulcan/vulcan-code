@@ -250,6 +250,7 @@ pub(crate) async fn seed_runtime_request_snapshot(
                     compaction_policy: preparation.context_compaction_policy,
                     context_budget_override: preparation.context_budget_override,
                     observed_usage: observed_usage.as_ref(),
+                    prefill_input_tokens: request.context_window_prefill_input_tokens,
                     estimator: token_estimator,
                 },
             ));

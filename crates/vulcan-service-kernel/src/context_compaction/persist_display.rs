@@ -4,7 +4,8 @@
 use super::*;
 use crate::{
     next_webui_session_addon_persist_version, persist_workspace_session_addon_state_update,
-    webui_session_addon_persist_versions_are_current,
+    persist_workspace_session_update_unlocked, webui_session_addon_persist_versions_are_current,
+    workspace_session_with_archive_status,
 };
 use vulcan_workbench_model::{SessionAddonNamespace, SessionAddonState};
 
@@ -38,16 +39,22 @@ pub(crate) fn context_compaction_usage_segment_from_execution(
     segment
 }
 
-pub(crate) fn spawn_context_compaction_persist_task(
+/// Persists one committed compaction snapshot and reports whether the durable barrier completed.
+/// 持久化一次已提交的压缩快照，并报告持久化屏障是否完成。
+///
+/// The automatic continuation path awaits this function so a rebuilt request can never race the
+/// transcript write that establishes the new context boundary.
+/// 自动续接路径会等待此函数，确保重建请求不会与建立新上下文边界的转录写入竞态。
+pub(crate) async fn persist_context_compaction_snapshot(
     state: SharedServiceBridgeState,
     controller_runtime: ControllerRuntimeHandle,
     workspace_snapshot: WorkspaceSnapshot,
     session_id: SessionId,
     section_id: String,
     reason: Option<String>,
-) {
+) -> Result<(), String> {
     if !workspace_snapshot_contains_regular_session(&workspace_snapshot, session_id) {
-        return;
+        return Ok(());
     }
     let output_style_persist_version = workspace_snapshot
         .session_runtime_state
@@ -68,113 +75,124 @@ pub(crate) fn spawn_context_compaction_persist_task(
     let output_style_persist_version = match output_style_persist_version {
         Some(Ok(version)) => Some(version),
         Some(Err(error)) => {
-            eprintln!(
-                "[webui-service] context-compaction output-style persist version failed: {error}"
-            );
-            return;
+            return Err(format!(
+                "context-compaction output-style persist version failed: {error}"
+            ));
         }
         None => None,
     };
-    // session_persist_version fences only the ordinary compaction snapshot.
-    // session_persist_version 仅隔离普通压缩快照。
+    // session_persist_version is the shared runtime/transcript ticket for this snapshot.
+    // session_persist_version 是此快照共享的运行态/转录持久化票据。
     let session_persist_version =
         match next_webui_session_runtime_persist_version(&state, session_id) {
             Ok(version) => version,
             Err(error) => {
-                eprintln!("[webui-service] context-compaction persist version failed: {error}");
-                return;
+                return Err(format!(
+                    "context-compaction persist version failed: {error}"
+                ));
             }
         };
-    spawn_service_task(async move {
-        let persist_lock = webui_workspace_persist_lock();
-        let _persist_guard = persist_lock.lock().await;
-        if !webui_session_runtime_persist_version_is_current(
-            &state,
-            session_id,
-            session_persist_version,
-        ) {
-            return;
-        }
-        let display_messages = context_compaction_complete_display_messages(
-            &workspace_snapshot,
-            session_id,
-            &section_id,
-        );
-        if let Err(error) =
-            vulcan_workspace_store::workspace_store::persist_single_session_transcript_messages(
-                controller_runtime.clone(),
-                session_id,
-                &display_messages,
-            )
-            .await
-        {
-            let reason_label = reason.as_deref().unwrap_or("context_compaction");
-            eprintln!(
-                "[webui-service] background context-compaction transcript persist failed ({reason_label}): {error}"
-            );
-        }
-        let Some(mut runtime_state) = workspace_snapshot
-            .session_runtime_state
-            .get(&session_id)
-            .cloned()
-            .or_else(|| {
-                workspace_snapshot
-                    .archived_session_runtime_state
+    let persist_lock = webui_workspace_persist_lock();
+    let _persist_guard = persist_lock.lock().await;
+    if !webui_session_runtime_persist_version_is_current(
+        &state,
+        session_id,
+        session_persist_version,
+    ) {
+        return Err(format!(
+            "context-compaction persistence was superseded before write: session={session_id}"
+        ));
+    }
+    let display_messages =
+        context_compaction_complete_display_messages(&workspace_snapshot, session_id, &section_id);
+    let Some(mut runtime_state) = workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .cloned()
+        .or_else(|| {
+            workspace_snapshot
+                .archived_session_runtime_state
+                .get(&session_id)
+                .cloned()
+        })
+    else {
+        return Err(format!(
+            "context-compaction runtime state is missing: session={session_id}"
+        ));
+    };
+    // current_output_style preserves a newer user selection made after the compaction snapshot.
+    // current_output_style 确保压缩快照之后发生的用户风格切换不会被后台任务覆盖。
+    let current_output_style = match state.lock() {
+        Ok(guard) => guard
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| {
+                workspace
+                    .session_runtime_state
                     .get(&session_id)
-                    .cloned()
+                    .or_else(|| workspace.archived_session_runtime_state.get(&session_id))
             })
-        else {
-            return;
-        };
-        // current_output_style preserves a newer user selection made after the compaction snapshot.
-        // current_output_style 确保压缩快照之后发生的用户风格切换不会被后台任务覆盖。
-        let current_output_style = match state.lock() {
-            Ok(guard) => guard
-                .workspace_snapshot
-                .as_ref()
-                .and_then(|workspace| {
-                    workspace
-                        .session_runtime_state
-                        .get(&session_id)
-                        .or_else(|| workspace.archived_session_runtime_state.get(&session_id))
-                })
-                .map(|current_runtime_state| current_runtime_state.output_style.clone()),
-            Err(error) => {
-                eprintln!(
-                    "[webui-service] context-compaction current output-style read failed: {error}"
-                );
-                return;
-            }
-        };
-        if let Some(current_output_style) = current_output_style {
-            runtime_state.output_style = current_output_style;
+            .map(|current_runtime_state| current_runtime_state.output_style.clone()),
+        Err(error) => {
+            return Err(format!(
+                "context-compaction current output-style read failed: {error}"
+            ));
         }
-        let output_style_addon_state = if runtime_state.output_style.is_empty() {
-            None
-        } else {
-            let mut addon_state = SessionAddonState::new(session_id);
-            let _ = addon_state.set_typed_namespace(
-                SessionAddonNamespace::OutputStyle,
-                &runtime_state.output_style,
-                runtime_state.updated_at.clone(),
-            );
-            Some(addon_state)
-        };
-        let addon_workspace_snapshot = workspace_snapshot.clone();
-        let addon_controller_runtime = controller_runtime.clone();
-        if let Err(error) =
-            vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
-                controller_runtime,
-                session_id,
-                &runtime_state,
-            )
-            .await
-        {
-            let reason_label = reason.as_deref().unwrap_or("context_compaction");
-            eprintln!(
-                "[webui-service] background context-compaction runtime-state persist failed ({reason_label}): {error}"
-            );
+    };
+    if let Some(current_output_style) = current_output_style {
+        runtime_state.output_style = current_output_style;
+    }
+
+    // Compose the exact transcript and runtime state into one session snapshot before persistence.
+    // 在持久化前将精确转录与运行态组合成同一份会话快照。
+    let mut persistence_snapshot = workspace_snapshot.clone();
+    let archived = workspace_session_with_archive_status(&persistence_snapshot, session_id)
+        .map(|(_, archived)| archived)
+        .ok_or_else(|| format!("context-compaction session disappeared: {session_id}"))?;
+    if archived {
+        persistence_snapshot
+            .archived_session_messages
+            .insert(session_id, display_messages);
+        persistence_snapshot
+            .archived_session_runtime_state
+            .insert(session_id, runtime_state.clone());
+    } else {
+        persistence_snapshot
+            .session_messages
+            .insert(session_id, display_messages);
+        persistence_snapshot
+            .session_runtime_state
+            .insert(session_id, runtime_state.clone());
+    }
+    // The workspace-store single-session API writes segmented transcript, runtime state, and its
+    // locator in one ordered operation, so a rebuilt turn cannot observe a half-written boundary.
+    // workspace-store 单会话 API 按顺序一次写入转录、运行态和定位行，重建回合不会读到半写边界。
+    persist_workspace_session_update_unlocked(
+        controller_runtime.clone(),
+        &persistence_snapshot,
+        session_id,
+    )
+    .await
+    .map_err(|error| {
+        let reason_label = reason.as_deref().unwrap_or("context_compaction");
+        format!("background context-compaction session persist failed ({reason_label}): {error}")
+    })?;
+    let output_style_addon_state = if runtime_state.output_style.is_empty() {
+        None
+    } else {
+        let mut addon_state = SessionAddonState::new(session_id);
+        if !addon_state.set_typed_namespace(
+            SessionAddonNamespace::OutputStyle,
+            &runtime_state.output_style,
+            runtime_state.updated_at.clone(),
+        ) {
+            return Err(String::from(
+                "context-compaction output-style state build failed",
+            ));
         }
+        Some(addon_state)
+    };
+    if let Some(addon_state) = output_style_addon_state {
         let output_style_persist_is_current = output_style_persist_version
             .map(|version| {
                 webui_session_addon_persist_versions_are_current(
@@ -184,20 +202,50 @@ pub(crate) fn spawn_context_compaction_persist_task(
                 )
             })
             .unwrap_or(true);
-        if let Some(addon_state) = output_style_addon_state
-            && output_style_persist_is_current
-            && let Err(error) = persist_workspace_session_addon_state_update(
-                addon_controller_runtime,
-                addon_workspace_snapshot,
-                session_id,
-                addon_state,
-            )
-            .await
-        {
+        if !output_style_persist_is_current {
+            return Err(format!(
+                "context-compaction output-style persistence was superseded: session={session_id}"
+            ));
+        }
+        persist_workspace_session_addon_state_update(
+            controller_runtime,
+            workspace_snapshot,
+            session_id,
+            addon_state,
+        )
+        .await
+        .map_err(|error| {
             let reason_label = reason.as_deref().unwrap_or("context_compaction");
-            eprintln!(
-                "[webui-service] background context-compaction output-style addon persist failed ({reason_label}): {error}"
-            );
+            format!(
+                "background context-compaction output-style addon persist failed ({reason_label}): {error}"
+            )
+        })?;
+    }
+    Ok(())
+}
+
+/// Spawns a background compaction persistence task for non-blocking manual flows.
+/// 为不阻塞手动流程启动后台压缩持久化任务。
+pub(crate) fn spawn_context_compaction_persist_task(
+    state: SharedServiceBridgeState,
+    controller_runtime: ControllerRuntimeHandle,
+    workspace_snapshot: WorkspaceSnapshot,
+    session_id: SessionId,
+    section_id: String,
+    reason: Option<String>,
+) {
+    spawn_service_task(async move {
+        if let Err(error) = persist_context_compaction_snapshot(
+            state,
+            controller_runtime,
+            workspace_snapshot,
+            session_id,
+            section_id,
+            reason,
+        )
+        .await
+        {
+            eprintln!("[webui-service] context-compaction persistence failed: {error}");
         }
     });
 }

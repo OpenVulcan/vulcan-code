@@ -2173,8 +2173,19 @@ export type TranslationKey =
 | "settings.modelCapabilities.outputResources"
 | "settings.modelCapabilities.overrideResources"
 | "settings.modelCapabilities.restore"
-| "settings.modelCapabilities.modelSource"
-| "settings.modelCapabilities.inheritedSource"
+  | "settings.modelCapabilities.modelSource"
+  | "settings.modelCapabilities.inheritedSource"
+  | "settings.contextWindowPolicy.title"
+  | "settings.contextWindowPolicy.description"
+  | "settings.contextWindowPolicy.effectivePercent"
+  | "settings.contextWindowPolicy.autoCompactPercent"
+  | "settings.contextWindowPolicy.autoCompactTokenLimit"
+  | "settings.contextWindowPolicy.scope"
+  | "settings.contextWindowPolicy.scopeInherit"
+  | "settings.contextWindowPolicy.scopeTotal"
+  | "settings.contextWindowPolicy.scopeBodyAfterPrefix"
+  | "settings.contextWindowPolicy.fallbackBuffer"
+  | "settings.contextWindowPolicy.clear"
   | "settings.models.enabled"
   | "settings.models.disabled"
   | "settings.models.toggle"
@@ -4741,8 +4752,19 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.modelCapabilities.outputResources": "输出资源覆盖",
     "settings.modelCapabilities.overrideResources": "启用完整集合覆盖（可显式选择空集合）",
 "settings.modelCapabilities.restore": "恢复来源默认值",
-"settings.modelCapabilities.modelSource": "模型设置",
-"settings.modelCapabilities.inheritedSource": "继承供应商",
+    "settings.modelCapabilities.modelSource": "模型设置",
+    "settings.modelCapabilities.inheritedSource": "继承供应商",
+    "settings.contextWindowPolicy.title": "Codex 上下文窗口策略",
+    "settings.contextWindowPolicy.description": "按原始模型窗口计算：默认 95% 有效窗口、90% 自动压缩线；留空表示继承上级设置。",
+    "settings.contextWindowPolicy.effectivePercent": "有效窗口百分比",
+    "settings.contextWindowPolicy.autoCompactPercent": "自动压缩百分比",
+    "settings.contextWindowPolicy.autoCompactTokenLimit": "自动压缩 Token 上限",
+    "settings.contextWindowPolicy.scope": "压缩计量范围",
+    "settings.contextWindowPolicy.scopeInherit": "继承上级",
+    "settings.contextWindowPolicy.scopeTotal": "总用量（Total）",
+    "settings.contextWindowPolicy.scopeBodyAfterPrefix": "稳定前缀之后（BodyAfterPrefix）",
+    "settings.contextWindowPolicy.fallbackBuffer": "回退缓冲 Token",
+    "settings.contextWindowPolicy.clear": "清除本层策略",
     "settings.models.enabled": "已启用",
     "settings.models.disabled": "已关闭",
     "settings.models.toggle": "切换模型启用状态",
@@ -7308,6 +7330,17 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.modelCapabilities.restore": "Restore source defaults",
     "settings.modelCapabilities.modelSource": "Model settings",
     "settings.modelCapabilities.inheritedSource": "Inherited provider",
+    "settings.contextWindowPolicy.title": "Codex context-window policy",
+    "settings.contextWindowPolicy.description": "Calculated from the raw model window: 95% effective window and 90% automatic compaction by default; empty values inherit the stronger layer.",
+    "settings.contextWindowPolicy.effectivePercent": "Effective window percent",
+    "settings.contextWindowPolicy.autoCompactPercent": "Automatic compaction percent",
+    "settings.contextWindowPolicy.autoCompactTokenLimit": "Automatic compaction token limit",
+    "settings.contextWindowPolicy.scope": "Compaction usage scope",
+    "settings.contextWindowPolicy.scopeInherit": "Inherit stronger layer",
+    "settings.contextWindowPolicy.scopeTotal": "Total usage",
+    "settings.contextWindowPolicy.scopeBodyAfterPrefix": "Body after stable prefix",
+    "settings.contextWindowPolicy.fallbackBuffer": "Fallback buffer tokens",
+    "settings.contextWindowPolicy.clear": "Clear this policy layer",
     "settings.models.enabled": "Enabled",
     "settings.models.disabled": "Disabled",
     "settings.models.toggle": "Toggle model availability",

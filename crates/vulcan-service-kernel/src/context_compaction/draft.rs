@@ -507,6 +507,11 @@ pub(crate) fn build_webui_context_compaction_draft(
         &summary_message_id,
         execution.compaction_result.policy,
     );
+    // A committed compaction starts a new context-usage epoch; the compact request remains in turn statistics only.
+    // 已提交压缩开启新的上下文用量纪元；压缩请求本身仅保留在本轮统计中。
+    draft_runtime_state.last_provider_usage = None;
+    draft_runtime_state.last_successful_provider_usage = None;
+    draft_runtime_state.auto_compact_prefill_input_tokens = None;
     set_webui_context_compaction_section_metadata_in_state(
         &mut draft_runtime_state,
         section_id,

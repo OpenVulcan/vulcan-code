@@ -31,8 +31,7 @@ use super::{
     merge_runtime_state_records_into_display_messages, owning_project_id_for_session,
     persist_workspace_session_update, replace_conversation_messages_in_workbench_window,
     replace_task_display_messages_with_runtime_state_records, spawn_service_task,
-    spawn_workspace_session_runtime_state_persist_task,
-    spawn_workspace_session_transcript_persist_task, sync_hydrated_session_dialogue_ready_marker,
+    spawn_workspace_session_persist_task, sync_hydrated_session_dialogue_ready_marker,
     task_display_prompt_anchor_from_workspace, webui_trace, webui_trace_if_slow,
     webui_turn_completion_gate_from_state, workbench_surface_matches_conversation,
     workspace_session_summary_for_session, workspace_snapshot_contains_regular_session,
@@ -64,7 +63,7 @@ use super::{
 /// Returns `Ok(())` after memory mutation and any required persistence tasks are scheduled.
 /// 在完成内存变更并调度必要持久化任务后返回 `Ok(())`。
 pub(super) fn apply_conversation_checkpoint(
-    _app: &ServiceEventEmitter,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     session_id: SessionId,
@@ -72,15 +71,15 @@ pub(super) fn apply_conversation_checkpoint(
     last_successful_provider_usage: Option<ProviderUsageSnapshot>,
     provider_request_count: usize,
 ) -> Result<(), String> {
-    let (is_main_session, workspace_snapshot) = {
+    let (is_main_session, workspace_snapshot, context_usage_event) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         let cached_task_prompt_anchor = cached_subagent_task_prompt_anchor(&guard, session_id);
-        let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
-            String::from("service is still starting; workspace snapshot is not ready")
-        })?;
-        {
+        let (is_main_session, workspace_snapshot) = {
+            let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
+                String::from("service is still starting; workspace snapshot is not ready")
+            })?;
             let now = current_unix_millis_text();
             // Only main-session checkpoints may persist through workspace-store; TaskSession checkpoints stay in memory here.
             // 只有主会话 checkpoint 可以通过 workspace-store 持久化；TaskSession checkpoint 在这里仅更新内存显示态。
@@ -98,6 +97,19 @@ pub(super) fn apply_conversation_checkpoint(
                 });
             apply_checkpoint_conversation_state(&mut runtime_state, conversation_state, &now)?;
             if let Some(usage) = last_successful_provider_usage {
+                if runtime_state
+                    .active_context_window_policy
+                    .is_some_and(|policy| {
+                        policy.auto_compact_scope
+                            == vulcan_context::ContextWindowUsageScope::BodyAfterPrefix
+                    })
+                    && runtime_state.auto_compact_prefill_input_tokens.is_none()
+                {
+                    // Codex captures the first successful input usage as the absolute body-window baseline.
+                    // Codex 将首次成功输入用量捕获为正文窗口的绝对基线。
+                    runtime_state.auto_compact_prefill_input_tokens =
+                        vulcan_context::budget::observed_input_tokens_from_usage(Some(&usage));
+                }
                 runtime_state.last_provider_usage = Some(usage.clone());
                 runtime_state.last_successful_provider_usage = Some(usage);
             }
@@ -127,22 +139,62 @@ pub(super) fn apply_conversation_checkpoint(
             }
             sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
             (is_main_session, workspace.clone())
-        }
+        };
+        // Context usage is a live projection, so publish it at every canonical checkpoint,
+        // including tool-result and continuation checkpoints between Provider calls.
+        // 上下文用量属于实时投影，因此每个规范检查点都要发布，包括 Provider 调用之间的工具结果与续跑检查点。
+        let context_usage_event = if workbench_surface_matches_conversation(
+            &guard.workbench,
+            session_id.to_string().as_str(),
+        ) {
+            let workspace = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+                String::from("service is still starting; workspace snapshot is not ready")
+            })?;
+            let public_model_capabilities = active_public_ai_model_capabilities(
+                guard
+                    .agent_runtime
+                    .as_ref()
+                    .map(|runtime| runtime.public_ai_runtime.as_ref()),
+            );
+            let context_usage = context_usage_snapshot_from_runtime_state(
+                session_id,
+                workspace.session_runtime_state.get(&session_id),
+                &guard.live_context_budgets,
+                public_model_capabilities.as_ref(),
+            );
+            guard.workbench.context_usage = context_usage.clone();
+            guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+            let generation = guard.workbench_generation;
+            guard.workbench.revision = generation;
+            Some(WorkbenchDeltaEnvelope {
+                generation,
+                delta: WorkbenchDelta::ContextUsageChanged(ContextUsageChangedDelta {
+                    context_usage,
+                }),
+            })
+        } else {
+            None
+        };
+        (is_main_session, workspace_snapshot, context_usage_event)
     };
     if is_main_session {
-        spawn_workspace_session_transcript_persist_task(
-            state.clone(),
-            controller_runtime.clone(),
-            workspace_snapshot.clone(),
-            session_id,
-            Some(String::from("conversation_checkpoint_transcript")),
-        );
-        spawn_workspace_session_runtime_state_persist_task(
+        // One full-session write keeps transcript and runtime state under the same monotonic ticket.
+        // 单次整会话写入让转录与运行态共享同一个单调递增票据。
+        spawn_workspace_session_persist_task(
             state.clone(),
             controller_runtime.clone(),
             workspace_snapshot,
             session_id,
             Some(String::from("conversation_checkpoint")),
+        );
+    }
+    if let Some(event) = context_usage_event {
+        // Emit after releasing the state lock so a slow WebUI client cannot block canonical state mutation.
+        // 释放状态锁后再发事件，避免缓慢的 WebUI 客户端阻塞规范状态变更。
+        emit_service_event_with_trace(
+            app,
+            "workbench_checkpoint_context_usage_delta_emit",
+            ServiceEvent::WorkbenchDelta(Box::new(event)),
         );
     }
     Ok(())

@@ -50,6 +50,7 @@ pub use transcript::{
     SessionCompactionEntry, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,
 };
 
+use serde::{Deserialize, Serialize};
 use vulcan_core::types::ProviderUsageSnapshot;
 
 /// Ratio above which the host should proactively compact history before the next run.
@@ -63,6 +64,209 @@ pub const CONTEXT_BUDGET_WARNING_RATIO: f32 = 0.70;
 /// Ratio above which the host should treat the session as effectively overflowed.
 /// 超过该占用比例后，宿主应将当前会话视为实际上已经溢出。
 pub const CONTEXT_BUDGET_OVERFLOW_RATIO: f32 = 0.97;
+
+/// Selects the usage scope used to compare the active context with the model window.
+/// 选择用于将活动上下文与模型窗口比较的用量范围。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextWindowUsageScope {
+    /// Counts the provider-reported total usage for the active context.
+    /// 使用 Provider 报告的总用量作为活动上下文。
+    Total,
+    /// Counts only the body after the stable prompt prefix.
+    /// 仅统计稳定提示词前缀之后的正文部分。
+    BodyAfterPrefix,
+}
+
+impl Default for ContextWindowUsageScope {
+    /// Returns the official Codex-compatible total usage scope.
+    /// 返回官方 Codex 兼容的总用量范围。
+    fn default() -> Self {
+        Self::Total
+    }
+}
+
+/// Stores sparse context-window policy changes for one configuration layer.
+/// 保存某一配置层的稀疏上下文窗口策略变更。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextWindowPolicyOverrides {
+    /// Effective hard-window percentage applied to the raw model context window.
+    /// 应用于模型原始上下文窗口的有效硬窗口百分比。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_context_window_percent: Option<u8>,
+    /// Automatic-compaction percentage applied to the raw model context window.
+    /// 应用于模型原始上下文窗口的自动压缩百分比。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_compact_percent: Option<u8>,
+    /// Explicit automatic-compaction token limit, when the provider exposes one.
+    /// Provider 明确公开自动压缩 Token 上限时使用的值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_compact_token_limit: Option<u64>,
+    /// Usage scope used by the automatic-compaction calculation.
+    /// 自动压缩计算使用的用量范围。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_compact_scope: Option<ContextWindowUsageScope>,
+    /// Optional fallback buffer reserved only when a provider fallback prompt exists.
+    /// 仅在 Provider 存在回退提示词时预留的可选缓冲区。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_buffer_tokens: Option<u64>,
+}
+
+impl ContextWindowPolicyOverrides {
+    /// Reports whether this sparse layer carries no explicit value.
+    /// 报告当前稀疏层是否没有任何显式值。
+    pub fn is_empty(&self) -> bool {
+        self.effective_context_window_percent.is_none()
+            && self.auto_compact_percent.is_none()
+            && self.auto_compact_token_limit.is_none()
+            && self.auto_compact_scope.is_none()
+            && self.fallback_buffer_tokens.is_none()
+    }
+
+    /// Validates one sparse policy layer before it is persisted.
+    /// 在持久化前校验一层稀疏策略。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `Ok(())` for a safe layer, or a controlled validation message.
+    /// 安全时返回 `Ok(())`，否则返回受控校验消息。
+    pub fn validate(&self) -> Result<(), String> {
+        for (label, value) in [
+            (
+                "effective_context_window_percent",
+                self.effective_context_window_percent,
+            ),
+            ("auto_compact_percent", self.auto_compact_percent),
+        ] {
+            if value.is_some_and(|percent| !(1..=100).contains(&percent)) {
+                return Err(format!("{label} must be between 1 and 100."));
+            }
+        }
+        if self
+            .auto_compact_token_limit
+            .is_some_and(|tokens| tokens == 0)
+        {
+            return Err(String::from(
+                "auto_compact_token_limit must be greater than zero.",
+            ));
+        }
+        if self
+            .fallback_buffer_tokens
+            .is_some_and(|tokens| usize::try_from(tokens).is_err())
+        {
+            return Err(String::from(
+                "fallback_buffer_tokens exceeds the host usize range.",
+            ));
+        }
+        if let (Some(effective), Some(auto_compact)) = (
+            self.effective_context_window_percent,
+            self.auto_compact_percent,
+        ) && auto_compact > effective
+        {
+            return Err(String::from(
+                "auto_compact_percent cannot exceed effective_context_window_percent.",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Merges a stronger sparse layer over this layer without inventing absent values.
+    /// 将更强的稀疏层覆盖到当前层，且不为缺失字段臆造值。
+    pub fn merged_with(self, stronger: Self) -> Self {
+        Self {
+            effective_context_window_percent: stronger
+                .effective_context_window_percent
+                .or(self.effective_context_window_percent),
+            auto_compact_percent: stronger.auto_compact_percent.or(self.auto_compact_percent),
+            auto_compact_token_limit: stronger
+                .auto_compact_token_limit
+                .or(self.auto_compact_token_limit),
+            auto_compact_scope: stronger.auto_compact_scope.or(self.auto_compact_scope),
+            fallback_buffer_tokens: stronger
+                .fallback_buffer_tokens
+                .or(self.fallback_buffer_tokens),
+        }
+    }
+
+    /// Resolves one sparse layer against the official Codex-compatible defaults.
+    /// 将一层稀疏策略解析为官方 Codex 兼容的完整默认值。
+    pub fn resolve(self) -> ContextWindowPolicy {
+        ContextWindowPolicy {
+            effective_context_window_percent: self.effective_context_window_percent.unwrap_or(95),
+            auto_compact_percent: self.auto_compact_percent.unwrap_or(90),
+            auto_compact_token_limit: self.auto_compact_token_limit,
+            auto_compact_scope: self.auto_compact_scope.unwrap_or_default(),
+            fallback_buffer_tokens: self
+                .fallback_buffer_tokens
+                .map(|value| usize::try_from(value).unwrap_or(usize::MAX))
+                .unwrap_or(0),
+        }
+    }
+}
+
+/// Fully resolved Codex-compatible context-window policy frozen for one turn.
+/// 为单个回合冻结的完整 Codex 兼容上下文窗口策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextWindowPolicy {
+    /// Effective hard-window percentage applied to the raw model window.
+    /// 应用于模型原始窗口的有效硬窗口百分比。
+    pub effective_context_window_percent: u8,
+    /// Automatic-compaction percentage applied to the raw model context window.
+    /// 应用于模型原始上下文窗口的自动压缩百分比。
+    pub auto_compact_percent: u8,
+    /// Explicit automatic-compaction token limit, when configured.
+    /// 已配置的显式自动压缩 Token 上限。
+    pub auto_compact_token_limit: Option<u64>,
+    /// Usage scope used for automatic compaction.
+    /// 自动压缩使用的用量范围。
+    pub auto_compact_scope: ContextWindowUsageScope,
+    /// Fallback buffer used only when a fallback prompt exists.
+    /// 仅在存在回退提示词时使用的回退缓冲区。
+    pub fallback_buffer_tokens: usize,
+}
+
+impl Default for ContextWindowPolicy {
+    /// Returns the official Codex defaults: 95% hard window, 90% compaction, total scope, no buffer.
+    /// 返回官方 Codex 默认值：95% 硬窗口、90% 压缩线、总用量范围、零缓冲。
+    fn default() -> Self {
+        ContextWindowPolicyOverrides::default().resolve()
+    }
+}
+
+impl ContextWindowPolicy {
+    /// Validates one fully resolved context-window policy, including cross-field ordering.
+    /// 校验一份完整解析后的上下文窗口策略，包括字段之间的顺序约束。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `Ok(())` for a policy that can be used by the budget calculator, or an actionable error.
+    /// 可供预算计算器使用时返回 `Ok(())`，否则返回可操作的错误信息。
+    pub fn validate(&self) -> Result<(), String> {
+        if !(1..=100).contains(&self.effective_context_window_percent) {
+            return Err(String::from(
+                "effective_context_window_percent must be between 1 and 100.",
+            ));
+        }
+        if !(1..=100).contains(&self.auto_compact_percent) {
+            return Err(String::from(
+                "auto_compact_percent must be between 1 and 100.",
+            ));
+        }
+        if self.auto_compact_percent > self.effective_context_window_percent {
+            return Err(String::from(
+                "auto_compact_percent cannot exceed effective_context_window_percent.",
+            ));
+        }
+        if self.auto_compact_token_limit == Some(0) {
+            return Err(String::from(
+                "auto_compact_token_limit must be greater than zero.",
+            ));
+        }
+        Ok(())
+    }
+}
 
 /// OpenCode-style policy that controls automatic compaction and retained history shape.
 /// 控制自动压缩与历史保留形态的 OpenCode 风格策略。
@@ -80,9 +284,15 @@ pub struct ContextCompactionPolicy {
     /// Maximum approximate token budget retained for the recent tail.
     /// 为最近尾部保留的近似 Token 上限。
     pub preserve_recent_tokens: usize,
-    /// Input-token reserve kept free for compaction summaries and the next user turn.
-    /// 为压缩摘要与下一轮用户输入预留的输入 Token 缓冲。
+    /// Legacy input reserve retained for decoding old settings; it no longer shrinks the model window.
+    /// 保留用于读取旧设置的输入缓冲字段；它不再缩小模型窗口。
     pub reserved: usize,
+    /// Codex-compatible context-window policy frozen for this execution turn.
+    /// 为本次执行回合冻结的 Codex 兼容上下文窗口策略。
+    pub window: ContextWindowPolicy,
+    /// Whether the window policy was explicitly frozen by the resolved request rather than supplied as behavior-only input.
+    /// 标记窗口策略是否已经由已解析请求显式冻结，而不是仅作为行为开关输入。
+    pub window_policy_is_explicit: bool,
 }
 
 impl Default for ContextCompactionPolicy {
@@ -94,7 +304,9 @@ impl Default for ContextCompactionPolicy {
             prune: true,
             tail_turns: 3,
             preserve_recent_tokens: 10_000,
-            reserved: 8_192,
+            reserved: 0,
+            window: ContextWindowPolicy::default(),
+            window_policy_is_explicit: false,
         }
     }
 }
@@ -182,6 +394,21 @@ pub struct ContextBudgetSnapshot {
     /// Effective input budget limit used by host estimation.
     /// 宿主估算使用的生效输入预算上限。
     pub effective_input_limit: Option<usize>,
+    /// Effective hard context window after the Codex availability percentage is applied.
+    /// 应用 Codex 可用百分比后的有效硬上下文窗口。
+    pub effective_context_window: Option<usize>,
+    /// Automatic-compaction threshold resolved for the active turn.
+    /// 为当前回合解析出的自动压缩阈值。
+    pub auto_compact_limit: Option<usize>,
+    /// Usage scope used to calculate the active context.
+    /// 计算活动上下文使用的用量范围。
+    pub auto_compact_scope: ContextWindowUsageScope,
+    /// Absolute input-token baseline for the current BodyAfterPrefix compaction window.
+    /// 当前 BodyAfterPrefix 压缩窗口使用的绝对输入 Token 基线。
+    pub auto_compact_prefill_input_tokens: Option<usize>,
+    /// Fallback buffer included only when the route supplied a fallback prompt.
+    /// 仅当路由提供回退提示词时计入的回退缓冲区。
+    pub fallback_buffer_tokens: usize,
     /// Effective output reserve held back for the provider response.
     /// 为 Provider 响应预留的生效输出预算。
     pub reserved_output_tokens: usize,
@@ -221,6 +448,12 @@ pub struct ContextBudgetSnapshot {
     /// Estimated total input token cost before response generation starts.
     /// 响应生成开始前的估算总输入 Token 成本。
     pub estimated_input_tokens: usize,
+    /// Active context tokens used for Codex window admission.
+    /// 用于 Codex 窗口准入判断的活动上下文 Token 数。
+    pub active_context_tokens: usize,
+    /// Scope-specific context tokens used only for the automatic-compaction line.
+    /// 仅用于自动压缩线的范围专属活动上下文 Token 数。
+    pub auto_compact_context_tokens: usize,
     /// Estimated total end-to-end token footprint including reasoning and output reserves.
     /// 包含推理与输出预留在内的估算端到端 Token 占用总量。
     pub estimated_total_tokens: usize,
@@ -243,6 +476,11 @@ impl Default for ContextBudgetSnapshot {
             fingerprint: String::new(),
             context_limit: None,
             effective_input_limit: None,
+            effective_context_window: None,
+            auto_compact_limit: None,
+            auto_compact_scope: ContextWindowUsageScope::Total,
+            auto_compact_prefill_input_tokens: None,
+            fallback_buffer_tokens: 0,
             reserved_output_tokens: 0,
             reserved_reasoning_tokens: 0,
             reserved_compaction_tokens: 0,
@@ -256,6 +494,8 @@ impl Default for ContextBudgetSnapshot {
             estimated_prompt_tokens: 0,
             estimated_tool_tokens: 0,
             estimated_input_tokens: 0,
+            active_context_tokens: 0,
+            auto_compact_context_tokens: 0,
             estimated_total_tokens: 0,
             usage_ratio: 0.0,
             observed_usage: None,
@@ -289,10 +529,10 @@ impl ContextBudgetSnapshot {
     /// Builds one compact usage label for the workbench context bar.
     /// 为工作台上下文条构建一条紧凑占用标签。
     pub fn usage_label(&self) -> String {
-        if let Some(limit) = self.effective_input_limit {
-            format!("{} / {}", self.estimated_input_tokens, limit)
+        if let Some(limit) = self.effective_context_window {
+            format!("{} / {}", self.active_context_tokens, limit)
         } else {
-            format!("{} / 未声明上限", self.estimated_input_tokens)
+            format!("{} / 未声明上限", self.active_context_tokens)
         }
     }
 
@@ -325,9 +565,15 @@ impl ContextBudgetSnapshot {
             "估算拆分"
         };
         format!(
-            "{severity_label} · {baseline_label}{} · 上下文窗 {} · {} {} · {} 系统 {} / 历史 {} / 当前 {} / 工具 {} · 端到端占用 {} · 输出预留 {} · 推理预留 {} · 压缩预留 {}{}",
+            "{severity_label} · {baseline_label}{} · 原始窗口 {} · 有效窗口 {} · 自动压缩线 {} · {} {} · {} 系统 {} / 历史 {} / 当前 {} / 工具 {} · 活动上下文 {} · 自动压缩计量 {} · 端到端占用 {} · 输出预留 {} · 推理预留 {} · 旧压缩预留 {}{}",
             baseline_reason_suffix,
             context_limit_label,
+            self.effective_context_window
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| String::from("未声明")),
+            self.auto_compact_limit
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| String::from("未声明")),
             input_source_label,
             self.usage_label(),
             breakdown_label,
@@ -335,6 +581,8 @@ impl ContextBudgetSnapshot {
             self.estimated_history_tokens,
             self.estimated_prompt_tokens,
             self.estimated_tool_tokens,
+            self.active_context_tokens,
+            self.auto_compact_context_tokens,
             self.estimated_total_tokens,
             self.reserved_output_tokens,
             self.reserved_reasoning_tokens,
@@ -412,5 +660,31 @@ mod tests {
 
         assert_eq!(low.usage_percent(), 0.0);
         assert_eq!(high.usage_percent(), 100.0);
+    }
+
+    /// Verifies the compacting threshold cannot sit above the hard available window.
+    /// 验证自动压缩阈值不能高于有效硬窗口。
+    #[test]
+    fn context_window_policy_rejects_compaction_above_hard_window() {
+        let policy = ContextWindowPolicyOverrides {
+            effective_context_window_percent: Some(95),
+            auto_compact_percent: Some(96),
+            ..ContextWindowPolicyOverrides::default()
+        };
+
+        let error = policy
+            .validate()
+            .expect_err("sparse policy must reject an impossible same-layer ordering");
+        assert!(error.contains("cannot exceed"));
+
+        let resolved = ContextWindowPolicy {
+            effective_context_window_percent: 95,
+            auto_compact_percent: 96,
+            ..ContextWindowPolicy::default()
+        };
+        let error = resolved
+            .validate()
+            .expect_err("resolved policy must reject an impossible inherited ordering");
+        assert!(error.contains("cannot exceed"));
     }
 }

@@ -76,6 +76,9 @@ impl SessionOutputStyleState {
 
     /// Captures an immutable snapshot at a new-session or compaction boundary.
     /// 在新会话或压缩边界捕获并保存不可变风格快照。
+    // Keep snapshot fields explicit because this method is the typed persistence boundary.
+    // 保持快照字段显式，因为此方法是强类型持久化边界。
+    #[allow(clippy::too_many_arguments)]
     pub fn set_applied_snapshot(
         &mut self,
         style_id: String,
@@ -115,6 +118,10 @@ pub struct SessionRuntimeStateEntry {
     /// Last active model identifier used by the session.
     /// 最近一次被该会话使用的激活模型标识。
     pub active_model_id: Option<String>,
+    /// Fully resolved context-window policy frozen at the latest accepted turn boundary.
+    /// 鏈€杩戜竴娆℃帴鍙楃殑鍥炲悎杈圭晫鎵€鍐荤粨鐨勫畬鏁翠笂涓嬫枃绐楀彛绛栫暐銆?
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_context_window_policy: Option<ContextWindowPolicy>,
     /// Last reasoning-effort preset selected while this session was active.
     /// 最近一次该会话激活时选择的推理档位预设。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -242,6 +249,14 @@ pub struct SessionRuntimeStateEntry {
     /// Latest successful provider usage snapshot captured from the final real provider turn.
     /// 从最终真实 Provider 回合中捕获到的最近一次成功用量快照。
     pub last_successful_provider_usage: Option<ProviderUsageSnapshot>,
+    /// Live physical Provider request accounting synchronized at every request boundary.
+    /// 在每个请求边界同步的实时物理 Provider 请求统计。
+    #[serde(default, skip_serializing_if = "SessionProviderUsageState::is_empty")]
+    pub provider_usage: SessionProviderUsageState,
+    /// Absolute input-token baseline for the current BodyAfterPrefix compaction window.
+    /// 当前 BodyAfterPrefix 压缩窗口使用的绝对输入 Token 基线。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_compact_prefill_input_tokens: Option<usize>,
     /// Provider request count captured at the latest safe runtime checkpoint.
     /// 最近一次安全运行时检查点捕获到的 Provider 请求次数。
     #[serde(default, skip_serializing_if = "Option::is_none")]

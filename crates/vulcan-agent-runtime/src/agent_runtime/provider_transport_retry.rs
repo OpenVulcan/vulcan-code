@@ -373,12 +373,22 @@ fn classify_structured_retry_reason(
     error: &AiExecutionError,
     retry_429: bool,
 ) -> Option<ProviderRetryClassification> {
-    if !error.retryable
+    // The official Codex overload code and message are authoritative when an older adapter
+    // accidentally leaves the generic retryable bit unset.
+    // 旧适配器误将通用 retryable 标志置空时，官方 Codex 过载代码和消息仍是权威依据。
+    let known_overload = structured_error_is_known_overload(error);
+    if (!error.retryable && !known_overload)
         || error.semantic_output_observed
         || error.side_effect_observed
         || error.dispatch_outcome == DispatchOutcome::Unknown
     {
         return None;
+    }
+    if known_overload {
+        return Some(ProviderRetryClassification {
+            category: ProviderRetryCategory::Transient,
+            reason: String::from("Provider overloaded"),
+        });
     }
     match error.category {
         AiErrorCategory::RateLimited if retry_429 => Some(ProviderRetryClassification {
@@ -402,6 +412,20 @@ fn classify_structured_retry_reason(
         }
         _ => None,
     }
+}
+
+/// Recognizes only the registered Codex overload markers that are safe to replay before semantic output.
+/// 仅识别已注册且在语义输出前可安全重放的 Codex 过载标记。
+fn structured_error_is_known_overload(error: &AiExecutionError) -> bool {
+    let code_matches = error.upstream_code.as_deref().is_some_and(|code| {
+        code.eq_ignore_ascii_case("server_is_overloaded") || code.eq_ignore_ascii_case("slow_down")
+    });
+    let message_matches = error.upstream_message.as_deref().is_some_and(|message| {
+        message
+            .to_ascii_lowercase()
+            .contains("our servers are currently overloaded. please try again later")
+    });
+    code_matches || message_matches
 }
 
 /// Classifies an exact HTTP status retained by a typed but otherwise unclassified error.
@@ -824,6 +848,31 @@ mod tests {
         assert_eq!(decision.retry_number, 1);
         assert_eq!(decision.max_retries, 3);
         assert_eq!(decision.reason, "Provider overloaded");
+    }
+
+    /// Verifies the official overload code remains retryable when a legacy adapter leaves the generic bit unset.
+    /// 验证旧适配器未设置通用重试标志时，官方过载代码仍会进入重试流程。
+    #[test]
+    fn structured_retry_entrypoint_recovers_legacy_overload_marker() {
+        let mut error = structured_provider_error(AiErrorCategory::Unclassified, false);
+        let VulcanCoreError::ProviderFailure {
+            details: Some(details),
+            ..
+        } = &mut error
+        else {
+            panic!("structured error expected");
+        };
+        details.upstream_code = Some(String::from("server_is_overloaded"));
+        details.upstream_message = Some(String::from(
+            "Our servers are currently overloaded. Please try again later.",
+        ));
+
+        let decision = policy()
+            .next_structured_retry(details.as_ref(), 0)
+            .expect("the registered overload marker should retry");
+
+        assert_eq!(decision.reason, "Provider overloaded");
+        assert_eq!(decision.retry_number, 1);
     }
 
     /// Verifies unknown provider dispatch never triggers transparent replay.

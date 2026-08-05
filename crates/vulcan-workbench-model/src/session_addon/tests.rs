@@ -104,17 +104,19 @@ fn session_addon_drops_unknown_legacy_namespaces() {
 #[test]
 fn session_addon_roundtrips_output_style_boundary_state() {
     let session_id = SessionId::new_v4();
-    let mut runtime_state = SessionRuntimeStateEntry::default();
-    runtime_state.output_style = SessionOutputStyleState {
-        override_style_id: Some(String::from("rigorous")),
-        applied_style_id: Some(String::from("balanced")),
-        applied_prompt_text: Some(String::from("exact prompt")),
-        applied_label: Some(String::from("Balanced")),
-        applied_fingerprint: Some(42),
-        applied_source_label: Some(String::from("test")),
-        applied_boundary: Some(String::from("new-session")),
-        applied_compaction_id: None,
-        applied_at: Some(String::from("1000")),
+    let runtime_state = SessionRuntimeStateEntry {
+        output_style: SessionOutputStyleState {
+            override_style_id: Some(String::from("rigorous")),
+            applied_style_id: Some(String::from("balanced")),
+            applied_prompt_text: Some(String::from("exact prompt")),
+            applied_label: Some(String::from("Balanced")),
+            applied_fingerprint: Some(42),
+            applied_source_label: Some(String::from("test")),
+            applied_boundary: Some(String::from("new-session")),
+            applied_compaction_id: None,
+            applied_at: Some(String::from("1000")),
+        },
+        ..SessionRuntimeStateEntry::default()
     };
 
     let addon =

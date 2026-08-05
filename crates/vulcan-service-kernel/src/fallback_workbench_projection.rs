@@ -96,6 +96,7 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
         session_plan_mode: None,
         session_vmm_policy: None,
         session_output_style: None,
+        session_provider_usage: None,
         session_addons_by_conversation: Vec::new(),
         session_vmm_policies_by_conversation: Vec::new(),
         memories: Vec::new(),

@@ -1389,6 +1389,7 @@ fn build_prompt_compaction_launch_request(
         conversation_state,
         context_compaction_policy: None,
         context_budget_override: None,
+        context_window_prefill_input_tokens: None,
         execution_mode: launch_context.execution_mode.clone(),
         temperature: None,
         reasoning_effort,

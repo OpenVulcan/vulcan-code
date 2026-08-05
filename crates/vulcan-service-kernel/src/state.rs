@@ -522,6 +522,12 @@ impl ActiveStreamTask {
         self.session_goal_id.as_deref()
     }
 
+    /// Returns the stable task identity used by admission and handoff fences.
+    /// 返回 admission 与交接屏障使用的稳定任务身份。
+    pub(crate) fn task_id(&self) -> Uuid {
+        self.task_id
+    }
+
     /// Rebinds this execution to the Goal that owns its next physical Provider request.
     /// 将当前执行重新绑定到拥有其下一次物理 Provider 请求的目标。
     ///
@@ -658,6 +664,22 @@ pub(crate) enum ActiveStreamTaskRegistrationError {
         /// 清理是否移除了本次注册尝试安装的精确条目。
         owned_entry_removed: bool,
     },
+    /// The session already has an active owner and the caller was not authorized to replace it.
+    /// 会话已经存在活动所有者，且调用方未获授权替换它。
+    Occupied {
+        /// Exact owner identity retained by the session registry.
+        /// 会话注册表保留的精确所有者身份。
+        existing_task_id: Uuid,
+    },
+}
+
+/// Controls the single-owner admission policy for a stream registration.
+/// 控制流注册的单所有者准入策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ActiveStreamTaskRegistrationMode {
+    /// Reject a second owner without cancelling the existing task.
+    /// 拒绝第二个所有者且不取消已有任务。
+    RejectIfOccupied,
 }
 
 impl ActiveStreamTaskRegistrationError {
@@ -725,6 +747,10 @@ impl std::fmt::Display for ActiveStreamTaskRegistrationError {
                 formatter,
                 "registered stream task exited before its start gate opened; owned_entry_removed={owned_entry_removed}"
             ),
+            Self::Occupied { existing_task_id } => write!(
+                formatter,
+                "session already has an active stream owner {existing_task_id}"
+            ),
         }
     }
 }
@@ -738,8 +764,8 @@ impl std::error::Error for ActiveStreamTaskRegistrationError {}
 /// 参数
 /// `state` owns the authoritative active stream registry.
 /// `state` 持有权威活动流注册表。
-/// `session_id` selects the session slot to replace.
-/// `session_id` 选择要替换的会话槽位。
+/// `session_id` selects the session slot that must remain single-owner.
+/// `session_id` 选择必须保持单所有者的会话槽位。
 /// `task_id` uniquely identifies the new task and all of its cleanup paths.
 /// `task_id` 唯一标识新任务及其所有清理路径。
 /// `session_goal_id` binds ordinary provider work to its launch-time Goal.
@@ -749,39 +775,60 @@ impl std::error::Error for ActiveStreamTaskRegistrationError {}
 ///
 /// # Returns
 /// 返回值
-/// Success after replacing and cancelling any previous task, or an explicit registration/start error.
-/// 替换并中止旧任务后返回成功，或返回显式注册/启动错误。
-pub(crate) fn spawn_registered_active_stream_task<F>(
+/// Success after durable registration, or an explicit registration/start error.
+/// 完成可靠注册后返回成功，或返回显式注册/启动错误。
+/// Spawns one stream task with an explicit single-owner admission mode.
+/// 使用显式单所有者 admission 模式启动一个流任务。
+pub(crate) fn spawn_registered_active_stream_task_with_mode<F>(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
     task_id: Uuid,
     session_goal_id: Option<String>,
+    mode: ActiveStreamTaskRegistrationMode,
     future: F,
 ) -> Result<(), ActiveStreamTaskRegistrationError>
 where
     F: Future<Output = ()> + Send + 'static,
 {
     let (start_sender, start_receiver) = tokio::sync::oneshot::channel::<()>();
-    let handle = spawn_service_task(async move {
-        if start_receiver.await.is_ok() {
-            future.await;
-        }
-    });
     let previous_task = match state.lock() {
-        Ok(mut guard) => guard.active_stream_tasks.insert(
-            session_id,
-            ActiveStreamTask::new(task_id, handle, session_goal_id),
-        ),
+        Ok(mut guard) => {
+            let previous_task_id = guard
+                .active_stream_tasks
+                .get(&session_id)
+                .map(ActiveStreamTask::task_id);
+            match mode {
+                ActiveStreamTaskRegistrationMode::RejectIfOccupied
+                    if let Some(existing_task_id) = previous_task_id =>
+                {
+                    return Err(ActiveStreamTaskRegistrationError::Occupied { existing_task_id });
+                }
+                _ => {}
+            }
+            let handle = spawn_service_task(async move {
+                if start_receiver.await.is_ok() {
+                    future.await;
+                }
+            });
+            let previous_task = guard.active_stream_tasks.insert(
+                session_id,
+                ActiveStreamTask::new(task_id, handle, session_goal_id),
+            );
+            debug_assert!(
+                previous_task.is_none(),
+                "active stream owner changed after single-owner admission"
+            );
+            previous_task
+        }
         Err(error) => {
-            handle.abort();
             return Err(ActiveStreamTaskRegistrationError::RegistryUnavailable {
                 detail: error.to_string(),
             });
         }
     };
-    if let Some(previous_task) = previous_task {
-        previous_task.abort();
-    }
+    // A second owner is rejected before insertion, so successful registration never cancels a live run.
+    // 第二个所有者会在插入前被拒绝，因此成功注册绝不会取消正在运行的任务。
+    debug_assert!(previous_task.is_none());
     if start_sender.send(()).is_err() {
         // owned_entry_removed preserves the exact ownership fact needed by failure terminalization.
         // owned_entry_removed 保留失败终结所需的精确所有权事实。

@@ -282,6 +282,112 @@ fn merge_session_messages_with_conversation_state_records_restores_runtime_order
     assert_eq!(merged_messages[4].body, "工具 2 已完成");
 }
 
+/// Verifies an older display-only row is not appended after newer canonical records.
+/// 验证较旧的仅显示行不会被追加到更新的规范记录之后。
+#[test]
+fn merge_session_messages_with_conversation_state_records_restores_timestamp_order() {
+    let mut existing_messages = vec![
+        transcript_entry(
+            "old-user",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "历史问题",
+            None,
+        ),
+        transcript_entry(
+            "shared-tool",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::ToolCallOutput,
+            "旧工具状态",
+            None,
+        ),
+        transcript_entry(
+            "stale-display",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::TurnStats,
+            "旧统计",
+            None,
+        ),
+    ];
+    existing_messages[0].created_at = String::from("100");
+    existing_messages[1].created_at = String::from("200");
+    existing_messages[2].created_at = String::from("150");
+
+    let mut shared_tool = transcript_entry(
+        "shared-tool",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::ToolCallOutput,
+        "新工具状态",
+        None,
+    );
+    shared_tool.created_at = String::from("200");
+    let mut new_output = transcript_entry(
+        "new-output",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::AssistantOutput,
+        "新的输出",
+        None,
+    );
+    new_output.created_at = String::from("300");
+    let runtime_state = conversation_state_from_session_messages(&[shared_tool, new_output])
+        .expect("valid replayed conversation identities");
+
+    let merged_messages =
+        merge_session_messages_with_conversation_state_records(&existing_messages, &runtime_state);
+
+    assert_eq!(
+        merged_messages
+            .iter()
+            .map(|message| message.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["old-user", "stale-display", "shared-tool", "new-output"]
+    );
+}
+
+/// Verifies disjoint runtime records are not blindly appended behind newer display rows.
+/// 验证没有共享锚点的运行态记录不会被盲目追加到更新显示行之后。
+#[test]
+fn merge_session_messages_with_conversation_state_records_orders_disjoint_timestamps() {
+    let mut existing_messages = vec![transcript_entry(
+        "new-display",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::AssistantOutput,
+        "较新的显示记录",
+        None,
+    )];
+    existing_messages[0].created_at = String::from("300");
+
+    let mut old_runtime = transcript_entry(
+        "old-runtime",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::ThinkingOutput,
+        "较早的运行态记录",
+        None,
+    );
+    old_runtime.created_at = String::from("100");
+    let mut latest_runtime = transcript_entry(
+        "latest-runtime",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::AssistantOutput,
+        "最新的运行态记录",
+        None,
+    );
+    latest_runtime.created_at = String::from("400");
+    let runtime_state = conversation_state_from_session_messages(&[old_runtime, latest_runtime])
+        .expect("valid disjoint runtime records");
+
+    let merged_messages =
+        merge_session_messages_with_conversation_state_records(&existing_messages, &runtime_state);
+
+    assert_eq!(
+        merged_messages
+            .iter()
+            .map(|message| message.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["old-runtime", "new-display", "latest-runtime"]
+    );
+}
+
 /// Verifies compaction planning projects runtime-log messages.
 /// 验证压缩规划会投影运行时日志消息。
 #[test]

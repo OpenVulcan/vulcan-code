@@ -19,6 +19,7 @@ import {
 import { CustomModelTemplateCard } from "@/components/features/settings/custom-model-template-card"
 import {
   buildCapabilityOverridePatch,
+  ContextWindowPolicyEditor,
   ReasoningProjectionEditor,
 } from "@/components/features/settings/public-ai-model-capability-dialog"
 import { CustomProviderChangeSummaryDialog } from "@/components/features/settings/custom-provider-change-summary-dialog"
@@ -1396,6 +1397,10 @@ function CapabilityOverridesEditor(props: { onSaved: (snapshot: PublicAiSettings
         <label className="grid gap-2 text-sm font-medium">{t("settings.customModels.contextLimit")}<Input inputMode="numeric" onChange={(event) => updateDraft("context_limit", (current) => ({ ...current, context_limit: Number.parseInt(event.target.value.replace(/\D/g, "") || "0", 10) }))} value={draft.context_limit ?? ""} /></label>
         <label className="grid gap-2 text-sm font-medium">{t("settings.customModels.outputLimit")}<Input inputMode="numeric" onChange={(event) => updateDraft("output_limit", (current) => ({ ...current, output_limit: Number.parseInt(event.target.value.replace(/\D/g, "") || "0", 10) }))} value={draft.output_limit ?? ""} /></label>
       </div>
+      <ContextWindowPolicyEditor
+        onChange={(value) => updateDraft("context_window_policy", (current) => ({ ...current, context_window_policy: value }))}
+        value={draft.context_window_policy ?? undefined}
+      />
       <fieldset className="rounded-lg border p-3">
         <legend className="px-1 text-sm font-medium">{t("settings.customModels.input")}</legend>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">

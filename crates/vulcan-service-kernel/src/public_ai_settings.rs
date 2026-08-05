@@ -17,6 +17,7 @@ use vulcan_ai_contract::{
     ReasoningControlMode, ReasoningEffort, ReasoningOutputPolicy, RerankRequest,
     RerankScoreSemantics, RerankText, RerankTruncation, StructuredOutputPolicy, ToolChoicePolicy,
 };
+use vulcan_context::ContextWindowPolicyOverrides;
 use vulcan_provider_adapters::{
     AccountUsageQueryKind, ActiveAiModelSelection, CatalogDiscoveryState, CatalogDiscoveryStatus,
     CommonModelTemplateSuggestion, ConnectionModelAccessPolicy, ConnectionModelCatalog,
@@ -52,6 +53,12 @@ pub(super) const KNOWLEDGE_CURATION_PURPOSE_ID: &str = "knowledge_display_curati
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct PublicAiSettingsSnapshot {
+    /// System-level sparse Codex context-window policy inherited by every route.
+    /// 所有路由继承的系统级稀疏 Codex 上下文窗口策略。
+    context_window_policy_overrides: ContextWindowPolicyOverrides,
+    /// Explicit provider-level sparse Codex context-window policies.
+    /// 显式供应商级稀疏 Codex 上下文窗口策略。
+    provider_context_window_policy_overrides: BTreeMap<String, ContextWindowPolicyOverrides>,
     /// Persisted background account-usage refresh interval.
     /// 持久化的后台账号用量刷新间隔。
     usage_refresh_interval_seconds: u64,
@@ -574,6 +581,16 @@ pub(super) struct PublicAiUsageRefreshSettingsRequest {
     /// Refresh interval in seconds.
     /// 刷新间隔秒数。
     interval_seconds: u64,
+}
+
+/// Saves or clears the system-level Codex context-window policy.
+/// 保存或清除系统级 Codex 上下文窗口策略。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiContextWindowPolicyOverridesSaveRequest {
+    /// Sparse policy layer; an empty object restores built-in Codex defaults.
+    /// 稀疏策略层；空对象恢复内置 Codex 默认值。
+    overrides: ContextWindowPolicyOverrides,
 }
 
 /// Selects one exact public AI model and account.
@@ -2726,6 +2743,7 @@ pub(super) async fn service_save_public_ai_custom_provider_model_defaults(
         provider_id.as_str(),
         defaults.as_ref(),
     );
+    candidate_configuration.validate_context_window_policy_layers()?;
     runtime.validate_model_catalog_overlays(&candidate_configuration)?;
     let configuration = mutate_public_ai_configuration_in_transaction(
         &state,
@@ -5081,6 +5099,26 @@ pub(super) async fn service_save_public_ai_usage_refresh_settings(
     build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
 }
 
+/// Saves the process-wide default Codex context-window policy.
+/// 保存进程级默认 Codex 上下文窗口策略。
+pub(super) async fn service_save_public_ai_context_window_policy_overrides(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiContextWindowPolicyOverridesSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    request.overrides.validate()?;
+    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
+    let overrides = request.overrides;
+    let configuration = mutate_public_ai_configuration(
+        &state,
+        "保存系统级上下文窗口策略失败",
+        |configuration| configuration.set_context_window_policy_overrides(overrides),
+    )
+    .await?;
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
 /// Selects one model and remembers its exact account.
 /// 选择一个模型并记住其精确账号。
 pub(super) async fn service_select_public_ai_model(
@@ -7426,6 +7464,10 @@ fn build_public_ai_settings_snapshot(
         .cloned()
         .collect();
     Ok(PublicAiSettingsSnapshot {
+        context_window_policy_overrides: configuration.context_window_policy_overrides,
+        provider_context_window_policy_overrides: configuration
+            .provider_context_window_policy_overrides
+            .clone(),
         usage_refresh_interval_seconds: configuration.usage_refresh_interval_seconds,
         usage_cache: runtime.usage_cache_snapshot()?,
         providers: providers.providers().into_iter().cloned().collect(),

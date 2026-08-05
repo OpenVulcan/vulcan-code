@@ -2131,7 +2131,6 @@ fn runtime_event_projects_conversation_transcript(event_kind: RuntimeEventKind) 
             | RuntimeEventKind::ToolStarted
             | RuntimeEventKind::ToolFinished
             | RuntimeEventKind::Retrying
-            | RuntimeEventKind::ProviderWaiting
             | RuntimeEventKind::TransportFallback
     )
 }
@@ -2299,6 +2298,7 @@ pub(crate) fn cache_live_context_budget_observed_usage(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
     usage: &ProviderUsageSnapshot,
+    conversation_state: &vulcan_context::SessionConversationState,
 ) -> Result<(), String> {
     let mut guard = state
         .lock()
@@ -2306,7 +2306,11 @@ pub(crate) fn cache_live_context_budget_observed_usage(
     let Some(context_budget) = guard.live_context_budgets.get_mut(&session_id) else {
         return Ok(());
     };
-    apply_observed_usage_to_context_budget(context_budget, usage);
+    apply_observed_usage_to_context_budget_with_local_state(
+        context_budget,
+        usage,
+        Some(conversation_state),
+    );
     Ok(())
 }
 
@@ -2316,6 +2320,16 @@ pub(crate) fn apply_observed_usage_to_context_budget(
     context_budget: &mut ContextBudgetSnapshot,
     usage: &ProviderUsageSnapshot,
 ) {
+    apply_observed_usage_to_context_budget_with_local_state(context_budget, usage, None);
+}
+
+/// Applies observed usage and post-response local messages to one live budget snapshot.
+/// 将 Provider 实测用量与响应后的本地消息增量应用到实时预算快照。
+fn apply_observed_usage_to_context_budget_with_local_state(
+    context_budget: &mut ContextBudgetSnapshot,
+    usage: &ProviderUsageSnapshot,
+    conversation_state: Option<&vulcan_context::SessionConversationState>,
+) {
     let Some(input_tokens) =
         vulcan_context::observed_input_tokens_from_usage(Some(usage)).or(usage.total_tokens)
     else {
@@ -2323,17 +2337,61 @@ pub(crate) fn apply_observed_usage_to_context_budget(
         return;
     };
     context_budget.estimated_input_tokens = input_tokens;
-    context_budget.estimated_total_tokens = usage.total_tokens.unwrap_or_else(|| {
+    let provider_context_tokens = usage.total_tokens.unwrap_or_else(|| {
         input_tokens
             .saturating_add(usage.output_tokens.unwrap_or_default())
             .saturating_add(usage.reasoning_tokens.unwrap_or_default())
     });
+    // Codex adds messages written after the last model-generated item to the latest Provider total.
+    // Codex 会把最近一次模型输出之后写入的消息增量加到最近一次 Provider 总量上。
+    let local_context_tokens = conversation_state
+        .map(local_context_tokens_after_latest_assistant)
+        .unwrap_or_default();
+    let active_context_tokens = provider_context_tokens.saturating_add(local_context_tokens);
+    let auto_compact_context_tokens = match context_budget.auto_compact_scope {
+        vulcan_context::ContextWindowUsageScope::Total => active_context_tokens,
+        vulcan_context::ContextWindowUsageScope::BodyAfterPrefix => active_context_tokens
+            .saturating_sub(
+                context_budget
+                    .auto_compact_prefill_input_tokens
+                    .unwrap_or(active_context_tokens),
+            ),
+    };
+    // The latest provider total is the active-context baseline; cumulative usage never drives the window.
+    // 最近一次 Provider 总量是活动上下文基线；累计用量永远不能驱动窗口判断。
+    context_budget.active_context_tokens = active_context_tokens;
+    context_budget.auto_compact_context_tokens = auto_compact_context_tokens;
+    context_budget.estimated_total_tokens = active_context_tokens;
     context_budget.usage_ratio = context_budget
-        .effective_input_limit
-        .map(|limit| input_tokens as f32 / limit.max(1) as f32)
+        .effective_context_window
+        .or(context_budget.effective_input_limit)
+        .map(|limit| active_context_tokens as f32 / limit.max(1) as f32)
         .unwrap_or_else(|| if input_tokens > 0 { 0.01 } else { 0.0 });
-    context_budget.severity = historical_context_budget_severity(context_budget.usage_ratio);
+    context_budget.severity =
+        vulcan_context::budget::context_budget_severity_for_limits_with_compaction_context(
+            active_context_tokens,
+            context_budget.effective_context_window,
+            context_budget.auto_compact_limit,
+            auto_compact_context_tokens,
+        );
     context_budget.observed_usage = Some(usage.clone());
+}
+
+/// Estimates canonical messages written after the latest assistant response.
+/// 估算最近一次助手响应之后写入的规范消息 Token 数。
+fn local_context_tokens_after_latest_assistant(
+    conversation_state: &vulcan_context::SessionConversationState,
+) -> usize {
+    let source_messages =
+        vulcan_context::conversation_state_to_compaction_source_messages(conversation_state);
+    let start = source_messages
+        .iter()
+        .rposition(|message| {
+            message.record_kind == vulcan_context::SessionMessageRecordKind::AssistantOutput
+        })
+        .map(|index| index.saturating_add(1))
+        .unwrap_or_default();
+    vulcan_context_compaction::estimate_compaction_source_tokens(&source_messages[start..])
 }
 
 #[cfg(test)]
@@ -2674,7 +2732,6 @@ mod tests {
             RuntimeEventKind::ToolStarted,
             RuntimeEventKind::ToolFinished,
             RuntimeEventKind::Retrying,
-            RuntimeEventKind::ProviderWaiting,
             RuntimeEventKind::TransportFallback,
         ];
 
@@ -2688,6 +2745,9 @@ mod tests {
         }
         assert!(!runtime_event_projects_conversation_transcript(
             RuntimeEventKind::TokenDelta
+        ));
+        assert!(!runtime_event_projects_conversation_transcript(
+            RuntimeEventKind::ProviderWaiting
         ));
     }
 
@@ -2992,5 +3052,44 @@ mod tests {
         assert!(runtime_event_changes_subagent_navigation(&spawn_finished));
         assert!(!runtime_event_changes_subagent_navigation(&spawn_started));
         assert!(!runtime_event_changes_subagent_navigation(&send_finished));
+    }
+
+    /// Verifies post-response tool results advance the active context beyond the latest Provider total.
+    /// 验证响应后的工具结果会在最近一次 Provider 总量之上推进活动上下文。
+    #[test]
+    fn local_context_tokens_after_latest_assistant_counts_tool_results_only() {
+        let state = vulcan_context::SessionConversationState {
+            messages: vec![
+                vulcan_context::SessionConversationMessage {
+                    id: String::from("user-1"),
+                    payload: vulcan_context::SessionConversationPayload::UserText {
+                        text: String::from("run the tool"),
+                        attachments: Vec::new(),
+                    },
+                },
+                vulcan_context::SessionConversationMessage {
+                    id: String::from("assistant-1"),
+                    payload: vulcan_context::SessionConversationPayload::Assistant {
+                        text: String::from("I will call it"),
+                        reasoning: String::new(),
+                        provider_message_id: None,
+                        provider_message_state: None,
+                        usage: None,
+                        tool_calls: Vec::new(),
+                    },
+                },
+                vulcan_context::SessionConversationMessage {
+                    id: String::from("tool-1"),
+                    payload: vulcan_context::SessionConversationPayload::ToolResult {
+                        tool_call_id: Some(String::from("call-1")),
+                        is_error: false,
+                        text: String::from("tool result body"),
+                    },
+                },
+            ],
+            ..vulcan_context::SessionConversationState::default()
+        };
+
+        assert!(local_context_tokens_after_latest_assistant(&state) > 0);
     }
 }

@@ -151,12 +151,28 @@ pub(crate) fn apply_execution_preparation(
                         updated_at: current_unix_millis_text(),
                         ..SessionRuntimeStateEntry::default()
                     });
+                let route_changed = runtime_state.active_provider_id.as_deref()
+                    != Some(preparation.model_blueprint.provider_id.as_str())
+                    || runtime_state.active_model_id.as_deref()
+                        != Some(preparation.model_blueprint.model_id.as_str())
+                    || runtime_state.active_context_window_policy
+                        != preparation
+                            .context_compaction_policy
+                            .map(|policy| policy.window);
+                if route_changed {
+                    // A new route or window policy cannot reuse the previous Codex prefill baseline.
+                    // 新路由或窗口策略不能复用之前的 Codex 前缀基线。
+                    runtime_state.auto_compact_prefill_input_tokens = None;
+                }
                 runtime_state.active_agent_id = Some(preparation.agent_id.clone());
                 runtime_state.active_provider_id =
                     Some(preparation.model_blueprint.provider_id.clone());
                 runtime_state.active_connection_id =
                     Some(preparation.model_blueprint.connection_id.clone());
                 runtime_state.active_model_id = Some(preparation.model_blueprint.model_id.clone());
+                runtime_state.active_context_window_policy = preparation
+                    .context_compaction_policy
+                    .map(|policy| policy.window);
                 runtime_state.active_reasoning_effort =
                     Some(preparation.model_blueprint.reasoning.requested_effort);
                 runtime_state.active_temperature = None;

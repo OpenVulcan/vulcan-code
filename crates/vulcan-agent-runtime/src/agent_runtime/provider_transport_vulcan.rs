@@ -44,6 +44,7 @@ use vulcan_core::types::{
 use vulcan_provider_adapters::{
     CredentialExecutionSecret, ProviderExecutionClient, ProviderExecutionFailure,
     ProviderExecutionRoute, ProviderExecutionStream, ResolvedPublicAiExecution,
+    ResponsesWebSocketPolicy,
 };
 use vulcan_tools_manager::{
     VulcanToolSchemaProjectionContext, project_tool_parameters_schema,
@@ -54,12 +55,8 @@ use vulcan_tools_manager::{
 /// 当供应商未报告独立输出上限时使用的 Vulcan 本地默认输出预算。
 const DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT: u64 = 32_000;
 
-/// Stable prefix assigned to user-defined public AI providers.
-/// 分配给用户自定义公共 AI 供应商的稳定前缀。
-const CUSTOM_PUBLIC_AI_PROVIDER_ID_PREFIX: &str = "custom:";
-
-/// Delay before a dispatched Provider request receives one visible first-event waiting status.
-/// 已发出的 Provider 请求在显示首事件等待状态前的延迟。
+/// Delay before a dispatched Provider request records an internal first-event wait marker.
+/// 已发出的 Provider 请求在记录首事件内部等待标记前的延迟。
 const PROVIDER_FIRST_EVENT_WAIT_STATUS_DELAY: std::time::Duration =
     std::time::Duration::from_secs(5);
 
@@ -73,21 +70,21 @@ const RESPONSES_WEBSOCKET_FALLBACK_STATUS_POLL_INTERVAL: std::time::Duration =
 ///
 /// # Parameters
 /// 参数
-/// `provider_id` identifies the immutable provider route and `configured_budget` is the ordinary
-/// host retry budget used by the official-provider path.
-/// `provider_id` 标识不可变供应商路由，`configured_budget` 是官方供应商路径使用的普通宿主重试预算。
+/// `websocket_policy` is the explicit route capability and `configured_budget` is the ordinary
+/// host retry budget used by the provider execution path.
+/// `websocket_policy` 是精确路由能力，`configured_budget` 是 Provider 执行路径使用的普通宿主重试预算。
 ///
 /// # Returns
 /// 返回值
-/// Zero for opt-in custom providers so their first replay-safe WebSocket failure immediately uses
-/// HTTP, or the configured budget for registered providers that follow the official Codex policy.
-/// 对已选择启用的自定义供应商返回零，使首次可安全重放的 WebSocket 失败立即改用 HTTP；
-/// 对遵循官方 Codex 策略的注册供应商返回配置预算。
-fn responses_websocket_retry_budget(provider_id: &str, configured_budget: u32) -> u32 {
-    if provider_id.starts_with(CUSTOM_PUBLIC_AI_PROVIDER_ID_PREFIX) {
-        0
-    } else {
-        configured_budget
+/// Returns the configured retry budget only when the exact route explicitly enables WebSocket.
+/// 仅当精确路由显式启用 WebSocket 时返回配置的重试预算。
+fn responses_websocket_retry_budget(
+    websocket_policy: ResponsesWebSocketPolicy,
+    configured_budget: u32,
+) -> u32 {
+    match websocket_policy {
+        ResponsesWebSocketPolicy::Disabled => 0,
+        ResponsesWebSocketPolicy::PreferredWithHttpFallback => configured_budget,
     }
 }
 
@@ -140,8 +137,15 @@ pub(crate) fn execute_vulcan_public_stream(
 ) -> ProviderDeltaStream {
     let cache_scope_id = request.session_id.to_string();
     let workspace_path = request.workspace_path.clone();
+    let websocket_policy = resolved
+        .route
+        .protocol_route
+        .responses_features
+        .as_ref()
+        .map(|features| features.websocket)
+        .unwrap_or(ResponsesWebSocketPolicy::Disabled);
     let websocket_retry_budget = responses_websocket_retry_budget(
-        resolved.route.provider.id.as_str(),
+        websocket_policy,
         request.retry_policy.ordinary_retry_budget(),
     );
     let output_token_limit = resolved_public_output_token_limit(
@@ -421,47 +425,25 @@ fn emit_responses_websocket_http_fallback_status(
         })
 }
 
-/// Emits one visible status when a dispatched Provider request has not produced its first event promptly.
-/// 当已发出的 Provider 请求未及时产生首个事件时，发出一次可见状态。
+/// Marks a delayed first event internally without emitting transcript-visible content.
+/// 当已发出的 Provider 请求未及时产生首个事件时，记录一次内部标记。
 ///
 /// # Parameters
 /// 参数
-/// `provider_id` identifies the visible provider; `announced` enforces one event for the physical
-/// request; `live_sender` forwards the event to the existing workbench stream.
-/// `provider_id` 标识可见供应商；`announced` 保证单个真实请求只发出一次；
-/// `live_sender` 把事件转发到现有工作台流。
+/// `announced` enforces one internal marker for the physical request.
+/// `announced` 保证单个真实请求只记录一次。
 ///
 /// # Returns
 /// 返回值
-/// Success when the status was already announced or forwarded, otherwise a closed-stream error.
-/// 状态已发送过或成功转发时返回成功，否则返回流已关闭错误。
-fn emit_provider_first_event_waiting_status(
-    provider_id: &str,
-    announced: &mut bool,
-    live_sender: &ProviderLiveDeltaSender,
-) -> Result<(), VulcanCoreError> {
+/// Success when the internal marker is already present or has just been recorded.
+/// 已记录过或本次成功记录时返回成功。
+fn mark_provider_first_event_waiting(announced: &mut bool) {
+    // The first-event delay is an internal diagnostic boundary, not assistant-visible content.
+    // 首个事件延迟只是内部诊断边界，不应成为助手可见内容。
     if *announced {
-        return Ok(());
+        return;
     }
     *announced = true;
-    live_sender
-        .send(Ok(ProviderStreamDelta::RuntimeEvent(
-            RuntimeEvent::new(
-                RuntimeEventKind::ProviderWaiting,
-                "等待 Provider 响应",
-                "请求已发送，正在等待 Provider 返回首个响应事件。",
-            )
-            .with_metadata(Some(json!({
-                "stage": "awaiting_first_provider_event",
-                "elapsed_ms": PROVIDER_FIRST_EVENT_WAIT_STATUS_DELAY.as_millis(),
-            }))),
-        )))
-        .map_err(|_| {
-            provider_failure(
-                provider_id,
-                "The provider runtime stream closed before the first-event waiting status could be published.",
-            )
-        })
 }
 
 /// Waits for the next public Provider stream item while publishing transport progress independently.
@@ -471,16 +453,16 @@ fn emit_provider_first_event_waiting_status(
 /// 参数
 /// `stream` is the active normalized Provider stream; `provider_id` identifies its visible route;
 /// `websocket_selected_at_start` freezes the initial transport choice; `fallback_active` reads the
-/// exact session-route fallback state; the announcement flags enforce one event of each kind;
-/// `live_sender` forwards visible status records.
+/// exact session-route fallback state; the fallback flag is emitted once and the first-event delay
+/// is recorded only as an internal diagnostic marker; `live_sender` forwards fallback status records.
 /// `stream` 是活动的规范化 Provider 流；`provider_id` 标识其可见路由；
 /// `websocket_selected_at_start` 固定初始传输选择；`fallback_active` 读取精确会话路由的回退状态；
-/// 两个通知标志保证每类事件只发送一次；`live_sender` 转发可见状态记录。
+/// 回退标志只发送一次，首事件延迟仅记录为内部诊断标记；`live_sender` 转发回退状态记录。
 ///
 /// # Returns
 /// 返回值
-/// The next stream item, end-of-stream, or a visible-status publication failure.
-/// 返回下一项流事件、流结束，或可见状态发布失败。
+/// The next stream item, end-of-stream, or a visible fallback-status publication failure.
+/// 返回下一项流事件、流结束，或可见回退状态发布失败。
 async fn next_public_execution_item_with_transport_progress<F>(
     stream: &mut ProviderExecutionStream,
     provider_id: &str,
@@ -502,8 +484,8 @@ where
     let mut fallback_poll =
         tokio::time::interval(RESPONSES_WEBSOCKET_FALLBACK_STATUS_POLL_INTERVAL);
     fallback_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    // firstEventWait delays the generic waiting note so healthy low-latency requests remain quiet.
-    // firstEventWait 延迟通用等待备注，使健康的低延迟请求保持简洁。
+    // firstEventWait delays the internal diagnostic marker so healthy low-latency requests remain quiet.
+    // firstEventWait 延迟内部诊断标记，使健康的低延迟请求保持简洁。
     let first_event_wait = tokio::time::sleep(PROVIDER_FIRST_EVENT_WAIT_STATUS_DELAY);
     tokio::pin!(first_event_wait);
 
@@ -529,11 +511,7 @@ where
                 )?;
             }
             _ = &mut first_event_wait, if !*first_event_waiting_announced => {
-                emit_provider_first_event_waiting_status(
-                    provider_id,
-                    first_event_waiting_announced,
-                    live_sender,
-                )?;
+                mark_provider_first_event_waiting(first_event_waiting_announced);
             }
         }
     }
@@ -858,8 +836,8 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
             .client
             .responses_websocket_selected_for_request(&self.route, &public);
         let mut websocket_fallback_announced = false;
-        // firstEventWaitingAnnounced prevents repeated visible notes during one slow physical request.
-        // firstEventWaitingAnnounced 防止单个缓慢真实请求重复产生可见备注。
+        // firstEventWaitingAnnounced deduplicates the internal marker for one slow physical request.
+        // firstEventWaitingAnnounced 为单个缓慢真实请求去重内部标记。
         let mut first_event_waiting_announced = false;
         let mut stream = self.client.execute_with_websocket_retry_budget(
             self.route.clone(),
@@ -2369,41 +2347,18 @@ mod tests {
         assert!(receiver.try_recv().is_err());
     }
 
-    /// Verifies the slow-first-event status is visible once and carries its exact wait stage.
-    /// 验证首事件缓慢状态只显示一次，并携带精确等待阶段。
+    /// Verifies the slow-first-event marker is recorded once without publishing transcript content.
+    /// 验证首事件缓慢标记只记录一次，且不会发布转录内容。
     #[test]
-    fn provider_first_event_waiting_status_is_published_once() {
-        // channel captures the exact workbench deltas emitted by the waiting-status helper.
-        // channel 捕获等待状态辅助函数发出的精确工作台增量。
-        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    fn provider_first_event_waiting_marker_is_recorded_once() {
         // announced models the per-physical-request deduplication fence.
         // announced 模拟单个真实请求的去重门禁。
         let mut announced = false;
 
-        emit_provider_first_event_waiting_status("custom:test", &mut announced, &sender)
-            .expect("waiting status should publish");
-        emit_provider_first_event_waiting_status("custom:test", &mut announced, &sender)
-            .expect("duplicate waiting status should be ignored");
+        mark_provider_first_event_waiting(&mut announced);
+        mark_provider_first_event_waiting(&mut announced);
 
-        // event is the one visible runtime record emitted for the delayed first event.
-        // event 是针对首事件延迟发出的唯一可见运行记录。
-        let event = receiver
-            .try_recv()
-            .expect("one waiting runtime event should be visible")
-            .expect("waiting runtime event should not be an error");
-        let ProviderStreamDelta::RuntimeEvent(event) = event else {
-            panic!("waiting status should use the runtime-event projection");
-        };
-        assert_eq!(event.kind, RuntimeEventKind::ProviderWaiting);
-        assert_eq!(
-            event
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.get("stage"))
-                .and_then(Value::as_str),
-            Some("awaiting_first_provider_event")
-        );
-        assert!(receiver.try_recv().is_err());
+        assert!(announced);
     }
 
     /// Verifies a fallback transition is published while the replacement HTTP stream remains pending.
@@ -2805,15 +2760,21 @@ mod tests {
         );
     }
 
-    /// Verifies custom-provider WebSocket failures fall back immediately while registered providers retain policy.
-    /// 验证自定义供应商 WebSocket 失败会立即回退，而注册供应商保留既有策略。
+    /// Verifies WebSocket retry budget follows the explicit route capability for every provider kind.
+    /// 验证所有供应商类型的 WebSocket 重试预算都遵循精确路由能力。
     #[test]
-    fn custom_provider_websocket_fallback_does_not_consume_ordinary_retry_budget() {
+    fn websocket_retry_budget_follows_explicit_route_capability() {
         assert_eq!(
-            responses_websocket_retry_budget("custom:provider-one", 5),
+            responses_websocket_retry_budget(ResponsesWebSocketPolicy::Disabled, 5),
             0
         );
-        assert_eq!(responses_websocket_retry_budget("openai", 5), 5);
+        assert_eq!(
+            responses_websocket_retry_budget(
+                ResponsesWebSocketPolicy::PreferredWithHttpFallback,
+                5
+            ),
+            5
+        );
     }
 
     /// Verifies a cursor produced by another protocol profile is never relabeled and reused.

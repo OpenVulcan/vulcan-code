@@ -1620,11 +1620,12 @@ async fn active_stream_task_start_gate_registers_before_execution() {
     let state_for_task = state.clone();
     let (observed_sender, observed_receiver) = tokio::sync::oneshot::channel::<bool>();
 
-    spawn_registered_active_stream_task(
+    spawn_registered_active_stream_task_with_mode(
         &state,
         session_id,
         task_id,
         Some(String::from("goal-gated")),
+        ActiveStreamTaskRegistrationMode::RejectIfOccupied,
         async move {
             let registered = state_for_task.lock().is_ok_and(|guard| {
                 guard
@@ -1641,6 +1642,60 @@ async fn active_stream_task_start_gate_registers_before_execution() {
     assert!(observed_receiver.await.expect("task observation"));
     let mut guard = state.lock().expect("service state lock");
     assert!(remove_active_stream_task_if_id(&mut guard, session_id, task_id).is_some());
+}
+
+/// Verifies ordinary registration rejects a second owner without aborting the first task.
+/// 验证普通注册会拒绝第二个所有者，且不会中止第一个任务。
+#[tokio::test]
+async fn active_stream_task_rejects_second_owner_without_replacement() {
+    // session_id identifies the single-owner session slot under test.
+    // session_id 标识被测的单所有者会话槽位。
+    let session_id = SessionId::new_v4();
+    // first_task_id remains the owner after the rejected registration attempt.
+    // first_task_id 在第二次注册被拒绝后仍然是所有者。
+    let first_task_id = Uuid::new_v4();
+    let second_task_id = Uuid::new_v4();
+    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+        session_id,
+    )));
+
+    spawn_registered_active_stream_task_with_mode(
+        &state,
+        session_id,
+        first_task_id,
+        None,
+        ActiveStreamTaskRegistrationMode::RejectIfOccupied,
+        async {
+            std::future::pending::<()>().await;
+        },
+    )
+    .expect("first owner should register");
+
+    let error = spawn_registered_active_stream_task_with_mode(
+        &state,
+        session_id,
+        second_task_id,
+        None,
+        ActiveStreamTaskRegistrationMode::RejectIfOccupied,
+        async {},
+    )
+    .expect_err("second ordinary owner should be rejected");
+    assert!(matches!(
+        error,
+        ActiveStreamTaskRegistrationError::Occupied {
+            existing_task_id
+        } if existing_task_id == first_task_id
+    ));
+
+    let mut guard = state.lock().expect("service state lock");
+    assert_eq!(
+        guard
+            .active_stream_tasks
+            .get(&session_id)
+            .map(ActiveStreamTask::task_id),
+        Some(first_task_id)
+    );
+    assert!(remove_active_stream_task_if_id(&mut guard, session_id, first_task_id).is_some());
 }
 
 /// Verifies a stopped kernel suppresses stale legacy stream handles for active-run decisions.

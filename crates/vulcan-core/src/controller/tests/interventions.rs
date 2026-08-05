@@ -99,16 +99,19 @@ fn run_user_turn_streaming_intervention_reaches_next_provider_request() {
 
         assert_eq!(result.provider_turns_executed, 2);
         assert_eq!(result.tool_calls_processed, 1);
-        assert_eq!(checkpoints.len(), 2);
+        // A completed Provider API call is checkpointed before tool execution, then the intervention
+        // and the next completed Provider call are persisted as independent state changes.
+        // 完成的 Provider API 调用会在工具执行前同步，随后干预消息与下一次 Provider 调用分别作为独立状态变化持久化。
+        assert_eq!(checkpoints.len(), 4);
         assert!(matches!(
-            checkpoints[1].messages.last(),
+            checkpoints[2].messages.last(),
             Some(ConversationMessage {
                 payload: ConversationPayload::UserText { text, attachments },
                 ..
             }) if text == "不需要配图了" && attachments == &vec![guided_attachment.clone()]
         ));
         assert!(matches!(
-            checkpoints[1].records.last(),
+            checkpoints[2].records.last(),
             Some(ConversationRecord {
                 title,
                 metadata: Some(metadata),
@@ -332,23 +335,26 @@ fn run_user_turn_streaming_intervention_waits_for_full_tool_batch() {
 
         assert_eq!(result.provider_turns_executed, 2);
         assert_eq!(result.tool_calls_processed, 2);
-        assert_eq!(checkpoints.len(), 3);
+        // The first Provider response, each tool result, the intervention, and the second Provider
+        // response each have their own checkpoint boundary.
+        // 首次 Provider 响应、每个工具结果、干预消息和第二次 Provider 响应都各自拥有同步边界。
+        assert_eq!(checkpoints.len(), 5);
         assert!(matches!(
-            checkpoints[0].messages.last(),
+            checkpoints[1].messages.last(),
             Some(ConversationMessage {
                 payload: ConversationPayload::ToolResult { tool_call_id, .. },
                 ..
             }) if tool_call_id.as_deref() == Some("call-1")
         ));
         assert!(matches!(
-            checkpoints[1].messages.last(),
+            checkpoints[2].messages.last(),
             Some(ConversationMessage {
                 payload: ConversationPayload::ToolResult { tool_call_id, .. },
                 ..
             }) if tool_call_id.as_deref() == Some("call-2")
         ));
         assert!(matches!(
-            checkpoints[2].messages.last(),
+            checkpoints[3].messages.last(),
             Some(ConversationMessage {
                 payload: ConversationPayload::UserText { text, .. },
                 ..

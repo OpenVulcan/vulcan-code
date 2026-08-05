@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use vulcan_context::SessionConversationState;
+use vulcan_context::{ContextWindowPolicy, SessionConversationState};
 use vulcan_context_injection::ContextInjectionState;
 use vulcan_core::types::{ConversationAttachment, ProviderUsageSnapshot};
 use vulcan_provider_config::config::{PersistedPromptSkillState, ReasoningEffortLevel};
@@ -66,6 +66,7 @@ mod panel_queue;
 mod planning;
 mod prompt_models;
 mod prompt_source;
+mod provider_usage;
 mod session_entry;
 mod vmm_state;
 
@@ -74,6 +75,7 @@ pub use panel_queue::*;
 pub use planning::*;
 pub use prompt_models::*;
 pub use prompt_source::*;
+pub use provider_usage::*;
 pub use session_entry::*;
 pub use vmm_state::*;
 

@@ -3,7 +3,110 @@
 
 use super::*;
 use vulcan_agent_runtime::agent_runtime::question_runtime::QuestionRequest;
-use vulcan_service_api::{ConversationAttentionSummary, ConversationSummary};
+use vulcan_service_api::{
+    ConversationAttentionSummary, ConversationSummary, SessionProviderUsageCallSummary,
+    SessionProviderUsageSummary, SessionProviderUsageTokenSummary,
+};
+
+/// Projects persisted physical Provider usage facts into the browser-facing session summary.
+/// 将持久化的物理 Provider 用量事实投影为浏览器侧会话摘要。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` contains the authoritative session runtime entry.
+/// `runtime_state` 包含权威会话运行态条目。
+///
+/// # Returns
+/// 返回值
+/// Returns `None` only when the session has not observed a physical Provider request.
+/// 仅当会话尚未观察到任何物理 Provider 请求时返回 `None`。
+pub(crate) fn session_provider_usage_summary_from_runtime_state(
+    runtime_state: &SessionRuntimeStateEntry,
+) -> Option<SessionProviderUsageSummary> {
+    let usage_state = &runtime_state.provider_usage;
+    if usage_state.is_empty() {
+        return None;
+    }
+    let latest_call = usage_state
+        .segments
+        .last()
+        .map(|segment| SessionProviderUsageCallSummary {
+            provider_call_id: segment.provider_call_id.clone(),
+            owner_kind: segment.owner_kind.clone(),
+            status: session_provider_usage_status_key(segment.status).to_string(),
+            usage: segment
+                .usage
+                .as_ref()
+                .and_then(session_provider_usage_tokens),
+            started_at_ms: segment.started_at_ms,
+            completed_at_ms: segment.completed_at_ms,
+            error_category: segment.error_category.clone(),
+            error_code: segment.error_code.clone(),
+        });
+    Some(SessionProviderUsageSummary {
+        provider_call_count: usage_state.provider_call_count,
+        in_flight_call_count: usage_state.in_flight_call_count,
+        unknown_usage_call_count: usage_state.unknown_usage_call_count,
+        last_usage: usage_state
+            .last_usage
+            .as_ref()
+            .and_then(session_provider_usage_tokens),
+        cumulative_usage: usage_state
+            .cumulative_usage
+            .as_ref()
+            .and_then(session_provider_usage_tokens),
+        latest_call,
+        usage_revision: usage_state.usage_revision,
+    })
+}
+
+/// Applies live Provider API call counts to the selected session goal summary.
+/// 将实时 Provider API 调用数量应用到选中会话目标摘要。
+pub(crate) fn session_goal_summary_with_provider_usage(
+    goal: Option<SessionGoalSummary>,
+    provider_usage: Option<&SessionProviderUsageSummary>,
+) -> Option<SessionGoalSummary> {
+    goal.map(|mut goal| {
+        if let Some(provider_usage) = provider_usage {
+            goal.api_call_count = provider_usage.provider_call_count;
+        }
+        goal
+    })
+}
+
+/// Converts one internal usage snapshot to the stable WebUI token shape.
+/// 将内部用量快照转换为稳定的 WebUI Token 结构。
+fn session_provider_usage_tokens(
+    usage: &ProviderUsageSnapshot,
+) -> Option<SessionProviderUsageTokenSummary> {
+    let summary = SessionProviderUsageTokenSummary {
+        input_tokens: usage.input_tokens,
+        uncached_input_tokens: usage.uncached_input_tokens,
+        cached_input_tokens: usage.cached_input_tokens,
+        cache_creation_input_tokens: usage.cache_creation_input_tokens,
+        output_tokens: usage.output_tokens,
+        reasoning_tokens: usage.reasoning_tokens,
+        total_tokens: usage.total_tokens,
+    };
+    (summary.input_tokens.is_some()
+        || summary.uncached_input_tokens.is_some()
+        || summary.cached_input_tokens.is_some()
+        || summary.cache_creation_input_tokens.is_some()
+        || summary.output_tokens.is_some()
+        || summary.reasoning_tokens.is_some()
+        || summary.total_tokens.is_some())
+    .then_some(summary)
+}
+
+/// Returns the stable WebUI status key for one persisted Provider request segment.
+/// 返回持久化 Provider 请求分段的稳定 WebUI 状态键。
+fn session_provider_usage_status_key(status: SessionProviderUsageSegmentStatus) -> &'static str {
+    match status {
+        SessionProviderUsageSegmentStatus::InFlight => "in_flight",
+        SessionProviderUsageSegmentStatus::Succeeded => "succeeded",
+        SessionProviderUsageSegmentStatus::Failed => "failed",
+    }
+}
 
 /// Projects session todolist state into the WebUI snapshot.
 /// 将会话 todolist 状态投影到 WebUI 快照。
@@ -164,12 +267,14 @@ pub(crate) fn session_addons_changed_delta_for_retained_list(
     session_plan_mode: Option<SessionPlanModeSummary>,
     session_vmm_policy: Option<SessionVmmPolicySummary>,
     session_output_style: Option<SessionOutputStyleSummary>,
+    session_provider_usage: Option<SessionProviderUsageSummary>,
 ) -> Option<SessionAddonsChangedDelta> {
     if session_goal.is_none()
         && session_todolist.is_none()
         && session_plan_mode.is_none()
         && session_vmm_policy.is_none()
         && session_output_style.is_none()
+        && session_provider_usage.is_none()
     {
         return None;
     }
@@ -180,6 +285,7 @@ pub(crate) fn session_addons_changed_delta_for_retained_list(
         session_plan_mode,
         session_vmm_policy,
         session_output_style,
+        session_provider_usage: session_provider_usage.map(Box::new),
     })
 }
 
@@ -779,6 +885,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         assert!(entry.is_none());
@@ -798,6 +905,7 @@ mod tests {
             None,
             None,
             Some(plan_mode),
+            None,
             None,
             None,
         )

@@ -1002,6 +1002,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         conversation_state: runtime_state.conversation_state.clone(),
         context_compaction_policy: None,
         context_budget_override: None,
+        context_window_prefill_input_tokens: runtime_state.auto_compact_prefill_input_tokens,
         execution_mode: input.start.execution_mode,
         temperature: None,
         reasoning_effort: input

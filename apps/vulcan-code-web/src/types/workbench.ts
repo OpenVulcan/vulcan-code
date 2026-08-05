@@ -13,6 +13,7 @@ import type {
   ContextInjectionChangedDelta,
   PendingPromptsChangedDelta,
   SessionAddonsChangedDelta,
+  SessionProviderUsageSummary,
   SessionOutputStyleSummary,
   SessionVmmPolicyByConversation,
   SessionVmmPolicySummary,
@@ -242,6 +243,9 @@ export interface WorkbenchSnapshot {
   // Current session output-style state.
   // 当前会话输出风格状态。
   sessionOutputStyle?: SessionOutputStyleSummary | null;
+  // Current selected-session physical Provider request counts and token usage.
+  // 当前选中会话的物理 Provider 请求计数与 Token 用量。
+  sessionProviderUsage?: SessionProviderUsageSummary | null;
   // Session addon projections retained for every conversation that has addon state.
   // 为每个存在附属状态的会话保留的会话附属投影。
   sessionAddonsByConversation?: SessionAddonsChangedDelta[];

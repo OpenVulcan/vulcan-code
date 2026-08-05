@@ -212,9 +212,24 @@ export interface PublicAiModelCapabilityOverrides {
   reasoning_control?: string;
   reasoning_efforts?: string[];
   tool_calling?: string;
+  // Optional sparse Codex context-window policy for this provider or model layer.
+  // 此供应商或模型层的可选稀疏 Codex 上下文窗口策略。
+  // Null explicitly removes a previously persisted sparse policy from this layer.
+  // null 用于显式移除该层之前持久化的稀疏策略。
+  context_window_policy?: PublicAiContextWindowPolicyOverrides | null;
   // Optional exact request projection shared by custom and native provider models.
   // 自定义供应商与系统供应商模型共同使用的可选精确请求投影。
   request_projection?: PublicAiCustomModelRequestProjection;
+}
+
+// PublicAiContextWindowPolicyOverrides stores sparse Codex window defaults.
+// PublicAiContextWindowPolicyOverrides 保存稀疏 Codex 窗口默认值。
+export interface PublicAiContextWindowPolicyOverrides {
+  effective_context_window_percent?: number;
+  auto_compact_percent?: number;
+  auto_compact_token_limit?: number;
+  auto_compact_scope?: "total" | "body_after_prefix";
+  fallback_buffer_tokens?: number;
 }
 
 // PublicAiCustomProviderModelDefaults is the safe provider-wide fallback capability contract.
@@ -227,6 +242,9 @@ export interface PublicAiCustomProviderModelDefaults {
   reasoning_control: string;
   reasoning_efforts: string[];
   tool_calling: string;
+  // Provider-wide sparse Codex context-window defaults.
+  // 供应商级稀疏 Codex 上下文窗口默认值。
+  context_window_policy?: PublicAiContextWindowPolicyOverrides;
   // Optional provider-wide request projection inherited by compatible models.
   // 可选的兼容模型继承供应商级请求投影。
   request_projection?: PublicAiCustomModelRequestProjection;
@@ -787,6 +805,12 @@ export type PublicAiProviderToolTestResult = {
 // PublicAiSettingsSnapshot combines persisted and process-local settings state.
 // PublicAiSettingsSnapshot 组合持久化设置状态与进程内设置状态。
 export interface PublicAiSettingsSnapshot {
+  // contextWindowPolicyOverrides is the system-level sparse Codex window policy.
+  // contextWindowPolicyOverrides 是系统级稀疏 Codex 窗口策略。
+  contextWindowPolicyOverrides: PublicAiContextWindowPolicyOverrides;
+  // providerContextWindowPolicyOverrides stores explicit provider-level window policies.
+  // providerContextWindowPolicyOverrides 保存显式供应商级窗口策略。
+  providerContextWindowPolicyOverrides?: Record<string, PublicAiContextWindowPolicyOverrides>;
   usageRefreshIntervalSeconds: number;
   usageCache: Record<string, PublicAiAccountUsage>;
   providers: PublicAiProviderDescriptor[];

@@ -41,7 +41,11 @@ import type {
   ConversationRenderItem,
 } from "@/components/conversation/conversation-model";
 import { metadataValue } from "@/components/conversation/conversation-metadata";
-import type { CommandSessionSummary, ComposerAttachmentSummary } from "@/types";
+import type {
+  CommandSessionSummary,
+  ComposerAttachmentSummary,
+  SessionProviderUsageSummary,
+} from "@/types";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { conversationMessageStreamState } from "@/state/conversation-live-stream-store";
@@ -513,6 +517,9 @@ export function ConversationProcessGroup(props: {
   // Whether the owning session is currently running.
   // 所属会话是否正在运行。
   sessionRunning: boolean;
+  // Live physical Provider request accounting shown without waiting for turn completion.
+  // 不等待整轮结束即可显示的实时物理 Provider 请求统计。
+  sessionProviderUsage?: SessionProviderUsageSummary | null;
   // WebUI-session expansion memory for long user prompt bubbles.
   // 长用户提示词气泡使用的当前 WebUI 会话展开记忆。
   expandedUserPromptIds: Set<string>;
@@ -621,6 +628,11 @@ export function ConversationProcessGroup(props: {
   const displayedDurationMs = props.process.durationMs ?? liveDurationMs;
   const durationLabel = formatWorkProcessDuration(displayedDurationMs, locale);
   const headerText = durationLabel ? `${t("conversation.process.header")} ${durationLabel}` : t("conversation.process.header");
+  const providerUsage = props.sessionProviderUsage;
+  const providerUsageTotal = providerUsage?.cumulativeUsage?.totalTokens ?? providerUsage?.lastUsage?.totalTokens;
+  const providerUsageLabel = providerUsage
+    ? `Provider API ${providerUsage.providerCallCount} 次 · ${providerUsage.inFlightCallCount} 进行中 · Token ${providerUsageTotal ?? "?"}`
+    : null;
   const stoppedText = durationLabel
     ? t("conversation.process.stoppedAfter").replace("{duration}", durationLabel)
     : t("conversation.process.stopped");
@@ -687,6 +699,11 @@ export function ConversationProcessGroup(props: {
       >
         <Clock3 className="work-process-icon" size={14} />
         <span>{headerText}</span>
+        {providerUsageLabel ? (
+          <span className="work-process-provider-usage" title="实时 Provider API 调用与 Token 统计">
+            {providerUsageLabel}
+          </span>
+        ) : null}
         {props.process.collapsible ? (collapsed ? <ChevronRight className="work-process-toggle-icon" size={13} /> : <ChevronDown className="work-process-toggle-icon" size={13} />) : null}
       </button>
       <div className="work-process-guidance">

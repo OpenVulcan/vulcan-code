@@ -3,8 +3,8 @@
 
 use super::*;
 use crate::{
-    ProviderTelemetryHookGuard, Uuid, seal_stream_content_records,
-    spawn_registered_active_stream_task,
+    ActiveStreamTaskRegistrationMode, ProviderTelemetryHookGuard, Uuid,
+    seal_stream_content_records, spawn_registered_active_stream_task_with_mode,
 };
 
 /// Streams one prompt-compaction request and mirrors provider deltas into WebUI state.
@@ -34,6 +34,7 @@ use crate::{
 pub(crate) async fn stream_webui_context_compaction_execution(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
     request: PromptCompactionJobRequest,
     session_id: SessionId,
     section_id: &str,
@@ -45,7 +46,11 @@ pub(crate) async fn stream_webui_context_compaction_execution(
     let mut terminal_result = None;
     // providerTelemetryGuard closes an active compaction request if the stream future is dropped.
     // providerTelemetryGuard 在压缩流 Future 被丢弃时关闭活动请求。
-    let mut provider_telemetry_guard = ProviderTelemetryHookGuard::new(state.clone());
+    let mut provider_telemetry_guard = ProviderTelemetryHookGuard::new_with_persistence(
+        state.clone(),
+        Some(controller_runtime.clone()),
+        Some(app.clone()),
+    );
     let mut stream = Box::pin(stream_prompt_compaction_job(request));
     while let Some(event) = stream.next().await {
         match event {
@@ -68,6 +73,7 @@ pub(crate) async fn stream_webui_context_compaction_execution(
                 if let Err(error) = apply_webui_context_compaction_stream_event(
                     app,
                     state,
+                    controller_runtime,
                     session_id,
                     section_id,
                     budget_note,
@@ -98,6 +104,20 @@ pub(crate) async fn stream_webui_context_compaction_execution(
     }
     // Every terminal path, including provider failure and premature exhaustion, closes active compaction rows.
     // 每条终止路径（包括 Provider 失败与提前耗尽）都关闭活跃压缩行。
+    if let Some(event) = provider_telemetry_guard.take_cancelled_event()
+        && let Err(error) = crate::process_provider_request_telemetry_event(
+            state,
+            controller_runtime,
+            Some(app),
+            &mut provider_telemetry_guard,
+            event,
+            "context_compaction_provider_usage_cancelled",
+        )
+    {
+        eprintln!(
+            "[webui-service] context compaction provider cancellation usage update failed: {error}"
+        );
+    }
     seal_stream_content_records(app, state, session_id, &mut record_ids)?;
     terminal_result
         .unwrap_or_else(|| Err(String::from("模型总结流提前结束，已取消本次提示词压缩。")))
@@ -153,6 +173,7 @@ pub(crate) fn spawn_webui_context_compaction_task(
                 stream_webui_context_compaction_execution(
                     &task_app,
                     &task_state,
+                    &controller_runtime,
                     request,
                     session_id,
                     &status_message_id,
@@ -212,7 +233,7 @@ pub(crate) fn spawn_webui_context_compaction_task(
                 if let Some(error) = rejection_error.as_ref() {
                     eprintln!("[webui-service] context compaction rejected: {error}");
                 }
-                spawn_context_compaction_persist_task(
+                if let Err(error) = persist_context_compaction_snapshot(
                     task_state,
                     controller_runtime,
                     snapshot,
@@ -223,18 +244,23 @@ pub(crate) fn spawn_webui_context_compaction_task(
                     } else {
                         "context_compaction"
                     })),
-                );
+                )
+                .await
+                {
+                    eprintln!("[webui-service] context compaction persistence failed: {error}");
+                }
             }
             Err(error) => {
                 eprintln!("[webui-service] context compaction finish failed: {error}");
             }
         }
     };
-    if let Err(error) = spawn_registered_active_stream_task(
+    if let Err(error) = spawn_registered_active_stream_task_with_mode(
         &state,
         session_id,
         active_stream_task_id,
         None,
+        ActiveStreamTaskRegistrationMode::RejectIfOccupied,
         task_future,
     ) {
         eprintln!("[webui-service] register context compaction stream task failed: {error}");
@@ -318,6 +344,7 @@ pub(crate) fn spawn_webui_context_compaction_task(
 pub(crate) fn apply_webui_context_compaction_stream_event(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
     session_id: SessionId,
     section_id: &str,
     budget_note: &str,
@@ -333,8 +360,14 @@ pub(crate) fn apply_webui_context_compaction_stream_event(
         | ExecutionStreamEvent::ProviderLoweringRepair { .. }
         | ExecutionStreamEvent::RequestReady { .. } => Ok(()),
         ExecutionStreamEvent::ProviderRequestTelemetry(event) => {
-            provider_telemetry_guard.forward(event);
-            Ok(())
+            crate::process_provider_request_telemetry_event(
+                state,
+                controller_runtime,
+                Some(app),
+                provider_telemetry_guard,
+                event,
+                "context_compaction_provider_usage_telemetry",
+            )
         }
         ExecutionStreamEvent::WireRequestReady { .. } => Ok(()),
         ExecutionStreamEvent::RequestStarted { .. } => {

@@ -45,6 +45,7 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         conversation_state: SessionConversationState::default(),
         context_compaction_policy: None,
         context_budget_override: None,
+        context_window_prefill_input_tokens: None,
         execution_mode: String::from("build"),
         temperature: None,
         reasoning_effort: ReasoningEffortLevel::High,
@@ -415,6 +416,67 @@ fn task_runtime_preparation_request_uses_resolved_runtime_policy() {
         .expect("child execution request should carry resolved compaction policy");
     assert!(!child_compaction_policy.auto);
     assert_eq!(child_request.context_budget_override, Some(12_000));
+}
+
+/// Verifies an explicit child provider/model selection clears the parent's credential connection.
+/// 验证子代理显式选择供应商/模型时会清除父级凭据连接。
+#[test]
+fn task_runtime_preparation_request_does_not_mix_parent_connection_with_child_route() {
+    let parent_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let provider_config = ProviderConfigurationFile::default();
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+        &provider_config,
+        &AgentProfileCatalog::default(),
+        None,
+        None,
+    );
+    let mut parent_request = test_parent_execution_request(parent_session_id);
+    parent_request.connection_id_override = Some(String::from("parent-connection"));
+    let context = TaskExecutionRuntimeContext::new(
+        provider_config,
+        Arc::new(foundation),
+        None,
+        parent_request,
+    );
+    let invocation = TaskExecutionRequest {
+        current_session_id: parent_session_id,
+        root_session_id: parent_session_id,
+        task_id,
+        execution_id: String::from("test-execution"),
+        public_task_id: String::from("agent-review"),
+        prompt: String::from("review this change"),
+        description: Some(String::from("Review code")),
+        subagent: Some(String::from("reviewer")),
+        invocation_config: TaskInvocationConfig::main("review this change"),
+        display_title: String::from("Review code (reviewer)"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    let mut resolved_config = test_resolved_config(
+        &build_test_controller_config("Base prompt"),
+        &invocation.invocation_config,
+    );
+    resolved_config.effective_config.provider_model.provider_id =
+        Some(String::from("custom:proxy"));
+    resolved_config.effective_config.provider_model.model_id = Some(String::from("gpt-5.6-luna"));
+
+    let (_, child_request) =
+        build_task_runtime_preparation_request(&context, &invocation, &resolved_config)
+            .expect("valid task runtime preparation");
+
+    assert_eq!(
+        child_request.provider_id_override.as_deref(),
+        Some("custom:proxy")
+    );
+    assert_eq!(
+        child_request.model_id_override.as_deref(),
+        Some("gpt-5.6-luna")
+    );
+    assert_eq!(child_request.connection_id_override, None);
 }
 
 /// Verifies ordinary child-agent execution hides parent-session tools by default.

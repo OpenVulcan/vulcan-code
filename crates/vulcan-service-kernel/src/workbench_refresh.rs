@@ -811,6 +811,8 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
     let selected_runtime_state = workspace
         .session_runtime_state
         .get(&workspace.selected_session);
+    let selected_session_provider_usage =
+        selected_runtime_state.and_then(session_provider_usage_summary_from_runtime_state);
     let public_ai_selection = public_ai_runtime
         .zip(public_ai_configuration.as_ref())
         .and_then(|(runtime, configuration)| {
@@ -917,7 +919,12 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         .iter()
         .filter_map(|session| {
             let runtime_state = workspace.session_runtime_state.get(&session.id);
-            let session_goal = session_goal_summaries.get(&session.id).cloned();
+            let session_provider_usage =
+                runtime_state.and_then(session_provider_usage_summary_from_runtime_state);
+            let session_goal = session_goal_summary_with_provider_usage(
+                session_goal_summaries.get(&session.id).cloned(),
+                session_provider_usage.as_ref(),
+            );
             let session_todolist = session_todolist_summary_from_runtime_state(runtime_state);
             let session_plan_mode = session_plan_mode_summary_from_runtime_state(runtime_state);
             let session_vmm_policy = runtime_state
@@ -941,6 +948,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 session_plan_mode,
                 session_vmm_policy,
                 session_output_style,
+                session_provider_usage,
             )
         })
         .collect::<Vec<_>>();
@@ -1123,9 +1131,12 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         pending_question,
         pending_questions,
         session_todolist: session_todolist_summary_from_runtime_state(selected_runtime_state),
-        session_goal: session_goal_summaries
-            .get(&workspace.selected_session)
-            .cloned(),
+        session_goal: session_goal_summary_with_provider_usage(
+            session_goal_summaries
+                .get(&workspace.selected_session)
+                .cloned(),
+            selected_session_provider_usage.as_ref(),
+        ),
         session_plan_mode: session_plan_mode_summary_from_runtime_state(selected_runtime_state),
         session_vmm_policy: Some(session_vmm_policy_summary_from_layers(
             &provider_configuration.vmm,
@@ -1136,6 +1147,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
             selected_runtime_state,
             provider_configuration.prompt.output_style.id(),
         ),
+        session_provider_usage: selected_session_provider_usage,
         session_addons_by_conversation,
         session_vmm_policies_by_conversation,
         memories: memories(workspace),

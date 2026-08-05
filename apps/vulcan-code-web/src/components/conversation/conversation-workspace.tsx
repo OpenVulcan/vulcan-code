@@ -51,6 +51,7 @@ import type {
   ComposerAttachmentSummary,
   ConversationMessage,
   ConversationSummary,
+  SessionProviderUsageSummary,
 } from "@/types";
 import { useI18n } from "@/i18n";
 
@@ -109,6 +110,9 @@ export function ConversationWorkspace(props: {
   // Whether the owning conversation is currently running.
   // 所属会话当前是否正在运行。
   sessionRunning: boolean;
+  // Live physical Provider request accounting projected by the selected session.
+  // 选中会话投影出的实时物理 Provider 请求统计。
+  sessionProviderUsage?: SessionProviderUsageSummary | null;
   // Whether the latest streaming thinking block may automatically expand in the inline transcript.
   // 最新流式思考块是否允许在内联会话中自动展开。
   autoExpandStreamingThinking?: boolean;
@@ -583,6 +587,7 @@ export function ConversationWorkspace(props: {
         parentConversationId={props.parentConversationId}
         process={timelineItem.process}
         sessionRunning={props.sessionRunning}
+        sessionProviderUsage={props.sessionProviderUsage}
         expandedUserPromptIds={userPromptExpansionOverrides}
         expandedToolPresentationIds={toolPresentationExpansionOverrides}
         workspacePath={props.workspacePath}

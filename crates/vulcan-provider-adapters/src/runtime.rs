@@ -1353,6 +1353,7 @@ impl PublicAiRuntime {
                 .model_capability_overrides
                 .remove(provider_model_key.as_str());
         }
+        candidate_configuration.validate_context_window_policy_layers()?;
 
         let source_catalogs = self
             .source_catalogs
@@ -1469,6 +1470,7 @@ impl PublicAiRuntime {
                 .provider_capability_overrides
                 .remove(provider_id);
         }
+        candidate_configuration.validate_context_window_policy_layers()?;
         let catalogs = self.resolved_model_catalog_snapshot(&candidate_configuration)?;
         let matched = candidate_configuration
             .connection_graph

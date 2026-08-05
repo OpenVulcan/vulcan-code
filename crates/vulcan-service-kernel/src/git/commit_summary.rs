@@ -564,6 +564,7 @@ async fn run_git_commit_summary_model(
         conversation_state: SessionConversationState::default(),
         context_compaction_policy: None,
         context_budget_override: None,
+        context_window_prefill_input_tokens: None,
         execution_mode: String::from("GitCommitSummary"),
         temperature: None,
         reasoning_effort,
@@ -605,13 +606,35 @@ async fn run_git_commit_summary_model(
     ));
     // providerTelemetryGuard forwards statistics and closes an active request if this future is dropped.
     // providerTelemetryGuard 转发统计，并在当前 Future 被丢弃时关闭活动请求。
-    let mut provider_telemetry_guard = ProviderTelemetryHookGuard::new(state);
+    let controller_runtime = crate::controller_runtime_from_state(&state)?;
+    let mut provider_telemetry_guard = ProviderTelemetryHookGuard::new_with_persistence(
+        state.clone(),
+        Some(controller_runtime.clone()),
+        None,
+    );
     while let Some(event) = stream.next().await {
         match event {
             ExecutionStreamEvent::ProviderRequestTelemetry(event) => {
-                provider_telemetry_guard.forward(event);
+                crate::process_provider_request_telemetry_event(
+                    &state,
+                    &controller_runtime,
+                    None,
+                    &mut provider_telemetry_guard,
+                    event,
+                    "git_commit_summary_provider_usage_telemetry",
+                )?;
             }
             ExecutionStreamEvent::Finished(report) => {
+                if let Some(event) = provider_telemetry_guard.take_cancelled_event() {
+                    crate::process_provider_request_telemetry_event(
+                        &state,
+                        &controller_runtime,
+                        None,
+                        &mut provider_telemetry_guard,
+                        event,
+                        "git_commit_summary_provider_usage_cancelled",
+                    )?;
+                }
                 if let Some(error) = report.error.as_ref() {
                     return Err(error.clone());
                 }
@@ -620,7 +643,19 @@ async fn run_git_commit_summary_model(
             _ => {}
         }
     }
-    Err(String::from("提交信息生成请求未返回终态报告。"))
+    if let Some(event) = provider_telemetry_guard.take_cancelled_event() {
+        crate::process_provider_request_telemetry_event(
+            &state,
+            &controller_runtime,
+            None,
+            &mut provider_telemetry_guard,
+            event,
+            "git_commit_summary_provider_usage_cancelled",
+        )?;
+    }
+    Err(String::from(
+        "git commit summary stream ended without a terminal report.",
+    ))
 }
 
 /// Cleans model-generated commit message text before it reaches `git commit`.

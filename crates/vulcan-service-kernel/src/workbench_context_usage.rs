@@ -100,16 +100,48 @@ pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
         .filter(|usage| usage.has_any_tokens())?;
     let provider_id = runtime_state.active_provider_id.as_deref()?;
     let model_id = runtime_state.active_model_id.as_deref()?;
-    let effective_input_limit = model_capabilities
+    let context_limit = model_capabilities
         .and_then(|capabilities| capabilities.context_limit)
         .and_then(|limit| usize::try_from(limit).ok());
+    let window_policy = runtime_state
+        .active_context_window_policy
+        .unwrap_or_default();
+    let effective_context_window = context_limit.map(|limit| {
+        limit
+            .saturating_mul(usize::from(window_policy.effective_context_window_percent))
+            .saturating_div(100)
+    });
+    let auto_compact_limit = context_limit.map(|raw_window| {
+        let percentage_limit = raw_window
+            .saturating_mul(usize::from(window_policy.auto_compact_percent))
+            .saturating_div(100)
+            .max(1);
+        let compact_line = window_policy
+            .auto_compact_token_limit
+            .and_then(|limit| usize::try_from(limit).ok())
+            .map(|limit| limit.min(percentage_limit))
+            .unwrap_or(percentage_limit);
+        compact_line
+            .saturating_add(window_policy.fallback_buffer_tokens)
+            .min(effective_context_window.unwrap_or(raw_window))
+    });
     let input_tokens = vulcan_context::observed_input_tokens_from_usage(Some(observed_usage))
         .or(observed_usage.total_tokens)
         .unwrap_or_default();
-    let mut usage_ratio = effective_input_limit
-        .map(|limit| input_tokens as f32 / limit.max(1) as f32)
+    let active_context_tokens = observed_usage.total_tokens.unwrap_or(input_tokens);
+    let auto_compact_context_tokens = match window_policy.auto_compact_scope {
+        vulcan_context::ContextWindowUsageScope::Total => active_context_tokens,
+        vulcan_context::ContextWindowUsageScope::BodyAfterPrefix => active_context_tokens
+            .saturating_sub(
+                runtime_state
+                    .auto_compact_prefill_input_tokens
+                    .unwrap_or(active_context_tokens),
+            ),
+    };
+    let mut usage_ratio = effective_context_window
+        .map(|limit| active_context_tokens as f32 / limit.max(1) as f32)
         .unwrap_or(0.0);
-    if effective_input_limit.is_none() && input_tokens > 0 {
+    if effective_context_window.is_none() && active_context_tokens > 0 {
         usage_ratio = 0.01;
     }
 
@@ -118,8 +150,13 @@ pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
             .live_context_budget_fingerprint
             .clone()
             .unwrap_or_else(|| format!("historical:{provider_id}:{model_id}")),
-        context_limit: effective_input_limit,
-        effective_input_limit,
+        context_limit,
+        effective_input_limit: effective_context_window,
+        effective_context_window,
+        auto_compact_limit,
+        auto_compact_scope: window_policy.auto_compact_scope,
+        auto_compact_prefill_input_tokens: runtime_state.auto_compact_prefill_input_tokens,
+        fallback_buffer_tokens: window_policy.fallback_buffer_tokens,
         reserved_output_tokens: model_capabilities
             .and_then(|capabilities| capabilities.output_limit)
             .and_then(|limit| usize::try_from(limit).ok())
@@ -136,6 +173,8 @@ pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
         estimated_prompt_tokens: 0,
         estimated_tool_tokens: 0,
         estimated_input_tokens: input_tokens,
+        active_context_tokens,
+        auto_compact_context_tokens,
         estimated_total_tokens: observed_usage.total_tokens.unwrap_or_else(|| {
             input_tokens
                 .saturating_add(observed_usage.output_tokens.unwrap_or_default())
@@ -143,7 +182,17 @@ pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
         }),
         usage_ratio,
         observed_usage: Some(observed_usage.clone()),
-        severity: historical_context_budget_severity(usage_ratio),
+        severity: effective_context_window
+            .zip(auto_compact_limit)
+            .map(|(hard_limit, auto_limit)| {
+                vulcan_context::budget::context_budget_severity_for_limits_with_compaction_context(
+                    active_context_tokens,
+                    Some(hard_limit),
+                    Some(auto_limit),
+                    auto_compact_context_tokens,
+                )
+            })
+            .unwrap_or_else(|| historical_context_budget_severity(usage_ratio)),
     })
 }
 

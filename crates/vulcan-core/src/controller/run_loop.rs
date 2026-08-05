@@ -101,7 +101,6 @@ impl VulcanCoreController {
 
             let assistant_message_id = self.append_assistant_turn(&response);
             self.refresh_continuation(&response, assistant_message_id.as_str());
-
             if response.tool_calls.is_empty() {
                 self.phase = ControllerPhase::Completed;
                 self.push_final_event(
@@ -325,6 +324,9 @@ impl VulcanCoreController {
 
             let assistant_message_id = self.append_assistant_turn(&response);
             self.refresh_continuation(&response, assistant_message_id.as_str());
+            // checkpoint_before_tools publishes the completed Provider call usage before any tool can block the next turn.
+            // checkpoint_before_tools 在任何工具可能阻塞下一回合前发布已完成 Provider 调用的用量。
+            on_safe_checkpoint(&self.snapshot, self.last_successful_provider_usage.as_ref());
 
             if response.tool_calls.is_empty() {
                 self.phase = ControllerPhase::Completed;

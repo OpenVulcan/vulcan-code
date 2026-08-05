@@ -23,6 +23,41 @@ fn next_persistence_version(current: u64, channel: &str) -> Result<u64, String> 
         .ok_or_else(|| format!("{channel} persistence version exhausted"))
 }
 
+/// Allocates one session-wide persistence ticket shared by runtime and transcript writers.
+/// 为运行态与转录写入者分配共享的会话级持久化票据。
+///
+/// The legacy maps remain compatibility indexes, but every allocation advances both so an older
+/// transcript snapshot cannot overtake a newer full-session or runtime snapshot.
+/// 旧映射仍作为兼容索引保留，但每次分配都会同步推进二者，避免旧转录快照越过更新的整会话或运行态快照。
+fn next_webui_session_persist_ticket_locked(
+    guard: &mut ServiceBridgeState,
+    session_id: SessionId,
+) -> Result<u64, String> {
+    let current = guard
+        .session_persist_versions
+        .get(&session_id)
+        .copied()
+        .into_iter()
+        .chain(
+            guard
+                .session_transcript_persist_versions
+                .get(&session_id)
+                .copied(),
+        )
+        .max()
+        .unwrap_or_default();
+    let next = if current == 0 {
+        1
+    } else {
+        next_persistence_version(current, "session")?
+    };
+    guard.session_persist_versions.insert(session_id, next);
+    guard
+        .session_transcript_persist_versions
+        .insert(session_id, next);
+    Ok(next)
+}
+
 /// Allocates the next ordinary whole-session persistence version.
 /// 分配下一个普通整会话持久化版本。
 ///
@@ -46,19 +81,7 @@ pub(crate) fn next_webui_session_runtime_persist_version(
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
-    // session_version fences complete session snapshot writers.
-    // session_version 隔离完整会话快照写入者。
-    let session_version = guard
-        .session_persist_versions
-        .get(&session_id)
-        .copied()
-        .map_or(Ok(1), |current| {
-            next_persistence_version(current, "whole-session")
-        })?;
-    guard
-        .session_persist_versions
-        .insert(session_id, session_version);
-    Ok(session_version)
+    next_webui_session_persist_ticket_locked(&mut guard, session_id)
 }
 
 /// Returns whether one ordinary runtime snapshot is current for its session.
@@ -127,24 +150,6 @@ pub(crate) fn invalidate_webui_session_lifecycle_persist_versions(
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
-    // next_session_version invalidates whole-session and runtime-state persistence tasks.
-    // next_session_version 使整会话与运行态持久化任务失效。
-    let next_session_version = guard
-        .session_persist_versions
-        .get(&session_id)
-        .copied()
-        .map_or(Ok(1), |current| {
-            next_persistence_version(current, "whole-session")
-        })?;
-    // next_transcript_version invalidates transcript-only persistence tasks.
-    // next_transcript_version 使仅转录持久化任务失效。
-    let next_transcript_version = guard
-        .session_transcript_persist_versions
-        .get(&session_id)
-        .copied()
-        .map_or(Ok(1), |current| {
-            next_persistence_version(current, "transcript")
-        })?;
     // addon_keys capture every namespace that already has a pending or completed version lineage.
     // addon_keys 捕获已经具有待处理或已完成版本谱系的每个命名空间。
     let addon_keys = guard
@@ -166,12 +171,9 @@ pub(crate) fn invalidate_webui_session_lifecycle_persist_versions(
             next_persistence_version(current, "addon").map(|version| (addon_key, version))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    guard
-        .session_persist_versions
-        .insert(session_id, next_session_version);
-    guard
-        .session_transcript_persist_versions
-        .insert(session_id, next_transcript_version);
+    // next_session_ticket invalidates runtime and transcript tasks atomically after all lanes pass preflight.
+    // next_session_ticket 在所有通道预检通过后以原子方式使运行态与转录任务失效。
+    next_webui_session_persist_ticket_locked(&mut guard, session_id)?;
     for (addon_key, next_addon_version) in next_addon_versions {
         guard
             .session_addon_persist_versions
@@ -201,17 +203,7 @@ pub(crate) fn next_webui_session_transcript_persist_version(
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
-    let next_version = guard
-        .session_transcript_persist_versions
-        .get(&session_id)
-        .copied()
-        .map_or(Ok(1), |current| {
-            next_persistence_version(current, "transcript")
-        })?;
-    guard
-        .session_transcript_persist_versions
-        .insert(session_id, next_version);
-    Ok(next_version)
+    next_webui_session_persist_ticket_locked(&mut guard, session_id)
 }
 
 /// Returns whether a live transcript persistence task is still current for its session.

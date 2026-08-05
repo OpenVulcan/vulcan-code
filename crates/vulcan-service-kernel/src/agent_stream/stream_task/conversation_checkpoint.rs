@@ -44,7 +44,12 @@ pub(super) fn handle_conversation_checkpoint_stream_event(
     // Live context budget usage is an optional projection; its failure must not block goal accounting or the canonical checkpoint.
     // 实时上下文预算用量是可选投影；其失败不得阻塞目标计量或规范检查点。
     if let Some(usage) = last_successful_provider_usage.as_ref()
-        && let Err(error) = cache_live_context_budget_observed_usage(task_state, session_id, usage)
+        && let Err(error) = cache_live_context_budget_observed_usage(
+            task_state,
+            session_id,
+            usage,
+            &conversation_state,
+        )
     {
         eprintln!("[webui-service] live context budget usage update failed: {error}");
     }

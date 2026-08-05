@@ -82,6 +82,68 @@ fn active_kernel_turn_routes_submission_to_existing_session_queue() {
     );
 }
 
+/// Verifies an active stream owner blocks a second submission even without a kernel marker.
+/// 验证即使没有内核标记，活动流所有者也会阻止第二次提交。
+#[tokio::test(flavor = "current_thread")]
+async fn active_stream_owner_routes_submission_to_existing_session_queue() {
+    // session_id identifies the retained conversation whose provider stream is active.
+    // session_id 标识 Provider 流正在运行的保留会话。
+    let session_id = SessionId::new_v4();
+    // service_state starts without a kernel turn so the stream-only race is covered.
+    // service_state 不启动内核回合，以覆盖仅活动流存在的竞态。
+    let service_state = test_service_state_with_parent_session(session_id);
+    // workspace_snapshot is the exact retained state observed by queue admission.
+    // workspace_snapshot 是排队 admission 观察到的精确保留状态。
+    let workspace_snapshot = service_state
+        .workspace_snapshot
+        .as_ref()
+        .expect("workspace snapshot")
+        .clone();
+    // state retains a pending stream owner whose future cannot complete by itself.
+    // state 保留一个自身不会完成的待处理活动流所有者。
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
+    let task_id = Uuid::new_v4();
+    spawn_registered_active_stream_task_with_mode(
+        &state,
+        session_id,
+        task_id,
+        None,
+        ActiveStreamTaskRegistrationMode::RejectIfOccupied,
+        async {
+            std::future::pending::<()>().await;
+        },
+    )
+    .expect("active stream owner should register");
+
+    assert_eq!(
+        evaluate_existing_submission_queue(&state, &workspace_snapshot, Some(session_id),)
+            .expect("stream-owner queue decision"),
+        ExistingSubmissionQueueDecision::Queue { session_id }
+    );
+
+    // Cleanup proves the test leaves no asynchronous owner behind.
+    // 清理步骤确保测试不会遗留异步所有者。
+    let removed = state
+        .lock()
+        .expect("service state should remain lockable")
+        .active_stream_tasks
+        .get(&session_id)
+        .map(|entry| entry.task_id());
+    assert_eq!(removed, Some(task_id));
+    state
+        .lock()
+        .expect("service state should remain lockable")
+        .active_stream_tasks
+        .get(&session_id)
+        .expect("active stream entry")
+        .abort();
+    state
+        .lock()
+        .expect("service state should remain lockable")
+        .active_stream_tasks
+        .remove(&session_id);
+}
+
 /// Verifies a queued commit preserves workspace state that advanced after submission preflight.
 /// 验证排队提交会保留提交预检后继续推进的工作区状态。
 ///

@@ -281,7 +281,15 @@ pub(crate) fn emit_session_addons_changed_delta(
         let workspace = guard.workspace_snapshot.as_ref().ok_or_else(|| {
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
-        let runtime_state = workspace.session_runtime_state.get(&session_id);
+        let runtime_state = workspace_session_with_archive_status(workspace, session_id).and_then(
+            |(_, archived)| {
+                if archived {
+                    workspace.archived_session_runtime_state.get(&session_id)
+                } else {
+                    workspace.session_runtime_state.get(&session_id)
+                }
+            },
+        );
         let session_goal = guard.session_goal_summaries.get(&session_id).cloned();
         let session_todolist = session_todolist_summary_from_runtime_state(runtime_state);
         let session_plan_mode = session_plan_mode_summary_from_runtime_state(runtime_state);
@@ -309,6 +317,10 @@ pub(crate) fn emit_session_addons_changed_delta(
             .unwrap_or(default_output_style_id());
         let session_output_style =
             session_output_style_summary_from_runtime_state(runtime_state, global_output_style_id);
+        let session_provider_usage =
+            runtime_state.and_then(session_provider_usage_summary_from_runtime_state);
+        let session_goal =
+            session_goal_summary_with_provider_usage(session_goal, session_provider_usage.as_ref());
         let session_addons_list_entry = session_addons_changed_delta_for_retained_list(
             conversation_id.clone(),
             session_goal.clone(),
@@ -316,6 +328,7 @@ pub(crate) fn emit_session_addons_changed_delta(
             session_plan_mode.clone(),
             session_vmm_policy_for_list.clone(),
             session_output_style.clone(),
+            session_provider_usage.clone(),
         );
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         let generation = guard.workbench_generation;
@@ -326,6 +339,7 @@ pub(crate) fn emit_session_addons_changed_delta(
             guard.workbench.session_plan_mode = session_plan_mode.clone();
             guard.workbench.session_vmm_policy = session_vmm_policy.clone();
             guard.workbench.session_output_style = session_output_style.clone();
+            guard.workbench.session_provider_usage = session_provider_usage.clone();
         }
         let pending_questions =
             pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref())?;
@@ -375,6 +389,7 @@ pub(crate) fn emit_session_addons_changed_delta(
             session_plan_mode: session_plan_mode.clone(),
             session_vmm_policy: session_vmm_policy.clone(),
             session_output_style: session_output_style.clone(),
+            session_provider_usage: session_provider_usage.clone().map(Box::new),
         };
         (
             WorkbenchDeltaEnvelope {
@@ -388,6 +403,7 @@ pub(crate) fn emit_session_addons_changed_delta(
                 session_plan_mode,
                 session_vmm_policy,
                 session_output_style,
+                session_provider_usage,
                 revision: generation,
             },
         )

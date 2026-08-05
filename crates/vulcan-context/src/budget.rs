@@ -3,7 +3,7 @@
 
 use crate::{
     CONTEXT_BUDGET_COMPACTION_RATIO, CONTEXT_BUDGET_OVERFLOW_RATIO, CONTEXT_BUDGET_WARNING_RATIO,
-    ContextBudgetSeverity, ContextBudgetSnapshot, ContextCompactionPolicy,
+    ContextBudgetSeverity, ContextBudgetSnapshot, ContextCompactionPolicy, ContextWindowUsageScope,
 };
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
@@ -175,6 +175,9 @@ pub struct RequestContextBudgetSnapshotInput<'a> {
     /// Optional provider-observed usage used to calibrate estimates.
     /// 用于校准估算值的可选 Provider 实测用量。
     pub observed_usage: Option<&'a ProviderUsageSnapshot>,
+    /// Absolute input-token baseline captured at the start of the current compaction window.
+    /// 当前压缩窗口开始时捕获的绝对输入 Token 基线。
+    pub prefill_input_tokens: Option<usize>,
 }
 
 /// Optional controls for request-facing budget snapshot construction.
@@ -211,13 +214,18 @@ pub fn build_request_context_budget_snapshot_with_options(
         reasoning,
         request_snapshot,
         observed_usage,
+        prefill_input_tokens,
     } = input;
     let reserved_reasoning_tokens = reasoning_token_reserve(reasoning);
     let reserved_output_tokens = resolve_output_token_reserve(capabilities);
-    let reserved_compaction_tokens = options
+    // Codex keeps the raw model window separate from the output ceiling; legacy reserved values
+    // must not silently shrink the active context window.
+    // Codex 将模型原始窗口与输出上限分离；旧版 reserved 不得静默缩小活动上下文窗口。
+    let reserved_compaction_tokens = 0usize;
+    let window_policy = options
         .compaction_policy
-        .map(|policy| policy.reserved)
-        .unwrap_or(0usize);
+        .map(|policy| policy.window)
+        .unwrap_or_default();
     let compaction_auto_enabled = options
         .compaction_policy
         .map(|policy| policy.auto)
@@ -245,16 +253,55 @@ pub fn build_request_context_budget_snapshot_with_options(
         + estimated_tool_tokens;
     let calibrated_input_tokens =
         calibrated_input_token_estimate(estimated_input_tokens, observed_usage);
-    let estimated_total_tokens = calibrated_input_tokens
+    // The hard-window admission always uses the complete active context.
+    // 硬窗口准入始终使用完整活动上下文。
+    let active_context_tokens = context_tokens_for_scope(
+        estimated_input_tokens,
+        observed_usage,
+        ContextWindowUsageScope::Total,
+        None,
+    );
+    // The configured scope only changes the automatic-compaction line.
+    // 配置的计量范围只改变自动压缩线。
+    let auto_compact_context_tokens = context_tokens_for_scope(
+        estimated_input_tokens,
+        observed_usage,
+        window_policy.auto_compact_scope,
+        prefill_input_tokens,
+    );
+    let estimated_total_tokens = active_context_tokens
         + reserved_reasoning_tokens
         + reserved_output_tokens
         + reserved_compaction_tokens;
-    let effective_input_limit = capabilities
-        .effective_input_limit()
-        .map(|limit| limit.saturating_sub(reserved_compaction_tokens).max(1usize));
-    let usage_ratio = effective_input_limit
-        .map(|limit| calibrated_input_tokens as f32 / limit.max(1) as f32)
+    let raw_context_limit = capabilities.effective_input_limit();
+    let effective_context_window = raw_context_limit.map(|limit| {
+        let percentage = usize::from(window_policy.effective_context_window_percent);
+        limit.saturating_mul(percentage).saturating_div(100).max(1)
+    });
+    let auto_compact_limit = raw_context_limit.map(|raw_window| {
+        let percentage_limit = raw_window
+            .saturating_mul(usize::from(window_policy.auto_compact_percent))
+            .saturating_div(100)
+            .max(1);
+        let explicit_limit = window_policy
+            .auto_compact_token_limit
+            .and_then(|limit| usize::try_from(limit).ok());
+        let compact_line = explicit_limit
+            .map(|limit| limit.min(percentage_limit))
+            .unwrap_or(percentage_limit);
+        compact_line
+            .saturating_add(window_policy.fallback_buffer_tokens)
+            .min(effective_context_window.unwrap_or(raw_window))
+    });
+    let usage_ratio = effective_context_window
+        .map(|limit| active_context_tokens as f32 / limit.max(1) as f32)
         .unwrap_or(0.0);
+    let severity = context_budget_severity_for_limits_with_compaction_context(
+        active_context_tokens,
+        effective_context_window,
+        auto_compact_limit,
+        auto_compact_context_tokens,
+    );
 
     ContextBudgetSnapshot {
         fingerprint: build_context_budget_fingerprint(
@@ -267,7 +314,12 @@ pub fn build_request_context_budget_snapshot_with_options(
             options.compaction_policy,
         ),
         context_limit: capabilities.context_limit,
-        effective_input_limit,
+        effective_input_limit: effective_context_window,
+        effective_context_window,
+        auto_compact_limit,
+        auto_compact_scope: window_policy.auto_compact_scope,
+        auto_compact_prefill_input_tokens: prefill_input_tokens,
+        fallback_buffer_tokens: window_policy.fallback_buffer_tokens,
         reserved_output_tokens,
         reserved_reasoning_tokens,
         reserved_compaction_tokens,
@@ -281,10 +333,12 @@ pub fn build_request_context_budget_snapshot_with_options(
         estimated_prompt_tokens,
         estimated_tool_tokens,
         estimated_input_tokens: calibrated_input_tokens,
+        active_context_tokens,
+        auto_compact_context_tokens,
         estimated_total_tokens,
         usage_ratio,
         observed_usage: observed_usage.cloned(),
-        severity: context_budget_severity_for_ratio(usage_ratio),
+        severity,
     }
 }
 
@@ -341,12 +395,17 @@ pub fn build_context_budget_fingerprint(
     let compaction_policy_label = compaction_policy
         .map(|policy| {
             format!(
-                "auto={}|prune={}|tail={}|preserve={}|reserved={}",
+                "auto={}|prune={}|tail={}|preserve={}|reserved={}|window_effective={}|window_compact={}|window_limit={:?}|window_scope={:?}|window_buffer={}",
                 policy.auto,
                 policy.prune,
                 policy.tail_turns,
                 policy.preserve_recent_tokens,
-                policy.reserved
+                policy.reserved,
+                policy.window.effective_context_window_percent,
+                policy.window.auto_compact_percent,
+                policy.window.auto_compact_token_limit,
+                policy.window.auto_compact_scope,
+                policy.window.fallback_buffer_tokens,
             )
         })
         .unwrap_or_else(|| String::from("none"));
@@ -405,6 +464,70 @@ pub fn context_budget_severity_for_ratio(usage_ratio: f32) -> ContextBudgetSever
     } else {
         ContextBudgetSeverity::Healthy
     }
+}
+
+/// Resolves the active context token count from the selected Codex usage scope.
+/// 根据选定的 Codex 用量范围解析活动上下文 Token 数。
+fn context_tokens_for_scope(
+    estimated_input_tokens: usize,
+    observed_usage: Option<&ProviderUsageSnapshot>,
+    scope: ContextWindowUsageScope,
+    prefill_input_tokens: Option<usize>,
+) -> usize {
+    let active_context_tokens = observed_usage
+        .and_then(|usage| usage.total_tokens)
+        .map(|total_tokens| {
+            let observed_input_tokens =
+                observed_input_tokens_from_usage(observed_usage).unwrap_or(total_tokens);
+            total_tokens
+                .saturating_add(estimated_input_tokens.saturating_sub(observed_input_tokens))
+        })
+        .unwrap_or(estimated_input_tokens);
+    if matches!(scope, ContextWindowUsageScope::BodyAfterPrefix) {
+        // Codex treats an unknown prefill baseline as the current active context, so the first
+        // request in a new compaction window contributes zero body tokens until usage is observed.
+        // Codex 将未知前缀基线视为当前活动上下文，因此新压缩窗口的首个请求在拿到实测用量前正文为零。
+        return active_context_tokens
+            .saturating_sub(prefill_input_tokens.unwrap_or(active_context_tokens));
+    }
+    active_context_tokens
+}
+
+/// Resolves severity from the active context and the Codex hard/automatic thresholds.
+/// 根据活动上下文以及 Codex 硬窗口和自动压缩阈值解析严重级别。
+pub fn context_budget_severity_for_limits(
+    active_context_tokens: usize,
+    effective_context_window: Option<usize>,
+    auto_compact_limit: Option<usize>,
+) -> ContextBudgetSeverity {
+    context_budget_severity_for_limits_with_compaction_context(
+        active_context_tokens,
+        effective_context_window,
+        auto_compact_limit,
+        active_context_tokens,
+    )
+}
+
+/// Resolves severity with a separate automatic-compaction usage scope.
+/// 使用独立的自动压缩计量范围解析严重级别。
+pub fn context_budget_severity_for_limits_with_compaction_context(
+    active_context_tokens: usize,
+    effective_context_window: Option<usize>,
+    auto_compact_limit: Option<usize>,
+    auto_compact_context_tokens: usize,
+) -> ContextBudgetSeverity {
+    let Some(hard_window) = effective_context_window else {
+        return ContextBudgetSeverity::Healthy;
+    };
+    if active_context_tokens >= hard_window {
+        return ContextBudgetSeverity::Overflow;
+    }
+    if auto_compact_limit.is_some_and(|limit| auto_compact_context_tokens >= limit) {
+        return ContextBudgetSeverity::CompactSoon;
+    }
+    // The Codex hard and automatic lines are the only active thresholds for a resolved policy.
+    // 已解析策略只使用 Codex 硬窗口线与自动压缩线作为活动阈值。
+    ContextBudgetSeverity::Healthy
 }
 
 /// Returns the reasoning-token reserve implied by one coarse reasoning effort bucket.
@@ -611,6 +734,64 @@ mod tests {
         assert_eq!(calibrated_input_token_estimate(10, Some(&usage)), 128);
     }
 
+    /// Verifies total-scope usage advances with newly estimated local input after an observed provider total.
+    /// 验证总量范围会在 Provider 已报告总量后，随着新估算的本地输入增量同步前进。
+    #[test]
+    fn active_context_tokens_adds_local_delta_to_provider_total() {
+        let usage = ProviderUsageSnapshot {
+            input_tokens: Some(100),
+            total_tokens: Some(140),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            context_tokens_for_scope(175, Some(&usage), ContextWindowUsageScope::Total, None),
+            215
+        );
+    }
+
+    /// Verifies body-after-prefix scope subtracts the absolute Codex prefill baseline.
+    /// 验证前缀后正文范围会减去 Codex 的绝对前缀基线。
+    #[test]
+    fn active_context_tokens_body_scope_subtracts_prefill_baseline() {
+        let usage = ProviderUsageSnapshot {
+            input_tokens: Some(100),
+            total_tokens: Some(140),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            context_tokens_for_scope(
+                175,
+                Some(&usage),
+                ContextWindowUsageScope::BodyAfterPrefix,
+                Some(100),
+            ),
+            115
+        );
+    }
+
+    /// Verifies an unknown prefill baseline starts a new body window at zero.
+    /// 验证未知前缀基线会让新正文窗口从零开始。
+    #[test]
+    fn active_context_tokens_body_scope_defaults_unknown_prefill_to_current_total() {
+        let usage = ProviderUsageSnapshot {
+            input_tokens: Some(100),
+            total_tokens: Some(140),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            context_tokens_for_scope(
+                175,
+                Some(&usage),
+                ContextWindowUsageScope::BodyAfterPrefix,
+                None
+            ),
+            0
+        );
+    }
+
     /// Verifies Anthropic cache reads outside input_tokens contribute to the complete context window.
     /// 验证 Anthropic 在 input_tokens 之外报告的缓存读取会计入完整上下文窗口。
     #[test]
@@ -674,6 +855,39 @@ mod tests {
         assert_eq!(
             context_budget_severity_for_ratio(CONTEXT_BUDGET_OVERFLOW_RATIO),
             ContextBudgetSeverity::Overflow
+        );
+    }
+
+    /// Verifies BodyAfterPrefix affects only the automatic line while the full context still guards H.
+    /// 验证 BodyAfterPrefix 只影响自动压缩线，而完整上下文仍负责 H 硬窗口保护。
+    #[test]
+    fn body_scope_does_not_bypass_hard_context_window() {
+        assert_eq!(
+            context_budget_severity_for_limits_with_compaction_context(
+                940,
+                Some(950),
+                Some(900),
+                800
+            ),
+            ContextBudgetSeverity::Healthy
+        );
+        assert_eq!(
+            context_budget_severity_for_limits_with_compaction_context(
+                960,
+                Some(950),
+                Some(900),
+                800
+            ),
+            ContextBudgetSeverity::Overflow
+        );
+        assert_eq!(
+            context_budget_severity_for_limits_with_compaction_context(
+                700,
+                Some(950),
+                Some(900),
+                900
+            ),
+            ContextBudgetSeverity::CompactSoon
         );
     }
 

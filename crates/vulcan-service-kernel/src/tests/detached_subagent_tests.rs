@@ -36,9 +36,16 @@ fn register_pending_context_compaction_test_stream(
     // task_id is shared by the retained entry and the commit authority under test.
     // task_id 由保留条目与被测提交权限共享。
     let task_id = Uuid::new_v4();
-    spawn_registered_active_stream_task(state, session_id, task_id, None, async {
-        std::future::pending::<()>().await;
-    })
+    spawn_registered_active_stream_task_with_mode(
+        state,
+        session_id,
+        task_id,
+        None,
+        ActiveStreamTaskRegistrationMode::RejectIfOccupied,
+        async {
+            std::future::pending::<()>().await;
+        },
+    )
     .expect("pending context-compaction test stream should register");
     task_id
 }
@@ -2719,29 +2726,30 @@ fn completion_gate_ignores_send_message_resumed_child_task() {
     assert_eq!(replacement_gate.pending_subagent_count, 1);
 }
 
-/// Verifies live transcript persistence versioning does not invalidate session and VMM persistence.
-/// 验证运行中转录持久化版本不会使会话与 VMM 持久化版本失效。
+/// Verifies runtime and live transcript writers share one monotonic session ticket.
+/// 验证运行态与运行中转录写入者共享同一个单调递增的会话票据。
 #[test]
-fn live_transcript_persist_version_is_independent_from_session_persist_version() {
+fn live_transcript_persist_version_advances_shared_session_ticket() {
     // session_id identifies the session whose persistence lanes are compared.
     // session_id 标识需要比较持久化通道的会话。
     let session_id = SessionId::new_v4();
-    // state carries independent version tables for runtime snapshots and live transcript writes.
-    // state 携带运行态快照写入与运行中转录写入的独立版本表。
+    // state carries compatibility indexes backed by one shared session ticket.
+    // state 携带由共享会话票据驱动的兼容索引。
     let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
         session_id,
     )));
 
-    // runtime_version belongs only to the ordinary runtime persistence lane.
-    // runtime_version 只属于普通运行时持久化通道。
+    // runtime_version is the first shared session ticket.
+    // runtime_version 是第一个共享会话票据。
     let runtime_version = next_webui_session_runtime_persist_version(&state, session_id)
         .expect("runtime persist version should allocate");
-    // transcript_version belongs to the live transcript-only persistence lane.
-    // transcript_version 属于仅运行中转录持久化通道。
+    // transcript_version advances the same ticket and invalidates older runtime snapshots.
+    // transcript_version 推进同一票据，并使旧运行态快照失效。
     let transcript_version = next_webui_session_transcript_persist_version(&state, session_id)
         .expect("transcript persist version should allocate");
 
-    assert!(webui_session_runtime_persist_version_is_current(
+    assert!(transcript_version > runtime_version);
+    assert!(!webui_session_runtime_persist_version_is_current(
         &state,
         session_id,
         runtime_version,
@@ -2754,7 +2762,7 @@ fn live_transcript_persist_version_is_independent_from_session_persist_version()
     assert!(!webui_session_runtime_persist_version_is_current(
         &state,
         session_id,
-        runtime_version.saturating_add(1),
+        transcript_version.saturating_add(1),
     ));
 }
 

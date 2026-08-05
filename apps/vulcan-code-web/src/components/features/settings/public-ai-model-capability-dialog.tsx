@@ -25,6 +25,7 @@ import {
   savePublicAiProviderCapabilityOverrides,
 } from "@/service/settings-actions-service"
 import type {
+  PublicAiContextWindowPolicyOverrides,
   PublicAiCustomModelRequestProjection,
   PublicAiCustomRequestMutation,
   PublicAiModel,
@@ -32,6 +33,115 @@ import type {
   PublicAiResourceKind,
   PublicAiSettingsSnapshot,
 } from "@/types"
+
+// ContextWindowPolicyEditor edits one sparse Codex window layer and leaves empty fields inherited.
+// ContextWindowPolicyEditor 编辑一层稀疏 Codex 窗口策略，并让空字段继续继承上级。
+export function ContextWindowPolicyEditor(props: {
+  onChange: (value: PublicAiContextWindowPolicyOverrides | undefined) => void
+  value?: PublicAiContextWindowPolicyOverrides
+}) {
+  const { t } = useI18n()
+  // updateNumber preserves the sparse shape while parsing only safe integer input.
+  // updateNumber 保持稀疏结构，并且只解析安全整数输入。
+  const updateNumber = React.useCallback((
+    field: "effective_context_window_percent" | "auto_compact_percent" | "auto_compact_token_limit" | "fallback_buffer_tokens",
+    rawValue: string,
+  ) => {
+    const next: PublicAiContextWindowPolicyOverrides = { ...(props.value ?? {}) }
+    const trimmed = rawValue.trim()
+    if (!trimmed) {
+      delete next[field]
+    } else {
+      const parsed = Number.parseInt(trimmed, 10)
+      if (Number.isSafeInteger(parsed)) {
+        next[field] = parsed
+      }
+    }
+    props.onChange(Object.keys(next).length > 0 ? next : undefined)
+  }, [props])
+  // updateScope changes only the optional usage-scope field.
+  // updateScope 只修改可选的用量范围字段。
+  const updateScope = React.useCallback((rawValue: string) => {
+    const next: PublicAiContextWindowPolicyOverrides = { ...(props.value ?? {}) }
+    if (rawValue === "") {
+      delete next.auto_compact_scope
+    } else {
+      next.auto_compact_scope = rawValue as PublicAiContextWindowPolicyOverrides["auto_compact_scope"]
+    }
+    props.onChange(Object.keys(next).length > 0 ? next : undefined)
+  }, [props])
+  return (
+    <fieldset className="space-y-3 rounded-lg border p-4">
+      <legend className="px-1 text-sm font-medium">{t("settings.contextWindowPolicy.title")}</legend>
+      <p className="text-xs text-muted-foreground">{t("settings.contextWindowPolicy.description")}</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="grid gap-1 text-sm">
+          <span>{t("settings.contextWindowPolicy.effectivePercent")}</span>
+          <Input
+            inputMode="numeric"
+            max={100}
+            min={1}
+            onChange={(event) => updateNumber("effective_context_window_percent", event.target.value)}
+            type="number"
+            value={props.value?.effective_context_window_percent ?? ""}
+          />
+        </label>
+        <label className="grid gap-1 text-sm">
+          <span>{t("settings.contextWindowPolicy.autoCompactPercent")}</span>
+          <Input
+            inputMode="numeric"
+            max={100}
+            min={1}
+            onChange={(event) => updateNumber("auto_compact_percent", event.target.value)}
+            type="number"
+            value={props.value?.auto_compact_percent ?? ""}
+          />
+        </label>
+        <label className="grid gap-1 text-sm">
+          <span>{t("settings.contextWindowPolicy.autoCompactTokenLimit")}</span>
+          <Input
+            inputMode="numeric"
+            min={1}
+            onChange={(event) => updateNumber("auto_compact_token_limit", event.target.value)}
+            type="number"
+            value={props.value?.auto_compact_token_limit ?? ""}
+          />
+        </label>
+        <label className="grid gap-1 text-sm">
+          <span>{t("settings.contextWindowPolicy.scope")}</span>
+          <select
+            className="h-9 rounded-md border bg-background px-3 text-sm"
+            onChange={(event) => updateScope(event.target.value)}
+            value={props.value?.auto_compact_scope ?? ""}
+          >
+            <option value="">{t("settings.contextWindowPolicy.scopeInherit")}</option>
+            <option value="total">{t("settings.contextWindowPolicy.scopeTotal")}</option>
+            <option value="body_after_prefix">{t("settings.contextWindowPolicy.scopeBodyAfterPrefix")}</option>
+          </select>
+        </label>
+        <label className="grid gap-1 text-sm">
+          <span>{t("settings.contextWindowPolicy.fallbackBuffer")}</span>
+          <Input
+            inputMode="numeric"
+            min={0}
+            onChange={(event) => updateNumber("fallback_buffer_tokens", event.target.value)}
+            type="number"
+            value={props.value?.fallback_buffer_tokens ?? ""}
+          />
+        </label>
+      </div>
+      <Button
+        className="w-fit"
+        disabled={!props.value || Object.keys(props.value).length === 0}
+        onClick={() => props.onChange(undefined)}
+        type="button"
+        variant="outline"
+      >
+        {t("settings.contextWindowPolicy.clear")}
+      </Button>
+    </fieldset>
+  )
+}
 
 // ModelCapabilityDialogProps identifies one model and its optional direct model-settings layer.
 // ModelCapabilityDialogProps 标识一个模型及其可选直接模型设置层。
@@ -89,6 +199,9 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
   // toolCallingEnabled is the direct user-defined model tool policy.
   // toolCallingEnabled 是直接自定义模型工具策略。
   const [toolCallingEnabled, setToolCallingEnabled] = React.useState(true)
+  // contextWindowPolicy is the sparse Codex threshold layer edited for this scope.
+  // contextWindowPolicy 是此作用域正在编辑的稀疏 Codex 阈值层。
+  const [contextWindowPolicy, setContextWindowPolicy] = React.useState<PublicAiContextWindowPolicyOverrides | undefined>(undefined)
   const [requestProjection, setRequestProjection] = React.useState<PublicAiCustomModelRequestProjection>(emptyRequestProjection())
   // touchedFields preserves sparse provider edits instead of copying one model's full effective values.
   // touchedFields 保留供应商级稀疏编辑，避免把某一个模型的完整有效值复制给整个供应商。
@@ -117,8 +230,9 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
     reasoning_control: reasoningEnabled ? "effort_selection" : "fixed_off",
     reasoning_efforts: reasoningEnabled ? reasoningEfforts : ["none"],
     tool_calling: toolCallingEnabled ? "native" : "unsupported",
+    context_window_policy: contextWindowPolicy,
     request_projection: requestProjection,
-  }), [contextLimit, inputResources, outputLimit, reasoningEfforts, reasoningEnabled, requestProjection, toolCallingEnabled])
+  }), [contextLimit, contextWindowPolicy, inputResources, outputLimit, reasoningEfforts, reasoningEnabled, requestProjection, toolCallingEnabled])
   // dirty is true only when the visible model layer differs semantically from its authoritative baseline.
   // dirty 仅在可见模型层与权威基线存在语义差异时为真。
   const dirty = !directProviderModelSettingsEqual(currentSettings, baselineSettings)
@@ -149,6 +263,7 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
     setReasoningEnabled(nextReasoningEnabled)
     setReasoningEfforts(projectOpenAiReasoningEfforts(settings.reasoning_efforts ?? []))
     setToolCallingEnabled(settings.tool_calling !== "unsupported")
+    setContextWindowPolicy(settings.context_window_policy ?? undefined)
     setRequestProjection(normalizeRequestProjection(settings.request_projection))
     setTouchedFields(new Set())
     setEdited(false)
@@ -273,6 +388,10 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
             value={outputLimit}
           />
         </div>
+        <ContextWindowPolicyEditor
+          onChange={(value) => { markField("context_window_policy"); setContextWindowPolicy(value) }}
+          value={contextWindowPolicy}
+        />
         <InputResourceEditor onChange={(value) => { markField("input_resources"); setInputResources(value) }} value={inputResources} />
         {props.providerId?.startsWith("custom:") ? (
           <fieldset className="rounded-lg border p-4">
@@ -392,6 +511,11 @@ export function buildCapabilityOverridePatch(
   if (touchedFields.has("tool_calling")) {
     patch.tool_calling = current.tool_calling
   }
+  if (touchedFields.has("context_window_policy")) {
+    // Null must survive JSON serialization so clearing the editor removes the persisted layer.
+    // 清空编辑器时必须保留 null，确保 JSON 序列化后真正移除已持久化的策略层。
+    patch.context_window_policy = current.context_window_policy ?? null
+  }
   if (touchedFields.has("request_projection")) {
     patch.request_projection = current.request_projection
   }
@@ -430,6 +554,7 @@ function modelCapabilitySettingsDraft(
     tool_calling: (overrides?.tool_calling ?? capabilities.tool_calling) === "unsupported"
       ? "unsupported"
       : "native",
+    context_window_policy: overrides?.context_window_policy ?? undefined,
     request_projection: normalizeRequestProjection(overrides?.request_projection),
   }
 }

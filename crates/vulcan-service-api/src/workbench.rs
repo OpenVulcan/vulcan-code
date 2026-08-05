@@ -191,6 +191,10 @@ pub struct WorkbenchSnapshot {
     /// 当前选中会话的输出风格状态。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_output_style: Option<SessionOutputStyleSummary>,
+    /// Current selected-session physical Provider request counts and token usage.
+    /// 当前选中会话的物理 Provider 请求计数与 Token 用量。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_provider_usage: Option<SessionProviderUsageSummary>,
     /// Session addon projections retained for every conversation that has addon state.
     /// 为每个存在附属状态的会话保留的会话附属投影。
     #[serde(default)]

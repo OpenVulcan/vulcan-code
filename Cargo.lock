@@ -6878,6 +6878,7 @@ dependencies = [
  "uuid",
  "vulcan-ai-contract",
  "vulcan-ai-protocols",
+ "vulcan-context",
 ]
 
 [[package]]

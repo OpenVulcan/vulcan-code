@@ -20,6 +20,7 @@ pub use runtime_state::{
     PendingPromptRuntimeOptions, PendingPromptWebSearchOverride, PendingSessionPromptEntry,
     PendingSessionPromptSource, SessionComposerDraftState, SessionOutputStyleState,
     SessionPlanArtifactState, SessionPlanModeState, SessionProviderToolTargetSelection,
+    SessionProviderUsageSegment, SessionProviderUsageSegmentStatus, SessionProviderUsageState,
     SessionRuntimeStateEntry, SessionTodolistItem, SessionTodolistItemStatus, SessionTodolistState,
     SessionTranscriptUiState, VmmProfileSyncState, VmmWritebackOutboxEntry,
     apply_pending_prompt_internal_queue_enqueue_plan, apply_pending_prompt_panel_drop_target,

@@ -385,6 +385,9 @@ export interface SessionAddonsChangedDelta {
   // Current output-style override and the last safely applied snapshot.
   // 当前会话输出风格覆盖与最近一次安全应用的快照。
   sessionOutputStyle?: SessionOutputStyleSummary | null;
+  // Live physical Provider request counts and token usage.
+  // 实时物理 Provider 请求计数与 Token 用量。
+  sessionProviderUsage?: SessionProviderUsageSummary | null;
 }
 
 // SessionOutputStyleSummary describes a pending per-session style override without mutating the active prompt context.
@@ -439,6 +442,87 @@ export interface SessionVmmPolicyByConversation {
   // VMM policy override and effective state for this conversation.
   // 该会话的 VMM 策略覆盖与最终状态。
   sessionVmmPolicy: SessionVmmPolicySummary;
+}
+
+// SessionProviderUsageTokenSummary carries one live Provider token snapshot.
+// SessionProviderUsageTokenSummary 携带一份实时 Provider Token 快照。
+export interface SessionProviderUsageTokenSummary {
+  // Provider-reported input tokens when known.
+  // Provider 报告的输入 Token，未知时为空。
+  inputTokens?: number | null;
+  // Normalized uncached input tokens when known.
+  // 规范化的非缓存输入 Token，未知时为空。
+  uncachedInputTokens?: number | null;
+  // Provider-reported cached input tokens when known.
+  // Provider 报告的缓存命中输入 Token，未知时为空。
+  cachedInputTokens?: number | null;
+  // Provider-reported cache-creation input tokens when known.
+  // Provider 报告的缓存写入输入 Token，未知时为空。
+  cacheCreationInputTokens?: number | null;
+  // Provider-reported output tokens when known.
+  // Provider 报告的输出 Token，未知时为空。
+  outputTokens?: number | null;
+  // Provider-reported reasoning tokens when known.
+  // Provider 报告的推理 Token，未知时为空。
+  reasoningTokens?: number | null;
+  // Provider-reported total tokens when known.
+  // Provider 报告的总 Token，未知时为空。
+  totalTokens?: number | null;
+}
+
+// SessionProviderUsageCallSummary carries the most recent physical request lifecycle.
+// SessionProviderUsageCallSummary 携带最近一次物理请求生命周期。
+export interface SessionProviderUsageCallSummary {
+  // Stable physical Provider request identifier.
+  // 稳定的物理 Provider 请求标识。
+  providerCallId: string;
+  // Stable execution owner category.
+  // 稳定的执行归属类别。
+  ownerKind: string;
+  // Request lifecycle status.
+  // 请求生命周期状态。
+  status: string;
+  // Usage facts known for this request.
+  // 此请求已知的用量事实。
+  usage?: SessionProviderUsageTokenSummary | null;
+  // Provider dispatch timestamp in Unix milliseconds.
+  // Provider 分发时间的 Unix 毫秒时间戳。
+  startedAtMs?: number | null;
+  // Provider terminal timestamp in Unix milliseconds.
+  // Provider 终态时间的 Unix 毫秒时间戳。
+  completedAtMs?: number | null;
+  // Stable redacted error category.
+  // 稳定的脱敏错误类别。
+  errorCategory?: string | null;
+  // Stable redacted error code.
+  // 稳定的脱敏错误代码。
+  errorCode?: string | null;
+}
+
+// SessionProviderUsageSummary carries live physical Provider accounting for one conversation.
+// SessionProviderUsageSummary 携带单个会话的实时物理 Provider 统计。
+export interface SessionProviderUsageSummary {
+  // Number of physical Provider requests dispatched.
+  // 已分发的物理 Provider 请求数量。
+  providerCallCount: number;
+  // Number of requests awaiting terminal events.
+  // 等待终态事件的请求数量。
+  inFlightCallCount: number;
+  // Number of terminal requests without usable usage facts.
+  // 未提供可用用量事实的终态请求数量。
+  unknownUsageCallCount: number;
+  // Latest usable usage snapshot.
+  // 最近一份可用用量快照。
+  lastUsage?: SessionProviderUsageTokenSummary | null;
+  // Cumulative usable usage across terminal requests.
+  // 全部终态请求的可用用量累计值。
+  cumulativeUsage?: SessionProviderUsageTokenSummary | null;
+  // Latest physical request lifecycle.
+  // 最近一次物理请求生命周期。
+  latestCall?: SessionProviderUsageCallSummary | null;
+  // Monotonic usage revision.
+  // 单调递增的用量版本号。
+  usageRevision: number;
 }
 
 // SessionAddonsChangedResponse carries addon state returned by direct RPC calls.

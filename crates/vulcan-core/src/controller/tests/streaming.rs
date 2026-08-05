@@ -151,7 +151,21 @@ fn run_user_turn_streaming_skips_partial_checkpoint_when_batch_tool_fails() {
             .await;
 
         assert!(result.is_err());
-        assert!(checkpoints.is_empty());
+        // The Provider response is durable before the failing tool batch is attempted.
+        // 工具批次失败前，Provider 响应已经先完成可靠同步。
+        assert_eq!(checkpoints.len(), 1);
+        assert_eq!(
+            checkpoints[0].1,
+            Some(ProviderUsageSnapshot {
+                input_tokens: Some(10),
+                uncached_input_tokens: Some(10),
+                output_tokens: Some(2),
+                reasoning_tokens: Some(1),
+                total_tokens: Some(13),
+                cached_input_tokens: None,
+                cache_creation_input_tokens: None,
+            })
+        );
         assert!(
             !controller
                 .snapshot()

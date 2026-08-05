@@ -56,6 +56,7 @@ fn build_task_start_test_runtime_context(
             conversation_state: SessionConversationState::default(),
             context_compaction_policy: None,
             context_budget_override: None,
+            context_window_prefill_input_tokens: None,
             execution_mode: String::from("build"),
             temperature: None,
             reasoning_effort: ReasoningEffortLevel::High,

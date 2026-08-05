@@ -10,6 +10,15 @@ use vulcan_hooks::{HookContext, HookScope};
 /// Drop-safe forwarding guard that guarantees an active request receives a cancelled terminal Hook.
 /// 支持安全丢弃的转发守卫，保证活动请求收到取消终态 Hook。
 pub(crate) struct ProviderTelemetryHookGuard {
+    /// Shared service state used to close live usage accounting on an aborted stream.
+    /// 用于在流任务中止时关闭实时用量统计的共享服务状态。
+    state: SharedServiceBridgeState,
+    /// Optional persistence runtime used when cancellation happens during task drop.
+    /// 任务丢弃期间发生取消时使用的可选持久化运行时。
+    controller_runtime: Option<ControllerRuntimeHandle>,
+    /// Optional WebUI emitter used to publish the cancellation accounting delta.
+    /// 用于发布取消记账增量的可选 WebUI 发射器。
+    app: Option<ServiceEventEmitter>,
     /// Protocol tracker that retains only the active request's redacted started payload.
     /// 仅保留活动请求脱敏开始载荷的协议跟踪器。
     cancellation: ProviderRequestTelemetryCancellationTracker,
@@ -19,19 +28,24 @@ pub(crate) struct ProviderTelemetryHookGuard {
 }
 
 impl ProviderTelemetryHookGuard {
-    /// Creates one stream-local telemetry forwarding guard.
-    /// 创建一个流局部遥测转发守卫。
+    /// Creates a guard that can persist and project cancellation accounting during Drop.
+    /// 创建一个可在 Drop 期间持久化并投影取消记账的守卫。
     ///
     /// # Parameters
     /// 参数
-    /// `state` resolves the current Vulcan Plugin runtime and canonical project ownership.
-    /// `state` 解析当前 Vulcan 插件运行时与规范项目归属。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns an empty guard ready to forward ordered events.
-    /// 返回一个可转发有序事件的空守卫。
-    pub(crate) fn new(state: SharedServiceBridgeState) -> Self {
+    /// `state` owns the authoritative workspace runtime state.
+    /// `state` 持有权威工作区运行时状态。
+    /// `controller_runtime` persists a synthetic terminal usage snapshot when task cancellation
+    /// bypasses the normal stream-drain path.
+    /// `controller_runtime` 在任务取消绕过正常流排空路径时持久化合成终态用量快照。
+    /// `app` receives the matching live addon delta when the owning surface is still available.
+    /// `app` 在所属界面仍可用时接收对应的实时附属状态增量。
+    pub(crate) fn new_with_persistence(
+        state: SharedServiceBridgeState,
+        controller_runtime: Option<ControllerRuntimeHandle>,
+        app: Option<ServiceEventEmitter>,
+    ) -> Self {
+        let accounting_state = state.clone();
         // sender and receiver form one bounded low-frequency Effect queue per execution stream.
         // sender 与 receiver 为每条执行流构成一个有界低频 Effect 队列。
         let (sender, mut receiver) = tokio::sync::mpsc::channel(64);
@@ -41,9 +55,18 @@ impl ProviderTelemetryHookGuard {
             }
         });
         Self {
+            state: accounting_state,
+            controller_runtime,
+            app,
             cancellation: ProviderRequestTelemetryCancellationTracker::default(),
             sender,
         }
+    }
+
+    /// Takes the synthetic cancelled terminal event for normal stream-exit handling.
+    /// 取出合成的取消终态事件，供正常流退出路径处理。
+    pub(crate) fn take_cancelled_event(&mut self) -> Option<ProviderRequestTelemetryEvent> {
+        self.cancellation.take_cancelled_event()
     }
 
     /// Observes and forwards one exact ordered telemetry event.
@@ -59,9 +82,11 @@ impl ProviderTelemetryHookGuard {
     /// Returns no value because Effect Hook dispatch remains non-blocking.
     /// 不返回值，因为 Effect Hook 调度保持非阻塞。
     pub(crate) fn forward(&mut self, event: ProviderRequestTelemetryEvent) {
-        if self.sender.try_send(event.clone()).is_ok() {
-            self.cancellation.observe(&event);
-        } else {
+        // Track lifecycle state before best-effort Hook delivery so queue backpressure cannot
+        // erase the cancellation terminal needed for authoritative usage accounting.
+        // 先记录生命周期，再尽力投递 Hook，避免队列背压抹掉权威用量记账所需的取消终态。
+        self.cancellation.observe(&event);
+        if self.sender.try_send(event).is_err() {
             eprintln!("[webui-service] provider telemetry Hook queue is saturated or closed");
         }
     }
@@ -71,12 +96,39 @@ impl Drop for ProviderTelemetryHookGuard {
     /// Emits one synthetic cancelled terminal event when the consumer future is aborted or dropped.
     /// 当消费 Future 被中止或丢弃时发出一条合成取消终态事件。
     fn drop(&mut self) {
-        if let Some(event) = self.cancellation.take_cancelled_event()
-            && self.sender.try_send(event).is_err()
-        {
-            eprintln!(
-                "[webui-service] provider cancellation telemetry could not enter the Hook queue"
-            );
+        if let Some(event) = self.cancellation.take_cancelled_event() {
+            match apply_provider_request_usage_telemetry(&self.state, &event) {
+                Ok(Some(snapshot)) => {
+                    if let Some(controller_runtime) = self.controller_runtime.clone() {
+                        spawn_workspace_session_persist_task(
+                            self.state.clone(),
+                            controller_runtime,
+                            snapshot,
+                            event.session_id,
+                            Some(String::from("provider_usage_cancelled_drop")),
+                        );
+                    }
+                    if let Some(app) = self.app.as_ref()
+                        && let Err(error) =
+                            emit_session_addons_changed_delta(app, &self.state, event.session_id)
+                    {
+                        eprintln!(
+                            "[webui-service] provider cancellation usage delta emit failed: {error}"
+                        );
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    eprintln!(
+                        "[webui-service] provider cancellation usage accounting failed: {error}"
+                    );
+                }
+            }
+            if self.sender.try_send(event).is_err() {
+                eprintln!(
+                    "[webui-service] provider cancellation telemetry could not enter the Hook queue"
+                );
+            }
         }
     }
 }

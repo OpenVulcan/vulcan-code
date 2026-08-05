@@ -111,9 +111,15 @@ pub(super) fn runtime_state_has_queued_pending_prompt_work(
 pub(super) fn session_has_blocking_system_prompt_work(
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
+    has_active_stream_task: bool,
     has_active_run: bool,
     has_precheck_progress: bool,
 ) -> bool {
+    // An active stream owner is busy even when its kernel marker is between phases.
+    // 即使内核标记正处于阶段切换中，活动流所有者仍表示会话繁忙。
+    if has_active_stream_task {
+        return true;
+    }
     let Some(runtime_state) = workspace_snapshot.session_runtime_state.get(&session_id) else {
         return has_active_run;
     };

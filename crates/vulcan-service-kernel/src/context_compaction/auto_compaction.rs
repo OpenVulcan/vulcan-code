@@ -212,6 +212,7 @@ pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
     let terminal_result = stream_webui_context_compaction_execution(
         app,
         state,
+        controller_runtime,
         job_request,
         session_id,
         &status_message_id,
@@ -254,14 +255,15 @@ pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
             } else {
                 "auto_context_compaction"
             };
-            spawn_context_compaction_persist_task(
+            persist_context_compaction_snapshot(
                 state.clone(),
                 controller_runtime.clone(),
                 snapshot,
                 session_id,
                 status_message_id.clone(),
                 Some(String::from(persist_reason)),
-            );
+            )
+            .await?;
             if let Some(error) = rejection_error {
                 return Err(error);
             }

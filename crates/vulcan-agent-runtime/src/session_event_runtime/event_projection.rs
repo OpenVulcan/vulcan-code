@@ -40,9 +40,7 @@ pub fn append_runtime_event_projection_to_state(
             now,
             event,
         )?,
-        RuntimeEventKind::Retrying
-        | RuntimeEventKind::ProviderWaiting
-        | RuntimeEventKind::TransportFallback => {
+        RuntimeEventKind::Retrying | RuntimeEventKind::TransportFallback => {
             append_provider_transport_note_projection_to_state(
                 &mut draft_runtime_state,
                 session_id,
@@ -58,8 +56,8 @@ pub fn append_runtime_event_projection_to_state(
     Ok(projected)
 }
 
-/// Appends one durable display-only note for Provider waiting, retry, or transport fallback.
-/// 为 Provider 等待、重试或传输回退追加一条持久化的纯显示备注。
+/// Appends one durable display-only note for Provider retry or transport fallback.
+/// 为 Provider 重试或传输回退追加一条持久化的纯显示备注。
 ///
 /// `runtime_state` owns the durable session conversation state.
 /// `runtime_state` 持有持久化会话对话状态。

@@ -110,7 +110,11 @@ pub(crate) fn maybe_start_webui_detached_subagent_task_listener(
         let mut record_ids = SessionStreamingRecordIds::default();
         // providerTelemetryGuard survives for the complete detached child-event subscription.
         // providerTelemetryGuard 在完整分离子事件订阅期间保持存活。
-        let mut provider_telemetry_guard = ProviderTelemetryHookGuard::new(state.clone());
+        let mut provider_telemetry_guard = ProviderTelemetryHookGuard::new_with_persistence(
+            state.clone(),
+            Some(controller_runtime.clone()),
+            Some(app.clone()),
+        );
         let mut stream = Box::pin(detached_stream);
         while let Some(event) = stream.next().await {
             webui_trace(
@@ -136,6 +140,20 @@ pub(crate) fn maybe_start_webui_detached_subagent_task_listener(
             {
                 eprintln!("[webui-service] detached subagent event failed: {error}");
             }
+        }
+        if let Some(event) = provider_telemetry_guard.take_cancelled_event()
+            && let Err(error) = process_provider_request_telemetry_event(
+                &state,
+                &controller_runtime,
+                Some(&app),
+                &mut provider_telemetry_guard,
+                event,
+                "detached_provider_usage_cancelled",
+            )
+        {
+            eprintln!(
+                "[webui-service] detached provider cancellation usage update failed: {error}"
+            );
         }
         // Stream exhaustion without a Finished event must not leave child transcript rows active forever.
         // 缺少 Finished 事件的流耗尽不得让子任务转录行永久保持活跃。
@@ -625,8 +643,14 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
         ExecutionStreamEvent::Prepared(_) => Ok(()),
         ExecutionStreamEvent::ProviderRequestCheckpoint { .. } => Ok(()),
         ExecutionStreamEvent::ProviderRequestTelemetry(event) => {
-            provider_telemetry_guard.forward(event);
-            Ok(())
+            process_provider_request_telemetry_event(
+                state,
+                controller_runtime,
+                Some(app),
+                provider_telemetry_guard,
+                event,
+                "detached_provider_usage_telemetry",
+            )
         }
         ExecutionStreamEvent::ProviderLoweringRepair { session_id, event } => {
             record_webui_provider_lowering_repair(controller_runtime, session_id, event)

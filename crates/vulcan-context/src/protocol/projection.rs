@@ -770,11 +770,13 @@ pub fn merge_session_messages_with_conversation_state_records(
         .iter()
         .position(|message| projected_ids.contains(message.id.as_str()))
     else {
-        // merged_messages appends a disjoint runtime segment after loaded history.
-        // merged_messages 将没有共享锚点的运行态片段追加到已加载历史之后。
-        let mut merged_messages = existing_messages.to_vec();
-        merged_messages.extend(projected_messages);
-        return merged_messages;
+        // A disjoint runtime segment must still use timestamps when available; blind tail append
+        // can place an older rebuilt record after newer display data during compaction recovery.
+        // 没有共享锚点的运行态片段仍须在时间戳可用时排序；盲目追加会让压缩恢复中的旧记录跑到新显示数据之后。
+        return merge_disjoint_session_messages_by_created_at(
+            existing_messages,
+            projected_messages,
+        );
     };
 
     // merged_messages keeps history before the runtime anchor, then emits canonical runtime order.
@@ -785,15 +787,71 @@ pub fn merge_session_messages_with_conversation_state_records(
             .saturating_add(projected_messages.len()),
     );
     merged_messages.extend_from_slice(&existing_messages[..first_shared_index]);
-    merged_messages.extend(projected_messages);
-    // trailing_unowned_messages preserves display-only rows that the runtime state does not own.
-    // trailing_unowned_messages 保留运行态不拥有的显示层尾部记录。
-    merged_messages.extend(
-        existing_messages[first_shared_index..]
-            .iter()
-            .filter(|message| !projected_ids.contains(message.id.as_str()))
-            .cloned(),
-    );
+    // trailing_unowned_messages preserves display-only rows while allowing timestamped stale rows
+    // to return to their chronological position instead of being appended after new canonical data.
+    // trailing_unowned_messages 保留仅显示行，并让带时间戳的旧行回到时间顺序中，避免被追加到新的规范数据之后。
+    let trailing_unowned_messages = existing_messages[first_shared_index..]
+        .iter()
+        .filter(|message| !projected_ids.contains(message.id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut trailing_index = 0;
+    for projected_message in projected_messages {
+        if let Ok(projected_created_at) = projected_message.created_at.parse::<u128>() {
+            while let Some(unowned_message) = trailing_unowned_messages.get(trailing_index) {
+                let Ok(unowned_created_at) = unowned_message.created_at.parse::<u128>() else {
+                    break;
+                };
+                if unowned_created_at >= projected_created_at {
+                    break;
+                }
+                merged_messages.push(unowned_message.clone());
+                trailing_index += 1;
+            }
+        }
+        merged_messages.push(projected_message);
+    }
+    merged_messages.extend(trailing_unowned_messages.into_iter().skip(trailing_index));
+    merged_messages
+}
+
+/// Merges disjoint runtime records using creation time while preserving deterministic source order.
+/// 使用创建时间合并没有共享锚点的运行态记录，同时保持确定性的来源顺序。
+///
+/// # Parameters
+/// 参数
+/// `existing_messages` are display rows already retained by the workspace snapshot.
+/// `existing_messages` 是工作区快照中已经保留的显示行。
+/// `projected_messages` are canonical runtime rows with no shared identity anchor.
+/// `projected_messages` 是没有共享身份锚点的规范运行态记录。
+///
+/// # Returns
+/// 返回值
+/// A stable merge ordered by valid timestamps; records without timestamps retain append order.
+/// 按有效时间戳稳定合并；缺少时间戳的记录保留追加顺序。
+fn merge_disjoint_session_messages_by_created_at(
+    existing_messages: &[SessionMessageEntry],
+    projected_messages: Vec<SessionMessageEntry>,
+) -> Vec<SessionMessageEntry> {
+    let mut merged_messages = existing_messages.to_vec();
+    for projected_message in projected_messages {
+        let Some(projected_created_at) = projected_message.created_at.parse::<u128>().ok() else {
+            merged_messages.push(projected_message);
+            continue;
+        };
+        let insert_at = merged_messages.iter().position(|existing_message| {
+            existing_message
+                .created_at
+                .parse::<u128>()
+                .ok()
+                .is_some_and(|existing_created_at| existing_created_at > projected_created_at)
+        });
+        if let Some(insert_at) = insert_at {
+            merged_messages.insert(insert_at, projected_message);
+        } else {
+            merged_messages.push(projected_message);
+        }
+    }
     merged_messages
 }
 

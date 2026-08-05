@@ -48,6 +48,9 @@ pub struct RequestContextCompactionBudgetSnapshotInput<'a> {
     /// Optional provider-observed usage used to calibrate estimates.
     /// 用于校准估算值的可选 Provider 实测用量。
     pub observed_usage: Option<&'a ProviderUsageSnapshot>,
+    /// Absolute input-token baseline for BodyAfterPrefix scope in the active compaction window.
+    /// 当前压缩窗口 BodyAfterPrefix 范围使用的绝对输入 Token 基线。
+    pub prefill_input_tokens: Option<usize>,
     /// Optional host token estimator.
     /// 可选宿主 Token 估算器。
     pub estimator: Option<&'a dyn ContextTokenEstimator>,
@@ -72,6 +75,7 @@ pub fn build_request_context_compaction_budget_snapshot(
             reasoning: map_reasoning_effort(input.reasoning.requested_effort),
             request_snapshot: input.request_snapshot,
             observed_usage: input.observed_usage,
+            prefill_input_tokens: input.prefill_input_tokens,
         },
         RequestContextBudgetSnapshotOptions {
             compaction_policy: Some(compaction_policy),
@@ -234,13 +238,15 @@ mod tests {
                 compaction_policy: Some(policy),
                 context_budget_override: None,
                 observed_usage: None,
+                prefill_input_tokens: None,
                 estimator: None,
             },
         );
 
         assert!(!budget.compaction_auto_enabled);
-        assert_eq!(budget.reserved_compaction_tokens, 1_234);
-        assert_eq!(budget.effective_input_limit, Some(18_766));
+        assert_eq!(budget.reserved_compaction_tokens, 0);
+        assert_eq!(budget.effective_input_limit, Some(19_000));
+        assert_eq!(budget.auto_compact_limit, Some(18_000));
 
         let enabled_budget = build_request_context_compaction_budget_snapshot(
             RequestContextCompactionBudgetSnapshotInput {
@@ -253,11 +259,43 @@ mod tests {
                 compaction_policy: Some(ContextCompactionPolicy::default()),
                 context_budget_override: None,
                 observed_usage: None,
+                prefill_input_tokens: None,
                 estimator: None,
             },
         );
 
         assert!(enabled_budget.compaction_auto_enabled);
+    }
+
+    /// Verifies Codex thresholds use 95% of the raw window for admission and 90% for automatic compaction.
+    /// 验证 Codex 阈值以原始窗口的 95% 作为准入上限、以 90% 作为自动压缩阈值。
+    #[test]
+    fn request_budget_snapshot_uses_codex_raw_window_thresholds() {
+        let capabilities = ModelCapabilities {
+            context_limit: Some(272_000),
+            ..ModelCapabilities::default()
+        };
+        let reasoning = ProviderRuntimeReasoningResolution::default();
+        let request_snapshot = test_request_snapshot();
+
+        let budget = build_request_context_compaction_budget_snapshot(
+            RequestContextCompactionBudgetSnapshotInput {
+                provider_id: "test-provider",
+                model_id: "test-model",
+                protocol_profile_id: vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+                capabilities: &capabilities,
+                reasoning: &reasoning,
+                request_snapshot: &request_snapshot,
+                compaction_policy: Some(ContextCompactionPolicy::default()),
+                context_budget_override: None,
+                observed_usage: None,
+                prefill_input_tokens: None,
+                estimator: None,
+            },
+        );
+
+        assert_eq!(budget.effective_context_window, Some(258_400));
+        assert_eq!(budget.auto_compact_limit, Some(244_800));
     }
 
     /// Verifies request-level context budgets cap the effective input limit below the model window.
@@ -282,11 +320,12 @@ mod tests {
                 compaction_policy: Some(ContextCompactionPolicy::default()),
                 context_budget_override: Some(12_000),
                 observed_usage: None,
+                prefill_input_tokens: None,
                 estimator: None,
             },
         );
 
-        assert_eq!(budget.effective_input_limit, Some(3_808));
+        assert_eq!(budget.effective_input_limit, Some(11_400));
 
         let model_capped_budget = build_request_context_compaction_budget_snapshot(
             RequestContextCompactionBudgetSnapshotInput {
@@ -299,10 +338,11 @@ mod tests {
                 compaction_policy: Some(ContextCompactionPolicy::default()),
                 context_budget_override: Some(30_000),
                 observed_usage: None,
+                prefill_input_tokens: None,
                 estimator: None,
             },
         );
 
-        assert_eq!(model_capped_budget.effective_input_limit, Some(11_808));
+        assert_eq!(model_capped_budget.effective_input_limit, Some(19_000));
     }
 }

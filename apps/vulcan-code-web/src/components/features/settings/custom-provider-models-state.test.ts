@@ -152,6 +152,7 @@ function snapshotFixture(): PublicAiSettingsSnapshot {
     inferenceProfiles: {},
     inferenceRouteDiagnostics: [],
     internalModelOverrides: {},
+    contextWindowPolicyOverrides: {},
   }
 }
 

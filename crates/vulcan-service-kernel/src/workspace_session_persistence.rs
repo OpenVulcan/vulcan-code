@@ -298,74 +298,19 @@ pub(crate) fn spawn_workspace_session_runtime_state_persist_task(
         session_id,
         "runtime-state persist version failed",
         move || async move {
-            let Some(runtime_state) = workspace_snapshot
-                .session_runtime_state
-                .get(&session_id)
-                .cloned()
-                .or_else(|| {
-                    workspace_snapshot
-                        .archived_session_runtime_state
-                        .get(&session_id)
-                        .cloned()
-                })
-            else {
-                return;
-            };
-            // persist_result keeps the store call readable inside the version-gated task.
-            // persist_result 让版本门闸任务内的存储调用保持易读。
-            let persist_result =
-                vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
-                    controller_runtime,
-                    session_id,
-                    &runtime_state,
-                )
-                .await;
-            if let Err(error) = persist_result {
+            if let Err(error) = persist_workspace_session_update_unlocked(
+                controller_runtime,
+                &workspace_snapshot,
+                session_id,
+            )
+            .await
+            {
                 let reason_label = reason.as_deref().unwrap_or("runtime_state");
                 eprintln!(
-                    "[webui-service] background runtime-state persist failed ({reason_label}): {error}"
+                    "[webui-service] background runtime-state session persist failed ({reason_label}): {error}"
                 );
             }
         },
-    );
-}
-
-/// Spawns a background write for the current loaded transcript without touching runtime state.
-/// 为当前已载入转录启动后台写入，且不触碰运行态。
-///
-/// # Parameters
-/// # 参数
-/// `state` owns the live transcript persistence version table.
-/// `state` 持有运行中转录持久化版本表。
-/// `controller_runtime` provides workspace persistence.
-/// `controller_runtime` 提供工作区持久化能力。
-/// `workspace_snapshot` is the current workspace snapshot containing loaded transcript rows.
-/// `workspace_snapshot` 是包含已载入转录行的当前工作区快照。
-/// `session_id` selects the session transcript to persist.
-/// `session_id` 选择要持久化的会话转录。
-/// `reason` is an optional diagnostic label for logs.
-/// `reason` 是用于日志的可选诊断标签。
-pub(crate) fn spawn_workspace_session_transcript_persist_task(
-    state: SharedServiceBridgeState,
-    controller_runtime: ControllerRuntimeHandle,
-    workspace_snapshot: WorkspaceSnapshot,
-    session_id: SessionId,
-    reason: Option<String>,
-) {
-    if !workspace_snapshot_contains_regular_session(&workspace_snapshot, session_id) {
-        return;
-    }
-    let loaded_messages =
-        loaded_session_messages_from_workspace(&workspace_snapshot, session_id).unwrap_or_default();
-    if loaded_messages.is_empty() {
-        return;
-    }
-    spawn_session_transcript_messages_persist_task(
-        state,
-        controller_runtime,
-        session_id,
-        loaded_messages,
-        reason,
     );
 }
 

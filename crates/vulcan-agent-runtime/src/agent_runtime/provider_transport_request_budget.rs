@@ -90,6 +90,7 @@ impl ProviderRequestBudgetGuard {
                 compaction_policy: self.context_compaction_policy,
                 context_budget_override: self.context_budget_override,
                 observed_usage: None,
+                prefill_input_tokens: None,
                 estimator: self.token_budget_runtime.estimator(),
             },
         );

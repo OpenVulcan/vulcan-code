@@ -52,10 +52,13 @@ pub(super) fn build_task_runtime_preparation_request(
         &resolved_config.effective_config.provider_model,
         &context.config,
     );
-    request.provider_id_override = public_model_override
-        .as_ref()
-        .map(|(provider_id, _)| provider_id.clone());
-    request.model_id_override = public_model_override.map(|(_, model_id)| model_id);
+    if let Some((provider_id, model_id)) = public_model_override {
+        request.provider_id_override = Some(provider_id);
+        request.model_id_override = Some(model_id);
+        // A child provider/model pair cannot reuse the parent's credential connection.
+        // 子任务更换供应商/模型后不得继续复用父任务凭据连接。
+        request.connection_id_override = None;
+    }
     request.subagent_prompt_context =
         build_task_subagent_prompt_context(invocation, resolved_config);
     request.task_session_store_root = context.request_template.task_session_store_root.clone();
@@ -112,6 +115,9 @@ fn clear_parent_request_runtime_state_for_task_session(request: &mut ExecutionPr
     request.tool_request_hidden_tool_ids.clear();
     request.system_prompt_hook_blocks.clear();
     request.context_injection = None;
+    // A task session owns a new compaction window and cannot reuse the parent prefill baseline.
+    // 子任务会话拥有新的压缩窗口，不能复用父会话前缀基线。
+    request.context_window_prefill_input_tokens = None;
     request.boundary_events.clear();
     request.runtime_system_updates.clear();
     request.session_goal_context = None;

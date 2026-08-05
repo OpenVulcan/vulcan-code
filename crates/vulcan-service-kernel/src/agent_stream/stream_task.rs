@@ -156,7 +156,11 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
         let mut record_ids = SessionStreamingRecordIds::default();
         // providerTelemetryGuard closes an active physical request even when this task future is aborted.
         // providerTelemetryGuard 即使当前任务 Future 被中止，也会关闭活动真实请求。
-        let mut provider_telemetry_guard = ProviderTelemetryHookGuard::new(task_state.clone());
+        let mut provider_telemetry_guard = ProviderTelemetryHookGuard::new_with_persistence(
+            task_state.clone(),
+            Some(controller_runtime.clone()),
+            Some(app.clone()),
+        );
         // executionProviderGoalId preserves goal ownership across tool-result requests after a goal reaches a stopped state.
         // executionProviderGoalId 在目标进入停止状态后，跨工具结果请求保留目标归属。
         let mut execution_provider_goal_id = request
@@ -343,17 +347,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                                 )
                                 .await
                                 {
-                                    Ok(true) => {
-                                        if let Err(error) = emit_session_addons_changed_delta(
-                                            &app,
-                                            &task_state,
-                                            event.session_id,
-                                        ) {
-                                            eprintln!(
-                                                "[webui-service] provider goal usage delta emit failed: {error}"
-                                            );
-                                        }
-                                    }
+                                    Ok(true) => {}
                                     Ok(false) => {}
                                     Err(error) => {
                                         eprintln!(
@@ -366,7 +360,18 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                         ProviderRequestTelemetryEventKind::FirstToken
                         | ProviderRequestTelemetryEventKind::Retrying => {}
                     }
-                    provider_telemetry_guard.forward(event);
+                    if let Err(error) = process_provider_request_telemetry_event(
+                        &task_state,
+                        &controller_runtime,
+                        Some(&app),
+                        &mut provider_telemetry_guard,
+                        event,
+                        "provider_usage_telemetry",
+                    ) {
+                        eprintln!(
+                            "[webui-service] provider usage telemetry state update failed: {error}"
+                        );
+                    }
                 }
                 ExecutionStreamEvent::ProviderLoweringRepair { session_id, event } => {
                     if let Err(error) = record_webui_provider_lowering_repair(
@@ -504,6 +509,18 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                 }
             }
         };
+        if let Some(event) = provider_telemetry_guard.take_cancelled_event()
+            && let Err(error) = process_provider_request_telemetry_event(
+                &task_state,
+                &controller_runtime,
+                Some(&app),
+                &mut provider_telemetry_guard,
+                event,
+                "provider_usage_cancelled",
+            )
+        {
+            eprintln!("[webui-service] provider cancellation usage state update failed: {error}");
+        }
         // Remaining identities belong to non-Finished exits such as exhaustion or stale ownership and must not remain active.
         // 剩余身份属于流耗尽或旧所有权等非 Finished 退出路径，不能继续保持活跃状态。
         if let Err(error) =
@@ -526,11 +543,12 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
             ),
         );
     };
-    if let Err(error) = spawn_registered_active_stream_task(
+    if let Err(error) = spawn_registered_active_stream_task_with_mode(
         &state,
         session_id,
         active_stream_task_id,
         session_goal_id,
+        ActiveStreamTaskRegistrationMode::RejectIfOccupied,
         task_future,
     ) {
         eprintln!("[webui-service] register stream task failed: {error}");
