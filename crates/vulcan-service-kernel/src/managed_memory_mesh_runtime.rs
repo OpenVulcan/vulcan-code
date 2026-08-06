@@ -31,14 +31,14 @@ use vulcan_service_api::{
     inference_service_discovery_snapshot_path,
 };
 use vulcan_vmm::{
-    MANAGED_CONTRACT_OWNER, MANAGED_CONTRACT_VERSION, MANAGED_INFERENCE_MODE, ManagedAssets,
-    ManagedConfig, ManagedControllerLease, ManagedGrpcConfig, ManagedGrpcKeepalive,
-    ManagedGrpcRequestTimeout, ManagedInferenceConfig, ManagedLoggingConfig,
-    ManagedManagementConfig, ManagedMemoryPipelineConfig, ManagedNoiseConfig, ManagedParent,
-    ManagedPiiConfig, ManagedPostActionConfig, ManagedPreCheckConfig, ManagedPromptConfig,
-    ManagedRelationalConfig, ManagedRetentionConfig, ManagedRuntimeConfig, ManagedStatus,
-    ManagedStorageConfig, ManagedVectorConfig, ResolveProjectRequest, ResolveUserRequest,
-    TonicVmmClient, VmmClient, VmmTransportConfig,
+    MANAGED_CONTRACT_OWNER, MANAGED_CONTRACT_VERSION, MANAGED_INFERENCE_MODE,
+    MANAGED_RUNTIME_BUILD_ID, ManagedAssets, ManagedConfig, ManagedControllerLease,
+    ManagedGrpcConfig, ManagedGrpcKeepalive, ManagedGrpcRequestTimeout, ManagedInferenceConfig,
+    ManagedLoggingConfig, ManagedManagementConfig, ManagedMemoryPipelineConfig, ManagedNoiseConfig,
+    ManagedParent, ManagedPiiConfig, ManagedPostActionConfig, ManagedPreCheckConfig,
+    ManagedPromptConfig, ManagedRelationalConfig, ManagedRetentionConfig, ManagedRuntimeConfig,
+    ManagedStatus, ManagedStorageConfig, ManagedVectorConfig, ResolveProjectRequest,
+    ResolveUserRequest, TonicVmmClient, VmmClient, VmmTransportConfig,
 };
 
 /// Stable isolated Controller space used only by the managed VMM runtime.
@@ -52,6 +52,10 @@ const MANAGED_VMM_SPACE_LABEL: &str = "VulcanMemoryMesh";
 /// Maximum time allowed for child readiness and authenticated Healthz.
 /// 子进程就绪与鉴权 Healthz 的最长允许时间。
 const MANAGED_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Stable manifest filename placed beside the packaged VMM configuration assets.
+/// 放置在打包 VMM 配置资产旁的稳定清单文件名。
+const MANAGED_RUNTIME_MANIFEST_FILE: &str = "vmm-runtime-manifest.json";
 
 /// Version of the persistent embedding-space compatibility marker.
 /// 持久化向量空间兼容标记的版本。
@@ -1457,6 +1461,7 @@ fn default_managed_manifest(
     let request_timeout = milliseconds_as_duration(vmm_config.receive_timeout_ms.unwrap_or(30_000));
     Ok(ManagedConfig {
         contract_version: MANAGED_CONTRACT_VERSION,
+        runtime_build_id: String::from(MANAGED_RUNTIME_BUILD_ID),
         owner: String::from(MANAGED_CONTRACT_OWNER),
         instance_id: instance_id.to_string(),
         generation,
@@ -1718,6 +1723,7 @@ fn validate_status(
     manifest_digest: &str,
 ) -> Result<(), String> {
     if status.contract_version != MANAGED_CONTRACT_VERSION
+        || status.runtime_build_id != MANAGED_RUNTIME_BUILD_ID
         || status.instance_id != instance_id
         || status.generation != generation
         || status.process_id != child_id
@@ -1962,7 +1968,140 @@ pub(crate) fn validate_managed_vmm_package(path: &Path) -> Result<PathBuf, Strin
     if !system_root.is_dir() {
         return Err(format!("VMM 打包资源目录不存在：{}", system_root.display()));
     }
+    validate_managed_runtime_manifest(&path, &system_root)?;
     Ok(path)
+}
+
+/// Validates the packaged build identity, binary digests, and deterministic config-tree digest.
+/// 校验打包构建身份、二进制摘要与确定性的配置树摘要。
+fn validate_managed_runtime_manifest(binary_path: &Path, config_root: &Path) -> Result<(), String> {
+    let manifest_path = config_root.join(MANAGED_RUNTIME_MANIFEST_FILE);
+    let body =
+        fs::read(&manifest_path).map_err(|error| format!("读取 VMM 运行时清单失败：{error}"))?;
+    let manifest: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|error| format!("解析 VMM 运行时清单失败：{error}"))?;
+    if manifest["manifest_version"].as_u64() != Some(1)
+        || manifest["managed_contract_version"].as_u64()
+            != Some(u64::from(MANAGED_CONTRACT_VERSION))
+        || manifest["inference_protocol_version"].as_u64()
+            != Some(u64::from(INFERENCE_SERVICE_API_VERSION))
+        || manifest["build_id"].as_str() != Some(MANAGED_RUNTIME_BUILD_ID)
+    {
+        return Err(String::from("VMM 运行时清单的版本或 build ID 不匹配。"));
+    }
+    for field in ["platform", "source_revision", "source_state_digest"] {
+        if manifest[field]
+            .as_str()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err(format!("VMM 运行时清单缺少非空字段 `{field}`。"));
+        }
+    }
+    let binary_names = [
+        binary_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| String::from("无法解析 VMM 主二进制文件名。"))?,
+        if cfg!(windows) {
+            "vmm-migrate.exe"
+        } else {
+            "vmm-migrate"
+        },
+    ];
+    let binaries = manifest["binaries"]
+        .as_object()
+        .ok_or_else(|| String::from("VMM 运行时清单缺少 binaries 对象。"))?;
+    for binary_name in binary_names {
+        let binary_path = binary_path
+            .parent()
+            .ok_or_else(|| String::from("无法解析 VMM 二进制目录。"))?
+            .join(binary_name);
+        let expected = binaries
+            .get(binary_name)
+            .and_then(|entry| entry.get("sha256"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| format!("VMM 运行时清单缺少 `{binary_name}` 的 SHA-256。"))?;
+        let actual = sha256_file(&binary_path)?;
+        if actual != expected {
+            return Err(format!(
+                "VMM 二进制 `{binary_name}` 的 SHA-256 与清单不匹配。"
+            ));
+        }
+    }
+    let expected_config_digest = manifest["config_assets_sha256"]
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| String::from("VMM 运行时清单缺少 config_assets_sha256。"))?;
+    let actual_config_digest = managed_config_assets_digest(config_root)?;
+    if actual_config_digest != expected_config_digest {
+        return Err(String::from("VMM 配置资产摘要与运行时清单不匹配。"));
+    }
+    Ok(())
+}
+
+/// Computes one stable SHA-256 over sorted relative config paths and their bytes.
+/// 对排序后的相对配置路径及文件字节计算稳定 SHA-256。
+fn managed_config_assets_digest(root: &Path) -> Result<String, String> {
+    let mut files = Vec::new();
+    collect_managed_config_files(root, root, &mut files)?;
+    files.sort();
+    let mut digest = Sha256::new();
+    for path in files {
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|error| format!("解析 VMM 配置相对路径失败：{error}"))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        digest.update(relative.as_bytes());
+        digest.update([0]);
+        let bytes = fs::read(&path)
+            .map_err(|error| format!("读取 VMM 配置资产 `{}` 失败：{error}", path.display()))?;
+        digest.update(bytes);
+        digest.update([0]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+/// Collects regular configuration files while rejecting symlink escapes.
+/// 收集普通配置文件，同时拒绝符号链接逃逸。
+fn collect_managed_config_files(
+    root: &Path,
+    current: &Path,
+    files: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    for entry in fs::read_dir(current)
+        .map_err(|error| format!("读取 VMM 配置目录 `{}` 失败：{error}", current.display()))?
+    {
+        let entry = entry.map_err(|error| format!("读取 VMM 配置目录项失败：{error}"))?;
+        let entry_path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("读取 VMM 配置目录项类型失败：{error}"))?;
+        if file_type.is_symlink() {
+            return Err(format!(
+                "VMM 配置资产不允许使用符号链接：{}",
+                entry_path.display()
+            ));
+        }
+        if file_type.is_dir() {
+            collect_managed_config_files(root, &entry_path, files)?;
+        } else if file_type.is_file()
+            && entry_path.file_name().and_then(|name| name.to_str())
+                != Some(MANAGED_RUNTIME_MANIFEST_FILE)
+        {
+            files.push(entry_path);
+        }
+    }
+    Ok(())
+}
+
+/// Computes one lowercase SHA-256 for an exact packaged binary.
+/// 为精确的打包二进制计算小写 SHA-256。
+fn sha256_file(path: &Path) -> Result<String, String> {
+    let bytes = fs::read(path)
+        .map_err(|error| format!("读取 VMM 打包二进制 `{}` 失败：{error}", path.display()))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
 /// Terminates and reaps one child after a bounded graceful observation period.
@@ -2120,6 +2259,7 @@ mod tests {
     fn managed_status_rejects_mismatched_child_identity() {
         let status = ManagedStatus {
             contract_version: MANAGED_CONTRACT_VERSION,
+            runtime_build_id: String::from(MANAGED_RUNTIME_BUILD_ID),
             instance_id: String::from("instance"),
             generation: 7,
             process_id: 42,
@@ -2158,13 +2298,48 @@ mod tests {
         } else {
             "vmm-local"
         });
+        let migrate_binary_path = binary_dir.join(if cfg!(windows) {
+            "vmm-migrate.exe"
+        } else {
+            "vmm-migrate"
+        });
         fs::write(&binary_path, b"test").expect("test binary should be written");
+        fs::write(&migrate_binary_path, b"migrate-test")
+            .expect("maintenance binary should be written");
 
         let error = validate_managed_vmm_package(&binary_path)
             .expect_err("package without configs must be rejected");
         assert!(error.contains("打包资源目录"));
 
-        fs::create_dir_all(root.join("configs")).expect("config directory should be created");
+        let config_root = root.join("configs");
+        fs::create_dir_all(&config_root).expect("config directory should be created");
+        fs::write(config_root.join("base.yaml"), b"fixture: true\n")
+            .expect("fixture config should be written");
+        let config_digest = managed_config_assets_digest(&config_root)
+            .expect("fixture config digest should be computed");
+        let manifest = serde_json::json!({
+            "manifest_version": 1,
+            "platform": if cfg!(windows) { "windows-amd64" } else { "test" },
+            "managed_contract_version": MANAGED_CONTRACT_VERSION,
+            "inference_protocol_version": INFERENCE_SERVICE_API_VERSION,
+            "source_revision": "fixture",
+            "source_state_digest": "fixture",
+            "build_id": MANAGED_RUNTIME_BUILD_ID,
+            "binaries": {
+                binary_path.file_name().unwrap().to_string_lossy(): {
+                    "sha256": sha256_file(&binary_path).expect("fixture binary digest")
+                },
+                migrate_binary_path.file_name().unwrap().to_string_lossy(): {
+                    "sha256": sha256_file(&migrate_binary_path).expect("fixture maintenance digest")
+                }
+            },
+            "config_assets_sha256": config_digest,
+        });
+        fs::write(
+            config_root.join(MANAGED_RUNTIME_MANIFEST_FILE),
+            serde_json::to_vec_pretty(&manifest).expect("fixture manifest should serialize"),
+        )
+        .expect("fixture manifest should be written");
         let resolved = validate_managed_vmm_package(&binary_path)
             .expect("package with adjacent configs should pass");
         assert_eq!(

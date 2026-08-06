@@ -39,8 +39,9 @@ use crate::{
     SharedServiceBridgeState, begin_public_ai_configuration_transaction,
     configured_inference::{VMM_CONSUMER_PROFILE_ID, model_supports_disabled_reasoning},
     emit_workbench_event, mutate_public_ai_configuration,
-    mutate_public_ai_configuration_in_transaction, public_ai_provider_rows_for_selection,
-    shell_host_from_state,
+    mutate_public_ai_configuration_in_transaction,
+    mutate_public_ai_configuration_with_commit_in_transaction,
+    public_ai_provider_rows_for_selection, shell_host_from_state,
 };
 
 /// Stable LLM purpose key used by the library-owned configured-inference profile.
@@ -5229,55 +5230,61 @@ pub(super) async fn service_select_public_ai_model(
             request.connection_id, request.model_id
         ));
     }
-    let configuration =
-        mutate_public_ai_configuration(&state, "选择公共 AI 模型失败", |configuration| {
-            configuration.connection_graph.remember_model_connection(
-                request.provider_id.as_str(),
-                request.model_id.as_str(),
-                request.connection_id.as_str(),
-            )?;
-            if conversation_id.is_none() {
-                configuration.active = Some(ActiveAiModelSelection {
-                    provider_id: request.provider_id.clone(),
-                    model_id: request.model_id.clone(),
-                    connection_id: request.connection_id.clone(),
-                });
-                runtime.resolve_active_selection(configuration)?;
-            } else {
-                runtime.resolve_connection_model_selection(
-                    configuration,
-                    request.connection_id.as_str(),
+    let _transaction = begin_public_ai_configuration_transaction().await;
+    let (configuration, persistence_context) =
+        mutate_public_ai_configuration_with_commit_in_transaction(
+            &state,
+            "选择公共 AI 模型失败",
+            |configuration| {
+                configuration.connection_graph.remember_model_connection(
                     request.provider_id.as_str(),
                     request.model_id.as_str(),
+                    request.connection_id.as_str(),
                 )?;
-            }
-            Ok(())
-        })
-        .await?;
-    // persistence_context captures the exact runtime-controls addon after updating a persisted session.
-    // persistence_context 在更新持久化会话后捕获精确的运行时控制附加状态。
-    let persistence_context = if let Some(session_id) = conversation_id {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("Failed to lock service state: {error}"))?;
-        let workspace = guard
-            .workspace_snapshot
-            .as_mut()
-            .ok_or_else(|| String::from("Workspace is not initialized."))?;
-        let runtime_state = workspace
-            .session_runtime_state
-            .get_mut(&session_id)
-            .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
-        runtime_state.active_provider_id = Some(request.provider_id.clone());
-        runtime_state.active_connection_id = Some(request.connection_id.clone());
-        runtime_state.active_model_id = Some(request.model_id.clone());
-        runtime_state.updated_at = crate::current_unix_millis_text();
-        let controller_runtime = guard.controller_runtime.clone();
-        let workspace_snapshot = guard.workspace_snapshot.clone();
-        Some((controller_runtime, session_id, workspace_snapshot))
-    } else {
-        None
-    };
+                if conversation_id.is_none() {
+                    configuration.active = Some(ActiveAiModelSelection {
+                        provider_id: request.provider_id.clone(),
+                        model_id: request.model_id.clone(),
+                        connection_id: request.connection_id.clone(),
+                    });
+                    runtime.resolve_active_selection(configuration)?;
+                } else {
+                    runtime.resolve_connection_model_selection(
+                        configuration,
+                        request.connection_id.as_str(),
+                        request.provider_id.as_str(),
+                        request.model_id.as_str(),
+                    )?;
+                }
+                Ok(())
+            },
+            |guard, configuration| {
+                // Commit the session model before publishing a workbench snapshot so a follow-up request cannot observe the old route.
+                // 在发布工作台快照前先提交会话模型，避免后续请求观察到旧路由。
+                let persistence_context = if let Some(session_id) = conversation_id {
+                    let workspace = guard
+                        .workspace_snapshot
+                        .as_mut()
+                        .ok_or_else(|| String::from("Workspace is not initialized."))?;
+                    let runtime_state = workspace
+                        .session_runtime_state
+                        .get_mut(&session_id)
+                        .ok_or_else(|| {
+                            format!("Conversation `{session_id}` has no runtime state.")
+                        })?;
+                    runtime_state.active_provider_id = Some(request.provider_id.clone());
+                    runtime_state.active_connection_id = Some(request.connection_id.clone());
+                    runtime_state.active_model_id = Some(request.model_id.clone());
+                    runtime_state.updated_at = crate::current_unix_millis_text();
+                    let controller_runtime = guard.controller_runtime.clone();
+                    let workspace_snapshot = guard.workspace_snapshot.clone();
+                    Some((controller_runtime, session_id, workspace_snapshot))
+                } else {
+                    None
+                };
+                Ok::<_, String>((configuration.clone(), persistence_context))
+            },
+        )?;
     publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
     if let Some((Some(controller_runtime), session_id, Some(workspace_snapshot))) =
         persistence_context

@@ -35,7 +35,6 @@ members = [
     "crates/vulcan-luaskills-prompt",
     "crates/vulcan-luaskills-config",
     "crates/vulcan-ai-contract",
-    "crates/vulcan-ai-protocols",
     "crates/vulcan-llm-core",
     "crates/vulcan-provider-adapters",
     "crates/vulcan-hello",
@@ -84,7 +83,6 @@ vulcan-tools-luaskills-call = { path = "crates/vulcan-tools-luaskills-call" }
 vulcan-luaskills-prompt = { path = "crates/vulcan-luaskills-prompt" }
 vulcan-luaskills-config = { path = "crates/vulcan-luaskills-config" }
 vulcan-ai-contract = { path = "crates/vulcan-ai-contract" }
-vulcan-ai-protocols = { path = "crates/vulcan-ai-protocols" }
 vulcan-llm-core = { path = "crates/vulcan-llm-core" }
 vulcan-provider-adapters = { path = "crates/vulcan-provider-adapters" }
 vldb-controller-client = "0.2.3"

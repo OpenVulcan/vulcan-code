@@ -30,21 +30,38 @@ use vulcan_ai_contract::{
 };
 use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
-    CLAUDE_CODE_MESSAGES_PROFILE_ID, EncodedWireRequest, GEMINI_GENERATE_CONTENT_PROFILE_ID,
+    CLAUDE_CODE_MESSAGES_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID,
     GEMINI_INTERACTIONS_PROFILE_ID, GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
     OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID, ProtocolConversionError,
-    ProtocolRegistry, ProtocolStreamFraming, ProtocolTransportProfile,
-    decode_gemini_count_tokens_response, encode_gemini_count_tokens_request,
+    ProtocolStreamFraming, decode_gemini_count_tokens_response, encode_gemini_count_tokens_request,
     gemini_replay_signature_payload, wrap_openai_reasoning_signature,
 };
 use vulcan_llm_core::{
-    AnthropicReasoningMode, CostCalculator, DEFAULT_RESPONSES_WEBSOCKET_MAX_AGE, ModelPricing,
+    AnthropicReasoningMode, CostCalculator, DEFAULT_RESPONSES_WEBSOCKET_MAX_AGE,
+    EncodedWireRequest, LlmCoreError, LlmProtocolRuntime, ModelPricing, ProtocolTransportProfile,
     ProviderRouteContext, RESPONSES_WEBSOCKET_CONNECTION_LIMIT_CODE, ResponsesWebsocketConfig,
     ResponsesWebsocketSession, UpstreamProtocol, UsageAccumulator, UsageExtractionProfile,
-    UsageRecordKind, project_responses_for_provider,
+    UsageRecordKind, converted_protocol_headers, encode_codex_responses_request,
+    project_responses_for_provider,
 };
 
 use tokio::sync::Mutex as TokioMutex;
+
+/// Supplies the core-owned protocol runtime to the provider execution client.
+/// 为供应商执行客户端提供由核心拥有的协议运行时。
+pub trait ProtocolRuntimeSource {
+    /// Converts the source into the immutable runtime shared by one client.
+    /// 将来源转换成一个客户端共享的不可变运行时。
+    fn into_protocol_runtime(self) -> Arc<LlmProtocolRuntime>;
+}
+
+impl ProtocolRuntimeSource for Arc<LlmProtocolRuntime> {
+    /// Keeps the already core-owned runtime unchanged.
+    /// 保持已经由核心拥有的运行时不变。
+    fn into_protocol_runtime(self) -> Arc<LlmProtocolRuntime> {
+        self
+    }
+}
 
 /// MiniMax documented maximum JSON request-body size.
 /// MiniMax 文档化的 JSON 请求体最大字节数。
@@ -505,9 +522,9 @@ pub struct ProviderExecutionClient {
     /// Shared configured HTTP client.
     /// 共享的已配置 HTTP 客户端。
     pub(crate) http: reqwest::Client,
-    /// Strict protocol profile registry.
-    /// 严格协议 Profile 注册表。
-    protocols: Arc<ProtocolRegistry>,
+    /// Core-owned protocol runtime facade.
+    /// 由核心拥有的协议运行时门面。
+    protocols: Arc<LlmProtocolRuntime>,
     /// Process-local prepared media references shared by preflight and dispatch clones.
     /// 由分派前准备与实际分派副本共享的进程内媒体引用缓存。
     prepared_media: Arc<StdMutex<BTreeMap<String, PreparedMediaCacheEntry>>>,
@@ -586,17 +603,20 @@ impl ProviderExecutionClient {
     ///
     /// # Parameters
     /// 参数
-    /// `http` is the shared HTTP client and `protocols` is the strict profile registry.
-    /// `http` 是共享 HTTP 客户端，`protocols` 是严格 Profile 注册表。
+    /// `http` is the shared HTTP client and `protocols` is the core-owned protocol runtime.
+    /// `http` 是共享 HTTP 客户端，`protocols` 是由核心拥有的协议运行时。
     ///
     /// # Returns
     /// 返回值
     /// A reusable execution client.
     /// 返回可复用执行客户端。
-    pub fn new(http: reqwest::Client, protocols: Arc<ProtocolRegistry>) -> Self {
+    pub fn new<Source>(http: reqwest::Client, protocols: Source) -> Self
+    where
+        Source: ProtocolRuntimeSource,
+    {
         Self {
             http,
-            protocols,
+            protocols: protocols.into_protocol_runtime(),
             prepared_media: Arc::new(StdMutex::new(BTreeMap::new())),
             responses_websocket_sessions: Arc::new(TokioMutex::new(BTreeMap::new())),
             responses_websocket_breakers: Arc::new(StdMutex::new(BTreeSet::new())),
@@ -958,14 +978,13 @@ impl ProviderExecutionClient {
         route: &ProviderExecutionRoute,
         request: &AiExecutionRequest,
     ) -> Result<EncodedWireRequest, ProviderExecutionFailure> {
-        let profile = self
-            .protocols
-            .require(route.protocol_route.protocol_profile_id.as_str())
-            .map_err(protocol_failure)?;
         validate_request_policy(route, request)?;
-        let encoded = profile.encode(request).map_err(protocol_failure)?;
-        let encoded =
-            project_responses_baseline_for_provider(&self.protocols, route, request, encoded)?;
+        // The extracted LLM core owns the canonical Codex Responses request body.
+        // 提取后的 LLM 核心拥有规范 Codex Responses 请求正文的唯一编码权。
+        let encoded = encode_codex_responses_request(request).map_err(|error| {
+            pre_dispatch_failure(format!("LLM core request encoding failed: {error}"))
+        })?;
+        let encoded = project_responses_baseline_for_provider(route, request, encoded)?;
         project_provider_request(route, request, encoded)
     }
 
@@ -1103,10 +1122,10 @@ impl ProviderExecutionClient {
             );
             // profile is the exact registered Codex Responses implementation used for both encoding and transport limits.
             // profile 是同时用于编码与传输限制的精确已注册 Codex Responses 实现。
-            let profile = self
+            let transport = self
                 .protocols
-                .require(route.protocol_route.protocol_profile_id.as_str())
-                .map_err(protocol_failure)?;
+                .transport_profile(route.protocol_route.protocol_profile_id.as_str())
+                .map_err(llm_core_protocol_failure)?;
             emit_provider_transport_trace(
                 trace_id.as_str(),
                 "responses_compact",
@@ -1122,7 +1141,9 @@ impl ProviderExecutionClient {
             );
             // encoded preserves the normal request projection order before the compact-only field filter runs.
             // encoded 在压缩专用字段过滤执行前保留普通请求的投影顺序。
-            let encoded = profile.encode(&request).map_err(protocol_failure)?;
+            let encoded = encode_codex_responses_request(&request).map_err(|error| {
+                pre_dispatch_failure(format!("LLM core request encoding failed: {error}"))
+            })?;
             emit_provider_transport_trace(
                 trace_id.as_str(),
                 "responses_compact",
@@ -1177,7 +1198,6 @@ impl ProviderExecutionClient {
             );
             // transport freezes the same profile's response limits for the unary HTTP call.
             // transport 为一元 HTTP 调用冻结同一协议实现的响应限制。
-            let transport = profile.transport_profile();
             // compactRequestStartedAt and compactRequestTimeout bound both headers and the complete body.
             // compactRequestStartedAt 与 compactRequestTimeout 同时约束响应头和完整正文。
             let compact_request_started_at = Instant::now();
@@ -1439,11 +1459,10 @@ impl ProviderExecutionClient {
                 &handshake_request,
                 &secret,
             )?;
-            let profile = client
+            let transport = client
                 .protocols
-                .require(route.protocol_route.protocol_profile_id.as_str())
-                .map_err(protocol_failure)?;
-            let transport = profile.transport_profile();
+                .transport_profile(route.protocol_route.protocol_profile_id.as_str())
+                .map_err(llm_core_protocol_failure)?;
             let url = responses_websocket_url(&route, handshake_encoded.path.as_str())?;
             let mut headers = execution_headers(&route, &handshake_encoded.headers, &secret)?;
             headers.insert(
@@ -1531,7 +1550,14 @@ impl ProviderExecutionClient {
                 "request_dispatched",
                 &transport_started_at,
             );
-            let mut decoder = profile.create_stream_decoder(execution_id.clone(), &request);
+            let mut decoder = client
+                .protocols
+                .create_stream_decoder(
+                    route.protocol_route.protocol_profile_id.as_str(),
+                    execution_id.clone(),
+                    &request,
+                )
+                .map_err(llm_core_protocol_failure)?;
             let usage_profiles = route.protocol_route.usage_extraction_profiles.clone();
             let profiled_usage_enabled = !usage_profiles.is_empty();
             let mut usage_accumulator = UsageAccumulator::default();
@@ -1803,11 +1829,10 @@ impl ProviderExecutionClient {
             );
             let request = request_without_nonpersistent_responses_continuation(&route, &request);
             let encoded = client.encode_request_with_credential(&route, &request, &secret)?;
-            let profile = client
+            let transport = client
                 .protocols
-                .require(route.protocol_route.protocol_profile_id.as_str())
-                .map_err(protocol_failure)?;
-            let transport = profile.transport_profile();
+                .transport_profile(route.protocol_route.protocol_profile_id.as_str())
+                .map_err(llm_core_protocol_failure)?;
             let url = route.request_url(encoded.path.as_str());
             let mut headers = execution_headers(&route, &encoded.headers, &secret)?;
             // Alibaba requires an explicit resolver switch whenever the request carries an OSS reference.
@@ -1895,7 +1920,14 @@ impl ProviderExecutionClient {
                 &transport,
                 url.as_str(),
             )?;
-            let mut decoder = profile.create_stream_decoder(execution_id.clone(), &request);
+            let mut decoder = client
+                .protocols
+                .create_stream_decoder(
+                    route.protocol_route.protocol_profile_id.as_str(),
+                    execution_id.clone(),
+                    &request,
+                )
+                .map_err(llm_core_protocol_failure)?;
             let mut parser = IncrementalFrameParser::new(transport);
             let mut bytes = response.bytes_stream();
             let usage_profiles = route.protocol_route.usage_extraction_profiles.clone();
@@ -2820,7 +2852,6 @@ fn validate_request_policy(
 /// 目标路由仍然提供精确路径和固定请求头，但请求正文统一来自公共基线使用的
 /// Responses 编码器。这样供应商转换不会依赖旧路由暴露给调用方的协议形状。
 fn project_responses_baseline_for_provider(
-    protocols: &ProtocolRegistry,
     route: &ProviderExecutionRoute,
     request: &AiExecutionRequest,
     mut encoded: EncodedWireRequest,
@@ -2831,19 +2862,22 @@ fn project_responses_baseline_for_provider(
     if matches!(upstream_protocol, UpstreamProtocol::OpenAiResponses) {
         return Ok(encoded);
     }
+    // Preserve only the converted protocol headers; the request body remains Responses-owned.
+    // 仅保留转换协议所需的请求头；请求正文仍由 Responses 核心拥有。
+    encoded
+        .headers
+        .extend(converted_protocol_headers(upstream_protocol));
 
-    let canonical_profile = protocols
-        .require(OPENAI_CODEX_RESPONSES_PROFILE_ID)
-        .map_err(protocol_failure)?;
     let mut canonical_request = request.clone();
     // Cross-protocol routes must replay complete history because a target protocol cannot reuse
     // a continuation cursor issued under another protocol identity.
     // 跨协议路由必须重放完整历史，因为目标协议不能复用另一协议身份签发的延续游标。
     canonical_request.continuation = None;
     prepare_target_reasoning_replay_for_responses(&mut canonical_request, upstream_protocol);
-    let mut canonical_body = canonical_profile
-        .encode(&canonical_request)
-        .map_err(protocol_failure)?
+    let mut canonical_body = encode_codex_responses_request(&canonical_request)
+        .map_err(|error| {
+            pre_dispatch_failure(format!("LLM core request encoding failed: {error}"))
+        })?
         .body;
     attach_target_tool_replay_to_responses(&mut canonical_body, request, upstream_protocol)?;
     if let Some(output_token_limit) = canonical_request.output_token_limit {
@@ -4423,6 +4457,36 @@ fn protocol_failure(error: ProtocolConversionError) -> ProviderExecutionFailure 
     }
 }
 
+/// Converts an LLM-core protocol-runtime failure without restoring adapter-side registry logic.
+/// 将 LLM 核心协议运行时失败转换为适配层错误，但不恢复适配层注册表逻辑。
+fn llm_core_protocol_failure(error: LlmCoreError) -> ProviderExecutionFailure {
+    ProviderExecutionFailure {
+        error: Box::new(AiExecutionError {
+            category: AiErrorCategory::InvalidRequest,
+            subcategory: Some(String::from("protocol_conversion")),
+            stage: String::from("protocol"),
+            http_status: None,
+            transport: None,
+            websocket_close_code: error.websocket_close_code,
+            upstream_code: None,
+            upstream_type: None,
+            upstream_parameter: None,
+            upstream_message: None,
+            request_id: None,
+            provider_id: None,
+            entry_id: None,
+            model_id: None,
+            message: error.message,
+            dispatch_outcome: DispatchOutcome::NotDispatched,
+            semantic_output_observed: false,
+            side_effect_observed: false,
+            terminal: true,
+            retryable: false,
+            retry_after: None,
+        }),
+    }
+}
+
 /// Restricts one encoded Codex compaction body to the official `CompactionInput` fields.
 /// 将编码后的 Codex 压缩请求体限制为官方 `CompactionInput` 字段集合。
 ///
@@ -5336,7 +5400,16 @@ mod tests {
     };
     use vulcan_ai_protocols::{
         ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
+        ProtocolRegistry,
     };
+
+    impl ProtocolRuntimeSource for Arc<ProtocolRegistry> {
+        /// Converts the legacy registry only for existing unit-test fixtures.
+        /// 仅为既有单元测试夹具转换旧注册表。
+        fn into_protocol_runtime(self) -> Arc<LlmProtocolRuntime> {
+            Arc::new(LlmProtocolRuntime::new(self))
+        }
+    }
 
     /// Verifies every executable built-in provider protocol is owned by the Responses conversion core.
     /// 验证每个可执行的内置供应商协议都由 Responses 转换核心负责。
@@ -7263,6 +7336,26 @@ mod tests {
             .expect("DeepSeek Anthropic enabled request should encode");
         assert_eq!(enabled.body["thinking"]["type"], "enabled");
         assert_eq!(enabled.body["output_config"]["effort"], "max");
+    }
+
+    /// Verifies DeepSeek Anthropic conversion keeps native web search instead of rejecting it.
+    /// 验证 DeepSeek Anthropic 转换保留原生 web search，而不是拒绝该工具。
+    #[test]
+    fn deepseek_anthropic_preserves_native_web_search() {
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let mut request = minimal_request();
+        request.model_id = String::from("deepseek-v4-flash");
+        request.reasoning_effort = Some(ReasoningEffort::Max);
+        request.native_tools = vec![vulcan_ai_contract::NativeToolKind::WebSearch];
+        let encoded = client
+            .encode_request(&deepseek_route(ANTHROPIC_MESSAGES_PROFILE_ID), &request)
+            .expect("DeepSeek Anthropic request should encode");
+        assert_eq!(encoded.body["tools"][0]["type"], "web_search_20250305");
+        assert_eq!(encoded.body["tools"][0]["name"], "web_search");
+        assert_eq!(encoded.body["thinking"]["type"], "enabled");
     }
 
     /// Verifies DeepSeek Responses projects native web search and removes unsupported fields.

@@ -6801,7 +6801,6 @@ dependencies = [
  "uuid",
  "vldb-controller-client",
  "vulcan-ai-contract",
- "vulcan-ai-protocols",
  "vulcan-change-set",
  "vulcan-context",
  "vulcan-context-compaction",
@@ -6809,6 +6808,7 @@ dependencies = [
  "vulcan-core",
  "vulcan-hooks",
  "vulcan-host-tools",
+ "vulcan-llm-core",
  "vulcan-luaskills-config",
  "vulcan-luaskills-prompt",
  "vulcan-mcp-runtime",
@@ -6836,15 +6836,6 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "vulcan-ai-protocols"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "vulcan-ai-contract",
 ]
 
 [[package]]
@@ -7070,7 +7061,6 @@ dependencies = [
  "tokio-util",
  "uuid",
  "vulcan-ai-contract",
- "vulcan-ai-protocols",
  "vulcan-context",
  "vulcan-llm-core",
 ]
@@ -7153,7 +7143,6 @@ dependencies = [
  "vldb-controller-client",
  "vulcan-agent-runtime",
  "vulcan-ai-contract",
- "vulcan-ai-protocols",
  "vulcan-context",
  "vulcan-context-compaction",
  "vulcan-context-injection",

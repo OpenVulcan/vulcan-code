@@ -13,6 +13,11 @@
     clippy::result_large_err,
     reason = "runtime launch preparation returns owned terminal reports for existing stream error paths."
 )]
+
+// Re-export the extracted protocol core under the historical source name during namespace migration.
+// 在命名空间迁移期间以历史源码名称引用已提取的协议核心。
+extern crate vulcan_llm_core as vulcan_ai_protocols;
+
 pub mod agent_profile;
 pub mod agent_runtime;
 pub mod attachment_asset_index;

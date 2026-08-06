@@ -1340,6 +1340,8 @@ export type TranslationKey =
   | "memory.data.description"
   | "memory.data.managementReady"
   | "memory.data.managementUnavailable"
+  | "memory.data.extractionRuntimeTitle"
+  | "memory.data.extractionRuntimeWaiting"
   | "memory.data.invalidResponse"
   | "memory.data.activeRuntime"
   | "memory.data.sessions"
@@ -3921,6 +3923,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.data.description": "按会话和回合查看长期记忆来源，并通过影响预览安全归档、回收或恢复数据。",
     "memory.data.managementReady": "管理服务正常",
     "memory.data.managementUnavailable": "管理服务不可用",
+    "memory.data.extractionRuntimeTitle": "记忆提炼等待中",
+    "memory.data.extractionRuntimeWaiting": "后置提炼服务尚未就绪；已稳定落库的回合会在服务恢复后自动重试。",
     "memory.data.invalidResponse": "VMM 管理服务返回了不符合契约的数据。",
     "memory.data.activeRuntime": "正在运行，暂不可操作",
     "memory.data.sessions": "会话",
@@ -6499,6 +6503,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.data.description": "Inspect long-term memory sources by session and turn, then archive, recycle, or restore data through an impact preview.",
     "memory.data.managementReady": "Management service ready",
     "memory.data.managementUnavailable": "Management service unavailable",
+    "memory.data.extractionRuntimeTitle": "Memory extraction is waiting",
+    "memory.data.extractionRuntimeWaiting": "The post-action extraction service is not ready yet. Durably stored turns will retry automatically when it recovers.",
     "memory.data.invalidResponse": "The VMM management service returned data that does not match its contract.",
     "memory.data.activeRuntime": "Running; actions unavailable",
     "memory.data.sessions": "Sessions",

@@ -7,7 +7,11 @@ use serde::{Deserialize, Serialize};
 
 /// Exact managed manifest version accepted by both processes.
 /// 两个进程共同接受的精确托管清单版本。
-pub const MANAGED_CONTRACT_VERSION: u32 = 2;
+pub const MANAGED_CONTRACT_VERSION: u32 = 1;
+
+/// Stable build identity shared by the packaged VMM binaries and the host manifest.
+/// 打包 VMM 二进制与宿主清单共享的稳定构建身份。
+pub const MANAGED_RUNTIME_BUILD_ID: &str = "vmm-runtime-v1";
 
 /// Stable authority owner written into every generated manifest.
 /// 写入每份生成清单的稳定权威所有者。
@@ -563,6 +567,9 @@ pub struct ManagedConfig {
     /// Exact contract version.
     /// 精确契约版本。
     pub contract_version: u32,
+    /// Exact packaged runtime build identity.
+    /// 精确的打包运行时构建身份。
+    pub runtime_build_id: String,
     /// Authoritative owner.
     /// 权威所有者。
     pub owner: String,
@@ -591,6 +598,9 @@ pub struct ManagedStatus {
     /// Exact managed contract version.
     /// 精确托管契约版本。
     pub contract_version: u32,
+    /// Exact packaged runtime build identity copied from the manifest.
+    /// 从清单复制的精确打包运行时构建身份。
+    pub runtime_build_id: String,
     /// Instance identifier copied from the manifest.
     /// 从清单复制的实例标识。
     pub instance_id: String,

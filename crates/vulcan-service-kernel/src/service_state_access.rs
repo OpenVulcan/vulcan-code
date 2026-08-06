@@ -517,6 +517,44 @@ where
     mutate_public_ai_configuration_in_transaction(state, save_error_context, mutate)
 }
 
+/// Mutates public AI configuration and commits dependent state while the caller owns the transaction guard.
+/// 在调用方持有事务守卫期间变更公共 AI 配置并提交依赖状态。
+pub(crate) fn mutate_public_ai_configuration_with_commit_in_transaction<Mutation, Commit, Output>(
+    state: &SharedServiceBridgeState,
+    save_error_context: &str,
+    mutate: Mutation,
+    commit: Commit,
+) -> Result<Output, String>
+where
+    Mutation: FnOnce(&mut vulcan_provider_adapters::PersistedAiConfiguration) -> Result<(), String>,
+    Commit: FnOnce(
+        &mut ServiceBridgeState,
+        &vulcan_provider_adapters::PersistedAiConfiguration,
+    ) -> Result<Output, String>,
+{
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let runtime = guard
+        .agent_runtime
+        .as_ref()
+        .map(|agent_runtime| std::sync::Arc::clone(&agent_runtime.public_ai_runtime))
+        .ok_or_else(|| String::from("service is still starting; public AI runtime is not ready"))?;
+    let mut configuration = runtime.configuration_snapshot()?;
+    mutate(&mut configuration)?;
+    vulcan_provider_config::config::save_public_ai_connections_file(&configuration).map_err(
+        |error| {
+            if save_error_context.is_empty() {
+                error
+            } else {
+                format!("{save_error_context}: {error}")
+            }
+        },
+    )?;
+    runtime.replace_configuration(configuration.clone())?;
+    commit(&mut guard, &configuration)
+}
+
 /// Acquires exclusive ownership of public AI configuration and credential mutations.
 /// 获取公共 AI 配置与凭据变更的独占所有权。
 ///

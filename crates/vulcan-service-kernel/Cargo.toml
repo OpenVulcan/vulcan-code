@@ -26,7 +26,6 @@ uuid.workspace = true
 vldb-controller-client.workspace = true
 vulcan-agent-runtime.workspace = true
 vulcan-ai-contract.workspace = true
-vulcan-ai-protocols.workspace = true
 vulcan-llm-core.workspace = true
 keyring.workspace = true
 vulcan-provider-adapters.workspace = true

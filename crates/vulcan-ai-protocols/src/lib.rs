@@ -9,7 +9,7 @@ pub mod cohere;
 pub mod gemini;
 pub mod interactions;
 pub mod openai;
-mod openai_stream;
+pub(crate) mod openai_stream;
 pub mod registry;
 pub mod shared;
 

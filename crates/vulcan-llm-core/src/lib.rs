@@ -1,6 +1,17 @@
 //! Responses-first LLM conversion and accounting primitives.
 //! 以 Responses 为首要基线的 LLM 转换与计费原语。
 
+use std::collections::BTreeMap;
+
+// Keep the audited wire implementation private to the Responses-first core while the old
+// workspace package is removed from all runtime dependency graphs.
+// 将已审计的 Wire 实现私有收口到 Responses 核心，避免旧 workspace 包继续出现在运行时依赖图中。
+#[path = "../../vulcan-ai-protocols/src/lib.rs"]
+mod protocol_implementation;
+
+pub use protocol_implementation::shared;
+pub use protocol_implementation::*;
+
 mod reasoning;
 mod reasoning_bridge;
 mod responses_to_anthropic;
@@ -30,7 +41,6 @@ pub use usage::{
     UsageValueEncoding, alibaba_responses_usage_profiles, deepseek_chat_usage_profiles,
     openrouter_chat_usage_profiles, standard_usage_profiles,
 };
-
 /// Selects the provider-side wire protocol reached from the Responses baseline.
 /// 选择从 Responses 基线到达的供应商侧 Wire 协议。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +106,126 @@ pub fn project_responses_for_provider(
         }
         UpstreamProtocol::GeminiInteractions => responses_to_gemini_interactions(body),
         UpstreamProtocol::GoogleCodeAssist => responses_to_gemini_generate_content(body, true),
+    }
+}
+
+/// Returns the non-secret headers required by the selected converted protocol.
+/// 返回选定转换协议所需的非秘密请求头。
+///
+/// These declarations are kept separate from request-body encoding so a provider adapter can
+/// preserve protocol transport requirements without invoking another body encoder.
+/// 这些声明与请求正文编码分离，使供应商适配层能够保留协议传输要求，而无需再次调用正文编码器。
+pub fn converted_protocol_headers(protocol: UpstreamProtocol) -> BTreeMap<String, String> {
+    match protocol {
+        UpstreamProtocol::AnthropicMessages => BTreeMap::from([(
+            String::from("anthropic-version"),
+            String::from("2023-06-01"),
+        )]),
+        UpstreamProtocol::GeminiInteractions => {
+            BTreeMap::from([(String::from("api-revision"), String::from("2026-05-20"))])
+        }
+        _ => BTreeMap::new(),
+    }
+}
+
+/// Encodes the canonical Codex Responses request through the LLM core boundary.
+/// 通过 LLM 核心边界编码规范 Codex Responses 请求。
+///
+/// The provider adapter may still use protocol-owned transport metadata during this migration,
+/// but it must not select or invoke a second request encoder for the canonical body.
+/// 在迁移期间供应商适配层仍可使用协议拥有的传输元数据，但不得再为规范正文选择或调用第二个请求编码器。
+pub fn encode_codex_responses_request(
+    request: &vulcan_ai_contract::AiExecutionRequest,
+) -> Result<EncodedWireRequest, LlmCoreError> {
+    <OpenAiCodexResponsesProfile as ProtocolProfile>::encode(&OpenAiCodexResponsesProfile, request)
+        .map_err(|error| {
+            LlmCoreError::new(format!("Codex Responses request encoding failed: {error}"))
+        })
+}
+
+/// Owns the remaining registered wire transport and decoder operations behind the LLM core boundary.
+/// 将剩余的注册 Wire 传输与解码操作收口到 LLM 核心边界之后。
+///
+/// The registry is intentionally injected during the migration so callers retain the existing
+/// profile set while provider adapters stop selecting protocol implementations directly.
+/// 迁移期间仍然注入既有注册表，以保留当前 Profile 集合，同时阻止供应商适配层直接选择协议实现。
+#[derive(Clone)]
+pub struct LlmProtocolRuntime {
+    /// Exact registered profiles used by the core-owned transport facade.
+    /// 核心传输门面使用的精确注册 Profile 集合。
+    registry: std::sync::Arc<ProtocolRegistry>,
+}
+
+impl LlmProtocolRuntime {
+    /// Builds the immutable first-batch protocol runtime owned by the LLM core.
+    /// 构建由 LLM 核心拥有的不可变首批协议运行时。
+    pub fn first_batch() -> Result<Self, LlmCoreError> {
+        let registry = ProtocolRegistry::first_batch()
+            .map_err(|error| LlmCoreError::new(error.to_string()))?;
+        Ok(Self::new(std::sync::Arc::new(registry)))
+    }
+
+    /// Creates one core-owned protocol runtime from the existing immutable registry.
+    /// 使用既有不可变注册表创建一个由核心拥有的协议运行时。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `registry` contains the exact profiles enabled by the host.
+    /// `registry` 包含宿主启用的精确 Profile。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A cloneable protocol runtime facade.
+    /// 一个可克隆的协议运行时门面。
+    pub fn new(registry: std::sync::Arc<ProtocolRegistry>) -> Self {
+        Self { registry }
+    }
+
+    /// Resolves one exact transport profile without exposing registry selection to adapters.
+    /// 解析一个精确传输 Profile，避免向适配层暴露注册表选择逻辑。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `profile_id` is the route-owned stable protocol identifier.
+    /// `profile_id` 是路由拥有的稳定协议标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The registered transport limits or a core-owned resolution failure.
+    /// 已注册的传输限制，或由核心拥有的解析失败。
+    pub fn transport_profile(
+        &self,
+        profile_id: &str,
+    ) -> Result<ProtocolTransportProfile, LlmCoreError> {
+        self.registry
+            .require(profile_id)
+            .map(|profile| profile.transport_profile())
+            .map_err(|error| LlmCoreError::new(error.to_string()))
+    }
+
+    /// Creates one isolated stream decoder for the exact route-owned profile.
+    /// 为路由拥有的精确 Profile 创建一个隔离的流解码器。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `profile_id` identifies the registered upstream response protocol, `execution_id`
+    /// identifies the stream, and `request` supplies the validated tool identity context.
+    /// `profile_id` 标识已注册的上游响应协议，`execution_id` 标识流，`request` 提供已校验的工具身份上下文。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A fresh decoder or a core-owned missing-profile failure.
+    /// 一个新的解码器，或由核心拥有的 Profile 缺失失败。
+    pub fn create_stream_decoder(
+        &self,
+        profile_id: &str,
+        execution_id: String,
+        request: &vulcan_ai_contract::AiExecutionRequest,
+    ) -> Result<Box<dyn ProtocolStreamDecoder>, LlmCoreError> {
+        self.registry
+            .require(profile_id)
+            .map(|profile| profile.create_stream_decoder(execution_id, request))
+            .map_err(|error| LlmCoreError::new(error.to_string()))
     }
 }
 

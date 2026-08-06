@@ -34,7 +34,7 @@ use vulcan_ai_contract::{
     EmbeddingResponse, InferenceUsageScope, ModelCapabilities, PromptCachePolicy,
     ReasoningControlMode, RerankRequest, RerankResponse,
 };
-use vulcan_ai_protocols::ProtocolRegistry;
+use vulcan_llm_core::LlmProtocolRuntime;
 use vulcan_llm_core::ModelPricing;
 
 /// Refreshes renewable tokens this long before their declared expiration.
@@ -439,9 +439,9 @@ pub struct PublicAiRuntime {
     /// Strict first-batch provider registry.
     /// 严格的首批供应商注册表。
     providers: ProviderRegistry,
-    /// Provider-neutral wire protocol registry.
-    /// 供应商无关的 Wire 协议注册表。
-    protocols: Arc<ProtocolRegistry>,
+    /// Core-owned provider-neutral wire protocol runtime.
+    /// 由核心拥有的供应商无关 Wire 协议运行时。
+    protocols: Arc<LlmProtocolRuntime>,
     /// Shared execution client.
     /// 共享执行客户端。
     execution_client: ProviderExecutionClient,
@@ -558,8 +558,7 @@ impl PublicAiRuntime {
     /// 返回包含 MiniMax 与 OpenRouter 注册项的运行时。
     pub fn first_batch(secrets: Arc<dyn CredentialSecretStore>) -> Result<Self, String> {
         install_process_rustls_crypto_provider()?;
-        let protocols = ProtocolRegistry::first_batch().map_err(|error| error.to_string())?;
-        let protocols = Arc::new(protocols);
+        let protocols = Arc::new(LlmProtocolRuntime::first_batch().map_err(|error| error.message)?);
         let http = build_public_ai_http_client()?;
         Ok(Self {
             providers: ProviderRegistry::first_batch()?,
@@ -651,9 +650,9 @@ impl PublicAiRuntime {
         Ok(())
     }
 
-    /// Returns the protocol registry.
-    /// 返回协议注册表。
-    pub fn protocols(&self) -> &ProtocolRegistry {
+    /// Returns the core-owned protocol runtime.
+    /// 返回由核心拥有的协议运行时。
+    pub fn protocols(&self) -> &LlmProtocolRuntime {
         self.protocols.as_ref()
     }
 

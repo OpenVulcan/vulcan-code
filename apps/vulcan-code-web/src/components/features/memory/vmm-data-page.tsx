@@ -480,6 +480,11 @@ export function VmmDataPage(props: VmmDataPageProps) {
     && !allSelectedArchived
     && !allSelectedForgotten
 
+  const postActionUnavailable = props.snapshot.runtime.processReady
+    && !props.snapshot.runtime.postactionReady
+  const postActionMessage = props.snapshot.runtime.postactionError?.trim()
+    || t("memory.data.extractionRuntimeWaiting")
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -499,6 +504,12 @@ export function VmmDataPage(props: VmmDataPageProps) {
         <Alert variant="destructive">
           <AlertTitle>{t("conversation.metadata.error")}</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
+      {postActionUnavailable ? (
+        <Alert variant={props.snapshot.runtime.postactionError ? "destructive" : "default"}>
+          <AlertTitle>{t("memory.data.extractionRuntimeTitle")}</AlertTitle>
+          <AlertDescription>{postActionMessage}</AlertDescription>
         </Alert>
       ) : null}
       <Tabs defaultValue="sessions" onValueChange={(value) => {

@@ -34,13 +34,13 @@ pub use config::{
     VmmRuntimeFeaturePolicy,
 };
 pub use managed::{
-    MANAGED_CONTRACT_OWNER, MANAGED_CONTRACT_VERSION, MANAGED_INFERENCE_MODE, ManagedAssets,
-    ManagedConfig, ManagedControllerLease, ManagedGrpcConfig, ManagedGrpcKeepalive,
-    ManagedGrpcRequestTimeout, ManagedInferenceConfig, ManagedLoggingConfig,
-    ManagedManagementConfig, ManagedMemoryPipelineConfig, ManagedNoiseConfig, ManagedParent,
-    ManagedPiiConfig, ManagedPostActionConfig, ManagedPreCheckConfig, ManagedPromptConfig,
-    ManagedRelationalConfig, ManagedRetentionConfig, ManagedRuntimeConfig, ManagedStatus,
-    ManagedStorageConfig, ManagedVectorConfig,
+    MANAGED_CONTRACT_OWNER, MANAGED_CONTRACT_VERSION, MANAGED_INFERENCE_MODE,
+    MANAGED_RUNTIME_BUILD_ID, ManagedAssets, ManagedConfig, ManagedControllerLease,
+    ManagedGrpcConfig, ManagedGrpcKeepalive, ManagedGrpcRequestTimeout, ManagedInferenceConfig,
+    ManagedLoggingConfig, ManagedManagementConfig, ManagedMemoryPipelineConfig, ManagedNoiseConfig,
+    ManagedParent, ManagedPiiConfig, ManagedPostActionConfig, ManagedPreCheckConfig,
+    ManagedPromptConfig, ManagedRelationalConfig, ManagedRetentionConfig, ManagedRuntimeConfig,
+    ManagedStatus, ManagedStorageConfig, ManagedVectorConfig,
 };
 pub use protocol::{
     ApplyProfileInstructionRequest, ApplyProfileInstructionResponse, ChatCompactRequest,

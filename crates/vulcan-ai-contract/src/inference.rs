@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Identifies the only inference contract version accepted by this release.
 /// 标识当前版本唯一接受的推理契约版本。
-pub const INFERENCE_CONTRACT_VERSION: u32 = 2;
+pub const INFERENCE_CONTRACT_VERSION: u32 = 1;
 
 /// Identifies one permission granted to an inference caller.
 /// 标识授予推理调用方的一项权限。

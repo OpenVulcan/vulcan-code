@@ -10,6 +10,10 @@
     reason = "service-kernel runtime handle bundles intentionally remain explicit until the shared service context object lands"
 )]
 
+// Re-export the extracted protocol core under the historical source name during namespace migration.
+// 在命名空间迁移期间以历史源码名称引用已提取的协议核心。
+extern crate vulcan_llm_core as vulcan_ai_protocols;
+
 use std::{
     collections::{BTreeMap, BTreeSet, hash_map::DefaultHasher},
     env,
