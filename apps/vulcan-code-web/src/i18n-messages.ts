@@ -2232,6 +2232,8 @@ export type TranslationKey =
   | "settings.inference.llm"
   | "settings.inference.embedding"
   | "settings.inference.rerank"
+  | "settings.inference.rerankEnabled"
+  | "settings.inference.rerankDisabled"
   | "settings.inference.noRoute"
   | "settings.inference.modelRegion"
   | "settings.inference.accountRegion"
@@ -4815,6 +4817,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.inference.llm": "受限 LLM",
     "settings.inference.embedding": "向量",
     "settings.inference.rerank": "重排",
+    "settings.inference.rerankEnabled": "启用 Rerank",
+    "settings.inference.rerankDisabled": "重排已关闭。勾选后选择模型；保存配置后需要重启 VMM。",
     "settings.inference.noRoute": "未配置",
     "settings.inference.modelRegion": "模型",
     "settings.inference.accountRegion": "账号",
@@ -7395,6 +7399,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.inference.llm": "Restricted LLM",
     "settings.inference.embedding": "Embeddings",
     "settings.inference.rerank": "Rerank",
+    "settings.inference.rerankEnabled": "Enable rerank",
+    "settings.inference.rerankDisabled": "Rerank is off. Check the box and select a model; saving requires a VMM restart.",
     "settings.inference.noRoute": "Not configured",
     "settings.inference.modelRegion": "Model",
     "settings.inference.accountRegion": "Account",

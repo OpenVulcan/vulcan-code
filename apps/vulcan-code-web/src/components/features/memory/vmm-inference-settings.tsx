@@ -14,6 +14,7 @@ import {
 import { formatSkillText } from "@/components/features/featureText"
 import { PublicAiInternalOverridesDialog } from "@/components/features/settings/public-ai-internal-overrides-dialog"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -428,6 +429,7 @@ export function VmmInferenceSettings({
               onChange={(route) => saveRoute("rerank_documents", undefined, route)}
               onTest={() => void testRoute("rerank_documents")}
               route={profile?.rerank}
+              showEnableToggle
               testPending={testingOperation === "rerank_documents"}
               testSummary={testSummaries.rerank_documents}
               unavailableReason={diagnostics.find((diagnostic) => (
@@ -524,6 +526,9 @@ function InferenceRouteField(props: {
   // Whether mutation or testing prevents interaction.
   // 变更或测试是否阻止交互。
   disabled: boolean
+  // Whether this route exposes the explicit enabled checkbox used by optional capabilities.
+  // 该路由是否展示可选能力使用的独立启用勾选项。
+  showEnableToggle?: boolean
   // Receives an exact route replacement or clear request.
   // 接收精确路由替换或清除请求。
   onChange: (route: PublicAiInferenceRoute | null) => void | Promise<boolean>
@@ -556,6 +561,14 @@ function InferenceRouteField(props: {
   // selectedModelKey is the model-first draft used to populate the separate account picker.
   // selectedModelKey 是先选模型后填充独立账号选择器的草稿。
   const [selectedModelKey, setSelectedModelKey] = React.useState<string | null>(persistedModelKey)
+  // enabledOverride keeps a newly enabled but not-yet-configured rerank route selectable before persistence.
+  // enabledOverride 让刚启用但尚未持久化配置的重排路由在保存前保持可选择。
+  const [enabledOverride, setEnabledOverride] = React.useState<boolean | null>(null)
+  // featureEnabled combines the persisted route with the local first-enable draft.
+  // featureEnabled 将已持久化路由与首次启用时的本地草稿合并为当前开关状态。
+  const featureEnabled = props.showEnableToggle
+    ? (enabledOverride ?? Boolean(props.route))
+    : true
   // candidateByRouteKey resolves one exact account route after the second selection step.
   // candidateByRouteKey 在第二步选择后解析一条精确账号路由。
   const candidateByRouteKey = React.useMemo(() => new Map(
@@ -623,16 +636,16 @@ function InferenceRouteField(props: {
   const requestRouteChange = React.useCallback(async (
     route: PublicAiInferenceRoute | null,
     nextModelKey: string | null,
-  ) => {
+  ): Promise<boolean> => {
     // nextRouteKey identifies the exact provider/account route before any confirmation or write.
     // nextRouteKey 在确认或写入前标识精确的提供商/账户路由。
     const nextRouteKey = route ? inferenceRouteKey(route) : ""
     if (persistedRouteKey === nextRouteKey) {
       setSelectedModelKey(nextModelKey)
-      return
+      return true
     }
     if (props.onBeforeChange && !await props.onBeforeChange(route)) {
-      return
+      return false
     }
     setSelectedModelKey(nextModelKey)
     // persisted is the asynchronous route-write outcome used to restore the previous draft on failure.
@@ -640,11 +653,30 @@ function InferenceRouteField(props: {
     const persisted = props.onChange(route)
     if (persisted instanceof Promise && !await persisted) {
       setSelectedModelKey(persistedModelKey)
+      return false
     }
+    return true
   }, [persistedModelKey, persistedRouteKey, props.onBeforeChange, props.onChange])
+
+  // changeEnabledState opens selection for a new route or clears the persisted route when disabled.
+  // changeEnabledState 在新路由启用时打开选择，在关闭时清除已持久化路由。
+  const changeEnabledState = React.useCallback(async (enabled: boolean) => {
+    if (!props.showEnableToggle) {
+      return
+    }
+    if (enabled) {
+      setEnabledOverride(true)
+      return
+    }
+    setEnabledOverride(false)
+    if (!await requestRouteChange(null, null)) {
+      setEnabledOverride(null)
+    }
+  }, [props.showEnableToggle, requestRouteChange])
 
   React.useEffect(() => {
     setSelectedModelKey(persistedModelKey)
+    setEnabledOverride(null)
   }, [persistedRouteKey])
 
   React.useEffect(() => {
@@ -684,25 +716,45 @@ function InferenceRouteField(props: {
 
   return (
     <div className="min-w-0 rounded-lg border p-2">
-      <div className="mb-1.5 flex min-w-0 items-center gap-1">
-        <label className="block truncate text-xs font-medium">{props.label}</label>
-        {props.description ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                aria-label={props.description}
-                className="shrink-0 text-muted-foreground hover:text-foreground"
-                type="button"
-              >
-                <Info className="size-3.5" aria-hidden="true" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent className="max-w-72 text-xs" side="top">
-              {props.description}
-            </TooltipContent>
-          </Tooltip>
+      <div className="mb-1.5 flex min-w-0 items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-1">
+          <label className="block truncate text-xs font-medium">{props.label}</label>
+          {props.description ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  aria-label={props.description}
+                  className="shrink-0 text-muted-foreground hover:text-foreground"
+                  type="button"
+                >
+                  <Info className="size-3.5" aria-hidden="true" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-72 text-xs" side="top">
+                {props.description}
+              </TooltipContent>
+            </Tooltip>
+          ) : null}
+        </div>
+        {props.showEnableToggle ? (
+          <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <Checkbox
+              aria-label={t("settings.inference.rerankEnabled")}
+              checked={featureEnabled}
+              disabled={props.disabled}
+              onCheckedChange={(checked) => {
+                void changeEnabledState(checked === true)
+              }}
+            />
+            <span>{t("settings.inference.rerankEnabled")}</span>
+          </label>
         ) : null}
       </div>
+      {props.showEnableToggle && !featureEnabled ? (
+        <p className="mb-1.5 text-[11px] text-muted-foreground">
+          {t("settings.inference.rerankDisabled")}
+        </p>
+      ) : null}
       <div className="grid min-w-0 grid-cols-2 gap-1.5">
         <div className="min-w-0">
           <span className="mb-1 block text-[11px] text-muted-foreground">
@@ -710,7 +762,7 @@ function InferenceRouteField(props: {
           </span>
           <InferencePickerControl
             ariaLabel={`${props.label} · ${t("settings.inference.modelRegion")}`}
-            disabled={props.disabled}
+            disabled={props.disabled || !featureEnabled}
             emptyLabel={t("composer.modelPicker.noMatches")}
             filterPlaceholder={t("composer.modelPicker.filter")}
             icon={<Cpu className="size-4" />}
@@ -737,6 +789,7 @@ function InferenceRouteField(props: {
             options={modelOptions}
             placeholder={t("settings.inference.selectModel")}
             selectedFallback={props.route?.model_id}
+            showNoRoute={!props.showEnableToggle}
             value={selectedModelKey}
           />
         </div>
@@ -746,7 +799,7 @@ function InferenceRouteField(props: {
           </span>
           <InferencePickerControl
             ariaLabel={`${props.label} · ${t("settings.inference.accountRegion")}`}
-            disabled={props.disabled || selectedModelKey === null}
+            disabled={props.disabled || !featureEnabled || selectedModelKey === null}
             emptyLabel={t("settings.inference.noAccountMatches")}
             filterPlaceholder={t("settings.inference.accountFilter")}
             icon={<UserRound className="size-4" />}
@@ -761,6 +814,7 @@ function InferenceRouteField(props: {
               ? t("settings.inference.selectAccount")
               : t("settings.inference.selectModelFirst")}
             selectedFallback={props.route?.connection_id}
+            showNoRoute={!props.showEnableToggle}
             value={selectedAccountKey}
           />
         </div>
@@ -769,7 +823,7 @@ function InferenceRouteField(props: {
         <Button
           aria-label={t("settings.inference.configureDefaults")}
           className="size-9 shrink-0"
-          disabled={props.disabled || !selectedCandidate}
+          disabled={props.disabled || !featureEnabled || !selectedCandidate}
           onClick={() => {
             if (selectedCandidate) {
               props.onConfigure(selectedCandidate)
@@ -786,7 +840,7 @@ function InferenceRouteField(props: {
           <Button
             aria-label={t("settings.inference.testConnection")}
             className="size-9 shrink-0"
-            disabled={props.disabled || props.testPending || !selectedCandidate}
+            disabled={props.disabled || !featureEnabled || props.testPending || !selectedCandidate}
             onClick={props.onTest}
             size="icon"
             title={t("settings.inference.testConnection")}
@@ -801,7 +855,7 @@ function InferenceRouteField(props: {
           </Button>
         ) : null}
       </div>
-      {selectedCandidate ? (
+      {featureEnabled && selectedCandidate ? (
         <div className="mt-1.5 space-y-0.5 break-words text-[11px] text-muted-foreground">
           <p>
             {selectedCandidate.serviceEntryDisplayName}
@@ -810,7 +864,7 @@ function InferenceRouteField(props: {
           </p>
         </div>
       ) : null}
-      {props.unavailableReason ? (
+      {featureEnabled && props.unavailableReason ? (
         <p className="mt-1.5 break-words text-xs text-destructive">
           {formatSkillText(t("settings.inference.unavailableReason"), {
             reason: props.unavailableReason,
@@ -856,6 +910,9 @@ function InferencePickerControl(props: {
   // Whether the picker is temporarily unavailable.
   // 选择器是否暂时不可用。
   disabled: boolean
+  // Whether the explicit no-route option remains visible in this picker.
+  // 该选择器是否继续显示显式的未配置选项。
+  showNoRoute?: boolean
   // Receives one selected identity or an explicit clear action.
   // 接收一个已选身份或显式清除动作。
   onValueChange: (value: string | null) => void
@@ -928,31 +985,33 @@ function InferencePickerControl(props: {
         </div>
         <ScrollArea className="model-picker-scroll">
           <div className="model-picker-list">
-            <div
-              className={cn(
-                "model-picker-group-row",
-                props.value === null && "selected",
-              )}
-            >
-              <Button
-                className="model-picker-group-main"
-                onClick={() => {
-                  props.onValueChange(null)
-                  setOpen(false)
-                }}
-                type="button"
-                variant="ghost"
+            {props.showNoRoute !== false ? (
+              <div
+                className={cn(
+                  "model-picker-group-row",
+                  props.value === null && "selected",
+                )}
               >
-                <span className="model-picker-selected-slot">
-                  {props.value === null ? <Check size={15} /> : null}
-                </span>
-                <span className="model-picker-row-copy">
-                  <span className="model-picker-row-title">
-                    {t("settings.inference.noRoute")}
+                <Button
+                  className="model-picker-group-main"
+                  onClick={() => {
+                    props.onValueChange(null)
+                    setOpen(false)
+                  }}
+                  type="button"
+                  variant="ghost"
+                >
+                  <span className="model-picker-selected-slot">
+                    {props.value === null ? <Check size={15} /> : null}
                   </span>
-                </span>
-              </Button>
-            </div>
+                  <span className="model-picker-row-copy">
+                    <span className="model-picker-row-title">
+                      {t("settings.inference.noRoute")}
+                    </span>
+                  </span>
+                </Button>
+              </div>
+            ) : null}
             {filteredOptions.length === 0 ? (
               <div className="model-picker-empty">{props.emptyLabel}</div>
             ) : (
