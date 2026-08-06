@@ -18,4 +18,18 @@ describe("settingsSubAreaGroups", () => {
       "ai-web-extract",
     ]);
   });
+
+  // Keeps context, retry, and usage settings under one model-basics node.
+  // 将上下文、重试和用量设置统一归入模型基础设置节点。
+  it("groups model runtime basics under the model settings group", () => {
+    const groups = settingsSubAreaGroups(testTranslator);
+    const models = groups.find((group) => group.id === "models");
+
+    expect(models?.items.map((item) => item.id)).toEqual([
+      "model-providers",
+      "credential-management",
+      "model-list",
+      "context-basics",
+    ]);
+  });
 });

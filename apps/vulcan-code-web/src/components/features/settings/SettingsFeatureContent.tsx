@@ -13,8 +13,7 @@ import {
   CredentialManagementArea,
 } from "@/components/features/settings/provider-list-settings";
 import { ProviderManagementArea } from "@/components/features/settings/provider-management-settings";
-import { ProviderRetrySettingsArea } from "@/components/features/settings/provider-retry-settings";
-import { ProviderUsageSettingsArea } from "@/components/features/settings/provider-usage-settings";
+import { ContextBasicsSettingsArea } from "@/components/features/settings/context-basics-settings";
 import { ProviderToolSelectionSettingsArea } from "@/components/features/settings/provider-tool-selection-settings";
 import { NotificationSettingsArea } from "@/components/features/settings/notification-settings-area";
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types";
@@ -102,11 +101,8 @@ export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
   if (props.activeSettingsSubArea === "git-commit") {
     return <GitCommitSettingsArea actions={props.actions} workbench={props.workbench} />;
   }
-  if (props.activeSettingsSubArea === "provider-retry") {
-    return <ProviderRetrySettingsArea actions={props.actions} settings={props.workbench.providerRetry} />;
-  }
-  if (props.activeSettingsSubArea === "provider-usage") {
-    return <ProviderUsageSettingsArea />;
+  if (props.activeSettingsSubArea === "context-basics") {
+    return <ContextBasicsSettingsArea actions={props.actions} retrySettings={props.workbench.providerRetry} />;
   }
   if (props.activeSettingsSubArea === "prompt-composer") {
     return (

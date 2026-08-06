@@ -125,6 +125,9 @@ export function ProviderRetrySettingsArea(props: {
   // Current retry settings projected by the service.
   // 服务端投影出的当前重试设置。
   settings?: ProviderRetrySettingsSummary
+  // Embedded removes the standalone full-height sizing when this panel is grouped with other settings.
+  // Embedded 在与其他设置组合时移除独立页面的全高尺寸约束。
+  embedded?: boolean
 }) {
   const { locale } = useI18n()
   const text = React.useCallback((zh: string, en: string) => locale === "zh-CN" ? zh : en, [locale])
@@ -161,7 +164,7 @@ export function ProviderRetrySettingsArea(props: {
   }, [draft, props.actions, text])
 
   return (
-    <section className="panel full-height settings-detail-panel">
+    <section className={props.embedded ? "panel settings-detail-panel" : "panel full-height settings-detail-panel"}>
       <PanelTitle icon={<RefreshCw size={17} />} title={text("请求重试", "Request retry")} />
       <div className="settings-form-grid">
         <article className="settings-card">

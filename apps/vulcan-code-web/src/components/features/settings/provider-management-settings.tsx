@@ -13,7 +13,6 @@ import {
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { CustomProviderModelsDialog } from "@/components/features/settings/custom-provider-models-dialog"
-import { ContextWindowPolicyEditor } from "@/components/features/settings/public-ai-model-capability-dialog"
 import { ProviderModelAccessDialog } from "@/components/features/settings/provider-model-access-dialog"
 import { localizedProviderDescription } from "@/components/features/settings/provider-presentation"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -66,14 +65,12 @@ import {
   probePublicAiCustomProvider,
   removePublicAiCustomProvider,
   savePublicAiCustomProvider,
-  savePublicAiContextWindowPolicyOverrides,
 } from "@/service/settings-actions-service"
 import type {
   PublicAiCustomProviderModelDiscoveryMode,
   PublicAiCustomProviderProbeResult,
   PublicAiCustomProviderProtocol,
   PublicAiCustomProviderSaveRequest,
-  PublicAiContextWindowPolicyOverrides,
   PublicAiResponsesRemoteCompactionPolicy,
   PublicAiResponsesWebsocketPolicy,
   PublicAiConnection,
@@ -83,54 +80,6 @@ import type {
   PublicAiServiceEntry,
   PublicAiSettingsSnapshot,
 } from "@/types"
-
-// SystemContextWindowPolicyCard edits the process-wide sparse Codex policy.
-// SystemContextWindowPolicyCard 编辑进程级稀疏 Codex 策略。
-function SystemContextWindowPolicyCard(props: {
-  onSaved: (snapshot: PublicAiSettingsSnapshot) => void
-  policy: PublicAiContextWindowPolicyOverrides
-}) {
-  const { t } = useI18n()
-  // draft is the current system-level sparse policy being edited.
-  // draft 是当前正在编辑的系统级稀疏策略。
-  const [draft, setDraft] = React.useState<PublicAiContextWindowPolicyOverrides | undefined>(props.policy)
-  // saving prevents overlapping policy mutations from the same settings card.
-  // saving 防止同一卡片发起重叠策略变更。
-  const [saving, setSaving] = React.useState(false)
-  // error contains one actionable system-policy save failure.
-  // error 保存一条可操作的系统策略保存失败信息。
-  const [error, setError] = React.useState<string | null>(null)
-  React.useEffect(() => {
-    setDraft(Object.keys(props.policy).length > 0 ? props.policy : undefined)
-  }, [props.policy])
-  // save persists the sparse system layer and updates the authoritative snapshot.
-  // save 持久化系统稀疏层并更新权威设置快照。
-  const save = React.useCallback(async () => {
-    setSaving(true)
-    setError(null)
-    try {
-      props.onSaved(await savePublicAiContextWindowPolicyOverrides(draft ?? {}))
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
-    } finally {
-      setSaving(false)
-    }
-  }, [draft, props])
-  return (
-    <div className="space-y-3 rounded-xl border p-4">
-      <div>
-        <h3 className="text-sm font-semibold">{t("settings.contextWindowPolicy.title")} · 系统默认</h3>
-        <p className="text-xs text-muted-foreground">{t("settings.contextWindowPolicy.description")}</p>
-      </div>
-      <ContextWindowPolicyEditor onChange={setDraft} value={draft} />
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      <Button disabled={saving} onClick={() => void save()} type="button">
-        {saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
-        保存系统默认
-      </Button>
-    </div>
-  )
-}
 
 // ProviderManagementArea renders the complete provider registry without credential details.
 // ProviderManagementArea 渲染不含凭据详情的完整供应商注册表。
@@ -299,11 +248,6 @@ export function ProviderManagementArea() {
           {error}
         </div>
       ) : null}
-
-      <SystemContextWindowPolicyCard
-        onSaved={setSnapshot}
-        policy={snapshot?.contextWindowPolicyOverrides ?? {}}
-      />
 
       <CustomProviderTable
         busyProviderId={busyProviderId}

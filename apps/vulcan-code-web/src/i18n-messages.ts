@@ -1801,6 +1801,7 @@ export type TranslationKey =
   | "settings.providerPromotion.referralDisclosure"
   | "settings.providerPromotion.sponsoredDisclosure"
   | "settings.modelList"
+  | "settings.modelBasics"
   | "settings.providerRetry"
   | "settings.providerUsage"
   | "settings.aiVendors"
@@ -1823,6 +1824,7 @@ export type TranslationKey =
   | "settings.modelProviders.description"
   | "settings.credentialManagement.description"
   | "settings.modelList.description"
+  | "settings.modelBasics.description"
   | "settings.providerRetry.description"
   | "settings.providerUsage.description"
   | "settings.aiVendors.description"
@@ -2181,6 +2183,10 @@ export type TranslationKey =
   | "settings.modelCapabilities.inheritedSource"
   | "settings.contextWindowPolicy.title"
   | "settings.contextWindowPolicy.description"
+  | "settings.contextBasics.title"
+  | "settings.contextBasics.description"
+  | "settings.contextBasics.loading"
+  | "settings.contextBasics.saveSystemDefault"
   | "settings.contextWindowPolicy.effectivePercent"
   | "settings.contextWindowPolicy.autoCompactPercent"
   | "settings.contextWindowPolicy.autoCompactTokenLimit"
@@ -4386,6 +4392,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerPromotion.referralDisclosure": "通过邀请链接注册可能会为开发者带来收益，用于支持 Vulcan 持续开发；不会影响模型排序或调用路由。",
     "settings.providerPromotion.sponsoredDisclosure": "赞助合作入口；合作关系不会影响模型排序或调用路由。",
     "settings.modelList": "模型列表",
+    "settings.modelBasics": "基础设置",
     "settings.providerRetry": "请求重试",
     "settings.providerUsage": "用量与计费",
     "settings.aiVendors": "能力供应商",
@@ -4408,6 +4415,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.modelProviders.description": "查看全部已实现供应商，并管理自定义兼容供应商。",
     "settings.credentialManagement.description": "管理模型账号、调用协议、用量与默认凭据。",
     "settings.modelList.description": "按供应商查看已启用模型，并核对当前工作台模型。",
+    "settings.modelBasics.description": "上下文、请求重试、用量与计费等模型运行基础设置。",
     "settings.providerRetry.description": "配置普通错误与 429 限流的重试次数、等待间隔和递增规则。",
     "settings.providerUsage.description": "查看原生出口侧用量、费用来源、覆盖率与账户额度快照。",
     "settings.aiVendors.description": "多个语义 AI 工具共用的能力供应商与路由目标。",
@@ -4764,8 +4772,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
 "settings.modelCapabilities.restore": "恢复来源默认值",
     "settings.modelCapabilities.modelSource": "模型设置",
     "settings.modelCapabilities.inheritedSource": "继承供应商",
-    "settings.contextWindowPolicy.title": "Codex 上下文窗口策略",
+    "settings.contextWindowPolicy.title": "上下文窗口策略",
     "settings.contextWindowPolicy.description": "按原始模型窗口计算：默认 95% 有效窗口、90% 自动压缩线；留空表示继承上级设置。",
+    "settings.contextBasics.title": "上下文基础设置",
+    "settings.contextBasics.description": "配置模型上下文窗口、自动压缩和回退缓冲策略，并集中管理请求重试与用量计费。",
+    "settings.contextBasics.loading": "正在读取基础设置…",
+    "settings.contextBasics.saveSystemDefault": "保存系统默认",
     "settings.contextWindowPolicy.effectivePercent": "有效窗口百分比",
     "settings.contextWindowPolicy.autoCompactPercent": "自动压缩百分比",
     "settings.contextWindowPolicy.autoCompactTokenLimit": "自动压缩 Token 上限",
@@ -6968,6 +6980,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerPromotion.referralDisclosure": "Registering through an invitation link may support the developers and help sustain Vulcan development; it does not affect model ranking or request routing.",
     "settings.providerPromotion.sponsoredDisclosure": "Sponsored entry; the relationship never changes model ranking or routing.",
     "settings.modelList": "Model list",
+    "settings.modelBasics": "Basic settings",
     "settings.providerRetry": "Request retry",
     "settings.providerUsage": "Usage and billing",
     "settings.aiVendors": "Capability vendors",
@@ -6990,6 +7003,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.modelProviders.description": "Review all implemented providers and manage custom compatible providers.",
     "settings.credentialManagement.description": "Manage model accounts, protocols, usage, and default credentials.",
     "settings.modelList.description": "Review enabled models by provider and the active workbench model.",
+    "settings.modelBasics.description": "Model runtime basics including context, request retry, usage, and billing.",
     "settings.providerRetry.description": "Configure retry counts, wait intervals, and backoff rules for ordinary failures and 429 rate limits.",
     "settings.providerUsage.description": "Inspect native egress usage, cost provenance, coverage, and account quota snapshots.",
     "settings.aiVendors.description": "Capability vendors and route targets shared by semantic AI tools.",
@@ -7346,8 +7360,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.modelCapabilities.restore": "Restore source defaults",
     "settings.modelCapabilities.modelSource": "Model settings",
     "settings.modelCapabilities.inheritedSource": "Inherited provider",
-    "settings.contextWindowPolicy.title": "Codex context-window policy",
+    "settings.contextWindowPolicy.title": "Context-window policy",
     "settings.contextWindowPolicy.description": "Calculated from the raw model window: 95% effective window and 90% automatic compaction by default; empty values inherit the stronger layer.",
+    "settings.contextBasics.title": "Context basics",
+    "settings.contextBasics.description": "Configure model context windows, automatic compaction, and fallback buffers while managing request retry, usage, and billing in one place.",
+    "settings.contextBasics.loading": "Loading basic settings…",
+    "settings.contextBasics.saveSystemDefault": "Save system default",
     "settings.contextWindowPolicy.effectivePercent": "Effective window percent",
     "settings.contextWindowPolicy.autoCompactPercent": "Automatic compaction percent",
     "settings.contextWindowPolicy.autoCompactTokenLimit": "Automatic compaction token limit",
