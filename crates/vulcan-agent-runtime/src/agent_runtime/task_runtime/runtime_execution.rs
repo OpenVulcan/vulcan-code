@@ -266,44 +266,126 @@ pub(crate) async fn run_task_with_shared_runtime_context(
     );
     let child_run_task = tokio::spawn(async move {
         let mut background_request = background_request;
-        let launch = prepare_task_runtime_stream_launch_with_preflight_compaction(
+        let mut launch = prepare_task_runtime_stream_launch_with_preflight_compaction(
             Arc::clone(&background_task_runtime),
             &context,
             &mut background_request,
             &background_resolved_config,
         )
         .await?;
-        let mut terminal_report = None;
-        let config = launch
-            .task_execution_context
-            .as_ref()
-            .map(|context| context.config.clone())
-            .unwrap_or_else(|| context.config.clone());
-        let prompt_intervention = Some(build_child_agent_prompt_intervention(
-            Arc::clone(&background_task_runtime),
-            background_request.task_id,
-        ));
-        let mut child_event_stream = Box::pin(drive_runtime_stream_provider_loop(
-            config,
-            launch,
-            prompt_intervention,
-        ));
-        while let Some(event) = child_event_stream.next().await {
-            if let ExecutionStreamEvent::Finished(report) = &event {
-                terminal_report = Some(report.clone());
-            }
-            background_task_runtime.publish_detached_task_event(
+        let initial_tool_result_count =
+            task_snapshot_tool_result_count(&background_request.snapshot);
+        let initial_message_ids = background_request
+            .snapshot
+            .messages
+            .iter()
+            .map(|message| message.id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut mid_turn_compaction_attempted = false;
+        let mut completed_provider_requests = 0usize;
+        let mut completed_tool_results = 0usize;
+        let mut completed_usage = None::<vulcan_core::types::ProviderUsageSnapshot>;
+        let mut completed_last_usage = None::<vulcan_core::types::ProviderUsageSnapshot>;
+        let report = loop {
+            let config = launch
+                .task_execution_context
+                .as_ref()
+                .map(|context| context.config.clone())
+                .unwrap_or_else(|| context.config.clone());
+            let prompt_intervention = Some(build_child_agent_prompt_intervention(
+                Arc::clone(&background_task_runtime),
                 background_request.task_id,
-                &background_request.execution_id,
-                DetachedTaskRuntimeEvent::ChildExecution(event),
-            )?;
-        }
-        let report = terminal_report.ok_or_else(|| {
-            format!(
-                "Task `{}` finished without a terminal execution report.",
-                background_request.task_id
+            ));
+            let mut child_event_stream = Box::pin(drive_runtime_stream_provider_loop(
+                config,
+                launch,
+                prompt_intervention,
+            ));
+            let mut terminal_report = None;
+            let mut compaction_state = None;
+            let mut checkpoint_provider_requests = 0usize;
+            let mut checkpoint_usage = None::<vulcan_core::types::ProviderUsageSnapshot>;
+            while let Some(event) = child_event_stream.next().await {
+                match &event {
+                    ExecutionStreamEvent::ConversationCheckpoint {
+                        last_successful_provider_usage,
+                        provider_request_count,
+                        ..
+                    } => {
+                        checkpoint_provider_requests = *provider_request_count;
+                        checkpoint_usage = last_successful_provider_usage.clone();
+                    }
+                    ExecutionStreamEvent::ContextCompactionRequired {
+                        conversation_state,
+                        reason,
+                        ..
+                    } => {
+                        compaction_state = Some((conversation_state.clone(), reason.clone()));
+                    }
+                    ExecutionStreamEvent::Finished(finished_report) => {
+                        terminal_report = Some(finished_report.clone());
+                    }
+                    _ => {}
+                }
+                background_task_runtime.publish_detached_task_event(
+                    background_request.task_id,
+                    &background_request.execution_id,
+                    DetachedTaskRuntimeEvent::ChildExecution(event),
+                )?;
+            }
+            if let Some(mut terminal_report) = terminal_report {
+                merge_task_mid_turn_report(
+                    &mut terminal_report,
+                    completed_provider_requests,
+                    completed_usage.as_ref(),
+                    completed_last_usage.as_ref(),
+                );
+                break terminal_report;
+            }
+            let Some((conversation_state, reason)) = compaction_state else {
+                return Err(format!(
+                    "Task `{}` finished without a terminal execution report.",
+                    background_request.task_id
+                ));
+            };
+            if mid_turn_compaction_attempted {
+                return Err(format!(
+                    "Task `{}` requested repeated mid-turn context compaction after `{reason}`.",
+                    background_request.task_id
+                ));
+            }
+            let checkpoint_snapshot = build_core_conversation_snapshot(&conversation_state)?;
+            completed_tool_results = task_snapshot_tool_result_count(&checkpoint_snapshot)
+                .saturating_sub(initial_tool_result_count);
+            completed_provider_requests =
+                completed_provider_requests.saturating_add(checkpoint_provider_requests);
+            let (snapshot_usage, snapshot_last_usage) =
+                task_snapshot_provider_usage_after(&checkpoint_snapshot, &initial_message_ids);
+            completed_usage = snapshot_usage.or_else(|| checkpoint_usage.clone());
+            completed_last_usage = snapshot_last_usage.or(checkpoint_usage);
+            background_request.snapshot = checkpoint_snapshot;
+            let compacted_snapshot = run_task_session_context_compaction(
+                Arc::clone(&background_task_runtime),
+                context.clone(),
+                background_request.clone(),
+                background_resolved_config.clone(),
             )
-        })?;
+            .await?
+            .ok_or_else(|| {
+                format!(
+                    "Task `{}` required mid-turn context compaction after `{reason}`, but compaction produced no snapshot.",
+                    background_request.task_id
+                )
+            })?;
+            background_request.snapshot = compacted_snapshot;
+            mid_turn_compaction_attempted = true;
+            launch = prepare_task_runtime_stream_launch(
+                &context,
+                &background_request,
+                &background_resolved_config,
+            )
+            .await?;
+        };
         let budget_should_compact = report
             .preparation
             .as_ref()
@@ -325,12 +407,18 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                 false
             });
         let should_compact_context = budget_should_compact || provider_limit_should_compact;
-        let outcome = task_execution_outcome_from_report(
+        let mut outcome = task_execution_outcome_from_report(
             &background_request,
             child_completion_controller_config,
             background_resolved_config,
             report,
         )?;
+        outcome.tool_calls_processed = outcome
+            .tool_calls_processed
+            .saturating_add(completed_tool_results);
+        if let Some(segment) = outcome.usage_segments.first_mut() {
+            segment.tool_call_count = outcome.tool_calls_processed;
+        }
         Ok::<TaskExecutionCompletion, String>(TaskExecutionCompletion {
             outcome,
             should_compact_context,
@@ -633,6 +721,101 @@ pub(crate) async fn run_task_with_shared_runtime_context(
         ),
     );
     Ok(running_outcome)
+}
+
+/// Counts replayable tool results in one child-task conversation snapshot.
+/// 统计一份子任务会话快照中可回放的工具结果数量。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` is the exact canonical window before or after one mid-turn compaction boundary.
+/// `snapshot` 是一次回合中压缩边界前后的精确规范窗口。
+///
+/// # Returns
+/// 返回值
+/// The number of completed tool-result messages retained by the snapshot.
+/// 返回快照中保留的已完成工具结果消息数量。
+fn task_snapshot_tool_result_count(snapshot: &CoreConversationSnapshot) -> usize {
+    snapshot
+        .messages
+        .iter()
+        .filter(|message| {
+            matches!(
+                message.payload,
+                vulcan_core::types::ConversationPayload::ToolResult { .. }
+            )
+        })
+        .count()
+}
+
+/// Accumulates successful provider usage from messages appended after the invocation baseline.
+/// 累加调用基线之后追加消息中的成功 Provider 用量。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` is the replay-safe pre-compaction state and `initial_message_ids` identifies every
+/// message that existed before this logical task execution started.
+/// `snapshot` 是压缩前可安全回放的状态，`initial_message_ids` 标识本次逻辑任务执行开始前已存在的全部消息。
+///
+/// # Returns
+/// 返回值
+/// Cumulative and latest successful usage for only the newly appended assistant messages.
+/// 仅返回新追加助手消息的累计用量与最后一次成功用量。
+fn task_snapshot_provider_usage_after(
+    snapshot: &CoreConversationSnapshot,
+    initial_message_ids: &std::collections::BTreeSet<String>,
+) -> (
+    Option<vulcan_core::types::ProviderUsageSnapshot>,
+    Option<vulcan_core::types::ProviderUsageSnapshot>,
+) {
+    let mut cumulative = None::<vulcan_core::types::ProviderUsageSnapshot>;
+    let mut last = None;
+    for message in &snapshot.messages {
+        if initial_message_ids.contains(&message.id) {
+            continue;
+        }
+        let vulcan_core::types::ConversationPayload::Assistant {
+            usage: Some(usage), ..
+        } = &message.payload
+        else {
+            continue;
+        };
+        cumulative
+            .get_or_insert_with(Default::default)
+            .accumulate_from(usage);
+        last = Some((**usage).clone());
+    }
+    (cumulative, last)
+}
+
+/// Merges pre-compaction provider accounting into the terminal continuation report.
+/// 将压缩前的 Provider 计量合并到续跑终态报告中。
+///
+/// # Parameters
+/// 参数
+/// `report` is the terminal report produced after the compacted continuation; the remaining
+/// arguments are successful facts captured before compaction.
+/// `report` 是压缩续跑后生成的终态报告；其余参数是压缩前捕获的成功事实。
+fn merge_task_mid_turn_report(
+    report: &mut ExecutionRunReport,
+    completed_provider_requests: usize,
+    completed_usage: Option<&vulcan_core::types::ProviderUsageSnapshot>,
+    completed_last_usage: Option<&vulcan_core::types::ProviderUsageSnapshot>,
+) {
+    report.provider_request_count = report
+        .provider_request_count
+        .saturating_add(completed_provider_requests);
+    if let Some(completed_usage) = completed_usage {
+        let cumulative = report
+            .cumulative_successful_provider_usage
+            .get_or_insert_with(Default::default);
+        let current = cumulative.clone();
+        *cumulative = completed_usage.clone();
+        cumulative.accumulate_from(&current);
+    }
+    if report.last_successful_provider_usage.is_none() {
+        report.last_successful_provider_usage = completed_last_usage.cloned();
+    }
 }
 
 /// Determines whether a task session crossed the provider-request compaction threshold after the current run.
@@ -1149,5 +1332,122 @@ pub(super) fn task_context_compaction_policy_from_snapshot(
     ContextCompactionPolicy {
         auto: snapshot.auto_compaction_enabled,
         ..ContextCompactionPolicy::default()
+    }
+}
+
+#[cfg(test)]
+mod mid_turn_compaction_tests {
+    use super::*;
+
+    /// Verifies continuation reports retain provider counts and usage accumulated before compaction.
+    /// 验证续跑报告会保留压缩前累计的 Provider 次数与用量。
+    #[test]
+    fn mid_turn_report_merge_preserves_pre_compaction_accounting() {
+        let current_usage = vulcan_core::types::ProviderUsageSnapshot {
+            input_tokens: Some(5),
+            total_tokens: Some(5),
+            ..Default::default()
+        };
+        let completed_usage = vulcan_core::types::ProviderUsageSnapshot {
+            input_tokens: Some(7),
+            total_tokens: Some(7),
+            ..Default::default()
+        };
+        let mut report = ExecutionRunReport {
+            session_id: SessionId::nil(),
+            preparation: None,
+            assistant_output: Some(String::from("done")),
+            thinking_output: None,
+            conversation_state: None,
+            provider_request_count: 2,
+            last_successful_provider_usage: Some(current_usage.clone()),
+            cumulative_successful_provider_usage: Some(current_usage.clone()),
+            mcp_discovery_rows: Vec::new(),
+            mcp_discovery_errors: Vec::new(),
+            warnings: Vec::new(),
+            error: None,
+            controller_events: Vec::new(),
+            embedded_turn_usage_segments: Vec::new(),
+        };
+
+        merge_task_mid_turn_report(&mut report, 1, Some(&completed_usage), None);
+
+        assert_eq!(report.provider_request_count, 3);
+        let cumulative = report
+            .cumulative_successful_provider_usage
+            .expect("cumulative usage should remain available");
+        assert_eq!(cumulative.input_tokens, Some(12));
+        assert_eq!(cumulative.total_tokens, Some(12));
+        assert_eq!(report.last_successful_provider_usage, Some(current_usage));
+    }
+
+    /// Verifies tool-result counting observes only completed replayable result messages.
+    /// 验证工具结果计数只统计已完成且可回放的结果消息。
+    #[test]
+    fn task_snapshot_tool_result_count_ignores_non_result_messages() {
+        let snapshot = CoreConversationSnapshot {
+            messages: vec![
+                vulcan_core::types::ConversationMessage {
+                    id: String::from("user"),
+                    payload: vulcan_core::types::ConversationPayload::UserText {
+                        text: String::from("run"),
+                        attachments: Vec::new(),
+                    },
+                },
+                vulcan_core::types::ConversationMessage {
+                    id: String::from("tool"),
+                    payload: vulcan_core::types::ConversationPayload::ToolResult {
+                        tool_call_id: Some(String::from("call")),
+                        is_error: false,
+                        text: String::from("ok"),
+                    },
+                },
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(task_snapshot_tool_result_count(&snapshot), 1);
+    }
+
+    /// Verifies pre-compaction accounting sums every newly appended assistant usage observation.
+    /// 验证压缩前计量会累加每条新追加助手消息的用量观测。
+    #[test]
+    fn task_snapshot_usage_accumulates_all_new_assistant_messages() {
+        let assistant = |id: &str, tokens: usize| vulcan_core::types::ConversationMessage {
+            id: id.to_string(),
+            payload: vulcan_core::types::ConversationPayload::Assistant {
+                text: String::new(),
+                reasoning: String::new(),
+                provider_message_id: None,
+                provider_message_state: None,
+                usage: Some(Box::new(vulcan_core::types::ProviderUsageSnapshot {
+                    input_tokens: Some(tokens),
+                    uncached_input_tokens: Some(tokens),
+                    total_tokens: Some(tokens),
+                    audio_input_tokens: Some(tokens),
+                    audio_output_tokens: Some(tokens),
+                    ..Default::default()
+                })),
+                tool_calls: Vec::new(),
+            },
+        };
+        let snapshot = CoreConversationSnapshot {
+            messages: vec![
+                assistant("existing", 100),
+                assistant("one", 3),
+                assistant("two", 4),
+            ],
+            ..Default::default()
+        };
+        let initial_ids = std::collections::BTreeSet::from([String::from("existing")]);
+
+        let (cumulative, last) = task_snapshot_provider_usage_after(&snapshot, &initial_ids);
+
+        let cumulative = cumulative.expect("new assistant usage should accumulate");
+        assert_eq!(cumulative.total_tokens, Some(7));
+        assert_eq!(cumulative.uncached_input_tokens, Some(7));
+        assert_eq!(cumulative.audio_input_tokens, Some(7));
+        assert_eq!(cumulative.audio_output_tokens, Some(7));
+        assert_eq!(last.and_then(|usage| usage.total_tokens), Some(4));
     }
 }

@@ -70,7 +70,7 @@ impl ProtocolProfile for AnthropicMessagesProfile {
         request: &AiExecutionRequest,
     ) -> Result<EncodedWireRequest, ProtocolConversionError> {
         require_anthropic_native_tools(request, self.id())?;
-        encode_anthropic_request(request, false)
+        encode_anthropic_request(request, false, self.id())
     }
 
     fn create_stream_decoder(
@@ -107,7 +107,7 @@ impl ProtocolProfile for AnthropicMessagesVideoProfile {
         request: &AiExecutionRequest,
     ) -> Result<EncodedWireRequest, ProtocolConversionError> {
         crate::shared::require_no_native_tools(request, self.id())?;
-        encode_anthropic_request(request, true)
+        encode_anthropic_request(request, true, self.id())
     }
 
     /// Creates one isolated Anthropic-compatible stream decoder.
@@ -147,7 +147,7 @@ impl ProtocolProfile for ClaudeCodeMessagesProfile {
     ) -> Result<EncodedWireRequest, ProtocolConversionError> {
         crate::shared::require_no_native_tools(request, self.id())?;
         let (forward_names, _) = claude_code_tool_name_maps(request);
-        let mut encoded = encode_anthropic_request(request, false)?;
+        let mut encoded = encode_anthropic_request(request, false, self.id())?;
         remap_claude_code_request_tool_names(&mut encoded.body, &forward_names)?;
         Ok(encoded)
     }
@@ -312,7 +312,9 @@ fn append_anthropic_native_tools(request: &AiExecutionRequest, tools: &mut Vec<V
 fn encode_anthropic_request(
     request: &AiExecutionRequest,
     allow_video: bool,
+    protocol_id: &str,
 ) -> Result<EncodedWireRequest, ProtocolConversionError> {
+    crate::require_no_route_bound_provider_context(request, protocol_id)?;
     let mut system_blocks = Vec::new();
     let mut message_values = Vec::new();
     let mut pending_tool_blocks = Vec::new();
@@ -329,12 +331,14 @@ fn encode_anthropic_request(
             }));
         }
         match message.role {
-            MessageRole::System => system_blocks.extend(content),
+            MessageRole::System | MessageRole::Developer => system_blocks.extend(content),
             MessageRole::User | MessageRole::Assistant => {
                 let role = match message.role {
                     MessageRole::User => "user",
                     MessageRole::Assistant => "assistant",
-                    MessageRole::System | MessageRole::Tool => unreachable!(),
+                    MessageRole::System | MessageRole::Developer | MessageRole::Tool => {
+                        unreachable!()
+                    }
                 };
                 message_values.push(json!({ "role": role, "content": content }));
             }
@@ -364,6 +368,12 @@ fn encode_anthropic_request(
         body.insert(String::from("system"), Value::Array(system_blocks));
     }
     if !request.tools.is_empty() || !request.native_tools.is_empty() {
+        if let Some(tool) = request.tools.iter().find(|tool| tool.strict) {
+            return Err(ProtocolConversionError::new(format!(
+                "Anthropic Messages has no registered strict-schema projector for tool `{}`.",
+                tool.name
+            )));
+        }
         let mut tools = request
             .tools
             .iter()
@@ -956,7 +966,9 @@ fn usage_from_anthropic(value: Option<&Value>) -> Vec<AiStreamEvent> {
         cache_write_1h_tokens: reported_usage(value, "cache_creation_1h_input_tokens"),
         ..RequestUsage::default()
     };
-    vec![AiStreamEvent::UsageUpdated { usage }]
+    vec![AiStreamEvent::UsageUpdated {
+        usage: Box::new(usage),
+    }]
 }
 
 /// Converts one reported unsigned usage field.
@@ -996,6 +1008,8 @@ fn anthropic_error(value: &Value) -> AiExecutionError {
         subcategory: error_type.clone(),
         stage: String::from("stream"),
         http_status: None,
+        transport: None,
+        websocket_close_code: None,
         upstream_code: error_type.clone(),
         upstream_type: error_type,
         upstream_parameter: value
@@ -1150,6 +1164,12 @@ fn encode_content_items(
 fn encode_anthropic_image(
     resource: &vulcan_ai_contract::ResourceReference,
 ) -> Result<Value, ProtocolConversionError> {
+    if resource.image_detail.is_some() {
+        return Err(ProtocolConversionError::new(format!(
+            "Anthropic Messages cannot preserve image detail for resource `{}`.",
+            resource.id
+        )));
+    }
     let url = resource.url.as_deref().ok_or_else(|| {
         ProtocolConversionError::new(format!(
             "Resource `{}` was not resolved before Anthropic projection.",
@@ -1525,6 +1545,9 @@ mod tests {
                 id: String::from("video"),
                 kind: vulcan_ai_contract::ResourceKind::Video,
                 media_type: Some(String::from("video/mp4")),
+                source_kind: vulcan_ai_contract::ResourceSourceKind::InlineData,
+                file_name: None,
+                image_detail: None,
                 local_path: None,
                 url: Some(String::from("data:video/mp4;base64,AA==")),
             },
@@ -1549,6 +1572,9 @@ mod tests {
                 id: String::from("video"),
                 kind: vulcan_ai_contract::ResourceKind::Video,
                 media_type: Some(String::from("video/mp4")),
+                source_kind: vulcan_ai_contract::ResourceSourceKind::InlineData,
+                file_name: None,
+                image_detail: None,
                 local_path: None,
                 url: Some(String::from("data:video/mp4;base64,AA==")),
             },
@@ -1566,11 +1592,13 @@ mod tests {
                 name: String::from("skill"),
                 description: String::from("Loads one skill."),
                 input_schema: json!({"type": "object"}),
+                strict: false,
             },
             vulcan_ai_contract::ToolDefinition {
                 name: String::from("Bash"),
                 description: String::from("Already title-cased."),
                 input_schema: json!({"type": "object"}),
+                strict: false,
             },
         ];
         let encoded = ClaudeCodeMessagesProfile

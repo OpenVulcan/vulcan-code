@@ -2,6 +2,7 @@
 //! 供应商无关的请求用量统计。
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Identifies how one usage value was obtained.
 /// 标识一个用量值的取得方式。
@@ -57,6 +58,86 @@ pub enum UsageValue {
     },
 }
 
+/// Carries one immutable effective pricing revision without floating-point values.
+/// 承载一份不使用浮点数的不可变生效价格修订。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PricingProfileSnapshot {
+    /// Content-addressed immutable revision.
+    /// 内容寻址的不可变修订号。
+    pub pricing_revision: String,
+    /// Stable provider identity.
+    /// 稳定供应商标识。
+    pub provider_id: String,
+    /// Optional stable service-entry identity.
+    /// 可选稳定服务入口标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_entry_id: Option<String>,
+    /// Exact model identity.
+    /// 精确模型标识。
+    pub model_id: String,
+    /// ISO currency.
+    /// ISO 币种。
+    pub currency: String,
+    /// Effective input price per million tokens.
+    /// 生效输入每百万 Token 价格。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_per_million: Option<String>,
+    /// Effective output price per million tokens.
+    /// 生效输出每百万 Token 价格。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_per_million: Option<String>,
+    /// Effective cache-read price per million tokens.
+    /// 生效缓存读取每百万 Token 价格。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_per_million: Option<String>,
+    /// Effective cache-write price per million tokens.
+    /// 生效缓存写入每百万 Token 价格。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_per_million: Option<String>,
+    /// Stable source scope kind.
+    /// 稳定来源作用域类型。
+    pub source_kind: String,
+    /// Exact source identity.
+    /// 精确来源标识。
+    pub source_id: String,
+    /// Hexadecimal SHA-256 of the frozen revision material.
+    /// 冻结修订材料的十六进制 SHA-256。
+    pub content_hash: String,
+}
+
+/// Carries one provider-reported billing partition without collapsing it into token totals.
+/// 承载一项供应商报告的计费分区，且不会把它折叠进 Token 合计。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsageBillingDetail {
+    /// Provider-defined billing category from one versioned extraction profile.
+    /// 由版本化提取 Profile 约束的供应商计费类别。
+    pub billing_type: String,
+    /// Input tokens assigned to this billing category.
+    /// 归入当前计费类别的输入 Token。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    /// Output tokens assigned to this billing category.
+    /// 归入当前计费类别的输出 Token。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    /// Total tokens assigned to this billing category.
+    /// 归入当前计费类别的 Token 合计。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    /// Text input tokens reported inside this billing category.
+    /// 当前计费类别中报告的文本输入 Token。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_tokens: Option<u64>,
+    /// Image input tokens reported inside this billing category.
+    /// 当前计费类别中报告的图片输入 Token。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_tokens: Option<u64>,
+    /// Reasoning output tokens reported inside this billing category.
+    /// 当前计费类别中报告的推理输出 Token。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u64>,
+}
+
 /// Carries normalized usage for one provider request.
 /// 承载一次供应商请求的归一化用量。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -103,6 +184,50 @@ pub struct RequestUsage {
     /// 供应商报告的十进制费用字符串。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost: Option<String>,
+    /// Locally estimated decimal cost from one frozen pricing revision.
+    /// 根据一份冻结价格修订在本地估算的十进制费用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_cost: Option<String>,
+    /// ISO currency shared by reported or estimated cost facts.
+    /// 报告或估算成本事实共用的 ISO 币种。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_currency: Option<String>,
+    /// Immutable pricing revision used for the local estimate.
+    /// 本地估算使用的不可变价格修订号。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing_revision: Option<String>,
+    /// Frozen effective pricing profile used for the local estimate.
+    /// 本地估算使用的冻结生效价格 Profile。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing_profile: Option<PricingProfileSnapshot>,
+    /// Provider-reported billing partitions retained separately from normalized token dimensions.
+    /// 与规范化 Token 维度分开保留的供应商计费分区。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub billing_details: Vec<UsageBillingDetail>,
+    /// Frozen extraction profile identity when raw provider evidence supplied this update.
+    /// 原始供应商证据产生当前更新时所使用的冻结提取 Profile 标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extraction_profile_id: Option<String>,
+    /// Frozen extraction profile revision.
+    /// 冻结的提取 Profile 修订号。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extraction_profile_revision: Option<u64>,
+    /// Exact provider JSON Pointer retained for every reported dimension.
+    /// 为每个已报告维度保留的精确供应商 JSON Pointer。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub source_paths: BTreeMap<String, String>,
+    /// Validation findings retained without replacing provider evidence.
+    /// 在不替换供应商证据的情况下保留的校验结果。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub validation_flags: Vec<String>,
+    /// Provider-returned model identity when reported with usage.
+    /// 与用量一同报告时的供应商返回模型标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_model: Option<String>,
+    /// Provider-returned response identity when reported with usage.
+    /// 与用量一同报告时的供应商返回响应标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_id: Option<String>,
 }
 
 impl RequestUsage {
@@ -165,6 +290,33 @@ impl RequestUsage {
         merge_usage_value(&mut self.total_tokens, update.total_tokens, update_kind);
         if update.cost.is_some() {
             self.cost = update.cost;
+        }
+        if update.estimated_cost.is_some() {
+            self.estimated_cost = update.estimated_cost;
+        }
+        if update.cost_currency.is_some() {
+            self.cost_currency = update.cost_currency;
+        }
+        if update.pricing_revision.is_some() {
+            self.pricing_revision = update.pricing_revision;
+        }
+        if update.pricing_profile.is_some() {
+            self.pricing_profile = update.pricing_profile;
+        }
+        if !update.billing_details.is_empty() {
+            self.billing_details = update.billing_details;
+        }
+        if update.extraction_profile_id.is_some() {
+            self.extraction_profile_id = update.extraction_profile_id;
+            self.extraction_profile_revision = update.extraction_profile_revision;
+        }
+        self.source_paths.extend(update.source_paths);
+        self.validation_flags.extend(update.validation_flags);
+        if update.response_model.is_some() {
+            self.response_model = update.response_model;
+        }
+        if update.response_id.is_some() {
+            self.response_id = update.response_id;
         }
         if matches!(update_kind, UsageUpdateKind::Final) {
             self.update_kind = UsageUpdateKind::Final;

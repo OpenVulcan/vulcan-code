@@ -707,6 +707,19 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
             last_successful_provider_usage,
             provider_request_count,
         ),
+        ExecutionStreamEvent::ContextCompactionRequired {
+            session_id,
+            conversation_state,
+            ..
+        } => apply_conversation_checkpoint(
+            app,
+            state,
+            controller_runtime,
+            session_id,
+            conversation_state,
+            None,
+            0,
+        ),
         ExecutionStreamEvent::Finished(report) => {
             let _ = agent_runtime;
             let session_id = report.session_id;

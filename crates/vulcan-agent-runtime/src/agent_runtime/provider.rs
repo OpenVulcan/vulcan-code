@@ -36,6 +36,9 @@ pub struct ProviderRuntimeBlueprint {
     /// Exact provider-neutral wire protocol profile selected for this immutable execution.
     /// 为本次不可变执行选定的精确供应商无关 Wire 协议 Profile。
     pub protocol_profile_id: String,
+    /// Content-addressed revision of the exact route snapshot selected for this execution.
+    /// 为本次执行选定的精确路由快照内容寻址修订号。
+    pub route_revision: String,
     /// Exact provider-internal secondary route selected for this immutable execution.
     /// 为本次不可变执行选定的精确供应商内部二级路由。
     pub secondary_route: vulcan_provider_adapters::SecondaryRouteSelection,
@@ -194,6 +197,7 @@ pub fn resolve_public_ai_provider_blueprint(
         model_id: selection.model.id.clone(),
         model_name: selection.model.display_name.clone(),
         protocol_profile_id: protocol_id.to_string(),
+        route_revision: selection.route_revision.clone(),
         secondary_route: selection.route.secondary_route.clone(),
         public_capabilities: capabilities,
         base_url: Some(selection.route.entry.base_url.clone()),

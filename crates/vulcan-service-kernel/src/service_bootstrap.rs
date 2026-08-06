@@ -697,6 +697,9 @@ fn run_service_bootstrap(
     // usageRefreshRuntime owns the memory-only allowance cache and observes interval changes.
     // usageRefreshRuntime 持有仅内存用量缓存并观测刷新间隔变更。
     let usage_refresh_runtime = Arc::clone(&public_ai_runtime);
+    // usageRefreshController persists the same observations through the existing application binding.
+    // usageRefreshController 通过现有应用绑定持久化同一批观测。
+    let usage_refresh_controller = controller_runtime.clone();
     runtime.spawn(async move {
         loop {
             let configuration = match usage_refresh_runtime.configuration_snapshot() {
@@ -713,6 +716,24 @@ fn run_service_bootstrap(
             {
                 eprintln!("[webui-service] public AI usage refresh failed: {error}");
             }
+            match usage_refresh_runtime.usage_cache_snapshot() {
+                Ok(snapshots) => {
+                    if let Err(error) =
+                        crate::provider_usage_runtime::persist_native_account_usage_snapshots(
+                            &usage_refresh_controller,
+                            usage_refresh_runtime.as_ref(),
+                            &configuration,
+                            &snapshots,
+                        )
+                        .await
+                    {
+                        eprintln!("[webui-service] public AI usage persistence failed: {error}");
+                    }
+                }
+                Err(error) => {
+                    eprintln!("[webui-service] public AI usage cache snapshot failed: {error}");
+                }
+            }
             tokio::time::sleep(std::time::Duration::from_secs(
                 configuration
                     .usage_refresh_interval_seconds
@@ -728,6 +749,7 @@ fn run_service_bootstrap(
             &public_ai_runtime,
         ))
         .with_retry_configuration(&provider_configuration.retry)
+        .with_native_usage_controller(controller_runtime.clone())
         .with_plugin_telemetry(vulcan_plugin_runtime.clone()),
     );
     let agent_runtime = AgentRuntimeBridge {
@@ -1705,9 +1727,27 @@ fn prepare_vulcan_plugin_runtime(
     // storageService 通过已连接的共享 Controller 客户端路由插件数据库调用。
     let storage_service = Arc::new(crate::plugin_storage::ControllerPluginStorageService::new(
         controller_runtime.client.clone(),
-        service_runtime,
+        service_runtime.clone(),
         plugin_state_root,
     ));
+    // legacyUsageMigration copies immutable historical facts through Controller bindings before plugin hooks resume writes.
+    // legacyUsageMigration 在插件 Hook 恢复写入前，通过 Controller 绑定复制不可变历史事实。
+    let legacy_usage_migration = service_runtime
+        .block_on(
+            crate::provider_usage_migration::migrate_legacy_usage_statistics(
+                storage_service.as_ref(),
+                controller_runtime,
+            ),
+        )
+        .map_err(|error| {
+            ServiceBootstrapError::new("vldb", "VLDB", format!("迁移旧用量统计数据失败：{error}"))
+        })?;
+    if legacy_usage_migration.source_present {
+        eprintln!(
+            "[webui-service] migrated {} legacy usage rows through source rowid {}",
+            legacy_usage_migration.imported_rows, legacy_usage_migration.final_source_rowid
+        );
+    }
     // uiEventPublisher forwards revision-only invalidations through existing service event sinks.
     // uiEventPublisher 通过现有服务事件接收器转发仅含修订号的失效通知。
     let ui_event_publisher = Arc::new(crate::plugin_ui_events::ServicePluginUiEventPublisher::new(

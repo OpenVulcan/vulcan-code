@@ -13,14 +13,18 @@ use crate::{
     ProviderExecutionFailure, ProviderExecutionRoute, ProviderExecutionStream,
     ProviderMetadataClient, ProviderRegistry, ProviderToolCapabilityKind,
     ProviderToolExecutionResult, ProviderToolTarget, ProviderToolTargetSelection,
-    RuntimeConnectionCatalogs, SecondaryRouteOption, SecondaryRouteSelection,
-    built_in_provider_tool_targets, native_inference::validate_native_action_binding,
+    ResolvedBillingProfile, RuntimeConnectionCatalogs, SecondaryRouteOption,
+    SecondaryRouteSelection, built_in_provider_tool_targets,
+    native_inference::validate_native_action_binding,
 };
 use async_trait::async_trait;
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex as AsyncMutex;
@@ -31,6 +35,7 @@ use vulcan_ai_contract::{
     ReasoningControlMode, RerankRequest, RerankResponse,
 };
 use vulcan_ai_protocols::ProtocolRegistry;
+use vulcan_llm_core::ModelPricing;
 
 /// Refreshes renewable tokens this long before their declared expiration.
 /// 在可续期 Token 声明过期前这么长时间执行刷新。
@@ -3097,7 +3102,10 @@ impl PublicAiRuntime {
                 &selection.model,
                 request,
                 usage_scope,
-                selection.catalog_revision.as_str(),
+                crate::native_inference::ExecutionRevisionRefs {
+                    catalog: selection.catalog_revision.as_str(),
+                    route: selection.route_revision.as_str(),
+                },
                 &secret,
             )
             .await
@@ -3134,20 +3142,23 @@ impl PublicAiRuntime {
                 &selection.model,
                 request,
                 usage_scope,
-                selection.catalog_revision.as_str(),
+                crate::native_inference::ExecutionRevisionRefs {
+                    catalog: selection.catalog_revision.as_str(),
+                    route: selection.route_revision.as_str(),
+                },
                 &secret,
             )
             .await
     }
 
-    /// Executes one resolved restricted internal LLM request with fresh credential material.
-    /// 使用新鲜凭据材料执行一项已解析的受限内部 LLM 请求。
+    /// Executes one resolved Responses request with fresh credential material.
+    /// 使用新鲜凭据材料执行一项已解析的 Responses 请求。
     ///
     /// # Parameters
     /// 参数
-    /// `selection` is the exact pre-authorized route, while `request` contains no tools,
-    /// resources, continuation, or account-routing instructions.
-    /// `selection` 是精确预授权路由，`request` 不包含工具、资源、延续信息或账号路由指令。
+    /// `selection` is the exact pre-authorized route, while `request` contains the complete
+    /// provider-neutral tool and resource semantics for this execution.
+    /// `selection` 是精确预授权路由，`request` 包含本次执行完整的供应商无关工具与资源语义。
     ///
     /// # Returns
     /// 返回值
@@ -3159,14 +3170,9 @@ impl PublicAiRuntime {
         request: AiExecutionRequest,
         execution_id: String,
     ) -> Result<ProviderExecutionStream, ProviderExecutionFailure> {
-        if request.operation != AiOperation::ConversationRespond
-            || !request.tools.is_empty()
-            || !request.native_tools.is_empty()
-            || !request.resources.is_empty()
-            || request.continuation.is_some()
-        {
+        if request.operation != AiOperation::ConversationRespond || request.continuation.is_some() {
             return Err(crate::execution::pre_dispatch_failure(
-                "Restricted internal LLM execution rejects tools, resources, continuation, and non-conversation operations.",
+                "Responses execution requires a conversation operation and does not accept host-private continuation metadata.",
             ));
         }
         if request.model_id != selection.model.id {
@@ -3473,13 +3479,125 @@ impl PublicAiRuntime {
         // 自定义模型与系统模型共用一条合并投影链，而不是替换掉已继承的上级层。
         route.custom_model_projection =
             resolve_request_projection(configuration, provider_id, model_id)?;
+        route.billing_profile = resolve_billing_profile(
+            configuration,
+            provider_id,
+            route.entry.id.as_str(),
+            model_id,
+            &route.secondary_route,
+        )?;
+        let route_revision = provider_execution_route_revision(
+            &route,
+            &model,
+            &overrides,
+            catalog_revision.as_str(),
+        )?;
         Ok(ResolvedPublicAiSelection {
             route,
             model,
             overrides,
             catalog_revision,
+            route_revision,
         })
     }
+}
+
+/// Resolves one immutable local billing profile from explicit persisted precedence layers.
+/// 从显式持久化优先级层解析一个不可变本地计费 Profile。
+fn resolve_billing_profile(
+    configuration: &PersistedAiConfiguration,
+    provider_id: &str,
+    service_entry_id: &str,
+    model_id: &str,
+    secondary_route: &SecondaryRouteSelection,
+) -> Result<Option<ResolvedBillingProfile>, String> {
+    if !configuration.billing.enabled {
+        return Ok(None);
+    }
+    let route_id = match secondary_route {
+        SecondaryRouteSelection::Automatic => None,
+        SecondaryRouteSelection::PinnedEndpoint { route_id, .. } => Some(route_id.as_str()),
+    };
+    let Some((scope, source_key, price)) =
+        configuration
+            .billing
+            .resolve_price_with_scope(provider_id, model_id, route_id)
+    else {
+        return Ok(None);
+    };
+    let pricing = ModelPricing::from_optional_strings(
+        price.input_cost_per_million.as_deref(),
+        price.output_cost_per_million.as_deref(),
+        price.cache_read_cost_per_million.as_deref(),
+        price.cache_creation_cost_per_million.as_deref(),
+    )
+    .map_err(|error| error.message)?;
+    let multiplier = price
+        .cost_multiplier
+        .as_deref()
+        .map(Decimal::from_str)
+        .transpose()
+        .map_err(|error| format!("Invalid frozen billing multiplier: {error}"))?
+        .unwrap_or(Decimal::ONE);
+    let revision_material = serde_json::to_vec(&serde_json::json!({
+        "scope": scope,
+        "source_key": &source_key,
+        "provider_id": provider_id,
+        "service_entry_id": service_entry_id,
+        "model_id": model_id,
+        "route_id": route_id,
+        "currency": configuration.billing.currency,
+        "price": price,
+    }))
+    .map_err(|error| format!("Failed to serialize frozen billing revision: {error}"))?;
+    let content_hash = format!("{:x}", Sha256::digest(revision_material));
+    let pricing_revision = format!("sha256:{content_hash}");
+    let snapshot = vulcan_ai_contract::PricingProfileSnapshot {
+        pricing_revision: pricing_revision.clone(),
+        provider_id: provider_id.to_string(),
+        service_entry_id: Some(service_entry_id.to_string()),
+        model_id: model_id.to_string(),
+        currency: configuration.billing.currency.clone(),
+        input_per_million: checked_multiply_price(pricing.input, multiplier, "input")?,
+        output_per_million: checked_multiply_price(pricing.output, multiplier, "output")?,
+        cache_read_per_million: checked_multiply_price(
+            pricing.cache_read,
+            multiplier,
+            "cache_read",
+        )?,
+        cache_write_per_million: checked_multiply_price(
+            pricing.cache_write,
+            multiplier,
+            "cache_write",
+        )?,
+        source_kind: scope.to_string(),
+        source_id: price.source.clone().unwrap_or(source_key),
+        content_hash,
+    };
+    Ok(Some(ResolvedBillingProfile {
+        pricing_revision,
+        currency: configuration.billing.currency.clone(),
+        pricing,
+        multiplier,
+        snapshot,
+    }))
+}
+
+/// Multiplies one optional decimal price and preserves an unknown price as unknown.
+/// 对一个可选十进制价格执行乘法，并让未知价格继续保持未知。
+fn checked_multiply_price(
+    price: Option<Decimal>,
+    multiplier: Decimal,
+    field: &str,
+) -> Result<Option<String>, String> {
+    price
+        .map(|value| {
+            value
+                .checked_mul(multiplier)
+                .map(|effective| effective.normalize().to_string())
+                .ok_or_else(|| format!("Frozen billing {field} price overflowed Decimal."))
+        })
+        .transpose()
 }
 
 /// Resolves provider and model request projections from low to high precedence.
@@ -3693,6 +3811,38 @@ pub fn apply_host_default_reasoning_policy(capabilities: &mut ModelCapabilities)
 
 /// Applies catalog overlays together with the exact account-level Kimi entitlement observation.
 /// 应用目录覆盖，并叠加精确账号级 Kimi 权益观测。
+/// Builds the protocol-aware in-memory capability baseline for one custom connection.
+/// 为一个自定义连接构建协议感知的内存能力基线。
+///
+/// # Parameters
+/// 参数
+/// `configuration` owns the exact connection protocol, and `connection_id` selects that connection.
+/// `configuration` 持有精确连接协议，`connection_id` 用于选择该连接。
+///
+/// # Returns
+/// 返回值
+/// A baseline that preserves Gemini reasoning evidence instead of injecting OpenAI-only effort levels.
+/// 返回一份保留 Gemini 思考证据、且不注入 OpenAI 专属档位的基线。
+fn custom_provider_system_baseline(
+    configuration: &PersistedAiConfiguration,
+    connection_id: &str,
+) -> crate::CustomProviderModelDefaults {
+    let mut baseline = crate::CustomProviderModelDefaults::default();
+    let uses_gemini = configuration
+        .connection_graph
+        .connections
+        .get(connection_id)
+        .is_some_and(|connection| {
+            connection.selected_protocol == vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID
+        });
+    if uses_gemini {
+        baseline.reasoning = CapabilitySupport::Unknown;
+        baseline.reasoning_control = ReasoningControlMode::Unknown;
+        baseline.reasoning_efforts.clear();
+    }
+    baseline
+}
+
 fn apply_model_catalog_overlays_with_account_plan(
     configuration: &PersistedAiConfiguration,
     provider_id: &str,
@@ -3701,9 +3851,10 @@ fn apply_model_catalog_overlays_with_account_plan(
     catalog: &mut ConnectionModelCatalog,
 ) -> Result<(), String> {
     let custom_provider = provider_id.starts_with("custom:");
-    // custom_baseline is the in-memory system layer and is never persisted merely by provider creation.
-    // custom_baseline 是内存中的系统层，不会仅因创建供应商而持久化。
-    let custom_baseline = custom_provider.then(crate::CustomProviderModelDefaults::default);
+    // custom_baseline is protocol-aware in-memory policy and is never persisted merely by provider creation.
+    // custom_baseline 是协议感知的内存策略，不会仅因创建供应商而持久化。
+    let custom_baseline = custom_provider
+        .then(|| custom_provider_system_baseline(configuration, catalog.connection_id.as_str()));
     // custom_provider_settings is the optional user-owned provider layer above catalog declarations.
     // custom_provider_settings 是位于目录声明之上的可选用户供应商层。
     let custom_provider_settings = custom_provider
@@ -4170,6 +4321,39 @@ fn apply_model_parameter_defaults(
     Ok(())
 }
 
+/// Builds the immutable revision for one exact LLM execution route.
+/// 为一条精确 LLM 执行路由构建不可变修订号。
+///
+/// # Parameters
+/// 参数
+/// `route`, `model`, `overrides`, and `catalog_revision` are the validated snapshots frozen at selection time.
+/// `route`、`model`、`overrides` 与 `catalog_revision` 是选择时冻结的已校验快照。
+///
+/// # Returns
+/// 返回值
+/// Returns a SHA-256 content revision or a serialization error.
+/// 返回 SHA-256 内容修订号或序列化错误。
+fn provider_execution_route_revision(
+    route: &ProviderExecutionRoute,
+    model: &ConnectionModel,
+    overrides: &crate::ModelExecutionOverrides,
+    catalog_revision: &str,
+) -> Result<String, String> {
+    let material = serde_json::to_vec(&(
+        &route.provider,
+        &route.entry,
+        &route.connection,
+        &route.protocol_route,
+        &route.secondary_route,
+        &route.custom_model_projection,
+        model,
+        overrides,
+        catalog_revision,
+    ))
+    .map_err(|error| format!("failed to serialize provider route revision: {error}"))?;
+    Ok(format!("sha256:{:x}", Sha256::digest(material)))
+}
+
 /// Carries immutable public selection metadata without credential material.
 /// 承载不含凭据材料的不可变公共选择元数据。
 pub struct ResolvedPublicAiSelection {
@@ -4185,6 +4369,9 @@ pub struct ResolvedPublicAiSelection {
     /// Runtime catalog revision frozen with this selection.
     /// 与此选择一同冻结的运行时目录修订。
     pub catalog_revision: String,
+    /// Content-addressed revision of the exact LLM route and request projection snapshot.
+    /// 精确 LLM 路由与请求投影快照的内容寻址修订号。
+    pub route_revision: String,
 }
 
 /// Carries all immutable public execution inputs resolved before controller dispatch.
@@ -4463,6 +4650,59 @@ mod tests {
     fn first_batch_installs_process_rustls_provider() {
         let _runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
         assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+    }
+
+    /// Verifies frozen attempts receive distinct immutable revisions for built-in and user price sources.
+    /// 验证冻结 attempt 会为内置与用户价格来源取得不同的不可变修订号。
+    #[test]
+    fn billing_profile_freezes_builtin_and_user_source_revisions() {
+        let mut configuration = PersistedAiConfiguration::default();
+        let builtin = resolve_billing_profile(
+            &configuration,
+            "openai",
+            "responses",
+            "gpt-5-nano",
+            &SecondaryRouteSelection::Automatic,
+        )
+        .expect("built-in pricing should resolve")
+        .expect("gpt-5-nano must have a frozen built-in price");
+        assert_eq!(builtin.snapshot.source_kind, "builtin_catalog_model");
+        assert_eq!(
+            builtin.snapshot.source_id,
+            "cc-switch:builtin:0345fad6048eed65b3423bedc8ce5711320ddfc3"
+        );
+
+        configuration
+            .billing
+            .import_cc_switch_model_pricing_json(
+                "user-file",
+                r#"{
+                    "version": 1,
+                    "models": [{
+                        "modelId": "gpt-5-nano",
+                        "displayName": "GPT-5 Nano",
+                        "inputCostPerMillion": "0.06",
+                        "outputCostPerMillion": "0.41",
+                        "cacheReadCostPerMillion": "0.006",
+                        "cacheCreationCostPerMillion": "0"
+                    }],
+                    "deletedModelIds": []
+                }"#,
+            )
+            .expect("user pricing should import");
+        let user = resolve_billing_profile(
+            &configuration,
+            "openai",
+            "responses",
+            "gpt-5-nano",
+            &SecondaryRouteSelection::Automatic,
+        )
+        .expect("user pricing should resolve")
+        .expect("user price should remain available");
+        assert_eq!(user.snapshot.source_kind, "catalog_model");
+        assert_eq!(user.snapshot.source_id, "cc-switch:user-file");
+        assert_ne!(user.pricing_revision, builtin.pricing_revision);
+        assert_ne!(user.snapshot.content_hash, builtin.snapshot.content_hash);
     }
 
     /// Verifies an accepted custom-model template remains executable when discovery is unavailable after restart.
@@ -5603,6 +5843,28 @@ mod tests {
         );
     }
 
+    /// Verifies a custom Gemini connection does not inherit OpenAI-only reasoning levels.
+    /// 验证自定义 Gemini 连接不会继承 OpenAI 专属思考档位。
+    #[test]
+    fn custom_gemini_system_baseline_preserves_protocol_reasoning_evidence() {
+        let mut configuration = PersistedAiConfiguration::default();
+        let mut gemini_connection = connection("custom-gemini");
+        gemini_connection.provider_id = String::from("custom:test");
+        gemini_connection.selected_protocol =
+            vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID.to_string();
+        configuration
+            .connection_graph
+            .connections
+            .insert(gemini_connection.id.clone(), gemini_connection);
+
+        let baseline = custom_provider_system_baseline(&configuration, "custom-gemini");
+
+        assert_eq!(baseline.reasoning, CapabilitySupport::Unknown);
+        assert_eq!(baseline.reasoning_control, ReasoningControlMode::Unknown);
+        assert!(baseline.reasoning_efforts.is_empty());
+        assert_eq!(baseline.tool_calling, CapabilitySupport::Native);
+    }
+
     /// Verifies an explicit provider setting can disable the system reasoning and tool defaults.
     /// 验证显式供应商设置可以关闭系统默认的思考与工具能力。
     #[test]
@@ -6192,6 +6454,12 @@ mod tests {
             .resolve_connection_model_selection(&configuration, "two", "openrouter", "vendor/model")
             .expect("exact session account should resolve");
         assert_eq!(selection.route.connection.id, "two");
+        assert!(selection.route_revision.starts_with("sha256:"));
+
+        let other_selection = runtime
+            .resolve_connection_model_selection(&configuration, "one", "openrouter", "vendor/model")
+            .expect("other exact account should resolve");
+        assert_ne!(selection.route_revision, other_selection.route_revision);
     }
 
     /// Verifies cached secondary routes are account-scoped, expire after six hours, and may be bypassed explicitly.

@@ -152,7 +152,7 @@ fn assistant_message(
             reasoning: String::new(),
             provider_message_id: None,
             provider_message_state: None,
-            usage: Some(usage),
+            usage: Some(Box::new(usage)),
             tool_calls: include_tool_call
                 .then(|| SessionConversationToolCall {
                     id: String::from("tool-item-1"),

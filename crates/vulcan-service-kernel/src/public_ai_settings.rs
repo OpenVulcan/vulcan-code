@@ -1,7 +1,6 @@
 //! Public AI connection settings and runtime metadata services.
 //! 公共 AI 连接设置与运行时元数据服务。
 
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -10,10 +9,10 @@ use std::{
 };
 use vulcan_ai_contract::{
     AccountUsageAvailability, AccountUsageSnapshot, AiExecutionRequest, AiMessage, AiOperation,
-    AiStreamEvent, ContentItem, EmbeddingEncoding, EmbeddingInput, EmbeddingInputContent,
-    EmbeddingOutputKind, EmbeddingPayload, EmbeddingRequest, EmbeddingTask,
-    INFERENCE_CONTRACT_VERSION, InferenceCallerBudget, InferenceCallerContext, InferencePermission,
-    InferenceUsageScope, MessageRole, ModelCapabilities, ParallelToolCallPolicy, PromptCachePolicy,
+    ContentItem, EmbeddingEncoding, EmbeddingInput, EmbeddingInputContent, EmbeddingOutputKind,
+    EmbeddingPayload, EmbeddingRequest, EmbeddingTask, INFERENCE_CONTRACT_VERSION,
+    InferenceCallerBudget, InferenceCallerContext, InferencePermission, InferenceUsageScope,
+    MessageRole, ModelCapabilities, ParallelToolCallPolicy, PromptCachePolicy,
     ReasoningControlMode, ReasoningEffort, ReasoningOutputPolicy, RerankRequest,
     RerankScoreSemantics, RerankText, RerankTruncation, StructuredOutputPolicy, ToolChoicePolicy,
 };
@@ -31,7 +30,7 @@ use vulcan_provider_adapters::{
     OAuthTransactionSnapshot, PersistedAiConfiguration, ProviderDescriptor, ProviderKind,
     ProviderRegistry, ProviderToolCapabilityKind, ProviderToolExecutionResult, ProviderToolTarget,
     ProviderToolTargetSelection, PublicAiRuntime, ResponsesRemoteCompactionPolicy,
-    ResponsesRouteFeatures, ResponsesWebSocketPolicy, ServiceEntryKind,
+    ResponsesRouteFeatures, ResponsesWebsocketPolicy, ServiceEntryKind,
     registered_native_action_binding_id,
 };
 use vulcan_service_api::{ServiceEventEmitter, WorkbenchSnapshot};
@@ -583,6 +582,19 @@ pub(super) struct PublicAiUsageRefreshSettingsRequest {
     interval_seconds: u64,
 }
 
+/// Imports one exact cc-switch model-pricing document into the lowest-precedence catalog.
+/// 将一份精确的 cc-switch 模型价格文档导入最低优先级目录。
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PublicAiCcSwitchPricingImportRequest {
+    /// Stable user-visible source identity recorded in each imported price.
+    /// 记录到每条导入价格中的稳定用户可见来源标识。
+    source_id: String,
+    /// Exact UTF-8 contents of cc-switch `model-pricing.json`.
+    /// cc-switch `model-pricing.json` 的精确 UTF-8 内容。
+    json: String,
+}
+
 /// Saves or clears the system-level Codex context-window policy.
 /// 保存或清除系统级 Codex 上下文窗口策略。
 #[derive(Debug, Clone, Deserialize)]
@@ -868,14 +880,14 @@ pub(super) struct PublicAiCustomProviderSaveRequest {
     /// The single compatible protocol served by this base URL.
     /// 此基础 URL 提供的唯一兼容协议。
     protocol: CustomProviderProtocol,
-    /// Explicit WebSocket transport policy for Codex Responses.
-    /// Codex Responses 的显式 WebSocket 传输策略。
-    #[serde(default)]
-    websocket_policy: ResponsesWebSocketPolicy,
     /// Explicit remote-compaction policy for Codex Responses.
     /// Codex Responses 的显式远端压缩策略。
     #[serde(default)]
     remote_compaction_policy: ResponsesRemoteCompactionPolicy,
+    /// Explicit WebSocket policy for Codex Responses.
+    /// Codex Responses 的显式 WebSocket 策略。
+    #[serde(default)]
+    websocket_policy: ResponsesWebsocketPolicy,
     /// Exact API-key header projection.
     /// 精确 API Key 请求头投影。
     authentication: CustomProviderAuthentication,
@@ -1264,8 +1276,8 @@ fn prepare_custom_provider_candidate(
     }
     .into_descriptor()?;
     if request.protocol != CustomProviderProtocol::OpenAiCodexResponses
-        && (request.websocket_policy != ResponsesWebSocketPolicy::Disabled
-            || request.remote_compaction_policy != ResponsesRemoteCompactionPolicy::Disabled)
+        && (request.remote_compaction_policy != ResponsesRemoteCompactionPolicy::Disabled
+            || request.websocket_policy != ResponsesWebsocketPolicy::Disabled)
     {
         return Err(String::from(
             "Responses capability policies require the Codex Responses protocol.",
@@ -1273,8 +1285,8 @@ fn prepare_custom_provider_candidate(
     }
     let route_features = (request.protocol == CustomProviderProtocol::OpenAiCodexResponses)
         .then_some(ResponsesRouteFeatures {
-            websocket: request.websocket_policy,
             remote_compaction: request.remote_compaction_policy,
+            websocket: request.websocket_policy,
         });
     let descriptor_route = descriptor
         .service_entries
@@ -2305,7 +2317,16 @@ pub(super) async fn service_validate_public_ai_custom_model(
         .reasoning_efforts
         .contains(&ReasoningEffort::None)
         .then_some(ReasoningEffort::None);
-    let execution_id = format!("custom-model-validation-{}", uuid::Uuid::new_v4().simple());
+    // Hidden reasoning is meaningful only when the exact route activates a reasoning effort.
+    // 仅当精确路由启用了思考档位时，隐藏思考才有明确语义。
+    let reasoning_output = if reasoning_effort.is_some() {
+        ReasoningOutputPolicy::Hidden
+    } else {
+        ReasoningOutputPolicy::ProviderDefault
+    };
+    // Native attempt persistence requires the logical execution identity to remain a canonical UUID.
+    // 原生真实尝试持久化要求逻辑执行标识保持为规范 UUID。
+    let execution_id = uuid::Uuid::new_v4().to_string();
     let execution_request = AiExecutionRequest {
         operation: AiOperation::ConversationRespond,
         model_id: selection.model.id.clone(),
@@ -2326,48 +2347,16 @@ pub(super) async fn service_validate_public_ai_custom_model(
         stop_sequences: Vec::new(),
         prompt_cache: selection.overrides.prompt_cache.clone().unwrap_or_default(),
         reasoning_effort,
-        reasoning_output: ReasoningOutputPolicy::Hidden,
+        reasoning_output,
         model_parameters: selection.overrides.model_parameters.clone(),
         resources: Vec::new(),
         output_token_limit: Some(output_limit),
     };
-    let mut stream = runtime
-        .execute_internal_llm(&selection, execution_request, execution_id)
+    let configured_inference_service = configured_inference_service_for_settings(&state)?;
+    let response_text = configured_inference_service
+        .execute_model_validation(&selection, execution_request, execution_id)
         .await
-        .map_err(|failure| failure.to_string())?;
-    let mut response_text = String::new();
-    let mut terminal_observed = false;
-    while let Some(event) = stream.next().await {
-        match event.map_err(|failure| failure.to_string())? {
-            AiStreamEvent::ResponseItemStarted {
-                item: ContentItem::Text { text },
-                ..
-            }
-            | AiStreamEvent::ResponseTextDelta { delta: text, .. } => {
-                response_text.push_str(text.as_str());
-            }
-            AiStreamEvent::ResponseCompleted => {
-                terminal_observed = true;
-                break;
-            }
-            AiStreamEvent::ResponseFailed { error } => return Err(error.message),
-            AiStreamEvent::ResponseCancelled => {
-                return Err(String::from("Custom model validation was cancelled."));
-            }
-            _ => {}
-        }
-    }
-    if !terminal_observed {
-        return Err(String::from(
-            "Custom model validation stream ended before a terminal completion event.",
-        ));
-    }
-    let response_text = response_text.trim().to_string();
-    if response_text.is_empty() {
-        return Err(String::from(
-            "Custom model validation completed without visible text output.",
-        ));
-    }
+        .map_err(|error| error.to_string())?;
 
     let provider_id = request.provider_id.clone();
     let connection_id = request.connection_id.clone();
@@ -5097,6 +5086,48 @@ pub(super) async fn service_save_public_ai_usage_refresh_settings(
     .await?;
     publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
     build_public_ai_settings_snapshot(runtime.as_ref(), &configuration)
+}
+
+/// Imports and atomically persists one cc-switch pricing document.
+/// 导入并原子持久化一份 cc-switch 价格文档。
+///
+/// # Parameters
+/// 参数
+/// `app` publishes the refreshed workbench, `state` owns configuration, and `request` carries the exact document.
+/// `app` 发布刷新后的工作台，`state` 持有配置，`request` 承载精确文档。
+///
+/// # Returns
+/// 返回值
+/// Returns the number of active catalog model prices imported after tombstones are applied.
+/// 返回应用删除标记后导入的有效目录模型价格数量。
+pub(super) async fn service_import_public_ai_cc_switch_pricing(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiCcSwitchPricingImportRequest,
+) -> Result<usize, String> {
+    const MAX_CC_SWITCH_PRICING_BYTES: usize = 4 * 1024 * 1024;
+    if request.json.len() > MAX_CC_SWITCH_PRICING_BYTES {
+        return Err(format!(
+            "cc-switch model-pricing.json exceeds {MAX_CC_SWITCH_PRICING_BYTES} UTF-8 bytes."
+        ));
+    }
+    let source_id = request.source_id;
+    let json = request.json;
+    let (runtime, _) = public_ai_runtime_and_configuration(&state)?;
+    let mut imported_count = 0usize;
+    let configuration = mutate_public_ai_configuration(
+        &state,
+        "导入 cc-switch 模型价格失败",
+        |configuration| {
+            imported_count = configuration
+                .billing
+                .import_cc_switch_model_pricing_json(source_id.as_str(), json.as_str())?;
+            Ok(())
+        },
+    )
+    .await?;
+    publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)?;
+    Ok(imported_count)
 }
 
 /// Saves the process-wide default Codex context-window policy.
@@ -8920,8 +8951,8 @@ mod inference_settings_route_tests {
             display_name: String::from("Codex Proxy"),
             base_url: String::from("https://proxy.example.test/v1"),
             protocol: CustomProviderProtocol::OpenAiCodexResponses,
-            websocket_policy: ResponsesWebSocketPolicy::PreferredWithHttpFallback,
             remote_compaction_policy: ResponsesRemoteCompactionPolicy::EnabledWithLocalFallback,
+            websocket_policy: ResponsesWebsocketPolicy::UnverifiedOverride,
             authentication: CustomProviderAuthentication::BearerAuthorization,
             credential_display_name: Some(String::from("Test Account")),
             secret: Some(String::from("test-secret")),
@@ -8944,12 +8975,12 @@ mod inference_settings_route_tests {
             .expect("Codex route should preserve explicit capability switches");
 
         assert_eq!(
-            features.websocket,
-            ResponsesWebSocketPolicy::PreferredWithHttpFallback
-        );
-        assert_eq!(
             features.remote_compaction,
             ResponsesRemoteCompactionPolicy::EnabledWithLocalFallback
+        );
+        assert_eq!(
+            features.websocket,
+            ResponsesWebsocketPolicy::UnverifiedOverride
         );
     }
 
@@ -8986,8 +9017,8 @@ mod inference_settings_route_tests {
             display_name: String::from("Codex Proxy"),
             base_url: String::from("https://proxy.example.test/v1"),
             protocol: CustomProviderProtocol::OpenAiCodexResponses,
-            websocket_policy: ResponsesWebSocketPolicy::PreferredWithHttpFallback,
             remote_compaction_policy: ResponsesRemoteCompactionPolicy::EnabledWithLocalFallback,
+            websocket_policy: ResponsesWebsocketPolicy::UnverifiedOverride,
             authentication: CustomProviderAuthentication::BearerAuthorization,
             credential_display_name: None,
             secret: None,
@@ -9070,8 +9101,8 @@ mod inference_settings_route_tests {
             display_name: String::from("Renamed Provider"),
             base_url: String::from("https://new.example.test/v1"),
             protocol: CustomProviderProtocol::OpenAiChat,
-            websocket_policy: ResponsesWebSocketPolicy::Disabled,
             remote_compaction_policy: ResponsesRemoteCompactionPolicy::Disabled,
+            websocket_policy: ResponsesWebsocketPolicy::Disabled,
             authentication: CustomProviderAuthentication::BearerAuthorization,
             credential_display_name: None,
             secret: None,
@@ -9115,8 +9146,8 @@ mod inference_settings_route_tests {
             display_name: String::from("Cosmetic Rename"),
             base_url: String::from("https://old.example.test/v1"),
             protocol: CustomProviderProtocol::OpenAiResponses,
-            websocket_policy: ResponsesWebSocketPolicy::Disabled,
             remote_compaction_policy: ResponsesRemoteCompactionPolicy::Disabled,
+            websocket_policy: ResponsesWebsocketPolicy::Disabled,
             authentication: CustomProviderAuthentication::BearerAuthorization,
             credential_display_name: None,
             secret: None,

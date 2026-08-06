@@ -361,8 +361,10 @@ impl VulcanCoreController {
             for result in results {
                 tool_calls_processed += 1;
                 self.append_tool_result_message(&result);
-                on_safe_checkpoint(&self.snapshot, self.last_successful_provider_usage.as_ref());
             }
+            // checkpoint_after_tool_batch publishes only the stable batch where every tool call has its result.
+            // checkpoint_after_tool_batch 仅发布每个工具调用均已有结果的稳定批次。
+            on_safe_checkpoint(&self.snapshot, self.last_successful_provider_usage.as_ref());
             // intervention_draft prevents a failed or falsely reported host callback from partially mutating Core state.
             // intervention_draft 防止失败或错误报告未变化的宿主回调局部修改 Core 状态。
             let mut intervention_draft = self.clone();

@@ -1,7 +1,6 @@
 //! Vulcan public-contract adapter for the existing host tool controller.
 //! 面向现有宿主工具控制器的 Vulcan 公共契约适配器。
 
-use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
 use crate::agent_runtime::provider_stream::ProviderDeltaStream;
@@ -42,9 +41,8 @@ use vulcan_core::types::{
     ProviderTurnResponse as CoreProviderTurnResponse, ProviderUsageSnapshot,
 };
 use vulcan_provider_adapters::{
-    CredentialExecutionSecret, ProviderExecutionClient, ProviderExecutionFailure,
-    ProviderExecutionRoute, ProviderExecutionStream, ResolvedPublicAiExecution,
-    ResponsesWebSocketPolicy,
+    CredentialExecutionSecret, ProviderExecutionClient, ProviderExecutionRoute,
+    ResolvedPublicAiExecution,
 };
 use vulcan_tools_manager::{
     VulcanToolSchemaProjectionContext, project_tool_parameters_schema,
@@ -54,39 +52,6 @@ use vulcan_tools_manager::{
 /// Vulcan-owned default output budget used when the provider reports no independent output limit.
 /// 当供应商未报告独立输出上限时使用的 Vulcan 本地默认输出预算。
 const DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT: u64 = 32_000;
-
-/// Delay before a dispatched Provider request records an internal first-event wait marker.
-/// 已发出的 Provider 请求在记录首事件内部等待标记前的延迟。
-const PROVIDER_FIRST_EVENT_WAIT_STATUS_DELAY: std::time::Duration =
-    std::time::Duration::from_secs(5);
-
-/// Poll interval used only while an initially selected Responses WebSocket may switch to HTTPS.
-/// 仅在最初选择的 Responses WebSocket 可能切换到 HTTPS 时使用的轮询间隔。
-const RESPONSES_WEBSOCKET_FALLBACK_STATUS_POLL_INTERVAL: std::time::Duration =
-    std::time::Duration::from_millis(50);
-
-/// Resolves how many WebSocket-only retries may delay an available HTTP fallback.
-/// 解析可用 HTTP 回退前允许由 WebSocket 专属重试造成的延迟次数。
-///
-/// # Parameters
-/// 参数
-/// `websocket_policy` is the explicit route capability and `configured_budget` is the ordinary
-/// host retry budget used by the provider execution path.
-/// `websocket_policy` 是精确路由能力，`configured_budget` 是 Provider 执行路径使用的普通宿主重试预算。
-///
-/// # Returns
-/// 返回值
-/// Returns the configured retry budget only when the exact route explicitly enables WebSocket.
-/// 仅当精确路由显式启用 WebSocket 时返回配置的重试预算。
-fn responses_websocket_retry_budget(
-    websocket_policy: ResponsesWebSocketPolicy,
-    configured_budget: u32,
-) -> u32 {
-    match websocket_policy {
-        ResponsesWebSocketPolicy::Disabled => 0,
-        ResponsesWebSocketPolicy::PreferredWithHttpFallback => configured_budget,
-    }
-}
 
 /// Resolves the requested output budget while treating catalog output limits as upper bounds.
 /// 在将目录输出限制视为上限的前提下解析请求输出预算。
@@ -137,17 +102,6 @@ pub(crate) fn execute_vulcan_public_stream(
 ) -> ProviderDeltaStream {
     let cache_scope_id = request.session_id.to_string();
     let workspace_path = request.workspace_path.clone();
-    let websocket_policy = resolved
-        .route
-        .protocol_route
-        .responses_features
-        .as_ref()
-        .map(|features| features.websocket)
-        .unwrap_or(ResponsesWebSocketPolicy::Disabled);
-    let websocket_retry_budget = responses_websocket_retry_budget(
-        websocket_policy,
-        request.retry_policy.ordinary_retry_budget(),
-    );
     let output_token_limit = resolved_public_output_token_limit(
         resolved.overrides.output_limit,
         resolved.model.capabilities.output_limit,
@@ -178,7 +132,6 @@ pub(crate) fn execute_vulcan_public_stream(
                 resolved.model.capabilities.output_resources.clone(),
                 workspace_path.clone(),
                 live_sender,
-                websocket_retry_budget,
             )
         },
         "Vulcan 公共契约",
@@ -234,7 +187,6 @@ pub(crate) fn capture_vulcan_public_stream(
             resolved.model.capabilities.output_resources,
             workspace_path,
             live_sender,
-            0,
         );
         let public_request = adapter
             .build_request(&prepared.core_snapshot, &controller_config)
@@ -242,11 +194,12 @@ pub(crate) fn capture_vulcan_public_stream(
             .map_err(|error| error.to_string())?;
         let encoded = resolved
             .client
-            .encode_request_for_selected_transport_with_credential(
+            .encode_effective_request_with_credential(
                 &resolved.route,
                 &public_request.public,
                 &adapter.secret,
             )
+            .await
             .map_err(|failure| failure.to_string())?;
         yield ProviderStreamDelta::WireRequest(encoded.body);
     })
@@ -301,9 +254,6 @@ pub(crate) struct VulcanPublicContractAdapter {
     /// Live host sender for tool request construction.
     /// 工具请求构造使用的宿主实时发送器。
     live_sender: ProviderLiveDeltaSender,
-    /// Host-controlled retry count allowed before a safe WebSocket failure falls back to HTTP.
-    /// 安全 WebSocket 失败回退 HTTP 前允许的宿主控制重试次数。
-    websocket_retry_budget: u32,
 }
 
 /// Carries the public request together with the controller budget snapshot.
@@ -329,7 +279,7 @@ impl VulcanPublicContractAdapter {
     /// before dispatch; `live_sender` projects tool construction to the WebUI.
     /// `route`、`secret` 与 `client` 标识精确执行路径；`tools` 是宿主工具定义；
     /// `output_token_limit`、`prompt_cache` 与 `model_parameters` 在分派前解析；
-    /// `live_sender` 将工具构造投影到 WebUI；`websocket_retry_budget` 保持供应商重试配置。
+    /// `live_sender` 将工具构造投影到 WebUI。
     ///
     /// # Returns
     /// 返回值
@@ -351,7 +301,6 @@ impl VulcanPublicContractAdapter {
         output_resources: Vec<ResourceKind>,
         workspace_path: String,
         live_sender: ProviderLiveDeltaSender,
-        websocket_retry_budget: u32,
     ) -> Self {
         // publicTools applies the same route-bound schema projection used by standalone remote compaction.
         // publicTools 应用与独立远端压缩相同的路由绑定 Schema 投影。
@@ -372,147 +321,6 @@ impl VulcanPublicContractAdapter {
             output_resources,
             workspace_path,
             live_sender,
-            websocket_retry_budget,
-        }
-    }
-}
-
-/// Emits one user-visible status when an initially selected WebSocket request switches to HTTP.
-/// 当最初选择 WebSocket 的请求切换到 HTTP 时发出一次用户可见状态。
-///
-/// # Parameters
-/// 参数
-/// `provider_id` identifies the visible provider; `fallback_active` is read from the exact
-/// session transport state; `websocket_selected_at_start` and `announced` enforce one event for
-/// this physical request; `live_sender` forwards the event to the existing workbench stream.
-/// `provider_id` 标识可见供应商；`fallback_active` 从精确会话传输状态读取；
-/// `websocket_selected_at_start` 与 `announced` 保证单个物理请求只发出一次；
-/// `live_sender` 把事件转发到现有工作台流。
-///
-/// # Returns
-/// 返回值
-/// Success when no announcement is needed or the status was forwarded, otherwise a closed-stream error.
-/// 无需通知或状态已转发时返回成功，否则返回流已关闭错误。
-fn emit_responses_websocket_http_fallback_status(
-    provider_id: &str,
-    websocket_selected_at_start: bool,
-    fallback_active: bool,
-    announced: &mut bool,
-    live_sender: &ProviderLiveDeltaSender,
-) -> Result<(), VulcanCoreError> {
-    if !websocket_selected_at_start || *announced || !fallback_active {
-        return Ok(());
-    }
-    *announced = true;
-    live_sender
-        .send(Ok(ProviderStreamDelta::RuntimeEvent(
-            RuntimeEvent::new(
-                RuntimeEventKind::TransportFallback,
-                "Provider 传输回退",
-                "Responses WebSocket 重试预算已耗尽，当前会话已安全切换到 HTTPS。",
-            )
-            .with_metadata(Some(json!({
-                "from_transport": "responses_websocket",
-                "to_transport": "https",
-                "scope": "session_route_model",
-            }))),
-        )))
-        .map_err(|_| {
-            provider_failure(
-                provider_id,
-                "The provider runtime stream closed before the transport fallback status could be published.",
-            )
-        })
-}
-
-/// Marks a delayed first event internally without emitting transcript-visible content.
-/// 当已发出的 Provider 请求未及时产生首个事件时，记录一次内部标记。
-///
-/// # Parameters
-/// 参数
-/// `announced` enforces one internal marker for the physical request.
-/// `announced` 保证单个真实请求只记录一次。
-///
-/// # Returns
-/// 返回值
-/// Success when the internal marker is already present or has just been recorded.
-/// 已记录过或本次成功记录时返回成功。
-fn mark_provider_first_event_waiting(announced: &mut bool) {
-    // The first-event delay is an internal diagnostic boundary, not assistant-visible content.
-    // 首个事件延迟只是内部诊断边界，不应成为助手可见内容。
-    if *announced {
-        return;
-    }
-    *announced = true;
-}
-
-/// Waits for the next public Provider stream item while publishing transport progress independently.
-/// 在等待下一项公共 Provider 流事件时，独立发布传输进度。
-///
-/// # Parameters
-/// 参数
-/// `stream` is the active normalized Provider stream; `provider_id` identifies its visible route;
-/// `websocket_selected_at_start` freezes the initial transport choice; `fallback_active` reads the
-/// exact session-route fallback state; the fallback flag is emitted once and the first-event delay
-/// is recorded only as an internal diagnostic marker; `live_sender` forwards fallback status records.
-/// `stream` 是活动的规范化 Provider 流；`provider_id` 标识其可见路由；
-/// `websocket_selected_at_start` 固定初始传输选择；`fallback_active` 读取精确会话路由的回退状态；
-/// 回退标志只发送一次，首事件延迟仅记录为内部诊断标记；`live_sender` 转发回退状态记录。
-///
-/// # Returns
-/// 返回值
-/// The next stream item, end-of-stream, or a visible fallback-status publication failure.
-/// 返回下一项流事件、流结束，或可见回退状态发布失败。
-async fn next_public_execution_item_with_transport_progress<F>(
-    stream: &mut ProviderExecutionStream,
-    provider_id: &str,
-    websocket_selected_at_start: bool,
-    fallback_active: F,
-    websocket_fallback_announced: &mut bool,
-    first_event_waiting_announced: &mut bool,
-    live_sender: &ProviderLiveDeltaSender,
-) -> Result<Option<Result<AiStreamEvent, ProviderExecutionFailure>>, VulcanCoreError>
-where
-    F: Fn() -> bool,
-{
-    // nextItem stays pinned across timer ticks so polling never cancels an in-flight stream receive.
-    // nextItem 在定时器触发期间保持固定，确保轮询不会取消正在进行的流接收。
-    let next_item = stream.next();
-    tokio::pin!(next_item);
-    // fallbackPoll checks the exact transport state without waiting for the HTTP fallback to finish.
-    // fallbackPoll 检查精确传输状态，无需等待 HTTP 回退执行结束。
-    let mut fallback_poll =
-        tokio::time::interval(RESPONSES_WEBSOCKET_FALLBACK_STATUS_POLL_INTERVAL);
-    fallback_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    // firstEventWait delays the internal diagnostic marker so healthy low-latency requests remain quiet.
-    // firstEventWait 延迟内部诊断标记，使健康的低延迟请求保持简洁。
-    let first_event_wait = tokio::time::sleep(PROVIDER_FIRST_EVENT_WAIT_STATUS_DELAY);
-    tokio::pin!(first_event_wait);
-
-    loop {
-        tokio::select! {
-            item = &mut next_item => {
-                emit_responses_websocket_http_fallback_status(
-                    provider_id,
-                    websocket_selected_at_start,
-                    fallback_active(),
-                    websocket_fallback_announced,
-                    live_sender,
-                )?;
-                return Ok(item);
-            }
-            _ = fallback_poll.tick(), if websocket_selected_at_start && !*websocket_fallback_announced => {
-                emit_responses_websocket_http_fallback_status(
-                    provider_id,
-                    websocket_selected_at_start,
-                    fallback_active(),
-                    websocket_fallback_announced,
-                    live_sender,
-                )?;
-            }
-            _ = &mut first_event_wait, if !*first_event_waiting_announced => {
-                mark_provider_first_event_waiting(first_event_waiting_announced);
-            }
         }
     }
 }
@@ -586,6 +394,7 @@ pub(crate) fn project_public_tool_definitions(
                 &tool.parameters,
                 schema_projection_profile,
             ),
+            strict: false,
         })
         .collect()
 }
@@ -832,19 +641,11 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                 )
             })?;
         let execution_id = uuid::Uuid::new_v4().to_string();
-        let websocket_selected_at_start = self
-            .client
-            .responses_websocket_selected_for_request(&self.route, &public);
-        let mut websocket_fallback_announced = false;
-        // firstEventWaitingAnnounced deduplicates the internal marker for one slow physical request.
-        // firstEventWaitingAnnounced 为单个缓慢真实请求去重内部标记。
-        let mut first_event_waiting_announced = false;
-        let mut stream = self.client.execute_with_websocket_retry_budget(
+        let mut stream = self.client.execute(
             self.route.clone(),
             public.clone(),
             self.secret.clone(),
             execution_id,
-            self.websocket_retry_budget,
         );
         // routeFingerprint binds replay signatures to the exact resolved endpoint used by this request.
         // routeFingerprint 将重放签名绑定到本次请求使用的精确已解析端点。
@@ -856,20 +657,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
             self.route.protocol_route.protocol_profile_id.as_str(),
             self.model_id(),
         );
-        while let Some(item) = next_public_execution_item_with_transport_progress(
-            &mut stream,
-            self.provider_id(),
-            websocket_selected_at_start,
-            || {
-                self.client
-                    .responses_websocket_http_fallback_active(&self.route, &public)
-            },
-            &mut websocket_fallback_announced,
-            &mut first_event_waiting_announced,
-            &self.live_sender,
-        )
-        .await?
-        {
+        while let Some(item) = stream.next().await {
             let event = item.map_err(|mut failure| {
                 attach_execution_route_context(
                     &mut failure.error,
@@ -893,7 +681,13 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                     self.model_id(),
                 );
             }
+            let usage_updated = matches!(event, AiStreamEvent::UsageUpdated { .. });
             response.apply_event(self.provider_id(), &self.live_sender, sink, event)?;
+            if usage_updated && let Some(usage) = response.usage.as_ref() {
+                let _ = self.live_sender.send(Ok(ProviderStreamDelta::UsageUpdated(
+                    public_usage_to_core(usage),
+                )));
+            }
         }
         response.finish()
     }
@@ -1174,6 +968,23 @@ impl PublicTurnAccumulator {
         S: VulcanProviderDeltaSink,
     {
         match event {
+            AiStreamEvent::TransportObserved {
+                transport,
+                dispatched_at_ms,
+                headers_at_ms,
+                http_status,
+                provider_request_id,
+                rate_limit_headers,
+            } => {
+                let _ = live_sender.send(Ok(ProviderStreamDelta::TransportObserved {
+                    transport,
+                    dispatched_at_ms,
+                    headers_at_ms,
+                    http_status,
+                    provider_request_id,
+                    rate_limit_headers,
+                }));
+            }
             AiStreamEvent::ResponseMetadataUpdated { continuation } => {
                 if let Some(existing) = self.provider_message_id.as_deref()
                     && existing != continuation.provider_message_id
@@ -1350,9 +1161,9 @@ impl PublicTurnAccumulator {
             }
             AiStreamEvent::UsageUpdated { usage } => {
                 if let Some(current) = self.usage.as_mut() {
-                    current.merge_update(usage);
+                    current.merge_update(*usage);
                 } else {
-                    self.usage = Some(usage);
+                    self.usage = Some(*usage);
                 }
             }
             AiStreamEvent::ResponseCompleted => {
@@ -1369,6 +1180,7 @@ impl PublicTurnAccumulator {
             }
             AiStreamEvent::ResponseStarted { .. }
             | AiStreamEvent::ResourceProgress { .. }
+            | AiStreamEvent::ImageGenerationPartial { .. }
             | AiStreamEvent::ResponseItemCompleted { .. } => {}
         }
         Ok(())
@@ -1974,6 +1786,9 @@ fn core_message_to_public(
                         id: resource_id,
                         kind,
                         media_type: Some(attachment.mime_type.clone()),
+                        source_kind: vulcan_ai_contract::ResourceSourceKind::HostResolved,
+                        file_name: None,
+                        image_detail: None,
                         local_path: Some(attachment.local_path.clone()),
                         url: None,
                     },
@@ -2217,6 +2032,7 @@ fn core_message_text(
 /// 将公共用量转换为控制器的临时统计结构。
 pub(super) fn public_usage_to_core(usage: &RequestUsage) -> ProviderUsageSnapshot {
     ProviderUsageSnapshot {
+        update_kind: Some(usage.update_kind),
         input_tokens: known_usage(&usage.input_tokens),
         uncached_input_tokens: known_usage(&usage.uncached_input_tokens),
         output_tokens: known_usage(&usage.output_tokens),
@@ -2224,6 +2040,20 @@ pub(super) fn public_usage_to_core(usage: &RequestUsage) -> ProviderUsageSnapsho
         total_tokens: known_usage(&usage.total_tokens),
         cached_input_tokens: known_usage(&usage.cache_read_tokens),
         cache_creation_input_tokens: known_usage(&usage.cache_write_tokens),
+        audio_input_tokens: known_usage(&usage.audio_input_tokens),
+        audio_output_tokens: known_usage(&usage.audio_output_tokens),
+        extraction_profile_id: usage.extraction_profile_id.clone(),
+        extraction_profile_revision: usage.extraction_profile_revision,
+        source_paths: usage.source_paths.clone(),
+        validation_flags: usage.validation_flags.clone(),
+        response_model: usage.response_model.clone(),
+        response_id: usage.response_id.clone(),
+        reported_cost: usage.cost.clone(),
+        estimated_cost: usage.estimated_cost.clone(),
+        cost_currency: usage.cost_currency.clone(),
+        pricing_revision: usage.pricing_revision.clone(),
+        pricing_profile: usage.pricing_profile.clone(),
+        billing_details: usage.billing_details.clone(),
     }
 }
 
@@ -2251,8 +2081,6 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::path::PathBuf;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
 
     /// RecordingProviderDeltaSink retains canonical Core deltas for adapter projection tests.
     /// RecordingProviderDeltaSink 为适配器投影测试保留规范 Core 增量。
@@ -2302,126 +2130,6 @@ mod tests {
         assert_eq!(usage.cache_write_tokens, reported(120));
         assert_eq!(usage.output_tokens, reported(75));
         assert_eq!(usage.total_tokens, reported(1_075));
-    }
-
-    /// Verifies an exhausted WebSocket budget publishes exactly one visible HTTPS fallback status.
-    /// 验证 WebSocket 预算耗尽后只发布一次可见的 HTTPS 回退状态。
-    #[test]
-    fn websocket_http_fallback_status_is_published_once() {
-        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-        let mut announced = false;
-
-        emit_responses_websocket_http_fallback_status(
-            "custom:test",
-            true,
-            true,
-            &mut announced,
-            &sender,
-        )
-        .expect("fallback status should publish");
-        emit_responses_websocket_http_fallback_status(
-            "custom:test",
-            true,
-            true,
-            &mut announced,
-            &sender,
-        )
-        .expect("duplicate fallback status should be ignored");
-
-        let event = receiver
-            .try_recv()
-            .expect("one fallback runtime event should be visible")
-            .expect("fallback runtime event should not be an error");
-        let ProviderStreamDelta::RuntimeEvent(event) = event else {
-            panic!("fallback status should use the runtime-event projection");
-        };
-        assert_eq!(event.kind, RuntimeEventKind::TransportFallback);
-        assert_eq!(
-            event
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.get("to_transport"))
-                .and_then(Value::as_str),
-            Some("https")
-        );
-        assert!(receiver.try_recv().is_err());
-    }
-
-    /// Verifies the slow-first-event marker is recorded once without publishing transcript content.
-    /// 验证首事件缓慢标记只记录一次，且不会发布转录内容。
-    #[test]
-    fn provider_first_event_waiting_marker_is_recorded_once() {
-        // announced models the per-physical-request deduplication fence.
-        // announced 模拟单个真实请求的去重门禁。
-        let mut announced = false;
-
-        mark_provider_first_event_waiting(&mut announced);
-        mark_provider_first_event_waiting(&mut announced);
-
-        assert!(announced);
-    }
-
-    /// Verifies a fallback transition is published while the replacement HTTP stream remains pending.
-    /// 验证替代 HTTP 流仍在等待时，回退转换已经发布。
-    #[tokio::test]
-    async fn websocket_fallback_status_does_not_wait_for_next_stream_item() {
-        // channel captures the runtime status independently from the deliberately pending stream.
-        // channel 独立捕获运行状态，而被测流会刻意保持等待。
-        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-        // fallbackActive becomes true after the transport has switched internally.
-        // fallbackActive 在传输内部完成切换后变为真。
-        let fallback_active = Arc::new(AtomicBool::new(false));
-        // stream never yields, reproducing an HTTP response-header wait after WebSocket fallback.
-        // stream 永不产出，复现 WebSocket 回退后的 HTTP 响应头等待。
-        let mut stream: ProviderExecutionStream = Box::pin(futures_util::stream::pending());
-        // websocketFallbackAnnounced and firstEventWaitingAnnounced are the physical-request fences.
-        // websocketFallbackAnnounced 与 firstEventWaitingAnnounced 是真实请求门禁。
-        let mut websocket_fallback_announced = false;
-        let mut first_event_waiting_announced = false;
-        // activation flips the exact fallback state before the next polling interval.
-        // activation 在下一次轮询间隔前翻转精确回退状态。
-        let activation_state = fallback_active.clone();
-        let activation = tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            activation_state.store(true, Ordering::SeqCst);
-        });
-
-        // pendingResult must time out because only the status, not a fake stream item, may be emitted.
-        // pendingResult 必须超时，因为只能发出状态，不能伪造流事件。
-        let pending_result = tokio::time::timeout(
-            std::time::Duration::from_millis(250),
-            next_public_execution_item_with_transport_progress(
-                &mut stream,
-                "custom:test",
-                true,
-                || fallback_active.load(Ordering::SeqCst),
-                &mut websocket_fallback_announced,
-                &mut first_event_waiting_announced,
-                &sender,
-            ),
-        )
-        .await;
-        activation
-            .await
-            .expect("fallback-state activation should complete");
-        assert!(
-            pending_result.is_err(),
-            "pending stream must not be synthesized"
-        );
-        assert!(websocket_fallback_announced);
-        assert!(!first_event_waiting_announced);
-
-        // event proves the visible fallback was published before any replacement stream item existed.
-        // event 证明替代流尚无事件时，可见回退已经发布。
-        let event = receiver
-            .try_recv()
-            .expect("fallback status should arrive while stream is pending")
-            .expect("fallback status should not be an error");
-        let ProviderStreamDelta::RuntimeEvent(event) = event else {
-            panic!("fallback status should use the runtime-event projection");
-        };
-        assert_eq!(event.kind, RuntimeEventKind::TransportFallback);
-        assert!(receiver.try_recv().is_err());
     }
 
     /// Verifies opaque compaction context requires the exact connection and resolved route.
@@ -2660,6 +2368,9 @@ mod tests {
                     id: String::from("image:item"),
                     kind: ResourceKind::Image,
                     media_type: Some(String::from("image/png")),
+                    source_kind: vulcan_ai_contract::ResourceSourceKind::InlineData,
+                    file_name: None,
+                    image_detail: None,
                     local_path: None,
                     url: Some(String::from("data:image/png;base64,aW1hZ2U=")),
                 },
@@ -2708,6 +2419,9 @@ mod tests {
                     id: String::from("remote-image"),
                     kind: ResourceKind::Image,
                     media_type: Some(String::from("image/png")),
+                    source_kind: vulcan_ai_contract::ResourceSourceKind::RemoteUrl,
+                    file_name: None,
+                    image_detail: None,
                     local_path: None,
                     url: Some(String::from("https://example.invalid/image.png")),
                 },
@@ -2757,23 +2471,6 @@ mod tests {
         assert_eq!(
             resolved_public_output_token_limit(Some(500_000), Some(393_216)),
             393_216
-        );
-    }
-
-    /// Verifies WebSocket retry budget follows the explicit route capability for every provider kind.
-    /// 验证所有供应商类型的 WebSocket 重试预算都遵循精确路由能力。
-    #[test]
-    fn websocket_retry_budget_follows_explicit_route_capability() {
-        assert_eq!(
-            responses_websocket_retry_budget(ResponsesWebSocketPolicy::Disabled, 5),
-            0
-        );
-        assert_eq!(
-            responses_websocket_retry_budget(
-                ResponsesWebSocketPolicy::PreferredWithHttpFallback,
-                5
-            ),
-            5
         );
     }
 
@@ -2833,6 +2530,8 @@ mod tests {
             subcategory: Some(String::from("upstream")),
             stage: String::from("stream"),
             http_status: Some(503),
+            transport: Some(vulcan_ai_contract::AiTransportKind::Http),
+            websocket_close_code: None,
             upstream_code: Some(String::from("server_is_overloaded")),
             upstream_type: Some(String::from("server_error")),
             upstream_parameter: Some(String::from("model")),

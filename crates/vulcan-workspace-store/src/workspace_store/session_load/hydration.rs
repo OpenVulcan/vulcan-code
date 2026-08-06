@@ -698,13 +698,13 @@ mod tests {
                 reasoning: String::new(),
                 provider_message_id: None,
                 provider_message_state: None,
-                usage: Some(ProviderUsageSnapshot {
+                usage: Some(Box::new(ProviderUsageSnapshot {
                     input_tokens: Some(input_tokens),
                     output_tokens: Some(output_tokens),
                     total_tokens: Some(total_tokens),
                     cached_input_tokens: Some(cached_input_tokens),
                     ..ProviderUsageSnapshot::default()
-                }),
+                })),
                 tool_calls: Vec::new(),
             },
         }

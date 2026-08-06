@@ -5,6 +5,46 @@ use crate::ContentItem;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Wraps one opaque provider continuation with an explicit closed provenance prefix.
+/// 使用显式封闭来源前缀封装一项不透明供应商延续载荷。
+///
+/// # Parameters
+/// 参数
+/// `provider` is the closed protocol family and `payload` is its opaque continuation value.
+/// `provider` 是封闭协议族，`payload` 是其不透明延续值。
+///
+/// # Returns
+/// 返回值
+/// A replay-safe value, or `None` when either component violates the delimiter contract.
+/// 返回可安全重放的值；任一部分违反分隔符契约时返回 `None`。
+pub fn wrap_provider_continuation(provider: &str, payload: &str) -> Option<String> {
+    let provider = provider.trim();
+    let payload = payload.trim();
+    if provider.is_empty() || payload.is_empty() || provider.contains('#') || payload.contains('#')
+    {
+        return None;
+    }
+    Some(format!("{provider}#{payload}"))
+}
+
+/// Unwraps one opaque continuation only for its exact owning provider family.
+/// 仅针对其精确归属供应商协议族解封一项不透明延续载荷。
+///
+/// # Parameters
+/// 参数
+/// `provider` is the expected protocol family and `signature` is the normalized stored value.
+/// `provider` 是预期协议族，`signature` 是归一化存储值。
+///
+/// # Returns
+/// 返回值
+/// The original opaque payload when provenance matches exactly.
+/// 来源精确匹配时返回原始不透明载荷。
+pub fn provider_continuation_payload<'a>(provider: &str, signature: &'a str) -> Option<&'a str> {
+    let (source, payload) = signature.split_once('#')?;
+    let payload = payload.trim();
+    (source == provider && !payload.is_empty() && !payload.contains('#')).then_some(payload)
+}
+
 /// Current durable replay envelope format version.
 /// 当前可持久化重放封套格式版本。
 pub const PROVIDER_REPLAY_ENVELOPE_VERSION: u16 = 2;

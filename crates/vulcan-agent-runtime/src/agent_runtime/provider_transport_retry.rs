@@ -122,10 +122,6 @@ impl ProviderRetryPolicy {
     /// 返回值
     /// Zero when automatic retry is disabled, otherwise the validated maximum retry count.
     /// 自动重试关闭时返回零，否则返回已校验的最大重试次数。
-    pub(crate) fn ordinary_retry_budget(&self) -> u32 {
-        if self.enabled { self.max_retries } else { 0 }
-    }
-
     /// Classifies one failed attempt and returns the next retry decision when retry is still allowed.
     /// 对一次失败尝试进行分类，并在仍允许重试时返回下一次重试决策。
     pub(crate) fn next_retry(
@@ -665,6 +661,8 @@ mod tests {
                 subcategory: None,
                 stage: String::from("response_headers"),
                 http_status: None,
+                transport: None,
+                websocket_close_code: None,
                 upstream_code: None,
                 upstream_type: None,
                 upstream_parameter: None,
@@ -963,8 +961,6 @@ mod tests {
     /// 验证普通瞬态失败仍会在配置的重试次数后停止。
     #[test]
     fn ordinary_transient_retries_remain_bounded() {
-        assert_eq!(policy().ordinary_retry_budget(), 3);
-        assert_eq!(ProviderRetryPolicy::disabled().ordinary_retry_budget(), 0);
         assert!(
             policy()
                 .next_retry(&provider_error("HTTP 503 Service Unavailable"), 3, false)

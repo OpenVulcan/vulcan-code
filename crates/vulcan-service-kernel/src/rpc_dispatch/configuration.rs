@@ -16,6 +16,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_output_style_catalog",
     "service_save_prompt_output_style",
     "service_public_ai_settings_snapshot",
+    "service_provider_usage_dashboard",
     "service_start_public_ai_oauth",
     "service_public_ai_oauth_status",
     "service_cancel_public_ai_oauth",
@@ -41,6 +42,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_sync_public_ai_connection",
     "service_query_public_ai_connection_usage",
     "service_save_public_ai_usage_refresh_settings",
+    "service_import_public_ai_cc_switch_pricing",
     "service_save_public_ai_context_window_policy_overrides",
     "service_select_public_ai_model",
     "service_save_public_ai_model_overrides",
@@ -137,6 +139,9 @@ pub(super) async fn dispatch(
         ),
         "service_public_ai_settings_snapshot" => {
             rpc_json_result(service_public_ai_settings_snapshot(state).await)
+        }
+        "service_provider_usage_dashboard" => {
+            rpc_json_result(service_provider_usage_dashboard(state).await)
         }
         "service_start_public_ai_oauth" => rpc_json_result(
             service_start_public_ai_oauth(state, rpc_required_param(params, "request")?).await,
@@ -296,6 +301,14 @@ pub(super) async fn dispatch(
         ),
         "service_save_public_ai_usage_refresh_settings" => rpc_json_result(
             service_save_public_ai_usage_refresh_settings(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_import_public_ai_cc_switch_pricing" => rpc_json_result(
+            service_import_public_ai_cc_switch_pricing(
                 app,
                 state,
                 rpc_required_param(params, "request")?,

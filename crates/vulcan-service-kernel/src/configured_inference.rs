@@ -3,8 +3,9 @@
 
 use futures_util::StreamExt;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     future::Future,
     sync::{Arc, Mutex, Weak},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -13,18 +14,21 @@ use time::OffsetDateTime;
 use tokio::sync::{Mutex as AsyncMutex, Notify, broadcast, watch};
 use uuid::Uuid;
 use vulcan_agent_runtime::agent_runtime::provider_reasoning::resolve_effective_public_reasoning_effort;
+use vulcan_agent_runtime::agent_runtime::provider_request_telemetry::{
+    ProviderRequestCompletedUsage, ProviderRequestTelemetryEvent, ProviderRequestTelemetryEventKind,
+};
 use vulcan_agent_runtime::agent_runtime::provider_transport_retry::{
     ProviderRetryDecision, ProviderRetryPolicy,
 };
 use vulcan_ai_contract::{
-    AiExecutionError, AiExecutionRequest, AiMessage, AiOperation, AiStreamEvent, ContentItem,
-    EmbeddingInputContent, EmbeddingRequest, EmbeddingResponse, ExecutionRouteSnapshot,
-    InferenceCallerContext, InferenceCapabilitySnapshot, InferenceMessageContent,
-    InferenceMessageRole, InferenceOperationCapability, InferencePermission, InferenceUsageScope,
-    LlmInferenceRequest, LlmInferenceResponse, LlmInferenceStreamEvent, MessageRole,
-    ModelCapabilities, ModelParameterValue, ParallelToolCallPolicy, ReasoningControlMode,
-    ReasoningEffort, RequestUsage, RerankRequest, RerankResponse, StructuredOutputPolicy,
-    ToolChoicePolicy, UsageValue,
+    AiErrorCategory, AiExecutionError, AiExecutionRequest, AiOperation, AiStreamEvent, ContentItem,
+    DispatchOutcome, EmbeddingInputContent, EmbeddingRequest, EmbeddingResponse,
+    ExecutionRouteSnapshot, InferenceCallerContext, InferenceCapabilitySnapshot,
+    InferenceOperationCapability, InferencePermission, InferenceUsageScope, ModelCapabilities,
+    ModelParameterValue, NativeToolKind, ParallelToolCallPolicy, ReasoningControlMode,
+    ReasoningEffort, RequestUsage, RerankRequest, RerankResponse, ResourceKind,
+    ResponsesExecutionOutputItem, ResponsesExecutionRequest, ResponsesExecutionResult,
+    StructuredOutputPolicy, ToolCall, ToolChoicePolicy, UsageValue,
 };
 use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
@@ -38,14 +42,24 @@ use vulcan_provider_adapters::{
     ProviderExecutionFailure, PublicAiRuntime, ResolvedPublicAiSelection,
 };
 use vulcan_provider_config::config::PersistedProviderRetryConfiguration;
+use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
+
+use crate::provider_usage_runtime::persist_native_provider_usage_attempt;
 
 /// Bounds process-local event buffering for one restricted LLM execution.
 /// 限制一项受限 LLM 执行的进程内事件缓冲。
 const LLM_EVENT_BUFFER_CAPACITY: usize = 128;
+/// Bounds retained normalized event payloads, including image previews, per execution.
+/// 限制每项执行保留的归一化事件载荷（包括图片预览）总量。
+const LLM_EVENT_BUFFER_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 /// Identifies the VMM internal-inference consumer profile.
 /// 标识 VMM 内部推理消费者配置档。
 pub(crate) const VMM_CONSUMER_PROFILE_ID: &str = "vmm";
+
+/// Identifies billable provider/model validation requests in the native usage ledger.
+/// 标识原生用量账本中的可计费供应商/模型验证请求。
+const PROVIDER_MODEL_VALIDATION_CONSUMER_ID: &str = "vulcan-code-provider-validation";
 
 /// Foundational VMM LLM purposes required before memory can be enabled.
 /// 启用记忆前必须就绪的 VMM 基础 LLM 用途。
@@ -253,7 +267,7 @@ pub struct ConfiguredLlmExecutionSnapshot {
     pub route: ExecutionRouteSnapshot,
     /// Completed aggregate result when successful.
     /// 成功时的已完成聚合结果。
-    pub response: Option<LlmInferenceResponse>,
+    pub response: Option<ResponsesExecutionResult>,
     /// Controlled terminal failure when unsuccessful.
     /// 未成功时的受控终态失败。
     pub error: Option<ConfiguredInferenceError>,
@@ -276,10 +290,13 @@ struct ConfiguredLlmExecutionState {
     snapshot: Mutex<ConfiguredLlmExecutionSnapshot>,
     /// Restricted normalized event sender.
     /// 受限归一化事件发送器。
-    event_sender: broadcast::Sender<LlmInferenceStreamEvent>,
+    event_sender: broadcast::Sender<AiStreamEvent>,
     /// Ordered bounded replay history for subscribers that attach after dispatch.
     /// 为分派后接入订阅者保留的有序有界重放历史。
-    event_history: Mutex<Vec<LlmInferenceStreamEvent>>,
+    event_history: Mutex<Vec<AiStreamEvent>>,
+    /// Approximate serialized byte size of retained replay events.
+    /// 已保留重放事件的近似序列化字节大小。
+    event_history_bytes: Mutex<usize>,
     /// Records whether replay history discarded an older event.
     /// 记录重放历史是否已经丢弃过较早事件。
     event_history_truncated: Mutex<bool>,
@@ -802,6 +819,7 @@ struct InternalInferenceTelemetryFacts {
     operation: String,
     capability_revision: String,
     catalog_revision: String,
+    route_revision: String,
     /// Exact terminal timing.
     /// 精确终态计时。
     started_at_unix_ms: u64,
@@ -810,6 +828,21 @@ struct InternalInferenceTelemetryFacts {
     /// Number of provider retries completed after the initial attempt.
     /// 初始尝试后已完成的供应商重试次数。
     retry_count: u32,
+    /// Exact upstream transport observed for this physical attempt.
+    /// 当前真实尝试观察到的精确上游传输。
+    transport: Option<vulcan_ai_contract::AiTransportKind>,
+    /// Exact transport dispatch and response-header timestamps.
+    /// 精确传输分派与响应头时间戳。
+    dispatched_at_ms: Option<i64>,
+    headers_at_ms: Option<i64>,
+    /// Exact HTTP and WebSocket terminal transport facts.
+    /// 精确 HTTP 与 WebSocket 终态传输事实。
+    transport_http_status: Option<u16>,
+    websocket_close_code: Option<u16>,
+    /// Allowlisted upstream request and rate-limit facts.
+    /// 允许列表内的上游请求与限流事实。
+    provider_request_id: Option<String>,
+    rate_limit_headers: BTreeMap<String, String>,
     /// Stable terminal status.
     /// 稳定终态状态。
     status: &'static str,
@@ -824,6 +857,9 @@ struct InternalInferenceTelemetryFacts {
     /// Optional stable failure category.
     /// 可选稳定失败类别。
     error_category: Option<String>,
+    /// Optional exact normalized provider failure.
+    /// 可选精确归一化供应商失败。
+    provider_error: Option<Box<AiExecutionError>>,
 }
 
 impl InternalInferenceTelemetryFacts {
@@ -882,7 +918,43 @@ impl InternalInferenceTelemetryFacts {
     /// 返回带有尝试计量的同一生命周期记录。
     fn with_retry_count(mut self, retry_count: u32) -> Self {
         self.retry_count = retry_count;
+        self.request_id = format!("{}:attempt:{retry_count}", self.execution_id);
         self
+    }
+
+    /// Copies exact transport facts from the active physical-attempt record.
+    /// 从活动真实尝试记录复制精确传输事实。
+    fn with_transport_from(mut self, source: &Self) -> Self {
+        self.transport = source.transport;
+        self.dispatched_at_ms = source.dispatched_at_ms;
+        self.headers_at_ms = source.headers_at_ms;
+        self.transport_http_status = source.transport_http_status;
+        self.websocket_close_code = source.websocket_close_code;
+        self.provider_request_id = source.provider_request_id.clone();
+        self.rate_limit_headers = source.rate_limit_headers.clone();
+        self
+    }
+
+    /// Records exact transport facts emitted by the physical provider dispatcher.
+    /// 记录真实供应商分派器发出的精确传输事实。
+    fn observe_transport_event(&mut self, event: &AiStreamEvent) {
+        let AiStreamEvent::TransportObserved {
+            transport,
+            dispatched_at_ms,
+            headers_at_ms,
+            http_status,
+            provider_request_id,
+            rate_limit_headers,
+        } = event
+        else {
+            return;
+        };
+        self.transport = Some(*transport);
+        self.dispatched_at_ms = Some(*dispatched_at_ms);
+        self.headers_at_ms = *headers_at_ms;
+        self.transport_http_status = *http_status;
+        self.provider_request_id = provider_request_id.clone();
+        self.rate_limit_headers = rate_limit_headers.clone();
     }
 
     /// Builds successful facts from one resolved provider selection.
@@ -1012,16 +1084,25 @@ impl InternalInferenceTelemetryFacts {
             },
             capability_revision: selection.model.capabilities.evidence_revision.clone(),
             catalog_revision: selection.catalog_revision.clone(),
+            route_revision: selection.route_revision.clone(),
             started_at_unix_ms,
             first_response_at_unix_ms: None,
             duration_ms,
             retry_count: 0,
+            transport: None,
+            dispatched_at_ms: None,
+            headers_at_ms: None,
+            transport_http_status: None,
+            websocket_close_code: None,
+            provider_request_id: None,
+            rate_limit_headers: BTreeMap::new(),
             status,
             usage: usage.clone(),
             input_item_count: None,
             output_item_count: None,
             vector_dimensions: None,
             error_category: error.map(|error| error.category_label().to_string()),
+            provider_error: error.and_then(|error| error.provider_error.clone()),
         }
     }
 
@@ -1070,16 +1151,25 @@ impl InternalInferenceTelemetryFacts {
             operation: AiOperation::ConversationRespond.as_str().to_string(),
             capability_revision: route.capability_revision.clone(),
             catalog_revision: route.catalog_revision.clone(),
+            route_revision: route.route_revision.clone(),
             started_at_unix_ms,
             first_response_at_unix_ms: None,
             duration_ms,
             retry_count: 0,
+            transport: None,
+            dispatched_at_ms: None,
+            headers_at_ms: None,
+            transport_http_status: None,
+            websocket_close_code: None,
+            provider_request_id: None,
+            rate_limit_headers: BTreeMap::new(),
             status,
             usage: usage.clone(),
             input_item_count: None,
             output_item_count: None,
             vector_dimensions: None,
             error_category: error.map(|error| error.category_label().to_string()),
+            provider_error: error.and_then(|error| error.provider_error.clone()),
         }
     }
 }
@@ -1119,6 +1209,9 @@ pub struct ConfiguredInferenceService {
     /// Optional host plugin runtime used for privacy-safe inference accounting.
     /// 用于隐私安全推理计量的可选宿主插件运行时。
     telemetry_runtime: Option<VulcanPluginRuntimeManager>,
+    /// Optional existing VLDB controller used by native provider accounting.
+    /// 原生供应商计量使用的可选现有 VLDB 控制器。
+    usage_controller: Option<ControllerRuntimeHandle>,
     /// Live host retry policy shared with the ordinary provider settings page.
     /// 与普通供应商设置页共享的实时宿主重试策略。
     provider_retry_policy: std::sync::RwLock<ProviderRetryPolicy>,
@@ -1153,6 +1246,7 @@ impl ConfiguredInferenceService {
             in_flight_embeddings: Mutex::new(BTreeMap::new()),
             in_flight_reranks: Mutex::new(BTreeMap::new()),
             telemetry_runtime: None,
+            usage_controller: None,
             provider_retry_policy: std::sync::RwLock::new(ProviderRetryPolicy::from_config(
                 &PersistedProviderRetryConfiguration::default(),
             )),
@@ -1175,6 +1269,13 @@ impl ConfiguredInferenceService {
     /// 返回已启用非秘密终态事件分派的同一服务。
     pub fn with_plugin_telemetry(mut self, runtime: VulcanPluginRuntimeManager) -> Self {
         self.telemetry_runtime = Some(runtime);
+        self
+    }
+
+    /// Enables native provider accounting through the existing application VLDB controller.
+    /// 通过现有应用 VLDB 控制器启用原生供应商计量。
+    pub fn with_native_usage_controller(mut self, controller: ControllerRuntimeHandle) -> Self {
+        self.usage_controller = Some(controller);
         self
     }
 
@@ -1219,6 +1320,221 @@ impl ConfiguredInferenceService {
             poisoned.into_inner()
         });
         *policy = ProviderRetryPolicy::from_config(configuration);
+    }
+
+    /// Executes one exact settings-owned model validation with native attempt accounting.
+    /// 执行一次由设置页持有的精确模型验证，并写入原生真实尝试计量。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `selection` freezes the user-selected provider route, `request` is the minimal validation
+    /// request, and `execution_id` is the stable logical request identity.
+    /// `selection` 冻结用户选择的供应商路由，`request` 是最小验证请求，`execution_id`
+    /// 是稳定逻辑请求标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns visible terminal response text, or a normalized failure after persisting the exact
+    /// physical attempt and any partial usage.
+    /// 返回可见终态响应文本；失败时先持久化精确真实尝试及可能存在的部分用量，再返回规范错误。
+    pub(crate) async fn execute_model_validation(
+        &self,
+        selection: &ResolvedPublicAiSelection,
+        request: AiExecutionRequest,
+        execution_id: String,
+    ) -> Result<String, ConfiguredInferenceError> {
+        let caller = provider_model_validation_caller();
+        let started_at_unix_ms = current_unix_millis();
+        let input_item_count = u64::try_from(request.messages.len()).unwrap_or(u64::MAX);
+        let mut active_facts = InternalInferenceTelemetryFacts::from_selection(
+            &caller,
+            PROVIDER_MODEL_VALIDATION_CONSUMER_ID,
+            execution_id.as_str(),
+            "internal_llm",
+            selection,
+            started_at_unix_ms,
+            0,
+            "succeeded",
+            &RequestUsage::default(),
+            None,
+        )
+        .with_metrics(Some(input_item_count), None, None);
+        self.emit_internal_inference_started(&active_facts);
+
+        let stream = self
+            .runtime
+            .execute_internal_llm(selection, request, execution_id.clone())
+            .await;
+        let mut stream = match stream {
+            Ok(stream) => stream,
+            Err(failure) => {
+                let error = ConfiguredInferenceError::from_provider_failure(failure);
+                self.emit_model_validation_terminal(
+                    &caller,
+                    selection,
+                    execution_id.as_str(),
+                    started_at_unix_ms,
+                    input_item_count,
+                    None,
+                    &RequestUsage::default(),
+                    &active_facts,
+                    Err(&error),
+                );
+                return Err(error);
+            }
+        };
+        let mut output_text = String::new();
+        let mut reasoning_text = String::new();
+        let mut structured_output = None;
+        let mut output_items = Vec::new();
+        let mut usage = RequestUsage::default();
+        let mut first_response_at_unix_ms = None;
+        while let Some(next_event) = stream.next().await {
+            let event = match next_event {
+                Ok(event) => event,
+                Err(failure) => {
+                    let error = ConfiguredInferenceError::from_provider_failure(failure);
+                    self.emit_model_validation_terminal(
+                        &caller,
+                        selection,
+                        execution_id.as_str(),
+                        started_at_unix_ms,
+                        input_item_count,
+                        first_response_at_unix_ms,
+                        &usage,
+                        &active_facts,
+                        Err(&error),
+                    );
+                    return Err(error);
+                }
+            };
+            active_facts.observe_transport_event(&event);
+            if first_response_at_unix_ms.is_none() && is_semantic_inference_response(&event) {
+                first_response_at_unix_ms = Some(current_unix_millis());
+            }
+            match aggregate_restricted_llm_event(
+                event,
+                &mut output_text,
+                &mut reasoning_text,
+                &mut structured_output,
+                &mut output_items,
+                &mut usage,
+            ) {
+                Ok(Some(_)) => {
+                    let output_text = output_text.trim().to_string();
+                    if output_text.is_empty() {
+                        let error = ConfiguredInferenceError::new(
+                            ConfiguredInferenceErrorCategory::Execution,
+                            "Custom model validation completed without visible text output.",
+                        );
+                        self.emit_model_validation_terminal(
+                            &caller,
+                            selection,
+                            execution_id.as_str(),
+                            started_at_unix_ms,
+                            input_item_count,
+                            first_response_at_unix_ms,
+                            &usage,
+                            &active_facts,
+                            Err(&error),
+                        );
+                        return Err(error);
+                    }
+                    self.emit_model_validation_terminal(
+                        &caller,
+                        selection,
+                        execution_id.as_str(),
+                        started_at_unix_ms,
+                        input_item_count,
+                        first_response_at_unix_ms,
+                        &usage,
+                        &active_facts,
+                        Ok(1),
+                    );
+                    return Ok(output_text);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    self.emit_model_validation_terminal(
+                        &caller,
+                        selection,
+                        execution_id.as_str(),
+                        started_at_unix_ms,
+                        input_item_count,
+                        first_response_at_unix_ms,
+                        &usage,
+                        &active_facts,
+                        Err(&error),
+                    );
+                    return Err(error);
+                }
+            }
+        }
+        let error = ConfiguredInferenceError::new(
+            ConfiguredInferenceErrorCategory::Execution,
+            "Custom model validation stream ended before a terminal completion event.",
+        );
+        self.emit_model_validation_terminal(
+            &caller,
+            selection,
+            execution_id.as_str(),
+            started_at_unix_ms,
+            input_item_count,
+            first_response_at_unix_ms,
+            &usage,
+            &active_facts,
+            Err(&error),
+        );
+        Err(error)
+    }
+
+    /// Persists one settings-owned model-validation terminal attempt.
+    /// 持久化一次由设置页持有的模型验证终态尝试。
+    #[allow(clippy::too_many_arguments)]
+    fn emit_model_validation_terminal(
+        &self,
+        caller: &InferenceCallerContext,
+        selection: &ResolvedPublicAiSelection,
+        execution_id: &str,
+        started_at_unix_ms: u64,
+        input_item_count: u64,
+        first_response_at_unix_ms: Option<u64>,
+        usage: &RequestUsage,
+        active_facts: &InternalInferenceTelemetryFacts,
+        result: Result<u64, &ConfiguredInferenceError>,
+    ) {
+        let duration_ms = current_unix_millis().saturating_sub(started_at_unix_ms);
+        let (status, output_item_count, error) = match result {
+            Ok(output_item_count) => ("succeeded", Some(output_item_count), None),
+            Err(error) => (
+                if error.category == ConfiguredInferenceErrorCategory::Cancelled {
+                    "cancelled"
+                } else {
+                    "failed"
+                },
+                None,
+                Some(error),
+            ),
+        };
+        let facts = InternalInferenceTelemetryFacts::from_selection(
+            caller,
+            PROVIDER_MODEL_VALIDATION_CONSUMER_ID,
+            execution_id,
+            "internal_llm",
+            selection,
+            started_at_unix_ms,
+            duration_ms,
+            status,
+            usage,
+            error,
+        )
+        .with_metrics(Some(input_item_count), output_item_count, None)
+        .with_first_response(first_response_at_unix_ms)
+        .with_transport_from(active_facts);
+        if first_response_at_unix_ms.is_some() {
+            self.emit_internal_inference_first_response(&facts);
+        }
+        self.emit_internal_inference_telemetry(facts);
     }
 
     /// Dispatches one content-free internal inference start event without blocking the caller.
@@ -1344,18 +1660,35 @@ impl ConfiguredInferenceService {
     /// Returns no value; disabled plugins and hook failures are diagnostic-only.
     /// 不返回值；插件禁用与 Hook 失败仅作为诊断。
     fn emit_internal_inference_telemetry(&self, facts: InternalInferenceTelemetryFacts) {
-        let Some(runtime) = self.telemetry_runtime.clone() else {
-            return;
-        };
         let completed_at_unix_ms = current_unix_millis();
         let session_id = facts.execution_id.clone();
         let payload = internal_inference_terminal_payload(&facts, completed_at_unix_ms);
-        dispatch_internal_inference_hook(
-            runtime,
-            "provider.request.completed",
-            session_id,
-            payload,
-        );
+        if let Some(runtime) = self.telemetry_runtime.clone() {
+            dispatch_internal_inference_hook(
+                runtime,
+                "provider.request.completed",
+                session_id,
+                payload.clone(),
+            );
+        }
+        if let Some(controller) = self.usage_controller.clone() {
+            match internal_inference_native_usage_event(&facts, payload) {
+                Ok(event) => {
+                    tokio::spawn(async move {
+                        if let Err(error) =
+                            persist_native_provider_usage_attempt(&controller, &event).await
+                        {
+                            eprintln!(
+                                "[webui-service] native configured-inference usage persistence failed: {error}"
+                            );
+                        }
+                    });
+                }
+                Err(error) => eprintln!(
+                    "[webui-service] native configured-inference usage event rejected: {error}"
+                ),
+            }
+        }
     }
 
     /// Returns the exact configured capabilities visible to one authorized caller.
@@ -2028,10 +2361,10 @@ impl ConfiguredInferenceService {
     /// 返回值
     /// A new or coalesced in-flight execution identifier.
     /// 返回新建或合并的运行中执行标识。
-    pub async fn start_llm(
+    pub async fn start_response_execution(
         self: &Arc<Self>,
         caller: InferenceCallerContext,
-        request: LlmInferenceRequest,
+        request: ResponsesExecutionRequest,
     ) -> Result<String, ConfiguredInferenceError> {
         self.prune_terminal_llm_executions()?;
         request.validate().map_err(|message| {
@@ -2074,7 +2407,7 @@ impl ConfiguredInferenceService {
             .resolve_internal_inference_selection(&configuration, route)
             .map_err(configuration_error)?;
         let provider_request =
-            restricted_provider_request(&configuration, &selection, &request, &caller)?;
+            responses_provider_request(&configuration, &selection, &request, &caller)?;
         let execution_id = Uuid::new_v4().to_string();
         let route_snapshot = llm_route_snapshot(&selection, caller.usage_scope);
         let (event_sender, _) = broadcast::channel(LLM_EVENT_BUFFER_CAPACITY);
@@ -2092,6 +2425,7 @@ impl ConfiguredInferenceService {
             }),
             event_sender,
             event_history: Mutex::new(Vec::new()),
+            event_history_bytes: Mutex::new(0),
             event_history_truncated: Mutex::new(false),
             cancellation_sender,
             terminal_notify: Notify::new(),
@@ -2139,14 +2473,14 @@ impl ConfiguredInferenceService {
     /// 返回值
     /// The completed response or the exact retained terminal failure.
     /// 返回已完成响应或精确保留的终态失败。
-    pub async fn execute_llm(
+    pub async fn execute_response(
         self: &Arc<Self>,
         caller: InferenceCallerContext,
-        request: LlmInferenceRequest,
-    ) -> Result<LlmInferenceResponse, ConfiguredInferenceError> {
+        request: ResponsesExecutionRequest,
+    ) -> Result<ResponsesExecutionResult, ConfiguredInferenceError> {
         let caller_id = caller.caller_id.clone();
-        let execution_id = self.start_llm(caller, request).await?;
-        self.wait_llm(caller_id.as_str(), execution_id.as_str())
+        let execution_id = self.start_response_execution(caller, request).await?;
+        self.wait_response(caller_id.as_str(), execution_id.as_str())
             .await
     }
 
@@ -2156,18 +2490,18 @@ impl ConfiguredInferenceService {
     /// # Parameters
     /// 参数
     /// `caller_id` must own `execution_id`; the execution identifier must have been returned by
-    /// `start_llm` for the same caller.
-    /// `caller_id` 必须拥有 `execution_id`；执行标识必须由同一调用方的 `start_llm` 返回。
+    /// `start_response_execution` for the same caller.
+    /// `caller_id` 必须拥有 `execution_id`；执行标识必须由同一调用方的 `start_response_execution` 返回。
     ///
     /// # Returns
     /// 返回值
     /// The retained completed aggregate response or its exact terminal failure.
     /// 保留的完整聚合响应或其精确终态失败。
-    pub async fn wait_llm(
+    pub async fn wait_response(
         &self,
         caller_id: &str,
         execution_id: &str,
-    ) -> Result<LlmInferenceResponse, ConfiguredInferenceError> {
+    ) -> Result<ResponsesExecutionResult, ConfiguredInferenceError> {
         loop {
             let state = self.owned_llm_execution(caller_id, execution_id)?;
             // Register the notification future before reading the phase so a terminal
@@ -2209,17 +2543,12 @@ impl ConfiguredInferenceService {
     /// 返回值
     /// A bounded broadcast receiver; lag is reported by the receiver.
     /// 返回有界广播接收器；滞后由接收器报告。
-    pub fn stream_llm(
+    pub fn stream_response(
         &self,
         caller_id: &str,
         execution_id: &str,
-    ) -> Result<
-        (
-            Vec<LlmInferenceStreamEvent>,
-            broadcast::Receiver<LlmInferenceStreamEvent>,
-        ),
-        ConfiguredInferenceError,
-    > {
+    ) -> Result<(Vec<AiStreamEvent>, broadcast::Receiver<AiStreamEvent>), ConfiguredInferenceError>
+    {
         self.prune_terminal_llm_executions()?;
         let state = self.owned_llm_execution(caller_id, execution_id)?;
         let history = state.event_history.lock().map_err(lock_error)?;
@@ -2546,7 +2875,7 @@ impl ConfiguredInferenceService {
     async fn drive_llm_execution(
         &self,
         state: Arc<ConfiguredLlmExecutionState>,
-        request: LlmInferenceRequest,
+        request: ResponsesExecutionRequest,
         route: ExecutionRouteSnapshot,
         selection: ResolvedPublicAiSelection,
         provider_request: AiExecutionRequest,
@@ -2555,31 +2884,38 @@ impl ConfiguredInferenceService {
         deadline_unix_ms: Option<u64>,
         caller_id: String,
     ) {
-        let started_at_unix_ms = current_unix_millis();
         let started_at = Instant::now();
         let input_item_count = u64::try_from(request.messages.len()).unwrap_or(u64::MAX);
-        let started_facts = InternalInferenceTelemetryFacts::from_route(
-            caller_id.as_str(),
-            request.consumer_profile_id.as_str(),
-            request.request_id.as_str(),
-            "internal_llm",
-            &route,
-            started_at_unix_ms,
-            0,
-            "succeeded",
-            &RequestUsage::default(),
-            None,
-        )
-        .with_metrics(Some(input_item_count), None, None);
-        self.emit_internal_inference_started(&started_facts);
         let mut first_response_at_unix_ms = None;
+        let mut attempt_first_response_at_unix_ms;
+        let mut active_attempt_facts;
+        let mut attempt_terminal_emitted;
         let mut output_text = String::new();
         let mut reasoning_text = String::new();
         let mut structured_output = None;
+        let mut output_items = Vec::new();
         let mut usage = RequestUsage::default();
         let mut completed_retries = 0_u32;
         let mut response_started_emitted = false;
         let terminal = 'attempts: loop {
+            let attempt_started_at_unix_ms = current_unix_millis();
+            active_attempt_facts = InternalInferenceTelemetryFacts::from_route(
+                caller_id.as_str(),
+                request.consumer_profile_id.as_str(),
+                request.request_id.as_str(),
+                "internal_llm",
+                &route,
+                attempt_started_at_unix_ms,
+                0,
+                "succeeded",
+                &RequestUsage::default(),
+                None,
+            )
+            .with_retry_count(completed_retries)
+            .with_metrics(Some(input_item_count), None, None);
+            attempt_first_response_at_unix_ms = None;
+            attempt_terminal_emitted = false;
+            self.emit_internal_inference_started(&active_attempt_facts);
             let deadline_wait = wait_until_deadline(deadline_unix_ms);
             tokio::pin!(deadline_wait);
             // Provider startup is part of the retained execution lifecycle. This keeps
@@ -2614,9 +2950,29 @@ impl ConfiguredInferenceService {
                     match stream {
                         Ok(stream) => stream,
                         Err(failure) => {
+                            let normalized_failure =
+                                ConfiguredInferenceError::from_provider_failure(failure.clone());
+                            let failed_facts = InternalInferenceTelemetryFacts::from_route(
+                                caller_id.as_str(),
+                                request.consumer_profile_id.as_str(),
+                                request.request_id.as_str(),
+                                "internal_llm",
+                                &route,
+                                attempt_started_at_unix_ms,
+                                current_unix_millis().saturating_sub(attempt_started_at_unix_ms),
+                                "failed",
+                                &usage,
+                                Some(&normalized_failure),
+                            )
+                            .with_retry_count(completed_retries)
+                            .with_metrics(Some(input_item_count), None, None)
+                            .with_first_response(attempt_first_response_at_unix_ms)
+                            .with_transport_from(&active_attempt_facts);
+                            self.emit_internal_inference_telemetry(failed_facts);
+                            attempt_terminal_emitted = true;
                             match self
                                 .wait_for_restricted_llm_retry(
-                                    &started_facts,
+                                    &active_attempt_facts,
                                     failure,
                                     completed_retries,
                                     &mut cancellation,
@@ -2626,6 +2982,7 @@ impl ConfiguredInferenceService {
                             {
                                 Ok(retry_count) => {
                                     completed_retries = retry_count;
+                                    usage = RequestUsage::default();
                                     continue 'attempts;
                                 }
                                 Err(error) => break 'attempts Err(error),
@@ -2672,9 +3029,30 @@ impl ConfiguredInferenceService {
                                         ConfiguredInferenceError::from_provider_failure(failure),
                                     );
                                 }
+                                let normalized_failure =
+                                    ConfiguredInferenceError::from_provider_failure(failure.clone());
+                                let failed_facts = InternalInferenceTelemetryFacts::from_route(
+                                    caller_id.as_str(),
+                                    request.consumer_profile_id.as_str(),
+                                    request.request_id.as_str(),
+                                    "internal_llm",
+                                    &route,
+                                    attempt_started_at_unix_ms,
+                                    current_unix_millis()
+                                        .saturating_sub(attempt_started_at_unix_ms),
+                                    "failed",
+                                    &usage,
+                                    Some(&normalized_failure),
+                                )
+                                .with_retry_count(completed_retries)
+                                .with_metrics(Some(input_item_count), None, None)
+                                .with_first_response(attempt_first_response_at_unix_ms)
+                                .with_transport_from(&active_attempt_facts);
+                                self.emit_internal_inference_telemetry(failed_facts);
+                                attempt_terminal_emitted = true;
                                 match self
                                     .wait_for_restricted_llm_retry(
-                                        &started_facts,
+                                        &active_attempt_facts,
                                         failure,
                                         completed_retries,
                                         &mut cancellation,
@@ -2684,15 +3062,22 @@ impl ConfiguredInferenceService {
                                 {
                                     Ok(retry_count) => {
                                         completed_retries = retry_count;
+                                        usage = RequestUsage::default();
                                         continue 'attempts;
                                     }
                                     Err(error) => break 'attempts Err(error),
                                 }
                             }
                         };
-                        let public_event = restricted_stream_event(&event);
+                        active_attempt_facts.observe_transport_event(&event);
+                        let public_event = Some(event.clone());
                         if public_event.as_ref().is_some_and(|event| {
-                            !matches!(event, LlmInferenceStreamEvent::Started { .. })
+                            !matches!(
+                                event,
+                                AiStreamEvent::TransportObserved { .. }
+                                    | AiStreamEvent::ResponseStarted { .. }
+                                    | AiStreamEvent::ResponseMetadataUpdated { .. }
+                            )
                         }) {
                             retry_unsafe_event_seen = true;
                         }
@@ -2703,10 +3088,10 @@ impl ConfiguredInferenceService {
                         {
                             let timestamp = current_unix_millis();
                             first_response_at_unix_ms = Some(timestamp);
+                            attempt_first_response_at_unix_ms = Some(timestamp);
                             self.emit_internal_inference_first_response(
-                                &started_facts
+                                &active_attempt_facts
                                     .clone()
-                                    .with_retry_count(completed_retries)
                                     .with_first_response(Some(timestamp)),
                             );
                         }
@@ -2715,6 +3100,7 @@ impl ConfiguredInferenceService {
                             &mut output_text,
                             &mut reasoning_text,
                             &mut structured_output,
+                            &mut output_items,
                             &mut usage,
                         ) {
                             Ok(Some(termination_reason)) => {
@@ -2749,6 +3135,8 @@ impl ConfiguredInferenceService {
             Ok(termination_reason)
         });
         let duration_ms = duration_millis(started_at.elapsed());
+        let attempt_duration_ms =
+            current_unix_millis().saturating_sub(active_attempt_facts.started_at_unix_ms);
         let telemetry = match &terminal {
             Ok(_) => InternalInferenceTelemetryFacts::from_route(
                 caller_id.as_str(),
@@ -2756,23 +3144,24 @@ impl ConfiguredInferenceService {
                 request.request_id.as_str(),
                 "internal_llm",
                 &route,
-                started_at_unix_ms,
-                duration_ms,
+                active_attempt_facts.started_at_unix_ms,
+                attempt_duration_ms,
                 "succeeded",
                 &usage,
                 None,
             )
             .with_retry_count(completed_retries)
             .with_metrics(Some(input_item_count), Some(1), None)
-            .with_first_response(first_response_at_unix_ms),
+            .with_first_response(attempt_first_response_at_unix_ms)
+            .with_transport_from(&active_attempt_facts),
             Err(error) => InternalInferenceTelemetryFacts::from_route(
                 caller_id.as_str(),
                 request.consumer_profile_id.as_str(),
                 request.request_id.as_str(),
                 "internal_llm",
                 &route,
-                started_at_unix_ms,
-                duration_ms,
+                active_attempt_facts.started_at_unix_ms,
+                attempt_duration_ms,
                 if error.category == ConfiguredInferenceErrorCategory::Cancelled {
                     "cancelled"
                 } else {
@@ -2783,7 +3172,8 @@ impl ConfiguredInferenceService {
             )
             .with_retry_count(completed_retries)
             .with_metrics(Some(input_item_count), None, None)
-            .with_first_response(first_response_at_unix_ms),
+            .with_first_response(attempt_first_response_at_unix_ms)
+            .with_transport_from(&active_attempt_facts),
         };
         let mut snapshot = match state.snapshot.lock() {
             Ok(snapshot) => snapshot,
@@ -2796,16 +3186,19 @@ impl ConfiguredInferenceService {
             Ok(termination_reason) => {
                 emit_restricted_llm_event(
                     &state,
-                    LlmInferenceStreamEvent::Completed,
+                    AiStreamEvent::ResponseCompleted,
                     &mut response_started_emitted,
                 );
                 snapshot.phase = ConfiguredLlmExecutionPhase::Completed;
-                snapshot.response = Some(LlmInferenceResponse {
+                snapshot.response = Some(ResponsesExecutionResult {
                     request_id: request.request_id,
                     route,
                     output_text,
                     reasoning_text: (!reasoning_text.is_empty()).then_some(reasoning_text),
+                    include_reasoning_encrypted_content: request
+                        .include_reasoning_encrypted_content,
                     structured_output,
+                    output_items,
                     termination_reason,
                     usage,
                     duration_ms,
@@ -2820,16 +3213,14 @@ impl ConfiguredInferenceService {
                 if error.category == ConfiguredInferenceErrorCategory::Cancelled {
                     emit_restricted_llm_event(
                         &state,
-                        LlmInferenceStreamEvent::Cancelled,
+                        AiStreamEvent::ResponseCancelled,
                         &mut response_started_emitted,
                     );
                 } else {
                     emit_restricted_llm_event(
                         &state,
-                        LlmInferenceStreamEvent::Failed {
-                            category: error.category_label().to_string(),
-                            message: error.message.clone(),
-                            provider_error: error.provider_error.as_deref().cloned(),
+                        AiStreamEvent::ResponseFailed {
+                            error: configured_inference_stream_error(&error),
                         },
                         &mut response_started_emitted,
                     );
@@ -2838,7 +3229,9 @@ impl ConfiguredInferenceService {
             }
         }
         drop(snapshot);
-        self.emit_internal_inference_telemetry(telemetry);
+        if !attempt_terminal_emitted {
+            self.emit_internal_inference_telemetry(telemetry);
+        }
         if let Ok(mut terminal_at) = state.terminal_at.lock() {
             *terminal_at = Some(Instant::now());
         }
@@ -2905,56 +3298,6 @@ impl ConfiguredInferenceService {
 /// A safe public event for semantic output, usage, and terminal state, or no event
 /// for provider metadata and lifecycle-only records.
 /// 返回安全的语义输出、用量或终态公共事件；供应商元数据和纯生命周期记录不返回事件。
-fn restricted_stream_event(event: &AiStreamEvent) -> Option<LlmInferenceStreamEvent> {
-    match event {
-        AiStreamEvent::ResponseStarted { execution_id } => Some(LlmInferenceStreamEvent::Started {
-            execution_id: execution_id.clone(),
-        }),
-        AiStreamEvent::ResponseItemStarted { item, .. } => match item {
-            ContentItem::Text { text } | ContentItem::Refusal { text } => {
-                Some(LlmInferenceStreamEvent::Text { text: text.clone() })
-            }
-            ContentItem::Reasoning { text, .. } => {
-                Some(LlmInferenceStreamEvent::Reasoning { text: text.clone() })
-            }
-            ContentItem::StructuredJson { value } => {
-                Some(LlmInferenceStreamEvent::StructuredOutput {
-                    value: value.clone(),
-                })
-            }
-            ContentItem::Resource { .. }
-            | ContentItem::ToolCall { .. }
-            | ContentItem::ToolResult { .. }
-            | ContentItem::Citation { .. } => None,
-        },
-        AiStreamEvent::ResponseTextDelta { delta, .. } => Some(LlmInferenceStreamEvent::Text {
-            text: delta.clone(),
-        }),
-        AiStreamEvent::ReasoningDelta { delta, .. } => Some(LlmInferenceStreamEvent::Reasoning {
-            text: delta.clone(),
-        }),
-        AiStreamEvent::UsageUpdated { usage } => Some(LlmInferenceStreamEvent::Usage {
-            usage: usage.clone(),
-        }),
-        AiStreamEvent::ResponseCompleted => Some(LlmInferenceStreamEvent::Completed),
-        AiStreamEvent::ResponseFailed { error } => Some(LlmInferenceStreamEvent::Failed {
-            category: String::from("execution"),
-            message: error.message.clone(),
-            provider_error: Some(error.clone()),
-        }),
-        AiStreamEvent::ResponseCancelled => Some(LlmInferenceStreamEvent::Cancelled),
-        AiStreamEvent::ResponseMetadataUpdated { .. }
-        | AiStreamEvent::ReasoningStarted { .. }
-        | AiStreamEvent::ReasoningCompleted { .. }
-        | AiStreamEvent::ToolCallStarted { .. }
-        | AiStreamEvent::ToolCallArgumentsDelta { .. }
-        | AiStreamEvent::ToolCallCompleted { .. }
-        | AiStreamEvent::ToolCallAborted { .. }
-        | AiStreamEvent::ResourceProgress { .. }
-        | AiStreamEvent::ResponseItemCompleted { .. } => None,
-    }
-}
-
 /// Identifies the first user-consumable semantic response for telemetry timing.
 /// 标识用于遥测计时的首个用户可消费语义响应。
 ///
@@ -2967,46 +3310,108 @@ fn restricted_stream_event(event: &AiStreamEvent) -> Option<LlmInferenceStreamEv
 /// 返回值
 /// True only for text, reasoning, or structured output content.
 /// 仅对文本、推理或结构化输出内容返回真。
-fn is_semantic_inference_response(event: &LlmInferenceStreamEvent) -> bool {
+fn is_semantic_inference_response(event: &AiStreamEvent) -> bool {
     matches!(
         event,
-        LlmInferenceStreamEvent::Text { .. }
-            | LlmInferenceStreamEvent::Reasoning { .. }
-            | LlmInferenceStreamEvent::StructuredOutput { .. }
+        AiStreamEvent::ResponseItemStarted { .. }
+            | AiStreamEvent::ResponseTextDelta { .. }
+            | AiStreamEvent::ReasoningDelta { .. }
+            | AiStreamEvent::ToolCallStarted { .. }
+            | AiStreamEvent::ToolCallArgumentsDelta { .. }
+            | AiStreamEvent::ToolCallCompleted { .. }
+            | AiStreamEvent::ImageGenerationPartial { .. }
     )
 }
 
-/// Appends and broadcasts one restricted event under a single replay ordering lock.
-/// 在单一重放顺序锁下追加并广播一项受限事件。
+/// Converts one host-controlled configured-inference failure into the shared normalized stream error.
+/// 将一项宿主控制的已配置推理失败转换为共享归一化流错误。
+fn configured_inference_stream_error(error: &ConfiguredInferenceError) -> AiExecutionError {
+    if let Some(provider_error) = error.provider_error.as_deref() {
+        return provider_error.clone();
+    }
+    let category = match error.category {
+        ConfiguredInferenceErrorCategory::Contract => AiErrorCategory::InvalidRequest,
+        ConfiguredInferenceErrorCategory::Authorization => AiErrorCategory::PermissionDenied,
+        ConfiguredInferenceErrorCategory::Configuration
+        | ConfiguredInferenceErrorCategory::Execution => AiErrorCategory::Unclassified,
+        ConfiguredInferenceErrorCategory::Limit => AiErrorCategory::Timeout,
+        ConfiguredInferenceErrorCategory::Cancelled => AiErrorCategory::Cancelled,
+    };
+    AiExecutionError {
+        category,
+        subcategory: Some(error.category_label().to_string()),
+        stage: String::from("configured_inference"),
+        http_status: None,
+        transport: None,
+        websocket_close_code: None,
+        upstream_code: Some(error.category_label().to_string()),
+        upstream_type: None,
+        upstream_parameter: None,
+        upstream_message: None,
+        request_id: None,
+        provider_id: None,
+        entry_id: None,
+        model_id: None,
+        message: error.message.clone(),
+        dispatch_outcome: DispatchOutcome::Unknown,
+        semantic_output_observed: false,
+        side_effect_observed: false,
+        terminal: true,
+        retryable: false,
+        retry_after: None,
+    }
+}
+
+/// Appends and broadcasts one normalized Responses event under bounded replay limits.
+/// 在有界重放限制下追加并广播一项归一化 Responses 事件。
 ///
 /// # Parameters
 /// 参数
-/// `state` owns replay and live delivery, `event` contains no provider continuation,
-/// tool, resource, or credential metadata, and `response_started_emitted` prevents
+/// `state` owns replay and live delivery, while `response_started_emitted` prevents
 /// transparent retries from exposing duplicate start records.
-/// `state` 拥有重放与实时投递，`event` 不包含供应商延续、工具、资源或凭据元数据，
-/// `response_started_emitted` 防止透明重试暴露重复启动记录。
+/// `state` 拥有重放与实时投递，`response_started_emitted` 防止透明重试暴露重复启动记录。
 fn emit_restricted_llm_event(
     state: &ConfiguredLlmExecutionState,
-    event: LlmInferenceStreamEvent,
+    event: AiStreamEvent,
     response_started_emitted: &mut bool,
 ) {
-    if matches!(&event, LlmInferenceStreamEvent::Started { .. }) {
+    if matches!(&event, AiStreamEvent::ResponseStarted { .. }) {
         if *response_started_emitted {
             return;
         }
         *response_started_emitted = true;
     }
-    let Ok(mut history) = state.event_history.lock() else {
-        return;
-    };
-    if history.len() == LLM_EVENT_BUFFER_CAPACITY {
-        history.remove(0);
-        if let Ok(mut truncated) = state.event_history_truncated.lock() {
-            *truncated = true;
+    let event_size = serde_json::to_vec(&event).ok().map(|value| value.len());
+    if let (Ok(mut history), Ok(mut history_bytes), Some(event_size)) = (
+        state.event_history.lock(),
+        state.event_history_bytes.lock(),
+        event_size,
+    ) {
+        if event_size > LLM_EVENT_BUFFER_MAX_BYTES {
+            history.clear();
+            *history_bytes = 0;
+            if let Ok(mut truncated) = state.event_history_truncated.lock() {
+                *truncated = true;
+            }
+        } else {
+            while history.len() >= LLM_EVENT_BUFFER_CAPACITY
+                || history_bytes.saturating_add(event_size) > LLM_EVENT_BUFFER_MAX_BYTES
+            {
+                let removed = history.remove(0);
+                let removed_size = serde_json::to_vec(&removed)
+                    .ok()
+                    .map_or(0, |value| value.len());
+                *history_bytes = history_bytes.saturating_sub(removed_size);
+                if let Ok(mut truncated) = state.event_history_truncated.lock() {
+                    *truncated = true;
+                }
+            }
+            history.push(event.clone());
+            *history_bytes = history_bytes.saturating_add(event_size);
         }
+    } else if let Ok(mut truncated) = state.event_history_truncated.lock() {
+        *truncated = true;
     }
-    history.push(event.clone());
     let _ = state.event_sender.send(event);
 }
 
@@ -3042,6 +3447,34 @@ fn authorize_caller(
         ));
     }
     Ok(())
+}
+
+/// Builds the host-owned identity used only for provider/model validation accounting.
+/// 构建仅用于供应商/模型验证计量的宿主持有身份。
+///
+/// # Returns
+/// 返回值
+/// A bounded internal-background caller whose identity becomes the native ledger consumer.
+/// 返回一个有界后台调用方，其身份会成为原生账本消费者。
+fn provider_model_validation_caller() -> InferenceCallerContext {
+    InferenceCallerContext {
+        caller_id: PROVIDER_MODEL_VALIDATION_CONSUMER_ID.to_string(),
+        allowed_consumer_profile_ids: BTreeSet::from([String::from(
+            PROVIDER_MODEL_VALIDATION_CONSUMER_ID,
+        )]),
+        permissions: BTreeSet::from([InferencePermission::Llm]),
+        usage_scope: InferenceUsageScope::InternalBackground,
+        interactive_session_id: None,
+        deadline_unix_ms: None,
+        budget: vulcan_ai_contract::InferenceCallerBudget {
+            max_concurrent_executions: 1,
+            max_input_units_per_request: Some(16 * 1024),
+            max_output_tokens_per_request: Some(256),
+            max_requests_per_minute: Some(60),
+            max_input_units_per_minute: Some(64 * 1024),
+            max_execution_duration_ms: Some(60_000),
+        },
+    }
 }
 
 /// Resolves one exact configured operation route without fallback.
@@ -3564,12 +3997,12 @@ fn first_complete_json_value(text: &str) -> Option<serde_json::Value> {
 ///
 /// # Returns
 /// 返回值
-/// A conversation-only request with tools, resources, and continuation disabled.
-/// 返回禁用工具、资源与延续信息的纯对话请求。
-fn restricted_provider_request(
+/// A provider-neutral Responses request that satisfies the frozen model capability contract.
+/// 返回满足冻结模型能力契约的供应商无关 Responses 请求。
+fn responses_provider_request(
     configuration: &PersistedAiConfiguration,
     selection: &ResolvedPublicAiSelection,
-    request: &LlmInferenceRequest,
+    request: &ResponsesExecutionRequest,
     caller: &InferenceCallerContext,
 ) -> Result<AiExecutionRequest, ConfiguredInferenceError> {
     let internal_overrides =
@@ -3577,6 +4010,7 @@ fn restricted_provider_request(
     let output_token_limit = narrow_output_limit(
         request.output_token_limit,
         [
+            selection.model.capabilities.output_limit,
             selection.overrides.output_limit,
             internal_overrides.and_then(|overrides| overrides.output_limit),
             caller.budget.max_output_tokens_per_request,
@@ -3596,6 +4030,7 @@ fn restricted_provider_request(
     // 解析与普通会话分发使用的同一宿主默认能力契约。
     let mut effective_capabilities = selection.model.capabilities.clone();
     vulcan_provider_adapters::apply_host_default_reasoning_policy(&mut effective_capabilities);
+    validate_responses_model_capabilities(request, &effective_capabilities)?;
     let requested_reasoning_effort = request
         .reasoning_effort
         .or_else(|| internal_overrides.and_then(|overrides| overrides.reasoning_effort));
@@ -3616,32 +4051,7 @@ fn restricted_provider_request(
         effective_capabilities.reasoning_efforts.as_slice(),
         reasoning_effort,
     )?;
-    let messages = request
-        .messages
-        .iter()
-        .map(|message| AiMessage {
-            role: match message.role {
-                InferenceMessageRole::System => MessageRole::System,
-                InferenceMessageRole::User => MessageRole::User,
-                InferenceMessageRole::Assistant => MessageRole::Assistant,
-            },
-            content: message
-                .content
-                .iter()
-                .map(|content| match content {
-                    InferenceMessageContent::Text { text } => {
-                        ContentItem::Text { text: text.clone() }
-                    }
-                    InferenceMessageContent::StructuredJson { value } => {
-                        ContentItem::StructuredJson {
-                            value: value.clone(),
-                        }
-                    }
-                })
-                .collect(),
-            provider_context_items: Vec::new(),
-        })
-        .collect();
+    let messages = request.messages.clone();
     let structured_output = structured_output_policy_for_protocol(
         selection.route.protocol_route.protocol_profile_id.as_str(),
         &request.structured_output,
@@ -3649,25 +4059,183 @@ fn restricted_provider_request(
     Ok(AiExecutionRequest {
         operation: AiOperation::ConversationRespond,
         model_id: selection.model.id.clone(),
-        cache_scope_id: Some(format!(
-            "configured-inference:{}:{}",
-            request.consumer_profile_id, request.purpose_id
-        )),
+        cache_scope_id: Some(responses_cache_scope_id(caller, request)),
         continuation: None,
         messages,
-        tools: Vec::new(),
-        native_tools: Vec::new(),
-        tool_choice: ToolChoicePolicy::Disabled,
-        parallel_tool_calls: ParallelToolCallPolicy::Disabled,
+        tools: request.tools.clone(),
+        native_tools: request.native_tools.clone(),
+        tool_choice: request.tool_choice.clone(),
+        parallel_tool_calls: request.parallel_tool_calls,
         structured_output,
-        stop_sequences: Vec::new(),
+        stop_sequences: request.stop_sequences.clone(),
         prompt_cache,
         reasoning_effort,
         reasoning_output: request.reasoning_output,
         model_parameters,
-        resources: Vec::new(),
+        resources: request.resources.clone(),
         output_token_limit,
     })
+}
+
+/// Builds one caller-isolated provider cache scope for a Responses execution.
+/// 为一项 Responses 执行构建调用方隔离的供应商缓存作用域。
+///
+/// # Parameters
+/// 参数
+/// `caller` is trusted host identity and `request` carries the optional untrusted public key.
+/// `caller` 是可信宿主身份，`request` 承载可选的不可信公共缓存键。
+///
+/// # Returns
+/// 返回值
+/// A bounded opaque cache identity that cannot collide across callers or expose caller text upstream.
+/// 返回不会跨调用方碰撞且不会向上游暴露调用方文本的有界不透明缓存身份。
+fn responses_cache_scope_id(
+    caller: &InferenceCallerContext,
+    request: &ResponsesExecutionRequest,
+) -> String {
+    let caller_key = request.prompt_cache_key.as_deref().unwrap_or("default");
+    let mut hasher = Sha256::new();
+    for value in [
+        caller.caller_id.as_str(),
+        request.consumer_profile_id.as_str(),
+        request.purpose_id.as_str(),
+        caller_key,
+    ] {
+        hasher.update((value.len() as u64).to_be_bytes());
+        hasher.update(value.as_bytes());
+    }
+    format!("vulcan-responses:sha256:{:x}", hasher.finalize())
+}
+
+/// Validates one Responses execution request against the exact selected-model capabilities.
+/// 根据所选模型的精确能力校验一项 Responses 执行请求。
+///
+/// # Parameters
+/// 参数
+/// `request` contains caller-visible tools and resources; `capabilities` is the frozen route
+/// snapshot resolved for this execution.
+/// `request` 包含调用方可见工具与资源；`capabilities` 是本次执行解析出的冻结路由快照。
+///
+/// # Returns
+/// 返回值
+/// Success only when every requested optional semantic is explicitly supported by the route.
+/// 仅当路由显式支持每项请求的可选语义时返回成功。
+fn validate_responses_model_capabilities(
+    request: &ResponsesExecutionRequest,
+    capabilities: &ModelCapabilities,
+) -> Result<(), ConfiguredInferenceError> {
+    let mut tool_names = BTreeSet::new();
+    for tool in &request.tools {
+        if !tool_names.insert(tool.name.as_str()) {
+            return Err(ConfiguredInferenceError::new(
+                ConfiguredInferenceErrorCategory::Contract,
+                format!("Responses tool name `{}` is duplicated.", tool.name),
+            ));
+        }
+    }
+
+    let has_tool_semantics = !request.tools.is_empty()
+        || !request.native_tools.is_empty()
+        || !matches!(request.tool_choice, ToolChoicePolicy::Auto)
+        || !matches!(
+            request.parallel_tool_calls,
+            ParallelToolCallPolicy::ProviderDefault
+        );
+    if has_tool_semantics && !capabilities.tool_calling.is_supported() {
+        return Err(ConfiguredInferenceError::new(
+            ConfiguredInferenceErrorCategory::Contract,
+            "The selected model route does not explicitly support tool calling.",
+        ));
+    }
+
+    if matches!(request.parallel_tool_calls, ParallelToolCallPolicy::Allowed)
+        && !capabilities.parallel_tool_calling.is_supported()
+    {
+        return Err(ConfiguredInferenceError::new(
+            ConfiguredInferenceErrorCategory::Contract,
+            "The selected model route does not explicitly support parallel tool calling.",
+        ));
+    }
+
+    if let ToolChoicePolicy::Specific { tool_name } = &request.tool_choice
+        && !tool_names.contains(tool_name.as_str())
+    {
+        return Err(ConfiguredInferenceError::new(
+            ConfiguredInferenceErrorCategory::Contract,
+            format!("Responses tool_choice references unknown function `{tool_name}`."),
+        ));
+    }
+
+    let mut native_tools = Vec::new();
+    for native_tool in request.native_tools.iter().copied() {
+        if native_tools.contains(&native_tool) {
+            return Err(ConfiguredInferenceError::new(
+                ConfiguredInferenceErrorCategory::Contract,
+                format!("Responses native tool `{native_tool:?}` is duplicated."),
+            ));
+        }
+        native_tools.push(native_tool);
+        if !capabilities.provider_native_tools.contains(&native_tool) {
+            return Err(ConfiguredInferenceError::new(
+                ConfiguredInferenceErrorCategory::Contract,
+                format!("The selected model route does not declare native tool `{native_tool:?}`."),
+            ));
+        }
+    }
+
+    if request
+        .native_tools
+        .contains(&NativeToolKind::ImageGeneration)
+        && !capabilities.output_resources.contains(&ResourceKind::Image)
+    {
+        return Err(ConfiguredInferenceError::new(
+            ConfiguredInferenceErrorCategory::Contract,
+            "Image generation requires an explicitly declared image output capability.",
+        ));
+    }
+
+    for resource in request
+        .resources
+        .iter()
+        .chain(request.messages.iter().flat_map(|message| {
+            message.content.iter().filter_map(|content| match content {
+                ContentItem::Resource { resource } => Some(resource),
+                _ => None,
+            })
+        }))
+    {
+        if !capabilities.input_resources.contains(&resource.kind) {
+            return Err(ConfiguredInferenceError::new(
+                ConfiguredInferenceErrorCategory::Contract,
+                format!(
+                    "The selected model route does not declare `{}` input resources.",
+                    resource_kind_label(resource.kind)
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Returns the stable public label for one resource kind.
+/// 返回一个资源类别的稳定公共标签。
+///
+/// # Parameters
+/// 参数
+/// `kind` is the closed resource kind from the AI contract.
+/// `kind` 是 AI 契约中的封闭资源类别。
+///
+/// # Returns
+/// 返回值
+/// The snake-case label used in controlled contract diagnostics.
+/// 返回受控契约诊断使用的蛇形标签。
+fn resource_kind_label(kind: ResourceKind) -> &'static str {
+    match kind {
+        ResourceKind::Image => "image",
+        ResourceKind::Audio => "audio",
+        ResourceKind::Video => "video",
+        ResourceKind::File => "file",
+    }
 }
 
 /// Selects the provider-wire structured-output projection while retaining host-side validation.
@@ -3919,7 +4487,7 @@ fn rerank_request_with_internal_defaults(
 /// 返回值
 /// The smallest known positive limit.
 /// 返回最小已知正数限制。
-fn narrow_output_limit(requested: Option<u64>, ceilings: [Option<u64>; 3]) -> Option<u64> {
+fn narrow_output_limit(requested: Option<u64>, ceilings: [Option<u64>; 4]) -> Option<u64> {
     ceilings
         .into_iter()
         .flatten()
@@ -3958,6 +4526,7 @@ fn llm_route_snapshot(
         secondary_endpoint_name,
         capability_revision: selection.model.capabilities.evidence_revision.clone(),
         catalog_revision: selection.catalog_revision.clone(),
+        route_revision: selection.route_revision.clone(),
         usage_scope,
     }
 }
@@ -4000,6 +4569,7 @@ fn configured_route_snapshot(
         secondary_endpoint_name,
         capability_revision: selection.model.capabilities.evidence_revision.clone(),
         catalog_revision: selection.catalog_revision.clone(),
+        route_revision: selection.route_revision.clone(),
         usage_scope: route.usage_scope,
     }
 }
@@ -4066,8 +4636,8 @@ fn unavailable_operation_capability(
 ///
 /// # Parameters
 /// 参数
-/// Mutable accumulators retain only text, reasoning, structured output, and usage.
-/// 可变累加器仅保留文本、推理、结构化输出与用量。
+/// Mutable accumulators retain text, reasoning, structured output, non-text items, and usage.
+/// 可变累加器保留文本、推理、结构化输出、非文本项目与用量。
 ///
 /// # Returns
 /// 返回值
@@ -4078,11 +4648,15 @@ fn aggregate_restricted_llm_event(
     output_text: &mut String,
     reasoning_text: &mut String,
     structured_output: &mut Option<serde_json::Value>,
+    output_items: &mut Vec<ResponsesExecutionOutputItem>,
     usage: &mut RequestUsage,
 ) -> Result<Option<String>, ConfiguredInferenceError> {
     match event {
-        AiStreamEvent::ResponseItemStarted { item, .. } => match item {
-            ContentItem::Text { text } => output_text.push_str(text.as_str()),
+        AiStreamEvent::ResponseItemStarted { item_id, item } => match item {
+            ContentItem::Text { text } => {
+                reject_text_refusal_mix(output_items)?;
+                output_text.push_str(text.as_str());
+            }
             ContentItem::StructuredJson { value } => {
                 if structured_output.replace(value).is_some() {
                     return Err(ConfiguredInferenceError::new(
@@ -4091,27 +4665,64 @@ fn aggregate_restricted_llm_event(
                     ));
                 }
             }
-            ContentItem::Refusal { text } => output_text.push_str(text.as_str()),
-            ContentItem::Reasoning { text, .. } => reasoning_text.push_str(text.as_str()),
-            ContentItem::Resource { .. }
-            | ContentItem::ToolCall { .. }
-            | ContentItem::ToolResult { .. }
-            | ContentItem::Citation { .. } => {
-                return Err(ConfiguredInferenceError::new(
-                    ConfiguredInferenceErrorCategory::Execution,
-                    "Restricted LLM stream emitted content outside its closed output contract.",
-                ));
+            ContentItem::Refusal { text } => {
+                if !output_text.is_empty() {
+                    return Err(ConfiguredInferenceError::new(
+                        ConfiguredInferenceErrorCategory::Execution,
+                        "Responses execution mixed output text and refusal content.",
+                    ));
+                }
+                output_items.push(ResponsesExecutionOutputItem {
+                    item_id,
+                    content: ContentItem::Refusal { text },
+                });
+            }
+            ContentItem::Reasoning { text, signature } => {
+                reasoning_text.push_str(text.as_str());
+                upsert_reasoning_output(output_items, item_id, text, signature);
+            }
+            ContentItem::Resource { resource } => {
+                if resource.kind != ResourceKind::Image {
+                    return Err(ConfiguredInferenceError::new(
+                        ConfiguredInferenceErrorCategory::Execution,
+                        format!(
+                            "Responses LLM execution produced unsupported `{:?}` resource output `{}`.",
+                            resource.kind, resource.id
+                        ),
+                    ));
+                }
+                output_items.push(ResponsesExecutionOutputItem {
+                    item_id,
+                    content: ContentItem::Resource { resource },
+                });
+            }
+            ContentItem::ToolCall { call } => {
+                upsert_tool_call_output(output_items, item_id, call);
+            }
+            ContentItem::ToolResult { result } => {
+                output_items.push(ResponsesExecutionOutputItem {
+                    item_id,
+                    content: ContentItem::ToolResult { result },
+                });
+            }
+            ContentItem::Citation { title, url, text } => {
+                output_items.push(ResponsesExecutionOutputItem {
+                    item_id,
+                    content: ContentItem::Citation { title, url, text },
+                });
             }
         },
         AiStreamEvent::ResponseTextDelta { delta, .. } => {
+            reject_text_refusal_mix(output_items)?;
             output_text.push_str(delta.as_str());
         }
-        AiStreamEvent::ReasoningDelta { delta, .. } => {
+        AiStreamEvent::ReasoningDelta { item_id, delta } => {
             reasoning_text.push_str(delta.as_str());
+            append_reasoning_output_delta(output_items, item_id, delta);
         }
         AiStreamEvent::UsageUpdated {
             usage: usage_update,
-        } => usage.merge_update(usage_update),
+        } => usage.merge_update(*usage_update),
         AiStreamEvent::ResponseCompleted => return Ok(Some(String::from("completed"))),
         AiStreamEvent::ResponseFailed { error } => {
             return Err(ConfiguredInferenceError::from_terminal_error(error));
@@ -4122,23 +4733,159 @@ fn aggregate_restricted_llm_event(
                 "Restricted LLM provider execution was cancelled.",
             ));
         }
-        AiStreamEvent::ToolCallStarted { .. }
-        | AiStreamEvent::ToolCallArgumentsDelta { .. }
-        | AiStreamEvent::ToolCallCompleted { .. }
-        | AiStreamEvent::ToolCallAborted { .. }
-        | AiStreamEvent::ResourceProgress { .. } => {
+        AiStreamEvent::ToolCallCompleted { item_id, call } => {
+            upsert_tool_call_output(output_items, item_id, call);
+        }
+        AiStreamEvent::ToolCallAborted { message, .. } => {
             return Err(ConfiguredInferenceError::new(
                 ConfiguredInferenceErrorCategory::Execution,
-                "Restricted LLM provider emitted a forbidden tool or resource event.",
+                format!("Provider aborted a streamed tool call: {message}"),
             ));
         }
-        AiStreamEvent::ResponseStarted { .. }
+        AiStreamEvent::ToolCallStarted { .. }
+        | AiStreamEvent::ToolCallArgumentsDelta { .. }
+        | AiStreamEvent::ResourceProgress { .. }
+        | AiStreamEvent::ImageGenerationPartial { .. } => {}
+        AiStreamEvent::ReasoningCompleted { item_id, signature } => {
+            complete_reasoning_output(output_items, item_id, signature);
+        }
+        AiStreamEvent::TransportObserved { .. }
+        | AiStreamEvent::ResponseStarted { .. }
         | AiStreamEvent::ResponseMetadataUpdated { .. }
         | AiStreamEvent::ReasoningStarted { .. }
-        | AiStreamEvent::ReasoningCompleted { .. }
         | AiStreamEvent::ResponseItemCompleted { .. } => {}
     }
     Ok(None)
+}
+
+/// Inserts or replaces one normalized reasoning output while retaining its continuation signature.
+/// 插入或替换一项归一化推理输出，同时保留其延续签名。
+///
+/// # Parameters
+/// 参数
+/// `output_items` owns ordered output, while the remaining values identify the authoritative item.
+/// `output_items` 持有有序输出，其余值标识权威推理项目。
+fn upsert_reasoning_output(
+    output_items: &mut Vec<ResponsesExecutionOutputItem>,
+    item_id: String,
+    text: String,
+    signature: Option<String>,
+) {
+    if let Some(existing) = output_items.iter_mut().find(|item| item.item_id == item_id) {
+        *existing = ResponsesExecutionOutputItem {
+            item_id,
+            content: ContentItem::Reasoning { text, signature },
+        };
+        return;
+    }
+    output_items.push(ResponsesExecutionOutputItem {
+        item_id,
+        content: ContentItem::Reasoning { text, signature },
+    });
+}
+
+/// Appends one reasoning delta to its exact normalized output item.
+/// 将一项推理增量追加到其精确归一化输出项目。
+///
+/// # Parameters
+/// 参数
+/// `output_items`, `item_id`, and `delta` identify the ordered item and new text fragment.
+/// `output_items`、`item_id` 与 `delta` 标识有序项目和新文本分片。
+fn append_reasoning_output_delta(
+    output_items: &mut Vec<ResponsesExecutionOutputItem>,
+    item_id: String,
+    delta: String,
+) {
+    if let Some(ContentItem::Reasoning { text, .. }) = output_items
+        .iter_mut()
+        .find(|item| item.item_id == item_id)
+        .map(|item| &mut item.content)
+    {
+        text.push_str(delta.as_str());
+        return;
+    }
+    output_items.push(ResponsesExecutionOutputItem {
+        item_id,
+        content: ContentItem::Reasoning {
+            text: delta,
+            signature: None,
+        },
+    });
+}
+
+/// Applies one terminal continuation signature to its exact reasoning output item.
+/// 将一项终态延续签名应用到其精确推理输出项目。
+///
+/// # Parameters
+/// 参数
+/// `output_items`, `item_id`, and `signature` identify the terminal normalized reasoning state.
+/// `output_items`、`item_id` 与 `signature` 标识终态归一化推理状态。
+fn complete_reasoning_output(
+    output_items: &mut Vec<ResponsesExecutionOutputItem>,
+    item_id: String,
+    signature: Option<String>,
+) {
+    if let Some(ContentItem::Reasoning {
+        signature: current, ..
+    }) = output_items
+        .iter_mut()
+        .find(|item| item.item_id == item_id)
+        .map(|item| &mut item.content)
+    {
+        *current = signature;
+        return;
+    }
+    output_items.push(ResponsesExecutionOutputItem {
+        item_id,
+        content: ContentItem::Reasoning {
+            text: String::new(),
+            signature,
+        },
+    });
+}
+
+/// Rejects provider output that mixes assistant text with refusal content.
+/// 拒绝将助手文本与拒绝内容混合的供应商输出。
+fn reject_text_refusal_mix(
+    output_items: &[ResponsesExecutionOutputItem],
+) -> Result<(), ConfiguredInferenceError> {
+    if output_items
+        .iter()
+        .any(|item| matches!(&item.content, ContentItem::Refusal { .. }))
+    {
+        return Err(ConfiguredInferenceError::new(
+            ConfiguredInferenceErrorCategory::Execution,
+            "Responses execution mixed output text and refusal content.",
+        ));
+    }
+    Ok(())
+}
+
+/// Inserts or replaces one completed tool call while preserving provider output order.
+/// 插入或替换一个已完成工具调用，同时保留供应商输出顺序。
+///
+/// # Parameters
+/// 参数
+/// `output_items` owns retained non-text output and `call` is the authoritative call payload.
+/// `output_items` 持有已保留非文本输出，`call` 是权威调用载荷。
+fn upsert_tool_call_output(
+    output_items: &mut Vec<ResponsesExecutionOutputItem>,
+    item_id: String,
+    call: ToolCall,
+) {
+    if let Some(existing) = output_items.iter_mut().find(|item| {
+        matches!(&item.content, ContentItem::ToolCall { call: existing } if existing.id == call.id)
+    }) {
+        *existing = ResponsesExecutionOutputItem {
+            item_id,
+            content: ContentItem::ToolCall { call },
+        };
+        return;
+    }
+    output_items.push(ResponsesExecutionOutputItem {
+        item_id,
+        content: ContentItem::ToolCall { call },
+    });
 }
 
 /// Builds one caller-scoped in-flight identity.
@@ -4153,7 +4900,10 @@ fn aggregate_restricted_llm_event(
 /// 返回值
 /// A length-prefixed de-duplication key.
 /// 返回长度前缀去重键。
-fn llm_in_flight_key(caller: &InferenceCallerContext, request: &LlmInferenceRequest) -> String {
+fn llm_in_flight_key(
+    caller: &InferenceCallerContext,
+    request: &ResponsesExecutionRequest,
+) -> String {
     inference_in_flight_key(
         caller,
         request.consumer_profile_id.as_str(),
@@ -4271,27 +5021,19 @@ fn enforce_llm_output_budget(
 /// 返回值
 /// A checked aggregate byte count.
 /// 返回经过溢出检查的字节合计。
-fn llm_input_units(request: &LlmInferenceRequest) -> Result<u64, ConfiguredInferenceError> {
-    let mut units = 0_u64;
-    for message in &request.messages {
-        for content in &message.content {
-            let length = match content {
-                InferenceMessageContent::Text { text } => text.len(),
-                InferenceMessageContent::StructuredJson { value } => serde_json::to_vec(value)
-                    .map_err(|error| {
-                        ConfiguredInferenceError::new(
-                            ConfiguredInferenceErrorCategory::Contract,
-                            format!(
-                                "Restricted LLM structured input could not be measured: {error}"
-                            ),
-                        )
-                    })?
-                    .len(),
-            };
-            units = checked_input_units(units, length)?;
-        }
-    }
-    Ok(units)
+fn llm_input_units(request: &ResponsesExecutionRequest) -> Result<u64, ConfiguredInferenceError> {
+    let encoded = serde_json::to_vec(request).map_err(|error| {
+        ConfiguredInferenceError::new(
+            ConfiguredInferenceErrorCategory::Contract,
+            format!("Responses execution input could not be measured: {error}"),
+        )
+    })?;
+    u64::try_from(encoded.len()).map_err(|_| {
+        ConfiguredInferenceError::new(
+            ConfiguredInferenceErrorCategory::Limit,
+            "Responses execution input exceeds the supported byte range.",
+        )
+    })
 }
 
 /// Counts embedding input as exact UTF-8 identifier and payload bytes.
@@ -4573,6 +5315,7 @@ fn internal_inference_identity_payload(
         "operation": facts.operation,
         "capability_revision": facts.capability_revision,
         "catalog_revision": facts.catalog_revision,
+        "route_revision": facts.route_revision,
         "attempt_index": facts.retry_count,
         "retry_count": facts.retry_count,
         "calendar_date": telemetry_calendar_date(facts.started_at_unix_ms),
@@ -4681,23 +5424,23 @@ fn internal_inference_terminal_payload(
         (String::from("duration_ms"), json!(facts.duration_ms)),
         (
             String::from("input_tokens"),
-            json!(usage_value_or_zero(&facts.usage.input_tokens)),
+            json!(usage_value_or_null(&facts.usage.input_tokens)),
         ),
         (
             String::from("uncached_input_tokens"),
-            json!(usage_value_or_zero(&facts.usage.uncached_input_tokens)),
+            json!(usage_value_or_null(&facts.usage.uncached_input_tokens)),
         ),
         (
             String::from("output_tokens"),
-            json!(usage_value_or_zero(&facts.usage.output_tokens)),
+            json!(usage_value_or_null(&facts.usage.output_tokens)),
         ),
         (
             String::from("reasoning_tokens"),
-            json!(usage_value_or_zero(&facts.usage.reasoning_tokens)),
+            json!(usage_value_or_null(&facts.usage.reasoning_tokens)),
         ),
         (
             String::from("total_tokens"),
-            json!(usage_value_or_zero(&facts.usage.total_tokens)),
+            json!(usage_value_or_null(&facts.usage.total_tokens)),
         ),
         (
             String::from("cached_input_tokens"),
@@ -4712,7 +5455,145 @@ fn internal_inference_terminal_payload(
         (String::from("error_category"), json!(facts.error_category)),
         (String::from("error_code"), serde_json::Value::Null),
     ]);
+    let provider_error = facts.provider_error.as_deref();
+    object.insert(
+        String::from("dispatch_outcome"),
+        match provider_error {
+            Some(error) => json!(error.dispatch_outcome),
+            None if facts.status == "succeeded" => json!(DispatchOutcome::Dispatched),
+            None => serde_json::Value::Null,
+        },
+    );
+    object.insert(
+        String::from("semantic_output_observed"),
+        json!(
+            provider_error
+                .map(|error| error.semantic_output_observed)
+                .unwrap_or(facts.first_response_at_unix_ms.is_some())
+        ),
+    );
+    object.insert(
+        String::from("replay_safe"),
+        provider_error
+            .map(|error| {
+                json!(
+                    !error.semantic_output_observed
+                        && !error.side_effect_observed
+                        && error.dispatch_outcome != DispatchOutcome::Unknown
+                )
+            })
+            .unwrap_or(serde_json::Value::Null),
+    );
+    object.insert(
+        String::from("transport"),
+        provider_error
+            .and_then(|error| error.transport)
+            .or(facts.transport)
+            .map(|value| json!(value))
+            .unwrap_or(serde_json::Value::Null),
+    );
+    object.insert(
+        String::from("dispatched_at_ms"),
+        json!(facts.dispatched_at_ms),
+    );
+    object.insert(String::from("headers_at_ms"), json!(facts.headers_at_ms));
+    object.insert(
+        String::from("http_status"),
+        provider_error
+            .and_then(|error| error.http_status)
+            .or(facts.transport_http_status)
+            .map(serde_json::Value::from)
+            .unwrap_or(serde_json::Value::Null),
+    );
+    object.insert(
+        String::from("websocket_close_code"),
+        provider_error
+            .and_then(|error| error.websocket_close_code)
+            .or(facts.websocket_close_code)
+            .map(serde_json::Value::from)
+            .unwrap_or(serde_json::Value::Null),
+    );
+    object.insert(
+        String::from("provider_request_id"),
+        provider_error
+            .and_then(|error| error.request_id.as_ref())
+            .or(facts.provider_request_id.as_ref())
+            .map(|value| json!(value))
+            .unwrap_or(serde_json::Value::Null),
+    );
+    object.insert(
+        String::from("rate_limit_headers"),
+        json!(facts.rate_limit_headers),
+    );
+    object.insert(
+        String::from("error_code"),
+        provider_error
+            .and_then(|error| error.upstream_code.as_ref())
+            .map(|value| json!(value))
+            .unwrap_or(serde_json::Value::Null),
+    );
+    object.insert(
+        String::from("retry_after"),
+        provider_error
+            .and_then(|error| error.retry_after.as_ref())
+            .map(|value| json!(value))
+            .unwrap_or(serde_json::Value::Null),
+    );
     payload
+}
+
+/// Builds one native terminal usage event from the exact configured-inference facts.
+/// 根据精确已配置推理事实构建一条原生终态用量事件。
+fn internal_inference_native_usage_event(
+    facts: &InternalInferenceTelemetryFacts,
+    payload: serde_json::Value,
+) -> Result<ProviderRequestTelemetryEvent, String> {
+    let session_id = Uuid::parse_str(facts.execution_id.as_str()).map_err(|error| {
+        format!(
+            "configured-inference execution id `{}` is not a UUID: {error}",
+            facts.execution_id
+        )
+    })?;
+    Ok(ProviderRequestTelemetryEvent {
+        kind: ProviderRequestTelemetryEventKind::Completed,
+        session_id,
+        payload,
+        completed_usage: Some(ProviderRequestCompletedUsage {
+            update_kind: Some(facts.usage.update_kind),
+            input_tokens: usage_value_usize(&facts.usage.input_tokens)?,
+            uncached_input_tokens: usage_value_usize(&facts.usage.uncached_input_tokens)?,
+            cached_input_tokens: usage_value_usize(&facts.usage.cache_read_tokens)?,
+            cache_creation_input_tokens: usage_value_usize(&facts.usage.cache_write_tokens)?,
+            output_tokens: usage_value_usize(&facts.usage.output_tokens)?,
+            reasoning_tokens: usage_value_usize(&facts.usage.reasoning_tokens)?,
+            total_tokens: usage_value_usize(&facts.usage.total_tokens)?,
+            audio_input_tokens: usage_value_usize(&facts.usage.audio_input_tokens)?,
+            audio_output_tokens: usage_value_usize(&facts.usage.audio_output_tokens)?,
+            extraction_profile_id: facts.usage.extraction_profile_id.clone(),
+            extraction_profile_revision: facts.usage.extraction_profile_revision,
+            source_paths: facts.usage.source_paths.clone(),
+            validation_flags: facts.usage.validation_flags.clone(),
+            response_model: facts.usage.response_model.clone(),
+            response_id: facts.usage.response_id.clone(),
+            reported_cost: facts.usage.cost.clone(),
+            estimated_cost: facts.usage.estimated_cost.clone(),
+            cost_currency: facts.usage.cost_currency.clone(),
+            pricing_revision: facts.usage.pricing_revision.clone(),
+            pricing_profile: facts.usage.pricing_profile.clone(),
+            billing_details: facts.usage.billing_details.clone(),
+        }),
+    })
+}
+
+/// Converts one known usage value into the host token-width without saturating.
+/// 将一个已知用量值无饱和地转换为宿主 Token 宽度。
+fn usage_value_usize(value: &UsageValue) -> Result<Option<usize>, String> {
+    match value {
+        UsageValue::Unknown => Ok(None),
+        UsageValue::Known { value, .. } => usize::try_from(*value)
+            .map(Some)
+            .map_err(|_| format!("provider usage value {value} exceeds host usize")),
+    }
 }
 
 /// Inserts one optional telemetry field without serializing absence as JSON null.
@@ -4795,25 +5676,6 @@ fn dispatch_internal_inference_hook(
             eprintln!("[inference-service] internal inference telemetry failed: {error}");
         }
     });
-}
-
-/// Reads a known normalized usage value or returns zero for an explicitly unknown value.
-/// 读取已知归一化用量值；对显式未知值返回零。
-///
-/// # Parameters
-/// 参数
-/// `value` is one provider-neutral usage field.
-/// `value` 是一项供应商无关用量字段。
-///
-/// # Returns
-/// 返回值
-/// The reported/derived/estimated count, or zero when no count was reported.
-/// 返回报告/推导/估算计数；未报告计数时返回零。
-fn usage_value_or_zero(value: &UsageValue) -> u64 {
-    match value {
-        UsageValue::Known { value, .. } => *value,
-        UsageValue::Unknown => 0,
-    }
 }
 
 /// Reads a known normalized usage value while preserving unknown as null.
@@ -4928,6 +5790,148 @@ mod tests {
                 max_execution_duration_ms: Some(30_000),
             },
         }
+    }
+
+    /// Builds one minimal Responses execution request for capability validation tests.
+    /// 构建一项用于能力校验测试的最小 Responses 执行请求。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A text-only request with provider-default optional semantics.
+    /// 返回一项仅含文本且可选语义均采用供应商默认值的请求。
+    fn test_responses_request() -> ResponsesExecutionRequest {
+        ResponsesExecutionRequest {
+            contract_version: INFERENCE_CONTRACT_VERSION,
+            request_id: String::from("request-capability-1"),
+            idempotency_key: None,
+            consumer_profile_id: String::from("vmm"),
+            purpose_id: String::from("precheck_l1"),
+            messages: vec![vulcan_ai_contract::AiMessage {
+                role: vulcan_ai_contract::MessageRole::User,
+                content: vec![ContentItem::Text {
+                    text: String::from("test"),
+                }],
+                provider_context_items: Vec::new(),
+            }],
+            tools: Vec::new(),
+            native_tools: Vec::new(),
+            tool_choice: ToolChoicePolicy::Auto,
+            parallel_tool_calls: ParallelToolCallPolicy::ProviderDefault,
+            structured_output: StructuredOutputPolicy::None,
+            prompt_cache: Default::default(),
+            prompt_cache_key: None,
+            include_reasoning_encrypted_content: false,
+            reasoning_effort: None,
+            reasoning_output: Default::default(),
+            model_parameters: BTreeMap::new(),
+            stop_sequences: Vec::new(),
+            resources: Vec::new(),
+            output_token_limit: None,
+        }
+    }
+
+    /// Verifies cache identities are caller-isolated, bounded, and never contain untrusted key text.
+    /// 验证缓存身份按调用方隔离、长度有界且绝不包含不可信键原文。
+    #[test]
+    fn responses_cache_scope_is_bounded_opaque_and_caller_isolated() {
+        let caller = test_caller();
+        let mut request = test_responses_request();
+        request.prompt_cache_key = Some("secret-cache-key\r\nheader-like-value".repeat(4096));
+        let first = responses_cache_scope_id(&caller, &request);
+        let repeated = responses_cache_scope_id(&caller, &request);
+        assert_eq!(first, repeated);
+        assert_eq!(first.len(), "vulcan-responses:sha256:".len() + 64);
+        assert!(!first.contains("secret-cache-key"));
+        assert!(!first.contains('\r'));
+        assert!(!first.contains('\n'));
+
+        let mut another_caller = caller;
+        another_caller.caller_id = String::from("another-vmm");
+        assert_ne!(first, responses_cache_scope_id(&another_caller, &request));
+    }
+
+    /// Verifies function-tool semantics require an explicitly tool-capable route.
+    /// 验证函数工具语义要求路由显式声明工具能力。
+    #[test]
+    fn responses_capability_validation_rejects_undeclared_tool_calling() {
+        let mut request = test_responses_request();
+        request.tools.push(vulcan_ai_contract::ToolDefinition {
+            name: String::from("lookup"),
+            description: String::from("Looks up one value."),
+            input_schema: serde_json::json!({"type": "object"}),
+            strict: true,
+        });
+
+        let error = validate_responses_model_capabilities(&request, &ModelCapabilities::default())
+            .expect_err("unknown tool support must not be treated as available");
+
+        assert_eq!(error.category, ConfiguredInferenceErrorCategory::Contract);
+        assert!(error.message.contains("tool calling"));
+    }
+
+    /// Verifies selected function names must resolve to one unique declared tool.
+    /// 验证被选择的函数名必须解析到唯一声明的工具。
+    #[test]
+    fn responses_capability_validation_rejects_unknown_specific_tool() {
+        let mut request = test_responses_request();
+        request.tool_choice = ToolChoicePolicy::Specific {
+            tool_name: String::from("missing"),
+        };
+        let capabilities = ModelCapabilities {
+            tool_calling: vulcan_ai_contract::CapabilitySupport::Native,
+            ..ModelCapabilities::default()
+        };
+
+        let error = validate_responses_model_capabilities(&request, &capabilities)
+            .expect_err("an unknown specific tool must be rejected");
+
+        assert!(error.message.contains("unknown function"));
+    }
+
+    /// Verifies native image generation requires both the native tool and image-output capability.
+    /// 验证原生图片生成同时要求原生工具与图片输出能力。
+    #[test]
+    fn responses_capability_validation_requires_image_output_for_generation() {
+        let mut request = test_responses_request();
+        request.native_tools.push(NativeToolKind::ImageGeneration);
+        let capabilities = ModelCapabilities {
+            tool_calling: vulcan_ai_contract::CapabilitySupport::Native,
+            provider_native_tools: vec![NativeToolKind::ImageGeneration],
+            ..ModelCapabilities::default()
+        };
+
+        let error = validate_responses_model_capabilities(&request, &capabilities)
+            .expect_err("image generation without image output must be rejected");
+
+        assert!(error.message.contains("image output"));
+    }
+
+    /// Verifies every typed resource input is checked against the frozen model declaration.
+    /// 验证每项强类型资源输入都会依据冻结模型声明进行校验。
+    #[test]
+    fn responses_capability_validation_checks_message_resources() {
+        let mut request = test_responses_request();
+        request.messages[0].content.push(ContentItem::Resource {
+            resource: vulcan_ai_contract::ResourceReference {
+                id: String::from("image-1"),
+                kind: ResourceKind::Image,
+                media_type: Some(String::from("image/png")),
+                source_kind: vulcan_ai_contract::ResourceSourceKind::RemoteUrl,
+                file_name: None,
+                image_detail: Some(vulcan_ai_contract::ImageInputDetail::High),
+                local_path: None,
+                url: Some(String::from("https://example.invalid/image.png")),
+            },
+        });
+
+        let error = validate_responses_model_capabilities(&request, &ModelCapabilities::default())
+            .expect_err("undeclared image input must be rejected");
+        assert!(error.message.contains("image"));
+
+        let mut capabilities = ModelCapabilities::default();
+        capabilities.input_resources.push(ResourceKind::Image);
+        validate_responses_model_capabilities(&request, &capabilities)
+            .expect("declared image input should pass");
     }
 
     /// Verifies reserved capacities keep interactive work admissible during lower-class saturation.
@@ -5165,26 +6169,41 @@ mod tests {
 
     #[test]
     fn llm_input_budget_uses_exact_utf8_bytes() {
-        let request = LlmInferenceRequest {
+        let request = ResponsesExecutionRequest {
             contract_version: INFERENCE_CONTRACT_VERSION,
             request_id: String::from("request-1"),
             idempotency_key: None,
             consumer_profile_id: String::from("vmm"),
             purpose_id: String::from("precheck_l1"),
-            messages: vec![vulcan_ai_contract::InferenceMessage {
-                role: InferenceMessageRole::User,
-                content: vec![InferenceMessageContent::Text {
+            messages: vec![vulcan_ai_contract::AiMessage {
+                role: vulcan_ai_contract::MessageRole::User,
+                content: vec![ContentItem::Text {
                     text: String::from("向量"),
                 }],
+                provider_context_items: Vec::new(),
             }],
+            tools: Vec::new(),
+            native_tools: Vec::new(),
+            tool_choice: Default::default(),
+            parallel_tool_calls: Default::default(),
             structured_output: Default::default(),
             prompt_cache: Default::default(),
+            prompt_cache_key: None,
+            include_reasoning_encrypted_content: false,
             reasoning_effort: None,
             reasoning_output: Default::default(),
             model_parameters: BTreeMap::new(),
+            stop_sequences: Vec::new(),
+            resources: Vec::new(),
             output_token_limit: None,
         };
-        assert_eq!(llm_input_units(&request).expect("input should fit"), 6);
+        let expected = serde_json::to_vec(&request)
+            .expect("request should serialize")
+            .len() as u64;
+        assert_eq!(
+            llm_input_units(&request).expect("input should fit"),
+            expected
+        );
     }
 
     /// Verifies internal inference terminal telemetry preserves cache and token accounting.
@@ -5215,10 +6234,18 @@ mod tests {
             operation: String::from("llm.generate"),
             capability_revision: String::from("capability-1"),
             catalog_revision: String::from("catalog-1"),
+            route_revision: String::from("sha256:route-1"),
             started_at_unix_ms: 1_000,
             first_response_at_unix_ms: Some(1_125),
             duration_ms: 750,
             retry_count: 1,
+            transport: Some(vulcan_ai_contract::AiTransportKind::Http),
+            dispatched_at_ms: Some(1_010),
+            headers_at_ms: Some(1_050),
+            transport_http_status: Some(200),
+            websocket_close_code: None,
+            provider_request_id: Some(String::from("provider-request-1")),
+            rate_limit_headers: BTreeMap::new(),
             status: "succeeded",
             usage: RequestUsage {
                 input_tokens: known(100),
@@ -5235,6 +6262,7 @@ mod tests {
             output_item_count: Some(1),
             vector_dimensions: None,
             error_category: None,
+            provider_error: None,
         };
 
         let payload = internal_inference_terminal_payload(&facts, 1_750);
@@ -5251,16 +6279,83 @@ mod tests {
         assert_eq!(payload["cost"], "0.00125");
         assert_eq!(payload["time_to_first_token_ms"], 125);
         assert_eq!(payload["retry_count"], 1);
+        assert_eq!(payload["transport"], "http");
+        assert_eq!(payload["dispatched_at_ms"], 1_010);
+        assert_eq!(payload["headers_at_ms"], 1_050);
+        assert_eq!(payload["http_status"], 200);
+        assert_eq!(payload["provider_request_id"], "provider-request-1");
+        assert_eq!(payload["route_revision"], "sha256:route-1");
+    }
+
+    /// Verifies unknown usage dimensions remain null in native and shadow telemetry.
+    /// 验证未知用量维度在原生与影子遥测中保持为空。
+    #[test]
+    fn internal_inference_terminal_payload_preserves_unknown_usage() {
+        let mut facts = InternalInferenceTelemetryFacts::from_route(
+            "caller",
+            "consumer",
+            "request",
+            "internal_llm",
+            &ExecutionRouteSnapshot {
+                provider_id: String::from("provider"),
+                service_entry_id: String::from("service"),
+                connection_id: String::from("connection"),
+                protocol_binding_id: Some(String::from("openai.responses.v1")),
+                action_binding_id: None,
+                secondary_route_id: None,
+                secondary_provider_name: None,
+                secondary_endpoint_name: None,
+                model_id: String::from("model"),
+                capability_revision: String::from("capability"),
+                catalog_revision: String::from("catalog"),
+                route_revision: String::from("sha256:route"),
+                usage_scope: InferenceUsageScope::InternalBackground,
+            },
+            1_000,
+            10,
+            "succeeded",
+            &RequestUsage::default(),
+            None,
+        );
+        facts.execution_id = Uuid::nil().to_string();
+
+        let initial_attempt = facts.clone().with_retry_count(0);
+        let retry_attempt = facts.clone().with_retry_count(1);
+        assert_eq!(initial_attempt.execution_id, retry_attempt.execution_id);
+        assert_eq!(
+            initial_attempt.request_id,
+            format!("{}:attempt:0", Uuid::nil())
+        );
+        assert_eq!(
+            retry_attempt.request_id,
+            format!("{}:attempt:1", Uuid::nil())
+        );
+
+        let payload = internal_inference_terminal_payload(&facts, 1_010);
+
+        for field in [
+            "input_tokens",
+            "uncached_input_tokens",
+            "output_tokens",
+            "reasoning_tokens",
+            "total_tokens",
+        ] {
+            assert!(payload[field].is_null(), "{field} must remain unknown");
+        }
     }
 
     #[test]
     fn output_limit_is_narrowed_by_every_trusted_ceiling() {
         assert_eq!(
-            narrow_output_limit(Some(1_000), [Some(800), Some(900), Some(700)]),
+            narrow_output_limit(Some(1_000), [Some(850), Some(800), Some(900), Some(700)]),
             Some(700)
         );
         assert_eq!(
-            narrow_output_limit(None, [None, Some(900), Some(700)]),
+            narrow_output_limit(None, [Some(650), None, Some(900), Some(700)]),
+            Some(650)
+        );
+        assert_eq!(
+            narrow_output_limit(None, [None, None, Some(900), Some(700)]),
             Some(700)
         );
     }

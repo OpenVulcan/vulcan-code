@@ -1,0 +1,20 @@
+[package]
+name = "vulcan-llm-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Responses-first LLM conversion, reasoning projection, usage parsing, and billing primitives."
+
+[dependencies]
+base64 = "0.22.1"
+futures-util = "0.3.31"
+rust_decimal.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+vulcan-ai-contract.workspace = true
+
+[lints]
+workspace = true

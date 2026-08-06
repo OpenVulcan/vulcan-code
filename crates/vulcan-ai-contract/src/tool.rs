@@ -33,6 +33,10 @@ pub struct ToolDefinition {
     /// JSON Schema for tool arguments.
     /// 工具参数的 JSON Schema。
     pub input_schema: Value,
+    /// Whether the provider must enforce exact schema-conforming arguments.
+    /// 供应商是否必须强制参数严格符合模式。
+    #[serde(default)]
+    pub strict: bool,
 }
 
 /// Carries one complete model-emitted tool call.

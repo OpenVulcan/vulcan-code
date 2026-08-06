@@ -18,6 +18,22 @@ pub const GEMINI_GENERATE_CONTENT_PROFILE_ID: &str = "google.gemini.generate_con
 /// Google Code Assist 内部 Gemini 封装的稳定 Profile 标识。
 pub const GOOGLE_CODE_ASSIST_PROFILE_ID: &str = "google.code_assist.generate_content.v1";
 
+/// Returns the opaque payload only when a replay signature belongs to Gemini.
+/// 仅当重放签名属于 Gemini 时返回其不透明载荷。
+///
+/// # Parameters
+/// 参数
+/// `signature` is the provider-scoped replay signature carried by the public contract.
+/// `signature` 是公共契约携带的供应商作用域重放签名。
+///
+/// # Returns
+/// 返回值
+/// The opaque Gemini payload, or `None` for another provider or malformed provenance.
+/// 返回 Gemini 不透明载荷；若属于其他供应商或来源格式错误则返回 `None`。
+pub fn gemini_replay_signature_payload(signature: &str) -> Option<&str> {
+    crate::compatible_provider_signature(crate::SIGNATURE_PROVIDER_GEMINI, signature)
+}
+
 /// Encodes and decodes the provider-independent Gemini GenerateContent wire contract.
 /// 编解码供应商无关的 Gemini GenerateContent Wire 契约。
 pub struct GeminiGenerateContentProfile;
@@ -178,6 +194,7 @@ impl ProtocolProfile for GeminiGenerateContentProfile {
         &self,
         request: &AiExecutionRequest,
     ) -> Result<EncodedWireRequest, ProtocolConversionError> {
+        crate::require_no_route_bound_provider_context(request, self.id())?;
         if request.prompt_cache != PromptCachePolicy::ProviderDefault {
             return Err(ProtocolConversionError::new(
                 "Gemini explicit prompt-cache projection is not registered.",
@@ -198,14 +215,16 @@ impl ProtocolProfile for GeminiGenerateContentProfile {
             })
             .collect::<BTreeMap<_, _>>();
         for message in &request.messages {
-            if message.role == MessageRole::System {
+            if matches!(message.role, MessageRole::System | MessageRole::Developer) {
                 system_parts.extend(encode_gemini_parts(message, &tool_names)?);
             } else {
                 contents.push(json!({
                     "role": match message.role {
                         MessageRole::Assistant => "model",
                         MessageRole::User | MessageRole::Tool => "user",
-                        MessageRole::System => unreachable!("system messages are separated"),
+                        MessageRole::System | MessageRole::Developer => {
+                            unreachable!("instruction messages are separated")
+                        }
                     },
                     "parts": encode_gemini_parts(message, &tool_names)?,
                 }));
@@ -221,6 +240,12 @@ impl ProtocolProfile for GeminiGenerateContentProfile {
         }
         let mut tools = Vec::new();
         if !request.tools.is_empty() {
+            if let Some(tool) = request.tools.iter().find(|tool| tool.strict) {
+                return Err(ProtocolConversionError::new(format!(
+                    "Gemini generateContent has no registered strict-schema projector for tool `{}`.",
+                    tool.name
+                )));
+            }
             tools.push(json!({
                 "functionDeclarations": request.tools.iter().map(|tool| json!({
                     "name": tool.name,
@@ -300,7 +325,7 @@ fn project_gemini_request_controls(
     request: &AiExecutionRequest,
     body: &mut Map<String, Value>,
 ) -> Result<(), ProtocolConversionError> {
-    if !matches!(request.tool_choice, ToolChoicePolicy::Auto) {
+    if !request.tools.is_empty() && !matches!(request.tool_choice, ToolChoicePolicy::Auto) {
         let function_calling_config = match &request.tool_choice {
             ToolChoicePolicy::Auto => json!({ "mode": "AUTO" }),
             ToolChoicePolicy::Required => json!({ "mode": "ANY" }),
@@ -318,10 +343,12 @@ fn project_gemini_request_controls(
             json!({ "functionCallingConfig": function_calling_config }),
         );
     }
-    if matches!(
-        request.parallel_tool_calls,
-        ParallelToolCallPolicy::Disabled
-    ) {
+    if !request.tools.is_empty()
+        && matches!(
+            request.parallel_tool_calls,
+            ParallelToolCallPolicy::Disabled
+        )
+    {
         return Err(ProtocolConversionError::new(
             "Gemini GenerateContent has no registered serial-tool-call projector.",
         ));
@@ -604,6 +631,12 @@ fn encode_gemini_parts(
 fn encode_gemini_resource(
     resource: &vulcan_ai_contract::ResourceReference,
 ) -> Result<Value, ProtocolConversionError> {
+    if resource.image_detail.is_some() {
+        return Err(ProtocolConversionError::new(format!(
+            "Gemini generateContent cannot preserve per-image detail for resource `{}`.",
+            resource.id
+        )));
+    }
     let url = resource.url.as_deref().ok_or_else(|| {
         ProtocolConversionError::new(format!(
             "Resource `{}` was not resolved before Gemini projection.",
@@ -890,7 +923,7 @@ impl ProtocolStreamDecoder for GeminiStreamDecoder {
         }
         if let Some(usage) = value.get("usageMetadata") {
             events.push(AiStreamEvent::UsageUpdated {
-                usage: gemini_usage(usage),
+                usage: Box::new(gemini_usage(usage)),
             });
         }
         if value
@@ -974,6 +1007,7 @@ mod tests {
                     name: String::from("lookup"),
                     description: String::from("Lookup"),
                     input_schema: json!({"type":"object"}),
+                    strict: false,
                 }],
                 native_tools: Vec::new(),
                 tool_choice: Default::default(),
@@ -1001,6 +1035,43 @@ mod tests {
             encoded.body["generationConfig"]["thinkingConfig"]["includeThoughts"],
             true
         );
+        assert!(encoded.body.get("toolConfig").is_none());
+    }
+
+    /// Verifies neutral disabled-tool controls are omitted when no function tools exist.
+    /// 验证不存在函数工具时会省略中性的禁用工具控制。
+    #[test]
+    fn encodes_tool_free_validation_request_without_serial_projection() {
+        let request = AiExecutionRequest {
+            operation: AiOperation::ConversationRespond,
+            model_id: String::from("gemini-model"),
+            cache_scope_id: None,
+            continuation: None,
+            messages: vec![AiMessage {
+                role: MessageRole::User,
+                content: vec![ContentItem::Text {
+                    text: String::from("Reply with exactly OK."),
+                }],
+                provider_context_items: Vec::new(),
+            }],
+            tools: Vec::new(),
+            native_tools: Vec::new(),
+            tool_choice: ToolChoicePolicy::Disabled,
+            parallel_tool_calls: ParallelToolCallPolicy::Disabled,
+            structured_output: StructuredOutputPolicy::None,
+            stop_sequences: Vec::new(),
+            prompt_cache: PromptCachePolicy::ProviderDefault,
+            reasoning_effort: None,
+            reasoning_output: ReasoningOutputPolicy::ProviderDefault,
+            model_parameters: BTreeMap::new(),
+            resources: Vec::new(),
+            output_token_limit: Some(256),
+        };
+
+        let encoded = GeminiGenerateContentProfile
+            .encode(&request)
+            .expect("tool-free validation request should encode");
+
         assert!(encoded.body.get("toolConfig").is_none());
     }
 
@@ -1075,6 +1146,7 @@ mod tests {
                 name: String::from("lookup"),
                 description: String::from("Lookup"),
                 input_schema: json!({"type":"object"}),
+                strict: false,
             }],
             native_tools: Vec::new(),
             tool_choice: Default::default(),

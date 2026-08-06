@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
@@ -31,6 +32,13 @@ pub enum CoreError {
         /// 无需解析展示消息即可保留的结构化执行错误。
         details: Option<Box<vulcan_ai_contract::AiExecutionError>>,
     },
+    /// The next provider request is over its verified context budget and must compact before retrying.
+    /// 下一次 Provider 请求超过已验证上下文预算，必须先压缩再重试。
+    ContextCompactionRequired {
+        /// Human-readable budget diagnostic retained for the host restart boundary.
+        /// 为宿主重启边界保留的人类可读预算诊断。
+        message: String,
+    },
     /// The tool executor failed while running a host-side tool invocation.
     /// 工具执行器在运行宿主侧工具调用时失败。
     ToolFailure {
@@ -52,6 +60,9 @@ impl Display for CoreError {
                 message,
                 ..
             } => write!(f, "provider `{provider_id}` failure: {message}"),
+            CoreError::ContextCompactionRequired { message } => {
+                write!(f, "context compaction required: {message}")
+            }
             CoreError::ToolFailure { tool_name, message } => {
                 write!(f, "tool `{tool_name}` failure: {message}")
             }
@@ -634,7 +645,7 @@ pub enum ConversationPayload {
         /// Optional provider usage snapshot retained for host-side budget calibration.
         /// 为宿主侧预算校准保留的可选 Provider 用量快照。
         #[serde(default)]
-        usage: Option<ProviderUsageSnapshot>,
+        usage: Option<Box<ProviderUsageSnapshot>>,
         /// Structured tool-call list emitted by the assistant turn.
         /// 由该助手回合发出的结构化工具调用列表。
         tool_calls: Vec<ConversationToolCall>,
@@ -816,6 +827,10 @@ pub struct ToolInvocationResult {
 /// 表示一份被保留用于预算校准与诊断的规范化 Provider 用量快照。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProviderUsageSnapshot {
+    /// Exact merge kind of the latest provider usage observation.
+    /// 最新 Provider 用量观测的精确合并类型。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_kind: Option<vulcan_ai_contract::UsageUpdateKind>,
     /// Optional provider-reported input token count.
     /// Provider 报告的可选输入 Token 数量。
     #[serde(default)]
@@ -844,6 +859,62 @@ pub struct ProviderUsageSnapshot {
     /// Provider 报告的可选缓存写入输入 Token 数量。
     #[serde(default)]
     pub cache_creation_input_tokens: Option<usize>,
+    /// Optional provider-reported audio input token count.
+    /// Provider 报告的可选音频输入 Token 数量。
+    #[serde(default)]
+    pub audio_input_tokens: Option<usize>,
+    /// Optional provider-reported audio output token count.
+    /// Provider 报告的可选音频输出 Token 数量。
+    #[serde(default)]
+    pub audio_output_tokens: Option<usize>,
+    /// Frozen usage extraction profile identity.
+    /// 冻结的用量提取 Profile 标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extraction_profile_id: Option<String>,
+    /// Frozen usage extraction profile revision.
+    /// 冻结的用量提取 Profile 修订号。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extraction_profile_revision: Option<u64>,
+    /// Exact source paths keyed by normalized usage dimension.
+    /// 按归一化用量维度索引的精确来源路径。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub source_paths: BTreeMap<String, String>,
+    /// Validation findings retained during raw usage merging.
+    /// 原始用量合并过程中保留的校验结果。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub validation_flags: Vec<String>,
+    /// Provider-returned model identity.
+    /// 供应商返回的模型标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_model: Option<String>,
+    /// Provider-returned response identity.
+    /// 供应商返回的响应标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_id: Option<String>,
+    /// Provider-reported decimal cost.
+    /// 供应商报告的十进制成本。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_cost: Option<String>,
+    /// Locally estimated decimal cost.
+    /// 本地估算的十进制成本。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_cost: Option<String>,
+    /// ISO currency for reported or estimated cost.
+    /// 报告或估算成本使用的 ISO 币种。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_currency: Option<String>,
+    /// Immutable pricing revision used by the local estimate.
+    /// 本地估算使用的不可变价格修订号。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing_revision: Option<String>,
+    /// Frozen effective pricing profile used by the local estimate.
+    /// 本地估算使用的冻结生效价格 Profile。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing_profile: Option<vulcan_ai_contract::PricingProfileSnapshot>,
+    /// Provider billing partitions retained separately from normalized totals.
+    /// 与规范化合计分开保留的供应商计费分区。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub billing_details: Vec<vulcan_ai_contract::UsageBillingDetail>,
 }
 
 /// Represents structured provider prompt layers before transport-specific rendering.
@@ -935,11 +1006,14 @@ impl ProviderUsageSnapshot {
     /// 返回该快照是否至少包含一个具体 Token 数量。
     pub const fn has_any_tokens(&self) -> bool {
         self.input_tokens.is_some()
+            || self.uncached_input_tokens.is_some()
             || self.output_tokens.is_some()
             || self.reasoning_tokens.is_some()
             || self.total_tokens.is_some()
             || self.cached_input_tokens.is_some()
             || self.cache_creation_input_tokens.is_some()
+            || self.audio_input_tokens.is_some()
+            || self.audio_output_tokens.is_some()
     }
 
     /// Adds another provider usage snapshot into this snapshot field by field.
@@ -950,7 +1024,15 @@ impl ProviderUsageSnapshot {
     /// `other` is the successful provider call usage to add.
     /// `other` 是需要累加的成功 Provider 调用用量。
     pub fn accumulate_from(&mut self, other: &Self) {
+        self.update_kind = other.update_kind.or(self.update_kind);
+        if !other.billing_details.is_empty() {
+            self.billing_details.clone_from(&other.billing_details);
+        }
         accumulate_optional_token_count(&mut self.input_tokens, other.input_tokens);
+        accumulate_optional_token_count(
+            &mut self.uncached_input_tokens,
+            other.uncached_input_tokens,
+        );
         accumulate_optional_token_count(&mut self.output_tokens, other.output_tokens);
         accumulate_optional_token_count(&mut self.reasoning_tokens, other.reasoning_tokens);
         accumulate_optional_token_count(&mut self.total_tokens, other.total_tokens);
@@ -959,6 +1041,8 @@ impl ProviderUsageSnapshot {
             &mut self.cache_creation_input_tokens,
             other.cache_creation_input_tokens,
         );
+        accumulate_optional_token_count(&mut self.audio_input_tokens, other.audio_input_tokens);
+        accumulate_optional_token_count(&mut self.audio_output_tokens, other.audio_output_tokens);
     }
 }
 

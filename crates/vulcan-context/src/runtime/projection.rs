@@ -193,7 +193,7 @@ impl<'a> RuntimeLogProjectionBuilder<'a> {
                         model_id: None,
                         provider_message_id: provider_message_id.clone(),
                         provider_message_state: provider_message_state.clone(),
-                        usage: usage.clone(),
+                        usage: usage.as_deref().cloned(),
                     },
                 ))?;
                 if !tool_calls.is_empty() {

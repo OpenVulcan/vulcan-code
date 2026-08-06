@@ -36,6 +36,7 @@ members = [
     "crates/vulcan-luaskills-config",
     "crates/vulcan-ai-contract",
     "crates/vulcan-ai-protocols",
+    "crates/vulcan-llm-core",
     "crates/vulcan-provider-adapters",
     "crates/vulcan-hello",
 ]
@@ -84,6 +85,7 @@ vulcan-luaskills-prompt = { path = "crates/vulcan-luaskills-prompt" }
 vulcan-luaskills-config = { path = "crates/vulcan-luaskills-config" }
 vulcan-ai-contract = { path = "crates/vulcan-ai-contract" }
 vulcan-ai-protocols = { path = "crates/vulcan-ai-protocols" }
+vulcan-llm-core = { path = "crates/vulcan-llm-core" }
 vulcan-provider-adapters = { path = "crates/vulcan-provider-adapters" }
 vldb-controller-client = "0.2.3"
 luaskills = "=0.5.5"
@@ -94,6 +96,7 @@ httpdate = "1.0.3"
 keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
+rust_decimal = "1.33"
 base64 = "0.22.1"
 flate2 = "1.1.9"
 fs2 = "0.4"

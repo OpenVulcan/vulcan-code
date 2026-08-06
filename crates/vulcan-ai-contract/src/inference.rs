@@ -2,8 +2,10 @@
 //! 面向已配置内部推理的受限供应商无关契约。
 
 use crate::{
-    AiExecutionError, AiOperation, ModelParameterValue, PromptCachePolicy, ReasoningEffort,
-    ReasoningOutputPolicy, RequestUsage, ResourceKind, ResourceReference, StructuredOutputPolicy,
+    AiMessage, AiOperation, ContentItem, ModelParameterValue, NativeToolKind,
+    ParallelToolCallPolicy, PromptCachePolicy, ReasoningEffort, ReasoningOutputPolicy,
+    RequestUsage, ResourceKind, ResourceReference, StructuredOutputPolicy, ToolChoicePolicy,
+    ToolDefinition,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -171,60 +173,11 @@ impl InferenceCallerContext {
     }
 }
 
-/// Identifies the restricted semantic author of an inference message.
-/// 标识受限推理消息的语义作者。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum InferenceMessageRole {
-    /// Host-authored instructions.
-    /// 宿主编写的指令。
-    System,
-    /// Caller-authored input.
-    /// 调用方编写的输入。
-    User,
-    /// Earlier assistant output.
-    /// 先前的助手输出。
-    Assistant,
-}
-
-/// Represents one restricted message item without tools or resources.
-/// 表示一项不含工具或资源的受限消息内容。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum InferenceMessageContent {
-    /// Plain text content.
-    /// 纯文本内容。
-    Text {
-        /// Exact text payload.
-        /// 精确文本载荷。
-        text: String,
-    },
-    /// Structured JSON content.
-    /// 结构化 JSON 内容。
-    StructuredJson {
-        /// Exact structured value.
-        /// 精确结构化值。
-        value: Value,
-    },
-}
-
-/// Carries one restricted inference message.
-/// 承载一条受限推理消息。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct InferenceMessage {
-    /// Semantic message author.
-    /// 消息语义作者。
-    pub role: InferenceMessageRole,
-    /// Ordered restricted message content.
-    /// 有序受限消息内容。
-    pub content: Vec<InferenceMessageContent>,
-}
-
-/// Carries one restricted configured LLM request.
-/// 承载一次受限的已配置 LLM 请求。
+/// Carries host-owned routing metadata around one provider-neutral Responses execution.
+/// 承载一次供应商无关 Responses 执行外围的宿主路由元数据。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LlmInferenceRequest {
+pub struct ResponsesExecutionRequest {
     /// Exact contract version.
     /// 精确契约版本。
     pub contract_version: u32,
@@ -241,9 +194,25 @@ pub struct LlmInferenceRequest {
     /// Consumer-profile-scoped business purpose identifier.
     /// 消费者配置档作用域内的业务用途标识。
     pub purpose_id: String,
-    /// Ordered restricted messages.
-    /// 有序受限消息。
-    pub messages: Vec<InferenceMessage>,
+    /// Ordered provider-neutral Responses messages.
+    /// 有序的供应商无关 Responses 消息。
+    pub messages: Vec<AiMessage>,
+    /// Standard function tools visible to the selected model.
+    /// 对所选模型可见的标准函数工具。
+    #[serde(default)]
+    pub tools: Vec<ToolDefinition>,
+    /// Provider-native tools selected through standard Responses tool types.
+    /// 通过标准 Responses 工具类型选择的供应商原生工具。
+    #[serde(default)]
+    pub native_tools: Vec<NativeToolKind>,
+    /// Standard tool invocation policy.
+    /// 标准工具调用策略。
+    #[serde(default)]
+    pub tool_choice: ToolChoicePolicy,
+    /// Standard parallel tool-call policy.
+    /// 标准并行工具调用策略。
+    #[serde(default)]
+    pub parallel_tool_calls: ParallelToolCallPolicy,
     /// Structured output constraint.
     /// 结构化输出约束。
     #[serde(default)]
@@ -252,6 +221,14 @@ pub struct LlmInferenceRequest {
     /// 提示词缓存意图。
     #[serde(default)]
     pub prompt_cache: PromptCachePolicy,
+    /// Optional caller-selected cache key, namespaced by the trusted host caller before dispatch.
+    /// 可选的调用方缓存键，分派前由可信宿主调用方命名空间隔离。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_key: Option<String>,
+    /// Whether the public response may expose opaque reasoning continuation payloads.
+    /// 公共响应是否可以暴露不透明推理延续载荷。
+    #[serde(default)]
+    pub include_reasoning_encrypted_content: bool,
     /// Optional exact reasoning effort.
     /// 可选的精确推理强度。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -264,13 +241,21 @@ pub struct LlmInferenceRequest {
     /// 能力契约已注册的模型参数。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub model_parameters: BTreeMap<String, ModelParameterValue>,
+    /// Ordered stop sequences retained by the shared Responses execution plane.
+    /// 由共享 Responses 执行平面保留的有序停止序列。
+    #[serde(default)]
+    pub stop_sequences: Vec<String>,
+    /// Input resources referenced by message content.
+    /// 消息内容引用的输入资源。
+    #[serde(default)]
+    pub resources: Vec<ResourceReference>,
     /// Optional caller-narrowed output limit.
     /// 可选的调用方收窄输出上限。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_token_limit: Option<u64>,
 }
 
-impl LlmInferenceRequest {
+impl ResponsesExecutionRequest {
     /// Validates the closed restricted LLM request before route resolution.
     /// 在解析路由前校验封闭的受限 LLM 请求。
     ///
@@ -285,6 +270,15 @@ impl LlmInferenceRequest {
             self.consumer_profile_id.as_str(),
         )?;
         validate_optional_idempotency_key(self.idempotency_key.as_deref())?;
+        if self
+            .prompt_cache_key
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(String::from(
+                "Responses prompt_cache_key must not be empty when provided.",
+            ));
+        }
         if self.purpose_id.trim().is_empty() {
             return Err(String::from("LLM inference purpose_id must not be empty."));
         }
@@ -300,7 +294,7 @@ impl LlmInferenceRequest {
                 ));
             }
             for content in &message.content {
-                if let InferenceMessageContent::Text { text } = content
+                if let ContentItem::Text { text } = content
                     && text.is_empty()
                 {
                     return Err(format!(
@@ -588,6 +582,9 @@ pub struct ExecutionRouteSnapshot {
     /// Runtime catalog revision frozen at dispatch.
     /// 分派时冻结的运行时目录修订。
     pub catalog_revision: String,
+    /// Content-addressed revision of the exact provider route and request projection.
+    /// 精确供应商路由与请求投影的内容寻址修订号。
+    pub route_revision: String,
     /// Actual execution usage context.
     /// 实际执行使用场景。
     pub usage_scope: InferenceUsageScope,
@@ -1075,10 +1072,22 @@ pub struct RerankResponse {
     pub duration_ms: u64,
 }
 
-/// Carries one completed restricted LLM response.
-/// 承载一次已完成的受限 LLM 响应。
+/// Retains one normalized Responses output item together with its stable item identity.
+/// 将一项归一化 Responses 输出与其稳定项目身份一起保留。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LlmInferenceResponse {
+pub struct ResponsesExecutionOutputItem {
+    /// Stable response item identifier emitted by the provider decoder.
+    /// 供应商解码器发出的稳定响应项目标识。
+    pub item_id: String,
+    /// Provider-neutral semantic output content.
+    /// 供应商无关的语义输出内容。
+    pub content: ContentItem,
+}
+
+/// Carries one completed Responses execution result.
+/// 承载一次已完成的 Responses 执行结果。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResponsesExecutionResult {
     /// Original request identifier.
     /// 原始请求标识。
     pub request_id: String,
@@ -1092,10 +1101,18 @@ pub struct LlmInferenceResponse {
     /// 可选的用户可见推理表示。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_text: Option<String>,
+    /// Whether the originating public request selected encrypted reasoning content.
+    /// 原始公共请求是否选择了加密推理内容。
+    #[serde(default)]
+    pub include_reasoning_encrypted_content: bool,
     /// Optional structured output.
     /// 可选结构化输出。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structured_output: Option<Value>,
+    /// Ordered non-text response items retained from the normalized provider stream.
+    /// 从归一化供应商流中保留的有序非文本响应项。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_items: Vec<ResponsesExecutionOutputItem>,
     /// Stable termination reason.
     /// 稳定终止原因。
     pub termination_reason: String,
@@ -1105,68 +1122,6 @@ pub struct LlmInferenceResponse {
     /// End-to-end execution duration in milliseconds.
     /// 端到端执行耗时毫秒数。
     pub duration_ms: u64,
-}
-
-/// Represents one restricted LLM stream event safe for trusted inference clients.
-/// 表示一项可安全暴露给可信推理客户端的受限 LLM 流事件。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum LlmInferenceStreamEvent {
-    /// Provider execution started through the frozen route.
-    /// 供应商执行已通过冻结路由启动。
-    Started {
-        /// Stable host execution identifier.
-        /// 稳定宿主执行标识。
-        execution_id: String,
-    },
-    /// Initial or delta user-visible text.
-    /// 初始或增量用户可见文本。
-    Text {
-        /// Exact decoded text fragment.
-        /// 精确解码文本分片。
-        text: String,
-    },
-    /// Initial or delta reasoning text permitted by the request policy.
-    /// 请求策略允许的初始或增量推理文本。
-    Reasoning {
-        /// Exact decoded reasoning fragment.
-        /// 精确解码推理分片。
-        text: String,
-    },
-    /// Complete structured output produced by the provider.
-    /// 供应商生成的完整结构化输出。
-    StructuredOutput {
-        /// Exact structured value.
-        /// 精确结构化值。
-        value: Value,
-    },
-    /// Updated normalized usage.
-    /// 更新后的归一化用量。
-    Usage {
-        /// Latest normalized request usage.
-        /// 最新归一化请求用量。
-        usage: RequestUsage,
-    },
-    /// Execution completed successfully.
-    /// 执行已成功完成。
-    Completed,
-    /// Execution failed with a normalized provider error.
-    /// 执行因归一化供应商错误而失败。
-    Failed {
-        /// Stable host-selected failure category.
-        /// 宿主选择的稳定失败类别。
-        category: String,
-        /// Controlled diagnostic without credential material.
-        /// 不含凭据材料的受控诊断。
-        message: String,
-        /// Optional normalized provider failure.
-        /// 可选的归一化供应商失败。
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        provider_error: Option<AiExecutionError>,
-    },
-    /// Execution was cancelled by its owning caller.
-    /// 执行已被所属调用方取消。
-    Cancelled,
 }
 
 /// Describes one configured operation route in a capability snapshot.
@@ -1427,7 +1382,7 @@ mod tests {
     /// 验证受限 LLM JSON 无法携带工具、延续状态或路由覆盖。
     #[test]
     fn restricted_llm_request_rejects_expansive_fields() {
-        let error = serde_json::from_value::<LlmInferenceRequest>(serde_json::json!({
+        let error = serde_json::from_value::<ResponsesExecutionRequest>(serde_json::json!({
             "contract_version": INFERENCE_CONTRACT_VERSION,
             "request_id": "request-1",
             "consumer_profile_id": "vmm",

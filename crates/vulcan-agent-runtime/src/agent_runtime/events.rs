@@ -212,6 +212,19 @@ pub enum ExecutionStreamEvent {
         /// 发出该检查点时本轮已观测到的 Provider 请求次数。
         provider_request_count: usize,
     },
+    /// Requests the host to compact the committed conversation and restart the active turn.
+    /// 请求宿主压缩已提交会话并重启当前回合。
+    ContextCompactionRequired {
+        /// Session identifier owning the active turn.
+        /// 拥有当前活动回合的会话标识。
+        session_id: SessionId,
+        /// Replay-safe conversation state produced at the tool boundary.
+        /// 工具边界处生成的可安全回放会话状态。
+        conversation_state: SessionConversationState,
+        /// Verified context-budget diagnostic produced before dispatch.
+        /// 分派前生成的已验证上下文预算诊断。
+        reason: String,
+    },
     /// Terminal execution report emitted exactly once at the end of the run.
     /// 在运行结束时恰好发出一次的最终执行报告。
     Finished(ExecutionRunReport),

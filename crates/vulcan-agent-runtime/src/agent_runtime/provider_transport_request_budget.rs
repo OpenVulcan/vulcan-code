@@ -95,7 +95,7 @@ impl ProviderRequestBudgetGuard {
             },
         );
         if budget.should_compact() {
-            return Err(VulcanCoreError::InvalidState {
+            return Err(VulcanCoreError::ContextCompactionRequired {
                 message: format!(
                     "请求预算门阻止发送：{}。请先执行上下文压缩后重新组装请求。",
                     budget.summary_note()
@@ -212,5 +212,80 @@ where
         S: VulcanProviderDeltaSink,
     {
         self.inner.execute_request_streaming(request, sink).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Request-budget guard tests for provider and tool boundaries.
+    //! Provider 与工具边界的请求预算守卫测试。
+
+    use super::*;
+    use vulcan_core::types::{
+        ConversationMessage, ConversationPayload, ProviderContinuation, ProviderPromptLayers,
+    };
+
+    /// Builds one minimal request snapshot for request-boundary budget tests.
+    /// 为请求边界预算测试构建一份最小请求快照。
+    ///
+    /// `history` is the exact canonical history assembled for the next physical request.
+    /// `history` 是为下一次真实请求装配的精确规范历史。
+    /// The returned snapshot contains no provider-specific optional fields.
+    /// 返回的快照不包含供应商专属可选字段。
+    fn request_snapshot(history: Vec<ConversationMessage>) -> CoreProviderRequestSnapshot {
+        CoreProviderRequestSnapshot {
+            provider_id: String::from("test-provider"),
+            model_id: String::from("test-model"),
+            system_prompt: String::new(),
+            prompt_layers: ProviderPromptLayers::default(),
+            prompt: String::from("continue"),
+            history,
+            temperature: None,
+            max_turns: 4,
+            tool_schemas: Vec::new(),
+            additional_params: None,
+            request_headers: None,
+            continuation: ProviderContinuation::default(),
+        }
+    }
+
+    /// Verifies a large tool result is rechecked before the next physical provider request.
+    /// 验证大型工具结果会在下一次真实 Provider 请求前重新接受预算检查。
+    #[test]
+    fn tool_result_growth_requires_compaction_before_next_provider_request() {
+        let guard = ProviderRequestBudgetGuard::new(
+            "test-provider",
+            "test-model",
+            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+            ModelCapabilities {
+                context_limit: Some(1_000),
+                ..ModelCapabilities::default()
+            },
+            ProviderRuntimeReasoningResolution::default(),
+            Some(ContextCompactionPolicy::default()),
+            Some(100),
+            Arc::new(TokenBudgetRuntime::pending()),
+        );
+
+        guard
+            .validate_snapshot(&request_snapshot(Vec::new()))
+            .expect("the first compact request should pass the dispatch budget gate");
+
+        let request_after_tool = request_snapshot(vec![ConversationMessage {
+            id: String::from("tool-result-1"),
+            payload: ConversationPayload::ToolResult {
+                tool_call_id: Some(String::from("call-1")),
+                is_error: false,
+                text: "large tool output ".repeat(200),
+            },
+        }]);
+        let error = guard
+            .validate_snapshot(&request_after_tool)
+            .expect_err("tool-result growth must trigger compaction before dispatch");
+
+        assert!(matches!(
+            error,
+            VulcanCoreError::ContextCompactionRequired { .. }
+        ));
     }
 }

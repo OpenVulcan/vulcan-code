@@ -276,7 +276,7 @@ impl VulcanCoreController {
                 reasoning: response.assistant_reasoning.clone(),
                 provider_message_id: response.provider_message_id.clone(),
                 provider_message_state: response.provider_message_state.clone(),
-                usage: response.usage.clone(),
+                usage: response.usage.clone().map(Box::new),
                 tool_calls: response.tool_calls.clone(),
             },
         });

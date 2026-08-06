@@ -13,6 +13,9 @@ pub enum MessageRole {
     /// System-authored instructions.
     /// 系统编写的指令。
     System,
+    /// Developer-authored instructions with Responses-specific precedence.
+    /// 具有 Responses 专属优先级的开发者指令。
+    Developer,
     /// User-authored input.
     /// 用户编写的输入。
     User,

@@ -2,6 +2,8 @@
 //! Vulcan Core Service 的 HTTP 与 WebSocket 宿主层。
 
 use std::{
+    collections::BTreeMap,
+    convert::Infallible,
     fs::{self, OpenOptions},
     future::Future,
     io::Write,
@@ -9,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
     sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
@@ -17,21 +19,31 @@ use axum::{
     body::Body as AxumBody,
     extract::{
         DefaultBodyLimit, OriginalUri as AxumOriginalUri, Path as AxumPath, State as AxumState,
+        rejection::JsonRejection,
         ws::{Message as AxumWsMessage, WebSocket, WebSocketUpgrade},
     },
-    http::{HeaderMap as AxumHeaderMap, Method as AxumMethod, StatusCode as AxumStatusCode},
-    response::{IntoResponse, Response as AxumResponse},
+    http::{
+        HeaderMap as AxumHeaderMap, HeaderValue as AxumHeaderValue, Method as AxumMethod,
+        StatusCode as AxumStatusCode,
+    },
+    response::{
+        IntoResponse, Response as AxumResponse,
+        sse::{Event as AxumSseEvent, KeepAlive, Sse},
+    },
     routing::{get, post},
 };
 use tokio::{net::TcpListener, sync::broadcast};
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+use uuid::Uuid;
 use vulcan_ai_contract::{
-    EmbeddingRequest, LlmInferenceRequest, LlmInferenceStreamEvent, RerankRequest,
+    AiStreamEvent, ContentItem, EmbeddingRequest, RequestUsage, RerankRequest, UsageValue,
+    derive_usage_sum,
 };
 use vulcan_service_api::{
     INFERENCE_SERVICE_API_VERSION, InferenceServiceDiscoverySnapshot,
     InferenceServiceErrorEnvelope, InferenceServiceHealthSnapshot, InferenceServiceHttpError,
-    InferenceServiceRequest, InferenceServiceSuccessEnvelope, ServiceEvent, ServiceEventSink,
+    InferenceServiceRequest, InferenceServiceSuccessEnvelope, OpenAiErrorEnvelope,
+    OpenAiErrorObject, ResponsesCreateRequest, ServiceEvent, ServiceEventSink,
     ServiceMediaResponse, ServiceStaticResponse, WebuiServiceDiscoverySnapshot,
     WebuiServiceRpcHttpRequest, build_service_media_file_response, build_webui_static_response,
     inference_service_discovery_snapshot_path, service_media_error_response,
@@ -63,15 +75,52 @@ pub type InferenceServiceRpcDispatcher = Arc<
     dyn Fn(String, InferenceServiceRequest) -> InferenceServiceRpcFuture + Send + Sync + 'static,
 >;
 
-/// Carries ordered replay plus live delivery for one restricted LLM stream.
-/// 承载一项受限 LLM 流的有序重放与实时投递。
+/// Cancels one active Responses execution when its streaming consumer disconnects.
+/// 当流式消费者断开时取消一项活动 Responses 执行。
+pub struct InferenceServiceCancellationGuard {
+    /// One-shot synchronous cancellation callback owned by the kernel.
+    /// 由内核持有的一次性同步取消回调。
+    cancel: Option<Box<dyn FnOnce() + Send + 'static>>,
+}
+
+impl InferenceServiceCancellationGuard {
+    /// Creates one armed cancellation guard.
+    /// 创建一个已启用的取消守卫。
+    pub fn new(cancel: impl FnOnce() + Send + 'static) -> Self {
+        Self {
+            cancel: Some(Box::new(cancel)),
+        }
+    }
+
+    /// Disarms cancellation after the execution emits a terminal event.
+    /// 在执行发出终态事件后解除取消。
+    pub fn disarm(&mut self) {
+        self.cancel = None;
+    }
+}
+
+impl Drop for InferenceServiceCancellationGuard {
+    /// Signals cooperative cancellation only while the guard remains armed.
+    /// 仅在守卫仍启用时发出协作式取消信号。
+    fn drop(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            cancel();
+        }
+    }
+}
+
+/// Carries ordered replay plus live delivery for one Responses stream.
+/// 承载一项 Responses 流的有序重放与实时投递。
 pub struct InferenceServiceEventSubscription {
     /// Events emitted before the subscriber attached.
     /// 订阅者接入前已经发出的事件。
-    pub replay: Vec<LlmInferenceStreamEvent>,
+    pub replay: Vec<AiStreamEvent>,
     /// Live bounded receiver created atomically with the replay snapshot.
     /// 与重放快照原子创建的实时有界接收器。
-    pub receiver: broadcast::Receiver<LlmInferenceStreamEvent>,
+    pub receiver: broadcast::Receiver<AiStreamEvent>,
+    /// Cancellation guard armed until the stream observes a terminal event.
+    /// 在流观察到终态事件前保持启用的取消守卫。
+    pub cancellation_guard: InferenceServiceCancellationGuard,
 }
 
 /// Boxed event-subscription result for one caller-owned LLM execution.
@@ -545,6 +594,12 @@ pub fn build_webui_service_router(config: WebuiServiceHttpConfig) -> Router {
                 .layer(DefaultBodyLimit::max(WEBUI_SERVICE_RPC_BODY_LIMIT_BYTES)),
         )
         .route("/events", get(webui_service_events_ws_handler))
+        .route("/v1/models", get(responses_models_http_handler))
+        .route(
+            "/v1/responses",
+            post(responses_create_http_handler)
+                .layer(DefaultBodyLimit::max(INFERENCE_SERVICE_BODY_LIMIT_BYTES)),
+        )
         .route(
             "/inference/v1/health",
             get(inference_service_health_http_handler),
@@ -552,28 +607,6 @@ pub fn build_webui_service_router(config: WebuiServiceHttpConfig) -> Router {
         .route(
             "/inference/v1/capabilities/{consumer_profile_id}",
             get(inference_service_capabilities_http_handler),
-        )
-        .route(
-            "/inference/v1/llm/start",
-            post(inference_service_llm_start_http_handler)
-                .layer(DefaultBodyLimit::max(INFERENCE_SERVICE_BODY_LIMIT_BYTES)),
-        )
-        .route(
-            "/inference/v1/llm/execute",
-            post(inference_service_llm_execute_http_handler)
-                .layer(DefaultBodyLimit::max(INFERENCE_SERVICE_BODY_LIMIT_BYTES)),
-        )
-        .route(
-            "/inference/v1/llm/{execution_id}",
-            get(inference_service_llm_status_http_handler),
-        )
-        .route(
-            "/inference/v1/llm/{execution_id}/cancel",
-            post(inference_service_llm_cancel_http_handler),
-        )
-        .route(
-            "/inference/v1/llm/{execution_id}/events",
-            get(inference_service_llm_events_ws_handler),
         )
         .route(
             "/inference/v1/embeddings",
@@ -594,6 +627,1103 @@ pub fn build_webui_service_router(config: WebuiServiceHttpConfig) -> Router {
         .fallback(get(webui_service_static_http_handler))
         .layer(cors)
         .with_state(service_state)
+}
+
+/// Returns only consumer-authorized and currently routable models using the standard list shape.
+/// 使用标准列表形态仅返回消费者已授权且当前可路由的模型。
+async fn responses_models_http_handler(
+    AxumState(server_state): AxumState<WebuiServiceHttpState>,
+    headers: AxumHeaderMap,
+) -> AxumResponse {
+    responses_dispatch_http(&server_state, &headers, InferenceServiceRequest::ListModels).await
+}
+
+/// Executes one standard Responses request as JSON or SSE according to the request body.
+/// 根据请求体以 JSON 或 SSE 执行一项标准 Responses 请求。
+async fn responses_create_http_handler(
+    AxumState(server_state): AxumState<WebuiServiceHttpState>,
+    headers: AxumHeaderMap,
+    request: Result<Json<ResponsesCreateRequest>, JsonRejection>,
+) -> AxumResponse {
+    let Json(request) = match request {
+        Ok(request) => request,
+        Err(error) => {
+            return openai_error_response(
+                AxumStatusCode::BAD_REQUEST,
+                "invalid_request_error",
+                "invalid_json",
+                None,
+                format!("Responses request JSON is invalid: {error}"),
+            );
+        }
+    };
+    if let Err(error) = request.validate_compatibility_level() {
+        return openai_error_response(
+            AxumStatusCode::BAD_REQUEST,
+            error.error_type.as_str(),
+            error.code.as_str(),
+            error.param,
+            error.message,
+        );
+    }
+    if request.stream {
+        responses_create_sse(server_state, headers, request).await
+    } else {
+        responses_dispatch_http(
+            &server_state,
+            &headers,
+            InferenceServiceRequest::CreateResponse { request },
+        )
+        .await
+    }
+}
+
+/// Starts one authorized execution and exposes only standard Responses SSE events.
+/// 启动一项已授权执行并且只暴露标准 Responses SSE 事件。
+async fn responses_create_sse(
+    server_state: WebuiServiceHttpState,
+    headers: AxumHeaderMap,
+    request: ResponsesCreateRequest,
+) -> AxumResponse {
+    let Some(token) = inference_service_token_from_headers(&headers) else {
+        return openai_error_response(
+            AxumStatusCode::UNAUTHORIZED,
+            "authentication_error",
+            "invalid_api_key",
+            None,
+            "Responses API bearer token is missing.",
+        );
+    };
+    let model = request.model.clone();
+    let include_reasoning_encrypted_content = request
+        .include
+        .iter()
+        .any(|field| field == "reasoning.encrypted_content");
+    let start = match (server_state.inference_dispatcher)(
+        token.clone(),
+        InferenceServiceRequest::StartResponse { request },
+    )
+    .await
+    {
+        Ok(start) => start,
+        Err(error) => return standard_inference_error_response(error),
+    };
+    let Some(execution_id) = start
+        .get("execution_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+    else {
+        return openai_error_response(
+            AxumStatusCode::INTERNAL_SERVER_ERROR,
+            "api_error",
+            "invalid_execution_start",
+            None,
+            "Responses execution did not return an execution identifier.",
+        );
+    };
+    let subscription =
+        match (server_state.inference_event_subscriber)(token, execution_id.clone()).await {
+            Ok(subscription) => subscription,
+            Err(error) => return standard_inference_error_response(error),
+        };
+    let request_id = format!("req_{}", execution_id.replace('-', ""));
+    let event_stream = responses_sse_event_stream(
+        execution_id,
+        model,
+        include_reasoning_encrypted_content,
+        subscription,
+    );
+    let response = Sse::new(event_stream)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("keep-alive"),
+        )
+        .into_response();
+    with_openai_request_id(response, request_id)
+}
+
+/// Converts normalized execution events into one ordered standard Responses SSE stream.
+/// 将归一化执行事件转换为一条有序的标准 Responses SSE 流。
+fn responses_sse_event_stream(
+    execution_id: String,
+    model: String,
+    include_reasoning_encrypted_content: bool,
+    subscription: InferenceServiceEventSubscription,
+) -> impl futures_core::Stream<Item = Result<AxumSseEvent, Infallible>> {
+    async_stream::stream! {
+        let InferenceServiceEventSubscription {
+            replay,
+            mut receiver,
+            mut cancellation_guard,
+        } = subscription;
+        let mut state = ResponsesSseState::new(
+            execution_id,
+            model,
+            include_reasoning_encrypted_content,
+        );
+        for event in replay {
+            let terminal = matches!(
+                event,
+                AiStreamEvent::ResponseCompleted
+                    | AiStreamEvent::ResponseFailed { .. }
+                    | AiStreamEvent::ResponseCancelled
+            );
+            for projected in state.project(event) {
+                yield Ok(projected);
+            }
+            if terminal {
+                cancellation_guard.disarm();
+                return;
+            }
+        }
+        loop {
+            let event = match receiver.recv().await {
+                Ok(event) => event,
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    yield Ok(state.standard_event(
+                        "error",
+                        serde_json::json!({
+                            "type": "error",
+                            "code": "stream_backpressure",
+                            "message": format!("Responses SSE consumer lagged behind by {skipped} buffered events."),
+                            "param": null
+                        }),
+                    ));
+                    break;
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            };
+            let terminal = matches!(
+                event,
+                AiStreamEvent::ResponseCompleted
+                    | AiStreamEvent::ResponseFailed { .. }
+                    | AiStreamEvent::ResponseCancelled
+            );
+            for projected in state.project(event) {
+                yield Ok(projected);
+            }
+            if terminal {
+                cancellation_guard.disarm();
+                break;
+            }
+        }
+    }
+}
+
+/// Retains the minimum state needed to emit self-consistent standard stream items.
+/// 保留生成自洽标准流项目所需的最小状态。
+struct ResponsesSseState {
+    /// Public response identifier derived from the host execution identity.
+    /// 由宿主执行身份派生的公共响应标识。
+    response_id: String,
+    /// Public message item identifier.
+    /// 公共消息项目标识。
+    message_id: String,
+    /// Requested public model identity.
+    /// 请求的公共模型身份。
+    model: String,
+    /// Stable creation timestamp shared by every lifecycle snapshot.
+    /// 所有生命周期快照共享的稳定创建时间戳。
+    created_at: u64,
+    /// Accumulated visible output text.
+    /// 累积的可见输出文本。
+    output_text: String,
+    /// Accumulated assistant refusal text.
+    /// 累积的助手拒绝文本。
+    refusal_text: String,
+    /// Whether the caller explicitly selected encrypted reasoning output.
+    /// 调用方是否显式选择了加密推理输出。
+    include_reasoning_encrypted_content: bool,
+    /// Latest normalized usage snapshot.
+    /// 最新归一化用量快照。
+    usage: RequestUsage,
+    /// Ordered standard output items accumulated for the terminal response object.
+    /// 为终态响应对象累积的有序标准输出项目。
+    output_items: Vec<serde_json::Value>,
+    /// Output index assigned when the assistant message first appears.
+    /// 助手消息首次出现时分配的输出索引。
+    message_index: Option<usize>,
+    /// Streamed reasoning items keyed by their exact standard item identity.
+    /// 按精确标准项目身份索引的流式推理项目。
+    reasoning_items: BTreeMap<String, ResponsesSseReasoningItem>,
+    /// Output indices for streamed function calls keyed by stream item identifier.
+    /// 按流项目标识索引的流式函数调用输出索引。
+    tool_indices: BTreeMap<String, usize>,
+    /// Output indices for image-generation items keyed by standard item identifier.
+    /// 按标准项目标识索引的图片生成输出索引。
+    image_indices: BTreeMap<String, usize>,
+    /// Monotonic sequence number assigned to every emitted standard stream event.
+    /// 分配给每项标准流事件的单调序列号。
+    sequence_number: u64,
+    /// Whether the response lifecycle header has been emitted.
+    /// 是否已经发出响应生命周期头部。
+    started: bool,
+    /// Whether the message item has been opened.
+    /// 是否已经打开消息项目。
+    message_open: bool,
+    /// Whether an output-text content part has been opened.
+    /// 是否已经打开输出文本内容部分。
+    text_open: bool,
+    /// Whether a refusal content part has been opened.
+    /// 是否已经打开拒绝内容部分。
+    refusal_open: bool,
+}
+
+/// Retains one independently streamed standard reasoning item.
+/// 保留一项独立流式标准推理项目。
+struct ResponsesSseReasoningItem {
+    /// Stable output index assigned when the item opens.
+    /// 项目打开时分配的稳定输出索引。
+    output_index: usize,
+    /// Accumulated public summary text.
+    /// 累积公共摘要文本。
+    text: String,
+    /// Optional provider continuation signature.
+    /// 可选供应商延续签名。
+    signature: Option<String>,
+}
+
+impl ResponsesSseState {
+    /// Creates an empty stream projection state for one execution.
+    /// 为一项执行创建空的流投影状态。
+    fn new(execution_id: String, model: String, include_reasoning_encrypted_content: bool) -> Self {
+        let compact_id = execution_id.replace('-', "");
+        Self {
+            response_id: format!("resp_{compact_id}"),
+            message_id: format!("msg_{compact_id}"),
+            model,
+            created_at: current_unix_seconds(),
+            output_text: String::new(),
+            refusal_text: String::new(),
+            include_reasoning_encrypted_content,
+            usage: RequestUsage::default(),
+            output_items: Vec::new(),
+            message_index: None,
+            reasoning_items: BTreeMap::new(),
+            tool_indices: BTreeMap::new(),
+            image_indices: BTreeMap::new(),
+            sequence_number: 0,
+            started: false,
+            message_open: false,
+            text_open: false,
+            refusal_open: false,
+        }
+    }
+
+    /// Projects one internal normalized event without exposing private event names.
+    /// 投影一项内部归一化事件且不暴露私有事件名称。
+    fn project(&mut self, event: AiStreamEvent) -> Vec<AxumSseEvent> {
+        let mut projected = Vec::new();
+        if !self.started {
+            self.started = true;
+            let response = self.response_json("in_progress");
+            projected.push(self.standard_event(
+                "response.created",
+                serde_json::json!({"type": "response.created", "sequence_number": 0, "response": response}),
+            ));
+            projected.push(self.standard_event(
+                "response.in_progress",
+                serde_json::json!({"type": "response.in_progress", "sequence_number": 1, "response": self.response_json("in_progress")}),
+            ));
+        }
+        match event {
+            AiStreamEvent::TransportObserved { .. }
+            | AiStreamEvent::ResponseStarted { .. }
+            | AiStreamEvent::ResponseMetadataUpdated { .. }
+            | AiStreamEvent::ResponseItemCompleted { .. }
+            | AiStreamEvent::ResourceProgress { .. } => {}
+            AiStreamEvent::ReasoningCompleted { item_id, signature } => {
+                let output_index = self.ensure_reasoning_item(item_id.as_str(), &mut projected);
+                self.reasoning_items
+                    .get_mut(item_id.as_str())
+                    .expect("reasoning item exists after opening")
+                    .signature = signature;
+                self.output_items[output_index] =
+                    self.reasoning_item(item_id.as_str(), "in_progress");
+            }
+            AiStreamEvent::ReasoningStarted { item_id } => {
+                self.ensure_reasoning_item(item_id.as_str(), &mut projected);
+            }
+            AiStreamEvent::ImageGenerationPartial {
+                item_id,
+                partial_image_index,
+                partial_image_b64,
+            } => {
+                let output_index =
+                    if let Some(output_index) = self.image_indices.get(item_id.as_str()).copied() {
+                        output_index
+                    } else {
+                        let output_index = self.output_items.len();
+                        let item = standard_image_generation_placeholder(item_id.as_str());
+                        self.output_items.push(item.clone());
+                        self.image_indices.insert(item_id.clone(), output_index);
+                        projected.push(self.standard_event(
+                            "response.output_item.added",
+                            serde_json::json!({
+                                "type": "response.output_item.added",
+                                "output_index": output_index,
+                                "item": item
+                            }),
+                        ));
+                        output_index
+                    };
+                projected.push(self.standard_event(
+                    "response.image_generation_call.partial_image",
+                    serde_json::json!({
+                        "type": "response.image_generation_call.partial_image",
+                        "item_id": item_id,
+                        "output_index": output_index,
+                        "partial_image_index": partial_image_index,
+                        "partial_image_b64": partial_image_b64
+                    }),
+                ));
+            }
+            AiStreamEvent::ResponseItemStarted { item_id, item } => match item {
+                ContentItem::Text { text } => {
+                    if !self.message_open {
+                        self.message_id = item_id;
+                    }
+                    projected.extend(self.project(AiStreamEvent::ResponseTextDelta {
+                        item_id: self.message_id.clone(),
+                        delta: text,
+                    }));
+                }
+                ContentItem::Refusal { text } => {
+                    projected.extend(self.project_refusal(item_id, text));
+                }
+                ContentItem::StructuredJson { value } => {
+                    if !self.message_open {
+                        self.message_id = item_id;
+                    }
+                    projected.extend(self.project(AiStreamEvent::ResponseTextDelta {
+                        item_id: self.message_id.clone(),
+                        delta: value.to_string(),
+                    }));
+                }
+                ContentItem::Reasoning { text, signature } => {
+                    projected.extend(self.project(AiStreamEvent::ReasoningStarted {
+                        item_id: item_id.clone(),
+                    }));
+                    projected.extend(self.project(AiStreamEvent::ReasoningDelta {
+                        item_id: item_id.clone(),
+                        delta: text,
+                    }));
+                    projected.extend(
+                        self.project(AiStreamEvent::ReasoningCompleted { item_id, signature }),
+                    );
+                }
+                ContentItem::ToolCall { call } => {
+                    let output_index = self.output_items.len();
+                    let item = standard_function_call_item(item_id.as_str(), &call, "completed");
+                    self.output_items.push(item.clone());
+                    self.tool_indices.insert(call.id.clone(), output_index);
+                    projected.push(self.standard_event(
+                        "response.output_item.added",
+                        serde_json::json!({
+                            "type": "response.output_item.added",
+                            "output_index": output_index,
+                            "item": item
+                        }),
+                    ));
+                    projected.push(self.standard_event(
+                        "response.output_item.done",
+                        serde_json::json!({
+                            "type": "response.output_item.done",
+                            "output_index": output_index,
+                            "item": standard_function_call_item(item_id.as_str(), &call, "completed")
+                        }),
+                    ));
+                }
+                ContentItem::Resource { resource } => {
+                    let output_index = if let Some(output_index) =
+                        self.image_indices.get(item_id.as_str()).copied()
+                    {
+                        output_index
+                    } else {
+                        let output_index = self.output_items.len();
+                        self.image_indices.insert(item_id.clone(), output_index);
+                        output_index
+                    };
+                    let item =
+                        standard_image_generation_item(item_id.as_str(), &resource, "completed");
+                    if output_index == self.output_items.len() {
+                        self.output_items.push(item.clone());
+                        projected.push(self.standard_event(
+                            "response.output_item.added",
+                            serde_json::json!({
+                                "type": "response.output_item.added",
+                                "output_index": output_index,
+                                "item": item
+                            }),
+                        ));
+                    } else {
+                        self.output_items[output_index] = item.clone();
+                    }
+                    projected.push(self.standard_event(
+                        "response.output_item.done",
+                        serde_json::json!({
+                            "type": "response.output_item.done",
+                            "output_index": output_index,
+                            "item": standard_image_generation_item(item_id.as_str(), &resource, "completed")
+                        }),
+                    ));
+                }
+                ContentItem::ToolResult { .. } | ContentItem::Citation { .. } => {}
+            },
+            AiStreamEvent::ResponseTextDelta { delta: text, .. } => {
+                if self.refusal_open {
+                    projected.push(self.standard_event(
+                        "error",
+                        serde_json::json!({
+                            "type": "error",
+                            "code": "invalid_provider_output",
+                            "message": "A response cannot mix output text and refusal content in one message item.",
+                            "param": null
+                        }),
+                    ));
+                    return projected;
+                }
+                let opening_message = !self.message_open;
+                if opening_message {
+                    self.message_open = true;
+                    let output_index = self.output_items.len();
+                    self.message_index = Some(output_index);
+                }
+                let opening_text = !self.text_open;
+                if opening_text {
+                    self.text_open = true;
+                }
+                let output_index = self
+                    .message_index
+                    .expect("message index exists after opening the message item");
+                if opening_message {
+                    let item = self.message_item("in_progress", "");
+                    self.output_items.push(item.clone());
+                    projected.push(self.standard_event(
+                        "response.output_item.added",
+                        serde_json::json!({
+                            "type": "response.output_item.added",
+                            "output_index": output_index,
+                            "item": item
+                        }),
+                    ));
+                }
+                if opening_text {
+                    self.output_items[output_index] =
+                        self.message_item("in_progress", self.output_text.as_str());
+                    projected.push(self.standard_event(
+                        "response.content_part.added",
+                        serde_json::json!({
+                            "type": "response.content_part.added",
+                            "item_id": self.message_id,
+                            "output_index": output_index,
+                            "content_index": 0,
+                            "part": {"type": "output_text", "text": "", "annotations": []}
+                        }),
+                    ));
+                }
+                self.output_text.push_str(text.as_str());
+                self.output_items[output_index] =
+                    self.message_item("in_progress", self.output_text.as_str());
+                projected.push(self.standard_event(
+                    "response.output_text.delta",
+                    serde_json::json!({
+                        "type": "response.output_text.delta",
+                        "item_id": self.message_id,
+                        "output_index": output_index,
+                        "content_index": 0,
+                        "delta": text
+                    }),
+                ));
+            }
+            AiStreamEvent::ReasoningDelta {
+                item_id,
+                delta: text,
+            } => {
+                let output_index = self.ensure_reasoning_item(item_id.as_str(), &mut projected);
+                self.reasoning_items
+                    .get_mut(item_id.as_str())
+                    .expect("reasoning item exists after opening")
+                    .text
+                    .push_str(text.as_str());
+                self.output_items[output_index] =
+                    self.reasoning_item(item_id.as_str(), "in_progress");
+                projected.push(self.standard_event(
+                    "response.reasoning_summary_text.delta",
+                    serde_json::json!({
+                        "type": "response.reasoning_summary_text.delta",
+                        "item_id": item_id,
+                        "output_index": output_index,
+                        "summary_index": 0,
+                        "delta": text
+                    }),
+                ));
+            }
+            AiStreamEvent::ToolCallStarted {
+                item_id,
+                call_id,
+                tool_name,
+                ..
+            } => {
+                let output_index = self.output_items.len();
+                let item = serde_json::json!({
+                    "id": item_id,
+                    "type": "function_call",
+                    "status": "in_progress",
+                    "call_id": call_id,
+                    "name": tool_name,
+                    "arguments": ""
+                });
+                self.output_items.push(item.clone());
+                self.tool_indices.insert(item_id.clone(), output_index);
+                projected.push(self.standard_event(
+                    "response.output_item.added",
+                    serde_json::json!({
+                        "type": "response.output_item.added",
+                        "output_index": output_index,
+                        "item": item
+                    }),
+                ));
+            }
+            AiStreamEvent::ToolCallArgumentsDelta { item_id, delta, .. } => {
+                let Some(output_index) = self.tool_indices.get(item_id.as_str()).copied() else {
+                    projected.push(self.standard_event(
+                        "error",
+                        serde_json::json!({"type": "error", "code": "invalid_tool_call_sequence", "message": "Function call arguments arrived before the function call item.", "param": item_id}),
+                    ));
+                    return projected;
+                };
+                let arguments = self.output_items[output_index]
+                    .get("arguments")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                self.output_items[output_index]["arguments"] =
+                    serde_json::Value::String(format!("{arguments}{delta}"));
+                projected.push(self.standard_event(
+                    "response.function_call_arguments.delta",
+                    serde_json::json!({"type": "response.function_call_arguments.delta", "item_id": item_id, "output_index": output_index, "delta": delta}),
+                ));
+            }
+            AiStreamEvent::ToolCallCompleted { item_id, call } => {
+                let output_index = if let Some(output_index) =
+                    self.tool_indices.get(item_id.as_str()).copied()
+                {
+                    output_index
+                } else {
+                    let output_index = self.output_items.len();
+                    self.tool_indices.insert(item_id.clone(), output_index);
+                    self.output_items.push(standard_function_call_item(
+                        item_id.as_str(),
+                        &call,
+                        "in_progress",
+                    ));
+                    projected.push(self.standard_event(
+                        "response.output_item.added",
+                        serde_json::json!({
+                            "type": "response.output_item.added",
+                            "output_index": output_index,
+                            "item": standard_function_call_item(item_id.as_str(), &call, "in_progress")
+                        }),
+                    ));
+                    output_index
+                };
+                let completed_item =
+                    standard_function_call_item(item_id.as_str(), &call, "completed");
+                self.output_items[output_index] = completed_item.clone();
+                projected.push(self.standard_event(
+                    "response.function_call_arguments.done",
+                    serde_json::json!({"type": "response.function_call_arguments.done", "item_id": item_id, "output_index": output_index, "arguments": call.arguments.to_string()}),
+                ));
+                projected.push(self.standard_event(
+                    "response.output_item.done",
+                    serde_json::json!({"type": "response.output_item.done", "output_index": output_index, "item": completed_item}),
+                ));
+            }
+            AiStreamEvent::ToolCallAborted { item_id, message } => {
+                projected.push(self.standard_event(
+                    "error",
+                    serde_json::json!({"type": "error", "code": "invalid_tool_call", "message": message, "param": item_id}),
+                ));
+            }
+            AiStreamEvent::UsageUpdated { usage } => self.usage.merge_update(*usage),
+            AiStreamEvent::ResponseCompleted => projected.extend(self.completed_events()),
+            AiStreamEvent::ResponseFailed { error } => {
+                let code = error
+                    .upstream_code
+                    .clone()
+                    .unwrap_or_else(|| String::from("provider_error"));
+                let error_object = serde_json::json!({
+                    "code": code,
+                    "message": error.message,
+                    "param": error.upstream_parameter
+                });
+                let mut response = self.response_json("failed");
+                response["error"] = error_object;
+                projected.push(self.standard_event(
+                    "response.failed",
+                    serde_json::json!({"type": "response.failed", "response": response}),
+                ));
+            }
+            AiStreamEvent::ResponseCancelled => {
+                let error = serde_json::json!({
+                    "code": "cancelled",
+                    "message": "Responses execution was cancelled."
+                });
+                let mut response = self.response_json("failed");
+                response["error"] = error;
+                projected.push(self.standard_event(
+                    "response.failed",
+                    serde_json::json!({
+                        "type": "response.failed",
+                        "response": response
+                    }),
+                ));
+            }
+        }
+        projected
+    }
+
+    /// Emits final item closures followed by the authoritative completed response.
+    /// 发出最终项目闭合事件以及权威完成响应。
+    fn completed_events(&mut self) -> Vec<AxumSseEvent> {
+        let mut events = Vec::new();
+        let mut reasoning_ids = self.reasoning_items.keys().cloned().collect::<Vec<_>>();
+        reasoning_ids.sort_by_key(|item_id| {
+            self.reasoning_items
+                .get(item_id)
+                .map(|item| item.output_index)
+                .unwrap_or(usize::MAX)
+        });
+        for item_id in reasoning_ids {
+            let reasoning = self
+                .reasoning_items
+                .get(item_id.as_str())
+                .expect("ordered reasoning item remains available");
+            let output_index = reasoning.output_index;
+            let reasoning_text = reasoning.text.clone();
+            let completed_item = self.reasoning_item(item_id.as_str(), "completed");
+            self.output_items[output_index] = completed_item.clone();
+            events.push(self.standard_event(
+                "response.reasoning_summary_text.done",
+                serde_json::json!({
+                    "type": "response.reasoning_summary_text.done",
+                    "item_id": item_id,
+                    "output_index": output_index,
+                    "summary_index": 0,
+                    "text": reasoning_text
+                }),
+            ));
+            events.push(self.standard_event(
+                "response.output_item.done",
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "output_index": output_index,
+                    "item": completed_item
+                }),
+            ));
+        }
+        if self.message_open {
+            let output_index = self
+                .message_index
+                .expect("message index exists for an open message item");
+            self.output_items[output_index] =
+                self.message_item("completed", self.output_text.as_str());
+            if self.text_open {
+                events.push(self.standard_event(
+                    "response.output_text.done",
+                    serde_json::json!({
+                        "type": "response.output_text.done",
+                        "item_id": self.message_id,
+                        "output_index": output_index,
+                        "content_index": 0,
+                        "text": self.output_text
+                    }),
+                ));
+            }
+            if self.refusal_open {
+                events.push(self.standard_event(
+                    "response.refusal.done",
+                    serde_json::json!({
+                        "type": "response.refusal.done",
+                        "item_id": self.message_id,
+                        "output_index": output_index,
+                        "content_index": 0,
+                        "refusal": self.refusal_text
+                    }),
+                ));
+            }
+            events.push(self.standard_event(
+                "response.output_item.done",
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "output_index": output_index,
+                    "item": self.message_item("completed", self.output_text.as_str())
+                }),
+            ));
+        }
+        events.push(self.standard_event(
+            "response.completed",
+            serde_json::json!({"type": "response.completed", "response": self.response_json("completed")}),
+        ));
+        events
+    }
+
+    /// Builds the current standard response object.
+    /// 构建当前标准响应对象。
+    fn response_json(&self, status: &str) -> serde_json::Value {
+        let mut output = self.output_items.clone();
+        if let Some(output_index) = self.message_index {
+            output[output_index] = self.message_item(status, self.output_text.as_str());
+        }
+        for (item_id, reasoning) in &self.reasoning_items {
+            output[reasoning.output_index] = self.reasoning_item(item_id.as_str(), status);
+        }
+        serde_json::json!({
+            "id": self.response_id,
+            "object": "response",
+            "created_at": self.created_at,
+            "status": status,
+            "model": self.model,
+            "output": output,
+            "usage": standard_responses_usage(&self.usage),
+            "error": null,
+            "incomplete_details": null
+        })
+    }
+
+    /// Builds one standard assistant message output item.
+    /// 构建一项标准助手消息输出项目。
+    fn message_item(&self, status: &str, text: &str) -> serde_json::Value {
+        let mut content = Vec::new();
+        if self.text_open {
+            content.push(serde_json::json!({
+                "type": "output_text",
+                "text": text,
+                "annotations": []
+            }));
+        }
+        if self.refusal_open {
+            content.push(serde_json::json!({
+                "type": "refusal",
+                "refusal": self.refusal_text
+            }));
+        }
+        serde_json::json!({
+            "id": self.message_id,
+            "type": "message",
+            "status": status,
+            "role": "assistant",
+            "content": content
+        })
+    }
+
+    /// Projects one complete refusal item into standard message-content events.
+    /// 将一项完整拒绝内容投影为标准消息内容事件。
+    fn project_refusal(&mut self, item_id: String, text: String) -> Vec<AxumSseEvent> {
+        let mut projected = Vec::new();
+        if self.text_open {
+            projected.push(self.standard_event(
+                "error",
+                serde_json::json!({
+                    "type": "error",
+                    "code": "invalid_provider_output",
+                    "message": "A response cannot mix output text and refusal content in one message item.",
+                    "param": null
+                }),
+            ));
+            return projected;
+        }
+        let opening_message = !self.message_open;
+        if opening_message {
+            self.message_open = true;
+            self.message_id = item_id;
+            self.message_index = Some(self.output_items.len());
+        }
+        let opening_refusal = !self.refusal_open;
+        self.refusal_open = true;
+        let output_index = self
+            .message_index
+            .expect("message index exists after opening refusal content");
+        if opening_message {
+            let item = self.message_item("in_progress", self.output_text.as_str());
+            self.output_items.push(item.clone());
+            projected.push(self.standard_event(
+                "response.output_item.added",
+                serde_json::json!({
+                    "type": "response.output_item.added",
+                    "output_index": output_index,
+                    "item": item
+                }),
+            ));
+        }
+        if opening_refusal {
+            projected.push(self.standard_event(
+                "response.content_part.added",
+                serde_json::json!({
+                    "type": "response.content_part.added",
+                    "item_id": self.message_id,
+                    "output_index": output_index,
+                    "content_index": 0,
+                    "part": {"type": "refusal", "refusal": ""}
+                }),
+            ));
+        }
+        self.refusal_text.push_str(text.as_str());
+        self.output_items[output_index] =
+            self.message_item("in_progress", self.output_text.as_str());
+        projected.push(self.standard_event(
+            "response.refusal.delta",
+            serde_json::json!({
+                "type": "response.refusal.delta",
+                "item_id": self.message_id,
+                "output_index": output_index,
+                "content_index": 0,
+                "delta": text
+            }),
+        ));
+        projected
+    }
+
+    /// Ensures one reasoning item has a stable output position and emits its opening event once.
+    /// 确保一项推理内容具有稳定输出位置，并且仅发出一次开启事件。
+    fn ensure_reasoning_item(&mut self, item_id: &str, projected: &mut Vec<AxumSseEvent>) -> usize {
+        if let Some(reasoning) = self.reasoning_items.get(item_id) {
+            return reasoning.output_index;
+        }
+        let output_index = self.output_items.len();
+        self.reasoning_items.insert(
+            item_id.to_string(),
+            ResponsesSseReasoningItem {
+                output_index,
+                text: String::new(),
+                signature: None,
+            },
+        );
+        let item = self.reasoning_item(item_id, "in_progress");
+        self.output_items.push(item.clone());
+        projected.push(self.standard_event(
+            "response.output_item.added",
+            serde_json::json!({
+                "type": "response.output_item.added",
+                "output_index": output_index,
+                "item": item
+            }),
+        ));
+        output_index
+    }
+
+    /// Builds one standard reasoning output item from the selected accumulated summary text.
+    /// 根据选定推理项的累积摘要文本构建标准推理输出项目。
+    fn reasoning_item(&self, item_id: &str, status: &str) -> serde_json::Value {
+        let reasoning = self
+            .reasoning_items
+            .get(item_id)
+            .expect("reasoning item must exist before projection");
+        let mut item = serde_json::json!({
+            "id": item_id,
+            "type": "reasoning",
+            "status": status,
+            "summary": [{"type": "summary_text", "text": reasoning.text}]
+        });
+        if self.include_reasoning_encrypted_content
+            && let Some(signature) = reasoning.signature.as_ref()
+            && let Some(signature) =
+                vulcan_ai_contract::provider_continuation_payload("openai", signature)
+        {
+            item["encrypted_content"] = serde_json::Value::String(signature.to_string());
+        }
+        item
+    }
+
+    /// Builds one named standard event and assigns its monotonic sequence number.
+    /// 构建一项命名标准事件并分配其单调序列号。
+    fn standard_event(
+        &mut self,
+        event_name: &'static str,
+        mut payload: serde_json::Value,
+    ) -> AxumSseEvent {
+        payload["sequence_number"] = serde_json::json!(self.sequence_number);
+        self.sequence_number = self.sequence_number.saturating_add(1);
+        standard_sse_event(event_name, payload)
+    }
+}
+
+/// Builds one standard function-call output item with a stable stream item identity.
+/// 使用稳定流项目身份构建一项标准函数调用输出项目。
+fn standard_function_call_item(
+    item_id: &str,
+    call: &vulcan_ai_contract::ToolCall,
+    status: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": item_id,
+        "type": "function_call",
+        "status": status,
+        "call_id": call.id,
+        "name": call.name,
+        "arguments": call.arguments.to_string()
+    })
+}
+
+/// Builds one standard image-generation output item from a normalized image resource.
+/// 根据归一化图片资源构建一项标准图片生成输出项目。
+fn standard_image_generation_item(
+    item_id: &str,
+    resource: &vulcan_ai_contract::ResourceReference,
+    status: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": item_id,
+        "type": "image_generation_call",
+        "status": status,
+        "result": resource.url
+    })
+}
+
+/// Builds one in-progress standard image-generation item before preview bytes complete.
+/// 在预览字节完成前构建一项进行中的标准图片生成项目。
+fn standard_image_generation_placeholder(item_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id": item_id,
+        "type": "image_generation_call",
+        "status": "in_progress"
+    })
+}
+
+/// Builds one named SSE event whose payload carries the same standard event type.
+/// 构建一项命名 SSE 事件，其载荷携带相同的标准事件类型。
+fn standard_sse_event(event_name: &'static str, payload: serde_json::Value) -> AxumSseEvent {
+    AxumSseEvent::default()
+        .event(event_name)
+        .data(payload.to_string())
+}
+
+/// Projects normalized usage into the standard Responses usage object.
+/// 将归一化用量投影为标准 Responses 用量对象。
+fn standard_responses_usage(usage: &RequestUsage) -> serde_json::Value {
+    let total_tokens = match usage.total_tokens {
+        UsageValue::Unknown => derive_usage_sum(usage.input_tokens, usage.output_tokens),
+        known => known,
+    };
+    serde_json::json!({
+        "input_tokens": known_usage_count(usage.input_tokens),
+        "input_tokens_details": {"cached_tokens": known_usage_count(usage.cache_read_tokens)},
+        "output_tokens": known_usage_count(usage.output_tokens),
+        "output_tokens_details": {"reasoning_tokens": known_usage_count(usage.reasoning_tokens)},
+        "total_tokens": known_usage_count(total_tokens)
+    })
+}
+
+/// Returns one known normalized usage count or JSON null when unavailable.
+/// 返回一个已知归一化用量计数；不可用时返回 JSON null。
+fn known_usage_count(value: UsageValue) -> serde_json::Value {
+    match value {
+        UsageValue::Known { value, .. } => serde_json::json!(value),
+        UsageValue::Unknown => serde_json::Value::Null,
+    }
+}
+
+/// Returns the current Unix timestamp in whole seconds for standard response objects.
+/// 返回标准响应对象使用的当前 Unix 整秒时间戳。
+fn current_unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// Maps one controlled inference failure into a standard Responses error envelope.
+/// 将一项受控推理失败映射为标准 Responses 错误信封。
+fn standard_inference_error_response(error: InferenceServiceHttpError) -> AxumResponse {
+    let status =
+        AxumStatusCode::from_u16(error.status).unwrap_or(AxumStatusCode::INTERNAL_SERVER_ERROR);
+    let (code, param) = error
+        .code
+        .split_once(':')
+        .map_or((error.code.as_str(), None), |(code, param)| {
+            (code, Some(param.to_string()))
+        });
+    openai_error_response(
+        status,
+        if error.status == 401 {
+            "authentication_error"
+        } else {
+            "api_error"
+        },
+        code,
+        param,
+        error.message,
+    )
+}
+
+/// Dispatches one standard Responses-surface request without the private inference envelope.
+/// 分发一个标准 Responses 界面请求，且不使用私有推理信封。
+async fn responses_dispatch_http(
+    server_state: &WebuiServiceHttpState,
+    headers: &AxumHeaderMap,
+    request: InferenceServiceRequest,
+) -> AxumResponse {
+    let Some(token) = inference_service_token_from_headers(headers) else {
+        return openai_error_response(
+            AxumStatusCode::UNAUTHORIZED,
+            "authentication_error",
+            "invalid_api_key",
+            None,
+            "Responses API bearer token is missing.",
+        );
+    };
+    match (server_state.inference_dispatcher)(token, request).await {
+        Ok(result) => {
+            let request_id = result
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(new_openai_request_id);
+            with_openai_request_id(Json(result).into_response(), request_id)
+        }
+        Err(error) => standard_inference_error_response(error),
+    }
+}
+
+/// Builds one standard OpenAI-compatible error response.
+/// 构建一个标准 OpenAI 兼容错误响应。
+fn openai_error_response(
+    status: AxumStatusCode,
+    error_type: &str,
+    code: &str,
+    param: Option<String>,
+    message: impl Into<String>,
+) -> AxumResponse {
+    let response = (
+        status,
+        Json(OpenAiErrorEnvelope {
+            error: OpenAiErrorObject {
+                message: message.into(),
+                error_type: error_type.to_string(),
+                param,
+                code: code.to_string(),
+            },
+        }),
+    )
+        .into_response();
+    with_openai_request_id(response, new_openai_request_id())
+}
+
+/// Adds one stable request identifier header to a standard OpenAI-compatible response.
+/// 为标准 OpenAI 兼容响应增加一个稳定请求标识头。
+fn with_openai_request_id(mut response: AxumResponse, request_id: String) -> AxumResponse {
+    if let Ok(value) = AxumHeaderValue::from_str(request_id.as_str()) {
+        response.headers_mut().insert("x-request-id", value);
+    }
+    response
+}
+
+/// Creates one process-unique public request identifier.
+/// 创建一个进程内唯一的公共请求标识。
+fn new_openai_request_id() -> String {
+    format!("req_{}", Uuid::new_v4().simple())
 }
 
 /// Returns non-secret health for the controlled inference surface.
@@ -627,66 +1757,6 @@ async fn inference_service_capabilities_http_handler(
         InferenceServiceRequest::Capabilities {
             consumer_profile_id,
         },
-    )
-    .await
-}
-
-/// Starts one restricted LLM execution.
-/// 启动一项受限 LLM 执行。
-async fn inference_service_llm_start_http_handler(
-    AxumState(server_state): AxumState<WebuiServiceHttpState>,
-    headers: AxumHeaderMap,
-    Json(request): Json<LlmInferenceRequest>,
-) -> AxumResponse {
-    inference_service_dispatch_http(
-        &server_state,
-        &headers,
-        InferenceServiceRequest::StartLlm { request },
-    )
-    .await
-}
-
-/// Executes and aggregates one restricted LLM request.
-/// 执行并聚合一项受限 LLM 请求。
-async fn inference_service_llm_execute_http_handler(
-    AxumState(server_state): AxumState<WebuiServiceHttpState>,
-    headers: AxumHeaderMap,
-    Json(request): Json<LlmInferenceRequest>,
-) -> AxumResponse {
-    inference_service_dispatch_http(
-        &server_state,
-        &headers,
-        InferenceServiceRequest::ExecuteLlm { request },
-    )
-    .await
-}
-
-/// Returns one caller-owned restricted LLM status.
-/// 返回一项调用方所有的受限 LLM 状态。
-async fn inference_service_llm_status_http_handler(
-    AxumState(server_state): AxumState<WebuiServiceHttpState>,
-    AxumPath(execution_id): AxumPath<String>,
-    headers: AxumHeaderMap,
-) -> AxumResponse {
-    inference_service_dispatch_http(
-        &server_state,
-        &headers,
-        InferenceServiceRequest::LlmStatus { execution_id },
-    )
-    .await
-}
-
-/// Cancels one caller-owned restricted LLM execution.
-/// 取消一项调用方所有的受限 LLM 执行。
-async fn inference_service_llm_cancel_http_handler(
-    AxumState(server_state): AxumState<WebuiServiceHttpState>,
-    AxumPath(execution_id): AxumPath<String>,
-    headers: AxumHeaderMap,
-) -> AxumResponse {
-    inference_service_dispatch_http(
-        &server_state,
-        &headers,
-        InferenceServiceRequest::CancelLlm { execution_id },
     )
     .await
 }
@@ -753,86 +1823,6 @@ async fn inference_service_dispatch_http(
         })
         .into_response(),
         Err(error) => inference_service_error_response(error),
-    }
-}
-
-/// Opens one caller-owned restricted LLM event stream.
-/// 打开一项调用方所有的受限 LLM 事件流。
-async fn inference_service_llm_events_ws_handler(
-    AxumState(server_state): AxumState<WebuiServiceHttpState>,
-    AxumPath(execution_id): AxumPath<String>,
-    headers: AxumHeaderMap,
-    websocket: WebSocketUpgrade,
-) -> AxumResponse {
-    let Some(token) = inference_service_token_from_headers(&headers) else {
-        return inference_service_error_response(InferenceServiceHttpError {
-            status: 401,
-            code: String::from("inference.unauthorized"),
-            message: String::from("Inference access token is missing."),
-        });
-    };
-    let subscription = match (server_state.inference_event_subscriber)(token, execution_id).await {
-        Ok(subscription) => subscription,
-        Err(error) => return inference_service_error_response(error),
-    };
-    websocket
-        .on_upgrade(move |socket| inference_service_llm_events_socket(socket, subscription))
-        .into_response()
-}
-
-/// Streams restricted LLM events and fails closed when a consumer falls behind.
-/// 推送受限 LLM 事件，并在消费者滞后时失败关闭。
-///
-/// # Parameters
-/// 参数
-/// `socket` is the authorized WebSocket and `receiver` is caller-owned.
-/// `socket` 是已授权 WebSocket，`receiver` 由调用方所有。
-async fn inference_service_llm_events_socket(
-    mut socket: WebSocket,
-    subscription: InferenceServiceEventSubscription,
-) {
-    for event in subscription.replay {
-        let text = match serde_json::to_string(&event) {
-            Ok(text) => text,
-            Err(error) => {
-                eprintln!("[inference-service] failed to serialize replayed LLM event: {error}");
-                return;
-            }
-        };
-        if socket.send(AxumWsMessage::Text(text.into())).await.is_err() {
-            return;
-        }
-    }
-    let mut receiver = subscription.receiver;
-    loop {
-        let event = match receiver.recv().await {
-            Ok(event) => event,
-            Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                let failure = LlmInferenceStreamEvent::Failed {
-                    category: String::from("backpressure"),
-                    message: format!(
-                        "Inference event consumer lagged behind by {skipped} buffered events."
-                    ),
-                    provider_error: None,
-                };
-                if let Ok(text) = serde_json::to_string(&failure) {
-                    let _ = socket.send(AxumWsMessage::Text(text.into())).await;
-                }
-                let _ = socket.send(AxumWsMessage::Close(None)).await;
-                break;
-            }
-            Err(broadcast::error::RecvError::Closed) => break,
-        };
-        let text = match serde_json::to_string(&event) {
-            Ok(text) => text,
-            Err(error) => {
-                eprintln!("[inference-service] failed to serialize LLM event: {error}");
-                break;
-            }
-        };
-        if socket.send(AxumWsMessage::Text(text.into())).await.is_err() {
-            break;
-        }
     }
 }
 
@@ -1298,16 +2288,49 @@ mod tests {
             })
         });
         let inference_dispatcher: InferenceServiceRpcDispatcher =
-            Arc::new(|_access_token, _request| {
-                Box::pin(async move { Ok(serde_json::Value::Null) })
+            Arc::new(|_access_token, request| {
+                Box::pin(async move {
+                    match request {
+                        InferenceServiceRequest::ListModels => Ok(json!({
+                            "object": "list",
+                            "data": [{
+                                "id": "test-model",
+                                "object": "model",
+                                "created": 0,
+                                "owned_by": "test-provider"
+                            }]
+                        })),
+                        InferenceServiceRequest::CreateResponse { request } => Ok(json!({
+                            "id": "resp_test",
+                            "object": "response",
+                            "status": "completed",
+                            "model": request.model,
+                            "output": []
+                        })),
+                        InferenceServiceRequest::StartResponse { .. } => {
+                            Ok(json!({"execution_id": "test-execution"}))
+                        }
+                        _ => Ok(serde_json::Value::Null),
+                    }
+                })
             });
         let inference_event_subscriber: InferenceServiceEventSubscriber =
             Arc::new(|_access_token, _execution_id| {
                 Box::pin(async move {
                     let (_sender, receiver) = broadcast::channel(8);
                     Ok(InferenceServiceEventSubscription {
-                        replay: Vec::new(),
+                        replay: vec![
+                            AiStreamEvent::ResponseStarted {
+                                execution_id: String::from("test-execution"),
+                            },
+                            AiStreamEvent::ResponseTextDelta {
+                                item_id: String::from("test-message"),
+                                delta: String::from("hello"),
+                            },
+                            AiStreamEvent::ResponseCompleted,
+                        ],
                         receiver,
+                        cancellation_guard: InferenceServiceCancellationGuard::new(|| {}),
                     })
                 })
             });
@@ -1387,6 +2410,102 @@ mod tests {
         assert_eq!(payload["result"]["params"]["projectId"], "p1");
     }
 
+    /// Verifies malformed standard request fields produce an OpenAI-compatible parameter error.
+    /// 验证格式错误的标准请求字段会产生 OpenAI 兼容参数错误。
+    #[tokio::test]
+    async fn responses_create_rejects_unsupported_field_with_standard_error() {
+        let response = test_router()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer test-inference-token")
+                    .body(Body::from(
+                        r#"{"model":"test-model","input":"hello","background":true}"#,
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), AxumStatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("body should read");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&body).expect("response should be JSON");
+        assert_eq!(payload["error"]["type"], "invalid_request_error");
+        assert_eq!(payload["error"]["param"], "background");
+        assert_eq!(payload["error"]["code"], "unsupported_parameter");
+    }
+
+    /// Verifies non-streaming Responses returns the unwrapped standard response object.
+    /// 验证非流式 Responses 返回不带私有信封的标准响应对象。
+    #[tokio::test]
+    async fn responses_create_returns_standard_json_object() {
+        let response = test_router()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer test-inference-token")
+                    .body(Body::from(r#"{"model":"test-model","input":"hello"}"#))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), AxumStatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("body should read");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&body).expect("response should be JSON");
+        assert_eq!(payload["object"], "response");
+        assert_eq!(payload["model"], "test-model");
+        assert!(payload.get("api_version").is_none());
+    }
+
+    /// Verifies streaming Responses emits named standard SSE lifecycle events through completion.
+    /// 验证流式 Responses 会发出命名的标准 SSE 生命周期事件直至完成。
+    #[tokio::test]
+    async fn responses_create_streams_standard_sse_events() {
+        let response = test_router()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer test-inference-token")
+                    .body(Body::from(
+                        r#"{"model":"test-model","input":"hello","stream":true}"#,
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), AxumStatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+        let body = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("body should read");
+        let text = String::from_utf8(body.to_vec()).expect("SSE body should be UTF-8");
+        assert!(text.contains("event: response.created"));
+        assert!(text.contains("event: response.output_text.delta"));
+        assert!(text.contains("\"delta\":\"hello\""));
+        assert!(text.contains("event: response.completed"));
+        assert!(!text.contains("execution_id"));
+    }
+
     /// Verifies browser RPC accepts payloads above Axum's default two megabyte JSON limit.
     /// 验证浏览器 RPC 可以接收超过 Axum 默认两兆 JSON 限制的载荷。
     #[tokio::test]
@@ -1446,6 +2565,59 @@ mod tests {
             serde_json::from_slice(&body).expect("response should be JSON");
         assert_eq!(payload["api_version"], INFERENCE_SERVICE_API_VERSION);
         assert_eq!(payload["code"], "inference.unauthorized");
+    }
+
+    /// Verifies `/v1/models` uses the standard error envelope when bearer authentication is missing.
+    /// 验证 `/v1/models` 在缺少 Bearer 鉴权时使用标准错误信封。
+    #[tokio::test]
+    async fn responses_models_rejects_missing_bearer_with_standard_error() {
+        let response = test_router()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/v1/models")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), AxumStatusCode::UNAUTHORIZED);
+        let body = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("body should read");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&body).expect("response should be JSON");
+        assert_eq!(payload["error"]["type"], "authentication_error");
+        assert_eq!(payload["error"]["code"], "invalid_api_key");
+        assert!(payload.get("api_version").is_none());
+    }
+
+    /// Verifies `/v1/models` returns the unwrapped standard model-list shape.
+    /// 验证 `/v1/models` 返回不带私有信封的标准模型列表形态。
+    #[tokio::test]
+    async fn responses_models_returns_standard_list_shape() {
+        let response = test_router()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/v1/models")
+                    .header("authorization", "Bearer test-inference-token")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), AxumStatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("body should read");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&body).expect("response should be JSON");
+        assert_eq!(payload["object"], "list");
+        assert_eq!(payload["data"][0]["id"], "test-model");
+        assert!(payload.get("api_version").is_none());
     }
 
     /// Verifies the dedicated token authorizes the closed capability request envelope.
@@ -1514,5 +2686,141 @@ mod tests {
             Some("token=test-token"),
             "test-token",
         ));
+    }
+
+    /// Verifies encrypted reasoning content is emitted only after explicit public selection.
+    /// 验证加密推理内容仅在公共请求显式选择后发出。
+    #[test]
+    fn responses_sse_gates_encrypted_reasoning_content() {
+        for (include, expected) in [(false, false), (true, true)] {
+            let mut state = ResponsesSseState::new(
+                String::from("execution-reasoning"),
+                String::from("test-model"),
+                include,
+            );
+            state.project(AiStreamEvent::ReasoningStarted {
+                item_id: String::from("rs_1"),
+            });
+            state.project(AiStreamEvent::ReasoningDelta {
+                item_id: String::from("rs_1"),
+                delta: String::from("checked"),
+            });
+            state.project(AiStreamEvent::ReasoningCompleted {
+                item_id: String::from("rs_1"),
+                signature: Some(String::from("openai#opaque")),
+            });
+
+            let response = state.response_json("completed");
+            assert_eq!(
+                response["output"][0].get("encrypted_content").is_some(),
+                expected
+            );
+            if include {
+                assert_eq!(response["output"][0]["encrypted_content"], "opaque");
+            }
+        }
+    }
+
+    /// Verifies interleaved reasoning items retain independent identities, text, and signatures.
+    /// 验证交错推理项分别保留独立身份、文本与签名。
+    #[test]
+    fn responses_sse_preserves_multiple_reasoning_items() {
+        let mut state = ResponsesSseState::new(
+            String::from("execution-multi-reasoning"),
+            String::from("test-model"),
+            true,
+        );
+        state.project(AiStreamEvent::ReasoningDelta {
+            item_id: String::from("rs_1"),
+            delta: String::from("first-a"),
+        });
+        state.project(AiStreamEvent::ReasoningDelta {
+            item_id: String::from("rs_2"),
+            delta: String::from("second"),
+        });
+        state.project(AiStreamEvent::ReasoningDelta {
+            item_id: String::from("rs_1"),
+            delta: String::from("-b"),
+        });
+        state.project(AiStreamEvent::ReasoningCompleted {
+            item_id: String::from("rs_2"),
+            signature: Some(String::from("openai#signature-two")),
+        });
+        state.project(AiStreamEvent::ReasoningCompleted {
+            item_id: String::from("rs_1"),
+            signature: Some(String::from("openai#signature-one")),
+        });
+
+        let response = state.response_json("completed");
+        assert_eq!(response["output"].as_array().map(Vec::len), Some(2));
+        assert_eq!(response["output"][0]["id"], "rs_1");
+        assert_eq!(response["output"][0]["summary"][0]["text"], "first-a-b");
+        assert_eq!(response["output"][0]["encrypted_content"], "signature-one");
+        assert_eq!(response["output"][1]["id"], "rs_2");
+        assert_eq!(response["output"][1]["summary"][0]["text"], "second");
+        assert_eq!(response["output"][1]["encrypted_content"], "signature-two");
+    }
+
+    /// Verifies partial usage updates retain earlier known fields in the completed SSE response.
+    /// 验证分段用量更新会在 SSE 完成响应中保留先前已知字段。
+    #[test]
+    fn responses_sse_merges_partial_usage_updates() {
+        let reported = |value| UsageValue::Known {
+            value,
+            source: vulcan_ai_contract::UsageValueSource::Reported,
+        };
+        let mut state = ResponsesSseState::new(
+            String::from("execution-usage"),
+            String::from("test-model"),
+            false,
+        );
+        state.project(AiStreamEvent::UsageUpdated {
+            usage: Box::new(RequestUsage {
+                input_tokens: reported(8),
+                ..RequestUsage::default()
+            }),
+        });
+        state.project(AiStreamEvent::UsageUpdated {
+            usage: Box::new(RequestUsage {
+                output_tokens: reported(2),
+                ..RequestUsage::default()
+            }),
+        });
+
+        let response = state.response_json("completed");
+        assert_eq!(response["usage"]["input_tokens"], 8);
+        assert_eq!(response["usage"]["output_tokens"], 2);
+        assert_eq!(response["usage"]["total_tokens"], 10);
+    }
+
+    /// Verifies dropping an armed stream guard requests cooperative execution cancellation.
+    /// 验证丢弃仍启用的流守卫会请求协作式取消执行。
+    #[test]
+    fn responses_stream_guard_cancels_when_dropped_armed() {
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = Arc::clone(&cancelled);
+        let guard = InferenceServiceCancellationGuard::new(move || {
+            observed.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        drop(guard);
+
+        assert!(cancelled.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    /// Verifies observing a terminal event disarms disconnect cancellation.
+    /// 验证观察到终态事件后会解除断连取消。
+    #[test]
+    fn responses_stream_guard_does_not_cancel_after_disarm() {
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = Arc::clone(&cancelled);
+        let mut guard = InferenceServiceCancellationGuard::new(move || {
+            observed.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        guard.disarm();
+        drop(guard);
+
+        assert!(!cancelled.load(std::sync::atomic::Ordering::SeqCst));
     }
 }

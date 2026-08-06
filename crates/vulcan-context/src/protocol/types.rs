@@ -135,7 +135,7 @@ pub enum SessionConversationPayload {
         /// Optional provider usage snapshot retained for host-side budget calibration.
         /// 为宿主侧预算校准保留的可选 Provider 用量快照。
         #[serde(default)]
-        usage: Option<ProviderUsageSnapshot>,
+        usage: Option<Box<ProviderUsageSnapshot>>,
         /// Structured tool-call list emitted by the assistant turn.
         /// 由该助手回合发出的结构化工具调用列表。
         tool_calls: Vec<SessionConversationToolCall>,

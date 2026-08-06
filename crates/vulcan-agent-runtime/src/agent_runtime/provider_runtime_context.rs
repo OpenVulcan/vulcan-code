@@ -1318,6 +1318,7 @@ mod tests {
             model_id: String::from("vendor/model"),
             model_name: String::from("Model"),
             protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+            route_revision: String::from("sha256:test-route"),
             secondary_route: Default::default(),
             public_capabilities: vulcan_ai_contract::ModelCapabilities::default(),
             base_url: Some(String::from("https://openrouter.ai/api/v1")),

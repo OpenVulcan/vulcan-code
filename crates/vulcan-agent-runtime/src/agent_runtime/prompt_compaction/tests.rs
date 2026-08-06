@@ -276,6 +276,7 @@ fn remote_compaction_request_preserves_identity_and_turn_reasoning_controls() {
             "properties": {"key": {"type": "string"}},
             "required": ["key"]
         }),
+        strict: false,
     }];
     // nativeTools proves provider-native capability declarations also enter the compact request.
     // nativeTools 证明 Provider 原生能力声明也进入压缩请求。

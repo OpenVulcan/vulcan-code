@@ -118,7 +118,7 @@ fn project_core_messages_to_provider_visible_history_for_model(
                     reasoning,
                     provider_message_id,
                     provider_message_state,
-                    usage.as_ref(),
+                    usage.as_deref(),
                     tool_calls,
                 ) {
                     index += 1;

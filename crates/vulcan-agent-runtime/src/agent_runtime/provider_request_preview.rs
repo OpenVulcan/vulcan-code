@@ -621,6 +621,7 @@ mod tests {
                 protocol_profile_id: String::from(
                     vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
                 ),
+                route_revision: String::from("sha256:test-route"),
                 secondary_route: Default::default(),
                 public_capabilities: vulcan_ai_contract::ModelCapabilities::default(),
                 base_url: Some(String::from("https://api.anthropic.com")),

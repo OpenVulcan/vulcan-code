@@ -67,59 +67,6 @@ fn provider_retry_projects_visible_display_note() {
     assert!(!record.record_kind.contributes_to_context());
 }
 
-/// Verifies a WebSocket-to-HTTPS fallback remains visible without entering later model context.
-/// 验证 WebSocket 到 HTTPS 的回退保持可见，同时不会进入后续模型上下文。
-#[test]
-fn provider_transport_fallback_projects_visible_display_note() {
-    // runtimeState owns the durable transcript projection under test.
-    // runtimeState 持有被测的持久转录投影。
-    let mut runtime_state = SessionRuntimeStateEntry::default();
-    // sessionId provides the stable namespace for the fallback record.
-    // sessionId 为回退记录提供稳定命名空间。
-    let session_id = test_session_id();
-    // fallbackEvent models the exact transition emitted after the WS retry budget is exhausted.
-    // fallbackEvent 模拟 WS 重试预算耗尽后发出的精确转换事件。
-    let fallback_event = RuntimeEvent::new(
-        RuntimeEventKind::TransportFallback,
-        "Provider 传输回退",
-        "Responses WebSocket 重试预算已耗尽，当前会话已安全切换到 HTTPS。",
-    )
-    .with_metadata(Some(json!({
-        "from_transport": "responses_websocket",
-        "to_transport": "https_sse",
-        "scope": "session",
-    })));
-
-    assert!(
-        append_runtime_event_projection_to_state(
-            &mut runtime_state,
-            session_id,
-            "3501",
-            &fallback_event,
-        )
-        .expect("transport fallback projection should succeed")
-    );
-    // record is the exact display-only row retained for the transport transition.
-    // record 是为本次传输转换保留的精确纯显示行。
-    let record = runtime_state
-        .conversation_state
-        .records
-        .last()
-        .expect("transport fallback should append one record");
-    assert_eq!(record.record_kind, SessionMessageRecordKind::DisplayNote);
-    assert!(record.visible);
-    assert_eq!(record.title, "Provider 传输回退");
-    assert!(record.body.contains("HTTPS"));
-    assert_eq!(
-        record
-            .metadata
-            .as_ref()
-            .and_then(|value| value["to_transport"].as_str()),
-        Some("https_sse")
-    );
-    assert!(!record.record_kind.contributes_to_context());
-}
-
 /// Verifies a slow Provider first-event status remains transient and never enters the durable transcript.
 /// 验证 Provider 首事件缓慢状态保持瞬时性，绝不进入持久转录。
 #[test]
@@ -174,6 +121,7 @@ fn usage_report(
         total_tokens: Some(total_tokens),
         cached_input_tokens,
         cache_creation_input_tokens: None,
+        ..ProviderUsageSnapshot::default()
     };
     ExecutionRunReport {
         session_id,
@@ -775,6 +723,7 @@ fn terminal_report_does_not_duplicate_multi_message_assistant_output_usage() {
         total_tokens: Some(110),
         cached_input_tokens: Some(80),
         cache_creation_input_tokens: None,
+        ..ProviderUsageSnapshot::default()
     };
     // finalUsage is the authoritative usage reported by the final Provider response.
     // finalUsage 是最后一次 Provider 响应报告的权威用量。
@@ -786,6 +735,7 @@ fn terminal_report_does_not_duplicate_multi_message_assistant_output_usage() {
         total_tokens: Some(132),
         cached_input_tokens: Some(100),
         cache_creation_input_tokens: None,
+        ..ProviderUsageSnapshot::default()
     };
     runtime_state.conversation_state.messages.extend([
         SessionConversationMessage {
@@ -795,7 +745,7 @@ fn terminal_report_does_not_duplicate_multi_message_assistant_output_usage() {
                 reasoning: String::new(),
                 provider_message_id: None,
                 provider_message_state: None,
-                usage: Some(first_usage),
+                usage: Some(Box::new(first_usage)),
                 tool_calls: Vec::new(),
             },
         },
@@ -806,7 +756,7 @@ fn terminal_report_does_not_duplicate_multi_message_assistant_output_usage() {
                 reasoning: String::new(),
                 provider_message_id: None,
                 provider_message_state: None,
-                usage: Some(final_usage.clone()),
+                usage: Some(Box::new(final_usage.clone())),
                 tool_calls: Vec::new(),
             },
         },
@@ -821,6 +771,7 @@ fn terminal_report_does_not_duplicate_multi_message_assistant_output_usage() {
         total_tokens: Some(242),
         cached_input_tokens: Some(180),
         cache_creation_input_tokens: None,
+        ..ProviderUsageSnapshot::default()
     };
     // report carries the cumulative visible output while retaining physical per-message usage.
     // report 携带累计可见输出，同时保留每条真实消息的逐次用量。
@@ -906,6 +857,7 @@ fn terminal_report_backfills_usage_when_checkpoint_messages_lack_usage() {
             total_tokens: Some(106),
             cached_input_tokens: Some(40),
             cache_creation_input_tokens: None,
+            ..ProviderUsageSnapshot::default()
         }),
         cumulative_successful_provider_usage: None,
         embedded_turn_usage_segments: Vec::new(),
@@ -971,6 +923,7 @@ fn terminal_report_backfills_multi_call_usage_from_cumulative_snapshot() {
             total_tokens: Some(26_633),
             cached_input_tokens: Some(25_856),
             cache_creation_input_tokens: None,
+            ..ProviderUsageSnapshot::default()
         }),
         cumulative_successful_provider_usage: Some(ProviderUsageSnapshot {
             input_tokens: Some(185_094),
@@ -980,6 +933,7 @@ fn terminal_report_backfills_multi_call_usage_from_cumulative_snapshot() {
             total_tokens: Some(186_431),
             cached_input_tokens: Some(180_992),
             cache_creation_input_tokens: None,
+            ..ProviderUsageSnapshot::default()
         }),
         embedded_turn_usage_segments: Vec::new(),
         mcp_discovery_rows: Vec::new(),

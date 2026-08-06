@@ -2,6 +2,7 @@
 //! 供应商无关的 Wire 协议 Profile。
 
 use std::collections::BTreeSet;
+use vulcan_ai_contract::AiExecutionRequest;
 
 pub mod anthropic;
 pub mod cohere;
@@ -35,11 +36,7 @@ pub(crate) const SIGNATURE_PROVIDER_GEMINI: &str = "gemini";
 /// Wraps one provider-native signature with explicit provenance for safe replay.
 /// 使用显式来源封装一个供应商原生签名，以便安全回放。
 pub(crate) fn wrap_provider_signature(provider: &str, signature: &str) -> Option<String> {
-    let signature = signature.trim();
-    if signature.is_empty() || signature.contains('#') {
-        return None;
-    }
-    Some(format!("{provider}#{signature}"))
+    vulcan_ai_contract::wrap_provider_continuation(provider, signature)
 }
 
 /// Unwraps a signature only when its explicit provenance matches the target provider.
@@ -48,9 +45,25 @@ pub(crate) fn compatible_provider_signature<'a>(
     provider: &str,
     signature: &'a str,
 ) -> Option<&'a str> {
-    let (source, payload) = signature.split_once('#')?;
-    let payload = payload.trim();
-    (source == provider && !payload.is_empty() && !payload.contains('#')).then_some(payload)
+    vulcan_ai_contract::provider_continuation_payload(provider, signature)
+}
+
+/// Rejects route-bound provider context before encoding through a different wire protocol.
+/// 在通过不同 Wire 协议编码前拒绝绑定路由的供应商上下文。
+pub(crate) fn require_no_route_bound_provider_context(
+    request: &AiExecutionRequest,
+    protocol_id: &str,
+) -> Result<(), ProtocolConversionError> {
+    if request
+        .messages
+        .iter()
+        .any(|message| !message.provider_context_items.is_empty())
+    {
+        return Err(ProtocolConversionError::new(format!(
+            "Protocol profile `{protocol_id}` cannot replay route-bound provider context items."
+        )));
+    }
+    Ok(())
 }
 
 /// Reconstructs one streamed tool name only along prefixes in the frozen tool set.

@@ -317,6 +317,7 @@ mod tests {
                 model_id: String::from("gpt-test"),
                 model_name: String::from("GPT Test"),
                 protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+                route_revision: String::from("sha256:test-route"),
                 secondary_route: Default::default(),
                 public_capabilities: vulcan_ai_contract::ModelCapabilities::default(),
                 base_url: Some(String::from("https://api.example.test/v1")),
@@ -459,6 +460,7 @@ mod tests {
                     total_tokens: Some(120),
                     cached_input_tokens: None,
                     cache_creation_input_tokens: None,
+                    ..ProviderUsageSnapshot::default()
                 }),
             )),
         );
@@ -593,6 +595,7 @@ mod tests {
             total_tokens: Some(4480),
             cached_input_tokens: Some(2048),
             cache_creation_input_tokens: None,
+            ..ProviderUsageSnapshot::default()
         };
         let mut preparation = build_test_preparation();
         preparation

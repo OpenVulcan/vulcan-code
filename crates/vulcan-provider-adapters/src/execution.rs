@@ -10,57 +10,45 @@ use crate::{
     SecondaryRouteSelection, ServiceEntry,
 };
 use async_stream::{stream, try_stream};
-use futures_util::{SinkExt, Stream, StreamExt};
+use futures_util::{Stream, StreamExt};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant, SystemTime};
-use tokio_tungstenite::{
-    connect_async,
-    tungstenite::{
-        Message,
-        client::IntoClientRequest,
-        http::header::{HeaderName as WebSocketHeaderName, HeaderValue as WebSocketHeaderValue},
-    },
-};
 use vulcan_ai_contract::{
     AiErrorCategory, AiExecutionError, AiExecutionRequest, AiStreamEvent, AiStreamStateMachine,
-    DispatchOutcome, InputTokenCount, ModelParameterValue, ParallelToolCallPolicy,
+    AiTransportKind, ContentItem, DispatchOutcome, InputTokenCount, ModelParameterValue,
     PromptCachePolicy, ReasoningEffort, ResourceKind, RetryAfterHint, RetryAfterSource,
     StructuredOutputPolicy, canonicalize_codex_responses_replay_items,
     is_replayable_codex_responses_item,
 };
 use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
-    CLAUDE_CODE_MESSAGES_PROFILE_ID, EncodedWireRequest, OPENAI_CHAT_PROFILE_ID,
+    CLAUDE_CODE_MESSAGES_PROFILE_ID, EncodedWireRequest, GEMINI_GENERATE_CONTENT_PROFILE_ID,
+    GEMINI_INTERACTIONS_PROFILE_ID, GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
     OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID, ProtocolConversionError,
     ProtocolRegistry, ProtocolStreamFraming, ProtocolTransportProfile,
     decode_gemini_count_tokens_response, encode_gemini_count_tokens_request,
+    gemini_replay_signature_payload, wrap_openai_reasoning_signature,
 };
+use vulcan_llm_core::{
+    AnthropicReasoningMode, CostCalculator, DEFAULT_RESPONSES_WEBSOCKET_MAX_AGE, ModelPricing,
+    ProviderRouteContext, RESPONSES_WEBSOCKET_CONNECTION_LIMIT_CODE, ResponsesWebsocketConfig,
+    ResponsesWebsocketSession, UpstreamProtocol, UsageAccumulator, UsageExtractionProfile,
+    UsageRecordKind, project_responses_for_provider,
+};
+
+use tokio::sync::Mutex as TokioMutex;
 
 /// MiniMax documented maximum JSON request-body size.
 /// MiniMax 文档化的 JSON 请求体最大字节数。
 const MINIMAX_REQUEST_BODY_BYTE_LIMIT: usize = 64_000_000;
-
-/// OpenAI beta header required by the current Codex Responses WebSocket v2 contract.
-/// 当前 Codex Responses WebSocket v2 契约要求携带的 OpenAI Beta 请求头。
-const OPENAI_RESPONSES_WEBSOCKET_BETA_HEADER_NAME: &str = "openai-beta";
-
-/// OpenAI beta header value used by the current official Codex Rust client.
-/// 当前官方 Codex Rust 客户端使用的 OpenAI Beta 请求头值。
-const OPENAI_RESPONSES_WEBSOCKET_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
-
-/// Official wrapped WebSocket error code indicating that a connection has reached its lifetime limit.
-/// 官方包装式 WebSocket 错误码，表示连接已经达到生命周期上限。
-const OPENAI_RESPONSES_WEBSOCKET_CONNECTION_LIMIT_CODE: &str = "websocket_connection_limit_reached";
-
-/// Official wrapped WebSocket error code requesting a replay without the stale response cursor.
-/// 官方包装式 WebSocket 错误码，要求在不携带过期响应游标的情况下重放。
-const OPENAI_RESPONSES_PREVIOUS_RESPONSE_NOT_FOUND_CODE: &str = "previous_response_not_found";
 
 /// Official Codex multiplier from stream idle timeout to the complete unary compact timeout.
 /// 官方 Codex 从流空闲超时换算完整一元压缩超时所使用的倍数。
@@ -70,9 +58,13 @@ const RESPONSES_COMPACT_TIMEOUT_IDLE_MULTIPLIER: u32 = 4;
 /// 用于启用不含密钥的供应商传输计时诊断的可选环境变量。
 const PROVIDER_TRANSPORT_TRACE_ENV: &str = "VULCAN_PROVIDER_TRANSPORT_TRACE";
 
-/// Maximum process-local session scopes that can remember a WebSocket-to-HTTP switch.
-/// 进程内最多记忆的 WebSocket 到 HTTP 会话切换范围数量。
-const MAX_REMEMBERED_RESPONSES_WEBSOCKET_FALLBACK_SCOPES: usize = 2_048;
+/// Codex Responses WebSocket protocol revision frozen from the adopted source baseline.
+/// 从已采纳源码基线冻结的 Codex Responses WebSocket 协议修订值。
+const CODEX_RESPONSES_WEBSOCKET_BETA: &str = "responses_websockets=2026-02-06";
+
+/// Official control error indicating that the active socket no longer owns the referenced chain.
+/// 表示活动 Socket 已不再持有被引用链的官方控制错误。
+const RESPONSES_WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND_CODE: &str = "previous_response_not_found";
 
 /// Immutable route selected before an execution starts.
 /// 在执行开始前选择的不可变路由。
@@ -96,6 +88,30 @@ pub struct ProviderExecutionRoute {
     /// Optional user-owned safe projection for one exact custom model.
     /// 可选的单个精确自定义模型用户自有安全投影。
     pub custom_model_projection: Option<CustomModelRequestProjection>,
+    /// Optional frozen local billing profile resolved from explicit configuration.
+    /// 从显式配置解析出的可选冻结本地计费 Profile。
+    pub billing_profile: Option<ResolvedBillingProfile>,
+}
+
+/// Frozen exact pricing facts applied to normalized usage updates.
+/// 应用于规范化用量更新的冻结精确价格事实。
+#[derive(Debug, Clone)]
+pub struct ResolvedBillingProfile {
+    /// Immutable content-addressed pricing revision.
+    /// 内容寻址的不可变价格修订号。
+    pub pricing_revision: String,
+    /// ISO currency for the local estimate.
+    /// 本地估算使用的 ISO 币种。
+    pub currency: String,
+    /// Per-million-token prices parsed without floating point.
+    /// 不经过浮点解析的每百万 Token 价格。
+    pub pricing: ModelPricing,
+    /// Exact provider-specific multiplier.
+    /// 精确供应商专属倍率。
+    pub multiplier: Decimal,
+    /// Serializable effective pricing evidence persisted with usage facts.
+    /// 随用量事实持久化的可序列化生效价格证据。
+    pub snapshot: vulcan_ai_contract::PricingProfileSnapshot,
 }
 
 impl ProviderExecutionRoute {
@@ -144,7 +160,7 @@ impl ProviderExecutionRoute {
                 connection.id, credential_profile.id
             )));
         }
-        let protocol_route = entry
+        let mut protocol_route = entry
             .protocol_routes
             .iter()
             .find(|route| route.protocol_profile_id == connection.selected_protocol)
@@ -155,6 +171,29 @@ impl ProviderExecutionRoute {
                     connection.selected_protocol, entry.id
                 ))
             })?;
+        if protocol_route.usage_extraction_profiles.is_empty()
+            && let Some(protocol) =
+                upstream_protocol_for_profile_id(protocol_route.protocol_profile_id.as_str())
+        {
+            protocol_route.usage_extraction_profiles =
+                vulcan_llm_core::standard_usage_profiles(protocol);
+            if entry.request_projector == RequestProjectorKind::Alibaba
+                && protocol == UpstreamProtocol::OpenAiResponses
+            {
+                protocol_route.usage_extraction_profiles =
+                    vulcan_llm_core::alibaba_responses_usage_profiles();
+            } else if entry.request_projector == RequestProjectorKind::DeepSeek
+                && protocol == UpstreamProtocol::OpenAiChatCompletions
+            {
+                protocol_route.usage_extraction_profiles =
+                    vulcan_llm_core::deepseek_chat_usage_profiles();
+            } else if provider.id == "openrouter"
+                && protocol == UpstreamProtocol::OpenAiChatCompletions
+            {
+                protocol_route.usage_extraction_profiles =
+                    vulcan_llm_core::openrouter_chat_usage_profiles();
+            }
+        }
         if !protocol_route.verified
             || !connection
                 .verified_protocols
@@ -180,6 +219,7 @@ impl ProviderExecutionRoute {
             protocol_route,
             secondary_route,
             custom_model_projection: None,
+            billing_profile: None,
         })
     }
 
@@ -471,25 +511,13 @@ pub struct ProviderExecutionClient {
     /// Process-local prepared media references shared by preflight and dispatch clones.
     /// 由分派前准备与实际分派副本共享的进程内媒体引用缓存。
     prepared_media: Arc<StdMutex<BTreeMap<String, PreparedMediaCacheEntry>>>,
-    /// Bounded session scopes that have switched from Responses WebSocket to HTTP.
-    /// 已从 Responses WebSocket 切换到 HTTP 的有界会话范围。
-    responses_websocket_http_fallback_scopes: Arc<StdMutex<BTreeMap<String, Instant>>>,
-    /// Bounded safe WebSocket failure counters awaiting host-controlled retries.
-    /// 等待宿主控制重试的有界安全 WebSocket 失败计数器。
-    responses_websocket_safe_failure_scopes:
-        Arc<StdMutex<BTreeMap<String, ResponsesWebsocketSafeFailureScope>>>,
-}
-
-/// Tracks consecutive replay-safe WebSocket failures for one exact session route.
-/// 跟踪一个精确会话路由连续发生的可安全重放 WebSocket 失败。
-#[derive(Clone, Copy)]
-struct ResponsesWebsocketSafeFailureScope {
-    /// Consecutive safe failure count since the last healthy WebSocket response.
-    /// 自上一次健康 WebSocket 响应以来的连续安全失败次数。
-    failures: u32,
-    /// Last observation time used to evict the oldest bounded scope.
-    /// 用于淘汰最旧有界范围的最后观察时间。
-    observed_at: Instant,
+    /// Credential-, route-, and session-isolated Responses WebSocket connections.
+    /// 按凭据、路由与会话隔离的 Responses WebSocket 连接。
+    responses_websocket_sessions:
+        Arc<TokioMutex<BTreeMap<String, Arc<TokioMutex<ResponsesWebsocketSession>>>>>,
+    /// Session-scoped WebSocket circuit breakers activated after transport failure.
+    /// 传输失败后激活的会话作用域 WebSocket 熔断器。
+    responses_websocket_breakers: Arc<StdMutex<BTreeSet<String>>>,
 }
 
 /// Stores one temporary provider media reference until the matching request is dispatched.
@@ -552,38 +580,6 @@ fn prepared_media_key(
     )
 }
 
-/// Builds the bounded session key that owns one Codex Responses transport fallback decision.
-/// 构建拥有一次 Codex Responses 传输回退决策的有界会话键。
-///
-/// # Parameters
-/// 参数
-/// `route` freezes provider and connection identity; `request` supplies the exact model and stable
-/// cache scope that the runtime derives from the task session id.
-/// `route` 固定供应商与连接身份；`request` 提供精确模型，以及运行时由任务会话标识派生的稳定缓存范围。
-///
-/// # Returns
-/// 返回值
-/// A process-local key only for Codex Responses requests with a stable session scope.
-/// 仅为具有稳定会话范围的 Codex Responses 请求返回进程内键。
-fn responses_websocket_fallback_scope_key(
-    route: &ProviderExecutionRoute,
-    request: &AiExecutionRequest,
-) -> Option<String> {
-    if route.protocol_route.protocol_profile_id != OPENAI_CODEX_RESPONSES_PROFILE_ID {
-        return None;
-    }
-    let cache_scope_id = request.cache_scope_id.as_deref()?;
-    Some(format!(
-        "{}|{}|{}|{}|{}|{}",
-        route.provider.id,
-        route.connection.id,
-        route.protocol_route.protocol_profile_id,
-        route.request_url("/responses"),
-        request.model_id,
-        cache_scope_id
-    ))
-}
-
 impl ProviderExecutionClient {
     /// Creates one execution client.
     /// 创建一个执行客户端。
@@ -602,149 +598,9 @@ impl ProviderExecutionClient {
             http,
             protocols,
             prepared_media: Arc::new(StdMutex::new(BTreeMap::new())),
-            responses_websocket_http_fallback_scopes: Arc::new(StdMutex::new(BTreeMap::new())),
-            responses_websocket_safe_failure_scopes: Arc::new(StdMutex::new(BTreeMap::new())),
+            responses_websocket_sessions: Arc::new(TokioMutex::new(BTreeMap::new())),
+            responses_websocket_breakers: Arc::new(StdMutex::new(BTreeSet::new())),
         }
-    }
-
-    /// Returns whether one exact Codex session already switched to HTTP after a safe WS failure.
-    /// 返回一个精确 Codex 会话是否已经在安全 WS 失败后切换到 HTTP。
-    pub fn responses_websocket_http_fallback_active(
-        &self,
-        route: &ProviderExecutionRoute,
-        request: &AiExecutionRequest,
-    ) -> bool {
-        let Some(scope_key) = responses_websocket_fallback_scope_key(route, request) else {
-            return false;
-        };
-        self.responses_websocket_http_fallback_scopes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains_key(scope_key.as_str())
-    }
-
-    /// Returns whether the exact request currently selects Codex Responses WebSocket transport.
-    /// 返回精确请求当前是否选择 Codex Responses WebSocket 传输。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `route` and `request` identify the immutable provider route and session-scoped request.
-    /// `route` 与 `request` 标识不可变供应商路由和会话级请求。
-    ///
-    /// # Returns
-    /// 返回值
-    /// `true` only when WebSocket is configured and the session has not switched to HTTP.
-    /// 仅当已配置 WebSocket 且会话尚未切换到 HTTP 时返回 `true`。
-    pub fn responses_websocket_selected_for_request(
-        &self,
-        route: &ProviderExecutionRoute,
-        request: &AiExecutionRequest,
-    ) -> bool {
-        route_prefers_codex_responses_websocket(route)
-            && !self.responses_websocket_http_fallback_active(route, request)
-    }
-
-    /// Remembers one safe WS-to-HTTP switch for the exact Codex session scope.
-    /// 为精确 Codex 会话范围记忆一次安全的 WS 到 HTTP 切换。
-    fn remember_responses_websocket_http_fallback(
-        &self,
-        route: &ProviderExecutionRoute,
-        request: &AiExecutionRequest,
-    ) {
-        let Some(scope_key) = responses_websocket_fallback_scope_key(route, request) else {
-            return;
-        };
-        self.responses_websocket_safe_failure_scopes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(scope_key.as_str());
-        let mut scopes = self
-            .responses_websocket_http_fallback_scopes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !scopes.contains_key(scope_key.as_str())
-            && scopes.len() >= MAX_REMEMBERED_RESPONSES_WEBSOCKET_FALLBACK_SCOPES
-            && let Some(oldest_scope_key) = scopes
-                .iter()
-                .min_by_key(|(_, remembered_at)| **remembered_at)
-                .map(|(scope_key, _)| scope_key.clone())
-        {
-            scopes.remove(oldest_scope_key.as_str());
-        }
-        scopes.insert(scope_key, Instant::now());
-    }
-
-    /// Records one replay-safe WebSocket failure and reports whether its retry budget is exhausted.
-    /// 记录一次可安全重放的 WebSocket 失败，并报告其重试预算是否已经耗尽。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `route` and `request` identify the exact session route; `retry_budget` is the configured
-    /// number of host-controlled retries allowed after the initial attempt.
-    /// `route` 与 `request` 标识精确会话路由；`retry_budget` 是初始尝试后允许的宿主控制重试次数。
-    ///
-    /// # Returns
-    /// 返回值
-    /// `true` when the next safe action is HTTP fallback, or when no stable session scope exists.
-    /// 当下一步安全动作应为 HTTP 回退，或不存在稳定会话范围时返回 `true`。
-    fn record_responses_websocket_safe_failure(
-        &self,
-        route: &ProviderExecutionRoute,
-        request: &AiExecutionRequest,
-        retry_budget: u32,
-    ) -> bool {
-        let Some(scope_key) = responses_websocket_fallback_scope_key(route, request) else {
-            return true;
-        };
-        let now = Instant::now();
-        let mut scopes = self
-            .responses_websocket_safe_failure_scopes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !scopes.contains_key(scope_key.as_str())
-            && scopes.len() >= MAX_REMEMBERED_RESPONSES_WEBSOCKET_FALLBACK_SCOPES
-            && let Some(oldest_scope_key) = scopes
-                .iter()
-                .min_by_key(|(_, scope)| scope.observed_at)
-                .map(|(scope_key, _)| scope_key.clone())
-        {
-            scopes.remove(oldest_scope_key.as_str());
-        }
-        let scope = scopes
-            .entry(scope_key)
-            .or_insert(ResponsesWebsocketSafeFailureScope {
-                failures: 0,
-                observed_at: now,
-            });
-        scope.failures = scope.failures.saturating_add(1);
-        scope.observed_at = now;
-        scope.failures > retry_budget
-    }
-
-    /// Clears pending safe-failure accounting after a healthy or semantic WebSocket response.
-    /// 在 WebSocket 健康完成或产生语义输出后清除待处理的安全失败计数。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `route` and `request` identify the exact session route whose transient count is reset.
-    /// `route` 与 `request` 标识需要重置瞬态计数的精确会话路由。
-    ///
-    /// # Returns
-    /// 返回值
-    /// This function mutates process-local state and returns no value.
-    /// 此函数修改进程内状态且不返回值。
-    fn clear_responses_websocket_safe_failures(
-        &self,
-        route: &ProviderExecutionRoute,
-        request: &AiExecutionRequest,
-    ) {
-        let Some(scope_key) = responses_websocket_fallback_scope_key(route, request) else {
-            return;
-        };
-        self.responses_websocket_safe_failure_scopes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(scope_key.as_str());
     }
 
     /// Uploads or pre-reads one local media resource before the conversation is materialized.
@@ -1108,6 +964,8 @@ impl ProviderExecutionClient {
             .map_err(protocol_failure)?;
         validate_request_policy(route, request)?;
         let encoded = profile.encode(request).map_err(protocol_failure)?;
+        let encoded =
+            project_responses_baseline_for_provider(&self.protocols, route, request, encoded)?;
         project_provider_request(route, request, encoded)
     }
 
@@ -1134,49 +992,64 @@ impl ProviderExecutionClient {
         project_credential_request(route, secret, encoded)
     }
 
-    /// Encodes the exact primary wire body selected for this route and session without credentials.
-    /// 在不投影凭据的情况下编码该路由与会话选中的精确主传输 Wire 正文。
+    /// Encodes the exact credential-projected wire body selected for this route and session.
+    /// 编码由当前路由与会话选中的精确凭据投影 Wire 正文。
     ///
     /// # Parameters
     /// 参数
     /// `route` is the frozen provider route and `request` is the immutable canonical request.
     /// `route` 是冻结的供应商路由，`request` 是不可变规范请求。
+    /// `secret` supplies the same credential-bound body projection used by real dispatch.
+    /// `secret` 提供与真实分派相同的凭据绑定正文投影。
     ///
     /// # Returns
     /// 返回值
-    /// A WebSocket response.create body when WS remains active for the session, otherwise the full
-    /// HTTP Responses body with every WebSocket-only continuation field removed.
-    /// 会话仍启用 WS 时返回 WebSocket response.create 正文；否则返回移除全部 WS 专属延续字段的
-    /// 完整 HTTP Responses 正文。
-    pub fn encode_request_for_selected_transport(
-        &self,
-        route: &ProviderExecutionRoute,
-        request: &AiExecutionRequest,
-    ) -> Result<EncodedWireRequest, ProviderExecutionFailure> {
-        let websocket_enabled = route_prefers_codex_responses_websocket(route)
-            && !self.responses_websocket_http_fallback_active(route, request);
-        let transport_request = if websocket_enabled {
-            request.clone()
-        } else {
-            prepare_http_execution_request(route, request.clone())
-        };
-        let mut encoded = self.encode_request(route, &transport_request)?;
-        if websocket_enabled {
-            encoded.body = project_codex_responses_websocket_body(&transport_request, encoded.body);
-        }
-        Ok(encoded)
-    }
-
-    /// Encodes the exact selected transport body and then applies credential-owned projections.
-    /// 编码精确选中的传输正文，然后应用凭据拥有的投影。
-    pub fn encode_request_for_selected_transport_with_credential(
+    /// The exact credential-projected request body selected by current transport state.
+    /// 返回由当前传输状态选中的精确凭据投影请求体。
+    pub async fn encode_effective_request_with_credential(
         &self,
         route: &ProviderExecutionRoute,
         request: &AiExecutionRequest,
         secret: &CredentialExecutionSecret,
     ) -> Result<EncodedWireRequest, ProviderExecutionFailure> {
-        let encoded = self.encode_request_for_selected_transport(route, request)?;
-        project_credential_request(route, secret, encoded)
+        let websocket_key = responses_websocket_cache_key(route, request, secret);
+        let websocket_allowed = websocket_key.as_ref().is_some_and(|key| {
+            route.protocol_route.responses_websocket_enabled()
+                && upstream_protocol_for_route(route) == Some(UpstreamProtocol::OpenAiResponses)
+                && !self
+                    .responses_websocket_breakers
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .contains(key)
+        });
+        let effective_request = if websocket_allowed {
+            let existing = self
+                .responses_websocket_sessions
+                .lock()
+                .await
+                .get(
+                    websocket_key
+                        .as_deref()
+                        .expect("allowed route has a cache key"),
+                )
+                .cloned();
+            if let Some(existing) = existing {
+                let session = existing.lock().await;
+                if session.replacement_required() {
+                    request_without_nonpersistent_responses_continuation(route, request)
+                } else {
+                    responses_websocket_request_for_active_session(
+                        request,
+                        session.previous_response_id(),
+                    )
+                }
+            } else {
+                request_without_nonpersistent_responses_continuation(route, request)
+            }
+        } else {
+            request_without_nonpersistent_responses_continuation(route, request)
+        };
+        self.encode_request_with_credential(route, &effective_request, secret)
     }
 
     /// Executes the standalone Codex Responses compaction endpoint without streaming.
@@ -1513,146 +1386,401 @@ impl ProviderExecutionClient {
         secret: CredentialExecutionSecret,
         execution_id: String,
     ) -> ProviderExecutionStream {
-        self.execute_with_websocket_retry_budget(route, request, secret, execution_id, 0)
+        let websocket_key = responses_websocket_cache_key(&route, &request, &secret);
+        let websocket_allowed = websocket_key.as_ref().is_some_and(|key| {
+            route.protocol_route.responses_websocket_enabled()
+                && upstream_protocol_for_route(&route) == Some(UpstreamProtocol::OpenAiResponses)
+                && !self
+                    .responses_websocket_breakers
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .contains(key)
+        });
+        if websocket_allowed {
+            return self.execute_responses_websocket(
+                route,
+                request,
+                secret,
+                execution_id,
+                websocket_key.expect("allowed WebSocket route has a cache key"),
+            );
+        }
+        self.execute_http(route, request, secret, execution_id)
     }
 
-    /// Executes one route while deferring safe WebSocket fallback through a bounded host retry budget.
-    /// 执行一条路由，并通过有界宿主重试预算延后安全的 WebSocket 回退。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `route`, `request`, `secret`, and `execution_id` define the exact physical request;
-    /// `websocket_retry_budget` is the number of host-controlled retries allowed before HTTP fallback.
-    /// `route`、`request`、`secret` 与 `execution_id` 定义精确物理请求；
-    /// `websocket_retry_budget` 是 HTTP 回退前允许的宿主控制重试次数。
-    ///
-    /// # Returns
-    /// 返回值
-    /// A normalized stream that either exposes the safe failure to the host retry loop or falls back
-    /// to HTTP only after the exact session budget is exhausted.
-    /// 返回规范化事件流：在预算未耗尽时向宿主重试循环暴露安全失败，仅在精确会话预算耗尽后回退 HTTP。
-    pub fn execute_with_websocket_retry_budget(
+    /// Executes one explicitly enabled Responses route over a non-multiplexed WebSocket.
+    /// 通过不复用并发响应的 WebSocket 执行一条显式启用的 Responses 路由。
+    fn execute_responses_websocket(
         &self,
         route: ProviderExecutionRoute,
         request: AiExecutionRequest,
         secret: CredentialExecutionSecret,
         execution_id: String,
-        websocket_retry_budget: u32,
+        websocket_key: String,
     ) -> ProviderExecutionStream {
-        let websocket_configured = route_prefers_codex_responses_websocket(&route);
-        let websocket_disabled_for_session =
-            websocket_configured && self.responses_websocket_http_fallback_active(&route, &request);
-        let websocket_enabled = websocket_configured && !websocket_disabled_for_session;
-        if !websocket_enabled {
-            if websocket_disabled_for_session {
-                let skipped_at = Instant::now();
-                emit_provider_transport_trace(
-                    execution_id.as_str(),
-                    "responses_websocket",
-                    "skipped_after_session_http_fallback",
-                    &skipped_at,
-                );
-            }
-            return self.execute_http(route, request, secret, execution_id);
-        }
         let client = self.clone();
         Box::pin(try_stream! {
-            let fallback_started_at = Instant::now();
-            let mut websocket = client.execute_responses_websocket(
-                route.clone(),
-                request.clone(),
-                secret.clone(),
-                execution_id.clone(),
+            let transport_started_at = Instant::now();
+            let dispatched_at_ms = provider_transport_unix_millis()?;
+            emit_provider_transport_trace(
+                execution_id.as_str(),
+                "responses_websocket",
+                "execution_started",
+                &transport_started_at,
             );
-            // Deferred lifecycle events prevent a failed pre-semantic WebSocket attempt from
-            // publishing stale response ids before the same logical request falls back to HTTP.
-            // 延迟生命周期事件可避免在同一逻辑请求回退 HTTP 前发布失败 WS 尝试产生的过期响应标识。
-            let mut deferred_websocket_events = Vec::new();
-            let mut websocket_semantic_output_observed = false;
-            let mut websocket_failure_observed = false;
-            while let Some(result) = websocket.next().await {
-                match result {
-                    Ok(event) => {
-                        if stream_event_has_semantic_output(&event)
-                            && !websocket_semantic_output_observed
-                        {
-                            websocket_semantic_output_observed = true;
-                            client.clear_responses_websocket_safe_failures(&route, &request);
-                            for deferred_event in deferred_websocket_events.drain(..) {
-                                yield deferred_event;
-                            }
-                        }
-                        if websocket_semantic_output_observed {
-                            yield event;
-                        } else {
-                            deferred_websocket_events.push(event);
-                        }
+            // Handshake projection must never depend on a non-persistent continuation cursor.
+            // 握手投影绝不能依赖非持久化的延续游标。
+            let handshake_request = request_without_nonpersistent_responses_continuation(
+                &route,
+                &request,
+            );
+            let handshake_encoded = client.encode_request_with_credential(
+                &route,
+                &handshake_request,
+                &secret,
+            )?;
+            let profile = client
+                .protocols
+                .require(route.protocol_route.protocol_profile_id.as_str())
+                .map_err(protocol_failure)?;
+            let transport = profile.transport_profile();
+            let url = responses_websocket_url(&route, handshake_encoded.path.as_str())?;
+            let mut headers = execution_headers(&route, &handshake_encoded.headers, &secret)?;
+            headers.insert(
+                HeaderName::from_static("openai-beta"),
+                HeaderValue::from_static(CODEX_RESPONSES_WEBSOCKET_BETA),
+            );
+            let config = ResponsesWebsocketConfig {
+                url,
+                headers: websocket_headers(&headers)?,
+                connect_timeout: Duration::from_millis(transport.response_headers_timeout_ms),
+                idle_timeout: Duration::from_millis(transport.stream_idle_timeout_ms),
+                max_connection_age: DEFAULT_RESPONSES_WEBSOCKET_MAX_AGE,
+                max_frame_bytes: transport.max_frame_bytes,
+            };
+            let session_handle = match client
+                .responses_websocket_session(websocket_key.as_str(), config.clone())
+                .await
+            {
+                Ok(session) => session,
+                Err(error) => {
+                    client.disable_responses_websocket(websocket_key.as_str());
+                    Err(trace_provider_transport_failure(
+                        execution_id.as_str(),
+                        "responses_websocket",
+                        stream_transport_failure_with_websocket_close_code(
+                            error.message,
+                            false,
+                            error.websocket_close_code,
+                        ),
+                        &transport_started_at,
+                    ))?
+                }
+            };
+            let mut session = session_handle.lock().await;
+            if session.replacement_required() {
+                let _ = session.close().await;
+                *session = match ResponsesWebsocketSession::connect(config).await {
+                    Ok(session) => session,
+                    Err(error) => {
+                        client.disable_responses_websocket(websocket_key.as_str());
+                        Err(trace_provider_transport_failure(
+                            execution_id.as_str(),
+                            "responses_websocket",
+                            stream_transport_failure_with_websocket_close_code(
+                                error.message,
+                                false,
+                                error.websocket_close_code,
+                            ),
+                            &transport_started_at,
+                        ))?
                     }
-                    Err(failure) => {
-                        websocket_failure_observed = true;
-                        let safe_http_fallback =
-                            websocket_failure_allows_http_fallback(&failure);
-                        // Unsupported handshake statuses are a route capability fact, not a transient outage.
-                        // 不支持的握手状态表示路由能力事实，而不是瞬时故障。
-                        let immediate_http_fallback = safe_http_fallback
-                            && websocket_failure_requires_immediate_http_fallback(&failure);
-                        let retry_budget_exhausted = immediate_http_fallback
-                            || safe_http_fallback
-                            && client.record_responses_websocket_safe_failure(
-                                &route,
-                                &request,
-                                websocket_retry_budget,
-                            );
-                        if safe_http_fallback && retry_budget_exhausted {
-                            emit_provider_transport_trace(
-                                execution_id.as_str(),
-                                "responses_websocket",
-                                "fallback_to_http",
-                                &fallback_started_at,
-                            );
-                            client.remember_responses_websocket_http_fallback(&route, &request);
-                            deferred_websocket_events.clear();
-                            let mut http = client.execute_http(
-                                route.clone(),
-                                request.clone(),
-                                secret.clone(),
-                                execution_id.clone(),
-                            );
-                            while let Some(result) = http.next().await {
-                                yield result?;
-                            }
-                        } else if safe_http_fallback {
-                            emit_provider_transport_trace(
-                                execution_id.as_str(),
-                                "responses_websocket",
-                                "retry_deferred_to_host",
-                                &fallback_started_at,
-                            );
-                            deferred_websocket_events.clear();
-                            Err(failure)?;
-                        } else {
-                            emit_provider_transport_trace(
-                                execution_id.as_str(),
-                                "responses_websocket",
-                                "fallback_rejected_after_semantic_output",
-                                &fallback_started_at,
-                            );
-                            for deferred_event in deferred_websocket_events.drain(..) {
-                                yield deferred_event;
-                            }
-                            Err(failure)?;
-                        }
-                        break;
+                };
+            }
+            // A store=false cursor is valid only when this exact active socket proves ownership.
+            // store=false 游标仅在当前精确活动 Socket 证明其归属时才有效。
+            let wire_request = responses_websocket_request_for_active_session(
+                &request,
+                session.previous_response_id(),
+            );
+            let encoded = client.encode_request_with_credential(&route, &wire_request, &secret)?;
+            if let Err(error) = session.begin_response(encoded.body, None).await {
+                client.disable_responses_websocket(websocket_key.as_str());
+                Err(trace_provider_transport_failure(
+                    execution_id.as_str(),
+                    "responses_websocket",
+                    stream_transport_failure_with_websocket_close_code(
+                        error.message,
+                        false,
+                        error.websocket_close_code,
+                    ),
+                    &transport_started_at,
+                ))?;
+            }
+            yield AiStreamEvent::TransportObserved {
+                transport: AiTransportKind::ResponsesWebsocket,
+                dispatched_at_ms,
+                headers_at_ms: None,
+                http_status: None,
+                provider_request_id: None,
+                rate_limit_headers: BTreeMap::new(),
+            };
+            emit_provider_transport_trace(
+                execution_id.as_str(),
+                "responses_websocket",
+                "request_dispatched",
+                &transport_started_at,
+            );
+            let mut decoder = profile.create_stream_decoder(execution_id.clone(), &request);
+            let usage_profiles = route.protocol_route.usage_extraction_profiles.clone();
+            let profiled_usage_enabled = !usage_profiles.is_empty();
+            let mut usage_accumulator = UsageAccumulator::default();
+            let mut profiled_usage_gate = ProfiledUsageEventGate::default();
+            let mut semantic_output_observed = false;
+            let mut stream_state = AiStreamStateMachine::default();
+            let mut terminal_observed = false;
+            loop {
+                let frame = match session.next_frame().await {
+                    Ok(Some(frame)) => frame,
+                    Ok(None) => {
+                        client.disable_responses_websocket(websocket_key.as_str());
+                        Err(trace_provider_transport_failure(
+                            execution_id.as_str(),
+                            "responses_websocket",
+                            stream_transport_failure_with_websocket_close_code(
+                                "Responses WebSocket closed without a terminal event.",
+                                semantic_output_observed,
+                                None,
+                            ),
+                            &transport_started_at,
+                        ))?
+                    }
+                    Err(error) => {
+                        client.disable_responses_websocket(websocket_key.as_str());
+                        Err(trace_provider_transport_failure(
+                            execution_id.as_str(),
+                            "responses_websocket",
+                            stream_transport_failure_with_websocket_close_code(
+                                error.message,
+                                semantic_output_observed,
+                                error.websocket_close_code,
+                            ),
+                            &transport_started_at,
+                        ))?
+                    }
+                };
+                if let Some((code, message)) = responses_websocket_retry_control(&frame.value) {
+                    Err(responses_websocket_control_failure(
+                        code,
+                        message,
+                        semantic_output_observed,
+                    ))?;
+                }
+                let mut profiled_usage_events = extract_profiled_usage_value_events(
+                    &usage_profiles,
+                    UsageRecordKind::WebSocketFrame,
+                    &frame.value,
+                    &mut usage_accumulator,
+                )
+                .map_err(|error| {
+                    abandon_responses_websocket_attempt(
+                        &mut session,
+                        stream_protocol_failure_for_transport(
+                            error,
+                            semantic_output_observed,
+                            AiTransportKind::ResponsesWebsocket,
+                        ),
+                    )
+                })?;
+                for usage_event in &mut profiled_usage_events {
+                    apply_local_cost_estimate(&route, usage_event);
+                }
+                for mut usage_event in profiled_usage_gate.stage(profiled_usage_events) {
+                    validate_stream_event(
+                        &mut stream_state,
+                        &usage_event,
+                        semantic_output_observed,
+                    )
+                    .map_err(|failure| {
+                        abandon_responses_websocket_attempt(&mut session, failure)
+                    })?;
+                    update_semantic_output_observation(
+                        &mut semantic_output_observed,
+                        &mut usage_event,
+                    );
+                    yield usage_event;
+                }
+                for mut event in decoder
+                    .push_json(&frame.value)
+                    .map_err(|error| {
+                        abandon_responses_websocket_attempt(
+                            &mut session,
+                            stream_protocol_failure_for_transport(
+                                error,
+                                semantic_output_observed,
+                                AiTransportKind::ResponsesWebsocket,
+                            ),
+                        )
+                    })?
+                {
+                    if profiled_usage_enabled
+                        && matches!(event, AiStreamEvent::UsageUpdated { .. })
+                    {
+                        continue;
+                    }
+                    apply_local_cost_estimate(&route, &mut event);
+                    let was_semantic_output_observed = semantic_output_observed;
+                    update_semantic_output_observation(
+                        &mut semantic_output_observed,
+                        &mut event,
+                    );
+                    if semantic_output_observed && !was_semantic_output_observed {
+                        emit_provider_transport_trace(
+                            execution_id.as_str(),
+                            "responses_websocket",
+                            "first_semantic_event",
+                            &transport_started_at,
+                        );
+                    }
+                    terminal_observed |= matches!(
+                        event,
+                        AiStreamEvent::ResponseCompleted | AiStreamEvent::ResponseFailed { .. }
+                    );
+                    validate_stream_event(&mut stream_state, &event, semantic_output_observed)
+                        .map_err(|failure| {
+                            abandon_responses_websocket_attempt(&mut session, failure)
+                        })?;
+                    let released_usage = profiled_usage_gate.observe(&event);
+                    yield event;
+                    for mut usage_event in released_usage {
+                        validate_stream_event(
+                            &mut stream_state,
+                            &usage_event,
+                            semantic_output_observed,
+                        )
+                        .map_err(|failure| {
+                            abandon_responses_websocket_attempt(&mut session, failure)
+                        })?;
+                        update_semantic_output_observation(
+                            &mut semantic_output_observed,
+                            &mut usage_event,
+                        );
+                        yield usage_event;
                     }
                 }
+                if frame.completed || frame.failed {
+                    break;
+                }
             }
-            if !websocket_failure_observed {
-                client.clear_responses_websocket_safe_failures(&route, &request);
+            for mut event in decoder
+                .finish()
+                .map_err(|error| {
+                    abandon_responses_websocket_attempt(
+                        &mut session,
+                        stream_completion_failure_for_transport(
+                            error,
+                            semantic_output_observed,
+                            AiTransportKind::ResponsesWebsocket,
+                        ),
+                    )
+                })?
+            {
+                if profiled_usage_enabled && matches!(event, AiStreamEvent::UsageUpdated { .. }) {
+                    continue;
+                }
+                apply_local_cost_estimate(&route, &mut event);
+                update_semantic_output_observation(&mut semantic_output_observed, &mut event);
+                terminal_observed |= matches!(
+                    event,
+                    AiStreamEvent::ResponseCompleted | AiStreamEvent::ResponseFailed { .. }
+                );
+                validate_stream_event(&mut stream_state, &event, semantic_output_observed).map_err(
+                    |failure| abandon_responses_websocket_attempt(&mut session, failure),
+                )?;
+                let released_usage = profiled_usage_gate.observe(&event);
+                yield event;
+                for mut usage_event in released_usage {
+                    validate_stream_event(
+                        &mut stream_state,
+                        &usage_event,
+                        semantic_output_observed,
+                    )
+                    .map_err(|failure| {
+                        abandon_responses_websocket_attempt(&mut session, failure)
+                    })?;
+                    update_semantic_output_observation(
+                        &mut semantic_output_observed,
+                        &mut usage_event,
+                    );
+                    yield usage_event;
+                }
             }
-            for deferred_event in deferred_websocket_events {
-                yield deferred_event;
+            profiled_usage_gate
+                .ensure_released()
+                .map_err(|error| {
+                    abandon_responses_websocket_attempt(
+                        &mut session,
+                        stream_completion_failure_for_transport(
+                            error,
+                            semantic_output_observed,
+                            AiTransportKind::ResponsesWebsocket,
+                        ),
+                    )
+                })?;
+            if !terminal_observed || !stream_state.is_terminal() {
+                Err(abandon_responses_websocket_attempt(
+                    &mut session,
+                    stream_completion_failure_for_transport(
+                        ProtocolConversionError::new(
+                            "Responses WebSocket ended without a normalized terminal event.",
+                        ),
+                        semantic_output_observed,
+                        AiTransportKind::ResponsesWebsocket,
+                    ),
+                ))?;
             }
+            emit_provider_transport_trace(
+                execution_id.as_str(),
+                "responses_websocket",
+                "execution_completed",
+                &transport_started_at,
+            );
         })
+    }
+
+    /// Returns or establishes one session-isolated WebSocket connection.
+    /// 返回或建立一个会话隔离的 WebSocket 连接。
+    async fn responses_websocket_session(
+        &self,
+        key: &str,
+        config: ResponsesWebsocketConfig,
+    ) -> Result<Arc<TokioMutex<ResponsesWebsocketSession>>, vulcan_llm_core::LlmCoreError> {
+        if let Some(existing) = self
+            .responses_websocket_sessions
+            .lock()
+            .await
+            .get(key)
+            .cloned()
+        {
+            return Ok(existing);
+        }
+        let session = Arc::new(TokioMutex::new(
+            ResponsesWebsocketSession::connect(config).await?,
+        ));
+        let mut sessions = self.responses_websocket_sessions.lock().await;
+        Ok(sessions
+            .entry(key.to_string())
+            .or_insert_with(|| Arc::clone(&session))
+            .clone())
+    }
+
+    /// Activates a sticky circuit breaker for one route and root session.
+    /// 为一条路由与根会话激活粘性熔断器。
+    fn disable_responses_websocket(&self, key: &str) {
+        self.responses_websocket_breakers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(key.to_string());
     }
 
     /// Starts one immutable HTTP SSE execution without transport fallback.
@@ -1673,7 +1801,7 @@ impl ProviderExecutionClient {
                 "execution_started",
                 &transport_started_at,
             );
-            let request = prepare_http_execution_request(&route, request);
+            let request = request_without_nonpersistent_responses_continuation(&route, &request);
             let encoded = client.encode_request_with_credential(&route, &request, &secret)?;
             let profile = client
                 .protocols
@@ -1699,6 +1827,7 @@ impl ProviderExecutionClient {
                 "request_dispatched",
                 &transport_started_at,
             );
+            let dispatched_at_ms = provider_transport_unix_millis()?;
             let response = tokio::time::timeout(
                 Duration::from_millis(transport.response_headers_timeout_ms),
                 client
@@ -1728,6 +1857,20 @@ impl ProviderExecutionClient {
                 &transport_started_at,
             );
             let status = response.status();
+            let headers_at_ms = provider_transport_unix_millis()?;
+            let rate_limit_headers = allowlisted_rate_limit_headers(response.headers());
+            let provider_request_id = provider_request_id_from_headers(
+                response.headers(),
+                route.protocol_route.provider_request_id_headers.as_slice(),
+            )?;
+            yield AiStreamEvent::TransportObserved {
+                transport: AiTransportKind::Http,
+                dispatched_at_ms,
+                headers_at_ms: Some(headers_at_ms),
+                http_status: Some(status.as_u16()),
+                provider_request_id,
+                rate_limit_headers,
+            };
             let response = if status.is_success() {
                 response
             } else {
@@ -1755,6 +1898,10 @@ impl ProviderExecutionClient {
             let mut decoder = profile.create_stream_decoder(execution_id.clone(), &request);
             let mut parser = IncrementalFrameParser::new(transport);
             let mut bytes = response.bytes_stream();
+            let usage_profiles = route.protocol_route.usage_extraction_profiles.clone();
+            let profiled_usage_enabled = !usage_profiles.is_empty();
+            let mut usage_accumulator = UsageAccumulator::default();
+            let mut profiled_usage_gate = ProfiledUsageEventGate::default();
             let mut semantic_output_observed = false;
             let mut first_chunk_observed = false;
             let mut stream_state = AiStreamStateMachine::default();
@@ -1795,12 +1942,40 @@ impl ProviderExecutionClient {
                     .push(chunk.as_ref())
                     .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?
                 {
+                    let mut profiled_usage_events = extract_profiled_usage_events(
+                        &usage_profiles,
+                        UsageRecordKind::SseEvent,
+                        frame.data.as_str(),
+                        &mut usage_accumulator,
+                    )
+                    .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?;
+                    for usage_event in &mut profiled_usage_events {
+                        apply_local_cost_estimate(&route, usage_event);
+                    }
+                    for mut usage_event in profiled_usage_gate.stage(profiled_usage_events) {
+                        validate_stream_event(
+                            &mut stream_state,
+                            &usage_event,
+                            semantic_output_observed,
+                        )?;
+                        update_semantic_output_observation(
+                            &mut semantic_output_observed,
+                            &mut usage_event,
+                        );
+                        yield usage_event;
+                    }
                     for mut event in decoder
                         .push_sse(frame.event_name.as_deref(), frame.data.as_str())
                         .map_err(|error| {
                             stream_protocol_failure(error, semantic_output_observed)
                         })?
                     {
+                        if profiled_usage_enabled
+                            && matches!(event, AiStreamEvent::UsageUpdated { .. })
+                        {
+                            continue;
+                        }
+                        apply_local_cost_estimate(&route, &mut event);
                         let was_semantic_output_observed = semantic_output_observed;
                         update_semantic_output_observation(
                             &mut semantic_output_observed,
@@ -1826,7 +2001,20 @@ impl ProviderExecutionClient {
                             );
                         }
                         validate_stream_event(&mut stream_state, &event, semantic_output_observed)?;
+                        let released_usage = profiled_usage_gate.observe(&event);
                         yield event;
+                        for mut usage_event in released_usage {
+                            validate_stream_event(
+                                &mut stream_state,
+                                &usage_event,
+                                semantic_output_observed,
+                            )?;
+                            update_semantic_output_observation(
+                                &mut semantic_output_observed,
+                                &mut usage_event,
+                            );
+                            yield usage_event;
+                        }
                     }
                 }
             }
@@ -1834,22 +2022,67 @@ impl ProviderExecutionClient {
                 .finish()
                 .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?
             {
+                let mut profiled_usage_events = extract_profiled_usage_events(
+                    &usage_profiles,
+                    UsageRecordKind::SseEvent,
+                    frame.data.as_str(),
+                    &mut usage_accumulator,
+                )
+                .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?;
+                for usage_event in &mut profiled_usage_events {
+                    apply_local_cost_estimate(&route, usage_event);
+                }
+                for mut usage_event in profiled_usage_gate.stage(profiled_usage_events) {
+                    validate_stream_event(
+                        &mut stream_state,
+                        &usage_event,
+                        semantic_output_observed,
+                    )?;
+                    update_semantic_output_observation(
+                        &mut semantic_output_observed,
+                        &mut usage_event,
+                    );
+                    yield usage_event;
+                }
                 for mut event in decoder
                     .push_sse(frame.event_name.as_deref(), frame.data.as_str())
                     .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?
                 {
+                    if profiled_usage_enabled
+                        && matches!(event, AiStreamEvent::UsageUpdated { .. })
+                    {
+                        continue;
+                    }
+                    apply_local_cost_estimate(&route, &mut event);
                     update_semantic_output_observation(
                         &mut semantic_output_observed,
                         &mut event,
                     );
                     validate_stream_event(&mut stream_state, &event, semantic_output_observed)?;
+                    let released_usage = profiled_usage_gate.observe(&event);
                     yield event;
+                    for mut usage_event in released_usage {
+                        validate_stream_event(
+                            &mut stream_state,
+                            &usage_event,
+                            semantic_output_observed,
+                        )?;
+                        update_semantic_output_observation(
+                            &mut semantic_output_observed,
+                            &mut usage_event,
+                        );
+                        yield usage_event;
+                    }
                 }
             }
             for mut event in decoder
                 .finish()
                 .map_err(|error| stream_completion_failure(error, semantic_output_observed))?
             {
+                if profiled_usage_enabled && matches!(event, AiStreamEvent::UsageUpdated { .. }) {
+                    continue;
+                }
+                apply_local_cost_estimate(&route, &mut event);
                 let was_semantic_output_observed = semantic_output_observed;
                 update_semantic_output_observation(
                     &mut semantic_output_observed,
@@ -1875,8 +2108,24 @@ impl ProviderExecutionClient {
                     );
                 }
                 validate_stream_event(&mut stream_state, &event, semantic_output_observed)?;
+                let released_usage = profiled_usage_gate.observe(&event);
                 yield event;
+                for mut usage_event in released_usage {
+                    validate_stream_event(
+                        &mut stream_state,
+                        &usage_event,
+                        semantic_output_observed,
+                    )?;
+                    update_semantic_output_observation(
+                        &mut semantic_output_observed,
+                        &mut usage_event,
+                    );
+                    yield usage_event;
+                }
             }
+            profiled_usage_gate
+                .ensure_released()
+                .map_err(|error| stream_completion_failure(error, semantic_output_observed))?;
             emit_provider_transport_trace(
                 execution_id.as_str(),
                 "http_sse",
@@ -1885,522 +2134,346 @@ impl ProviderExecutionClient {
             );
         })
     }
+}
 
-    /// Executes one Codex Responses request over a JSON WebSocket stream.
-    /// 通过 JSON WebSocket 流执行一次 Codex Responses 请求。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `route`, `request`, `secret`, and `execution_id` are the same immutable execution inputs
-    /// used by the HTTP path.
-    /// `route`、`request`、`secret` 与 `execution_id` 与 HTTP 路径使用相同的不可变执行输入。
-    ///
-    /// # Returns
-    /// 返回值
-    /// A normalized stream. A failure before semantic output is marked retryable so the caller can
-    /// safely fall back to HTTP SSE; failures after semantic output remain terminal.
-    /// 返回归一化流。语义输出前的失败会标记为可重试，以便调用方安全回退 HTTP SSE；语义输出后的失败保持终态。
-    fn execute_responses_websocket(
-        &self,
-        route: ProviderExecutionRoute,
-        request: AiExecutionRequest,
-        secret: CredentialExecutionSecret,
-        execution_id: String,
-    ) -> ProviderExecutionStream {
-        let client = self.clone();
-        Box::pin(try_stream! {
-            let transport_started_at = Instant::now();
-            emit_provider_transport_trace(
-                execution_id.as_str(),
-                "responses_websocket",
-                "execution_started",
-                &transport_started_at,
-            );
-            let encoded = client.encode_request_with_credential(&route, &request, &secret)?;
-            let profile = client
-                .protocols
-                .require(route.protocol_route.protocol_profile_id.as_str())
-                .map_err(protocol_failure)?;
-            if route.protocol_route.protocol_profile_id != OPENAI_CODEX_RESPONSES_PROFILE_ID {
-                Err(websocket_protocol_failure(
-                    "Responses WebSocket transport is registered only for the Codex Responses profile.",
-                ))?;
-            }
-            let transport = profile.transport_profile();
-            let http_url = route.request_url(encoded.path.as_str());
-            let websocket_url = websocket_url_from_http(http_url.as_str())
-                .map_err(|error| websocket_protocol_failure(error.message))?;
-            let headers = execution_headers(&route, &encoded.headers, &secret)?;
-            let mut websocket_request = websocket_url
-                .as_str()
-                .into_client_request()
-                .map_err(|error| websocket_handshake_failure(format!(
-                    "Provider WebSocket URL `{websocket_url}` is invalid: {error}"
-                )))?;
-            for (name, value) in headers.iter() {
-                let websocket_name = name
-                    .as_str()
-                    .parse::<WebSocketHeaderName>()
-                    .map_err(|error| {
-                    websocket_handshake_failure(format!(
-                        "Provider WebSocket header name `{name}` is invalid: {error}"
-                    ))
-                })?;
-                let websocket_value = value.to_str().map_err(|error| {
-                    websocket_handshake_failure(format!(
-                        "Provider WebSocket header `{name}` is not valid UTF-8: {error}"
-                    ))
-                })?.parse::<WebSocketHeaderValue>().map_err(|error| {
-                    websocket_handshake_failure(format!(
-                        "Provider WebSocket header `{name}` is invalid: {error}"
-                    ))
-                })?;
-                websocket_request
-                    .headers_mut()
-                    .insert(websocket_name, websocket_value);
-            }
-            insert_responses_websocket_v2_beta_header(websocket_request.headers_mut());
-            emit_provider_transport_trace(
-                execution_id.as_str(),
-                "responses_websocket",
-                "handshake_started",
-                &transport_started_at,
-            );
-            let (mut websocket, _) = tokio::time::timeout(
-                Duration::from_millis(transport.response_headers_timeout_ms),
-                connect_async(websocket_request),
-            )
-            .await
-            .map_err(|_| {
-                websocket_handshake_failure(format!(
-                    "Provider WebSocket handshake to `{websocket_url}` exceeded the registered {} ms response-header timeout.",
-                    transport.response_headers_timeout_ms
-                ))
-            })?
-            .map_err(|error| {
-                websocket_handshake_failure_from_error(
-                    error,
-                    format!("Provider WebSocket handshake to `{websocket_url}` failed"),
-                )
-            })?;
-            emit_provider_transport_trace(
-                execution_id.as_str(),
-                "responses_websocket",
-                "handshake_completed",
-                &transport_started_at,
-            );
-            let websocket_body = project_codex_responses_websocket_body(&request, encoded.body.clone());
-            let request_json = serde_json::to_string(&websocket_body).map_err(|error| {
-                websocket_protocol_failure(format!(
-                    "Codex WebSocket response.create request could not be serialized: {error}"
-                ))
-            })?;
-            websocket
-                .send(Message::text(request_json))
-                .await
-                .map_err(|error| {
-                    stream_transport_failure(
-                        format!("Provider WebSocket request to `{websocket_url}` failed: {error}"),
-                        false,
-                    )
-                })?;
-            emit_provider_transport_trace(
-                execution_id.as_str(),
-                "responses_websocket",
-                "request_sent",
-                &transport_started_at,
-            );
-            let mut decoder = profile.create_stream_decoder(execution_id.clone(), &request);
-            let mut semantic_output_observed = false;
-            let mut stream_state = AiStreamStateMachine::default();
-            let mut terminal_observed = false;
-            let mut first_frame_observed = false;
-            let mut close_detail = None;
-            loop {
-                let next_frame = tokio::time::timeout(
-                    Duration::from_millis(transport.stream_idle_timeout_ms),
-                    websocket.next(),
-                )
-                .await
-                .map_err(|_| {
-                    stream_transport_failure(
-                        format!(
-                            "Provider WebSocket stream from `{websocket_url}` exceeded the registered {} ms idle timeout.",
-                            transport.stream_idle_timeout_ms
-                        ),
-                        semantic_output_observed,
-                    )
-                })?;
-                let Some(frame) = next_frame else {
-                    break;
-                };
-                let frame = frame.map_err(|error| {
-                    stream_transport_failure(
-                        format!("Provider WebSocket stream from `{websocket_url}` failed: {error}"),
-                        semantic_output_observed,
-                    )
-                })?;
-                if !first_frame_observed {
-                    first_frame_observed = true;
-                    emit_provider_transport_trace(
-                        execution_id.as_str(),
-                        "responses_websocket",
-                        "first_frame_received",
-                        &transport_started_at,
-                    );
-                }
-                let value = match frame {
-                    Message::Text(text) => serde_json::from_str::<Value>(text.as_ref()).map_err(|error| {
-                        stream_protocol_failure(ProtocolConversionError::new(format!(
-                            "Provider WebSocket text event from `{websocket_url}` is invalid JSON: {error}"
-                        )), semantic_output_observed)
-                    })?,
-                    Message::Binary(bytes) => serde_json::from_slice::<Value>(bytes.as_ref()).map_err(|error| {
-                        stream_protocol_failure(ProtocolConversionError::new(format!(
-                            "Provider WebSocket binary event from `{websocket_url}` is invalid JSON: {error}"
-                        )), semantic_output_observed)
-                    })?,
-                    Message::Ping(payload) => {
-                        websocket.send(Message::Pong(payload)).await.map_err(|error| {
-                            stream_transport_failure(
-                                format!("Provider WebSocket pong to `{websocket_url}` failed: {error}"),
-                                semantic_output_observed,
-                            )
-                        })?;
-                        continue;
-                    }
-                    Message::Pong(_) => continue,
-                    Message::Close(close_frame) => {
-                        if let Some(close_frame) = close_frame.as_ref() {
-                            let close_code = format!("{:?}", close_frame.code);
-                            let close_reason = close_frame.reason.as_ref();
-                            emit_provider_transport_close_trace(
-                                execution_id.as_str(),
-                                close_code.as_str(),
-                                close_reason,
-                                &transport_started_at,
-                            );
-                            close_detail = Some(format!(
-                                "close code {close_code} with reason `{close_reason}`"
-                            ));
-                        } else {
-                            close_detail = Some(String::from("a close frame without code or reason"));
-                        }
-                        emit_provider_transport_trace(
-                            execution_id.as_str(),
-                            "responses_websocket",
-                            "close_frame_received",
-                            &transport_started_at,
-                        );
-                        break;
-                    }
-                    Message::Frame(_) => continue,
-                };
-                if let Some(failure) = websocket_wrapped_error_failure(&value) {
-                    Err(failure)?;
-                }
-                for mut event in decoder
-                    .push_json(&value)
-                    .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?
-                {
-                    let was_semantic_output_observed = semantic_output_observed;
-                    update_semantic_output_observation(
-                        &mut semantic_output_observed,
-                        &mut event,
-                    );
-                    if semantic_output_observed && !was_semantic_output_observed {
-                        emit_provider_transport_trace(
-                            execution_id.as_str(),
-                            "responses_websocket",
-                            "first_semantic_event",
-                            &transport_started_at,
-                        );
-                    }
-                    terminal_observed = terminal_observed
-                        || matches!(event, AiStreamEvent::ResponseCompleted | AiStreamEvent::ResponseFailed { .. });
-                    if terminal_observed {
-                        emit_provider_transport_trace(
-                            execution_id.as_str(),
-                            "responses_websocket",
-                            "terminal_event",
-                            &transport_started_at,
-                        );
-                    }
-                    validate_stream_event(&mut stream_state, &event, semantic_output_observed)?;
-                    yield event;
-                }
-                if terminal_observed {
-                    break;
-                }
-            }
-            if !terminal_observed {
-                let close_detail = close_detail
-                    .as_deref()
-                    .unwrap_or("the transport ended without a close frame");
-                let mut failure = stream_transport_failure(
-                    format!("Provider WebSocket stream from `{websocket_url}` closed before a terminal Responses event: {close_detail}."),
-                    semantic_output_observed,
-                );
-                // The upstream account-pool signal is safe to replay over HTTPS and should not consume five host retries.
-                // 上游账号池信号可以安全通过 HTTPS 重放，不应消耗五次宿主重试。
-                if close_detail
-                    .to_ascii_lowercase()
-                    .contains("no available account")
-                {
-                    failure.error.subcategory = Some(String::from(
-                        "websocket_no_available_account",
-                    ));
-                }
-                Err(failure)?;
-            }
-            for mut event in decoder
-                .finish()
-                .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?
-            {
-                let was_semantic_output_observed = semantic_output_observed;
-                update_semantic_output_observation(
-                    &mut semantic_output_observed,
-                    &mut event,
-                );
-                if semantic_output_observed && !was_semantic_output_observed {
-                    emit_provider_transport_trace(
-                        execution_id.as_str(),
-                        "responses_websocket",
-                        "first_semantic_event",
-                        &transport_started_at,
-                    );
-                }
-                terminal_observed = terminal_observed
-                    || matches!(event, AiStreamEvent::ResponseCompleted | AiStreamEvent::ResponseFailed { .. });
-                if terminal_observed {
-                    emit_provider_transport_trace(
-                        execution_id.as_str(),
-                        "responses_websocket",
-                        "terminal_event",
-                        &transport_started_at,
-                    );
-                }
-                validate_stream_event(&mut stream_state, &event, semantic_output_observed)?;
-                yield event;
-            }
-            emit_provider_transport_trace(
-                execution_id.as_str(),
-                "responses_websocket",
-                "execution_finished",
-                &transport_started_at,
-            );
-        })
+/// Delays raw profiled usage until the normalized response lifecycle has started.
+/// 将原始 Profile 用量延迟到规范化响应生命周期开始之后。
+#[derive(Debug, Default)]
+struct ProfiledUsageEventGate {
+    /// Whether a validated response start event has been observed.
+    /// 是否已经观察到通过校验的响应开始事件。
+    response_started: bool,
+    /// Usage events collected before the response start event.
+    /// 在响应开始事件之前采集的用量事件。
+    pending: Vec<AiStreamEvent>,
+}
+
+impl ProfiledUsageEventGate {
+    /// Stages newly extracted usage and returns events that may be published immediately.
+    /// 暂存新提取的用量并返回可以立即发布的事件。
+    fn stage(&mut self, events: Vec<AiStreamEvent>) -> Vec<AiStreamEvent> {
+        if self.response_started {
+            return events;
+        }
+        self.pending.extend(events);
+        Vec::new()
+    }
+
+    /// Observes one validated normalized event and releases pending usage after response start.
+    /// 观察一个已校验的规范化事件并在响应开始后释放暂存用量。
+    fn observe(&mut self, event: &AiStreamEvent) -> Vec<AiStreamEvent> {
+        if !matches!(event, AiStreamEvent::ResponseStarted { .. }) {
+            return Vec::new();
+        }
+        self.response_started = true;
+        std::mem::take(&mut self.pending)
+    }
+
+    /// Rejects a completed transport that collected usage without a normalized response start.
+    /// 拒绝已经采集用量却没有规范化响应开始事件的已结束传输。
+    fn ensure_released(&self) -> Result<(), ProtocolConversionError> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        Err(ProtocolConversionError::new(
+            "Provider usage was observed before normalization, but the response start event was never emitted.",
+        ))
     }
 }
 
-/// Returns whether one exact route is configured to prefer Codex Responses WebSocket v2.
-/// 返回一个精确路由是否配置为优先使用 Codex Responses WebSocket v2。
-fn route_prefers_codex_responses_websocket(route: &ProviderExecutionRoute) -> bool {
-    route
-        .protocol_route
-        .responses_features
-        .as_ref()
-        .is_some_and(|features| {
-            features.websocket == crate::ResponsesWebSocketPolicy::PreferredWithHttpFallback
-        })
-        && route.protocol_route.protocol_profile_id == OPENAI_CODEX_RESPONSES_PROFILE_ID
+/// Extracts usage from one untouched stream record before protocol normalization.
+/// 在协议归一化前从一条未经修改的流记录中提取用量。
+fn extract_profiled_usage_events(
+    profiles: &[UsageExtractionProfile],
+    record_kind: UsageRecordKind,
+    data: &str,
+    accumulator: &mut UsageAccumulator,
+) -> Result<Vec<AiStreamEvent>, ProtocolConversionError> {
+    if profiles.is_empty() || data.trim() == "[DONE]" {
+        return Ok(Vec::new());
+    }
+    let value: Value = serde_json::from_str(data).map_err(|error| {
+        ProtocolConversionError::new(format!(
+            "Provider usage record is not valid JSON before normalization: {error}"
+        ))
+    })?;
+    extract_profiled_usage_value_events(profiles, record_kind, &value, accumulator)
 }
 
-/// Removes WebSocket-only continuation state before encoding one HTTP Responses request.
-/// 在编码 HTTP Responses 请求前移除仅属于 WebSocket 的延续状态。
+/// Extracts usage from one already parsed raw provider record.
+/// 从一条已解析的原始供应商记录中提取用量。
+fn extract_profiled_usage_value_events(
+    profiles: &[UsageExtractionProfile],
+    record_kind: UsageRecordKind,
+    value: &Value,
+    accumulator: &mut UsageAccumulator,
+) -> Result<Vec<AiStreamEvent>, ProtocolConversionError> {
+    let mut events = Vec::new();
+    for profile in profiles {
+        let Some(observation) = profile
+            .extract(record_kind, value)
+            .map_err(|error| ProtocolConversionError::new(error.message))?
+        else {
+            continue;
+        };
+        let usage = observation.usage.clone();
+        if accumulator
+            .apply(None, observation)
+            .map_err(|error| ProtocolConversionError::new(error.message))?
+        {
+            events.push(AiStreamEvent::UsageUpdated {
+                usage: Box::new(usage),
+            });
+        }
+    }
+    Ok(events)
+}
+
+/// Applies one frozen local price profile to a normalized usage event without replacing provider cost facts.
+/// 将一个冻结本地价格 Profile 应用于规范化用量事件且不替换供应商成本事实。
+fn apply_local_cost_estimate(route: &ProviderExecutionRoute, event: &mut AiStreamEvent) {
+    let Some(profile) = route.billing_profile.as_ref() else {
+        return;
+    };
+    let AiStreamEvent::UsageUpdated { usage } = event else {
+        return;
+    };
+    if usage.cost.is_some() {
+        // reported_currency must remain authoritative whenever provider cost evidence exists.
+        // 存在供应商成本证据时 reported_currency 必须保持权威。
+        let Some(reported_currency) = usage.cost_currency.as_deref() else {
+            usage
+                .validation_flags
+                .push(String::from("reported_cost_currency_missing"));
+            return;
+        };
+        if reported_currency != profile.currency {
+            usage.validation_flags.push(String::from(
+                "reported_and_estimated_cost_currency_mismatch",
+            ));
+            return;
+        }
+    }
+    let breakdown = CostCalculator::calculate(usage, &profile.pricing, profile.multiplier);
+    usage.estimated_cost = breakdown.total.map(|value| value.normalize().to_string());
+    usage.cost_currency = Some(profile.currency.clone());
+    usage.pricing_revision = Some(profile.pricing_revision.clone());
+    usage.pricing_profile = Some(profile.snapshot.clone());
+}
+
+/// Removes a Responses continuation whenever the wire request is explicitly non-persistent.
+/// 在线路请求明确不持久化时移除 Responses 延续游标。
 ///
 /// # Parameters
 /// 参数
-/// `route` identifies the exact active protocol and `request` is the owned immutable request snapshot.
-/// `route` 标识精确的当前协议，`request` 是拥有所有权的不可变请求快照。
+/// `route` identifies the exact protocol profile and `request` is the immutable canonical request.
+/// `route` 标识精确协议配置，`request` 是不可变规范请求。
 ///
 /// # Returns
 /// 返回值
-/// A request that retains full canonical history for HTTP while leaving every other protocol unchanged.
-/// 返回为 HTTP 保留完整规范历史、且不改变其他协议的请求。
-fn prepare_http_execution_request(
+/// A request that replays complete context for standard and Codex store=false Responses calls.
+/// 返回一项为标准及 Codex store=false Responses 调用重放完整上下文的请求。
+fn request_without_nonpersistent_responses_continuation(
     route: &ProviderExecutionRoute,
-    mut request: AiExecutionRequest,
+    request: &AiExecutionRequest,
 ) -> AiExecutionRequest {
-    if route.protocol_route.protocol_profile_id == OPENAI_CODEX_RESPONSES_PROFILE_ID {
+    let mut request = request.clone();
+    if matches!(
+        route.protocol_route.protocol_profile_id.as_str(),
+        OPENAI_RESPONSES_PROFILE_ID | OPENAI_CODEX_RESPONSES_PROFILE_ID
+    ) {
         request.continuation = None;
     }
     request
 }
 
-/// Projects the required official Codex Responses WebSocket v2 envelope fields.
-/// 投影官方 Codex Responses WebSocket v2 信封要求的字段。
+/// Selects incremental WebSocket input only when the active socket proves cursor ownership.
+/// 仅在活动 Socket 证明游标归属时选择 WebSocket 增量输入。
 ///
 /// # Parameters
 /// 参数
-/// `request` is the immutable public request and `body` is its already validated Codex Responses
-/// HTTP-shaped body before the WebSocket-only envelope projection.
-/// `request` 是不可变公共请求；`body` 是已经校验、尚未投影 WebSocket 专属信封的 Codex Responses
-/// HTTP 形请求正文。
+/// `request` carries the proven local append boundary and `active_response_id` is owned by the
+/// exact cached socket.
+/// `request` 携带已证明的本地追加边界，`active_response_id` 由精确缓存 Socket 持有。
 ///
 /// # Returns
 /// 返回值
-/// The exact response.create body with official defaults filled only when the public request did not
-/// select an explicit value.
-/// 返回精确的 response.create 正文，仅在公共请求未显式选择值时补齐官方默认字段。
-fn project_codex_responses_websocket_body(request: &AiExecutionRequest, mut body: Value) -> Value {
-    body["type"] = Value::String(String::from("response.create"));
-    if body.get("tool_choice").is_none() {
-        body["tool_choice"] = Value::String(String::from("auto"));
+/// The incremental request on an exact identity match, otherwise a complete-history request.
+/// 精确身份匹配时返回增量请求，否则返回完整历史请求。
+fn responses_websocket_request_for_active_session(
+    request: &AiExecutionRequest,
+    active_response_id: Option<&str>,
+) -> AiExecutionRequest {
+    let continuation_matches = request.continuation.as_ref().is_some_and(|continuation| {
+        active_response_id == Some(continuation.provider_message_id.as_str())
+    });
+    let mut request = request.clone();
+    if !continuation_matches {
+        request.continuation = None;
     }
-    if body.get("parallel_tool_calls").is_none() {
-        body["parallel_tool_calls"] = Value::Bool(!matches!(
-            request.parallel_tool_calls,
-            ParallelToolCallPolicy::Disabled
-        ));
-    }
-    if body.get("include").is_none() {
-        body["include"] = json!(["reasoning.encrypted_content"]);
-    }
-    if let Some(cache_scope_id) = request.cache_scope_id.as_deref() {
-        if body.get("client_metadata").is_none() {
-            body["client_metadata"] = Value::Object(serde_json::Map::new());
-        }
-        if let Some(client_metadata) = body["client_metadata"].as_object_mut() {
-            client_metadata
-                .entry(String::from("session_id"))
-                .or_insert_with(|| Value::String(cache_scope_id.to_string()));
-            client_metadata
-                .entry(String::from("thread_id"))
-                .or_insert_with(|| Value::String(cache_scope_id.to_string()));
-        }
-    }
-    body
+    request
 }
 
-/// Installs the exact Responses WebSocket v2 capability header on one handshake request.
-/// 在一次握手请求上安装精确的 Responses WebSocket v2 能力请求头。
+/// Extracts retryable Codex WebSocket control errors from untouched provider frames.
+/// 从未经修改的供应商帧中提取可重试的 Codex WebSocket 控制错误。
 ///
 /// # Parameters
 /// 参数
-/// `headers` is the final WebSocket handshake header map after provider and credential projection.
-/// `headers` 是完成供应商与凭据投影后的最终 WebSocket 握手请求头集合。
-fn insert_responses_websocket_v2_beta_header(
-    headers: &mut tokio_tungstenite::tungstenite::http::HeaderMap,
-) {
-    headers.insert(
-        WebSocketHeaderName::from_static(OPENAI_RESPONSES_WEBSOCKET_BETA_HEADER_NAME),
-        WebSocketHeaderValue::from_static(OPENAI_RESPONSES_WEBSOCKET_BETA_HEADER_VALUE),
-    );
-}
-
-/// Returns whether one failed WebSocket attempt can safely restart over HTTP.
-/// 返回一次失败的 WebSocket 尝试是否可以安全地通过 HTTP 重新开始。
-///
-/// # Parameters
-/// 参数
-/// `failure` is the exact typed failure produced by the WebSocket transport.
-/// `failure` 是 WebSocket 传输产生的精确强类型失败。
+/// `value` is the exact parsed WebSocket frame before protocol decoding.
+/// `value` 是协议解码前的精确已解析 WebSocket 帧。
 ///
 /// # Returns
 /// 返回值
-/// `true` only before semantic output or side effects, including a dispatched request whose stream
-/// ended before any replay-unsafe event became visible.
-/// 仅在语义输出或副作用产生前返回 `true`，包括已经分派但在任何不可安全重放事件可见前中断的请求。
-fn websocket_failure_allows_http_fallback(failure: &ProviderExecutionFailure) -> bool {
-    failure.error.retryable
-        && !failure.error.semantic_output_observed
-        && !failure.error.side_effect_observed
-}
-
-/// Returns whether a WebSocket failure proves the exact route does not support the transport.
-/// 返回一次 WebSocket 失败是否已经证明精确路由不支持该传输。
-///
-/// # Parameters
-/// 参数
-/// `failure` is the typed handshake or stream failure produced by the Responses WebSocket path.
-/// `failure` 是 Responses WebSocket 路径产生的类型化握手或流失败。
-///
-/// # Returns
-/// 返回值
-/// `true` only for the registered unsupported-handshake classification, which must bypass
-/// transient retry delays and switch to HTTPS immediately.
-/// 仅当失败属于已注册的不支持握手分类时返回 `true`，此时必须跳过瞬时重试延迟并立即切换 HTTPS。
-fn websocket_failure_requires_immediate_http_fallback(failure: &ProviderExecutionFailure) -> bool {
-    matches!(
-        failure.error.subcategory.as_deref(),
-        Some("websocket_unsupported" | "websocket_no_available_account")
-    )
-}
-
-/// Converts official wrapped Responses WebSocket errors before the generic stream decoder runs.
-/// 在通用流解码器运行前转换官方包装式 Responses WebSocket 错误。
-///
-/// # Parameters
-/// 参数
-/// `value` is one decoded JSON WebSocket frame.
-/// `value` 是一帧已解码的 JSON WebSocket 消息。
-///
-/// # Returns
-/// 返回值
-/// A typed transport failure for official retry signals or non-success wrapped HTTP status, and
-/// `None` for ordinary Responses events handled by the shared decoder.
-/// 对官方重试信号或包装的非成功 HTTP 状态返回强类型传输失败；普通 Responses 事件返回 `None`
-/// 并交给共享解码器处理。
-fn websocket_wrapped_error_failure(value: &Value) -> Option<ProviderExecutionFailure> {
-    if value.get("type").and_then(Value::as_str) != Some("error") {
-        return None;
-    }
-    // errorPayload supports the official nested wrapper while retaining flat proxy compatibility.
-    // errorPayload 支持官方嵌套包装，同时保留扁平代理兼容性。
-    let error_payload = value.get("error").unwrap_or(value);
-    // errorCode selects only the two retry signals explicitly registered by the official Codex client.
-    // errorCode 仅选择官方 Codex 客户端显式注册的两个重试信号。
-    let error_code = error_payload.get("code").and_then(Value::as_str);
-    if matches!(
-        error_code,
-        Some(
-            OPENAI_RESPONSES_WEBSOCKET_CONNECTION_LIMIT_CODE
-                | OPENAI_RESPONSES_PREVIOUS_RESPONSE_NOT_FOUND_CODE
-        )
+/// The stable code and controlled message for recoverable chain or connection loss.
+/// 返回可恢复链或连接丢失对应的稳定代码与受控消息。
+fn responses_websocket_retry_control(value: &Value) -> Option<(String, String)> {
+    let code = value
+        .pointer("/error/code")
+        .or_else(|| value.pointer("/response/error/code"))
+        .and_then(Value::as_str)?;
+    if !matches!(
+        code,
+        RESPONSES_WEBSOCKET_CONNECTION_LIMIT_CODE
+            | RESPONSES_WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND_CODE
     ) {
-        // message preserves the provider diagnostic and supplies the official recovery meaning when absent.
-        // message 保留供应商诊断，并在缺失时补充官方恢复语义。
-        let message = error_payload
-            .get("message")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| match error_code {
-                Some(OPENAI_RESPONSES_WEBSOCKET_CONNECTION_LIMIT_CODE) => String::from(
-                    "Responses WebSocket connection limit reached; retry with a new transport.",
-                ),
-                _ => String::from(
-                    "Previous response was not found; retry the complete request without its cursor.",
-                ),
-            });
-        // failure is replay-safe because the wrapper arrived before any semantic event escaped.
-        // failure 可安全重放，因为该包装错误出现在任何语义事件逸出之前。
-        let mut failure = stream_transport_failure(message, false);
-        failure.error.subcategory = error_code.map(str::to_string);
-        return Some(failure);
-    }
-    // status mirrors the official `status` plus legacy `status_code` alias.
-    // status 镜像官方 `status` 字段及旧版 `status_code` 别名。
-    let status = value
-        .get("status")
-        .or_else(|| value.get("status_code"))
-        .and_then(Value::as_u64)
-        .and_then(|status| u16::try_from(status).ok())?;
-    if (200..300).contains(&status) {
         return None;
     }
-    Some(http_failure(status, None, value.to_string().as_str()))
+    let message = value
+        .pointer("/error/message")
+        .or_else(|| value.pointer("/response/error/message"))
+        .and_then(Value::as_str)
+        .filter(|message| !message.trim().is_empty())
+        .unwrap_or(match code {
+            RESPONSES_WEBSOCKET_CONNECTION_LIMIT_CODE => {
+                "Responses WebSocket connection lifetime was exhausted."
+            }
+            RESPONSES_WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND_CODE => {
+                "Responses WebSocket previous response was not found."
+            }
+            _ => unreachable!("retry control code was matched above"),
+        });
+    Some((code.to_string(), message.to_string()))
 }
 
-/// Emits one opt-in, secret-safe timing point for a physical provider transport attempt.
-/// 为一次物理供应商传输尝试输出可选且不含密钥的计时点。
+/// Converts a recoverable WebSocket control event into one replay-safe physical-attempt failure.
+/// 将可恢复 WebSocket 控制事件转换为一次可安全重放的真实尝试失败。
 ///
 /// # Parameters
 /// 参数
-/// `execution_id` is the opaque local execution correlation id; `transport` and `stage` are
-/// fixed internal labels; `started_at` is the monotonic start time for this physical attempt.
-/// `execution_id` 是本地不透明执行关联标识；`transport` 与 `stage` 是固定内部标签；
-/// `started_at` 是本次物理尝试的单调起始时间。
+/// `code` and `message` preserve bounded upstream diagnostics; `semantic_output_observed` protects
+/// callers from replay after visible output.
+/// `code` 与 `message` 保留有界上游诊断，`semantic_output_observed` 防止在可见输出后重放。
+///
+/// # Returns
+/// 返回值
+/// A structured retryable transport failure whose safety flag remains authoritative.
+/// 返回一项安全标志仍具权威性的结构化可重试传输失败。
+fn responses_websocket_control_failure(
+    code: String,
+    message: String,
+    semantic_output_observed: bool,
+) -> ProviderExecutionFailure {
+    let mut failure = stream_transport_failure_with_websocket_close_code(
+        message.clone(),
+        semantic_output_observed,
+        None,
+    );
+    failure.error.subcategory = Some(String::from("responses_websocket_control"));
+    failure.error.upstream_code = Some(code);
+    failure.error.upstream_message = Some(message);
+    failure
+}
+
+/// Invalidates a socket after local decoding or lifecycle validation rejects its active response.
+/// 在本地解码或生命周期校验拒绝活动响应后使 Socket 失效。
+///
+/// # Parameters
+/// 参数
+/// `session` owns the exact in-flight socket and `failure` preserves the original typed cause.
+/// `session` 持有精确的处理中 Socket，`failure` 保留原始强类型原因。
+///
+/// # Returns
+/// 返回值
+/// The unchanged failure after synchronously clearing unsafe connection-local state.
+/// 同步清除不安全的连接局部状态后返回未经修改的失败。
+fn abandon_responses_websocket_attempt(
+    session: &mut ResponsesWebsocketSession,
+    failure: ProviderExecutionFailure,
+) -> ProviderExecutionFailure {
+    session.abandon_response();
+    failure
+}
+
+/// Builds the non-secret isolation key for one Responses WebSocket session.
+/// 为一个 Responses WebSocket 会话构建不含密钥的隔离键。
+fn responses_websocket_cache_key(
+    route: &ProviderExecutionRoute,
+    request: &AiExecutionRequest,
+    secret: &CredentialExecutionSecret,
+) -> Option<String> {
+    let root_session_id = request.cache_scope_id.as_deref()?;
+    let material = serde_json::to_vec(&json!({
+        "provider_id": route.provider.id,
+        "entry": route.entry,
+        "connection_id": route.connection.id,
+        "credential_revision": secret.revision(),
+        "protocol_route": route.protocol_route,
+        "secondary_route": route.secondary_route,
+        "custom_model_projection": route.custom_model_projection,
+        "model_id": request.model_id,
+        "root_session_id": root_session_id,
+    }))
+    .ok()?;
+    Some(format!("sha256:{:x}", Sha256::digest(material)))
+}
+
+/// Converts the exact HTTP Responses endpoint to its WebSocket scheme.
+/// 将精确 HTTP Responses 端点转换为对应 WebSocket scheme。
+fn responses_websocket_url(
+    route: &ProviderExecutionRoute,
+    encoded_path: &str,
+) -> Result<String, ProviderExecutionFailure> {
+    let http_url = route.request_url(encoded_path);
+    let mut url = reqwest::Url::parse(http_url.as_str()).map_err(|error| {
+        pre_dispatch_failure(format!("Responses WebSocket endpoint is invalid: {error}"))
+    })?;
+    let websocket_scheme = match url.scheme() {
+        "https" => "wss",
+        "http" => "ws",
+        scheme => {
+            return Err(pre_dispatch_failure(format!(
+                "Responses WebSocket cannot derive from endpoint scheme `{scheme}`."
+            )));
+        }
+    };
+    url.set_scheme(websocket_scheme).map_err(|_| {
+        pre_dispatch_failure("Responses WebSocket endpoint scheme could not be replaced.")
+    })?;
+    Ok(url.to_string())
+}
+
+/// Copies validated HTTP headers into the secret-safe WebSocket handshake container.
+/// 将已校验 HTTP Header 复制到不实现调试输出的 WebSocket 握手容器。
+fn websocket_headers(
+    headers: &HeaderMap,
+) -> Result<BTreeMap<String, String>, ProviderExecutionFailure> {
+    headers
+        .iter()
+        .map(|(name, value)| {
+            value
+                .to_str()
+                .map(|value| (name.as_str().to_string(), value.to_string()))
+                .map_err(|error| {
+                    pre_dispatch_failure(format!(
+                        "Responses WebSocket header `{name}` is not valid UTF-8: {error}"
+                    ))
+                })
+        })
+        .collect()
+}
+
+/// Emits one bounded provider transport trace event.
+/// 发出一条有界供应商传输跟踪事件。
 fn emit_provider_transport_trace(
     execution_id: &str,
     transport: &'static str,
@@ -2459,15 +2532,40 @@ fn emit_provider_transport_failure_trace(
         return;
     }
     eprintln!(
-        "[provider-transport-trace] execution_id={execution_id} transport={transport} stage=execution_failed elapsed_ms={} category={:?} subcategory={:?} error_stage={:?} http_status={:?} dispatch_outcome={:?} retryable={}",
+        "[provider-transport-trace] execution_id={execution_id} transport={transport} stage=execution_failed elapsed_ms={} category={:?} subcategory={:?} error_stage={:?} http_status={:?} websocket_close_code={:?} dispatch_outcome={:?} retryable={}",
         started_at.elapsed().as_millis(),
         failure.error.category,
         failure.error.subcategory,
         failure.error.stage,
         failure.error.http_status,
+        failure.error.websocket_close_code,
         failure.error.dispatch_outcome,
         failure.error.retryable
     );
+}
+
+/// Emits a secret-safe failure trace and returns the unchanged typed failure.
+/// 输出不含秘密的失败追踪，并原样返回强类型失败。
+///
+/// # Parameters
+/// 参数
+/// `execution_id`, `transport`, and `started_at` identify the physical attempt; `failure` is the
+/// authoritative structured failure passed back to retry accounting.
+/// `execution_id`、`transport` 与 `started_at` 标识真实尝试；`failure` 是返回重试统计的权威
+/// 结构化失败。
+///
+/// # Returns
+/// 返回值
+/// The same failure after its normalized, non-secret fields have been traced.
+/// 在记录标准化且不含秘密的字段后，返回同一失败。
+fn trace_provider_transport_failure(
+    execution_id: &str,
+    transport: &'static str,
+    failure: ProviderExecutionFailure,
+    started_at: &Instant,
+) -> ProviderExecutionFailure {
+    emit_provider_transport_failure_trace(execution_id, transport, &failure, started_at);
+    failure
 }
 
 /// Emits one opt-in Responses compact JSON shape without response values or user content.
@@ -2591,41 +2689,6 @@ fn provider_transport_trace_enabled() -> bool {
     })
 }
 
-/// Emits one bounded WebSocket close code and provider reason for opt-in diagnostics.
-/// 为可选诊断输出有界的 WebSocket 关闭码与供应商原因。
-///
-/// # Parameters
-/// 参数
-/// `execution_id` is the local correlation id, `code` is the protocol close code, `reason` is the
-/// provider close reason, and `started_at` is the physical attempt start time.
-/// `execution_id` 是本地关联标识，`code` 是协议关闭码，`reason` 是供应商关闭原因，
-/// `started_at` 是物理尝试起始时间。
-fn emit_provider_transport_close_trace(
-    execution_id: &str,
-    code: &str,
-    reason: &str,
-    started_at: &Instant,
-) {
-    if !provider_transport_trace_enabled() {
-        return;
-    }
-    let bounded_reason = reason
-        .chars()
-        .take(256)
-        .map(|character| {
-            if character.is_ascii_graphic() || character == ' ' {
-                character
-            } else {
-                ' '
-            }
-        })
-        .collect::<String>();
-    eprintln!(
-        "[provider-transport-trace] execution_id={execution_id} transport=responses_websocket stage=close_frame_detail elapsed_ms={} code={code} reason={bounded_reason:?}",
-        started_at.elapsed().as_millis()
-    );
-}
-
 /// Returns whether one normalized event makes transparent replay unsafe.
 /// 返回一条归一化事件是否会使透明重放变得不安全。
 ///
@@ -2644,7 +2707,9 @@ fn stream_event_has_semantic_output(event: &AiStreamEvent) -> bool {
         AiStreamEvent::ResponseTextDelta { .. }
             | AiStreamEvent::ReasoningDelta { .. }
             | AiStreamEvent::ToolCallStarted { .. }
+            | AiStreamEvent::ImageGenerationPartial { .. }
             | AiStreamEvent::ResourceProgress { .. }
+            | AiStreamEvent::UsageUpdated { .. }
     )
 }
 
@@ -2745,6 +2810,191 @@ fn validate_request_policy(
     Ok(())
 }
 
+/// Projects the canonical Responses body into the exact Chat upstream shape.
+/// 将规范 Responses 正文投影为精确的 Chat 上游形状。
+///
+/// The target route still supplies its exact path and fixed headers, while the
+/// request body is derived from the same Responses encoder used by the public
+/// baseline. This keeps provider conversion independent from the caller-facing
+/// protocol selected by a legacy route.
+/// 目标路由仍然提供精确路径和固定请求头，但请求正文统一来自公共基线使用的
+/// Responses 编码器。这样供应商转换不会依赖旧路由暴露给调用方的协议形状。
+fn project_responses_baseline_for_provider(
+    protocols: &ProtocolRegistry,
+    route: &ProviderExecutionRoute,
+    request: &AiExecutionRequest,
+    mut encoded: EncodedWireRequest,
+) -> Result<EncodedWireRequest, ProviderExecutionFailure> {
+    let Some(upstream_protocol) = upstream_protocol_for_route(route) else {
+        return Ok(encoded);
+    };
+    if matches!(upstream_protocol, UpstreamProtocol::OpenAiResponses) {
+        return Ok(encoded);
+    }
+
+    let canonical_profile = protocols
+        .require(OPENAI_CODEX_RESPONSES_PROFILE_ID)
+        .map_err(protocol_failure)?;
+    let mut canonical_request = request.clone();
+    // Cross-protocol routes must replay complete history because a target protocol cannot reuse
+    // a continuation cursor issued under another protocol identity.
+    // 跨协议路由必须重放完整历史，因为目标协议不能复用另一协议身份签发的延续游标。
+    canonical_request.continuation = None;
+    prepare_target_reasoning_replay_for_responses(&mut canonical_request, upstream_protocol);
+    let mut canonical_body = canonical_profile
+        .encode(&canonical_request)
+        .map_err(protocol_failure)?
+        .body;
+    attach_target_tool_replay_to_responses(&mut canonical_body, request, upstream_protocol)?;
+    if let Some(output_token_limit) = canonical_request.output_token_limit {
+        // Codex omits this optional wire field, while Anthropic conversion requires the caller-resolved limit.
+        // Codex 会省略该可选线路字段，而 Anthropic 转换需要调用方已解析出的输出上限。
+        canonical_body["max_output_tokens"] = json!(output_token_limit);
+    }
+    let anthropic_reasoning_mode = if route.entry.request_projector == RequestProjectorKind::Direct
+    {
+        AnthropicReasoningMode::NativeBudget
+    } else {
+        AnthropicReasoningMode::ProviderSpecific
+    };
+    let context = ProviderRouteContext {
+        upstream_protocol,
+        anthropic_reasoning_mode,
+    };
+    encoded.body = project_responses_for_provider(canonical_body, &context).map_err(|error| {
+        pre_dispatch_failure(format!("LLM provider conversion failed: {error}"))
+    })?;
+    Ok(encoded)
+}
+
+/// Resolves the provider-side protocol handled by the Responses conversion core.
+/// 解析 Responses 转换核心处理的供应商侧协议。
+fn upstream_protocol_for_route(route: &ProviderExecutionRoute) -> Option<UpstreamProtocol> {
+    upstream_protocol_for_profile_id(route.protocol_route.protocol_profile_id.as_str())
+}
+
+/// Maps one exact registered protocol profile to the conversion-core wire protocol.
+/// 将一个精确注册协议 Profile 映射到转换核心 Wire 协议。
+fn upstream_protocol_for_profile_id(profile_id: &str) -> Option<UpstreamProtocol> {
+    match profile_id {
+        OPENAI_RESPONSES_PROFILE_ID | OPENAI_CODEX_RESPONSES_PROFILE_ID => {
+            Some(UpstreamProtocol::OpenAiResponses)
+        }
+        OPENAI_CHAT_PROFILE_ID => Some(UpstreamProtocol::OpenAiChatCompletions),
+        ANTHROPIC_MESSAGES_PROFILE_ID
+        | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
+        | CLAUDE_CODE_MESSAGES_PROFILE_ID => Some(UpstreamProtocol::AnthropicMessages),
+        GEMINI_GENERATE_CONTENT_PROFILE_ID => Some(UpstreamProtocol::GeminiGenerateContent),
+        GEMINI_INTERACTIONS_PROFILE_ID => Some(UpstreamProtocol::GeminiInteractions),
+        GOOGLE_CODE_ASSIST_PROFILE_ID => Some(UpstreamProtocol::GoogleCodeAssist),
+        _ => None,
+    }
+}
+
+/// Rewraps same-provider Gemini reasoning signatures for the internal Responses conversion body.
+/// 为内部 Responses 转换正文重新封装同供应商 Gemini 推理签名。
+///
+/// # Parameters
+/// 参数
+/// `request` is the conversion-only clone and `upstream_protocol` selects whether Gemini replay
+/// metadata is meaningful for the frozen target route.
+/// `request` 是仅供转换使用的克隆，`upstream_protocol` 决定 Gemini 重放元数据是否适用于冻结目标路由。
+fn prepare_target_reasoning_replay_for_responses(
+    request: &mut AiExecutionRequest,
+    upstream_protocol: UpstreamProtocol,
+) {
+    if !matches!(
+        upstream_protocol,
+        UpstreamProtocol::GeminiGenerateContent
+            | UpstreamProtocol::GeminiInteractions
+            | UpstreamProtocol::GoogleCodeAssist
+    ) {
+        return;
+    }
+    for message in &mut request.messages {
+        for item in &mut message.content {
+            let ContentItem::Reasoning { signature, .. } = item else {
+                continue;
+            };
+            let Some(raw_signature) = signature
+                .as_deref()
+                .and_then(gemini_replay_signature_payload)
+            else {
+                continue;
+            };
+            *signature = wrap_openai_reasoning_signature(raw_signature);
+        }
+    }
+}
+
+/// Attaches same-provider Gemini function-call signatures to internal Responses items.
+/// 将同供应商 Gemini 函数调用签名附加到内部 Responses Item。
+///
+/// # Parameters
+/// 参数
+/// `canonical_body` is never dispatched directly, `request` owns signed calls, and
+/// `upstream_protocol` is the exact target route protocol.
+/// `canonical_body` 不会被直接分派，`request` 持有已签名调用，`upstream_protocol` 是精确目标路由协议。
+///
+/// # Returns
+/// 返回值
+/// Success after every matching call receives a bounded internal extension, or a controlled
+/// conversion failure when the canonical body cannot preserve its call identity.
+/// 每个匹配调用收到有界内部扩展后返回成功；若规范正文无法保留调用身份，则返回受控转换失败。
+fn attach_target_tool_replay_to_responses(
+    canonical_body: &mut Value,
+    request: &AiExecutionRequest,
+    upstream_protocol: UpstreamProtocol,
+) -> Result<(), ProviderExecutionFailure> {
+    if !matches!(
+        upstream_protocol,
+        UpstreamProtocol::GeminiGenerateContent | UpstreamProtocol::GoogleCodeAssist
+    ) {
+        return Ok(());
+    }
+    let mut signatures = BTreeMap::new();
+    for message in &request.messages {
+        for item in &message.content {
+            let ContentItem::ToolCall { call } = item else {
+                continue;
+            };
+            if let Some(signature) = call
+                .signature
+                .as_deref()
+                .and_then(gemini_replay_signature_payload)
+            {
+                signatures.insert(call.id.as_str(), signature);
+            }
+        }
+    }
+    if signatures.is_empty() {
+        return Ok(());
+    }
+    let input = canonical_body
+        .get_mut("input")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| {
+            pre_dispatch_failure(
+                "Responses conversion body is missing the input array required for Gemini signed calls.",
+            )
+        })?;
+    for item in input {
+        let Some(call_id) = item.get("call_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(signature) = signatures.remove(call_id) else {
+            continue;
+        };
+        item["x_vulcan_provider_signature"] = Value::String(signature.to_string());
+    }
+    if let Some((call_id, _)) = signatures.into_iter().next() {
+        return Err(pre_dispatch_failure(format!(
+            "Responses conversion body did not preserve signed Gemini function call `{call_id}`."
+        )));
+    }
+    Ok(())
+}
+
 /// Applies provider-only fields after protocol encoding.
 /// 在协议编码后应用仅供应商字段。
 fn project_provider_request(
@@ -2834,9 +3084,27 @@ fn validate_structured_output_projection(
                 .and_then(Value::as_str),
             encoded.body.pointer("/text/format/schema"),
         ),
+        GEMINI_GENERATE_CONTENT_PROFILE_ID => (
+            encoded
+                .body
+                .pointer("/generationConfig/responseMimeType")
+                .and_then(Value::as_str),
+            encoded.body.pointer("/generationConfig/responseJsonSchema"),
+        ),
+        GOOGLE_CODE_ASSIST_PROFILE_ID => (
+            encoded
+                .body
+                .pointer("/request/generationConfig/responseMimeType")
+                .and_then(Value::as_str),
+            encoded
+                .body
+                .pointer("/request/generationConfig/responseJsonSchema"),
+        ),
         _ => return Ok(()),
     };
-    if projected_type == Some("json_schema") && projected_schema == Some(schema) {
+    if (projected_type == Some("json_schema") && projected_schema == Some(schema))
+        || (projected_type == Some("application/json") && projected_schema == Some(schema))
+    {
         return Ok(());
     }
     Err(pre_dispatch_failure(format!(
@@ -4104,6 +4372,8 @@ pub(crate) fn pre_dispatch_failure(message: impl Into<String>) -> ProviderExecut
             subcategory: Some(String::from("route_validation")),
             stage: String::from("prepare"),
             http_status: None,
+            transport: None,
+            websocket_close_code: None,
             upstream_code: None,
             upstream_type: None,
             upstream_parameter: None,
@@ -4132,6 +4402,8 @@ fn protocol_failure(error: ProtocolConversionError) -> ProviderExecutionFailure 
             subcategory: Some(String::from("protocol_conversion")),
             stage: String::from("protocol"),
             http_status: None,
+            transport: None,
+            websocket_close_code: None,
             upstream_code: None,
             upstream_type: None,
             upstream_parameter: None,
@@ -4149,174 +4421,6 @@ fn protocol_failure(error: ProtocolConversionError) -> ProviderExecutionFailure 
             retry_after: None,
         }),
     }
-}
-
-/// Converts an HTTP(S) provider URL into its exact WebSocket scheme counterpart.
-/// 将 HTTP(S) 供应商 URL 转换为精确对应的 WebSocket Scheme。
-///
-/// # Parameters
-/// 参数
-/// `url` is the already resolved immutable HTTP request URL.
-/// `url` 是已经解析完成的不可变 HTTP 请求 URL。
-///
-/// # Returns
-/// 返回值
-/// A `ws://` or `wss://` URL, or a deterministic protocol conversion error for unsupported schemes.
-/// 返回 `ws://` 或 `wss://` URL；遇到不支持的 Scheme 时返回确定性的协议转换错误。
-fn websocket_url_from_http(url: &str) -> Result<String, ProtocolConversionError> {
-    if let Some(rest) = url.strip_prefix("https://") {
-        return Ok(format!("wss://{rest}"));
-    }
-    if let Some(rest) = url.strip_prefix("http://") {
-        return Ok(format!("ws://{rest}"));
-    }
-    Err(ProtocolConversionError::new(format!(
-        "Provider WebSocket transport requires an http:// or https:// route URL, got `{url}`."
-    )))
-}
-
-/// Creates a pre-dispatch WebSocket failure that permits the HTTP fallback path.
-/// 创建允许回退到 HTTP 路径的分派前 WebSocket 失败。
-///
-/// # Parameters
-/// 参数
-/// `message` is a controlled handshake or setup diagnostic.
-/// `message` 是受控的握手或准备阶段诊断。
-///
-/// # Returns
-/// 返回值
-/// A retryable pre-dispatch failure with no observed semantic output or side effect.
-/// 返回可重试且尚未分派推理请求、未观察到语义输出或副作用的失败。
-fn websocket_handshake_failure(message: impl Into<String>) -> ProviderExecutionFailure {
-    ProviderExecutionFailure {
-        error: Box::new(AiExecutionError {
-            category: AiErrorCategory::ProviderUnavailable,
-            subcategory: Some(String::from("websocket")),
-            stage: String::from("response_stream"),
-            http_status: None,
-            upstream_code: None,
-            upstream_type: None,
-            upstream_parameter: None,
-            upstream_message: None,
-            request_id: None,
-            provider_id: None,
-            entry_id: None,
-            model_id: None,
-            message: message.into(),
-            // The WebSocket handshake precedes `response.create`; no inference request was dispatched.
-            // WebSocket 握手发生在 `response.create` 之前；此时尚未分派推理请求。
-            dispatch_outcome: DispatchOutcome::NotDispatched,
-            semantic_output_observed: false,
-            side_effect_observed: false,
-            terminal: true,
-            retryable: true,
-            retry_after: None,
-        }),
-    }
-}
-
-/// Classifies a WebSocket handshake error before deciding whether HTTP fallback is safe.
-/// 在决定是否安全回退 HTTP 前，对 WebSocket 握手错误进行分类。
-///
-/// # Parameters
-/// 参数
-/// `error` is the exact tungstenite handshake error, and `context` identifies the route operation.
-/// `error` 是 tungstenite 的精确握手错误，`context` 标识路由操作。
-///
-/// # Returns
-/// 返回值
-/// An authentication/permission failure that must remain visible, or a retryable unsupported/
-/// unavailable failure that can be handled by the existing pre-semantic HTTP fallback.
-/// 返回必须显式暴露的鉴权/权限失败，或可由既有语义输出前 HTTP 回退处理的可重试不支持/不可用失败。
-fn websocket_handshake_failure_from_error(
-    error: tokio_tungstenite::tungstenite::Error,
-    context: String,
-) -> ProviderExecutionFailure {
-    let message = format!("{context}: {error}");
-    match &error {
-        tokio_tungstenite::tungstenite::Error::Http(response) => {
-            websocket_handshake_http_failure(response.status().as_u16(), message)
-        }
-        _ => websocket_handshake_failure(message),
-    }
-}
-
-/// Builds a typed failure for an HTTP response returned during the WebSocket handshake.
-/// 为 WebSocket 握手阶段返回的 HTTP 响应构造类型化失败。
-///
-/// # Parameters
-/// 参数
-/// `status` is the handshake HTTP status, and `message` is the bounded diagnostic.
-/// `status` 是握手 HTTP 状态码，`message` 是受控诊断信息。
-///
-/// # Returns
-/// 返回值
-/// Authentication and permission failures are terminal and never silently fall back; unsupported
-/// WebSocket statuses remain retryable so the caller can use HTTP before semantic output exists.
-/// 鉴权与权限失败为终止错误且绝不静默回退；不支持 WebSocket 的状态仍可重试，以便在产生语义输出前使用 HTTP。
-fn websocket_handshake_http_failure(
-    status: u16,
-    message: impl Into<String>,
-) -> ProviderExecutionFailure {
-    let (category, subcategory, retryable) = match status {
-        401 => (
-            AiErrorCategory::Authentication,
-            "websocket_authentication",
-            false,
-        ),
-        403 => (
-            AiErrorCategory::PermissionDenied,
-            "websocket_permission",
-            false,
-        ),
-        404 | 405 | 426 => (
-            AiErrorCategory::ProviderUnavailable,
-            "websocket_unsupported",
-            true,
-        ),
-        _ => (AiErrorCategory::ProviderUnavailable, "websocket", true),
-    };
-    ProviderExecutionFailure {
-        error: Box::new(AiExecutionError {
-            category,
-            subcategory: Some(String::from(subcategory)),
-            stage: String::from("response_stream"),
-            http_status: Some(status),
-            upstream_code: None,
-            upstream_type: None,
-            upstream_parameter: None,
-            upstream_message: None,
-            request_id: None,
-            provider_id: None,
-            entry_id: None,
-            model_id: None,
-            message: message.into(),
-            // An HTTP handshake response still precedes the model-facing `response.create` frame.
-            // 即使收到了 HTTP 握手响应，面向模型的 `response.create` 帧仍未发送。
-            dispatch_outcome: DispatchOutcome::NotDispatched,
-            semantic_output_observed: false,
-            side_effect_observed: false,
-            terminal: true,
-            retryable,
-            retry_after: None,
-        }),
-    }
-}
-
-/// Creates a pre-dispatch protocol failure for an invalid WebSocket request shape.
-/// 为无效 WebSocket 请求形态创建分派前协议失败。
-///
-/// # Parameters
-/// 参数
-/// `message` is the controlled protocol diagnostic.
-/// `message` 是受控协议诊断。
-///
-/// # Returns
-/// 返回值
-/// A non-retryable protocol conversion failure that prevents an unsafe transport fallback.
-/// 返回阻止不安全传输回退的不可重试协议转换失败。
-fn websocket_protocol_failure(message: impl Into<String>) -> ProviderExecutionFailure {
-    protocol_failure(ProtocolConversionError::new(message))
 }
 
 /// Restricts one encoded Codex compaction body to the official `CompactionInput` fields.
@@ -4413,6 +4517,8 @@ fn compact_protocol_failure(message: impl Into<String>) -> ProviderExecutionFail
             subcategory: Some(String::from("protocol_conversion")),
             stage: String::from("response_compact"),
             http_status: Some(200),
+            transport: Some(AiTransportKind::Http),
+            websocket_close_code: None,
             upstream_code: None,
             upstream_type: None,
             upstream_parameter: None,
@@ -4451,6 +4557,8 @@ fn compact_transport_failure(message: impl Into<String>) -> ProviderExecutionFai
             subcategory: Some(String::from("transport")),
             stage: String::from("response_compact"),
             http_status: None,
+            transport: Some(AiTransportKind::Http),
+            websocket_close_code: None,
             upstream_code: None,
             upstream_type: None,
             upstream_parameter: None,
@@ -4488,12 +4596,34 @@ fn stream_protocol_failure(
     error: ProtocolConversionError,
     semantic_output_observed: bool,
 ) -> ProviderExecutionFailure {
+    stream_protocol_failure_for_transport(error, semantic_output_observed, AiTransportKind::Http)
+}
+
+/// Converts one malformed stream into a terminal failure for the exact transport.
+/// 将一个畸形流转换为精确传输对应的终态失败。
+///
+/// # Parameters
+/// 参数
+/// `error` is the decoder failure, `semantic_output_observed` protects replay, and `transport` is exact.
+/// `error` 是解码失败，`semantic_output_observed` 保护重放，`transport` 是精确传输。
+///
+/// # Returns
+/// 返回值
+/// A non-retryable dispatched protocol failure retaining the observed transport.
+/// 返回保留已观察传输的不可重试已分派协议失败。
+fn stream_protocol_failure_for_transport(
+    error: ProtocolConversionError,
+    semantic_output_observed: bool,
+    transport: AiTransportKind,
+) -> ProviderExecutionFailure {
     ProviderExecutionFailure {
         error: Box::new(AiExecutionError {
             category: AiErrorCategory::InvalidRequest,
             subcategory: Some(String::from("protocol_conversion")),
             stage: String::from("response_stream"),
             http_status: None,
+            transport: Some(transport),
+            websocket_close_code: None,
             upstream_code: None,
             upstream_type: None,
             upstream_parameter: None,
@@ -4531,10 +4661,35 @@ fn stream_completion_failure(
     error: ProtocolConversionError,
     semantic_output_observed: bool,
 ) -> ProviderExecutionFailure {
+    stream_completion_failure_for_transport(error, semantic_output_observed, AiTransportKind::Http)
+}
+
+/// Converts end-of-stream validation for one exact transport.
+/// 转换一个精确传输的流结束校验结果。
+///
+/// # Parameters
+/// 参数
+/// `error` is the typed completion failure, `semantic_output_observed` protects replay, and `transport` is exact.
+/// `error` 是强类型结束失败，`semantic_output_observed` 保护重放，`transport` 是精确传输。
+///
+/// # Returns
+/// 返回值
+/// A retryable truncation or terminal protocol failure retaining the exact transport.
+/// 返回保留精确传输的可重试截断或终态协议失败。
+fn stream_completion_failure_for_transport(
+    error: ProtocolConversionError,
+    semantic_output_observed: bool,
+    transport: AiTransportKind,
+) -> ProviderExecutionFailure {
     if error.is_truncated_stream() {
-        return stream_transport_failure(error.message, semantic_output_observed);
+        return dispatched_stream_transport_failure(
+            error.message,
+            semantic_output_observed,
+            transport,
+            None,
+        );
     }
-    stream_protocol_failure(error, semantic_output_observed)
+    stream_protocol_failure_for_transport(error, semantic_output_observed, transport)
 }
 
 /// Creates a structured transport failure.
@@ -4546,6 +4701,8 @@ pub(crate) fn transport_failure(message: impl Into<String>) -> ProviderExecution
             subcategory: Some(String::from("transport")),
             stage: String::from("transport"),
             http_status: None,
+            transport: None,
+            websocket_close_code: None,
             upstream_code: None,
             upstream_type: None,
             upstream_parameter: None,
@@ -4585,6 +4742,7 @@ pub(crate) fn http_send_transport_failure(
     // failure starts with the conservative unknown dispatch outcome used for ambiguous send errors.
     // failure 初始采用用于模糊发送错误的保守未知分派结果。
     let mut failure = transport_failure(message);
+    failure.error.transport = Some(AiTransportKind::Http);
     if error.is_connect() {
         // A DNS, TCP, or TLS connection-establishment failure occurs before an HTTP request can be dispatched.
         // DNS、TCP 或 TLS 连接建立失败发生在 HTTP 请求可被分派之前。
@@ -4610,12 +4768,55 @@ fn stream_transport_failure(
     message: impl Into<String>,
     semantic_output_observed: bool,
 ) -> ProviderExecutionFailure {
+    dispatched_stream_transport_failure(
+        message,
+        semantic_output_observed,
+        AiTransportKind::Http,
+        None,
+    )
+}
+
+/// Creates one dispatched transport failure with an optional exact WebSocket close code.
+/// 创建一项已分派传输失败，并可携带精确 WebSocket 关闭码。
+fn stream_transport_failure_with_websocket_close_code(
+    message: impl Into<String>,
+    semantic_output_observed: bool,
+    websocket_close_code: Option<u16>,
+) -> ProviderExecutionFailure {
+    dispatched_stream_transport_failure(
+        message,
+        semantic_output_observed,
+        AiTransportKind::ResponsesWebsocket,
+        websocket_close_code,
+    )
+}
+
+/// Creates one dispatched stream failure for the exact observed transport.
+/// 为精确观察到的传输创建一项已分派流失败。
+///
+/// # Parameters
+/// 参数
+/// `message` is controlled text, `semantic_output_observed` protects replay, `transport` is exact, and `websocket_close_code` is optional WS evidence.
+/// `message` 是受控文本，`semantic_output_observed` 保护重放，`transport` 是精确传输，`websocket_close_code` 是可选 WS 证据。
+///
+/// # Returns
+/// 返回值
+/// A typed terminal transport failure retaining exact replay and transport facts.
+/// 返回保留精确重放与传输事实的强类型终态传输失败。
+fn dispatched_stream_transport_failure(
+    message: impl Into<String>,
+    semantic_output_observed: bool,
+    transport: AiTransportKind,
+    websocket_close_code: Option<u16>,
+) -> ProviderExecutionFailure {
     ProviderExecutionFailure {
         error: Box::new(AiExecutionError {
             category: AiErrorCategory::ProviderUnavailable,
             subcategory: Some(String::from("transport")),
             stage: String::from("response_stream"),
             http_status: None,
+            transport: Some(transport),
+            websocket_close_code,
             upstream_code: None,
             upstream_type: None,
             upstream_parameter: None,
@@ -4633,6 +4834,76 @@ fn stream_transport_failure(
             retry_after: None,
         }),
     }
+}
+
+/// Returns the current host Unix timestamp in milliseconds for transport telemetry.
+/// 返回用于传输遥测的当前宿主 Unix 毫秒时间戳。
+fn provider_transport_unix_millis() -> Result<i64, ProviderExecutionFailure> {
+    let millis = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_err(|error| transport_failure(format!("Host clock precedes Unix epoch: {error}")))?
+        .as_millis();
+    i64::try_from(millis)
+        .map_err(|_| transport_failure("Host Unix timestamp exceeds SQLite INTEGER."))
+}
+
+/// Copies only the fixed non-secret rate-limit response-header allowlist.
+/// 仅复制固定且不含秘密的限流响应头允许列表。
+fn allowlisted_rate_limit_headers(headers: &HeaderMap) -> BTreeMap<String, String> {
+    const NAMES: &[&str] = &[
+        "retry-after",
+        "ratelimit-limit",
+        "ratelimit-policy",
+        "ratelimit-remaining",
+        "ratelimit-reset",
+        "x-ratelimit-limit-requests",
+        "x-ratelimit-limit-tokens",
+        "x-ratelimit-remaining-requests",
+        "x-ratelimit-remaining-tokens",
+        "x-ratelimit-reset-requests",
+        "x-ratelimit-reset-tokens",
+    ];
+    NAMES
+        .iter()
+        .filter_map(|name| {
+            headers
+                .get(*name)
+                .and_then(|value| value.to_str().ok())
+                .map(|value| ((*name).to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+/// Extracts the upstream request identifier using only the route-declared ordered headers.
+/// 仅使用路由声明的有序响应头提取上游请求标识。
+///
+/// # Parameters
+/// 参数
+/// `headers` are the exact upstream response headers and `declared_names` is the route-owned order.
+/// `headers` 是精确上游响应头，`declared_names` 是路由自有的查找顺序。
+///
+/// # Returns
+/// 返回值
+/// The first declared non-empty identifier, absence when none is present, or a protocol failure for invalid text.
+/// 返回首个已声明且非空的标识；均不存在时返回空；文本无效时返回协议失败。
+fn provider_request_id_from_headers(
+    headers: &HeaderMap,
+    declared_names: &[String],
+) -> Result<Option<String>, ProviderExecutionFailure> {
+    for name in declared_names {
+        let Some(value) = headers.get(name) else {
+            continue;
+        };
+        let value = value.to_str().map_err(|error| {
+            response_headers_protocol_failure(format!(
+                "Provider request-id header `{name}` is not valid text: {error}"
+            ))
+        })?;
+        if !value.is_empty() {
+            return Ok(Some(value.to_string()));
+        }
+    }
+    Ok(None)
 }
 
 /// Validates a successful response content type against the immutable protocol profile.
@@ -4701,6 +4972,8 @@ pub(crate) fn response_headers_protocol_failure(
             subcategory: Some(String::from("response_content_type")),
             stage: String::from("response_headers"),
             http_status: Some(200),
+            transport: Some(AiTransportKind::Http),
+            websocket_close_code: None,
             upstream_code: None,
             upstream_type: None,
             upstream_parameter: None,
@@ -4944,8 +5217,16 @@ pub(crate) fn http_failure(
     ) || upstream_message
         .as_deref()
         .is_some_and(is_known_overload_message);
+    // knownContextOverflow uses only provider-owned stable codes or types, never display-message guessing.
+    // knownContextOverflow 仅使用供应商自有稳定代码或类型，绝不猜测展示消息。
+    let known_context_overflow = matches!(
+        upstream_code.as_deref().or(error_type),
+        Some("context_length_exceeded" | "max_tokens_exceeded" | "token_limit_exceeded")
+    );
     let category = if known_overload {
         AiErrorCategory::ProviderOverloaded
+    } else if known_context_overflow {
+        AiErrorCategory::ContextLengthExceeded
     } else {
         match error_type {
             Some("authentication" | "authentication_error") => AiErrorCategory::Authentication,
@@ -4958,14 +5239,9 @@ pub(crate) fn http_failure(
             }
             Some("timeout") => AiErrorCategory::Timeout,
             Some("content_policy_violation") => AiErrorCategory::ContentPolicy,
-            Some(
-                "invalid_request"
-                | "invalid_request_error"
-                | "context_length_exceeded"
-                | "max_tokens_exceeded"
-                | "token_limit_exceeded"
-                | "string_too_long",
-            ) => AiErrorCategory::InvalidRequest,
+            Some("invalid_request" | "invalid_request_error" | "string_too_long") => {
+                AiErrorCategory::InvalidRequest
+            }
             _ => match status {
                 401 => AiErrorCategory::Authentication,
                 403 => AiErrorCategory::PermissionDenied,
@@ -4985,6 +5261,8 @@ pub(crate) fn http_failure(
                 .or_else(|| Some(String::from("http"))),
             stage: String::from("response_headers"),
             http_status: Some(status),
+            transport: Some(AiTransportKind::Http),
+            websocket_close_code: None,
             upstream_code,
             upstream_type: error_type.map(str::to_string),
             upstream_parameter: error
@@ -5033,21 +5311,336 @@ pub(crate) fn http_failure(
 mod tests {
     use super::*;
     use crate::{
-        CredentialMode,
+        CredentialMode, ProviderRegistry, ResponsesRemoteCompactionPolicy, ResponsesRouteFeatures,
+        ResponsesWebsocketPolicy,
         providers::{
             alibaba_descriptor, deepseek_descriptor, kimi_descriptor, minimax_descriptor,
             openrouter_descriptor,
         },
     };
+    use futures_util::SinkExt;
     use serde_json::json;
     use std::collections::{BTreeMap, BTreeSet};
     use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio_tungstenite::{
+        accept_async,
+        tungstenite::{
+            Message,
+            protocol::{CloseFrame, frame::coding::CloseCode},
+        },
+    };
     use vulcan_ai_contract::{
         AiContinuation, AiMessage, AiOperation, ContentItem, MessageRole, StructuredOutputPolicy,
     };
     use vulcan_ai_protocols::{
         ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
     };
+
+    /// Verifies every executable built-in provider protocol is owned by the Responses conversion core.
+    /// 验证每个可执行的内置供应商协议都由 Responses 转换核心负责。
+    #[test]
+    fn every_builtin_provider_protocol_routes_through_responses_core() {
+        let registry = ProviderRegistry::first_batch().expect("provider registry should build");
+        let unmapped = registry
+            .providers()
+            .into_iter()
+            .flat_map(|provider| {
+                provider.service_entries.iter().flat_map(move |entry| {
+                    entry
+                        .protocol_routes
+                        .iter()
+                        .filter(|route| {
+                            upstream_protocol_for_profile_id(route.protocol_profile_id.as_str())
+                                .is_none()
+                        })
+                        .map(move |route| {
+                            format!("{}/{}/{}", provider.id, entry.id, route.protocol_profile_id)
+                        })
+                })
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            unmapped.is_empty(),
+            "built-in provider protocols bypass Responses core: {unmapped:?}"
+        );
+    }
+
+    /// Verifies provider-specialized dynamic usage paths are frozen by exact route metadata.
+    /// 验证供应商专属动态用量路径由精确路由元数据冻结。
+    #[test]
+    fn exact_provider_routes_install_specialized_usage_profiles() {
+        // alibaba_provider owns the explicit projector that selects documented Responses billing details.
+        // alibaba_provider 持有选择文档化 Responses 计费明细的显式投影器。
+        let alibaba_provider = alibaba_descriptor();
+        // alibaba_entry is the exact pay-as-you-go route that exposes the official Responses endpoint.
+        // alibaba_entry 是公开官方 Responses 端点的精确按量入口。
+        let alibaba_entry = alibaba_provider
+            .service_entries
+            .iter()
+            .find(|entry| entry.id == "model-studio-cn")
+            .expect("Alibaba Model Studio China entry must exist")
+            .clone();
+        // alibaba_connection binds the test to the verified Responses protocol without URL inference.
+        // alibaba_connection 将测试绑定到已验证 Responses 协议，不使用 URL 推断。
+        let alibaba_connection = CredentialConnection {
+            id: String::from("connection"),
+            provider_id: alibaba_provider.id.clone(),
+            service_entry_id: alibaba_entry.id.clone(),
+            credential_profile_id: String::from("api-key"),
+            credential_mode: CredentialMode::Token,
+            credential_id: String::from("credential"),
+            display_name: String::from("Primary"),
+            secret_reference: String::from("secret"),
+            management_secret_reference: None,
+            service_origin_override: None,
+            verified_protocols: BTreeSet::from([OPENAI_RESPONSES_PROFILE_ID.to_string()]),
+            selected_protocol: OPENAI_RESPONSES_PROFILE_ID.to_string(),
+            prompt_cache_by_protocol: BTreeMap::new(),
+            usage_scope_override: None,
+        };
+        // alibaba_route is the immutable execution snapshot inspected below.
+        // alibaba_route 是下方检查的不可变执行快照。
+        let alibaba_route = ProviderExecutionRoute::resolve(
+            alibaba_provider,
+            alibaba_entry,
+            alibaba_connection,
+            SecondaryRouteSelection::Automatic,
+        )
+        .expect("Alibaba Responses route should resolve");
+        assert!(
+            alibaba_route
+                .protocol_route
+                .usage_extraction_profiles
+                .iter()
+                .all(|profile| profile.profile_id.starts_with("alibaba.openai.responses."))
+        );
+        assert!(
+            alibaba_route
+                .protocol_route
+                .usage_extraction_profiles
+                .iter()
+                .all(|profile| profile.bindings.iter().any(|binding| {
+                    binding.field == vulcan_llm_core::UsageField::BillingDetails
+                        && binding.encoding
+                            == vulcan_llm_core::UsageValueEncoding::AlibabaResponsesBillingDetails
+                }))
+        );
+
+        // deepseek_route is resolved from the explicit DeepSeek projector and Chat protocol.
+        // deepseek_route 由显式 DeepSeek 投影器与 Chat 协议解析。
+        let deepseek_route = deepseek_route(OPENAI_CHAT_PROFILE_ID);
+        assert!(
+            deepseek_route
+                .protocol_route
+                .usage_extraction_profiles
+                .iter()
+                .all(|profile| profile.profile_id.starts_with("deepseek.chat."))
+        );
+        assert!(
+            deepseek_route
+                .protocol_route
+                .usage_extraction_profiles
+                .iter()
+                .all(|profile| profile.bindings.iter().any(|binding| {
+                    binding.field == vulcan_llm_core::UsageField::UncachedInputTokens
+                        && binding.pointers == [String::from("/usage/prompt_cache_miss_tokens")]
+                }))
+        );
+
+        // openrouter_route proves provider identity, protocol, and usage profile are bound together.
+        // openrouter_route 证明供应商身份、协议与用量 Profile 被共同绑定。
+        let openrouter_route = pinned_openrouter_route(OPENAI_CHAT_PROFILE_ID);
+        assert!(
+            openrouter_route
+                .protocol_route
+                .usage_extraction_profiles
+                .iter()
+                .all(|profile| profile.profile_id.starts_with("openrouter.chat."))
+        );
+        assert!(
+            openrouter_route
+                .protocol_route
+                .usage_extraction_profiles
+                .iter()
+                .all(|profile| profile.bindings.iter().any(|binding| {
+                    binding.field == vulcan_llm_core::UsageField::ReportedCostUsd
+                        && binding.pointers == [String::from("/usage/cost")]
+                }))
+        );
+    }
+
+    /// Verifies local estimates never assign their currency to incompatible reported cost evidence.
+    /// 验证本地估算绝不会把自身币种赋给不兼容的供应商上报成本证据。
+    #[test]
+    fn local_cost_estimate_rejects_reported_currency_conflicts() {
+        // route owns the frozen USD estimate that intentionally conflicts with reported EUR.
+        // route 持有与供应商上报 EUR 故意冲突的冻结 USD 估算。
+        let mut route = pinned_openrouter_route(OPENAI_CHAT_PROFILE_ID);
+        route.billing_profile = Some(ResolvedBillingProfile {
+            pricing_revision: String::from("pricing-revision"),
+            currency: String::from("USD"),
+            pricing: ModelPricing::from_optional_strings(
+                Some("1"),
+                Some("2"),
+                Some("0"),
+                Some("0"),
+            )
+            .expect("pricing should parse"),
+            multiplier: Decimal::ONE,
+            snapshot: vulcan_ai_contract::PricingProfileSnapshot {
+                pricing_revision: String::from("pricing-revision"),
+                provider_id: String::from("openrouter"),
+                service_entry_id: Some(String::from("public")),
+                model_id: String::from("openai/gpt-5"),
+                currency: String::from("USD"),
+                input_per_million: Some(String::from("1")),
+                output_per_million: Some(String::from("2")),
+                cache_read_per_million: Some(String::from("0")),
+                cache_write_per_million: Some(String::from("0")),
+                source_kind: String::from("test"),
+                source_id: String::from("test"),
+                content_hash: String::from("content-hash"),
+            },
+        });
+        // event carries exact provider evidence before the local estimate is attempted.
+        // event 在尝试本地估算前承载精确供应商证据。
+        let mut event = AiStreamEvent::UsageUpdated {
+            usage: Box::new(vulcan_ai_contract::RequestUsage {
+                uncached_input_tokens: vulcan_ai_contract::UsageValue::Known {
+                    value: 1_000_000,
+                    source: vulcan_ai_contract::UsageValueSource::Reported,
+                },
+                output_tokens: vulcan_ai_contract::UsageValue::Known {
+                    value: 500_000,
+                    source: vulcan_ai_contract::UsageValueSource::Reported,
+                },
+                cost: Some(String::from("0.5")),
+                cost_currency: Some(String::from("EUR")),
+                ..vulcan_ai_contract::RequestUsage::default()
+            }),
+        };
+
+        apply_local_cost_estimate(&route, &mut event);
+
+        // usage is the post-projection evidence inspected for accidental currency overwrite.
+        // usage 是投影后用于检查意外币种覆盖的证据。
+        let AiStreamEvent::UsageUpdated { usage } = event else {
+            panic!("usage event should remain a usage event");
+        };
+        assert_eq!(usage.cost.as_deref(), Some("0.5"));
+        assert_eq!(usage.cost_currency.as_deref(), Some("EUR"));
+        assert!(usage.estimated_cost.is_none());
+        assert!(usage.pricing_revision.is_none());
+        assert!(usage.pricing_profile.is_none());
+        assert_eq!(
+            usage.validation_flags,
+            [String::from(
+                "reported_and_estimated_cost_currency_mismatch"
+            )]
+        );
+    }
+
+    /// Verifies raw usage is retained but cannot precede the normalized response start.
+    /// 验证原始用量会被保留但不能先于规范化响应开始事件。
+    #[test]
+    fn profiled_usage_gate_releases_usage_after_response_start() {
+        let mut gate = ProfiledUsageEventGate::default();
+        let usage_event = AiStreamEvent::UsageUpdated {
+            usage: Box::new(vulcan_ai_contract::RequestUsage::default()),
+        };
+        assert!(gate.stage(vec![usage_event]).is_empty());
+
+        let start = AiStreamEvent::ResponseStarted {
+            execution_id: String::from("execution"),
+        };
+        let mut state = AiStreamStateMachine::default();
+        state.apply(&start).expect("start should be valid");
+        let released = gate.observe(&start);
+        assert_eq!(released.len(), 1);
+        state
+            .apply(&released[0])
+            .expect("released usage should follow response start");
+        gate.ensure_released()
+            .expect("all pending usage should be released");
+    }
+
+    /// Verifies a transport cannot silently discard usage when normalization never starts.
+    /// 验证规范化从未开始时传输不能静默丢弃用量。
+    #[test]
+    fn profiled_usage_gate_rejects_missing_response_start() {
+        let mut gate = ProfiledUsageEventGate::default();
+        let usage_event = AiStreamEvent::UsageUpdated {
+            usage: Box::new(vulcan_ai_contract::RequestUsage::default()),
+        };
+        assert!(gate.stage(vec![usage_event]).is_empty());
+        assert!(gate.ensure_released().is_err());
+    }
+
+    /// Verifies an emitted usage fact closes the transparent-replay safety window.
+    /// 验证已发出的用量事实会关闭透明重放安全窗口。
+    #[test]
+    fn usage_output_marks_subsequent_transport_failure_retry_unsafe() {
+        let mut observed = false;
+        let mut usage = AiStreamEvent::UsageUpdated {
+            usage: Box::new(vulcan_ai_contract::RequestUsage::default()),
+        };
+        update_semantic_output_observation(&mut observed, &mut usage);
+        assert!(observed);
+
+        let failure = stream_transport_failure("stream lost", observed);
+        assert!(failure.error.semantic_output_observed);
+        assert!(!failure.error.retryable);
+    }
+
+    /// Verifies an exact upstream context code is distinct from generic invalid requests.
+    /// 验证精确上游上下文代码与通用无效请求具有不同类别。
+    #[test]
+    fn http_context_length_code_is_typed() {
+        let failure = http_failure(
+            400,
+            None,
+            r#"{"error":{"type":"invalid_request_error","code":"context_length_exceeded","message":"too large"}}"#,
+        );
+
+        assert_eq!(
+            failure.error.category,
+            AiErrorCategory::ContextLengthExceeded
+        );
+        assert_eq!(
+            failure.error.upstream_code.as_deref(),
+            Some("context_length_exceeded")
+        );
+    }
+
+    /// Verifies provider request identifiers follow the route-declared header order exactly.
+    /// 验证供应商请求标识严格遵循路由声明的响应头顺序。
+    #[test]
+    fn provider_request_id_uses_declared_order() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-request-id", "primary".parse().expect("valid header"));
+        headers.insert(
+            "x-oai-request-id",
+            "secondary".parse().expect("valid header"),
+        );
+        let declared_names = vec![
+            String::from("x-oai-request-id"),
+            String::from("x-request-id"),
+        ];
+
+        assert_eq!(
+            provider_request_id_from_headers(&headers, declared_names.as_slice())
+                .expect("declared request-id headers should decode"),
+            Some(String::from("secondary"))
+        );
+        assert_eq!(
+            provider_request_id_from_headers(&headers, &[])
+                .expect("an undeclared route should not inspect headers"),
+            None
+        );
+    }
 
     /// Verifies only a proven connection-establishment failure is safe to replay.
     /// 验证只有已证明的连接建立失败才可安全重放。
@@ -5080,6 +5673,7 @@ mod tests {
             connect_failure.error.dispatch_outcome,
             DispatchOutcome::NotDispatched
         );
+        assert_eq!(connect_failure.error.transport, Some(AiTransportKind::Http));
         assert!(connect_failure.error.retryable);
 
         // builder_error proves that unrelated request-send failures retain the conservative outcome.
@@ -5096,6 +5690,33 @@ mod tests {
         assert_eq!(
             builder_failure.error.dispatch_outcome,
             DispatchOutcome::Unknown
+        );
+        assert_eq!(builder_failure.error.transport, Some(AiTransportKind::Http));
+    }
+
+    /// Verifies HTTP stream failures cannot be mislabeled as Responses WebSocket failures.
+    /// 验证 HTTP 流失败不会被错误标记为 Responses WebSocket 失败。
+    #[test]
+    fn http_stream_failure_retains_http_transport() {
+        let failure = stream_transport_failure("stream ended", false);
+
+        assert_eq!(failure.error.transport, Some(AiTransportKind::Http));
+        assert_eq!(failure.error.websocket_close_code, None);
+    }
+
+    /// Verifies WebSocket decoder failures retain the WebSocket transport classification.
+    /// 验证 WebSocket 解码失败保留 WebSocket 传输分类。
+    #[test]
+    fn websocket_protocol_failure_retains_websocket_transport() {
+        let failure = stream_protocol_failure_for_transport(
+            ProtocolConversionError::new("bad frame"),
+            false,
+            AiTransportKind::ResponsesWebsocket,
+        );
+
+        assert_eq!(
+            failure.error.transport,
+            Some(AiTransportKind::ResponsesWebsocket)
         );
     }
 
@@ -5193,6 +5814,485 @@ mod tests {
             resources: Vec::new(),
             output_token_limit: Some(512),
         }
+    }
+
+    /// Verifies WebSocket reuse keys are opaque and change with the exact endpoint snapshot.
+    /// 验证 WebSocket 复用键不透明，并会随精确 endpoint 快照变化。
+    #[test]
+    fn responses_websocket_cache_key_is_bounded_and_endpoint_bound() {
+        let mut route = deepseek_route(OPENAI_CHAT_PROFILE_ID);
+        let mut request = minimal_request();
+        request.cache_scope_id = Some(String::from("session-sensitive-value"));
+        let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("test-secret"))
+            .expect("test secret envelope should validate")
+            .execution_secret()
+            .expect("test execution secret should resolve");
+        let first = responses_websocket_cache_key(&route, &request, &secret)
+            .expect("session-bound request should produce a key");
+        assert_eq!(first.len(), "sha256:".len() + 64);
+        assert!(!first.contains("session-sensitive-value"));
+        assert!(!first.contains(route.entry.base_url.as_str()));
+
+        route.entry.base_url = String::from("https://changed.example.invalid/v1");
+        let changed = responses_websocket_cache_key(&route, &request, &secret)
+            .expect("changed endpoint should still produce a key");
+        assert_ne!(first, changed);
+    }
+
+    /// Verifies executable Gemini Interactions routes pass through the Responses conversion core.
+    /// 验证可执行 Gemini Interactions 路由会经过 Responses 转换核心。
+    #[test]
+    fn gemini_interactions_route_uses_responses_baseline_and_preserves_replay() {
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let mut route = pinned_openrouter_route(OPENAI_CHAT_PROFILE_ID);
+        route.protocol_route.protocol_profile_id = String::from(GEMINI_INTERACTIONS_PROFILE_ID);
+        route.protocol_route.endpoint_path = Some(String::from("/interactions"));
+        route.connection.selected_protocol = String::from(GEMINI_INTERACTIONS_PROFILE_ID);
+        route.connection.verified_protocols =
+            BTreeSet::from([String::from(GEMINI_INTERACTIONS_PROFILE_ID)]);
+        let mut request = minimal_request();
+        request.messages.push(vulcan_ai_contract::AiMessage {
+            role: vulcan_ai_contract::MessageRole::Assistant,
+            content: vec![
+                ContentItem::Reasoning {
+                    text: String::from("signed reasoning"),
+                    signature: Some(String::from("gemini#reasoning-signature")),
+                },
+                ContentItem::ToolCall {
+                    call: vulcan_ai_contract::ToolCall {
+                        id: String::from("call-1"),
+                        name: String::from("lookup"),
+                        arguments: json!({"q":"x"}),
+                        signature: Some(String::from("gemini#call-signature")),
+                    },
+                },
+            ],
+            provider_context_items: Vec::new(),
+        });
+        request.tools.push(vulcan_ai_contract::ToolDefinition {
+            name: String::from("lookup"),
+            description: String::from("Lookup"),
+            input_schema: json!({"type":"object"}),
+            strict: false,
+        });
+
+        let encoded = client
+            .encode_request(&route, &request)
+            .expect("Interactions route should project from Responses");
+
+        assert_eq!(encoded.path, "/interactions");
+        assert!(encoded.body.get("contents").is_none());
+        assert_eq!(encoded.body["input"][1]["type"], "thought");
+        assert_eq!(encoded.body["input"][1]["signature"], "reasoning-signature");
+        assert_eq!(encoded.body["input"][2]["type"], "function_call");
+        assert!(
+            encoded.body["input"][2]
+                .get("x_vulcan_provider_signature")
+                .is_none()
+        );
+    }
+
+    /// Adds one exact Codex continuation boundary to a minimal test request.
+    /// 为最小测试请求增加一项精确 Codex 延续边界。
+    fn request_with_codex_continuation() -> AiExecutionRequest {
+        let mut request = minimal_request();
+        request.continuation = Some(AiContinuation {
+            provider_id: String::from("openrouter"),
+            protocol_profile_id: String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID),
+            model_id: request.model_id.clone(),
+            provider_message_id: String::from("response-1"),
+            covered_local_message_id: String::from("message-1"),
+            covered_message_count: 1,
+        });
+        request
+    }
+
+    /// Reads one bounded local HTTP request including its declared body.
+    /// 读取一项有界本地 HTTP 请求及其声明正文。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `stream` is the accepted loopback connection owned by one test request.
+    /// `stream` 是一项测试请求持有的已接受环回连接。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The complete UTF-8 request used only for transport assertions.
+    /// 返回仅用于传输断言的完整 UTF-8 请求。
+    async fn read_test_http_request(stream: &mut TcpStream) -> String {
+        let mut bytes = Vec::new();
+        let mut chunk = [0_u8; 4_096];
+        let expected_length = loop {
+            let read = stream.read(&mut chunk).await.expect("request should read");
+            assert!(read > 0, "request headers must not end early");
+            bytes.extend_from_slice(&chunk[..read]);
+            assert!(
+                bytes.len() <= 128 * 1_024,
+                "test request must remain bounded"
+            );
+            let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8(bytes[..header_end].to_vec())
+                .expect("request headers should be UTF-8");
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .expect("request should declare content length");
+            break header_end + 4 + content_length;
+        };
+        while bytes.len() < expected_length {
+            let read = stream.read(&mut chunk).await.expect("body should read");
+            assert!(read > 0, "request body must not end early");
+            bytes.extend_from_slice(&chunk[..read]);
+            assert!(
+                bytes.len() <= 128 * 1_024,
+                "test request must remain bounded"
+            );
+        }
+        String::from_utf8(bytes).expect("request should be UTF-8")
+    }
+
+    /// Verifies store=false HTTP never emits a cursor and WS requires exact socket ownership.
+    /// 验证 store=false HTTP 永不发送游标且 WS 要求精确 Socket 归属。
+    #[tokio::test]
+    async fn nonpersistent_responses_continuation_is_scoped_to_the_active_websocket() {
+        let request = request_with_codex_continuation();
+        let mut route = pinned_openrouter_route(OPENAI_RESPONSES_PROFILE_ID);
+        route.protocol_route.protocol_profile_id = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
+
+        let http_request = request_without_nonpersistent_responses_continuation(&route, &request);
+        assert!(http_request.continuation.is_none());
+
+        let fresh_socket = responses_websocket_request_for_active_session(&request, None);
+        assert!(fresh_socket.continuation.is_none());
+        let wrong_socket =
+            responses_websocket_request_for_active_session(&request, Some("response-other"));
+        assert!(wrong_socket.continuation.is_none());
+        let matching_socket =
+            responses_websocket_request_for_active_session(&request, Some("response-1"));
+        assert_eq!(
+            matching_socket
+                .continuation
+                .as_ref()
+                .map(|continuation| continuation.provider_message_id.as_str()),
+            Some("response-1")
+        );
+
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("secret"))
+            .expect("test key should validate")
+            .execution_secret()
+            .expect("test key should resolve");
+        let effective = client
+            .encode_effective_request_with_credential(&route, &request, &secret)
+            .await
+            .expect("HTTP preview should encode");
+        assert!(effective.body.get("previous_response_id").is_none());
+    }
+
+    /// Verifies only official recoverable WebSocket controls become replay-safe failures.
+    /// 验证仅官方可恢复 WebSocket 控制错误会转换为可安全重放失败。
+    #[test]
+    fn websocket_retry_controls_preserve_code_and_semantic_safety() {
+        for code in [
+            RESPONSES_WEBSOCKET_CONNECTION_LIMIT_CODE,
+            RESPONSES_WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND_CODE,
+        ] {
+            let (actual_code, message) = responses_websocket_retry_control(&json!({
+                "type": "error",
+                "error": {"code": code, "message": "retry the request"}
+            }))
+            .expect("official control should be recognized");
+            let failure = responses_websocket_control_failure(actual_code, message, false);
+            assert!(failure.error.retryable);
+            assert_eq!(
+                failure.error.transport,
+                Some(AiTransportKind::ResponsesWebsocket)
+            );
+            assert_eq!(failure.error.upstream_code.as_deref(), Some(code));
+            assert!(!failure.error.semantic_output_observed);
+        }
+
+        assert!(
+            responses_websocket_retry_control(&json!({
+                "type": "error",
+                "error": {"code": "invalid_prompt", "message": "bad prompt"}
+            }))
+            .is_none()
+        );
+        let failure = responses_websocket_control_failure(
+            String::from(RESPONSES_WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND_CODE),
+            String::from("retry"),
+            true,
+        );
+        assert!(!failure.error.retryable);
+        assert!(failure.error.semantic_output_observed);
+    }
+
+    /// Verifies a 1013 pre-semantic WS failure activates session-scoped HTTP fallback.
+    /// 验证语义输出前的 1013 WS 失败会激活会话作用域 HTTP 回退。
+    #[tokio::test]
+    async fn websocket_1013_failure_falls_back_to_full_history_http_attempt() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("address should resolve");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("WS client should connect");
+            let mut websocket = accept_async(stream)
+                .await
+                .expect("WS upgrade should succeed");
+            let _ = websocket.next().await.expect("WS request should arrive");
+            websocket
+                .send(Message::Close(Some(CloseFrame {
+                    code: CloseCode::Again,
+                    reason: "try HTTP".into(),
+                })))
+                .await
+                .expect("1013 close should send");
+            drop(websocket);
+
+            let (mut stream, _) = listener.accept().await.expect("HTTP client should connect");
+            let request = read_test_http_request(&mut stream).await;
+            assert!(
+                !request.contains("previous_response_id"),
+                "store=false HTTP fallback must replay complete history"
+            );
+            let body = [
+                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"response-http\"}}\n\n",
+                "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"item_id\":\"message-http\",\"delta\":\"OK\"}\n\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"response-http\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
+            ]
+            .concat();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("HTTP response should send");
+        });
+
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let mut route = pinned_openrouter_route(OPENAI_RESPONSES_PROFILE_ID);
+        route.protocol_route.protocol_profile_id = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
+        route.protocol_route.base_url_override = Some(format!("http://{address}"));
+        route.protocol_route.responses_features = Some(ResponsesRouteFeatures {
+            remote_compaction: ResponsesRemoteCompactionPolicy::Disabled,
+            websocket: ResponsesWebsocketPolicy::Verified,
+        });
+        route.connection.selected_protocol = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
+        route.connection.verified_protocols =
+            BTreeSet::from([String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID)]);
+        let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("secret"))
+            .expect("test key should validate")
+            .execution_secret()
+            .expect("test key should resolve");
+        let mut request = request_with_codex_continuation();
+        request.cache_scope_id = Some(String::from("session-1"));
+
+        let mut websocket_attempt = client.execute(
+            route.clone(),
+            request.clone(),
+            secret.clone(),
+            String::from("execution-ws"),
+        );
+        let mut websocket_observed = false;
+        let failure = loop {
+            match websocket_attempt.next().await {
+                Some(Ok(AiStreamEvent::TransportObserved { transport, .. })) => {
+                    websocket_observed |= transport == AiTransportKind::ResponsesWebsocket;
+                }
+                Some(Ok(_)) => {}
+                Some(Err(failure)) => break failure,
+                None => panic!("WS attempt must fail"),
+            }
+        };
+        assert!(websocket_observed);
+        assert_eq!(failure.error.websocket_close_code, Some(1013));
+        assert!(!failure.error.semantic_output_observed);
+        drop(websocket_attempt);
+
+        let mut http_attempt =
+            client.execute(route, request, secret, String::from("execution-http"));
+        let mut http_observed = false;
+        let mut completed = false;
+        while let Some(event) = http_attempt.next().await {
+            match event.expect("HTTP fallback should succeed") {
+                AiStreamEvent::TransportObserved { transport, .. } => {
+                    http_observed |= transport == AiTransportKind::Http;
+                }
+                AiStreamEvent::ResponseCompleted => completed = true,
+                _ => {}
+            }
+        }
+        assert!(http_observed);
+        assert!(completed);
+        server.await.expect("server should finish");
+    }
+
+    /// Verifies a missing socket-local response retries full history on the same live connection.
+    /// 验证 Socket 局部响应缺失后会在同一活动连接上用完整历史重试。
+    #[tokio::test]
+    async fn websocket_previous_response_not_found_retries_without_stale_cursor() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("address should resolve");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("WS client should connect");
+            let mut websocket = accept_async(stream)
+                .await
+                .expect("WS upgrade should succeed");
+
+            let first = websocket
+                .next()
+                .await
+                .expect("first request should arrive")
+                .expect("first request should read");
+            let Message::Text(first) = first else {
+                panic!("first request must be text");
+            };
+            let first: Value = serde_json::from_str(&first).expect("first request should be JSON");
+            assert!(first.get("previous_response_id").is_none());
+            websocket
+                .send(Message::Text(
+                    json!({"type":"response.completed","response":{"id":"response-1"}})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .expect("first completion should send");
+
+            let second = websocket
+                .next()
+                .await
+                .expect("incremental request should arrive")
+                .expect("incremental request should read");
+            let Message::Text(second) = second else {
+                panic!("incremental request must be text");
+            };
+            let second: Value =
+                serde_json::from_str(&second).expect("incremental request should be JSON");
+            assert_eq!(second["previous_response_id"], "response-1");
+            websocket
+                .send(Message::Text(
+                    json!({
+                        "type":"error",
+                        "error":{
+                            "code":RESPONSES_WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND_CODE,
+                            "message":"chain expired"
+                        }
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("missing-chain control should send");
+
+            let third = websocket
+                .next()
+                .await
+                .expect("full retry should arrive")
+                .expect("full retry should read");
+            let Message::Text(third) = third else {
+                panic!("full retry must be text");
+            };
+            let third: Value = serde_json::from_str(&third).expect("full retry should be JSON");
+            assert!(third.get("previous_response_id").is_none());
+            websocket
+                .send(Message::Text(
+                    json!({"type":"response.completed","response":{"id":"response-2"}})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .expect("retry completion should send");
+        });
+
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let mut route = pinned_openrouter_route(OPENAI_RESPONSES_PROFILE_ID);
+        route.protocol_route.protocol_profile_id = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
+        route.protocol_route.base_url_override = Some(format!("http://{address}"));
+        route.protocol_route.responses_features = Some(ResponsesRouteFeatures {
+            remote_compaction: ResponsesRemoteCompactionPolicy::Disabled,
+            websocket: ResponsesWebsocketPolicy::Verified,
+        });
+        route.connection.selected_protocol = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
+        route.connection.verified_protocols =
+            BTreeSet::from([String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID)]);
+        let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("secret"))
+            .expect("test key should validate")
+            .execution_secret()
+            .expect("test key should resolve");
+        let mut request = request_with_codex_continuation();
+        request.cache_scope_id = Some(String::from("session-previous-response"));
+
+        let mut first = client.execute(
+            route.clone(),
+            request.clone(),
+            secret.clone(),
+            String::from("execution-first"),
+        );
+        let mut first_completed = false;
+        while let Some(event) = first.next().await {
+            first_completed |= matches!(
+                event.expect("first request should succeed"),
+                AiStreamEvent::ResponseCompleted
+            );
+        }
+        assert!(first_completed);
+
+        let mut incremental = client.execute(
+            route.clone(),
+            request.clone(),
+            secret.clone(),
+            String::from("execution-incremental"),
+        );
+        let failure = loop {
+            match incremental.next().await {
+                Some(Ok(_)) => {}
+                Some(Err(failure)) => break failure,
+                None => panic!("missing-chain request must fail"),
+            }
+        };
+        assert_eq!(
+            failure.error.upstream_code.as_deref(),
+            Some(RESPONSES_WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND_CODE)
+        );
+        assert!(failure.error.retryable);
+        drop(incremental);
+
+        let mut retry = client.execute(route, request, secret, String::from("execution-retry"));
+        let mut retry_completed = false;
+        while let Some(event) = retry.next().await {
+            retry_completed |= matches!(
+                event.expect("full-history retry should succeed"),
+                AiStreamEvent::ResponseCompleted
+            );
+        }
+        assert!(retry_completed);
+        server.await.expect("server should finish");
     }
 
     /// Verifies the compact request body follows the official Codex `CompactionInput` shape.
@@ -5318,59 +6418,10 @@ mod tests {
         );
     }
 
-    /// Verifies HTTP(S) routes map to the exact WebSocket scheme and reject unsupported schemes.
-    /// 验证 HTTP(S) 路由映射到精确 WebSocket Scheme，并拒绝不支持的 Scheme。
+    /// Verifies the protocol encoder can project a cursor proven by the active WebSocket layer.
+    /// 验证协议编码器可投影由活动 WebSocket 层证明的游标。
     #[test]
-    fn codex_websocket_url_conversion_is_strict() {
-        assert_eq!(
-            websocket_url_from_http("https://example.test/v1/responses")
-                .expect("HTTPS route should map to WSS"),
-            "wss://example.test/v1/responses"
-        );
-        assert_eq!(
-            websocket_url_from_http("http://localhost:8317/v1/responses")
-                .expect("HTTP route should map to WS"),
-            "ws://localhost:8317/v1/responses"
-        );
-        assert!(websocket_url_from_http("ftp://example.test/responses").is_err());
-    }
-
-    /// Verifies handshake authentication failures cannot be hidden by HTTP fallback.
-    /// 验证握手鉴权失败不能被 HTTP 回退静默隐藏。
-    #[test]
-    fn codex_websocket_handshake_auth_failure_is_terminal() {
-        let failure = websocket_handshake_http_failure(401, "unauthorized");
-        assert_eq!(failure.error.category, AiErrorCategory::Authentication);
-        assert_eq!(failure.error.http_status, Some(401));
-        assert!(!failure.error.retryable);
-        assert_eq!(
-            failure.error.dispatch_outcome,
-            DispatchOutcome::NotDispatched
-        );
-    }
-
-    /// Verifies unsupported handshake statuses remain eligible for pre-semantic HTTP fallback.
-    /// 验证不支持的握手状态在产生语义输出前仍可安全回退 HTTP。
-    #[test]
-    fn codex_websocket_handshake_unsupported_status_allows_fallback() {
-        let failure = websocket_handshake_http_failure(426, "upgrade required");
-        assert_eq!(failure.error.category, AiErrorCategory::ProviderUnavailable);
-        assert_eq!(
-            failure.error.subcategory.as_deref(),
-            Some("websocket_unsupported")
-        );
-        assert_eq!(failure.error.http_status, Some(426));
-        assert!(failure.error.retryable);
-        assert_eq!(
-            failure.error.dispatch_outcome,
-            DispatchOutcome::NotDispatched
-        );
-    }
-
-    /// Verifies HTTP Codex Responses never sends the WebSocket-only continuation cursor.
-    /// 验证 HTTP Codex Responses 绝不会发送仅属于 WebSocket 的延续游标。
-    #[test]
-    fn codex_http_request_uses_full_history_without_previous_response_id() {
+    fn codex_protocol_projection_preserves_socket_proven_previous_response_id() {
         let client = ProviderExecutionClient::new(
             reqwest::Client::new(),
             Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
@@ -5390,76 +6441,17 @@ mod tests {
             covered_message_count: 0,
         });
 
-        let websocket_encoded = client
+        let encoded = client
             .encode_request(&route, &request)
-            .expect("WebSocket request should retain the proven cursor");
-        let http_request = prepare_http_execution_request(&route, request);
-        let http_encoded = client
-            .encode_request(&route, &http_request)
-            .expect("HTTP request should encode with full history");
+            .expect("Responses protocol should retain the socket-proven cursor");
 
+        assert_eq!(encoded.body["previous_response_id"], "resp-previous");
         assert_eq!(
-            websocket_encoded.body["previous_response_id"],
-            "resp-previous"
-        );
-        assert!(http_encoded.body.get("previous_response_id").is_none());
-        assert_eq!(
-            http_encoded.body["input"]
+            encoded.body["input"]
                 .as_array()
-                .expect("HTTP input should remain an array")
+                .expect("Responses input should remain an array")
                 .len(),
             1
-        );
-    }
-
-    /// Verifies the WebSocket body preserves official HTTP controls and adds its response.create envelope.
-    /// 验证 WebSocket 正文保留官方 HTTP 控制字段并增加 response.create 信封。
-    #[test]
-    fn codex_websocket_body_preserves_official_controls_and_projects_v2_envelope() {
-        let client = ProviderExecutionClient::new(
-            reqwest::Client::new(),
-            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
-        );
-        let mut route = pinned_openrouter_route(OPENAI_RESPONSES_PROFILE_ID);
-        route.protocol_route.protocol_profile_id = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
-        route.connection.selected_protocol = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
-        route.connection.verified_protocols =
-            BTreeSet::from([String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID)]);
-        route.protocol_route.responses_features = Some(crate::ResponsesRouteFeatures {
-            websocket: crate::ResponsesWebSocketPolicy::PreferredWithHttpFallback,
-            remote_compaction: crate::ResponsesRemoteCompactionPolicy::Disabled,
-        });
-        let mut request = minimal_request();
-        request.cache_scope_id = Some(String::from("session-stable"));
-        let http_shaped = client
-            .encode_request(&route, &request)
-            .expect("Codex Responses body should encode");
-        let websocket_body = client
-            .encode_request_for_selected_transport(&route, &request)
-            .expect("selected WebSocket transport should encode")
-            .body;
-
-        assert_eq!(websocket_body["type"], "response.create");
-        assert_eq!(websocket_body["tool_choice"], "auto");
-        assert_eq!(websocket_body["parallel_tool_calls"], true);
-        assert_eq!(
-            websocket_body["include"],
-            json!(["reasoning.encrypted_content"])
-        );
-        assert_eq!(
-            websocket_body["client_metadata"]["session_id"],
-            "session-stable"
-        );
-        assert_eq!(
-            websocket_body["client_metadata"]["thread_id"],
-            "session-stable"
-        );
-        assert!(http_shaped.body.get("type").is_none());
-        assert_eq!(http_shaped.body["tool_choice"], "auto");
-        assert_eq!(http_shaped.body["parallel_tool_calls"], true);
-        assert_eq!(
-            http_shaped.body["include"],
-            json!(["reasoning.encrypted_content"])
         );
     }
 
@@ -5474,369 +6466,6 @@ mod tests {
         assert!(failure.error.retryable);
         assert!(!failure.error.semantic_output_observed);
         assert!(!failure.error.side_effect_observed);
-    }
-
-    /// Verifies a safe WS fallback is remembered only for the exact provider route, connection, and session.
-    /// 验证安全 WS 回退只会被精确供应商路由、连接与会话记住。
-    #[test]
-    fn codex_websocket_http_fallback_is_session_scoped() {
-        let client = ProviderExecutionClient::new(
-            reqwest::Client::new(),
-            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
-        );
-        let mut route = pinned_openrouter_route(OPENAI_RESPONSES_PROFILE_ID);
-        route.protocol_route.protocol_profile_id = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
-        route.connection.selected_protocol = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
-        route.connection.verified_protocols =
-            BTreeSet::from([String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID)]);
-        route.protocol_route.responses_features = Some(crate::ResponsesRouteFeatures {
-            websocket: crate::ResponsesWebSocketPolicy::PreferredWithHttpFallback,
-            remote_compaction: crate::ResponsesRemoteCompactionPolicy::Disabled,
-        });
-        let mut first_session = minimal_request();
-        first_session.cache_scope_id = Some(String::from("session-a"));
-        let mut second_session = first_session.clone();
-        second_session.cache_scope_id = Some(String::from("session-b"));
-
-        assert!(!client.responses_websocket_http_fallback_active(&route, &first_session));
-        assert_eq!(
-            client
-                .encode_request_for_selected_transport(&route, &first_session)
-                .expect("first request should use the selected WebSocket shape")
-                .body["type"],
-            "response.create"
-        );
-        client.remember_responses_websocket_http_fallback(&route, &first_session);
-
-        assert!(client.responses_websocket_http_fallback_active(&route, &first_session));
-        assert!(
-            client
-                .encode_request_for_selected_transport(&route, &first_session)
-                .expect("remembered fallback should use the HTTP shape")
-                .body
-                .get("type")
-                .is_none()
-        );
-        assert!(!client.responses_websocket_http_fallback_active(&route, &second_session));
-        // changedRoute simulates an edited custom-provider endpoint under the same stable identities.
-        // changedRoute 模拟稳定身份不变但自定义供应商端点已被编辑的情况。
-        let mut changed_route = route.clone();
-        changed_route.entry.base_url = String::from("https://changed.example/v1");
-        assert!(!client.responses_websocket_http_fallback_active(&changed_route, &first_session));
-    }
-
-    /// Verifies safe WebSocket failures exhaust the exact configured retry budget and reset after health.
-    /// 验证安全 WebSocket 失败会耗尽精确配置的重试预算，并在恢复健康后重置。
-    #[test]
-    fn codex_websocket_safe_failures_respect_and_reset_retry_budget() {
-        let client = ProviderExecutionClient::new(
-            reqwest::Client::new(),
-            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
-        );
-        let mut route = pinned_openrouter_route(OPENAI_RESPONSES_PROFILE_ID);
-        route.protocol_route.protocol_profile_id = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
-        route.connection.selected_protocol = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
-        route.connection.verified_protocols =
-            BTreeSet::from([String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID)]);
-        let mut request = minimal_request();
-        request.cache_scope_id = Some(String::from("session-retry-budget"));
-
-        assert!(!client.record_responses_websocket_safe_failure(&route, &request, 2));
-        assert!(!client.record_responses_websocket_safe_failure(&route, &request, 2));
-        assert!(client.record_responses_websocket_safe_failure(&route, &request, 2));
-
-        client.clear_responses_websocket_safe_failures(&route, &request);
-        assert!(!client.record_responses_websocket_safe_failure(&route, &request, 2));
-
-        client.remember_responses_websocket_http_fallback(&route, &request);
-        assert!(client.responses_websocket_http_fallback_active(&route, &request));
-        assert!(
-            client
-                .responses_websocket_safe_failure_scopes
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .is_empty()
-        );
-    }
-
-    /// Verifies an unsupported WebSocket handshake switches to HTTP without consuming transient retries.
-    /// 验证不支持的 WebSocket 握手会直接切换 HTTP，而不会消耗瞬时重试次数。
-    #[test]
-    fn codex_websocket_unsupported_handshake_falls_back_immediately() {
-        let unsupported = websocket_handshake_http_failure(
-            426,
-            "provider does not support the Responses WebSocket upgrade",
-        );
-        assert_eq!(
-            unsupported.error.subcategory.as_deref(),
-            Some("websocket_unsupported")
-        );
-        assert!(websocket_failure_allows_http_fallback(&unsupported));
-        assert!(websocket_failure_requires_immediate_http_fallback(
-            &unsupported
-        ));
-
-        let account_pool = stream_transport_failure(
-            "Provider WebSocket stream closed with reason `no available account`",
-            false,
-        );
-        let mut account_pool = account_pool;
-        account_pool.error.subcategory = Some(String::from("websocket_no_available_account"));
-        assert!(websocket_failure_requires_immediate_http_fallback(
-            &account_pool
-        ));
-
-        let transient = websocket_handshake_failure("temporary handshake failure");
-        assert!(websocket_failure_allows_http_fallback(&transient));
-        assert!(!websocket_failure_requires_immediate_http_fallback(
-            &transient
-        ));
-    }
-
-    /// Verifies every Responses WebSocket v2 handshake carries the official beta capability value.
-    /// 验证每次 Responses WebSocket v2 握手都携带官方 Beta 能力值。
-    #[test]
-    fn codex_websocket_handshake_installs_v2_beta_header() {
-        let mut headers = tokio_tungstenite::tungstenite::http::HeaderMap::new();
-        headers.insert(
-            WebSocketHeaderName::from_static(OPENAI_RESPONSES_WEBSOCKET_BETA_HEADER_NAME),
-            WebSocketHeaderValue::from_static("stale-value"),
-        );
-
-        insert_responses_websocket_v2_beta_header(&mut headers);
-
-        assert_eq!(
-            headers
-                .get(OPENAI_RESPONSES_WEBSOCKET_BETA_HEADER_NAME)
-                .and_then(|value| value.to_str().ok()),
-            Some(OPENAI_RESPONSES_WEBSOCKET_BETA_HEADER_VALUE)
-        );
-    }
-
-    /// Verifies one complete local WebSocket transport round trip preserves the official envelope and semantic lifecycle.
-    /// 验证一次完整的本地 WebSocket 传输往返会保留官方信封与语义生命周期。
-    #[tokio::test]
-    #[allow(clippy::result_large_err)]
-    async fn codex_websocket_transport_completes_semantic_round_trip() {
-        // listener owns one exact loopback WebSocket endpoint for the transport under test.
-        // listener 为被测传输持有一个精确的回环 WebSocket 端点。
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .expect("loopback WebSocket listener should bind");
-        // address is the operating-system-assigned endpoint projected into the provider route.
-        // address 是投影到供应商路由中的操作系统分配端点。
-        let address = listener
-            .local_addr()
-            .expect("loopback WebSocket address should resolve");
-        // server validates the handshake and emits one official semantic Responses lifecycle.
-        // server 校验握手并发送一组官方语义 Responses 生命周期事件。
-        let server = tokio::spawn(async move {
-            // transport is the accepted TCP connection that must be upgraded exactly once.
-            // transport 是必须精确升级一次的已接受 TCP 连接。
-            let (transport, _) = listener
-                .accept()
-                .await
-                .expect("WebSocket client should connect");
-            // websocket validates the official beta header during the upgrade callback.
-            // websocket 在升级回调期间校验官方 Beta 请求头。
-            let mut websocket = tokio_tungstenite::accept_hdr_async(
-                transport,
-                |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
-                 response: tokio_tungstenite::tungstenite::handshake::server::Response| {
-                    assert_eq!(
-                        request
-                            .headers()
-                            .get(OPENAI_RESPONSES_WEBSOCKET_BETA_HEADER_NAME)
-                            .and_then(|value| value.to_str().ok()),
-                        Some(OPENAI_RESPONSES_WEBSOCKET_BETA_HEADER_VALUE)
-                    );
-                    Ok(response)
-                },
-            )
-            .await
-            .expect("WebSocket handshake should complete");
-            // request_message is the single response.create command sent by the client.
-            // request_message 是客户端发送的唯一 response.create 命令。
-            let request_message = websocket
-                .next()
-                .await
-                .expect("WebSocket request should arrive")
-                .expect("WebSocket request should be readable");
-            // request_body is the exact JSON envelope observed on the wire.
-            // request_body 是在线路上观察到的精确 JSON 信封。
-            let request_body: Value = serde_json::from_str(
-                request_message
-                    .to_text()
-                    .expect("WebSocket request should be text"),
-            )
-            .expect("WebSocket request should be valid JSON");
-            assert_eq!(request_body["type"], "response.create");
-            assert_eq!(request_body["model"], "openai/gpt-4.1");
-            assert_eq!(
-                request_body["client_metadata"]["session_id"],
-                "ws-round-trip"
-            );
-            assert_eq!(
-                request_body["client_metadata"]["thread_id"],
-                "ws-round-trip"
-            );
-
-            // response_events are official JSON events consumed by the same decoder as HTTP SSE.
-            // response_events 是由 HTTP SSE 共用解码器消费的官方 JSON 事件。
-            let response_events = [
-                json!({
-                    "type": "response.created",
-                    "response": {"id": "resp-ws-round-trip"}
-                }),
-                json!({
-                    "type": "response.output_text.delta",
-                    "output_index": 0,
-                    "item_id": "msg-ws-round-trip",
-                    "delta": "WS_SEMANTIC_OK"
-                }),
-                json!({
-                    "type": "response.output_item.done",
-                    "output_index": 0,
-                    "item": {
-                        "id": "msg-ws-round-trip",
-                        "type": "message",
-                        "role": "assistant",
-                        "content": [{"type": "output_text", "text": "WS_SEMANTIC_OK"}]
-                    }
-                }),
-                json!({
-                    "type": "response.completed",
-                    "response": {
-                        "id": "resp-ws-round-trip",
-                        "usage": {"input_tokens": 4, "output_tokens": 2, "total_tokens": 6}
-                    }
-                }),
-            ];
-            for response_event in response_events {
-                websocket
-                    .send(Message::text(response_event.to_string()))
-                    .await
-                    .expect("WebSocket response event should send");
-            }
-        });
-
-        // client owns the production protocol registry and transport implementation.
-        // client 持有生产协议注册表与传输实现。
-        let client = ProviderExecutionClient::new(
-            reqwest::Client::new(),
-            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
-        );
-        // route is one explicit Codex Responses route pointed at the loopback server.
-        // route 是一条指向回环服务器的显式 Codex Responses 路由。
-        let mut route = pinned_openrouter_route(OPENAI_RESPONSES_PROFILE_ID);
-        route.entry.base_url = format!("http://{address}");
-        route.protocol_route.protocol_profile_id = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
-        route.connection.selected_protocol = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
-        route.connection.verified_protocols =
-            BTreeSet::from([String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID)]);
-        route.protocol_route.responses_features = Some(crate::ResponsesRouteFeatures {
-            websocket: crate::ResponsesWebSocketPolicy::PreferredWithHttpFallback,
-            remote_compaction: crate::ResponsesRemoteCompactionPolicy::Disabled,
-        });
-        // request supplies the stable task identity required by the official WebSocket metadata.
-        // request 提供官方 WebSocket 元数据要求的稳定任务身份。
-        let mut request = minimal_request();
-        request.cache_scope_id = Some(String::from("ws-round-trip"));
-        // secret projects the same bearer credential shape used by production custom providers.
-        // secret 投影生产自定义供应商使用的同一 Bearer 凭据形状。
-        let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("test-secret"))
-            .expect("credential envelope should validate")
-            .execution_secret()
-            .expect("execution secret should resolve");
-        // stream is the production WebSocket-selected normalized execution stream.
-        // stream 是生产环境选择 WebSocket 后的规范化执行流。
-        let mut stream = client.execute(
-            route,
-            request,
-            secret,
-            String::from("ws-round-trip-execution"),
-        );
-        // events retain the complete normalized semantic lifecycle for assertions.
-        // events 保留完整规范化语义生命周期以供断言。
-        let mut events = Vec::new();
-        while let Some(event) = stream.next().await {
-            events.push(event.expect("WebSocket semantic stream should succeed"));
-        }
-        server.await.expect("WebSocket server task should finish");
-
-        assert!(events.iter().any(|event| matches!(
-            event,
-            AiStreamEvent::ResponseMetadataUpdated { continuation }
-                if continuation.provider_message_id == "resp-ws-round-trip"
-        )));
-        assert!(events.iter().any(|event| matches!(
-            event,
-            AiStreamEvent::ResponseTextDelta { delta, .. }
-                if delta == "WS_SEMANTIC_OK"
-        )));
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, AiStreamEvent::ResponseCompleted))
-        );
-    }
-
-    /// Verifies official wrapped WebSocket retry signals fall back while authentication remains terminal.
-    /// 验证官方包装式 WebSocket 重试信号会触发回退，而鉴权错误仍保持终止。
-    #[test]
-    fn codex_websocket_wrapped_errors_preserve_fallback_safety() {
-        // missing_response is the official stale-cursor signal used to request a complete replay.
-        // missing_response 是用于请求完整重放的官方过期游标信号。
-        let missing_response = websocket_wrapped_error_failure(&json!({
-            "type": "error",
-            "error": {
-                "code": "previous_response_not_found",
-                "message": "stale cursor"
-            }
-        }))
-        .expect("official stale-cursor wrapper should become a transport failure");
-        assert_eq!(
-            missing_response.error.subcategory.as_deref(),
-            Some(OPENAI_RESPONSES_PREVIOUS_RESPONSE_NOT_FOUND_CODE)
-        );
-        assert!(websocket_failure_allows_http_fallback(&missing_response));
-
-        // authentication is an already-dispatched credential failure and must never be hidden by HTTP fallback.
-        // authentication 是已经分派的凭据失败，绝不能被 HTTP 回退隐藏。
-        let authentication = websocket_wrapped_error_failure(&json!({
-            "type": "error",
-            "status": 401,
-            "error": {
-                "type": "authentication_error",
-                "message": "invalid token"
-            }
-        }))
-        .expect("wrapped authentication status should become a typed failure");
-        assert_eq!(
-            authentication.error.category,
-            AiErrorCategory::Authentication
-        );
-        assert!(!websocket_failure_allows_http_fallback(&authentication));
-
-        // generic_error remains a public terminal Responses event for the shared decoder.
-        // generic_error 仍是交给共享解码器处理的公共 Responses 终态事件。
-        let generic_error = websocket_wrapped_error_failure(&json!({
-            "type": "error",
-            "error": {"code": "invalid_request_error", "message": "bad input"}
-        }));
-        assert!(generic_error.is_none());
-    }
-
-    /// Verifies a dispatched terminal gap can fall back only before semantic output exists.
-    /// 验证已分派请求的终态缺口仅能在尚无语义输出时回退。
-    #[test]
-    fn codex_websocket_terminal_gap_fallback_respects_semantic_boundary() {
-        let safe = stream_transport_failure("stream ended before terminal", false);
-        assert_eq!(safe.error.dispatch_outcome, DispatchOutcome::Dispatched);
-        assert!(websocket_failure_allows_http_fallback(&safe));
-
-        let unsafe_failure = stream_transport_failure("stream ended after output", true);
-        assert!(!websocket_failure_allows_http_fallback(&unsafe_failure));
     }
 
     /// Verifies HTTP decoder completion distinguishes transient truncation from malformed payloads.

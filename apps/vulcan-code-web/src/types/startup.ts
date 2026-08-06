@@ -13,6 +13,7 @@ export type SettingsSubAreaId =
   | "credential-management"
   | "model-list"
   | "provider-retry"
+  | "provider-usage"
   | "ai-vendors"
   | "ai-web-search"
   | "ai-web-extract"

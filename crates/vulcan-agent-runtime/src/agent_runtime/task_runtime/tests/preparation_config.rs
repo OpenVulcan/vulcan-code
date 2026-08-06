@@ -1685,6 +1685,7 @@ fn task_execution_outcome_from_report_preserves_final_assistant_message_id() {
         total_tokens: Some(160),
         cached_input_tokens: Some(40),
         cache_creation_input_tokens: None,
+        ..vulcan_core::types::ProviderUsageSnapshot::default()
     };
     let cumulative_provider_usage = vulcan_core::types::ProviderUsageSnapshot {
         input_tokens: Some(220),
@@ -1694,6 +1695,7 @@ fn task_execution_outcome_from_report_preserves_final_assistant_message_id() {
         total_tokens: Some(300),
         cached_input_tokens: Some(80),
         cache_creation_input_tokens: None,
+        ..vulcan_core::types::ProviderUsageSnapshot::default()
     };
     let report = ExecutionRunReport {
         session_id: task_id,

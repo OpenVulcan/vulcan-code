@@ -64,12 +64,18 @@ pub(crate) struct RuntimeStreamDeltaState {
     /// Cumulative successful provider usage for the current runtime stream.
     /// 当前运行时流中成功 Provider 调用的累计用量。
     cumulative_successful_provider_usage: Option<CoreProviderUsageSnapshot>,
+    /// Latest accumulated usage for the currently active physical request, including a failed partial response.
+    /// 当前活动真实请求的最新累计用量，包括失败响应已产生的部分用量。
+    active_provider_usage: Option<CoreProviderUsageSnapshot>,
     /// Number of successful assistant provider turns already reflected in the cumulative usage.
     /// 已经计入累计用量的成功助手 Provider 回合数量。
     cumulative_usage_accounted_assistant_turns: usize,
     /// Terminal provider error captured from the stream, if one has occurred.
     /// 如果已经发生，则保存从流中捕获到的终态 Provider 错误。
     terminal_error: Option<String>,
+    /// Host-owned context compaction request captured at a replay-safe boundary.
+    /// 在可回放安全边界捕获的宿主上下文压缩请求。
+    context_compaction_required: Option<(SessionConversationState, String)>,
     /// Low-frequency physical Provider request telemetry state machine.
     /// 低频真实 Provider 请求遥测状态机。
     provider_request_telemetry: ProviderRequestTelemetryTracker,
@@ -110,8 +116,10 @@ impl RuntimeStreamDeltaState {
             final_conversation_state: None,
             last_successful_provider_usage: None,
             cumulative_successful_provider_usage: None,
+            active_provider_usage: None,
             cumulative_usage_accounted_assistant_turns: 0,
             terminal_error: None,
+            context_compaction_required: None,
             provider_request_telemetry: ProviderRequestTelemetryTracker::default(),
             tool_request_stream: ToolRequestStreamCoordinator::default(),
             observed_tool_request: false,
@@ -245,6 +253,14 @@ impl RuntimeStreamDeltaState {
     /// 返回是否已经捕获到一条等待收尾处理的终态流错误。
     pub(crate) fn has_terminal_error(&self) -> bool {
         self.terminal_error.is_some()
+    }
+
+    /// Drains a pending host-owned context compaction request.
+    /// 提取等待中的宿主上下文压缩请求。
+    pub(crate) fn take_context_compaction_required(
+        &mut self,
+    ) -> Option<(SessionConversationState, String)> {
+        self.context_compaction_required.take()
     }
 
     /// Completes the current floating thinking phase exactly once when visible reasoning content exists.
@@ -464,6 +480,7 @@ pub(crate) fn process_provider_stream_delta(
 ) -> Vec<ExecutionStreamEvent> {
     match item {
         Ok(ProviderStreamDelta::RequestSnapshot(snapshot)) => {
+            state.active_provider_usage = None;
             state.latest_request_snapshot = Some(snapshot.clone());
             state.provider_request_count = state.provider_request_count.saturating_add(1);
             // events begins with telemetry so an effect Hook can observe the request before UI timing markers.
@@ -485,6 +502,24 @@ pub(crate) fn process_provider_stream_delta(
             ]);
             events
         }
+        Ok(ProviderStreamDelta::TransportObserved {
+            transport,
+            dispatched_at_ms,
+            headers_at_ms,
+            http_status,
+            provider_request_id,
+            rate_limit_headers,
+        }) => {
+            state.provider_request_telemetry.observe_transport(
+                transport,
+                dispatched_at_ms,
+                headers_at_ms,
+                http_status,
+                provider_request_id,
+                rate_limit_headers,
+            );
+            Vec::new()
+        }
         Ok(ProviderStreamDelta::WireRequest(request_json)) => {
             state.latest_wire_request_json = Some(request_json);
             vec![ExecutionStreamEvent::WireRequestReady { session_id }]
@@ -493,6 +528,7 @@ pub(crate) fn process_provider_stream_delta(
         Ok(ProviderStreamDelta::Output(delta)) => state.process_output_delta(session_id, delta),
         Ok(ProviderStreamDelta::ToolRequestFragment(fragment)) => {
             state.observed_tool_request = true;
+            state.provider_request_telemetry.observe_semantic_output();
             // runtimeEvents are safe low-frequency projections produced without raw arguments.
             // runtimeEvents 是在不包含原始参数的前提下生成的安全低频投影。
             let runtime_events = state.tool_request_stream.apply(fragment);
@@ -504,12 +540,17 @@ pub(crate) fn process_provider_stream_delta(
         Ok(ProviderStreamDelta::RuntimeEvent(event)) => {
             state.process_runtime_event(session_id, event)
         }
+        Ok(ProviderStreamDelta::UsageUpdated(usage)) => {
+            state.active_provider_usage = Some(usage);
+            Vec::new()
+        }
         Ok(ProviderStreamDelta::RequestFailed {
             will_retry,
             retry_number,
             max_retries,
             delay_ms,
             error_category,
+            error,
         }) => state
             .provider_request_telemetry
             .complete_failure(
@@ -518,12 +559,21 @@ pub(crate) fn process_provider_stream_delta(
                 max_retries,
                 delay_ms,
                 &error_category,
+                error.as_deref(),
+                state.active_provider_usage.as_ref(),
             )
             .into_iter()
             .map(ExecutionStreamEvent::ProviderRequestTelemetry)
             .collect(),
         Ok(ProviderStreamDelta::LoweringRepair(event)) => {
             vec![ExecutionStreamEvent::ProviderLoweringRepair { session_id, event }]
+        }
+        Ok(ProviderStreamDelta::ContextCompactionRequired {
+            conversation_state,
+            reason,
+        }) => {
+            state.context_compaction_required = Some((conversation_state.clone(), reason.clone()));
+            Vec::new()
         }
         Ok(ProviderStreamDelta::FinalConversationState(
             conversation_state,
@@ -542,6 +592,7 @@ pub(crate) fn process_provider_stream_delta(
                 .map(ExecutionStreamEvent::ProviderRequestTelemetry)
                 .into_iter()
                 .collect::<Vec<_>>();
+            state.active_provider_usage = None;
             events.push(ExecutionStreamEvent::ConversationCheckpoint {
                 session_id,
                 conversation_state,
@@ -555,7 +606,15 @@ pub(crate) fn process_provider_stream_delta(
             // telemetryEvents 在适配器错误绕过类型化失败增量时关闭请求。
             let telemetry_events = state
                 .provider_request_telemetry
-                .complete_failure(false, 0, 0, 0, "provider_stream_error")
+                .complete_failure(
+                    false,
+                    0,
+                    0,
+                    0,
+                    "provider_stream_error",
+                    None,
+                    state.active_provider_usage.as_ref(),
+                )
                 .into_iter()
                 .map(ExecutionStreamEvent::ProviderRequestTelemetry)
                 .collect();
@@ -600,6 +659,13 @@ mod tests {
         )
     }
 
+    /// Builds one delta state with exact request telemetry identities installed.
+    /// 构建一份已安装精确请求遥测身份的增量状态。
+    fn build_delta_state_with_telemetry() -> RuntimeStreamDeltaState {
+        build_delta_state()
+            .with_provider_request_telemetry_context(ProviderRequestTelemetryContext::for_test())
+    }
+
     /// Preserves the prepared protocol profile when emitting one provider request checkpoint.
     /// 发出 Provider 请求检查点时保留执行准备阶段解析出的协议画像。
     #[test]
@@ -626,6 +692,55 @@ mod tests {
             } if provider_family == vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID
                 && snapshot.provider_id == "mock-provider"
         )));
+    }
+
+    /// Verifies an accumulated usage update survives a later physical request failure.
+    /// 验证累计用量更新会在后续真实请求失败时保留下来。
+    #[test]
+    fn failed_stream_request_emits_partial_usage_telemetry() {
+        let session_id = Uuid::nil();
+        let mut state = build_delta_state_with_telemetry();
+        process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::RequestSnapshot(
+                build_request_snapshot(),
+            )),
+        );
+        process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::UsageUpdated(
+                CoreProviderUsageSnapshot {
+                    input_tokens: Some(21),
+                    output_tokens: Some(4),
+                    total_tokens: Some(25),
+                    ..CoreProviderUsageSnapshot::default()
+                },
+            )),
+        );
+
+        let events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::RequestFailed {
+                will_retry: false,
+                retry_number: 0,
+                max_retries: 0,
+                delay_ms: 0,
+                error_category: String::from("provider_transport_error"),
+                error: None,
+            }),
+        );
+
+        let completed_usage = events.into_iter().find_map(|event| match event {
+            ExecutionStreamEvent::ProviderRequestTelemetry(event) => event.completed_usage,
+            _ => None,
+        });
+        assert_eq!(
+            completed_usage.and_then(|usage| usage.total_tokens),
+            Some(25)
+        );
     }
 
     /// Builds one minimal request snapshot so provider-request counting uses the real event shape.
@@ -666,6 +781,7 @@ mod tests {
             total_tokens: Some(total_tokens),
             cached_input_tokens: Some(cached_input_tokens),
             cache_creation_input_tokens: None,
+            ..CoreProviderUsageSnapshot::default()
         }
     }
 

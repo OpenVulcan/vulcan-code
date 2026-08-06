@@ -22,9 +22,10 @@ pub(crate) use launch_failure::{
     commit_stream_task_registration_failure, handle_pre_registration_stream_task_launch_failure,
     handle_stream_task_registration_failure,
 };
-use prepared::{PreparedStreamEventAction, handle_prepared_stream_event};
 #[cfg(test)]
-pub(crate) use prepared::{PreparedStreamFailureCommit, commit_prepared_stream_failure};
+pub(crate) use prepared::PreparedStreamFailureCommit;
+pub(crate) use prepared::commit_prepared_stream_failure;
+use prepared::{PreparedStreamEventAction, handle_prepared_stream_event};
 use request_phase::{RequestPhaseStreamEvent, handle_request_phase_stream_event};
 use request_trace::StreamRequestTraceState;
 use runtime_event::{handle_runtime_stream_event, runtime_event_hook_policy_for_execution_scope};
@@ -170,6 +171,9 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
         // activeProviderGoalId binds exactly one physical request to its resolved goal owner.
         // activeProviderGoalId 将恰好一次物理请求绑定到其解析后的目标所有者。
         let mut active_provider_goal_id: Option<String> = None;
+        // active_preparation preserves the exact provider/model budget facts for a mid-turn compaction restart.
+        // active_preparation 保留中途回合压缩重启所需的精确 Provider/模型预算事实。
+        let mut active_preparation: Option<ExecutionPreparation> = None;
         let intervention_started_at = current_unix_millis_value();
         let prompt_intervention = build_webui_prompt_intervention(app.clone(), task_state.clone());
         webui_after_precheck_trace(
@@ -257,6 +261,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
             }
             match event {
                 ExecutionStreamEvent::Prepared(preparation) => {
+                    active_preparation = Some(preparation.clone());
                     match handle_prepared_stream_event(
                         &app,
                         &task_state,
@@ -476,6 +481,108 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     last_successful_provider_usage,
                     provider_request_count,
                 ),
+                ExecutionStreamEvent::ContextCompactionRequired {
+                    session_id,
+                    conversation_state,
+                    reason,
+                } => {
+                    if auto_compaction_already_attempted {
+                        eprintln!(
+                            "[webui-service] repeated mid-turn context compaction rejected: session={session_id} reason={reason}"
+                        );
+                        let _ = commit_prepared_stream_failure(
+                            &app,
+                            &task_state,
+                            session_id,
+                            active_stream_task_id,
+                            "mid-turn context compaction retry limit reached",
+                        );
+                        return;
+                    }
+                    let Some(preparation) = active_preparation.as_ref() else {
+                        let _ = commit_prepared_stream_failure(
+                            &app,
+                            &task_state,
+                            session_id,
+                            active_stream_task_id,
+                            "mid-turn context compaction preparation missing",
+                        );
+                        return;
+                    };
+                    let mut compaction_request = request.clone();
+                    compaction_request.conversation_state = conversation_state;
+                    let compaction_result =
+                        force_auto_compact_webui_session_after_provider_boundary(
+                            &app,
+                            &task_state,
+                            &controller_runtime,
+                            &agent_runtime,
+                            active_stream_task_id,
+                            &compaction_request,
+                            preparation,
+                        )
+                        .await;
+                    match compaction_result {
+                        Ok(Some(updated_request)) => {
+                            webui_trace(
+                                "stream_mid_turn_compaction_restarting",
+                                format!("session={session_id} reason={reason}"),
+                            );
+                            let owns_active_stream_entry = task_state
+                                .lock()
+                                .ok()
+                                .and_then(|mut guard| {
+                                    remove_active_stream_task_if_id(
+                                        &mut guard,
+                                        session_id,
+                                        active_stream_task_id,
+                                    )
+                                })
+                                .is_some();
+                            if !owns_active_stream_entry {
+                                return;
+                            }
+                            spawn_agent_stream_task_with_auto_compaction_state(
+                                app.clone(),
+                                task_state.clone(),
+                                controller_runtime.clone(),
+                                agent_runtime.clone(),
+                                updated_request,
+                                true,
+                            );
+                            return;
+                        }
+                        Ok(None) => {
+                            let error = String::from(
+                                "mid-turn context compaction was required but produced no refreshed request",
+                            );
+                            eprintln!(
+                                "[webui-service] {error}: session={session_id} reason={reason}"
+                            );
+                            let _ = commit_prepared_stream_failure(
+                                &app,
+                                &task_state,
+                                session_id,
+                                active_stream_task_id,
+                                "mid-turn context compaction produced no request",
+                            );
+                            return;
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "[webui-service] mid-turn context compaction failed: session={session_id} reason={reason} error={error}"
+                            );
+                            let _ = commit_prepared_stream_failure(
+                                &app,
+                                &task_state,
+                                session_id,
+                                active_stream_task_id,
+                                "mid-turn context compaction failure",
+                            );
+                            return;
+                        }
+                    }
+                }
                 ExecutionStreamEvent::Finished(report) => {
                     // finished_session_id keeps the exact owner available before the report moves into terminal handling.
                     // finished_session_id 在报告移入终态处理前保留精确所属会话。

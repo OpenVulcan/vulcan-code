@@ -41,6 +41,7 @@ impl ProtocolProfile for CohereChatProfile {
         request: &AiExecutionRequest,
     ) -> Result<EncodedWireRequest, ProtocolConversionError> {
         crate::shared::require_no_native_tools(request, self.id())?;
+        crate::require_no_route_bound_provider_context(request, self.id())?;
         if request.prompt_cache != PromptCachePolicy::ProviderDefault {
             return Err(ProtocolConversionError::new(
                 "Cohere explicit prompt-cache projection is not registered.",
@@ -59,6 +60,12 @@ impl ProtocolProfile for CohereChatProfile {
             (String::from("messages"), Value::Array(messages)),
         ]);
         if !request.tools.is_empty() {
+            if let Some(tool) = request.tools.iter().find(|tool| tool.strict) {
+                return Err(ProtocolConversionError::new(format!(
+                    "Cohere Chat has no registered strict-schema projector for tool `{}`.",
+                    tool.name
+                )));
+            }
             body.insert(
                 String::from("tools"),
                 Value::Array(
@@ -262,7 +269,7 @@ fn encode_cohere_message(message: &AiMessage) -> Result<Vec<Value>, ProtocolConv
     }
     let mut encoded = Vec::new();
     match message.role {
-        MessageRole::System => {
+        MessageRole::System | MessageRole::Developer => {
             let content = ordinary_content
                 .iter()
                 .filter_map(|item| item.get("text").and_then(Value::as_str))
@@ -593,7 +600,7 @@ impl ProtocolStreamDecoder for CohereStreamDecoder {
                 }
                 if let Some(usage) = value.pointer("/delta/usage") {
                     events.push(AiStreamEvent::UsageUpdated {
-                        usage: cohere_usage(usage),
+                        usage: Box::new(cohere_usage(usage)),
                     });
                 }
                 self.completed = true;
@@ -725,6 +732,7 @@ mod tests {
                     name: String::from("lookup"),
                     description: String::from("Lookup"),
                     input_schema: json!({"type":"object"}),
+                    strict: false,
                 }],
                 native_tools: Vec::new(),
                 tool_choice: Default::default(),

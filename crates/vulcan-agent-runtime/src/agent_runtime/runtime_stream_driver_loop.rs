@@ -298,6 +298,15 @@ pub(crate) fn drive_runtime_stream_provider_loop(
             return;
         }
 
+        if let Some((conversation_state, reason)) = stream_state.take_context_compaction_required() {
+            yield ExecutionStreamEvent::ContextCompactionRequired {
+                session_id,
+                conversation_state,
+                reason,
+            };
+            return;
+        }
+
         if let Some(error) = stream_state.take_terminal_error() {
             for event in build_failure_terminal_events(
                 session_id,

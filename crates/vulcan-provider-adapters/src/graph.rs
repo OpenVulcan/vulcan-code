@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::{InferenceUsageScope, ModelCapabilities, PromptCachePolicy};
+use vulcan_llm_core::UsageExtractionProfile;
 
 /// Identifies one credential acquisition mode.
 /// 标识一种凭据获取方式。
@@ -321,20 +322,6 @@ pub enum AccountUsageQueryKind {
     KimiCodingPlan,
 }
 
-/// Selects whether one Responses route may use its WebSocket transport.
-/// 选择一条 Responses 路由是否可以使用 WebSocket 传输。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ResponsesWebSocketPolicy {
-    /// Keeps the existing HTTP streaming transport only.
-    /// 仅保留现有 HTTP 流式传输。
-    #[default]
-    Disabled,
-    /// Prefers WebSocket and falls back to HTTP before semantic output is observed.
-    /// 优先使用 WebSocket，并在观察到语义输出前回退到 HTTP。
-    PreferredWithHttpFallback,
-}
-
 /// Selects whether one Responses route may use the standalone remote compact endpoint.
 /// 选择一条 Responses 路由是否可以使用独立远端压缩端点。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -349,18 +336,36 @@ pub enum ResponsesRemoteCompactionPolicy {
     EnabledWithLocalFallback,
 }
 
+/// Selects the explicitly verified Responses WebSocket capability for one route.
+/// 选择一条路由显式验证的 Responses WebSocket 能力。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponsesWebsocketPolicy {
+    /// Keeps HTTP/SSE as the only allowed transport.
+    /// 仅允许 HTTP/SSE 传输。
+    #[default]
+    Disabled,
+    /// Enables WebSocket because this exact route has passed real verification.
+    /// 当前精确路由已通过真实验证，因此启用 WebSocket。
+    Verified,
+    /// Enables an advanced user override while retaining unverified telemetry status.
+    /// 启用高级用户覆盖，同时在遥测中保留未验证状态。
+    #[serde(alias = "preferred_with_http_fallback")]
+    UnverifiedOverride,
+}
+
 /// Carries explicit optional capabilities for one OpenAI Responses route.
 /// 承载一条 OpenAI Responses 路由的显式可选能力。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ResponsesRouteFeatures {
-    /// WebSocket transport selection.
-    /// WebSocket 传输选择。
-    #[serde(default)]
-    pub websocket: ResponsesWebSocketPolicy,
     /// Standalone remote compaction selection.
     /// 独立远端压缩选择。
     #[serde(default)]
     pub remote_compaction: ResponsesRemoteCompactionPolicy,
+    /// Responses WebSocket capability for this exact route.
+    /// 当前精确路由的 Responses WebSocket 能力。
+    #[serde(default)]
+    pub websocket: ResponsesWebsocketPolicy,
 }
 
 /// Describes one verified protocol route.
@@ -402,12 +407,31 @@ pub struct ProtocolRoute {
     /// 可选的用户声明 Responses 传输与压缩能力。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub responses_features: Option<ResponsesRouteFeatures>,
+    /// Versioned raw usage extraction profiles frozen with this route.
+    /// 随当前路由冻结的版本化原始用量提取 Profile。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub usage_extraction_profiles: Vec<UsageExtractionProfile>,
+    /// Ordered response-header names that may carry the upstream provider request identifier.
+    /// 可承载上游供应商请求标识的有序响应头名称。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provider_request_id_headers: Vec<String>,
     /// Whether this route has completed real verification.
     /// 此路由是否已完成真实验证。
     pub verified: bool,
 }
 
 impl ProtocolRoute {
+    /// Reports whether this exact route explicitly enables Responses WebSocket transport.
+    /// 报告当前精确路由是否显式启用 Responses WebSocket 传输。
+    pub fn responses_websocket_enabled(&self) -> bool {
+        self.responses_features.as_ref().is_some_and(|features| {
+            matches!(
+                features.websocket,
+                ResponsesWebsocketPolicy::Verified | ResponsesWebsocketPolicy::UnverifiedOverride
+            )
+        })
+    }
+
     /// Reports whether this exact route explicitly enables standalone remote Responses compaction.
     /// 报告当前精确路由是否显式启用独立远端 Responses 压缩。
     ///
@@ -1006,4 +1030,24 @@ pub struct SecondaryRouteOption {
     /// 供应商报告时的近期每秒 Token 吞吐量。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub throughput_tokens_per_second: Option<f64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies the retired preferred-with-fallback value remains explicitly unverified.
+    /// 验证已退役的优先 WS 并允许回退值仍保持显式未验证语义。
+    #[test]
+    fn websocket_policy_reads_legacy_preferred_with_http_fallback() {
+        let policy: ResponsesWebsocketPolicy =
+            serde_json::from_str(r#""preferred_with_http_fallback""#)
+                .expect("legacy websocket policy should deserialize");
+
+        assert_eq!(policy, ResponsesWebsocketPolicy::UnverifiedOverride);
+        assert_eq!(
+            serde_json::to_string(&policy).expect("websocket policy should serialize"),
+            r#""unverified_override""#
+        );
+    }
 }

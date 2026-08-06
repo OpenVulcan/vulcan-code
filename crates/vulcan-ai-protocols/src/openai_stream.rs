@@ -349,7 +349,7 @@ impl ProtocolStreamDecoder for OpenAiChatStreamDecoder {
         }
         if let Some(usage) = value.get("usage") {
             events.push(AiStreamEvent::UsageUpdated {
-                usage: openai_usage(usage),
+                usage: Box::new(openai_usage(usage)),
             });
         }
         if let Some(choices) = value.get("choices").and_then(Value::as_array) {
@@ -1363,6 +1363,9 @@ impl OpenAiResponsesStreamDecoder {
                         id: resource_id.clone(),
                         kind: ResourceKind::Image,
                         media_type: Some(media_type.to_string()),
+                        source_kind: vulcan_ai_contract::ResourceSourceKind::InlineData,
+                        file_name: None,
+                        image_detail: None,
                         local_path: None,
                         url: Some(format!("data:{media_type};base64,{result}")),
                     },
@@ -1544,7 +1547,7 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
                     .or_else(|| value.get("usage"))
                 {
                     events.push(AiStreamEvent::UsageUpdated {
-                        usage: openai_usage(usage),
+                        usage: Box::new(openai_usage(usage)),
                     });
                 }
                 self.terminal = true;
@@ -1629,6 +1632,14 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
                             "OpenAI Responses partial image payload is missing.",
                         )
                     })?;
+                let partial_image_index = value
+                    .get("partial_image_index")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| {
+                        ProtocolConversionError::new(
+                            "OpenAI Responses partial image index is missing or invalid.",
+                        )
+                    })?;
                 let bytes_processed = u64::try_from(encoded.len())
                     .map_err(|_| {
                         ProtocolConversionError::new(
@@ -1637,6 +1648,11 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
                     })?
                     .saturating_mul(3)
                     / 4;
+                events.push(AiStreamEvent::ImageGenerationPartial {
+                    item_id: item_id.clone(),
+                    partial_image_index,
+                    partial_image_b64: encoded.to_string(),
+                });
                 events.push(AiStreamEvent::ResourceProgress {
                     resource_id: format!("{item_id}:resource"),
                     state: ResourceTransferState::Running {
@@ -1802,7 +1818,16 @@ fn normalize_openai_error(
     // 官方 Codex 过载代码优先于代理返回的通用错误类型。
     let discriminator = code
         .as_deref()
-        .filter(|value| matches!(*value, "server_is_overloaded" | "slow_down"))
+        .filter(|value| {
+            matches!(
+                *value,
+                "server_is_overloaded"
+                    | "slow_down"
+                    | "context_length_exceeded"
+                    | "max_tokens_exceeded"
+                    | "token_limit_exceeded"
+            )
+        })
         .or(error_type.as_deref())
         .or(code.as_deref());
     let category = match discriminator {
@@ -1816,6 +1841,9 @@ fn normalize_openai_error(
         }
         Some("provider_unavailable") => AiErrorCategory::ProviderUnavailable,
         Some("timeout") => AiErrorCategory::Timeout,
+        Some("context_length_exceeded" | "max_tokens_exceeded" | "token_limit_exceeded") => {
+            AiErrorCategory::ContextLengthExceeded
+        }
         Some("invalid_request") | Some("invalid_request_error") | Some("invalid_prompt") => {
             AiErrorCategory::InvalidRequest
         }
@@ -1841,6 +1869,8 @@ fn normalize_openai_error(
                     .and_then(Value::as_u64)
                     .and_then(|status| u16::try_from(status).ok())
             }),
+        transport: None,
+        websocket_close_code: None,
         upstream_code: code,
         upstream_type: error_type,
         upstream_parameter: error
@@ -2327,6 +2357,25 @@ mod tests {
                 .expect("terminal error should finish")
                 .is_empty()
         );
+    }
+
+    /// Verifies Responses streaming preserves the exact context-window error category.
+    /// 验证 Responses 流式处理保留精确上下文窗口错误类别。
+    #[test]
+    fn responses_context_length_error_is_typed() {
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        let events = decoder
+            .push_sse(
+                Some("error"),
+                r#"{"type":"error","code":"context_length_exceeded","message":"too large"}"#,
+            )
+            .expect("context-window error should decode");
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ResponseFailed { error }
+                if error.category == AiErrorCategory::ContextLengthExceeded
+        )));
     }
 
     /// Verifies the official Codex server overload code becomes a retryable provider overload.
@@ -2887,13 +2936,21 @@ mod tests {
         let progress = decoder
             .push_sse(
                 Some("response.image_generation_call.partial_image"),
-                r#"{"type":"response.image_generation_call.partial_image","output_index":2,"item_id":"image-item","partial_image_b64":"aW1hZ2U="}"#,
+                r#"{"type":"response.image_generation_call.partial_image","output_index":2,"item_id":"image-item","partial_image_index":0,"partial_image_b64":"aW1hZ2U="}"#,
             )
             .expect("partial image should decode");
         assert!(progress.iter().any(|event| matches!(
             event,
             AiStreamEvent::ResourceProgress { resource_id, .. }
                 if resource_id == "image-item:resource"
+        )));
+        assert!(progress.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ImageGenerationPartial {
+                item_id,
+                partial_image_index: 0,
+                partial_image_b64,
+            } if item_id == "image-item" && partial_image_b64 == "aW1hZ2U="
         )));
 
         let completed = decoder
@@ -2952,7 +3009,7 @@ mod tests {
         let error = decoder
             .push_sse(
                 Some("response.image_generation_call.partial_image"),
-                r#"{"type":"response.image_generation_call.partial_image","output_index":2,"item_id":"image-item","partial_image_b64":"aW1hZ2U="}"#,
+                r#"{"type":"response.image_generation_call.partial_image","output_index":2,"item_id":"image-item","partial_image_index":1,"partial_image_b64":"aW1hZ2U="}"#,
             )
             .expect_err("progress after image completion must fail");
         assert!(error.to_string().contains("progress after completion"));

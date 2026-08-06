@@ -9692,7 +9692,18 @@ mcp:
             1
         );
         runtime.block_on(async {
-            tokio::time::sleep(Duration::from_millis(1_500)).await;
+            // The reaper starts at the one-second deadline, while asynchronous shutdown may finish later under full-workspace load.
+            // 回收器在一秒截止点启动，而异步关闭在全仓负载下可能稍后才完成。
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if manager.snapshot().plugins["idle-plugin"].active_session_count == 0 {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            })
+            .await
+            .expect("idle session should be reaped within the bounded shutdown window");
         });
         assert_eq!(
             manager.snapshot().plugins["idle-plugin"].active_session_count,

@@ -223,7 +223,7 @@ impl RuntimeConversationProjection {
                 reasoning: event.reasoning.clone(),
                 provider_message_id: event.provider_message_id.clone(),
                 provider_message_state: event.provider_message_state.clone(),
-                usage: event.usage.clone(),
+                usage: event.usage.clone().map(Box::new),
                 tool_calls: Vec::new(),
             },
         });

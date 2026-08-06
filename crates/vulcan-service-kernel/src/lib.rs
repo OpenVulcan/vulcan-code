@@ -46,7 +46,8 @@ use vulcan_agent_runtime::{
         extension_generation::ExtensionGeneration,
         prompt_composer_runtime::invalidate_runtime_prompt_luaskill_catalog_cache,
         provider_request_telemetry::{
-            ProviderRequestTelemetryEvent, ProviderRequestTelemetryEventKind,
+            ProviderRequestCompletedUsage, ProviderRequestTelemetryEvent,
+            ProviderRequestTelemetryEventKind,
         },
         question_runtime::{PendingQuestionChangeCallback, QuestionRuntime},
         task_runtime::{DetachedTaskRuntimeEvent, TaskRuntime},
@@ -216,6 +217,7 @@ mod plugin_ui_events;
 mod project_conversation_services;
 mod project_directories;
 mod provider_settings;
+mod provider_usage_migration;
 mod provider_usage_runtime;
 mod public_ai_settings;
 mod rpc_dispatch;
@@ -267,6 +269,7 @@ use command_sessions::*;
 use context_compaction::{
     MANUAL_CONTEXT_COMPACTION_TRIGGER, append_webui_context_compaction_status_message_to_workspace,
     context_compaction_budget_note_from_state,
+    force_auto_compact_webui_session_after_provider_boundary,
     maybe_auto_compact_webui_session_before_provider_request, spawn_webui_context_compaction_task,
     webui_context_compaction_plan_from_conversation_state,
 };

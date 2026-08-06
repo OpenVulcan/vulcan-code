@@ -316,6 +316,101 @@ where
                         break;
                     }
                     Err(error) => {
+                        if let CoreError::ContextCompactionRequired { message } = &error {
+                            abort_active_tool_request_streams(
+                                &task_sender,
+                                &mut active_tool_request_streams,
+                                "context_compaction_required",
+                            );
+                            let last_successful_provider_usage =
+                                controller.last_successful_provider_usage().cloned();
+                            let final_delta = core_snapshot_to_session_conversation_state(
+                                controller.snapshot(),
+                            )
+                            .map(|conversation_state| {
+                                ProviderStreamDelta::FinalConversationState(
+                                    conversation_state.clone(),
+                                    last_successful_provider_usage,
+                                )
+                            });
+                            let _ = task_sender.send(Ok(ProviderStreamDelta::RequestFailed {
+                                will_retry: false,
+                                retry_number: 0,
+                                max_retries: completed_retries,
+                                delay_ms: 0,
+                                error_category: String::from("context_compaction_required"),
+                                error: None,
+                            }));
+                            // finalDelta follows request failure so checkpoint projection cannot close the attempt as successful.
+                            // finalDelta 位于请求失败之后，避免检查点投影把该 attempt 关闭为成功。
+                            let _ = task_sender.send(final_delta);
+                            match core_snapshot_to_session_conversation_state(controller.snapshot()) {
+                                Ok(conversation_state) => {
+                                    let _ = task_sender.send(Ok(
+                                        ProviderStreamDelta::ContextCompactionRequired {
+                                            conversation_state,
+                                            reason: message.clone(),
+                                        },
+                                    ));
+                                }
+                                Err(conversion_error) => {
+                                    let _ = task_sender.send(Err(format!(
+                                        "Context compaction boundary could not be serialized: {conversion_error}"
+                                    )));
+                                }
+                            }
+                            break;
+                        }
+                        if provider_failure_requires_context_compaction(
+                            &error,
+                            unsafe_delta_seen,
+                        ) {
+                            abort_active_tool_request_streams(
+                                &task_sender,
+                                &mut active_tool_request_streams,
+                                "provider_context_length_exceeded",
+                            );
+                            let last_successful_provider_usage =
+                                controller.last_successful_provider_usage().cloned();
+                            let final_delta = core_snapshot_to_session_conversation_state(
+                                controller.snapshot(),
+                            )
+                            .map(|conversation_state| {
+                                ProviderStreamDelta::FinalConversationState(
+                                    conversation_state.clone(),
+                                    last_successful_provider_usage,
+                                )
+                            });
+                            let _ = task_sender.send(Ok(ProviderStreamDelta::RequestFailed {
+                                will_retry: false,
+                                retry_number: 0,
+                                max_retries: completed_retries,
+                                delay_ms: 0,
+                                error_category: String::from("context_length_exceeded"),
+                                error: structured_provider_failure(&error),
+                            }));
+                            // finalDelta follows request failure so checkpoint projection cannot close the attempt as successful.
+                            // finalDelta 位于请求失败之后，避免检查点投影把该 attempt 关闭为成功。
+                            let _ = task_sender.send(final_delta);
+                            match core_snapshot_to_session_conversation_state(controller.snapshot()) {
+                                Ok(conversation_state) => {
+                                    let _ = task_sender.send(Ok(
+                                        ProviderStreamDelta::ContextCompactionRequired {
+                                            conversation_state,
+                                            reason: String::from(
+                                                "Provider rejected the replay-safe request because the declared context window was exceeded.",
+                                            ),
+                                        },
+                                    ));
+                                }
+                                Err(conversion_error) => {
+                                    let _ = task_sender.send(Err(format!(
+                                        "Provider context-overflow boundary could not be serialized: {conversion_error}"
+                                    )));
+                                }
+                            }
+                            break;
+                        }
                         // retryDecision is computed before request cleanup so superseded cards receive the exact retry terminal state.
                         // retryDecision 会在请求清理前计算，使被替换卡片获得精确的重试终态。
                         let retry_decision =
@@ -347,6 +442,7 @@ where
                                 max_retries: decision.max_retries,
                                 delay_ms,
                                 error_category: String::from("retryable_provider_transport_error"),
+                                error: structured_provider_failure(&error),
                             };
                             if task_sender.send(Ok(failed_request_delta)).is_err() {
                                 break;
@@ -405,6 +501,7 @@ where
                             max_retries: completed_retries,
                             delay_ms: 0,
                             error_category: String::from("provider_transport_error"),
+                            error: structured_provider_failure(&error),
                         };
                         let _ = task_sender.send(Ok(failed_request_delta));
                         // Preserve only the controller snapshot before the terminal error is reported.
@@ -471,6 +568,48 @@ fn observe_provider_request_retry_safety(
     if provider_delta_makes_retry_unsafe(delta) {
         *unsafe_delta_seen = true;
     }
+}
+
+/// Extracts the structured provider failure retained by the controller error.
+/// 提取控制器错误中保留的结构化供应商失败。
+fn structured_provider_failure(
+    error: &CoreError,
+) -> Option<Box<vulcan_ai_contract::AiExecutionError>> {
+    match error {
+        CoreError::ProviderFailure { details, .. } => details.clone(),
+        CoreError::InvalidState { .. }
+        | CoreError::ContextCompactionRequired { .. }
+        | CoreError::ToolFailure { .. } => None,
+    }
+}
+
+/// Reports whether one typed provider rejection permits a single compensating compaction.
+/// 报告一个强类型供应商拒绝是否允许执行一次补偿压缩。
+///
+/// # Parameters
+/// 参数
+/// `error` retains structured provider facts and `unsafe_delta_seen` records visible non-replayable output.
+/// `error` 保留结构化供应商事实，`unsafe_delta_seen` 记录可见且不可重放的输出。
+///
+/// # Returns
+/// 返回值
+/// `true` only for an exact context-window category with no semantic output, side effect, or unknown dispatch.
+/// 仅对无语义输出、无副作用且分派结果非未知的精确上下文窗口类别返回 `true`。
+fn provider_failure_requires_context_compaction(
+    error: &CoreError,
+    unsafe_delta_seen: bool,
+) -> bool {
+    let CoreError::ProviderFailure { details, .. } = error else {
+        return false;
+    };
+    let Some(details) = details.as_deref() else {
+        return false;
+    };
+    details.category == vulcan_ai_contract::AiErrorCategory::ContextLengthExceeded
+        && !unsafe_delta_seen
+        && !details.semantic_output_observed
+        && !details.side_effect_observed
+        && details.dispatch_outcome != vulcan_ai_contract::DispatchOutcome::Unknown
 }
 
 /// Resets consecutive retry accounting when the controller reaches another physical request after one successful request.
@@ -648,6 +787,71 @@ mod tests {
 
     use super::*;
     use tokio::sync::Notify;
+
+    /// Builds one typed context-window provider failure for compensation-safety tests.
+    /// 构建一个用于补偿安全测试的强类型上下文窗口供应商失败。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A dispatched rejection with no semantic output or side effect.
+    /// 返回一个已分派且没有语义输出或副作用的拒绝。
+    fn context_window_failure() -> CoreError {
+        CoreError::ProviderFailure {
+            provider_id: String::from("openai"),
+            message: String::from("context length exceeded"),
+            details: Some(Box::new(vulcan_ai_contract::AiExecutionError {
+                category: vulcan_ai_contract::AiErrorCategory::ContextLengthExceeded,
+                subcategory: Some(String::from("invalid_request_error")),
+                stage: String::from("response_headers"),
+                http_status: Some(400),
+                transport: Some(vulcan_ai_contract::AiTransportKind::Http),
+                websocket_close_code: None,
+                upstream_code: Some(String::from("context_length_exceeded")),
+                upstream_type: Some(String::from("invalid_request_error")),
+                upstream_parameter: Some(String::from("input")),
+                upstream_message: None,
+                request_id: None,
+                provider_id: Some(String::from("openai")),
+                entry_id: Some(String::from("api")),
+                model_id: Some(String::from("gpt")),
+                message: String::from("request context exceeded"),
+                dispatch_outcome: vulcan_ai_contract::DispatchOutcome::Dispatched,
+                semantic_output_observed: false,
+                side_effect_observed: false,
+                terminal: true,
+                retryable: false,
+                retry_after: None,
+            })),
+        }
+    }
+
+    /// Verifies compensation requires typed overflow plus replay-safe stream facts.
+    /// 验证补偿压缩必须同时具备强类型越界与可回放安全流事实。
+    #[test]
+    fn context_overflow_compensation_requires_replay_safety() {
+        let error = context_window_failure();
+        assert!(provider_failure_requires_context_compaction(&error, false));
+        assert!(!provider_failure_requires_context_compaction(&error, true));
+
+        let CoreError::ProviderFailure {
+            details: Some(details),
+            ..
+        } = error
+        else {
+            panic!("fixture must retain structured details");
+        };
+        let mut unsafe_details = *details;
+        unsafe_details.dispatch_outcome = vulcan_ai_contract::DispatchOutcome::Unknown;
+        let unsafe_error = CoreError::ProviderFailure {
+            provider_id: String::from("openai"),
+            message: String::from("context length exceeded"),
+            details: Some(Box::new(unsafe_details)),
+        };
+        assert!(!provider_failure_requires_context_compaction(
+            &unsafe_error,
+            false
+        ));
+    }
 
     /// Builds one minimal request snapshot used to verify physical-request retry boundaries.
     /// 构建一份用于验证真实请求重试边界的最小请求快照。

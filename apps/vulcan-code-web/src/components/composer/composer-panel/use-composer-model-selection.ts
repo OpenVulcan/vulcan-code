@@ -85,6 +85,19 @@ export interface ComposerModelSelectionController {
   openReasoningPicker: () => void;
 }
 
+// shouldDeferServiceModelChoiceSync protects an in-flight optimistic choice from same-session stale snapshots.
+// shouldDeferServiceModelChoiceSync 保护正在持久化的乐观选择不被同会话旧快照覆盖。
+// Parameters: scopeChanged identifies navigation, and pendingModelChoice identifies an active persistence request.
+// 参数：scopeChanged 标识会话导航，pendingModelChoice 标识活动中的持久化请求。
+// Returns: true only when the current session must keep its optimistic model choice.
+// 返回值：仅当当前会话必须保留乐观模型选择时返回 true。
+export function shouldDeferServiceModelChoiceSync(
+  scopeChanged: boolean,
+  pendingModelChoice: string | null,
+): boolean {
+  return !scopeChanged && pendingModelChoice !== null;
+}
+
 // useComposerModelSelection synchronizes service snapshots with optimistic model and reasoning choices.
 // useComposerModelSelection 将服务快照与乐观模型、推理选择保持同步。
 // Parameters: options provides authoritative provider data, reasoning capabilities, and persistence callbacks.
@@ -107,6 +120,12 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
   // modelRequestVersionRef prevents an older failed request from rolling back a newer model choice.
   // modelRequestVersionRef 防止较早的失败请求回滚较新的模型选择。
   const modelRequestVersionRef = React.useRef(0);
+  // pendingModelChoiceRef protects the latest optimistic choice until its service request settles.
+  // pendingModelChoiceRef 在最新服务请求结束前保护对应的乐观选择。
+  const pendingModelChoiceRef = React.useRef<string | null>(null);
+  // modelChoiceScopeRef distinguishes session navigation from same-session snapshot refreshes.
+  // modelChoiceScopeRef 区分会话导航与同会话快照刷新。
+  const modelChoiceScopeRef = React.useRef(options.conversationScopeKey);
   // reasoningRequestVersionRef prevents an older failed request from rolling back a newer reasoning choice.
   // reasoningRequestVersionRef 防止较早的失败请求回滚较新的推理选择。
   const reasoningRequestVersionRef = React.useRef(0);
@@ -199,6 +218,14 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
   }, [effectiveReasoningSelection, reasoningEffort]);
 
   React.useLayoutEffect(() => {
+    // scopeChanged makes a different conversation's persisted model immediately authoritative.
+    // scopeChanged 使不同会话的持久化模型立即成为权威值。
+    const scopeChanged = modelChoiceScopeRef.current !== options.conversationScopeKey;
+    modelChoiceScopeRef.current = options.conversationScopeKey;
+    if (shouldDeferServiceModelChoiceSync(scopeChanged, pendingModelChoiceRef.current)) {
+      return;
+    }
+    pendingModelChoiceRef.current = null;
     modelRequestVersionRef.current += 1;
     setModelChoice(activeModelChoiceKey);
   }, [activeModelChoiceKey, options.conversationScopeKey]);
@@ -240,12 +267,16 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
     // requestVersion 在重叠选择中标识本次乐观请求。
     const requestVersion = modelRequestVersionRef.current + 1;
     modelRequestVersionRef.current = requestVersion;
+    pendingModelChoiceRef.current = nextChoice;
     setModelChoice(nextChoice);
     // saved records whether the service accepted this model selection.
     // saved 记录服务是否接受本次模型选择。
     const saved = await options.onSelectModel(choice);
-    if (!saved && modelRequestVersionRef.current === requestVersion) {
-      setModelChoice(previousChoice);
+    if (modelRequestVersionRef.current === requestVersion) {
+      pendingModelChoiceRef.current = null;
+      if (!saved) {
+        setModelChoice(previousChoice);
+      }
     }
   }, [modelChoice, options.onSelectModel]);
 

@@ -1,5 +1,5 @@
-//! User-defined OpenAI and Anthropic compatible provider contracts.
-//! 用户自定义 OpenAI 与 Anthropic 兼容供应商契约。
+//! User-defined OpenAI, Anthropic, and Gemini compatible provider contracts.
+//! 用户自定义 OpenAI、Anthropic 与 Gemini 兼容供应商契约。
 
 use crate::{
     AccountUsageQueryKind, AuthenticationProjection, CredentialBillingKind,
@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::InferenceUsageScope;
 use vulcan_ai_protocols::{
-    ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_CODEX_RESPONSES_PROFILE_ID,
-    OPENAI_RESPONSES_PROFILE_ID,
+    ANTHROPIC_MESSAGES_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
+    OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
 
 /// Identifies one protocol exposed by a user-defined compatible provider.
@@ -32,6 +32,9 @@ pub enum CustomProviderProtocol {
     /// OpenAI Codex Responses protocol with explicit Codex request identity.
     /// 带显式 Codex 请求身份的 OpenAI Codex Responses 协议。
     OpenAiCodexResponses,
+    /// Google Gemini generateContent protocol.
+    /// Google Gemini generateContent 协议。
+    GeminiGenerateContent,
 }
 
 /// Identifies the API-key projection selected for one custom provider.
@@ -45,6 +48,9 @@ pub enum CustomProviderAuthentication {
     /// Sends the key through `x-api-key`.
     /// 通过 `x-api-key` 发送 Key。
     XApiKey,
+    /// Sends the key through the Gemini API-key projection.
+    /// 通过 Gemini API Key 投影发送 Key。
+    GoogleApiKey,
 }
 
 /// Selects how one custom provider exposes its model catalog.
@@ -71,6 +77,7 @@ impl CustomProviderAuthentication {
         match self {
             Self::BearerAuthorization => AuthenticationProjection::BearerAuthorization,
             Self::XApiKey => AuthenticationProjection::XApiKey,
+            Self::GoogleApiKey => AuthenticationProjection::GoogleApiKey,
         }
     }
 }
@@ -84,17 +91,19 @@ impl CustomProviderProtocol {
             Self::OpenAiChat => OPENAI_CHAT_PROFILE_ID,
             Self::OpenAiResponses => OPENAI_RESPONSES_PROFILE_ID,
             Self::OpenAiCodexResponses => OPENAI_CODEX_RESPONSES_PROFILE_ID,
+            Self::GeminiGenerateContent => GEMINI_GENERATE_CONTENT_PROFILE_ID,
         }
     }
 
     /// Returns the provider endpoint path used by this protocol.
     /// 返回此协议使用的供应商端点路径。
-    fn endpoint_path(self) -> &'static str {
+    fn endpoint_path(self) -> Option<&'static str> {
         match self {
-            Self::AnthropicMessages => "/messages",
-            Self::OpenAiChat => "/chat/completions",
-            Self::OpenAiResponses => "/responses",
-            Self::OpenAiCodexResponses => "/responses",
+            Self::AnthropicMessages => Some("/messages"),
+            Self::OpenAiChat => Some("/chat/completions"),
+            Self::OpenAiResponses => Some("/responses"),
+            Self::OpenAiCodexResponses => Some("/responses"),
+            Self::GeminiGenerateContent => None,
         }
     }
 }
@@ -153,6 +162,7 @@ impl CustomProviderDefinition {
             CustomProviderProtocol::OpenAiChat
             | CustomProviderProtocol::OpenAiResponses
             | CustomProviderProtocol::OpenAiCodexResponses => ModelDiscoveryKind::OpenAi,
+            CustomProviderProtocol::GeminiGenerateContent => ModelDiscoveryKind::Gemini,
         };
         let model_discovery = match self.model_discovery_mode {
             CustomProviderModelDiscoveryMode::Standard
@@ -174,7 +184,7 @@ impl CustomProviderDefinition {
         };
         let protocol_routes = vec![ProtocolRoute {
             protocol_profile_id: self.protocol.profile_id().to_string(),
-            endpoint_path: Some(self.protocol.endpoint_path().to_string()),
+            endpoint_path: self.protocol.endpoint_path().map(str::to_string),
             base_url_override: None,
             request_headers: BTreeMap::new(),
             authentication: None,
@@ -183,6 +193,8 @@ impl CustomProviderDefinition {
             model_discovery_base_url_override: None,
             responses_features: (self.protocol == CustomProviderProtocol::OpenAiCodexResponses)
                 .then_some(ResponsesRouteFeatures::default()),
+            usage_extraction_profiles: Vec::new(),
+            provider_request_id_headers: Vec::new(),
             verified: true,
         }];
         Ok(ProviderDescriptor {
@@ -309,7 +321,9 @@ pub(crate) fn validate_persisted_custom_provider_descriptor(
     }
     if !matches!(
         entry.authentication,
-        AuthenticationProjection::BearerAuthorization | AuthenticationProjection::XApiKey
+        AuthenticationProjection::BearerAuthorization
+            | AuthenticationProjection::XApiKey
+            | AuthenticationProjection::GoogleApiKey
     ) {
         return Err(String::from(
             "Persisted custom provider uses an unsupported authentication projection.",
@@ -341,13 +355,14 @@ pub(crate) fn validate_persisted_custom_provider_descriptor(
         OPENAI_CHAT_PROFILE_ID => CustomProviderProtocol::OpenAiChat,
         OPENAI_RESPONSES_PROFILE_ID => CustomProviderProtocol::OpenAiResponses,
         OPENAI_CODEX_RESPONSES_PROFILE_ID => CustomProviderProtocol::OpenAiCodexResponses,
+        GEMINI_GENERATE_CONTENT_PROFILE_ID => CustomProviderProtocol::GeminiGenerateContent,
         _ => {
             return Err(String::from(
                 "Persisted custom provider uses an unsupported protocol route.",
             ));
         }
     };
-    if route.endpoint_path.as_deref() != Some(protocol.endpoint_path())
+    if route.endpoint_path.as_deref() != protocol.endpoint_path()
         || route.base_url_override.is_some()
         || !route.request_headers.is_empty()
         || route.authentication.is_some()
@@ -370,6 +385,7 @@ pub(crate) fn validate_persisted_custom_provider_descriptor(
         CustomProviderProtocol::OpenAiChat
         | CustomProviderProtocol::OpenAiResponses
         | CustomProviderProtocol::OpenAiCodexResponses => ModelDiscoveryKind::OpenAi,
+        CustomProviderProtocol::GeminiGenerateContent => ModelDiscoveryKind::Gemini,
     };
     let route_discovery = route.model_discovery.ok_or_else(|| {
         String::from("Persisted custom provider protocol route must declare model discovery.")
@@ -518,6 +534,41 @@ mod tests {
         assert_eq!(descriptor.kind, ProviderKind::Custom);
     }
 
+    /// Verifies a custom Gemini provider owns native discovery, authentication, and dynamic model paths.
+    /// 验证自定义 Gemini 供应商持有原生发现、鉴权与动态模型路径。
+    #[test]
+    fn custom_provider_projects_gemini_generate_content() {
+        // descriptor is the complete runtime contract produced from one browser-editable definition.
+        // descriptor 是从浏览器可编辑定义生成的完整运行时契约。
+        let descriptor = CustomProviderDefinition {
+            id: String::from("custom:gemini-relay"),
+            display_name: String::from("Gemini Relay"),
+            base_url: String::from("https://example.com/v1beta"),
+            protocol: CustomProviderProtocol::GeminiGenerateContent,
+            authentication: CustomProviderAuthentication::GoogleApiKey,
+            model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
+            model_discovery_path: None,
+        }
+        .into_descriptor()
+        .expect("custom Gemini provider should be valid");
+        // entry is the sole exact service route accepted by the custom-provider boundary.
+        // entry 是自定义供应商边界接受的唯一精确服务路由。
+        let entry = &descriptor.service_entries[0];
+        // route carries the dynamic Gemini protocol without a misleading fixed endpoint path.
+        // route 承载动态 Gemini 协议，不声明误导性的固定端点路径。
+        let route = &entry.protocol_routes[0];
+
+        assert_eq!(entry.authentication, AuthenticationProjection::GoogleApiKey);
+        assert_eq!(entry.model_discovery, ModelDiscoveryKind::Gemini);
+        assert_eq!(
+            route.protocol_profile_id,
+            GEMINI_GENERATE_CONTENT_PROFILE_ID
+        );
+        assert_eq!(route.endpoint_path, None);
+        validate_persisted_custom_provider_descriptor(&descriptor)
+            .expect("persisted Gemini descriptor should revalidate");
+    }
+
     /// Verifies Codex custom providers carry explicit optional capabilities with safe defaults.
     /// 验证 Codex 自定义供应商携带显式可选能力，并使用安全默认值。
     #[test]
@@ -537,10 +588,6 @@ mod tests {
         let features = route
             .responses_features
             .expect("Codex route should declare optional capabilities");
-        assert_eq!(
-            features.websocket,
-            crate::ResponsesWebSocketPolicy::Disabled
-        );
         assert_eq!(
             features.remote_compaction,
             crate::ResponsesRemoteCompactionPolicy::Disabled

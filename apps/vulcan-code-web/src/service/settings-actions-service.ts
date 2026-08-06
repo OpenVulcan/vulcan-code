@@ -27,6 +27,7 @@ import type {
   PublicAiOAuthStartRequest,
   PublicAiOAuthTransaction,
   PublicAiSettingsSnapshot,
+  ProviderUsageDashboard,
   ProviderModelSecondaryRouteSelection,
   ProviderModelSecondaryRouteSummary,
   OutputStyleCatalogSummary,
@@ -62,6 +63,23 @@ export async function savePromptOutputStyle(styleId: string): Promise<OutputStyl
 // loadPublicAiSettings 加载持久化连接与仅内存目录。
 export async function loadPublicAiSettings(): Promise<PublicAiSettingsSnapshot> {
   return serviceClient.request<PublicAiSettingsSnapshot>("service_public_ai_settings_snapshot");
+}
+
+// loadProviderUsageDashboard loads native VLDB-backed usage, cost, and account facts.
+// loadProviderUsageDashboard 加载由原生 VLDB 支撑的用量、成本与账户事实。
+export async function loadProviderUsageDashboard(): Promise<ProviderUsageDashboard> {
+  return serviceClient.request<ProviderUsageDashboard>("service_provider_usage_dashboard");
+}
+
+// importPublicAiCcSwitchPricing atomically replaces the lowest-precedence catalog from one exact cc-switch document.
+// importPublicAiCcSwitchPricing 从一份精确 cc-switch 文档原子替换最低优先级价格目录。
+export async function importPublicAiCcSwitchPricing(
+  sourceId: string,
+  json: string,
+): Promise<number> {
+  return serviceClient.request<number>("service_import_public_ai_cc_switch_pricing", {
+    request: { sourceId, json },
+  });
 }
 
 // startPublicAiOAuth starts one provider-declared browser authorization flow.

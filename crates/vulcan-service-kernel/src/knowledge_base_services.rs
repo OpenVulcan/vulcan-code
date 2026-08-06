@@ -11,13 +11,13 @@ use std::{
 };
 use vulcan_ai_contract::ExecutionRouteSnapshot;
 use vulcan_ai_contract::{
-    AiOperation, EmbeddingEncoding, EmbeddingInput, EmbeddingInputContent,
-    EmbeddingInvalidInputPolicy, EmbeddingOutputKind, EmbeddingPayload, EmbeddingRequest,
-    EmbeddingResponse, EmbeddingTask, INFERENCE_CONTRACT_VERSION, InferenceCallerBudget,
-    InferenceCallerContext, InferenceMessage, InferenceMessageContent, InferenceMessageRole,
-    InferencePermission, InferenceUsageScope, LlmInferenceRequest, LlmInferenceResponse,
-    LlmInferenceStreamEvent, ModelCapabilities, ReasoningControlMode, ReasoningEffort,
-    ReasoningOutputPolicy, RequestUsage, StructuredOutputPolicy, UsageValue,
+    AiMessage, AiOperation, AiStreamEvent, ContentItem, EmbeddingEncoding, EmbeddingInput,
+    EmbeddingInputContent, EmbeddingInvalidInputPolicy, EmbeddingOutputKind, EmbeddingPayload,
+    EmbeddingRequest, EmbeddingResponse, EmbeddingTask, INFERENCE_CONTRACT_VERSION,
+    InferenceCallerBudget, InferenceCallerContext, InferencePermission, InferenceUsageScope,
+    MessageRole, ModelCapabilities, ReasoningControlMode, ReasoningEffort, ReasoningOutputPolicy,
+    RequestUsage, ResponsesExecutionRequest, ResponsesExecutionResult, StructuredOutputPolicy,
+    UsageValue,
 };
 use vulcan_provider_adapters::{InferenceRouteBinding, InferenceRouteConfiguration};
 use vulcan_service_api::{
@@ -271,14 +271,18 @@ impl KnowledgeOperationReporter {
 
     /// Consumes one normalized LLM stream event and persists a throttled preview.
     /// 消费一项归一化 LLM 流事件，并按节流策略持久化预览。
-    async fn observe_llm_event(&self, event: &LlmInferenceStreamEvent) {
+    async fn observe_llm_event(&self, event: &AiStreamEvent) {
         {
             let mut state = self.state.lock().await;
             let Some(current) = state.snapshot.current_request.as_mut() else {
                 return;
             };
             match event {
-                LlmInferenceStreamEvent::Text { text } => {
+                AiStreamEvent::ResponseTextDelta { delta: text, .. }
+                | AiStreamEvent::ResponseItemStarted {
+                    item: ContentItem::Text { text },
+                    ..
+                } => {
                     let current_payload =
                         knowledge_json_stream_payload(current.output_markdown.as_str());
                     let next_payload = knowledge_truncate_stream_payload(
@@ -286,23 +290,24 @@ impl KnowledgeOperationReporter {
                     );
                     current.output_markdown = knowledge_json_stream_markdown(next_payload.as_str());
                 }
-                LlmInferenceStreamEvent::StructuredOutput { value } => {
+                AiStreamEvent::ResponseItemStarted {
+                    item: ContentItem::StructuredJson { value },
+                    ..
+                } => {
                     if let Ok(text) = serde_json::to_string_pretty(value) {
                         let preview = knowledge_truncate_stream_payload(text.as_str());
                         current.output_markdown = knowledge_json_stream_markdown(preview.as_str());
                     }
                 }
-                LlmInferenceStreamEvent::Usage { usage } => {
+                AiStreamEvent::UsageUpdated { usage } => {
                     current.input_tokens = knowledge_usage_value(&usage.input_tokens);
                     current.output_tokens = knowledge_usage_value(&usage.output_tokens);
                     current.cache_read_tokens = knowledge_usage_value(&usage.cache_read_tokens);
                     current.cache_write_tokens = knowledge_usage_value(&usage.cache_write_tokens);
                 }
-                LlmInferenceStreamEvent::Failed { .. } => current.status = String::from("failed"),
-                LlmInferenceStreamEvent::Cancelled => current.status = String::from("cancelled"),
-                LlmInferenceStreamEvent::Started { .. }
-                | LlmInferenceStreamEvent::Reasoning { .. }
-                | LlmInferenceStreamEvent::Completed => {}
+                AiStreamEvent::ResponseFailed { .. } => current.status = String::from("failed"),
+                AiStreamEvent::ResponseCancelled => current.status = String::from("cancelled"),
+                _ => {}
             }
         }
         self.persist(false).await;
@@ -310,7 +315,7 @@ impl KnowledgeOperationReporter {
 
     /// Completes one LLM request, updates cumulative usage, and retains its compact history row.
     /// 完成一次 LLM 请求，更新累计用量并保留紧凑历史记录。
-    async fn finish_llm_request(&self, response: &LlmInferenceResponse, status: &str) {
+    async fn finish_llm_request(&self, response: &ResponsesExecutionResult, status: &str) {
         {
             let mut state = self.state.lock().await;
             state.snapshot.current_request.get_or_insert_with(|| {
@@ -868,14 +873,14 @@ fn knowledge_display_request(
     relative_path: &str,
     title: &str,
     content: &str,
-) -> Result<LlmInferenceRequest, String> {
+) -> Result<ResponsesExecutionRequest, String> {
     let reasoning_effort =
         parse_knowledge_reasoning_effort(settings.curation.reasoning_effort.as_deref())?;
     let bounded_content = knowledge_display_source_content(content);
     let user_prompt = format!(
         "Source path: {relative_path}\nSource title: {title}\n\n<untrusted_markdown>\n{bounded_content}\n</untrusted_markdown>",
     );
-    Ok(LlmInferenceRequest {
+    Ok(ResponsesExecutionRequest {
         contract_version: INFERENCE_CONTRACT_VERSION,
         request_id: format!("knowledge-curation-{source_document_id}"),
         idempotency_key: Some(format!("knowledge-curation-{source_document_id}")),
@@ -887,17 +892,23 @@ fn knowledge_display_request(
             .unwrap_or_default(),
         purpose_id: crate::public_ai_settings::KNOWLEDGE_CURATION_PURPOSE_ID.to_string(),
         messages: vec![
-            InferenceMessage {
-                role: InferenceMessageRole::System,
-                content: vec![InferenceMessageContent::Text {
+            AiMessage {
+                role: MessageRole::System,
+                content: vec![ContentItem::Text {
                     text: knowledge_display_system_prompt(),
                 }],
+                provider_context_items: Vec::new(),
             },
-            InferenceMessage {
-                role: InferenceMessageRole::User,
-                content: vec![InferenceMessageContent::Text { text: user_prompt }],
+            AiMessage {
+                role: MessageRole::User,
+                content: vec![ContentItem::Text { text: user_prompt }],
+                provider_context_items: Vec::new(),
             },
         ],
+        tools: Vec::new(),
+        native_tools: Vec::new(),
+        tool_choice: Default::default(),
+        parallel_tool_calls: Default::default(),
         structured_output: StructuredOutputPolicy::JsonSchema {
             name: String::from("knowledge_display_document"),
             description: Some(String::from(
@@ -912,8 +923,12 @@ fn knowledge_display_request(
             ReasoningOutputPolicy::ProviderDefault
         },
         prompt_cache: Default::default(),
+        prompt_cache_key: None,
+        include_reasoning_encrypted_content: false,
         reasoning_effort,
         model_parameters: BTreeMap::new(),
+        stop_sequences: Vec::new(),
+        resources: Vec::new(),
         output_token_limit: Some(8_192),
     })
 }
@@ -985,7 +1000,7 @@ fn mark_knowledge_display_batch(
 fn knowledge_display_batch_request(
     settings: &KnowledgeLibrarySettings,
     items: &[KnowledgeDisplayBatchItem],
-) -> Result<LlmInferenceRequest, String> {
+) -> Result<ResponsesExecutionRequest, String> {
     let reasoning_effort =
         parse_knowledge_reasoning_effort(settings.curation.reasoning_effort.as_deref())?;
     let source_sections = items
@@ -1010,7 +1025,7 @@ fn knowledge_display_batch_request(
     let user_prompt = format!(
         "Process every source document independently. Return exactly one root JSON object with a `documents` array. Return exactly one item for every requested source marker, copy each marker exactly, and do not add, omit, or merge items.\n逐份独立整理每个来源文档。必须返回包含 `documents` 数组的单个根 JSON 对象。每个来源标记必须恰好对应一项结果，标记必须原样复制，不得增加、遗漏或合并结果。\n\n{source_sections}"
     );
-    Ok(LlmInferenceRequest {
+    Ok(ResponsesExecutionRequest {
         contract_version: INFERENCE_CONTRACT_VERSION,
         request_id: format!("knowledge-curation-batch-{request_key}"),
         idempotency_key: Some(format!("knowledge-curation-batch-{request_key}")),
@@ -1022,20 +1037,26 @@ fn knowledge_display_batch_request(
             .unwrap_or_default(),
         purpose_id: crate::public_ai_settings::KNOWLEDGE_CURATION_PURPOSE_ID.to_string(),
         messages: vec![
-            InferenceMessage {
-                role: InferenceMessageRole::System,
-                content: vec![InferenceMessageContent::Text {
+            AiMessage {
+                role: MessageRole::System,
+                content: vec![ContentItem::Text {
                     text: format!(
                         "{}\nFor this multi-document request, the root object must contain only `documents`; each item must contain its exact `source_marker` plus all six document fields.\n本次为多文档请求，根对象只能包含 `documents`；数组中的每一项都必须包含原样 `source_marker` 以及文档六个字段。",
                         knowledge_display_system_prompt()
                     ),
                 }],
+                provider_context_items: Vec::new(),
             },
-            InferenceMessage {
-                role: InferenceMessageRole::User,
-                content: vec![InferenceMessageContent::Text { text: user_prompt }],
+            AiMessage {
+                role: MessageRole::User,
+                content: vec![ContentItem::Text { text: user_prompt }],
+                provider_context_items: Vec::new(),
             },
         ],
+        tools: Vec::new(),
+        native_tools: Vec::new(),
+        tool_choice: Default::default(),
+        parallel_tool_calls: Default::default(),
         structured_output: StructuredOutputPolicy::JsonSchema {
             name: String::from("knowledge_display_documents"),
             description: Some(String::from(
@@ -1050,8 +1071,12 @@ fn knowledge_display_batch_request(
             ReasoningOutputPolicy::ProviderDefault
         },
         prompt_cache: Default::default(),
+        prompt_cache_key: None,
+        include_reasoning_encrypted_content: false,
         reasoning_effort,
         model_parameters: BTreeMap::new(),
+        stop_sequences: Vec::new(),
+        resources: Vec::new(),
         output_token_limit: Some(8_192),
     })
 }
@@ -1063,8 +1088,8 @@ fn knowledge_display_batch_request(
 /// formatting correction outside the untrusted source block.
 /// 重试保留完全相同的 Schema 与来源材料，只在不可信来源块之外追加宿主要求的格式纠正。
 fn knowledge_display_schema_repair_request(
-    mut request: LlmInferenceRequest,
-) -> Result<LlmInferenceRequest, String> {
+    mut request: ResponsesExecutionRequest,
+) -> Result<ResponsesExecutionRequest, String> {
     request
         .request_id
         .push_str(KNOWLEDGE_DISPLAY_SCHEMA_REPAIR_SUFFIX);
@@ -1074,13 +1099,13 @@ fn knowledge_display_schema_repair_request(
     let user_message = request
         .messages
         .iter_mut()
-        .find(|message| message.role == InferenceMessageRole::User)
+        .find(|message| message.role == MessageRole::User)
         .ok_or_else(|| String::from("资料库整理重试请求缺少用户消息"))?;
     let content = user_message
         .content
         .last_mut()
         .ok_or_else(|| String::from("资料库整理重试请求缺少用户消息内容"))?;
-    let InferenceMessageContent::Text { text } = content else {
+    let ContentItem::Text { text } = content else {
         return Err(String::from("资料库整理重试请求的用户消息必须是文本"));
     };
     let repair_instruction = match &request.structured_output {
@@ -1114,15 +1139,15 @@ fn knowledge_display_requires_schema_repair_retry(error_message: &str) -> bool {
 /// 观察一次分离式 LLM 执行的历史与实时事件，直到收到终态事件为止。
 async fn observe_knowledge_llm_stream(
     reporter: &KnowledgeOperationReporter,
-    replay: Vec<LlmInferenceStreamEvent>,
-    mut receiver: tokio::sync::broadcast::Receiver<LlmInferenceStreamEvent>,
+    replay: Vec<AiStreamEvent>,
+    mut receiver: tokio::sync::broadcast::Receiver<AiStreamEvent>,
 ) {
     for event in replay {
         let terminal = matches!(
             event,
-            LlmInferenceStreamEvent::Completed
-                | LlmInferenceStreamEvent::Failed { .. }
-                | LlmInferenceStreamEvent::Cancelled
+            AiStreamEvent::ResponseCompleted
+                | AiStreamEvent::ResponseFailed { .. }
+                | AiStreamEvent::ResponseCancelled
         );
         reporter.observe_llm_event(&event).await;
         if terminal {
@@ -1134,9 +1159,9 @@ async fn observe_knowledge_llm_stream(
             Ok(event) => {
                 let terminal = matches!(
                     event,
-                    LlmInferenceStreamEvent::Completed
-                        | LlmInferenceStreamEvent::Failed { .. }
-                        | LlmInferenceStreamEvent::Cancelled
+                    AiStreamEvent::ResponseCompleted
+                        | AiStreamEvent::ResponseFailed { .. }
+                        | AiStreamEvent::ResponseCancelled
                 );
                 reporter.observe_llm_event(&event).await;
                 if terminal {
@@ -1156,8 +1181,8 @@ async fn wait_knowledge_llm_with_cancel(
     caller_id: &str,
     execution_id: &str,
     reporter: &KnowledgeOperationReporter,
-) -> Result<LlmInferenceResponse, crate::configured_inference::ConfiguredInferenceError> {
-    let response = service.wait_llm(caller_id, execution_id);
+) -> Result<ResponsesExecutionResult, crate::configured_inference::ConfiguredInferenceError> {
+    let response = service.wait_response(caller_id, execution_id);
     tokio::pin!(response);
     let mut cancellation_poll = tokio::time::interval(std::time::Duration::from_millis(200));
     loop {
@@ -1177,13 +1202,13 @@ async fn wait_knowledge_llm_with_cancel(
 async fn execute_knowledge_display_attempt(
     service: &Arc<crate::configured_inference::ConfiguredInferenceService>,
     caller: &InferenceCallerContext,
-    request: LlmInferenceRequest,
+    request: ResponsesExecutionRequest,
     label: &str,
     reporter: &KnowledgeOperationReporter,
     is_retry: bool,
-) -> Result<LlmInferenceResponse, String> {
+) -> Result<ResponsesExecutionResult, String> {
     let execution_id = service
-        .start_llm(caller.clone(), request.clone())
+        .start_response_execution(caller.clone(), request.clone())
         .await
         .map_err(|error| format!("{error}"))?;
     let caller_id = caller.caller_id.as_str();
@@ -1203,7 +1228,7 @@ async fn execute_knowledge_display_attempt(
             is_retry,
         )
         .await;
-    let (replay, receiver) = match service.stream_llm(caller_id, execution_id.as_str()) {
+    let (replay, receiver) = match service.stream_response(caller_id, execution_id.as_str()) {
         Ok(stream) => stream,
         Err(error) => {
             reporter.finish_request_error("failed").await;
@@ -1237,10 +1262,10 @@ async fn execute_knowledge_display_attempt(
 async fn execute_knowledge_display_request(
     service: &Arc<crate::configured_inference::ConfiguredInferenceService>,
     consumer_profile_id: &str,
-    request: LlmInferenceRequest,
+    request: ResponsesExecutionRequest,
     label: &str,
     reporter: &KnowledgeOperationReporter,
-) -> Result<vulcan_ai_contract::LlmInferenceResponse, String> {
+) -> Result<vulcan_ai_contract::ResponsesExecutionResult, String> {
     let caller = knowledge_curation_caller(consumer_profile_id)?;
     match execute_knowledge_display_attempt(
         service,
@@ -1375,7 +1400,7 @@ fn parse_knowledge_display_batch(
 async fn execute_knowledge_display_draft(
     service: &Arc<crate::configured_inference::ConfiguredInferenceService>,
     consumer_profile_id: &str,
-    request: LlmInferenceRequest,
+    request: ResponsesExecutionRequest,
     label: &str,
     reporter: &KnowledgeOperationReporter,
 ) -> Result<KnowledgeDisplayDraft, String> {
@@ -3504,8 +3529,7 @@ mod tests {
             "# 删除 Buff\n\n说明",
         )
         .expect("legacy curation settings should build a request");
-        let InferenceMessageContent::Text { text: user_prompt } = &request.messages[1].content[0]
-        else {
+        let ContentItem::Text { text: user_prompt } = &request.messages[1].content[0] else {
             panic!("knowledge curation user message must be text");
         };
         assert!(!user_prompt.contains("source-document-id"));
@@ -3614,7 +3638,7 @@ mod tests {
             original_idempotency_key
                 .map(|key| { format!("{key}{KNOWLEDGE_DISPLAY_SCHEMA_REPAIR_SUFFIX}") })
         );
-        let InferenceMessageContent::Text {
+        let ContentItem::Text {
             text: repaired_prompt,
         } = &repaired.messages[1].content[0]
         else {
@@ -3641,7 +3665,7 @@ mod tests {
         let request = request.expect("legacy curation settings should build a batch request");
         let repaired = knowledge_display_schema_repair_request(request)
             .expect("batch schema repair request should preserve the user message");
-        let InferenceMessageContent::Text {
+        let ContentItem::Text {
             text: repaired_prompt,
         } = &repaired.messages[1].content[0]
         else {
@@ -3733,14 +3757,13 @@ mod tests {
         let items = mark_knowledge_display_batch(sources);
         let request = knowledge_display_batch_request(&KnowledgeLibrarySettings::default(), &items);
         let request = request.expect("legacy curation settings should build a batch request");
-        let InferenceMessageContent::Text {
+        let ContentItem::Text {
             text: system_prompt,
         } = &request.messages[0].content[0]
         else {
             panic!("knowledge curation system message must be text");
         };
-        let InferenceMessageContent::Text { text: user_prompt } = &request.messages[1].content[0]
-        else {
+        let ContentItem::Text { text: user_prompt } = &request.messages[1].content[0] else {
             panic!("knowledge curation user message must be text");
         };
         assert!(system_prompt.contains("`documents`"));
@@ -3805,8 +3828,7 @@ mod tests {
             &content,
         )
         .expect("legacy curation settings should build a request");
-        let InferenceMessageContent::Text { text: user_prompt } = &request.messages[1].content[0]
-        else {
+        let ContentItem::Text { text: user_prompt } = &request.messages[1].content[0] else {
             panic!("knowledge curation user message must be text");
         };
         assert!(user_prompt.contains(content.as_str()));

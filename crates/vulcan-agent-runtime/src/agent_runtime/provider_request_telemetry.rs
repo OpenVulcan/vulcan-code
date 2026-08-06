@@ -7,6 +7,7 @@ use serde::Serialize;
 use serde_json::{Value, to_value};
 use time::{OffsetDateTime, UtcOffset};
 use uuid::Uuid;
+use vulcan_ai_contract::{AiExecutionError, AiTransportKind, DispatchOutcome, RetryAfterHint};
 use vulcan_core::types::{ProviderRequestSnapshot, ProviderUsageSnapshot};
 
 /// Hook point fired after one physical Provider request starts.
@@ -53,6 +54,9 @@ pub(crate) struct ProviderRequestTelemetryContext {
     /// Canonical API family that defines whether Provider input already excludes cached tokens.
     /// 定义 Provider 输入是否已经排除缓存 Token 的规范接口族。
     protocol_profile_id: String,
+    /// Content-addressed revision of the exact frozen execution route.
+    /// 精确冻结执行路由的内容寻址修订号。
+    route_revision: String,
     /// Optional exact provider-internal route identifier.
     /// 可选的精确供应商内部路由标识。
     secondary_route_id: Option<String>,
@@ -65,6 +69,9 @@ pub(crate) struct ProviderRequestTelemetryContext {
     /// Stable owner category derived from explicit preparation fields.
     /// 从显式执行准备字段派生的稳定归属类别。
     owner_kind: &'static str,
+    /// Stable billing operation derived from the explicit prompt purpose.
+    /// 从显式提示用途派生的稳定计费操作。
+    operation: &'static str,
     /// Stable active agent identity.
     /// 稳定激活代理身份。
     owner_id: String,
@@ -98,6 +105,14 @@ impl ProviderRequestTelemetryContext {
             }
             ExecutionPromptPurpose::UserTurn => "main_agent",
         };
+        // operation is deliberately independent from owner_kind so aggregation never conflates workload with ownership.
+        // operation 刻意独立于 owner_kind，避免聚合时混淆工作负载与归属。
+        let operation = match preparation.prompt_purpose {
+            ExecutionPromptPurpose::ContextCompaction
+            | ExecutionPromptPurpose::ContextCompactionCachePreserving => "compact",
+            ExecutionPromptPurpose::GitCommitSummary => "git_commit_summary",
+            ExecutionPromptPurpose::UserTurn => "conversation",
+        };
         // Secondary-route fields come only from the validated immutable route snapshot.
         // 二级路由字段仅来自已校验的不可变路由快照。
         let (secondary_route_id, secondary_provider_name, secondary_endpoint_name) =
@@ -122,12 +137,38 @@ impl ProviderRequestTelemetryContext {
             connection_id: preparation.model_blueprint.connection_id.clone(),
             model_name: preparation.model_blueprint.model_name.clone(),
             protocol_profile_id: preparation.model_blueprint.protocol_profile_id.clone(),
+            route_revision: preparation.model_blueprint.route_revision.clone(),
             secondary_route_id,
             secondary_provider_name,
             secondary_endpoint_name,
             owner_kind,
+            operation,
             owner_id: preparation.agent_id.clone(),
             owner_name: preparation.agent_name.clone(),
+        }
+    }
+
+    /// Builds a deterministic telemetry context for sibling-module state-machine tests.
+    /// 为同级模块状态机测试构建确定性的遥测上下文。
+    #[cfg(test)]
+    pub(crate) fn for_test() -> Self {
+        Self {
+            execution_id: String::from("execution-1"),
+            session_id: SessionId::nil(),
+            workspace_id: String::from("workspace-1"),
+            provider_name: String::from("Mock Provider"),
+            service_entry_id: String::from("public-api"),
+            model_name: String::from("Mock Model"),
+            protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+            route_revision: String::from("sha256:test-route"),
+            secondary_route_id: None,
+            secondary_provider_name: None,
+            secondary_endpoint_name: None,
+            connection_id: String::from("connection-1"),
+            owner_kind: "main_agent",
+            operation: "conversation",
+            owner_id: String::from("agent-1"),
+            owner_name: String::from("Agent One"),
         }
     }
 }
@@ -181,21 +222,30 @@ pub struct ProviderRequestTelemetryEvent {
     /// Versioned JSON payload without prompts, outputs, headers, or credentials.
     /// 不含提示词、输出、请求头或凭据的版本化 JSON 载荷。
     pub payload: Value,
-    /// Exact normalized usage carried only by a successful completed request.
-    /// 仅由成功完成的请求携带的精确标准化用量。
+    /// Exact normalized usage carried by a terminal request when the provider reported any usage.
+    /// 当供应商报告了任意用量时，由终态请求携带的精确标准化用量。
     pub completed_usage: Option<ProviderRequestCompletedUsage>,
 }
 
-/// Exact normalized token usage for one successful physical provider request.
-/// 单次成功物理 Provider 请求的精确标准化 Token 用量。
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Exact normalized token usage for one terminal physical provider request.
+/// 单次终态真实 Provider 请求的精确标准化 Token 用量。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ProviderRequestCompletedUsage {
+    /// Exact merge kind of the latest provider usage observation.
+    /// 最新 Provider 用量观测的精确合并类型。
+    pub update_kind: Option<vulcan_ai_contract::UsageUpdateKind>,
+    /// Complete provider-reported input token count.
+    /// 完整的供应商报告输入 Token 数。
+    pub input_tokens: Option<usize>,
     /// Input tokens that were not served from cache.
     /// 未由缓存提供的输入 Token 数。
     pub uncached_input_tokens: Option<usize>,
     /// Input tokens served from cache.
     /// 由缓存提供的输入 Token 数。
     pub cached_input_tokens: Option<usize>,
+    /// Input tokens written into a provider prompt cache.
+    /// 写入 Provider 提示词缓存的输入 Token 数。
+    pub cache_creation_input_tokens: Option<usize>,
     /// Complete output tokens, including reasoning when reported as an output subset.
     /// 完整输出 Token 数；当思考作为输出子集报告时已包含思考。
     pub output_tokens: Option<usize>,
@@ -205,6 +255,48 @@ pub struct ProviderRequestCompletedUsage {
     /// Provider-reported total tokens.
     /// Provider 报告的总 Token 数。
     pub total_tokens: Option<usize>,
+    /// Provider-reported audio input tokens.
+    /// 供应商报告的音频输入 Token。
+    pub audio_input_tokens: Option<usize>,
+    /// Provider-reported audio output tokens.
+    /// 供应商报告的音频输出 Token。
+    pub audio_output_tokens: Option<usize>,
+    /// Frozen raw usage extraction profile identity.
+    /// 冻结的原始用量提取 Profile 标识。
+    pub extraction_profile_id: Option<String>,
+    /// Frozen raw usage extraction profile revision.
+    /// 冻结的原始用量提取 Profile 修订号。
+    pub extraction_profile_revision: Option<u64>,
+    /// Exact raw source paths keyed by normalized dimension.
+    /// 按归一化维度索引的精确原始来源路径。
+    pub source_paths: std::collections::BTreeMap<String, String>,
+    /// Raw usage validation findings.
+    /// 原始用量校验结果。
+    pub validation_flags: Vec<String>,
+    /// Provider-returned model identity.
+    /// 供应商返回的模型标识。
+    pub response_model: Option<String>,
+    /// Provider-returned response identity.
+    /// 供应商返回的响应标识。
+    pub response_id: Option<String>,
+    /// Provider-reported decimal cost.
+    /// 供应商报告的十进制成本。
+    pub reported_cost: Option<String>,
+    /// Locally estimated decimal cost.
+    /// 本地估算的十进制成本。
+    pub estimated_cost: Option<String>,
+    /// ISO currency for reported or estimated cost.
+    /// 报告或估算成本使用的 ISO 币种。
+    pub cost_currency: Option<String>,
+    /// Immutable pricing revision used by the local estimate.
+    /// 本地估算使用的不可变价格修订号。
+    pub pricing_revision: Option<String>,
+    /// Frozen effective pricing profile used by the local estimate.
+    /// 本地估算使用的冻结生效价格 Profile。
+    pub pricing_profile: Option<vulcan_ai_contract::PricingProfileSnapshot>,
+    /// Provider billing partitions retained separately from normalized totals.
+    /// 与规范化合计分开保留的供应商计费分区。
+    pub billing_details: Vec<vulcan_ai_contract::UsageBillingDetail>,
 }
 
 /// Service-edge tracker that closes an in-flight request when its consumer stream is dropped.
@@ -430,6 +522,7 @@ impl ProviderRequestTelemetryTracker {
                 None,
                 Some("telemetry_invariant"),
                 Some("overlapping_request"),
+                None,
             ));
         }
         // startedAt captures one timestamp for both state and payload.
@@ -446,6 +539,13 @@ impl ProviderRequestTelemetryTracker {
             started_at_ms: started_at.timestamp_ms,
             first_event_at_ms: None,
             first_token_at_ms: None,
+            transport: None,
+            dispatched_at_ms: None,
+            headers_at_ms: None,
+            http_status: None,
+            provider_request_id: None,
+            rate_limit_headers: std::collections::BTreeMap::new(),
+            semantic_output_observed: false,
             calendar_date: started_at.calendar_date,
             timezone_offset_minutes: started_at.timezone_offset_minutes,
         };
@@ -465,6 +565,42 @@ impl ProviderRequestTelemetryTracker {
         }
     }
 
+    /// Records exact dispatcher-owned transport facts for the active physical request.
+    /// 为当前真实请求记录由分派器持有的精确传输事实。
+    pub(crate) fn observe_transport(
+        &mut self,
+        transport: AiTransportKind,
+        dispatched_at_ms: i64,
+        headers_at_ms: Option<i64>,
+        http_status: Option<u16>,
+        provider_request_id: Option<String>,
+        rate_limit_headers: std::collections::BTreeMap<String, String>,
+    ) {
+        let Some(active_request) = self.active_request.as_mut() else {
+            return;
+        };
+        active_request.transport = Some(transport);
+        active_request.dispatched_at_ms = Some(dispatched_at_ms);
+        active_request.headers_at_ms = headers_at_ms;
+        active_request.http_status = http_status;
+        active_request.provider_request_id = provider_request_id;
+        active_request.rate_limit_headers = rate_limit_headers;
+        if active_request.first_event_at_ms.is_none() {
+            active_request.first_event_at_ms = headers_at_ms;
+        }
+    }
+
+    /// Records that the active request exposed replay-relevant semantic output.
+    /// 记录活动请求已经暴露与重放相关的语义输出。
+    pub(crate) fn observe_semantic_output(&mut self) {
+        if let Some(active_request) = self.active_request.as_mut() {
+            active_request.semantic_output_observed = true;
+            if active_request.first_event_at_ms.is_none() {
+                active_request.first_event_at_ms = Some(current_unix_millis());
+            }
+        }
+    }
+
     /// Records and emits the first visible token event at most once.
     /// 最多一次记录并发出首个可见 Token 事件。
     ///
@@ -478,6 +614,7 @@ impl ProviderRequestTelemetryTracker {
         if active_request.first_event_at_ms.is_none() {
             active_request.first_event_at_ms = Some(current_unix_millis());
         }
+        active_request.semantic_output_observed = true;
         if active_request.first_token_at_ms.is_some() {
             return None;
         }
@@ -517,6 +654,7 @@ impl ProviderRequestTelemetryTracker {
             usage,
             None,
             None,
+            None,
         ))
     }
 
@@ -525,8 +663,8 @@ impl ProviderRequestTelemetryTracker {
     ///
     /// # Parameters
     /// 参数
-    /// `will_retry` states whether another transport attempt follows, `retry_number` is its index, and `delay_ms` is the wait.
-    /// `will_retry` 表示是否继续传输重试，`retry_number` 是其序号，`delay_ms` 是等待时长。
+    /// `will_retry` states whether another transport attempt follows, retry fields describe that transition, and `usage` retains reported partial usage.
+    /// `will_retry` 表示是否继续传输重试，重试字段描述该转换，`usage` 保留供应商已报告的部分用量。
     ///
     /// # Returns
     /// 返回值
@@ -539,6 +677,8 @@ impl ProviderRequestTelemetryTracker {
         max_retries: u32,
         delay_ms: u64,
         error_category: &str,
+        error: Option<&AiExecutionError>,
+        usage: Option<&ProviderUsageSnapshot>,
     ) -> Vec<ProviderRequestTelemetryEvent> {
         let Some(context) = self.context.as_ref() else {
             return Vec::new();
@@ -554,9 +694,10 @@ impl ProviderRequestTelemetryTracker {
                 context,
                 active_request,
                 ProviderRequestTerminalStatus::Failed,
-                None,
+                usage,
                 Some(error_category),
-                None,
+                error.and_then(|value| value.upstream_code.as_deref()),
+                error,
             ));
             if will_retry {
                 events.push(build_retrying_event(
@@ -604,6 +745,27 @@ struct ActiveProviderRequestTelemetry {
     /// Optional first visible token timestamp.
     /// 可选首个可见 Token 时间戳。
     first_token_at_ms: Option<i64>,
+    /// Exact transport observed at dispatch.
+    /// 分派时观察到的精确传输。
+    transport: Option<AiTransportKind>,
+    /// Exact host dispatch timestamp from the transport boundary.
+    /// 来自传输边界的精确宿主分派时间戳。
+    dispatched_at_ms: Option<i64>,
+    /// Exact host response-header timestamp when applicable.
+    /// 适用时的精确宿主响应头时间戳。
+    headers_at_ms: Option<i64>,
+    /// Exact HTTP status observed by the transport.
+    /// 传输层观察到的精确 HTTP 状态码。
+    http_status: Option<u16>,
+    /// Allowlisted upstream request identifier.
+    /// 允许列表内的上游请求标识。
+    provider_request_id: Option<String>,
+    /// Fixed-allowlist rate-limit response headers.
+    /// 固定允许列表内的限流响应头。
+    rate_limit_headers: std::collections::BTreeMap<String, String>,
+    /// Whether replay-relevant semantic output was observed.
+    /// 是否已经观察到与重放相关的语义输出。
+    semantic_output_observed: bool,
     /// Host-local calendar date at request start.
     /// 请求开始时的宿主本地自然日。
     calendar_date: String,
@@ -650,6 +812,9 @@ struct ProviderTelemetryIdentityPayload<'a> {
     /// Stable owner category.
     /// 稳定归属类别。
     owner_kind: &'a str,
+    /// Stable billing operation.
+    /// 稳定计费操作。
+    operation: &'a str,
     /// Stable owner identity.
     /// 稳定归属身份。
     owner_id: &'a str,
@@ -671,6 +836,9 @@ struct ProviderTelemetryIdentityPayload<'a> {
     /// Exact protocol profile identifier.
     /// 精确协议 Profile 标识。
     protocol_profile_id: &'a str,
+    /// Content-addressed revision of the exact frozen route.
+    /// 精确冻结路由的内容寻址修订号。
+    route_revision: &'a str,
     /// Optional exact provider-internal route identifier.
     /// 可选的精确供应商内部路由标识。
     secondary_route_id: Option<&'a str>,
@@ -722,6 +890,7 @@ fn identity_payload<'a>(
         project_id: None,
         workspace_id: Some(&context.workspace_id),
         owner_kind: context.owner_kind,
+        operation: context.operation,
         owner_id: &context.owner_id,
         owner_name: &context.owner_name,
         provider_key: &request.provider_key,
@@ -729,6 +898,7 @@ fn identity_payload<'a>(
         service_entry_id: &context.service_entry_id,
         connection_id: &context.connection_id,
         protocol_profile_id: &context.protocol_profile_id,
+        route_revision: &context.route_revision,
         secondary_route_id: context.secondary_route_id.as_deref(),
         secondary_provider_name: context.secondary_provider_name.as_deref(),
         secondary_endpoint_name: context.secondary_endpoint_name.as_deref(),
@@ -787,6 +957,7 @@ fn build_completed_event(
     usage: Option<&ProviderUsageSnapshot>,
     error_category: Option<&str>,
     error_code: Option<&str>,
+    error: Option<&AiExecutionError>,
 ) -> ProviderRequestTelemetryEvent {
     // completedAt is captured once for all terminal durations.
     // completedAt 为全部终态时长捕获同一时间戳。
@@ -812,14 +983,29 @@ fn build_completed_event(
         uncached_input_tokens,
         output_tokens_with_presence,
     );
-    let completed_usage = (matches!(status, ProviderRequestTerminalStatus::Succeeded)
-        && usage.is_some())
-    .then_some(ProviderRequestCompletedUsage {
+    let completed_usage = usage.is_some().then_some(ProviderRequestCompletedUsage {
+        update_kind: normalized_usage.update_kind,
+        input_tokens: normalized_usage.input_tokens,
         uncached_input_tokens,
         cached_input_tokens: normalized_usage.cached_input_tokens,
+        cache_creation_input_tokens: normalized_usage.cache_creation_input_tokens,
         output_tokens: output_tokens_with_presence,
         reasoning_tokens: normalized_usage.reasoning_tokens,
         total_tokens: normalized_usage.total_tokens,
+        audio_input_tokens: normalized_usage.audio_input_tokens,
+        audio_output_tokens: normalized_usage.audio_output_tokens,
+        extraction_profile_id: normalized_usage.extraction_profile_id.clone(),
+        extraction_profile_revision: normalized_usage.extraction_profile_revision,
+        source_paths: normalized_usage.source_paths.clone(),
+        validation_flags: normalized_usage.validation_flags.clone(),
+        response_model: normalized_usage.response_model.clone(),
+        response_id: normalized_usage.response_id.clone(),
+        reported_cost: normalized_usage.reported_cost.clone(),
+        estimated_cost: normalized_usage.estimated_cost.clone(),
+        cost_currency: normalized_usage.cost_currency.clone(),
+        pricing_revision: normalized_usage.pricing_revision.clone(),
+        pricing_profile: normalized_usage.pricing_profile.clone(),
+        billing_details: normalized_usage.billing_details.clone(),
     });
     ProviderRequestTelemetryEvent {
         kind: ProviderRequestTelemetryEventKind::Completed,
@@ -850,6 +1036,27 @@ fn build_completed_event(
             finish_reason: None,
             error_category,
             error_code,
+            dispatch_outcome: error
+                .map(|value| value.dispatch_outcome)
+                .or(request.transport.map(|_| DispatchOutcome::Dispatched)),
+            semantic_output_observed: error
+                .map(|value| value.semantic_output_observed)
+                .unwrap_or(request.semantic_output_observed),
+            replay_safe: error.map(provider_error_replay_safe),
+            transport: error
+                .and_then(|value| value.transport)
+                .or(request.transport),
+            dispatched_at_ms: request.dispatched_at_ms,
+            headers_at_ms: request.headers_at_ms,
+            http_status: error
+                .and_then(|value| value.http_status)
+                .or(request.http_status),
+            websocket_close_code: error.and_then(|value| value.websocket_close_code),
+            provider_request_id: error
+                .and_then(|value| value.request_id.as_deref())
+                .or(request.provider_request_id.as_deref()),
+            rate_limit_headers: &request.rate_limit_headers,
+            retry_after: error.and_then(|value| value.retry_after.as_ref()),
             calendar_date: &request.calendar_date,
             timezone_offset_minutes: request.timezone_offset_minutes,
         }),
@@ -928,6 +1135,14 @@ fn accounted_total_tokens(
         (None, Some(derived)) => (Some(derived), "derived"),
         (None, None) => (None, "unknown"),
     }
+}
+
+/// Determines replay safety only from the structured failure facts used by the retry layer.
+/// 仅依据重试层使用的结构化失败事实判断重放安全性。
+fn provider_error_replay_safe(error: &AiExecutionError) -> bool {
+    !error.semantic_output_observed
+        && !error.side_effect_observed
+        && error.dispatch_outcome != DispatchOutcome::Unknown
 }
 
 /// Builds one retry-wait telemetry event linked to the failed physical request.
@@ -1064,6 +1279,39 @@ struct CompletedPayload<'a> {
     /// Optional stable error code.
     /// 可选稳定错误码。
     error_code: Option<&'a str>,
+    /// Exact dispatch outcome when a structured failure supplied it.
+    /// 结构化失败提供时的精确分派结果。
+    dispatch_outcome: Option<DispatchOutcome>,
+    /// Whether replay-relevant semantic output was observed.
+    /// 是否已经观察到与重放相关的语义输出。
+    semantic_output_observed: bool,
+    /// Whether automatic replay is proven safe at this terminal boundary.
+    /// 当前终态边界是否已证明可安全自动重放。
+    replay_safe: Option<bool>,
+    /// Exact upstream transport observed for this attempt.
+    /// 当前尝试观察到的精确上游传输。
+    transport: Option<AiTransportKind>,
+    /// Host timestamp immediately before transport dispatch.
+    /// 传输分派前的宿主时间戳。
+    dispatched_at_ms: Option<i64>,
+    /// Host timestamp when HTTP response headers became available.
+    /// HTTP 响应头可用时的宿主时间戳。
+    headers_at_ms: Option<i64>,
+    /// Optional upstream HTTP status.
+    /// 可选上游 HTTP 状态码。
+    http_status: Option<u16>,
+    /// Exact WebSocket close code supplied by the peer.
+    /// 对端提供的精确 WebSocket 关闭码。
+    websocket_close_code: Option<u16>,
+    /// Optional upstream request identifier from the structured failure.
+    /// 来自结构化失败的可选上游请求标识。
+    provider_request_id: Option<&'a str>,
+    /// Fixed-allowlist rate-limit response headers.
+    /// 固定允许列表内的限流响应头。
+    rate_limit_headers: &'a std::collections::BTreeMap<String, String>,
+    /// Optional normalized provider retry delay with exact provenance.
+    /// 可选的带精确来源归一化供应商重试延迟。
+    retry_after: Option<&'a RetryAfterHint>,
     /// Host-local calendar date at request start.
     /// 请求开始时的宿主本地自然日。
     calendar_date: &'a str,
@@ -1176,11 +1424,13 @@ mod tests {
             service_entry_id: String::from("public-api"),
             model_name: String::from("Model Name"),
             protocol_profile_id: String::from(vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID),
+            route_revision: String::from("sha256:test-route"),
             secondary_route_id: Some(String::from("route-1")),
             secondary_provider_name: Some(String::from("DeepInfra")),
             secondary_endpoint_name: Some(String::from("DeepInfra endpoint")),
             connection_id: String::from("connection-1"),
             owner_kind: "main_agent",
+            operation: "conversation",
             owner_id: String::from("agent-1"),
             owner_name: String::from("Agent One"),
         });
@@ -1223,6 +1473,7 @@ mod tests {
             started[0].payload["protocol_profile_id"],
             vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
         );
+        assert_eq!(started[0].payload["route_revision"], "sha256:test-route");
         assert_eq!(started[0].payload["secondary_route_id"], "route-1");
         assert_eq!(started[0].payload["secondary_provider_name"], "DeepInfra");
         assert_eq!(
@@ -1241,6 +1492,7 @@ mod tests {
                 total_tokens: Some(18),
                 cached_input_tokens: Some(3),
                 cache_creation_input_tokens: None,
+                ..ProviderUsageSnapshot::default()
             }))
             .expect("active request should complete");
         assert_eq!(completed.kind, ProviderRequestTelemetryEventKind::Completed);
@@ -1252,11 +1504,14 @@ mod tests {
         assert_eq!(
             completed.completed_usage,
             Some(ProviderRequestCompletedUsage {
+                input_tokens: Some(10),
                 uncached_input_tokens: Some(10),
                 cached_input_tokens: Some(3),
+                cache_creation_input_tokens: None,
                 output_tokens: Some(5),
                 reasoning_tokens: Some(2),
                 total_tokens: Some(18),
+                ..ProviderRequestCompletedUsage::default()
             })
         );
         assert!(tracker.complete_success(None).is_none());
@@ -1286,9 +1541,11 @@ mod tests {
             Some(ProviderRequestCompletedUsage {
                 uncached_input_tokens: None,
                 cached_input_tokens: None,
+                cache_creation_input_tokens: None,
                 output_tokens: None,
                 reasoning_tokens: None,
                 total_tokens: None,
+                ..ProviderRequestCompletedUsage::default()
             })
         );
     }
@@ -1307,6 +1564,7 @@ mod tests {
             total_tokens: Some(66_870),
             cached_input_tokens: Some(64_000),
             cache_creation_input_tokens: Some(31),
+            ..ProviderUsageSnapshot::default()
         };
         // openaiUsage models an OpenAI-compatible prompt total that includes cached tokens.
         // openaiUsage 模拟包含缓存 Token 的 OpenAI 兼容提示词总量。
@@ -1386,6 +1644,7 @@ mod tests {
             total_tokens: Some(1_250),
             cached_input_tokens: None,
             cache_creation_input_tokens: None,
+            ..ProviderUsageSnapshot::default()
         };
 
         assert_eq!(
@@ -1406,8 +1665,15 @@ mod tests {
         // tracker 持有待测生命周期。
         let mut tracker = test_tracker();
         tracker.start_request(&test_request_snapshot());
-        let events =
-            tracker.complete_failure(true, 1, 3, 250, "retryable_provider_transport_error");
+        let events = tracker.complete_failure(
+            true,
+            1,
+            3,
+            250,
+            "retryable_provider_transport_error",
+            None,
+            None,
+        );
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].kind, ProviderRequestTelemetryEventKind::Completed);
         assert_eq!(events[0].payload["status"], "failed");
@@ -1415,6 +1681,43 @@ mod tests {
         assert_eq!(events[1].payload["retry_number"], 1);
         let next_started = tracker.start_request(&test_request_snapshot());
         assert_eq!(next_started[0].payload["retry_count"], 1);
+    }
+
+    /// Verifies a failed physical request retains usage reported before its terminal error.
+    /// 验证失败的真实请求会保留终态错误前已报告的用量。
+    #[test]
+    fn failed_request_retains_reported_partial_usage() {
+        let mut tracker = test_tracker();
+        tracker.start_request(&test_request_snapshot());
+        let usage = ProviderUsageSnapshot {
+            input_tokens: Some(13),
+            output_tokens: Some(2),
+            total_tokens: Some(15),
+            ..ProviderUsageSnapshot::default()
+        };
+
+        let events = tracker.complete_failure(
+            false,
+            0,
+            0,
+            0,
+            "provider_transport_error",
+            None,
+            Some(&usage),
+        );
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].payload["status"], "failed");
+        assert_eq!(events[0].payload["input_tokens"], 13);
+        assert_eq!(events[0].payload["output_tokens"], 2);
+        assert_eq!(events[0].payload["total_tokens"], 15);
+        assert_eq!(
+            events[0]
+                .completed_usage
+                .as_ref()
+                .and_then(|value| value.total_tokens),
+            Some(15)
+        );
     }
 
     /// Verifies a dropped consumer converts the active request into exactly one cancelled terminal event.

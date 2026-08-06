@@ -401,6 +401,7 @@ pub(crate) fn apply_webui_context_compaction_stream_event(
             Ok(())
         }
         ExecutionStreamEvent::ConversationCheckpoint { .. } => Ok(()),
+        ExecutionStreamEvent::ContextCompactionRequired { .. } => Ok(()),
         ExecutionStreamEvent::Finished(_) => {
             seal_stream_content_records(app, state, session_id, record_ids)
         }

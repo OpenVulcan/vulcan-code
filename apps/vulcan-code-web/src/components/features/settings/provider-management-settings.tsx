@@ -75,7 +75,7 @@ import type {
   PublicAiCustomProviderSaveRequest,
   PublicAiContextWindowPolicyOverrides,
   PublicAiResponsesRemoteCompactionPolicy,
-  PublicAiResponsesWebSocketPolicy,
+  PublicAiResponsesWebsocketPolicy,
   PublicAiConnection,
   PublicAiModelCapabilityEvidence,
   PublicAiModelOverrideRecord,
@@ -665,9 +665,9 @@ function CustomProviderDialog(props: {
   const [displayName, setDisplayName] = React.useState("")
   const [baseUrl, setBaseUrl] = React.useState("")
   const [protocol, setProtocol] = React.useState<PublicAiCustomProviderProtocol>("open_ai_responses")
-  const [websocketPolicy, setWebsocketPolicy] = React.useState<PublicAiResponsesWebSocketPolicy>("disabled")
   const [remoteCompactionPolicy, setRemoteCompactionPolicy] = React.useState<PublicAiResponsesRemoteCompactionPolicy>("disabled")
-  const [authentication, setAuthentication] = React.useState<"bearer_authorization" | "x_api_key">("bearer_authorization")
+  const [websocketPolicy, setWebsocketPolicy] = React.useState<PublicAiResponsesWebsocketPolicy>("disabled")
+  const [authentication, setAuthentication] = React.useState<"bearer_authorization" | "google_api_key" | "x_api_key">("bearer_authorization")
   const [modelDiscoveryMode, setModelDiscoveryMode] = React.useState<PublicAiCustomProviderModelDiscoveryMode>("standard")
   const [modelDiscoveryPath, setModelDiscoveryPath] = React.useState("")
   const [credentialDisplayName, setCredentialDisplayName] = React.useState("")
@@ -706,12 +706,14 @@ function CustomProviderDialog(props: {
     const entry = props.provider?.service_entries[0]
     setDisplayName(props.provider?.display_name ?? "")
     setBaseUrl(entry?.base_url ?? "")
-    setAuthentication(entry?.authentication === "x_api_key" ? "x_api_key" : "bearer_authorization")
+    setAuthentication(entry?.authentication === "google_api_key"
+      ? "google_api_key"
+      : entry?.authentication === "x_api_key" ? "x_api_key" : "bearer_authorization")
     const nextProtocol = customProtocolFromProfile(entry?.protocol_routes[0]?.protocol_profile_id ?? "") ?? "open_ai_responses"
     const routeFeatures = entry?.protocol_routes[0]?.responses_features
     setProtocol(nextProtocol)
-    setWebsocketPolicy(routeFeatures?.websocket ?? "disabled")
     setRemoteCompactionPolicy(routeFeatures?.remote_compaction ?? "disabled")
+    setWebsocketPolicy(routeFeatures?.websocket ?? "disabled")
     setModelDiscoveryMode(customProviderDiscoveryMode(entry))
     setModelDiscoveryPath(entry?.protocol_routes[0]?.model_discovery_path ?? "")
     setCredentialDisplayName(props.provider?.display_name ?? "")
@@ -772,8 +774,8 @@ function CustomProviderDialog(props: {
     displayName: displayName.trim(),
     baseUrl: baseUrl.trim(),
     protocol,
-    websocketPolicy,
     remoteCompactionPolicy,
+    websocketPolicy,
     authentication,
     ...(props.provider
       ? (validationConnectionId ? { validationConnectionId } : {})
@@ -879,19 +881,19 @@ function CustomProviderDialog(props: {
     !originalEntry
     || baseUrl.trim().replace(/\/+$/, "") !== originalEntry.base_url.replace(/\/+$/, "")
     || protocolChanged
-    || authentication !== (originalEntry.authentication === "x_api_key" ? "x_api_key" : "bearer_authorization")
+    || authentication !== customProviderAuthentication(originalEntry)
     || modelDiscoveryMode !== customProviderDiscoveryMode(originalEntry)
     || (modelDiscoveryMode === "custom_path"
       && modelDiscoveryPath.trim() !== (originalEntry.protocol_routes[0]?.model_discovery_path ?? ""))
   )
-  // responsesFeaturesChanged tracks explicit Codex capability switches without forcing credential revalidation.
-  // responsesFeaturesChanged 跟踪显式 Codex 能力开关，但不会强制重新验证凭据。
+  // responsesFeaturesChanged tracks explicit Codex transport capabilities without forcing credential revalidation.
+  // responsesFeaturesChanged 跟踪显式 Codex 传输能力开关，但不会强制重新验证凭据。
   const originalResponsesFeatures = originalEntry?.protocol_routes[0]?.responses_features
   const responsesFeaturesChanged = Boolean(props.provider)
     && protocol === "open_ai_codex_responses"
     && (
-      websocketPolicy !== (originalResponsesFeatures?.websocket ?? "disabled")
-      || remoteCompactionPolicy !== (originalResponsesFeatures?.remote_compaction ?? "disabled")
+      remoteCompactionPolicy !== (originalResponsesFeatures?.remote_compaction ?? "disabled")
+      || websocketPolicy !== (originalResponsesFeatures?.websocket ?? "disabled")
     )
   // credentialFreeEdit identifies an existing provider whose contract cannot be remotely probed yet.
   // credentialFreeEdit 标识当前尚无法远程探测契约的无账号现有供应商。
@@ -946,11 +948,14 @@ function CustomProviderDialog(props: {
               <label className="settings-form-field">
                 <span>{t("settings.customProviders.protocol")}</span>
                   <Select onValueChange={(value) => {
-                    const nextProtocol = value as PublicAiCustomProviderProtocol
-                    setProtocol(nextProtocol)
+                     const nextProtocol = value as PublicAiCustomProviderProtocol
+                     setProtocol(nextProtocol)
+                     if (nextProtocol === "gemini_generate_content") {
+                       setAuthentication("google_api_key")
+                     }
                     if (nextProtocol !== "open_ai_codex_responses") {
-                      setWebsocketPolicy("disabled")
                       setRemoteCompactionPolicy("disabled")
+                      setWebsocketPolicy("disabled")
                     }
                   }} value={protocol}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
@@ -963,10 +968,11 @@ function CustomProviderDialog(props: {
               </label>
               <label className="settings-form-field">
                 <span>{t("settings.customProviders.authentication")}</span>
-                <Select onValueChange={(value) => setAuthentication(value as "bearer_authorization" | "x_api_key")} value={authentication}>
+                <Select onValueChange={(value) => setAuthentication(value as "bearer_authorization" | "google_api_key" | "x_api_key")} value={authentication}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="bearer_authorization">Authorization: Bearer</SelectItem>
+                    <SelectItem value="google_api_key">Gemini API Key</SelectItem>
                     <SelectItem value="x_api_key">x-api-key</SelectItem>
                   </SelectContent>
                 </Select>
@@ -994,18 +1000,6 @@ function CustomProviderDialog(props: {
                 <p className="font-medium text-foreground">{t("settings.customProviders.codexCapabilities")}</p>
                 <label className="flex items-start gap-2">
                   <input
-                    checked={websocketPolicy === "preferred_with_http_fallback"}
-                    className="mt-1"
-                    onChange={(event) => setWebsocketPolicy(event.target.checked ? "preferred_with_http_fallback" : "disabled")}
-                    type="checkbox"
-                  />
-                  <span>
-                    <span className="block font-medium">{t("settings.customProviders.codexWebsocket")}</span>
-                    <span className="block text-xs text-muted-foreground">{t("settings.customProviders.codexWebsocketHint")}</span>
-                  </span>
-                </label>
-                <label className="flex items-start gap-2">
-                  <input
                     checked={remoteCompactionPolicy === "enabled_with_local_fallback"}
                     className="mt-1"
                     onChange={(event) => setRemoteCompactionPolicy(event.target.checked ? "enabled_with_local_fallback" : "disabled")}
@@ -1014,6 +1008,18 @@ function CustomProviderDialog(props: {
                   <span>
                     <span className="block font-medium">{t("settings.customProviders.codexRemoteCompaction")}</span>
                     <span className="block text-xs text-muted-foreground">{t("settings.customProviders.codexRemoteCompactionHint")}</span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-2">
+                  <input
+                    checked={websocketPolicy !== "disabled"}
+                    className="mt-1"
+                    onChange={(event) => setWebsocketPolicy(event.target.checked ? "unverified_override" : "disabled")}
+                    type="checkbox"
+                  />
+                  <span>
+                    <span className="block font-medium">{t("settings.customProviders.codexWebsocket")}</span>
+                    <span className="block text-xs text-muted-foreground">{t("settings.customProviders.codexWebsocketHint")}</span>
                   </span>
                 </label>
               </div>
@@ -1288,6 +1294,27 @@ function customProviderDiscoveryMode(entry: PublicAiServiceEntry | undefined): P
   return "standard"
 }
 
+// customProviderAuthentication maps one persisted entry to the editable authentication contract.
+// customProviderAuthentication 将一个持久化入口映射为可编辑鉴权契约。
+//
+// Parameters
+// 参数
+// `entry` is the exact persisted custom-provider service entry.
+// `entry` 是精确的持久化自定义供应商服务入口。
+//
+// Returns
+// 返回值
+// The single supported browser authentication choice.
+// 返回唯一受支持的浏览器鉴权选择。
+function customProviderAuthentication(
+  entry: PublicAiServiceEntry | undefined,
+): "bearer_authorization" | "google_api_key" | "x_api_key" {
+  if (entry?.authentication === "google_api_key") {
+    return "google_api_key"
+  }
+  return entry?.authentication === "x_api_key" ? "x_api_key" : "bearer_authorization"
+}
+
 // customProviderEndpointPreview joins the exact protocol path to the user-entered base URL.
 // customProviderEndpointPreview 将精确协议路径拼接到用户输入的基础 URL。
 //
@@ -1301,6 +1328,9 @@ function customProviderDiscoveryMode(entry: PublicAiServiceEntry | undefined): P
 // A display-only endpoint preview, or an empty string when no base URL exists.
 // 返回仅用于展示的端点预览；没有基础 URL 时返回空字符串。
 function customProviderEndpointPreview(baseUrl: string, protocol: PublicAiCustomProviderProtocol): string {
+  if (protocol === "gemini_generate_content") {
+    return joinCustomProviderUrl(baseUrl, "/models/{model}:streamGenerateContent?alt=sse")
+  }
   const path = protocol === "anthropic_messages"
     ? "/messages"
     : protocol === "open_ai_chat"
@@ -1435,6 +1465,9 @@ function customProtocolFromProfile(profileId: string): PublicAiCustomProviderPro
   if (profileId === "openai-codex-responses.v1") {
     return "open_ai_codex_responses"
   }
+  if (profileId === "google.gemini.generate_content") {
+    return "gemini_generate_content"
+  }
   return null
 }
 
@@ -1446,6 +1479,9 @@ function customProtocolProfileId(protocol: PublicAiCustomProviderProtocol): stri
   }
   if (protocol === "open_ai_chat") {
     return "openai-chat-completions.v1"
+  }
+  if (protocol === "gemini_generate_content") {
+    return "google.gemini.generate_content"
   }
   if (protocol === "open_ai_codex_responses") {
     return "openai-codex-responses.v1"
@@ -1469,6 +1505,7 @@ function errorMessage(reason: unknown): string {
 // customProtocolOptions 是浏览器可编辑的完整兼容协议集合。
 const customProtocolOptions: Array<{ id: PublicAiCustomProviderProtocol; label: string }> = [
   { id: "anthropic_messages", label: "Anthropic Messages" },
+  { id: "gemini_generate_content", label: "Gemini Generate Content" },
   { id: "open_ai_chat", label: "OpenAI Chat Completions" },
   { id: "open_ai_responses", label: "OpenAI Responses" },
   { id: "open_ai_codex_responses", label: "Codex Responses (full compatibility)" },

@@ -575,13 +575,13 @@ fn latest_session_turn_stats_includes_embedded_compaction_usage_segments() {
                     reasoning: String::new(),
                     provider_message_id: None,
                     provider_message_state: None,
-                    usage: Some(ProviderUsageSnapshot {
+                    usage: Some(Box::new(ProviderUsageSnapshot {
                         input_tokens: Some(40),
                         output_tokens: Some(12),
                         total_tokens: Some(52),
                         cached_input_tokens: Some(16),
                         ..ProviderUsageSnapshot::default()
-                    }),
+                    })),
                     tool_calls: Vec::new(),
                 },
             },

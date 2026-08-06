@@ -27,11 +27,66 @@ pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
     request: &ExecutionPreparationRequest,
     preparation: &ExecutionPreparation,
 ) -> Result<Option<ExecutionPreparationRequest>, String> {
+    maybe_auto_compact_webui_session_with_mode(
+        app,
+        state,
+        controller_runtime,
+        agent_runtime,
+        active_stream_task_id,
+        request,
+        preparation,
+        false,
+    )
+    .await
+}
+
+/// Forces one context compaction after a provider/tool boundary reported a verified budget overflow.
+/// 在 Provider/工具边界报告已验证预算溢出后强制执行一次上下文压缩。
+pub(crate) async fn force_auto_compact_webui_session_after_provider_boundary(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    agent_runtime: &AgentRuntimeBridge,
+    active_stream_task_id: Uuid,
+    request: &ExecutionPreparationRequest,
+    preparation: &ExecutionPreparation,
+) -> Result<Option<ExecutionPreparationRequest>, String> {
+    maybe_auto_compact_webui_session_with_mode(
+        app,
+        state,
+        controller_runtime,
+        agent_runtime,
+        active_stream_task_id,
+        request,
+        preparation,
+        true,
+    )
+    .await
+}
+
+/// Executes the shared compaction transaction with an explicit trigger mode.
+/// 使用显式触发模式执行共享上下文压缩事务。
+async fn maybe_auto_compact_webui_session_with_mode(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    agent_runtime: &AgentRuntimeBridge,
+    active_stream_task_id: Uuid,
+    request: &ExecutionPreparationRequest,
+    preparation: &ExecutionPreparation,
+    force_compaction: bool,
+) -> Result<Option<ExecutionPreparationRequest>, String> {
     if request.prompt_purpose != ExecutionPromptPurpose::UserTurn {
         return Ok(None);
     }
     let Some(context_budget) = preparation.context_budget.as_ref() else {
-        return Ok(None);
+        return if force_compaction {
+            Err(String::from(
+                "context compaction was required but the execution preparation has no budget snapshot",
+            ))
+        } else {
+            Ok(None)
+        };
     };
     // vmm_controller_registry is cloned without retaining the shared service lock.
     // vmm_controller_registry 在不保留共享服务锁的情况下完成克隆。
@@ -54,7 +109,7 @@ pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
     // vmm_pressure_requires_compaction 仅在达到绝对或比例阈值后提高压缩优先级。
     let vmm_pressure_requires_compaction =
         vmm_cache_pressure_requires_compaction(context_budget, vmm_cache_pressure);
-    if !context_budget.should_compact() && !vmm_pressure_requires_compaction {
+    if !force_compaction && !context_budget.should_compact() && !vmm_pressure_requires_compaction {
         return Ok(None);
     }
     let session_id = request.session_id;

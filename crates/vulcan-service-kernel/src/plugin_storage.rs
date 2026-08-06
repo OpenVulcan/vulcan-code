@@ -294,6 +294,67 @@ impl ControllerPluginStorageService {
         Ok(())
     }
 
+    /// Queries an existing plugin database through its Controller binding without creating source data.
+    /// 通过插件的 Controller 绑定查询既有数据库，且不创建来源数据。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `plugin_id` selects the host-derived database, `sql` is a validated read statement, and `params` are typed values.
+    /// `plugin_id` 选择宿主派生数据库，`sql` 是已校验读语句，`params` 是类型化参数。
+    ///
+    /// # Returns
+    /// 返回值
+    /// JSON rows when the physical database exists, otherwise `None`.
+    /// 物理数据库存在时返回 JSON 行，否则返回 `None`。
+    pub(crate) async fn query_existing_sqlite_rows(
+        &self,
+        plugin_id: &str,
+        sql: &str,
+        params: Vec<ControllerSqliteValue>,
+    ) -> Result<Option<Value>, String> {
+        validate_plugin_storage_identity(plugin_id)?;
+        validate_sqlite_statement(sql, SqliteStatementAccess::Read)?;
+        let plugin_data_root = plugin_data_root(&self.plugin_state_root, plugin_id);
+        let sqlite_path = plugin_data_root.join("plugin.sqlite3");
+        if !sqlite_path.is_file() {
+            return Ok(None);
+        }
+        self.ensure_sqlite(plugin_id).await?;
+        let result = tokio::time::timeout(
+            PLUGIN_SQLITE_QUERY_TIMEOUT,
+            self.client.query_sqlite_json_typed(
+                plugin_space_id(plugin_id),
+                plugin_sqlite_binding_id(plugin_id, &self.binding_scope),
+                sql,
+                params,
+            ),
+        )
+        .await
+        .map_err(|_| {
+            format!(
+                "Plugin SQLite migration query exceeded the {} second timeout.",
+                PLUGIN_SQLITE_QUERY_TIMEOUT.as_secs()
+            )
+        })?
+        .map_err(|error| format!("Plugin SQLite migration query failed: {error}"))?;
+        if result.row_count > PLUGIN_SQLITE_MAX_QUERY_ROWS {
+            return Err(format!(
+                "Plugin SQLite migration query returned {} rows; maximum is {}.",
+                result.row_count, PLUGIN_SQLITE_MAX_QUERY_ROWS
+            ));
+        }
+        if result.json_data.len() > PLUGIN_SQLITE_MAX_QUERY_BYTES {
+            return Err(format!(
+                "Plugin SQLite migration query returned {} bytes; maximum is {}.",
+                result.json_data.len(),
+                PLUGIN_SQLITE_MAX_QUERY_BYTES
+            ));
+        }
+        serde_json::from_str::<Value>(&result.json_data)
+            .map(Some)
+            .map_err(|error| format!("Controller returned invalid migration JSON rows: {error}"))
+    }
+
     /// Ensures the plugin LanceDB space and binding exist exactly once per process.
     /// 确保插件 LanceDB 空间与绑定在每个进程中只初始化一次。
     ///

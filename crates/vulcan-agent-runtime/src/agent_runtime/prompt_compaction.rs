@@ -521,6 +521,7 @@ fn prompt_compaction_progress_for_runtime_event(
         ExecutionStreamEvent::ProviderRequestTelemetry(_)
         | ExecutionStreamEvent::RuntimeEvent { .. }
         | ExecutionStreamEvent::ConversationCheckpoint { .. }
+        | ExecutionStreamEvent::ContextCompactionRequired { .. }
         | ExecutionStreamEvent::ThinkingCompleted { .. }
         | ExecutionStreamEvent::Finished(_) => None,
     }

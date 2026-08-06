@@ -44,8 +44,8 @@ export interface PublicAiProtocolRoute {
   model_discovery?: PublicAiModelDiscoveryKind;
   model_discovery_path?: string;
   responses_features?: {
-    websocket: PublicAiResponsesWebSocketPolicy;
     remote_compaction: PublicAiResponsesRemoteCompactionPolicy;
+    websocket: PublicAiResponsesWebsocketPolicy;
   };
   verified: boolean;
 }
@@ -126,14 +126,10 @@ export interface PublicAiProviderDescriptor {
 // PublicAiCustomProviderProtocol 标识用户选择的一种兼容 Wire 协议。
 export type PublicAiCustomProviderProtocol =
   | "anthropic_messages"
+  | "gemini_generate_content"
   | "open_ai_chat"
   | "open_ai_responses"
   | "open_ai_codex_responses";
-// PublicAiResponsesWebSocketPolicy selects the explicit Codex Responses transport preference.
-// PublicAiResponsesWebSocketPolicy 选择显式的 Codex Responses 传输偏好。
-export type PublicAiResponsesWebSocketPolicy =
-  | "disabled"
-  | "preferred_with_http_fallback";
 // PublicAiResponsesRemoteCompactionPolicy selects the explicit standalone compact behavior.
 // PublicAiResponsesRemoteCompactionPolicy 选择显式的独立远端压缩行为。
 export type PublicAiResponsesRemoteCompactionPolicy =
@@ -144,6 +140,10 @@ export type PublicAiResponsesRemoteCompactionPolicy =
 // PublicAiCustomProviderModelDiscoveryMode 选择自动、自定义路径或手工发现。
 export type PublicAiCustomProviderModelDiscoveryMode = "standard" | "custom_path" | "manual";
 
+// PublicAiResponsesWebsocketPolicy controls one explicit Codex Responses WebSocket route.
+// PublicAiResponsesWebsocketPolicy 控制一条显式 Codex Responses WebSocket 路由。
+export type PublicAiResponsesWebsocketPolicy = "disabled" | "verified" | "unverified_override";
+
 // PublicAiCustomProviderSaveRequest creates or replaces one user-defined provider.
 // PublicAiCustomProviderSaveRequest 创建或替换一个用户自定义供应商。
 export interface PublicAiCustomProviderSaveRequest {
@@ -151,9 +151,9 @@ export interface PublicAiCustomProviderSaveRequest {
   displayName: string;
   baseUrl: string;
   protocol: PublicAiCustomProviderProtocol;
-  websocketPolicy: PublicAiResponsesWebSocketPolicy;
   remoteCompactionPolicy: PublicAiResponsesRemoteCompactionPolicy;
-  authentication: "bearer_authorization" | "x_api_key";
+  websocketPolicy: PublicAiResponsesWebsocketPolicy;
+  authentication: "bearer_authorization" | "google_api_key" | "x_api_key";
   credentialDisplayName?: string;
   secret?: string;
   validationConnectionId?: string;
@@ -801,6 +801,93 @@ export type PublicAiProviderToolTestResult = {
         value: PublicAiProviderToolExtractOutput;
       };
 };
+
+// ProviderUsageDailySummary carries one native daily provider accounting row.
+// ProviderUsageDailySummary 承载一条原生供应商每日计量行。
+export interface ProviderUsageDailySummary {
+  calendarDate: string;
+  providerId: string;
+  serviceEntryId: string;
+  consumerId: string;
+  operation: string;
+  modelId: string;
+  currency: string;
+  attemptCount: number;
+  successfulAttemptCount: number;
+  reportedUsageAttemptCount: number;
+  inputTokens?: number | null;
+  uncachedInputTokens?: number | null;
+  cacheReadTokens?: number | null;
+  cacheWriteTokens?: number | null;
+  outputTokens?: number | null;
+  reasoningTokens?: number | null;
+  totalTokens?: number | null;
+  reportedCost?: string | null;
+  estimatedCost?: string | null;
+  aggregateRevision: number;
+}
+
+// ProviderUsageBillingDetail preserves one provider-defined billing partition.
+// ProviderUsageBillingDetail 保留一项供应商定义的计费分区。
+export interface ProviderUsageBillingDetail {
+  billing_type: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  text_tokens?: number;
+  image_tokens?: number;
+  reasoning_tokens?: number;
+}
+
+// ProviderUsageAttemptSummary exposes one recent physical attempt and its frozen pricing source.
+// ProviderUsageAttemptSummary 公开一条近期物理 attempt 及其冻结价格来源。
+export interface ProviderUsageAttemptSummary {
+  attemptId: string;
+  consumerId: string;
+  operation: string;
+  providerId: string;
+  serviceEntryId: string;
+  modelId: string;
+  transport?: string | null;
+  httpStatus?: number | null;
+  websocketCloseCode?: number | null;
+  errorCategory?: string | null;
+  errorCode?: string | null;
+  status: string;
+  usageAvailability: "missing" | "partial" | "final";
+  totalTokens?: number | null;
+  billingDetails: ProviderUsageBillingDetail[];
+  reportedCost?: string | null;
+  estimatedCost?: string | null;
+  currency?: string | null;
+  pricingRevision?: string | null;
+  pricingSourceKind?: string | null;
+  pricingSourceId?: string | null;
+  terminalAtMs: number;
+}
+
+// ProviderAccountUsageSummary carries one latest native account observation.
+// ProviderAccountUsageSummary 承载一条最新原生账户观测。
+export interface ProviderAccountUsageSummary {
+  providerId: string;
+  connectionId: string;
+  snapshotKind: string;
+  endpointProfileRevision: string;
+  payload: PublicAiAccountUsage;
+  observedAtMs: number;
+}
+
+// ProviderUsageDashboard exposes native usage, cost, and account facts to users.
+// ProviderUsageDashboard 向用户公开原生用量、成本与账户事实。
+export interface ProviderUsageDashboard {
+  generatedAtMs: number;
+  schemaRevision: number;
+  aggregateRevision: number;
+  healthStatus: string;
+  daily: ProviderUsageDailySummary[];
+  recentAttempts: ProviderUsageAttemptSummary[];
+  accounts: ProviderAccountUsageSummary[];
+}
 
 // PublicAiSettingsSnapshot combines persisted and process-local settings state.
 // PublicAiSettingsSnapshot 组合持久化设置状态与进程内设置状态。

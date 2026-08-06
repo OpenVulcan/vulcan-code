@@ -729,6 +729,7 @@ mod tests {
             total_tokens: Some(140),
             cached_input_tokens: None,
             cache_creation_input_tokens: None,
+            ..Default::default()
         };
 
         assert_eq!(calibrated_input_token_estimate(10, Some(&usage)), 128);
@@ -804,6 +805,7 @@ mod tests {
             total_tokens: Some(112_395),
             cached_input_tokens: Some(111_616),
             cache_creation_input_tokens: Some(0),
+            ..Default::default()
         };
 
         assert_eq!(
@@ -828,6 +830,7 @@ mod tests {
             total_tokens: Some(112_395),
             cached_input_tokens: Some(111_616),
             cache_creation_input_tokens: None,
+            ..Default::default()
         };
 
         assert_eq!(

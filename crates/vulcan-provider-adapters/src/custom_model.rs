@@ -196,11 +196,17 @@ impl CustomProviderModelDefaults {
     /// `capabilities` is the credential-scoped capability snapshot being resolved.
     /// `capabilities` 是正在解析的凭据作用域能力快照。
     pub fn apply_system_capability_policy(&self, capabilities: &mut ModelCapabilities) {
-        // The compatible-provider system policy is authoritative over conservative catalog flags.
-        // 兼容供应商系统策略对目录中的保守能力标记具有权威性。
-        capabilities.reasoning = self.reasoning;
-        capabilities.reasoning_control = self.reasoning_control;
-        capabilities.reasoning_efforts = self.reasoning_efforts.clone();
+        // Unknown reasoning fields intentionally preserve protocol-specific discovery or model evidence.
+        // 未知思考字段会有意保留协议专属发现结果或模型证据。
+        if self.reasoning != CapabilitySupport::Unknown {
+            capabilities.reasoning = self.reasoning;
+        }
+        if self.reasoning_control != ReasoningControlMode::Unknown {
+            capabilities.reasoning_control = self.reasoning_control;
+        }
+        if !self.reasoning_efforts.is_empty() {
+            capabilities.reasoning_efforts = self.reasoning_efforts.clone();
+        }
         capabilities.tool_calling = self.tool_calling;
         capabilities.evidence_revision = format!(
             "{}+custom-provider-system-policy.v1",

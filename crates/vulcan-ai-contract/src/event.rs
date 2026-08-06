@@ -2,8 +2,8 @@
 //! 供应商无关的流式事件与生命周期校验。
 
 use crate::{
-    AiContinuationUpdate, AiExecutionError, ContentItem, RequestUsage, ResourceTransferState,
-    ToolCall, ToolCallProgress, UsageUpdateKind,
+    AiContinuationUpdate, AiExecutionError, AiTransportKind, ContentItem, RequestUsage,
+    ResourceTransferState, ToolCall, ToolCallProgress, UsageUpdateKind,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -13,6 +13,32 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AiStreamEvent {
+    /// Exact transport facts became observable for this physical attempt.
+    /// 当前真实尝试的精确传输事实已经可观测。
+    TransportObserved {
+        /// Exact transport selected by the dispatcher.
+        /// 分派器选中的精确传输。
+        transport: AiTransportKind,
+        /// Host timestamp immediately before dispatch began.
+        /// 分派开始前的宿主时间戳。
+        dispatched_at_ms: i64,
+        /// Host timestamp when HTTP response headers became available.
+        /// HTTP 响应头可用时的宿主时间戳。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        headers_at_ms: Option<i64>,
+        /// HTTP status observed at the transport boundary.
+        /// 在传输边界观察到的 HTTP 状态码。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        http_status: Option<u16>,
+        /// Allowlisted upstream request identifier.
+        /// 允许列表内的上游请求标识。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_request_id: Option<String>,
+        /// Allowlisted rate-limit headers with original header names.
+        /// 保留原始响应头名称的允许列表限流响应头。
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        rate_limit_headers: BTreeMap<String, String>,
+    },
     /// Response execution has started.
     /// 响应执行已经开始。
     ResponseStarted {
@@ -134,6 +160,19 @@ pub enum AiStreamEvent {
         /// 当前传输状态。
         state: ResourceTransferState,
     },
+    /// One standard image-generation preview became available.
+    /// 一项标准图片生成预览已经可用。
+    ImageGenerationPartial {
+        /// Stable image-generation response item identifier.
+        /// 稳定的图片生成响应项目标识。
+        item_id: String,
+        /// Zero-based preview sequence index reported by the provider.
+        /// 供应商报告的从零开始预览序列索引。
+        partial_image_index: u64,
+        /// Base64-encoded preview image bytes without a data-URL prefix.
+        /// 不含数据 URL 前缀的 Base64 编码预览图片字节。
+        partial_image_b64: String,
+    },
     /// One response item has completed.
     /// 一个响应项已经完成。
     ResponseItemCompleted {
@@ -146,7 +185,7 @@ pub enum AiStreamEvent {
     UsageUpdated {
         /// Normalized usage snapshot.
         /// 归一化用量快照。
-        usage: RequestUsage,
+        usage: Box<RequestUsage>,
     },
     /// Response completed successfully.
     /// 响应成功完成。
@@ -239,7 +278,8 @@ impl AiStreamStateMachine {
                 }
                 self.started = true;
             }
-            AiStreamEvent::ResponseMetadataUpdated { .. } => {}
+            AiStreamEvent::TransportObserved { .. }
+            | AiStreamEvent::ResponseMetadataUpdated { .. } => {}
             event if !self.started => {
                 return Err(format!(
                     "Stream event `{}` was emitted before the response start event.",
@@ -322,7 +362,9 @@ impl AiStreamStateMachine {
                 }
                 self.final_usage_observed = true;
             }
-            AiStreamEvent::ResourceProgress { .. } | AiStreamEvent::UsageUpdated { .. } => {}
+            AiStreamEvent::ResourceProgress { .. }
+            | AiStreamEvent::ImageGenerationPartial { .. }
+            | AiStreamEvent::UsageUpdated { .. } => {}
         }
         Ok(())
     }
@@ -367,6 +409,7 @@ impl AiStreamEvent {
     /// 返回稳定的诊断事件类别。
     fn kind(&self) -> &'static str {
         match self {
+            Self::TransportObserved { .. } => "transport_observed",
             Self::ResponseStarted { .. } => "response_started",
             Self::ResponseMetadataUpdated { .. } => "response_metadata_updated",
             Self::ResponseItemStarted { .. } => "response_item_started",
@@ -379,6 +422,7 @@ impl AiStreamEvent {
             Self::ToolCallCompleted { .. } => "tool_call_completed",
             Self::ToolCallAborted { .. } => "tool_call_aborted",
             Self::ResourceProgress { .. } => "resource_progress",
+            Self::ImageGenerationPartial { .. } => "image_generation_partial",
             Self::ResponseItemCompleted { .. } => "response_item_completed",
             Self::UsageUpdated { .. } => "usage_updated",
             Self::ResponseCompleted => "response_completed",
@@ -479,15 +523,15 @@ mod tests {
             .expect("terminal event should be valid");
 
         let snapshot = AiStreamEvent::UsageUpdated {
-            usage: RequestUsage::default(),
+            usage: Box::new(RequestUsage::default()),
         };
         assert!(state.apply(&snapshot).is_err());
 
         let final_usage = AiStreamEvent::UsageUpdated {
-            usage: RequestUsage {
+            usage: Box::new(RequestUsage {
                 update_kind: UsageUpdateKind::Final,
                 ..RequestUsage::default()
-            },
+            }),
         };
         state
             .apply(&final_usage)
@@ -506,10 +550,10 @@ mod tests {
             })
             .expect("start should be valid");
         let final_usage = AiStreamEvent::UsageUpdated {
-            usage: RequestUsage {
+            usage: Box::new(RequestUsage {
                 update_kind: UsageUpdateKind::Final,
                 ..RequestUsage::default()
-            },
+            }),
         };
         state
             .apply(&final_usage)
@@ -533,20 +577,20 @@ mod tests {
             .expect("start should be valid");
         state
             .apply(&AiStreamEvent::UsageUpdated {
-                usage: RequestUsage {
+                usage: Box::new(RequestUsage {
                     update_kind: UsageUpdateKind::Final,
                     ..RequestUsage::default()
-                },
+                }),
             })
             .expect("first final usage should be valid");
 
         assert!(
             state
                 .apply(&AiStreamEvent::UsageUpdated {
-                    usage: RequestUsage {
+                    usage: Box::new(RequestUsage {
                         update_kind: UsageUpdateKind::Delta,
                         ..RequestUsage::default()
-                    },
+                    }),
                 })
                 .is_err()
         );

@@ -5,6 +5,7 @@ import {
   BrainCircuit,
   FileSearch,
   FileText,
+  CircleDollarSign,
   FolderTree,
   GitCommitHorizontal,
   Image,
@@ -115,6 +116,7 @@ export function settingsSubAreaGroups(t: ReturnType<typeof useI18n>["t"]): Setti
         { id: "credential-management", label: t("settings.credentialManagement"), icon: <FileText size={16} />, description: t("settings.credentialManagement.description") },
         { id: "model-list", label: t("settings.modelList"), icon: <FileText size={16} />, description: t("settings.modelList.description") },
         { id: "provider-retry", label: t("settings.providerRetry"), icon: <RefreshCw size={16} />, description: t("settings.providerRetry.description") },
+        { id: "provider-usage", label: t("settings.providerUsage"), icon: <CircleDollarSign size={16} />, description: t("settings.providerUsage.description") },
       ],
     },
     {

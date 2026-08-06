@@ -358,6 +358,18 @@ struct WireRerankResponse {
     usage: WireUsage,
 }
 
+/// Borrows the two immutable revisions frozen for one provider execution.
+/// 借用一次供应商执行冻结的两个不可变修订号。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ExecutionRevisionRefs<'a> {
+    /// Runtime model-catalog revision.
+    /// 运行时模型目录修订号。
+    pub catalog: &'a str,
+    /// Content-addressed provider-route revision.
+    /// 内容寻址供应商路由修订号。
+    pub route: &'a str,
+}
+
 impl ProviderExecutionClient {
     /// Executes one frozen native embedding route and validates complete batch identity.
     /// 执行一条冻结的原生向量路由并校验完整批次身份。
@@ -373,13 +385,13 @@ impl ProviderExecutionClient {
     /// 返回值
     /// A normalized all-or-nothing embedding response or a structured failure.
     /// 返回归一化的整批成功向量响应或结构化失败。
-    pub async fn execute_embedding(
+    pub(crate) async fn execute_embedding(
         &self,
         route: &ProviderExecutionRoute,
         model: &ConnectionModel,
         request: &EmbeddingRequest,
         usage_scope: InferenceUsageScope,
-        catalog_revision: &str,
+        revisions: ExecutionRevisionRefs<'_>,
         secret: &CredentialExecutionSecret,
     ) -> Result<EmbeddingResponse, ProviderExecutionFailure> {
         let started_at = Instant::now();
@@ -460,7 +472,8 @@ impl ProviderExecutionClient {
                 route,
                 model,
                 usage_scope,
-                catalog_revision,
+                revisions.catalog,
+                revisions.route,
                 Some(binding_id),
             ),
             fingerprint: EmbeddingSpaceFingerprint {
@@ -499,13 +512,13 @@ impl ProviderExecutionClient {
     /// 返回值
     /// A normalized ranked response or a structured provider/contract failure.
     /// 返回归一化排序响应或结构化供应商与契约失败。
-    pub async fn execute_rerank(
+    pub(crate) async fn execute_rerank(
         &self,
         route: &ProviderExecutionRoute,
         model: &ConnectionModel,
         request: &RerankRequest,
         usage_scope: InferenceUsageScope,
-        catalog_revision: &str,
+        revisions: ExecutionRevisionRefs<'_>,
         secret: &CredentialExecutionSecret,
     ) -> Result<RerankResponse, ProviderExecutionFailure> {
         let started_at = Instant::now();
@@ -572,7 +585,8 @@ impl ProviderExecutionClient {
                 route,
                 model,
                 usage_scope,
-                catalog_revision,
+                revisions.catalog,
+                revisions.route,
                 Some(binding_id),
             ),
             fingerprint: RerankProfileFingerprint {
@@ -1001,6 +1015,7 @@ fn execution_route_snapshot(
     model: &ConnectionModel,
     usage_scope: InferenceUsageScope,
     catalog_revision: &str,
+    route_revision: &str,
     action_binding_id: Option<&str>,
 ) -> ExecutionRouteSnapshot {
     let (secondary_route_id, secondary_provider_name, secondary_endpoint_name) =
@@ -1017,6 +1032,7 @@ fn execution_route_snapshot(
         secondary_endpoint_name,
         capability_revision: model.capabilities.evidence_revision.clone(),
         catalog_revision: catalog_revision.to_string(),
+        route_revision: route_revision.to_string(),
         usage_scope,
     }
 }

@@ -16,14 +16,18 @@ rustls.workspace = true
 httpdate.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+rust_decimal.workspace = true
 sha2.workspace = true
 tokio.workspace = true
-tokio-tungstenite.workspace = true
 tokio-util.workspace = true
 uuid.workspace = true
 vulcan-ai-contract.workspace = true
 vulcan-ai-protocols.workspace = true
 vulcan-context.workspace = true
+vulcan-llm-core.workspace = true
+
+[dev-dependencies]
+tokio-tungstenite.workspace = true
 
 [lints]
 workspace = true

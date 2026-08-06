@@ -6,7 +6,9 @@ use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
 use crate::conversation_protocol::SessionConversationState;
 use futures_util::Stream;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::pin::Pin;
+use vulcan_ai_contract::{AiExecutionError, AiTransportKind};
 use vulcan_context::RuntimeProviderLoweringRepairEvent;
 use vulcan_core::types::{
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
@@ -26,6 +28,28 @@ pub(crate) enum ProviderStreamDelta {
     /// Final provider-specific HTTP request JSON captured immediately before network dispatch.
     /// 在网络发送前捕获到的最终 Provider 专用 HTTP 请求 JSON。
     WireRequest(Value),
+    /// Exact upstream transport facts observed by the physical dispatcher.
+    /// 真实分派器观察到的精确上游传输事实。
+    TransportObserved {
+        /// Exact selected transport.
+        /// 精确选中的传输。
+        transport: AiTransportKind,
+        /// Host timestamp immediately before dispatch.
+        /// 分派前的宿主时间戳。
+        dispatched_at_ms: i64,
+        /// Host timestamp when HTTP headers became available.
+        /// HTTP 响应头可用时的宿主时间戳。
+        headers_at_ms: Option<i64>,
+        /// Exact HTTP status when applicable.
+        /// 适用时的精确 HTTP 状态码。
+        http_status: Option<u16>,
+        /// Allowlisted upstream request identifier.
+        /// 允许列表内的上游请求标识。
+        provider_request_id: Option<String>,
+        /// Fixed-allowlist rate-limit response headers.
+        /// 固定允许列表内的限流响应头。
+        rate_limit_headers: BTreeMap<String, String>,
+    },
     /// Assistant thinking delta returned by the provider stream.
     /// Provider 流返回的助手思考增量。
     Thinking(String),
@@ -38,6 +62,9 @@ pub(crate) enum ProviderStreamDelta {
     /// Runtime event emitted from one streamed provider-side tool interaction.
     /// 来自某次 Provider 侧流式工具交互的运行时事件。
     RuntimeEvent(RuntimeEvent),
+    /// Latest accumulated normalized usage for the active physical Provider request.
+    /// 当前活动真实 Provider 请求的最新累计规范化用量。
+    UsageUpdated(CoreProviderUsageSnapshot),
     /// Terminal failure metadata for the currently active physical Provider request.
     /// 当前活动真实 Provider 请求的终态失败元数据。
     RequestFailed {
@@ -56,6 +83,9 @@ pub(crate) enum ProviderStreamDelta {
         /// Stable redacted failure category.
         /// 稳定脱敏失败类别。
         error_category: String,
+        /// Structured provider failure facts retained without parsing display text.
+        /// 无需解析展示文本即可保留的结构化供应商失败事实。
+        error: Option<Box<AiExecutionError>>,
     },
     /// Provider lowering repair, downgrade, or rejection emitted for runtime audit.
     /// 为运行时审计发出的 Provider 转换修复、降级或拒绝事件。
@@ -63,6 +93,16 @@ pub(crate) enum ProviderStreamDelta {
     /// Final canonical conversation state plus the latest successful provider usage from the current run.
     /// 当前运行结束后的最终规范会话状态，以及本次运行中最近一次成功 Provider 用量。
     FinalConversationState(SessionConversationState, Option<CoreProviderUsageSnapshot>),
+    /// Requests host-owned context compaction before the next provider turn can continue.
+    /// 请求宿主拥有的上下文压缩，以便继续下一次 Provider 回合。
+    ContextCompactionRequired {
+        /// Replay-safe canonical conversation state at the tool boundary.
+        /// 工具边界处可安全回放的规范会话状态。
+        conversation_state: SessionConversationState,
+        /// Verified context-budget diagnostic produced before dispatch.
+        /// 分派前生成的已验证上下文预算诊断。
+        reason: String,
+    },
 }
 
 /// Boxed provider stream used by the runtime to forward thinking and output deltas incrementally.

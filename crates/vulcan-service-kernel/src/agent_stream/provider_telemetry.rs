@@ -46,11 +46,18 @@ impl ProviderTelemetryHookGuard {
         app: Option<ServiceEventEmitter>,
     ) -> Self {
         let accounting_state = state.clone();
+        let native_usage_controller = controller_runtime.clone();
         // sender and receiver form one bounded low-frequency Effect queue per execution stream.
         // sender 与 receiver 为每条执行流构成一个有界低频 Effect 队列。
         let (sender, mut receiver) = tokio::sync::mpsc::channel(64);
         spawn_service_task(async move {
             while let Some(event) = receiver.recv().await {
+                if let Some(controller_runtime) = native_usage_controller.as_ref()
+                    && let Err(error) =
+                        persist_native_provider_usage_attempt(controller_runtime, &event).await
+                {
+                    eprintln!("[webui-service] native provider usage persistence failed: {error}");
+                }
                 dispatch_provider_request_telemetry_hook(&state, event).await;
             }
         });

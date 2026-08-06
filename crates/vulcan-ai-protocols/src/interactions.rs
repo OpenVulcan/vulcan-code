@@ -46,6 +46,7 @@ impl ProtocolProfile for GeminiInteractionsProfile {
         &self,
         request: &AiExecutionRequest,
     ) -> Result<EncodedWireRequest, ProtocolConversionError> {
+        crate::require_no_route_bound_provider_context(request, self.id())?;
         if !matches!(request.prompt_cache, PromptCachePolicy::ProviderDefault) {
             return Err(ProtocolConversionError::new(
                 "Gemini Interactions explicit cache projection is not registered.",
@@ -260,7 +261,7 @@ fn encode_interactions_input(
     }
     for message in messages {
         match message.role {
-            MessageRole::System => {
+            MessageRole::System | MessageRole::Developer => {
                 for item in &message.content {
                     match item {
                         ContentItem::Text { text } | ContentItem::Refusal { text } => {
@@ -384,6 +385,12 @@ fn encode_interactions_message(message: &AiMessage) -> Result<Vec<Value>, Protoc
 fn encode_interactions_resource(
     resource: &vulcan_ai_contract::ResourceReference,
 ) -> Result<Value, ProtocolConversionError> {
+    if resource.image_detail.is_some() {
+        return Err(ProtocolConversionError::new(format!(
+            "Gemini Interactions cannot preserve per-image detail for resource `{}`.",
+            resource.id
+        )));
+    }
     let media_type = resource.media_type.as_deref().ok_or_else(|| {
         ProtocolConversionError::new("Gemini Interactions resources require a MIME type.")
     })?;
@@ -429,6 +436,12 @@ fn encode_interactions_resource(
 fn encode_interactions_tools(
     request: &AiExecutionRequest,
 ) -> Result<Vec<Value>, ProtocolConversionError> {
+    if let Some(tool) = request.tools.iter().find(|tool| tool.strict) {
+        return Err(ProtocolConversionError::new(format!(
+            "Gemini Interactions has no registered strict-schema projector for tool `{}`.",
+            tool.name
+        )));
+    }
     let mut tools = request
         .tools
         .iter()
@@ -814,7 +827,7 @@ impl ProtocolStreamDecoder for GeminiInteractionsStreamDecoder {
                     .or_else(|| value.pointer("/metadata/total_usage"));
                 if let Some(usage) = usage {
                     events.push(AiStreamEvent::UsageUpdated {
-                        usage: interactions_usage(usage),
+                        usage: Box::new(interactions_usage(usage)),
                     });
                 }
                 self.terminal = true;
@@ -829,6 +842,8 @@ impl ProtocolStreamDecoder for GeminiInteractionsStreamDecoder {
                         subcategory: None,
                         stage: String::from("stream"),
                         http_status: None,
+                        transport: None,
+                        websocket_close_code: None,
                         upstream_code: value
                             .pointer("/interaction/error/code")
                             .and_then(Value::as_str)
@@ -911,13 +926,42 @@ fn required_u32(value: &Value, field: &str) -> Result<u32, ProtocolConversionErr
 /// Normalizes Interactions usage without deriving uncached input from cached totals.
 /// 归一化 Interactions 用量，且不从缓存总量推导非缓存输入。
 fn interactions_usage(value: &Value) -> RequestUsage {
-    let input_tokens = reported_usage(value, "total_input_tokens");
-    let cache_read_tokens = reported_usage(value, "total_cached_tokens");
+    let modern = value.get("total_input_tokens").is_some();
+    let input_tokens = reported_usage(
+        value,
+        if modern {
+            "total_input_tokens"
+        } else {
+            "input_tokens"
+        },
+    );
+    let cache_read_tokens = reported_usage(
+        value,
+        if modern {
+            "total_cached_tokens"
+        } else {
+            "cached_tokens"
+        },
+    );
     RequestUsage {
         input_tokens,
         uncached_input_tokens: derive_uncached_input(input_tokens, cache_read_tokens),
-        output_tokens: reported_usage(value, "total_output_tokens"),
-        reasoning_tokens: reported_usage(value, "total_thought_tokens"),
+        output_tokens: reported_usage(
+            value,
+            if modern {
+                "total_output_tokens"
+            } else {
+                "output_tokens"
+            },
+        ),
+        reasoning_tokens: reported_usage(
+            value,
+            if modern {
+                "total_thought_tokens"
+            } else {
+                "reasoning_tokens"
+            },
+        ),
         cache_read_tokens,
         total_tokens: reported_usage(value, "total_tokens"),
         ..RequestUsage::default()
@@ -993,6 +1037,7 @@ mod tests {
                 name: String::from("lookup"),
                 description: String::from("Looks up a value."),
                 input_schema: json!({"type": "object"}),
+                strict: false,
             }],
             native_tools: Vec::new(),
             tool_choice: Default::default(),
@@ -1128,6 +1173,13 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, AiStreamEvent::ResponseCompleted))
         );
+        assert!(completed.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::UsageUpdated { usage }
+                if matches!(usage.input_tokens, UsageValue::Known { value: 2, .. })
+                    && matches!(usage.output_tokens, UsageValue::Known { value: 3, .. })
+                    && matches!(usage.total_tokens, UsageValue::Known { value: 5, .. })
+        )));
         decoder.finish().expect("terminal stream should finish");
     }
 }

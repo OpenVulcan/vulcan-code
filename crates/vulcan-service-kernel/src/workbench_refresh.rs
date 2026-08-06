@@ -704,6 +704,17 @@ pub(crate) fn detached_task_event_trace_detail(event: &DetachedTaskRuntimeEvent)
             conversation_state.records.len(),
             conversation_state.messages.len()
         ),
+        DetachedTaskRuntimeEvent::ChildExecution(
+            ExecutionStreamEvent::ContextCompactionRequired {
+                session_id,
+                conversation_state,
+                reason,
+            },
+        ) => format!(
+            "session={session_id} records={} messages={} reason={reason}",
+            conversation_state.records.len(),
+            conversation_state.messages.len()
+        ),
         DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::Finished(report)) => {
             format!(
                 "provider_requests={} output_chars={} error={}",
@@ -768,6 +779,9 @@ pub(crate) fn detached_task_event_label(event: &DetachedTaskRuntimeEvent) -> &'s
         DetachedTaskRuntimeEvent::ChildExecution(
             ExecutionStreamEvent::ConversationCheckpoint { .. },
         ) => "child.checkpoint",
+        DetachedTaskRuntimeEvent::ChildExecution(
+            ExecutionStreamEvent::ContextCompactionRequired { .. },
+        ) => "child.context_compaction_required",
         DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::Finished(_)) => {
             "child.finished"
         }

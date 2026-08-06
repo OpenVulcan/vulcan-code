@@ -158,6 +158,7 @@ fn task_runtime_publishes_subagent_mailbox_events() {
             total_tokens: Some(160),
             cached_input_tokens: Some(40),
             cache_creation_input_tokens: None,
+            ..vulcan_core::types::ProviderUsageSnapshot::default()
         }),
     );
     let completed_outcome = TaskExecutionOutcome {
@@ -1541,6 +1542,7 @@ async fn wait_agent_returns_consumed_child_feedback() {
             total_tokens: Some(160),
             cached_input_tokens: Some(40),
             cache_creation_input_tokens: None,
+            ..vulcan_core::types::ProviderUsageSnapshot::default()
         }),
     );
     let outcome = TaskExecutionOutcome {
@@ -1950,6 +1952,7 @@ fn task_invocation_result_omits_embedded_conversation_state() {
             total_tokens: Some(160),
             cached_input_tokens: Some(40),
             cache_creation_input_tokens: None,
+            ..vulcan_core::types::ProviderUsageSnapshot::default()
         }),
     );
     let outcome = TaskExecutionOutcome {

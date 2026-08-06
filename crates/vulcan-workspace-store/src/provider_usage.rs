@@ -15,7 +15,7 @@ pub fn latest_provider_usage_from_conversation_state(
         .rev()
         .find_map(|message| match &message.payload {
             SessionConversationPayload::Assistant { usage, .. } => usage
-                .as_ref()
+                .as_deref()
                 .filter(|snapshot| snapshot.has_any_tokens())
                 .cloned(),
             _ => None,
@@ -90,6 +90,7 @@ mod tests {
             total_tokens: Some(320),
             cached_input_tokens: None,
             cache_creation_input_tokens: None,
+            ..ProviderUsageSnapshot::default()
         };
         let latest_usage = ProviderUsageSnapshot {
             input_tokens: Some(1024),
@@ -99,6 +100,7 @@ mod tests {
             total_tokens: Some(1408),
             cached_input_tokens: Some(512),
             cache_creation_input_tokens: None,
+            ..ProviderUsageSnapshot::default()
         };
         let state = SessionConversationState {
             messages: vec![
@@ -110,7 +112,7 @@ mod tests {
                         provider_message_id: None,
                         provider_message_state: None,
                         tool_calls: Vec::new(),
-                        usage: Some(first_usage),
+                        usage: Some(Box::new(first_usage)),
                     },
                 },
                 SessionConversationMessage {
@@ -121,7 +123,7 @@ mod tests {
                         provider_message_id: None,
                         provider_message_state: None,
                         tool_calls: Vec::new(),
-                        usage: Some(latest_usage.clone()),
+                        usage: Some(Box::new(latest_usage.clone())),
                     },
                 },
             ],
@@ -147,6 +149,7 @@ mod tests {
             total_tokens: Some(1728),
             cached_input_tokens: Some(1024),
             cache_creation_input_tokens: None,
+            ..ProviderUsageSnapshot::default()
         };
         let state = SessionConversationState {
             messages: vec![
@@ -158,7 +161,7 @@ mod tests {
                         provider_message_id: None,
                         provider_message_state: None,
                         tool_calls: Vec::new(),
-                        usage: Some(valid_usage.clone()),
+                        usage: Some(Box::new(valid_usage.clone())),
                     },
                 },
                 SessionConversationMessage {
@@ -169,7 +172,7 @@ mod tests {
                         provider_message_id: None,
                         provider_message_state: None,
                         tool_calls: Vec::new(),
-                        usage: Some(ProviderUsageSnapshot::default()),
+                        usage: Some(Box::new(ProviderUsageSnapshot::default())),
                     },
                 },
             ],
@@ -195,6 +198,7 @@ mod tests {
             total_tokens: Some(2816),
             cached_input_tokens: Some(1024),
             cache_creation_input_tokens: Some(256),
+            ..ProviderUsageSnapshot::default()
         };
 
         let raw = serialize_provider_usage_to_json(Some(&usage))
@@ -220,6 +224,7 @@ mod tests {
             total_tokens: Some(4608),
             cached_input_tokens: None,
             cache_creation_input_tokens: None,
+            ..ProviderUsageSnapshot::default()
         };
 
         assert_eq!(calibrated_input_token_estimate(1024, Some(&usage)), 4096);
@@ -239,6 +244,7 @@ mod tests {
             total_tokens: Some(1408),
             cached_input_tokens: None,
             cache_creation_input_tokens: None,
+            ..ProviderUsageSnapshot::default()
         };
 
         assert_eq!(observed_input_tokens_from_usage(Some(&usage)), Some(1024));

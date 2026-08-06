@@ -1074,6 +1074,7 @@ fn task_session_execution_report_fast_path_projects_live_usage_stats() {
         total_tokens: Some(31_311),
         cached_input_tokens: Some(5_888),
         cache_creation_input_tokens: None,
+        ..ProviderUsageSnapshot::default()
     };
     let report = ExecutionRunReport {
         session_id: task_session_id,

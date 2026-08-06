@@ -338,7 +338,7 @@ fn terminal_assistant_messages_accept_usage(
         return false;
     };
     if usage.is_none() {
-        *usage = report.last_successful_provider_usage.clone();
+        *usage = report.last_successful_provider_usage.clone().map(Box::new);
     }
     true
 }
@@ -379,7 +379,7 @@ fn append_terminal_assistant_text_message(
                 reasoning: String::new(),
                 provider_message_id: None,
                 provider_message_state: None,
-                usage: report.last_successful_provider_usage.clone(),
+                usage: report.last_successful_provider_usage.clone().map(Box::new),
                 tool_calls: Vec::new(),
             },
         },

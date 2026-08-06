@@ -335,26 +335,24 @@ fn run_user_turn_streaming_intervention_waits_for_full_tool_batch() {
 
         assert_eq!(result.provider_turns_executed, 2);
         assert_eq!(result.tool_calls_processed, 2);
-        // The first Provider response, each tool result, the intervention, and the second Provider
-        // response each have their own checkpoint boundary.
-        // 首次 Provider 响应、每个工具结果、干预消息和第二次 Provider 响应都各自拥有同步边界。
-        assert_eq!(checkpoints.len(), 5);
+        // The first Provider response, complete tool batch, intervention, and second Provider response
+        // each have one checkpoint boundary; no partial tool batch is externally visible.
+        // 首次 Provider 响应、完整工具批次、干预消息和第二次 Provider 响应各有一个同步边界；外部看不到部分工具批次。
+        assert_eq!(checkpoints.len(), 4);
+        assert!(checkpoints[1].messages.iter().any(|message| matches!(
+            &message.payload,
+            ConversationPayload::ToolResult { tool_call_id, .. }
+                if tool_call_id.as_deref() == Some("call-1")
+        )));
         assert!(matches!(
             checkpoints[1].messages.last(),
-            Some(ConversationMessage {
-                payload: ConversationPayload::ToolResult { tool_call_id, .. },
-                ..
-            }) if tool_call_id.as_deref() == Some("call-1")
-        ));
-        assert!(matches!(
-            checkpoints[2].messages.last(),
             Some(ConversationMessage {
                 payload: ConversationPayload::ToolResult { tool_call_id, .. },
                 ..
             }) if tool_call_id.as_deref() == Some("call-2")
         ));
         assert!(matches!(
-            checkpoints[3].messages.last(),
+            checkpoints[2].messages.last(),
             Some(ConversationMessage {
                 payload: ConversationPayload::UserText { text, .. },
                 ..

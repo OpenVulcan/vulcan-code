@@ -1800,6 +1800,7 @@ export type TranslationKey =
   | "settings.providerPromotion.sponsoredDisclosure"
   | "settings.modelList"
   | "settings.providerRetry"
+  | "settings.providerUsage"
   | "settings.aiVendors"
   | "settings.aiWebSearch"
   | "settings.aiWebExtract"
@@ -1821,6 +1822,7 @@ export type TranslationKey =
   | "settings.credentialManagement.description"
   | "settings.modelList.description"
   | "settings.providerRetry.description"
+  | "settings.providerUsage.description"
   | "settings.aiVendors.description"
   | "settings.aiWebSearch.description"
   | "settings.aiWebExtract.description"
@@ -1935,10 +1937,10 @@ export type TranslationKey =
   | "settings.customProviders.baseUrl"
   | "settings.customProviders.protocol"
   | "settings.customProviders.codexCapabilities"
-  | "settings.customProviders.codexWebsocket"
-  | "settings.customProviders.codexWebsocketHint"
   | "settings.customProviders.codexRemoteCompaction"
   | "settings.customProviders.codexRemoteCompactionHint"
+  | "settings.customProviders.codexWebsocket"
+  | "settings.customProviders.codexWebsocketHint"
   | "settings.customProviders.authentication"
   | "settings.customProviders.discoveryMode"
   | "settings.customProviders.discoveryStandard"
@@ -4379,6 +4381,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerPromotion.sponsoredDisclosure": "赞助合作入口；合作关系不会影响模型排序或调用路由。",
     "settings.modelList": "模型列表",
     "settings.providerRetry": "请求重试",
+    "settings.providerUsage": "用量与计费",
     "settings.aiVendors": "能力供应商",
     "settings.aiWebSearch": "网页搜索",
     "settings.aiWebExtract": "网页抓取",
@@ -4400,6 +4403,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.credentialManagement.description": "管理模型账号、调用协议、用量与默认凭据。",
     "settings.modelList.description": "按供应商查看已启用模型，并核对当前工作台模型。",
     "settings.providerRetry.description": "配置普通错误与 429 限流的重试次数、等待间隔和递增规则。",
+    "settings.providerUsage.description": "查看原生出口侧用量、费用来源、覆盖率与账户额度快照。",
     "settings.aiVendors.description": "多个语义 AI 工具共用的能力供应商与路由目标。",
     "settings.aiWebSearch.description": "网页搜索能力的启用状态与可用目标。",
     "settings.aiWebExtract.description": "网页抓取能力的启用状态与可用目标。",
@@ -4514,10 +4518,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customProviders.baseUrl": "基础 URL",
     "settings.customProviders.protocol": "调用协议",
     "settings.customProviders.codexCapabilities": "Codex Responses 能力",
-    "settings.customProviders.codexWebsocket": "优先使用 WebSocket",
-    "settings.customProviders.codexWebsocketHint": "对端不支持时，在产生语义输出前回退到 HTTP。",
     "settings.customProviders.codexRemoteCompaction": "启用远端上下文压缩",
     "settings.customProviders.codexRemoteCompactionHint": "调用 /responses/compact；仅在未产生语义输出或副作用且可安全重试时回退到本地压缩。",
+    "settings.customProviders.codexWebsocket": "尝试 Responses WebSocket",
+    "settings.customProviders.codexWebsocketHint": "将此供应商标记为未验证 WS 覆盖；失败时仅在安全边界内回退 HTTP/SSE。",
     "settings.customProviders.authentication": "鉴权请求头",
     "settings.customProviders.discoveryMode": "模型目录",
     "settings.customProviders.discoveryStandard": "标准 /models",
@@ -6955,6 +6959,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.providerPromotion.sponsoredDisclosure": "Sponsored entry; the relationship never changes model ranking or routing.",
     "settings.modelList": "Model list",
     "settings.providerRetry": "Request retry",
+    "settings.providerUsage": "Usage and billing",
     "settings.aiVendors": "Capability vendors",
     "settings.aiWebSearch": "Web search",
     "settings.aiWebExtract": "Web extract",
@@ -6976,6 +6981,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.credentialManagement.description": "Manage model accounts, protocols, usage, and default credentials.",
     "settings.modelList.description": "Review enabled models by provider and the active workbench model.",
     "settings.providerRetry.description": "Configure retry counts, wait intervals, and backoff rules for ordinary failures and 429 rate limits.",
+    "settings.providerUsage.description": "Inspect native egress usage, cost provenance, coverage, and account quota snapshots.",
     "settings.aiVendors.description": "Capability vendors and route targets shared by semantic AI tools.",
     "settings.aiWebSearch.description": "Web-search capability state and available targets.",
     "settings.aiWebExtract.description": "Web-extraction capability state and available targets.",
@@ -7090,10 +7096,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customProviders.baseUrl": "Base URL",
     "settings.customProviders.protocol": "Calling protocol",
     "settings.customProviders.codexCapabilities": "Codex Responses capabilities",
-    "settings.customProviders.codexWebsocket": "Prefer WebSocket",
-    "settings.customProviders.codexWebsocketHint": "Falls back to HTTP before semantic output when unsupported.",
     "settings.customProviders.codexRemoteCompaction": "Enable remote context compaction",
     "settings.customProviders.codexRemoteCompactionHint": "Uses /responses/compact and falls back to local compaction on safe failures.",
+    "settings.customProviders.codexWebsocket": "Try Responses WebSocket",
+    "settings.customProviders.codexWebsocketHint": "Marks this provider as an unverified WS override and falls back to HTTP/SSE only at safe boundaries.",
     "settings.customProviders.authentication": "Authentication header",
     "settings.customProviders.discoveryMode": "Model catalog",
     "settings.customProviders.discoveryStandard": "Standard /models",

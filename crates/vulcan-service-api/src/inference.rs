@@ -1,6 +1,7 @@
 //! Versioned loopback inference service transport contracts.
 //! 版本化回环推理服务传输契约。
 
+use crate::ResponsesCreateRequest;
 use reqwest::{Method, StatusCode, Url, header};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
@@ -10,8 +11,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use vulcan_ai_contract::{
-    EmbeddingRequest, EmbeddingResponse, InferenceCapabilitySnapshot, LlmInferenceRequest,
-    LlmInferenceResponse, RerankRequest, RerankResponse,
+    EmbeddingRequest, EmbeddingResponse, InferenceCapabilitySnapshot, RerankRequest, RerankResponse,
 };
 
 /// Identifies the first controlled loopback inference API version.
@@ -127,6 +127,23 @@ pub struct InferenceServiceHealthSnapshot {
 /// 为传输无关分派选择一个封闭推理 HTTP 操作。
 #[derive(Debug, Clone)]
 pub enum InferenceServiceRequest {
+    /// Lists consumer-authorized routable conversation models.
+    /// 列出消费者已授权且可路由的对话模型。
+    ListModels,
+    /// Starts one standard Responses Create execution for SSE delivery.
+    /// 启动一个用于 SSE 投递的标准 Responses Create 执行。
+    StartResponse {
+        /// Validated standard request body.
+        /// 已校验的标准请求体。
+        request: ResponsesCreateRequest,
+    },
+    /// Executes and aggregates one standard Responses Create request.
+    /// 执行并聚合一个标准 Responses Create 请求。
+    CreateResponse {
+        /// Validated standard request body.
+        /// 已校验的标准请求体。
+        request: ResponsesCreateRequest,
+    },
     /// Reads one authorized consumer capability snapshot.
     /// 读取一个已授权消费者能力快照。
     Capabilities {
@@ -136,32 +153,6 @@ pub enum InferenceServiceRequest {
     },
     /// Starts one restricted LLM execution.
     /// 启动一项受限 LLM 执行。
-    StartLlm {
-        /// Closed restricted LLM request.
-        /// 封闭受限 LLM 请求。
-        request: LlmInferenceRequest,
-    },
-    /// Executes and aggregates one restricted LLM request.
-    /// 执行并聚合一项受限 LLM 请求。
-    ExecuteLlm {
-        /// Closed restricted LLM request.
-        /// 封闭受限 LLM 请求。
-        request: LlmInferenceRequest,
-    },
-    /// Reads caller-owned execution status.
-    /// 读取调用方所有的执行状态。
-    LlmStatus {
-        /// Stable execution identifier.
-        /// 稳定执行标识。
-        execution_id: String,
-    },
-    /// Cancels one caller-owned execution.
-    /// 取消一项调用方所有的执行。
-    CancelLlm {
-        /// Stable execution identifier.
-        /// 稳定执行标识。
-        execution_id: String,
-    },
     /// Creates one complete embedding batch.
     /// 创建一批完整向量。
     CreateEmbeddings {
@@ -218,24 +209,6 @@ pub struct InferenceServiceErrorEnvelope {
     /// Controlled human-readable diagnostic.
     /// 受控人类可读诊断。
     pub message: String,
-}
-
-/// Carries the stable identifier returned when a restricted LLM execution starts.
-/// 承载受限 LLM 执行启动后返回的稳定标识。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InferenceServiceLlmStartResult {
-    /// Stable host execution identifier.
-    /// 稳定宿主执行标识。
-    pub execution_id: String,
-}
-
-/// Carries the result of an explicit caller-owned cancellation request.
-/// 承载一次显式调用方所有取消请求的结果。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InferenceServiceCancelResult {
-    /// Whether the host accepted cancellation for the owned execution.
-    /// 宿主是否接受了所属执行的取消请求。
-    pub cancelled: bool,
 }
 
 /// Reports one controlled loopback inference client failure.
@@ -536,90 +509,6 @@ impl InferenceServiceClient {
             .await
     }
 
-    /// Starts one restricted LLM execution without waiting for provider completion.
-    /// 启动一项受限 LLM 执行且不等待供应商完成。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `request` must name the same consumer profile as this discovery grant.
-    /// `request` 必须声明与当前发现授权相同的消费者配置档。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The stable execution identifier used for status, events, and cancellation.
-    /// 返回用于状态、事件与取消的稳定执行标识。
-    pub async fn start_llm(
-        &self,
-        request: &LlmInferenceRequest,
-    ) -> Result<InferenceServiceLlmStartResult, InferenceServiceClientError> {
-        self.validate_request_profile(request.consumer_profile_id.as_str())?;
-        self.request(Method::POST, "inference/v1/llm/start", Some(request))
-            .await
-    }
-
-    /// Executes and aggregates one restricted LLM request.
-    /// 执行并聚合一项受限 LLM 请求。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `request` is a closed provider-neutral request for the bound profile.
-    /// `request` 是绑定配置档的一项封闭供应商无关请求。
-    ///
-    /// # Returns
-    /// 返回值
-    /// A completed response with the frozen route and normalized usage.
-    /// 返回包含冻结路由与归一化用量的完整响应。
-    pub async fn execute_llm(
-        &self,
-        request: &LlmInferenceRequest,
-    ) -> Result<LlmInferenceResponse, InferenceServiceClientError> {
-        self.validate_request_profile(request.consumer_profile_id.as_str())?;
-        self.request(Method::POST, "inference/v1/llm/execute", Some(request))
-            .await
-    }
-
-    /// Reads one caller-owned LLM execution snapshot as the versioned wire value.
-    /// 以版本化 Wire 值读取一项调用方所有的 LLM 执行快照。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `execution_id` is the identifier returned by `start_llm`.
-    /// `execution_id` 是 `start_llm` 返回的标识。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The exact service snapshot value, allowing clients in other languages to mirror it.
-    /// 返回精确服务快照值，便于其他语言客户端镜像。
-    pub async fn llm_status(
-        &self,
-        execution_id: &str,
-    ) -> Result<serde_json::Value, InferenceServiceClientError> {
-        let path = self.llm_execution_path(execution_id, None)?;
-        self.request(Method::GET, path.as_str(), Option::<&()>::None)
-            .await
-    }
-
-    /// Cancels one caller-owned LLM execution.
-    /// 取消一项调用方所有的 LLM 执行。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `execution_id` is the stable identifier returned by `start_llm`.
-    /// `execution_id` 是 `start_llm` 返回的稳定标识。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The host acknowledgement for the exact owned execution.
-    /// 返回宿主对该精确所属执行的确认。
-    pub async fn cancel_llm(
-        &self,
-        execution_id: &str,
-    ) -> Result<InferenceServiceCancelResult, InferenceServiceClientError> {
-        let path = self.llm_execution_path(execution_id, Some("cancel"))?;
-        self.request(Method::POST, path.as_str(), Option::<&()>::None)
-            .await
-    }
-
     /// Creates one complete embedding batch through the configured profile.
     /// 通过已配置档创建一批完整向量。
     ///
@@ -662,32 +551,6 @@ impl InferenceServiceClient {
             .await
     }
 
-    /// Returns the authenticated WebSocket URL for one owned LLM event stream.
-    /// 返回一项所属 LLM 事件流的已鉴权 WebSocket URL。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `execution_id` is the exact identifier returned by `start_llm`.
-    /// `execution_id` 是 `start_llm` 返回的精确标识。
-    ///
-    /// # Returns
-    /// 返回值
-    /// A loopback WebSocket URL plus the bearer token that must be sent as an Authorization header.
-    /// 返回回环 WebSocket URL，以及必须通过 Authorization 请求头发送的 Bearer Token。
-    pub fn llm_events_endpoint(
-        &self,
-        execution_id: &str,
-    ) -> Result<(Url, &str), InferenceServiceClientError> {
-        let path = self.llm_execution_path(execution_id, Some("events"))?;
-        let mut url = self.endpoint(path.as_str())?;
-        url.set_scheme("ws").map_err(|_| {
-            InferenceServiceClientError::InvalidContract(String::from(
-                "Inference event URL could not switch to the WebSocket scheme.",
-            ))
-        })?;
-        Ok((url, self.access_token.as_str()))
-    }
-
     /// Validates that a closed request cannot escape the discovery-bound profile.
     /// 验证封闭请求不能逃逸发现绑定配置档。
     ///
@@ -711,36 +574,6 @@ impl InferenceServiceClient {
             )));
         }
         Ok(())
-    }
-
-    /// Builds one execution-scoped path without permitting path injection.
-    /// 构建一条执行作用域路径且不允许路径注入。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `execution_id` is one opaque identifier and `suffix` selects one closed child operation.
-    /// `execution_id` 是不透明标识，`suffix` 选择一个封闭子操作。
-    ///
-    /// # Returns
-    /// 返回值
-    /// A relative API path containing one encoded identifier segment.
-    /// 返回包含一个已编码标识段的相对 API 路径。
-    fn llm_execution_path(
-        &self,
-        execution_id: &str,
-        suffix: Option<&str>,
-    ) -> Result<String, InferenceServiceClientError> {
-        if execution_id.trim().is_empty() {
-            return Err(InferenceServiceClientError::InvalidContract(String::from(
-                "Inference execution identifier cannot be empty.",
-            )));
-        }
-        let mut path = format!("inference/v1/llm/{}", encode_path_segment(execution_id));
-        if let Some(suffix) = suffix {
-            path.push('/');
-            path.push_str(suffix);
-        }
-        Ok(path)
     }
 
     /// Sends one versioned authenticated request and decodes its exact typed result.
@@ -1050,22 +883,5 @@ mod inference_client_tests {
     #[test]
     fn path_segment_encoding_blocks_injection() {
         assert_eq!(encode_path_segment("execution/a b"), "execution%2Fa%20b");
-    }
-
-    /// Verifies the event endpoint preserves loopback scope and changes only its scheme.
-    /// 验证事件端点保留回环作用域且仅切换其 Scheme。
-    #[test]
-    fn event_endpoint_is_loopback_websocket() {
-        let client =
-            InferenceServiceClient::from_discovery(reqwest::Client::new(), discovery_fixture())
-                .expect("valid loopback discovery");
-        let (url, token) = client
-            .llm_events_endpoint("execution/a")
-            .expect("valid event endpoint");
-        assert_eq!(
-            url.as_str(),
-            "ws://127.0.0.1:17891/inference/v1/llm/execution%2Fa/events"
-        );
-        assert_eq!(token, "test-token");
     }
 }

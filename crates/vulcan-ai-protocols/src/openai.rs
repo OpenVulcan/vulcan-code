@@ -9,6 +9,22 @@ use vulcan_ai_contract::{
     ToolChoicePolicy, is_replayable_codex_responses_item,
 };
 
+/// Wraps one northbound OpenAI reasoning payload with explicit replay provenance.
+/// 使用显式重放来源封装一项北向 OpenAI 推理载荷。
+///
+/// # Parameters
+/// 参数
+/// `signature` is the opaque `encrypted_content` value received from a standard Responses client.
+/// `signature` 是从标准 Responses 客户端收到的不透明 `encrypted_content` 值。
+///
+/// # Returns
+/// 返回值
+/// A replay-safe signature, or `None` when the value violates the closed provenance format.
+/// 返回可安全重放的签名；值违反封闭来源格式时返回 `None`。
+pub fn wrap_openai_reasoning_signature(signature: &str) -> Option<String> {
+    crate::wrap_provider_signature(crate::SIGNATURE_PROVIDER_OPENAI, signature)
+}
+
 /// Stable OpenAI Chat Completions profile identifier.
 /// 稳定的 OpenAI Chat Completions Profile 标识。
 pub const OPENAI_CHAT_PROFILE_ID: &str = "openai-chat-completions.v1";
@@ -18,6 +34,14 @@ pub const OPENAI_RESPONSES_PROFILE_ID: &str = "openai-responses.v1";
 /// Stable OpenAI Codex subscription Responses profile identifier.
 /// 稳定的 OpenAI Codex 订阅 Responses Profile 标识。
 pub const OPENAI_CODEX_RESPONSES_PROFILE_ID: &str = "openai-codex-responses.v1";
+
+/// Official Codex client originator used by the adopted Responses transport.
+/// 已采纳 Responses 传输所使用的官方 Codex 客户端来源标识。
+const CODEX_RESPONSES_ORIGINATOR: &str = "codex_cli_rs";
+/// Frozen upstream Codex user agent with Vulcan attribution.
+/// 冻结的上游 Codex 用户代理，并保留 Vulcan 归属。
+const CODEX_RESPONSES_USER_AGENT: &str =
+    "codex_cli_rs/0.144.1 (Windows 11; x86_64) vulcan-code/0.1";
 
 /// Normalizes an OpenAI-compatible usage object through the same projector used by streaming responses.
 /// 通过与流式响应相同的投影器规范化 OpenAI 兼容用量对象。
@@ -229,13 +253,26 @@ impl ProtocolProfile for OpenAiCodexResponsesProfile {
             project_responses_reasoning_output(request.reasoning_output, &mut body["reasoning"])?;
         }
         project_responses_request_controls(request, &mut body)?;
-        let mut headers = std::collections::BTreeMap::new();
+        let mut headers = std::collections::BTreeMap::from([
+            (
+                String::from("originator"),
+                String::from(CODEX_RESPONSES_ORIGINATOR),
+            ),
+            (
+                String::from("user-agent"),
+                String::from(CODEX_RESPONSES_USER_AGENT),
+            ),
+        ]);
         if let Some(cache_scope_id) = request.cache_scope_id.as_deref() {
             body["prompt_cache_key"] = Value::String(cache_scope_id.to_string());
             body["client_metadata"] = json!({
                 "session_id": cache_scope_id,
                 "thread_id": cache_scope_id,
             });
+            headers.insert(
+                String::from("x-client-request-id"),
+                cache_scope_id.to_string(),
+            );
             headers.insert(String::from("session-id"), cache_scope_id.to_string());
             // Root Vulcan task sessions map to both official Codex session and thread identities.
             // Vulcan 根任务会话同时映射为官方 Codex 的会话身份与线程身份。
@@ -520,6 +557,7 @@ fn require_default_cache_policy(
 /// Encodes public messages into OpenAI-compatible messages.
 /// 将公共消息编码为 OpenAI 兼容消息。
 fn encode_messages(request: &AiExecutionRequest) -> Result<Vec<Value>, ProtocolConversionError> {
+    crate::require_no_route_bound_provider_context(request, "openai.chat_completions")?;
     request
         .messages
         .iter()
@@ -545,6 +583,7 @@ fn encode_messages(request: &AiExecutionRequest) -> Result<Vec<Value>, ProtocolC
             }
             let role = match message.role {
                 MessageRole::System => "system",
+                MessageRole::Developer => "developer",
                 MessageRole::User => "user",
                 MessageRole::Assistant => "assistant",
                 MessageRole::Tool => {
@@ -641,7 +680,7 @@ fn encode_responses_input(
                         input.push(json!({
                             "type": "function_call_output",
                             "call_id": result.call_id,
-                            "output": encode_json_or_string(&result.content)?,
+                            "output": encode_responses_tool_output(&result.content)?,
                         }));
                     } else {
                         return Err(ProtocolConversionError::new(
@@ -715,14 +754,15 @@ fn encode_responses_input(
                     }));
                 }
             }
-            MessageRole::System | MessageRole::User => {
+            MessageRole::System | MessageRole::Developer | MessageRole::User => {
                 if message.role == MessageRole::System && !include_system_messages {
                     continue;
                 }
-                let role = if message.role == MessageRole::System {
-                    "system"
-                } else {
-                    "user"
+                let role = match message.role {
+                    MessageRole::System => "system",
+                    MessageRole::Developer => "developer",
+                    MessageRole::User => "user",
+                    MessageRole::Assistant | MessageRole::Tool => unreachable!(),
                 };
                 let mut content = Vec::new();
                 for item in &message.content {
@@ -737,14 +777,8 @@ fn encode_responses_input(
                             "type": "input_text",
                             "text": encode_json_or_string(value)?,
                         })),
-                        ContentItem::Resource { resource }
-                            if message.role == MessageRole::User
-                                && resource.kind == vulcan_ai_contract::ResourceKind::Image =>
-                        {
-                            content.push(json!({
-                                "type": "input_image",
-                                "image_url": require_resource_url(resource)?,
-                            }))
+                        ContentItem::Resource { resource } if message.role == MessageRole::User => {
+                            content.push(encode_responses_resource(resource)?)
                         }
                         _ => {
                             return Err(ProtocolConversionError::new(
@@ -758,6 +792,86 @@ fn encode_responses_input(
         }
     }
     Ok(input)
+}
+
+/// Encodes one standard Responses image or file input without losing its source-field semantics.
+/// 编码一项标准 Responses 图片或文件输入，且不丢失其来源字段语义。
+fn encode_responses_resource(
+    resource: &vulcan_ai_contract::ResourceReference,
+) -> Result<Value, ProtocolConversionError> {
+    use vulcan_ai_contract::{ResourceKind, ResourceSourceKind};
+    match resource.kind {
+        ResourceKind::Image => {
+            let mut part = match resource.source_kind {
+                ResourceSourceKind::ProviderFileId => json!({
+                    "type": "input_image",
+                    "file_id": resource.id,
+                }),
+                ResourceSourceKind::HostResolved
+                | ResourceSourceKind::RemoteUrl
+                | ResourceSourceKind::InlineData => json!({
+                    "type": "input_image",
+                    "image_url": require_resource_url(resource)?,
+                }),
+            };
+            if let Some(detail) = resource.image_detail {
+                part["detail"] = serde_json::to_value(detail).map_err(|error| {
+                    ProtocolConversionError::new(format!(
+                        "OpenAI Responses image detail could not be encoded: {error}"
+                    ))
+                })?;
+            }
+            Ok(part)
+        }
+        ResourceKind::File => match resource.source_kind {
+            ResourceSourceKind::ProviderFileId => Ok(json!({
+                "type": "input_file",
+                "file_id": resource.id,
+            })),
+            ResourceSourceKind::RemoteUrl => Ok(json!({
+                "type": "input_file",
+                "file_url": require_resource_url(resource)?,
+            })),
+            ResourceSourceKind::InlineData => {
+                let file_name = resource.file_name.as_deref().ok_or_else(|| {
+                    ProtocolConversionError::new(format!(
+                        "Inline file resource `{}` is missing its required filename.",
+                        resource.id
+                    ))
+                })?;
+                Ok(json!({
+                    "type": "input_file",
+                    "file_data": require_resource_url(resource)?,
+                    "filename": file_name,
+                }))
+            }
+            ResourceSourceKind::HostResolved => {
+                let url = require_resource_url(resource)?;
+                if url.starts_with("data:") {
+                    let file_name = resource.file_name.as_deref().ok_or_else(|| {
+                        ProtocolConversionError::new(format!(
+                            "Host-resolved inline file resource `{}` is missing its filename.",
+                            resource.id
+                        ))
+                    })?;
+                    Ok(json!({
+                        "type": "input_file",
+                        "file_data": url,
+                        "filename": file_name,
+                    }))
+                } else {
+                    Ok(json!({
+                        "type": "input_file",
+                        "file_url": url,
+                    }))
+                }
+            }
+        },
+        ResourceKind::Audio | ResourceKind::Video => Err(ProtocolConversionError::new(format!(
+            "OpenAI Responses has no registered {:?} input projector.",
+            resource.kind
+        ))),
+    }
 }
 
 /// Validates one Responses continuation against the immutable request and protocol profile.
@@ -863,13 +977,29 @@ fn encode_codex_instructions(
 fn encode_chat_resource(
     resource: &vulcan_ai_contract::ResourceReference,
 ) -> Result<Value, ProtocolConversionError> {
-    let url = require_resource_url(resource)?;
     match resource.kind {
-        vulcan_ai_contract::ResourceKind::Image => Ok(json!({
-            "type": "image_url",
-            "image_url": { "url": url },
-        })),
+        vulcan_ai_contract::ResourceKind::Image => {
+            if resource.source_kind == vulcan_ai_contract::ResourceSourceKind::ProviderFileId {
+                return Err(ProtocolConversionError::new(format!(
+                    "OpenAI Chat-compatible image input cannot represent provider file id `{}`.",
+                    resource.id
+                )));
+            }
+            let mut image_url = json!({ "url": require_resource_url(resource)? });
+            if let Some(detail) = resource.image_detail {
+                image_url["detail"] = serde_json::to_value(detail).map_err(|error| {
+                    ProtocolConversionError::new(format!(
+                        "OpenAI Chat image detail could not be encoded: {error}"
+                    ))
+                })?;
+            }
+            Ok(json!({
+                "type": "image_url",
+                "image_url": image_url,
+            }))
+        }
         vulcan_ai_contract::ResourceKind::Audio => {
+            let url = require_resource_url(resource)?;
             let (_, data) = parse_data_url(url)?;
             let media_type = resource.media_type.as_deref().ok_or_else(|| {
                 ProtocolConversionError::new("OpenAI audio input requires a MIME type.")
@@ -882,25 +1012,55 @@ fn encode_chat_resource(
                 },
             }))
         }
-        vulcan_ai_contract::ResourceKind::Video => Ok(json!({
-            "type": "video_url",
-            "video_url": { "url": url },
-        })),
-        vulcan_ai_contract::ResourceKind::File => {
-            let filename = resource
-                .local_path
-                .as_deref()
-                .and_then(|path| std::path::Path::new(path).file_name())
-                .and_then(|name| name.to_str())
-                .unwrap_or(resource.id.as_str());
+        vulcan_ai_contract::ResourceKind::Video => {
+            let url = require_resource_url(resource)?;
             Ok(json!({
-                "type": "file",
-                "file": {
-                    "filename": filename,
-                    "file_data": url,
-                },
+                "type": "video_url",
+                "video_url": { "url": url },
             }))
         }
+        vulcan_ai_contract::ResourceKind::File => match resource.source_kind {
+            vulcan_ai_contract::ResourceSourceKind::ProviderFileId => Ok(json!({
+                "type": "file",
+                "file": { "file_id": resource.id },
+            })),
+            vulcan_ai_contract::ResourceSourceKind::InlineData
+            | vulcan_ai_contract::ResourceSourceKind::HostResolved
+                if require_resource_url(resource)?.starts_with("data:") =>
+            {
+                let filename = resource
+                    .file_name
+                    .as_deref()
+                    .or_else(|| {
+                        resource
+                            .local_path
+                            .as_deref()
+                            .and_then(|path| std::path::Path::new(path).file_name())
+                            .and_then(|name| name.to_str())
+                    })
+                    .ok_or_else(|| {
+                        ProtocolConversionError::new(format!(
+                            "Inline Chat file resource `{}` is missing its filename.",
+                            resource.id
+                        ))
+                    })?;
+                Ok(json!({
+                    "type": "file",
+                    "file": {
+                        "filename": filename,
+                        "file_data": require_resource_url(resource)?,
+                    },
+                }))
+            }
+            vulcan_ai_contract::ResourceSourceKind::RemoteUrl
+            | vulcan_ai_contract::ResourceSourceKind::InlineData
+            | vulcan_ai_contract::ResourceSourceKind::HostResolved => {
+                Err(ProtocolConversionError::new(format!(
+                    "OpenAI Chat-compatible file input cannot represent remote URL resource `{}`.",
+                    resource.id
+                )))
+            }
+        },
     }
 }
 
@@ -992,6 +1152,25 @@ fn encode_json_or_string(value: &Value) -> Result<String, ProtocolConversionErro
     }
 }
 
+/// Encodes a standard Responses function output without flattening supported rich content arrays.
+/// 编码标准 Responses 函数输出，且不扁平化受支持的富内容数组。
+///
+/// # Parameters
+/// 参数
+/// `value` is the provider-neutral tool result payload.
+/// `value` 是供应商无关的工具结果载荷。
+///
+/// # Returns
+/// 返回值
+/// Strings and content arrays retain their wire shape; other JSON values use deterministic text.
+/// 字符串与内容数组保留其 Wire 形态；其他 JSON 值使用确定性文本。
+fn encode_responses_tool_output(value: &Value) -> Result<Value, ProtocolConversionError> {
+    match value {
+        Value::String(_) | Value::Array(_) => Ok(value.clone()),
+        value => encode_json_or_string(value).map(Value::String),
+    }
+}
+
 /// Encodes public tool definitions into OpenAI function tools.
 /// 将公共工具定义编码为 OpenAI 函数工具。
 fn encode_openai_tools(request: &AiExecutionRequest) -> Vec<Value> {
@@ -1005,6 +1184,7 @@ fn encode_openai_tools(request: &AiExecutionRequest) -> Vec<Value> {
                     "name": tool.name,
                     "description": tool.description,
                     "parameters": tool.input_schema,
+                    "strict": tool.strict,
                 }
             })
         })
@@ -1033,6 +1213,7 @@ fn encode_responses_tools(request: &AiExecutionRequest) -> Vec<Value> {
                 "name": tool.name,
                 "description": tool.description,
                 "parameters": tool.input_schema,
+                "strict": tool.strict,
             })
         })
         .collect::<Vec<_>>();
@@ -1147,6 +1328,7 @@ mod tests {
                 name: String::from("lookup"),
                 description: String::from("Looks up source code."),
                 input_schema: json!({"type": "object"}),
+                strict: false,
             }],
             native_tools: Vec::new(),
             tool_choice: Default::default(),
@@ -1195,6 +1377,21 @@ mod tests {
             encoded.headers.get("thread-id").map(String::as_str),
             Some("session-stable")
         );
+        assert_eq!(
+            encoded
+                .headers
+                .get("x-client-request-id")
+                .map(String::as_str),
+            Some("session-stable")
+        );
+        assert_eq!(
+            encoded.headers.get("originator").map(String::as_str),
+            Some("codex_cli_rs")
+        );
+        assert_eq!(
+            encoded.headers.get("user-agent").map(String::as_str),
+            Some("codex_cli_rs/0.144.1 (Windows 11; x86_64) vulcan-code/0.1")
+        );
         assert!(
             encoded.body["input"]
                 .as_array()
@@ -1229,6 +1426,9 @@ mod tests {
                 id: String::from("image-1"),
                 kind: ResourceKind::Image,
                 media_type: Some(String::from("image/png")),
+                source_kind: vulcan_ai_contract::ResourceSourceKind::InlineData,
+                file_name: None,
+                image_detail: None,
                 local_path: None,
                 url: Some(String::from("data:image/png;base64,AA==")),
             },
@@ -1245,6 +1445,34 @@ mod tests {
                 "image_url": "data:image/png;base64,AA==",
             })
         );
+    }
+
+    /// Verifies Codex Responses preserves developer messages as developer input items.
+    /// 验证 Codex Responses 将开发者消息保留为 developer 输入项。
+    #[test]
+    fn codex_responses_preserves_developer_role() {
+        let mut request = codex_request();
+        request.messages.insert(
+            1,
+            AiMessage {
+                role: MessageRole::Developer,
+                content: vec![ContentItem::Text {
+                    text: String::from("follow developer policy"),
+                }],
+                provider_context_items: Vec::new(),
+            },
+        );
+
+        let encoded = OpenAiCodexResponsesProfile
+            .encode(&request)
+            .expect("developer input should encode");
+
+        assert!(encoded.body["input"].as_array().is_some_and(|input| {
+            input.iter().any(|item| {
+                item["role"] == "developer"
+                    && item["content"][0]["text"] == "follow developer policy"
+            })
+        }));
     }
 
     /// Verifies a route-bound opaque compaction item is replayed before later assistant text.
@@ -1290,6 +1518,40 @@ mod tests {
             "opaque-checkpoint"
         );
         assert_eq!(input[checkpoint_index + 1]["type"], "message");
+    }
+
+    /// Verifies native Responses preserves structured function-output content arrays.
+    /// 验证原生 Responses 会保留结构化函数输出内容数组。
+    #[test]
+    fn codex_preserves_rich_function_output_arrays() {
+        let mut request = codex_request();
+        request.messages.push(AiMessage {
+            role: MessageRole::Tool,
+            content: vec![ContentItem::ToolResult {
+                result: vulcan_ai_contract::ToolResult {
+                    call_id: String::from("call-rich"),
+                    is_error: false,
+                    content: json!([
+                        {"type": "input_text", "text": "done"},
+                        {"type": "input_image", "image_url": "data:image/png;base64,AA=="}
+                    ]),
+                },
+            }],
+            provider_context_items: Vec::new(),
+        });
+
+        let encoded = OpenAiCodexResponsesProfile
+            .encode(&request)
+            .expect("rich function output should encode");
+        let output = encoded.body["input"]
+            .as_array()
+            .expect("input should be an array")
+            .iter()
+            .find(|item| item["type"] == "function_call_output")
+            .expect("function output should be present");
+
+        assert!(output["output"].is_array());
+        assert_eq!(output["output"][1]["type"], "input_image");
     }
 
     /// Verifies a proven Responses cursor emits `previous_response_id` and only the uncovered suffix.
@@ -1358,6 +1620,7 @@ mod tests {
             name: String::from("image_gen.imagegen"),
             description: String::from("Generates an image."),
             input_schema: json!({"type": "object"}),
+            strict: false,
         });
         let deduplicated = OpenAiCodexResponsesProfile
             .encode(&request)

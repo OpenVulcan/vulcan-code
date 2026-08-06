@@ -3,6 +3,19 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Identifies the exact upstream transport used by one physical attempt.
+/// 标识一次真实尝试所使用的精确上游传输。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiTransportKind {
+    /// HTTP request whose response is consumed as JSON or SSE.
+    /// 响应按 JSON 或 SSE 消费的 HTTP 请求。
+    Http,
+    /// OpenAI Responses WebSocket request.
+    /// OpenAI Responses WebSocket 请求。
+    ResponsesWebsocket,
+}
+
 /// Identifies a stable execution error category.
 /// 标识一个稳定的执行错误类别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +45,9 @@ pub enum AiErrorCategory {
     /// Request validation failed.
     /// 请求校验失败。
     InvalidRequest,
+    /// Provider rejected the request because its context window was exceeded.
+    /// 供应商因请求超过上下文窗口而拒绝请求。
+    ContextLengthExceeded,
     /// Content policy rejected the request or output.
     /// 内容策略拒绝请求或输出。
     ContentPolicy,
@@ -116,6 +132,14 @@ pub struct AiExecutionError {
     /// 可选 HTTP 状态。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_status: Option<u16>,
+    /// Exact upstream transport when dispatch reached a transport boundary.
+    /// 分派到达传输边界时使用的精确上游传输。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transport: Option<AiTransportKind>,
+    /// WebSocket close code when the peer supplied a close frame.
+    /// 对端提供关闭帧时的 WebSocket 关闭码。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub websocket_close_code: Option<u16>,
     /// Optional upstream code.
     /// 可选上游错误码。
     #[serde(default, skip_serializing_if = "Option::is_none")]

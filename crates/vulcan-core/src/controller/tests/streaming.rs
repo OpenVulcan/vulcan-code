@@ -124,6 +124,7 @@ fn run_user_turn_streaming_skips_partial_checkpoint_when_batch_tool_fails() {
                     total_tokens: Some(13),
                     cached_input_tokens: None,
                     cache_creation_input_tokens: None,
+                    ..ProviderUsageSnapshot::default()
                 }),
             },
         )]);
@@ -164,6 +165,7 @@ fn run_user_turn_streaming_skips_partial_checkpoint_when_batch_tool_fails() {
                 total_tokens: Some(13),
                 cached_input_tokens: None,
                 cache_creation_input_tokens: None,
+                ..ProviderUsageSnapshot::default()
             })
         );
         assert!(
@@ -189,5 +191,80 @@ fn run_user_turn_streaming_skips_partial_checkpoint_when_batch_tool_fails() {
                         if tool_call_id.as_deref() == Some("call-2")
                 ))
         );
+    });
+}
+
+/// Emits one stable checkpoint after every result in a successful tool batch has been appended.
+/// 在成功工具批次的全部结果均已追加后，仅发出一个稳定检查点。
+#[test]
+fn run_user_turn_streaming_checkpoints_complete_tool_batch_once() {
+    let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let adapter = MockStreamingProviderAdapter::new(vec![
+            (
+                Vec::new(),
+                ProviderTurnResponse {
+                    assistant_text: String::new(),
+                    assistant_reasoning: String::new(),
+                    provider_message_id: Some(String::from("response-tools")),
+                    provider_message_state: None,
+                    tool_calls: vec![
+                        ConversationToolCall {
+                            id: String::from("item-1"),
+                            tool_call_id: Some(String::from("call-1")),
+                            tool_name: String::from("first_tool"),
+                            arguments: json!({}),
+                        },
+                        ConversationToolCall {
+                            id: String::from("item-2"),
+                            tool_call_id: Some(String::from("call-2")),
+                            tool_name: String::from("second_tool"),
+                            arguments: json!({}),
+                        },
+                    ],
+                    continuation: None,
+                    usage: None,
+                },
+            ),
+            (
+                Vec::new(),
+                ProviderTurnResponse {
+                    assistant_text: String::from("done"),
+                    assistant_reasoning: String::new(),
+                    provider_message_id: Some(String::from("response-final")),
+                    provider_message_state: None,
+                    tool_calls: Vec::new(),
+                    continuation: None,
+                    usage: None,
+                },
+            ),
+        ]);
+        let executor = MockToolExecutor::new()
+            .with_outcome("first_tool", "first", None, false)
+            .with_outcome("second_tool", "second", None, false);
+        let mut controller =
+            VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default())
+                .expect("valid core conversation snapshot");
+        let mut checkpoints = Vec::<ConversationSnapshot>::new();
+
+        controller
+            .run_user_turn_streaming_with_checkpoints(
+                &adapter,
+                &executor,
+                &AllowAllToolPolicy,
+                "run both tools",
+                |snapshot, _| checkpoints.push(snapshot.clone()),
+            )
+            .await
+            .expect("successful tool batch should continue");
+
+        assert_eq!(checkpoints.len(), 3);
+        let stable_tool_checkpoint = &checkpoints[1];
+        let tool_result_count = stable_tool_checkpoint
+            .messages
+            .iter()
+            .filter(|message| matches!(message.payload, ConversationPayload::ToolResult { .. }))
+            .count();
+        assert_eq!(tool_result_count, 2);
     });
 }

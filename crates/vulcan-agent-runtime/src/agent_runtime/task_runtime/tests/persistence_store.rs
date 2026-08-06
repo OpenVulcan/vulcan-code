@@ -1559,6 +1559,7 @@ fn store_task_outcome_persists_segmented_task_session_artifacts() {
         total_tokens: Some(130),
         cached_input_tokens: Some(40),
         cache_creation_input_tokens: Some(7),
+        ..vulcan_core::types::ProviderUsageSnapshot::default()
     };
     let snapshot = CoreConversationSnapshot {
         messages: vec![
@@ -1576,7 +1577,7 @@ fn store_task_outcome_persists_segmented_task_session_artifacts() {
                     reasoning: String::from("checked"),
                     provider_message_id: Some(String::from("assistant-provider-1")),
                     provider_message_state: None,
-                    usage: Some(provider_usage.clone()),
+                    usage: Some(Box::new(provider_usage.clone())),
                     tool_calls: Vec::new(),
                 },
             },
@@ -1957,6 +1958,7 @@ fn store_task_outcome_scopes_cloned_display_records_to_task_prompt() {
         total_tokens: Some(26),
         cached_input_tokens: None,
         cache_creation_input_tokens: None,
+        ..vulcan_core::types::ProviderUsageSnapshot::default()
     };
     let parent_provider_usage = vulcan_core::types::ProviderUsageSnapshot {
         input_tokens: Some(9_000),
@@ -1966,6 +1968,7 @@ fn store_task_outcome_scopes_cloned_display_records_to_task_prompt() {
         total_tokens: Some(9_990),
         cached_input_tokens: None,
         cache_creation_input_tokens: None,
+        ..vulcan_core::types::ProviderUsageSnapshot::default()
     };
     let snapshot = CoreConversationSnapshot {
         messages: vec![
@@ -1983,7 +1986,7 @@ fn store_task_outcome_scopes_cloned_display_records_to_task_prompt() {
                     reasoning: String::new(),
                     provider_message_id: None,
                     provider_message_state: None,
-                    usage: Some(parent_provider_usage.clone()),
+                    usage: Some(Box::new(parent_provider_usage.clone())),
                     tool_calls: Vec::new(),
                 },
             },
@@ -2001,7 +2004,7 @@ fn store_task_outcome_scopes_cloned_display_records_to_task_prompt() {
                     reasoning: String::new(),
                     provider_message_id: Some(String::from("provider-child")),
                     provider_message_state: None,
-                    usage: Some(provider_usage.clone()),
+                    usage: Some(Box::new(provider_usage.clone())),
                     tool_calls: Vec::new(),
                 },
             },
@@ -2188,6 +2191,7 @@ fn store_task_outcome_scopes_resumed_stats_to_inter_agent_delivery() {
         total_tokens: Some(36),
         cached_input_tokens: None,
         cache_creation_input_tokens: None,
+        ..vulcan_core::types::ProviderUsageSnapshot::default()
     };
     let delivery_metadata = json!({
         "display_note": true,
@@ -2246,7 +2250,7 @@ fn store_task_outcome_scopes_resumed_stats_to_inter_agent_delivery() {
                     reasoning: String::new(),
                     provider_message_id: Some(String::from("provider-followup")),
                     provider_message_state: None,
-                    usage: Some(provider_usage.clone()),
+                    usage: Some(Box::new(provider_usage.clone())),
                     tool_calls: Vec::new(),
                 },
             },
@@ -2405,6 +2409,7 @@ fn store_task_outcome_merges_explicit_usage_without_losing_record_calls() {
         total_tokens: Some(52),
         cached_input_tokens: Some(11),
         cache_creation_input_tokens: None,
+        ..vulcan_core::types::ProviderUsageSnapshot::default()
     };
     let snapshot = CoreConversationSnapshot {
         messages: vec![

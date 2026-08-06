@@ -28,6 +28,7 @@ mod ai_credentials;
 mod git_preferences;
 mod goal_store;
 mod persistence;
+mod provider_billing;
 mod segmented_session_store;
 mod session_addon_store;
 mod session_load;
@@ -70,6 +71,20 @@ pub use persistence::{
     persist_single_session_transcript_messages, persist_single_session_update,
     remove_project_after_archiving_sessions, rename_project, rename_single_session,
     restore_project, rollback_persisted_session_before_user_prompt,
+};
+pub use provider_billing::{
+    PROVIDER_USAGE_SCHEMA_REVISION, ProviderAccountUsageSnapshotRecord,
+    ProviderAccountUsageSummary, ProviderPricingProfileRecord, ProviderRateLimitSnapshotRecord,
+    ProviderUsageAttemptRecord, ProviderUsageAttemptSummary, ProviderUsageDailySummary,
+    ProviderUsageDashboard, ensure_provider_usage_schema, load_provider_usage_dashboard,
+    load_provider_usage_migration_completed, load_provider_usage_migration_cursor,
+    persist_provider_account_usage_snapshot, persist_provider_pricing_profile,
+    persist_provider_rate_limit_snapshot, persist_provider_usage_attempt,
+    persist_provider_usage_attempt_and_rebuild_daily,
+    persist_provider_usage_attempt_batch_and_rebuild_daily,
+    persist_provider_usage_migration_completed, persist_provider_usage_migration_cursor,
+    rebuild_provider_usage_daily,
+    remove_duplicate_legacy_provider_usage_attempts_and_rebuild_daily,
 };
 pub use session_load::{
     load_session_display_hydration_snapshot_for_project_created_at,

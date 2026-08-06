@@ -7,7 +7,7 @@ use crate::{
     OAuthProviderKind, ProtocolRoute, ProviderCategory, ProviderDescriptor, ProviderKind,
     ProviderPartnershipKind, ProviderPromotion, ProviderPromotionDisclosureKey,
     RequestProjectorKind, ResponsesRemoteCompactionPolicy, ResponsesRouteFeatures,
-    ResponsesWebSocketPolicy, ServiceEntry, ServiceEntryKind,
+    ResponsesWebsocketPolicy, ServiceEntry, ServiceEntryKind,
 };
 use std::collections::BTreeMap;
 use vulcan_ai_contract::InferenceUsageScope;
@@ -644,8 +644,8 @@ pub fn openai_descriptor() -> ProviderDescriptor {
                 request_headers: [],
                 model_discovery: ModelDiscoveryKind::OpenAi,
                 protocol_routes: [
-                    protocol_route(OPENAI_CHAT_PROFILE_ID, "/chat/completions"),
-                    protocol_route(OPENAI_RESPONSES_PROFILE_ID, "/responses"),
+                    official_openai_protocol_route(OPENAI_CHAT_PROFILE_ID, "/chat/completions"),
+                    official_openai_protocol_route(OPENAI_RESPONSES_PROFILE_ID, "/responses"),
                 ],
             }),
             service_entry(ServiceEntrySpec {
@@ -955,6 +955,7 @@ fn alibaba_model_studio_entry(id: &str, display_name: &str, origin: &str) -> Ser
         request_projector: RequestProjectorKind::Alibaba,
         protocol_routes: vec![
             protocol_route(OPENAI_CHAT_PROFILE_ID, "/chat/completions"),
+            protocol_route(OPENAI_RESPONSES_PROFILE_ID, "/responses"),
             protocol_route_with_overrides(
                 ANTHROPIC_MESSAGES_PROFILE_ID,
                 "/v1/messages",
@@ -1236,8 +1237,33 @@ fn protocol_route(protocol_profile_id: &str, endpoint_path: &str) -> ProtocolRou
         model_discovery_path: None,
         model_discovery_base_url_override: None,
         responses_features: None,
+        usage_extraction_profiles: Vec::new(),
+        provider_request_id_headers: Vec::new(),
         verified: true,
     }
+}
+
+/// Creates one official OpenAI route with its documented request-id response headers.
+/// 创建一条带有官方请求标识响应头声明的 OpenAI 路由。
+///
+/// # Parameters
+/// 参数
+/// `protocol_profile_id` is the exact wire profile and `endpoint_path` is the official path.
+/// `protocol_profile_id` 是精确 Wire Profile，`endpoint_path` 是官方路径。
+///
+/// # Returns
+/// 返回值
+/// A verified route whose ordered request-id fallbacks match the official client.
+/// 返回请求标识有序回退与官方客户端一致的已验证路由。
+fn official_openai_protocol_route(protocol_profile_id: &str, endpoint_path: &str) -> ProtocolRoute {
+    // route preserves the shared route defaults before attaching provider-owned telemetry metadata.
+    // route 保留共享路由默认值，再附加供应商自有遥测元数据。
+    let mut route = protocol_route(protocol_profile_id, endpoint_path);
+    route.provider_request_id_headers = vec![
+        String::from("x-request-id"),
+        String::from("x-oai-request-id"),
+    ];
+    route
 }
 
 /// Creates the verified official Codex Responses route with capabilities proven by the official client.
@@ -1245,15 +1271,15 @@ fn protocol_route(protocol_profile_id: &str, endpoint_path: &str) -> ProtocolRou
 ///
 /// # Returns
 /// 返回值
-/// The official Responses route with WebSocket v2 and standalone remote compaction enabled.
-/// 返回启用 WebSocket v2 与独立远端压缩的官方 Responses 路由。
+/// The official Responses route with standalone remote compaction enabled.
+/// 返回启用独立远端压缩的官方 Responses 路由。
 fn official_codex_responses_protocol_route() -> ProtocolRoute {
     // route starts from the shared verified route contract before enabling only proven Codex features.
     // route 从共享已验证路由契约开始，仅启用已获证明的 Codex 能力。
-    let mut route = protocol_route(OPENAI_CODEX_RESPONSES_PROFILE_ID, "/responses");
+    let mut route = official_openai_protocol_route(OPENAI_CODEX_RESPONSES_PROFILE_ID, "/responses");
     route.responses_features = Some(ResponsesRouteFeatures {
-        websocket: ResponsesWebSocketPolicy::PreferredWithHttpFallback,
         remote_compaction: ResponsesRemoteCompactionPolicy::EnabledWithLocalFallback,
+        websocket: ResponsesWebsocketPolicy::Verified,
     });
     route
 }
@@ -1290,6 +1316,8 @@ fn protocol_route_with_overrides<const H: usize>(
         model_discovery_path: None,
         model_discovery_base_url_override: model_discovery_base_url_override.map(str::to_string),
         responses_features: None,
+        usage_extraction_profiles: Vec::new(),
+        provider_request_id_headers: Vec::new(),
         verified: true,
     }
 }
@@ -1317,6 +1345,8 @@ fn protocol_profile_route(protocol_profile_id: &str) -> ProtocolRoute {
         model_discovery_path: None,
         model_discovery_base_url_override: None,
         responses_features: None,
+        usage_extraction_profiles: Vec::new(),
+        provider_request_id_headers: Vec::new(),
         verified: true,
     }
 }
@@ -1341,6 +1371,8 @@ fn minimax_protocol_routes() -> [ProtocolRoute; 2] {
             model_discovery_path: None,
             model_discovery_base_url_override: None,
             responses_features: None,
+            usage_extraction_profiles: Vec::new(),
+            provider_request_id_headers: Vec::new(),
             verified: true,
         },
     ]
@@ -1354,7 +1386,7 @@ mod tests {
     };
     use crate::{
         AccountUsageQueryKind, AuthenticationProjection, CredentialMode, ModelDiscoveryKind,
-        OAuthProviderKind, ResponsesRemoteCompactionPolicy, ResponsesWebSocketPolicy,
+        OAuthProviderKind, ResponsesRemoteCompactionPolicy,
     };
     use vulcan_ai_contract::InferenceUsageScope;
 
@@ -1379,12 +1411,15 @@ mod tests {
             .responses_features
             .expect("official Codex route should declare proven capabilities");
         assert_eq!(
-            features.websocket,
-            ResponsesWebSocketPolicy::PreferredWithHttpFallback
-        );
-        assert_eq!(
             features.remote_compaction,
             ResponsesRemoteCompactionPolicy::EnabledWithLocalFallback
+        );
+        assert_eq!(
+            route.provider_request_id_headers,
+            vec![
+                String::from("x-request-id"),
+                String::from("x-oai-request-id")
+            ]
         );
     }
 
